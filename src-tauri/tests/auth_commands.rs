@@ -37,7 +37,7 @@ fn crypto_js_derive_key_iv(passphrase: &[u8], salt: &[u8]) -> ([u8; 32], [u8; 16
 }
 
 fn encrypt_mnemonic(mnemonic: &str, passcode: &str) -> String {
-    use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+    use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
     use base64::Engine;
 
     let salt: [u8; 8] = rand::random();
@@ -61,7 +61,7 @@ fn encrypt_mnemonic(mnemonic: &str, passcode: &str) -> String {
 }
 
 fn decrypt_mnemonic(encrypted: &str, passcode: &str) -> Result<String, String> {
-    use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+    use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
     use base64::Engine;
 
     let raw = base64::engine::general_purpose::STANDARD
@@ -116,15 +116,13 @@ fn test_mnemonic_validation_invalid() {
         bip39::Mnemonic::parse_in_normalized(bip39::Language::English, "not a valid mnemonic")
             .is_err()
     );
-    assert!(
-        bip39::Mnemonic::parse_in_normalized(bip39::Language::English, "").is_err()
-    );
+    assert!(bip39::Mnemonic::parse_in_normalized(bip39::Language::English, "").is_err());
 }
 
 #[test]
 fn test_key_derivation() {
-    use sp_core::crypto::Ss58Codec;
     use sp_core::Pair as _;
+    use sp_core::crypto::Ss58Codec;
 
     let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
@@ -137,16 +135,15 @@ fn test_key_derivation() {
     assert!(substrate_address.len() > 40);
 
     // Derive Ethereum keypair
-    use alloy_signer_local::coins_bip39::English;
     use alloy_signer_local::MnemonicBuilder;
+    use alloy_signer_local::coins_bip39::English;
 
-    let eth_signer: alloy_signer_local::PrivateKeySigner =
-        MnemonicBuilder::<English>::default()
-            .phrase(mnemonic)
-            .index(0)
-            .unwrap()
-            .build()
-            .unwrap();
+    let eth_signer: alloy_signer_local::PrivateKeySigner = MnemonicBuilder::<English>::default()
+        .phrase(mnemonic)
+        .index(0)
+        .unwrap()
+        .build()
+        .unwrap();
     let eth_address = format!("{}", eth_signer.address());
 
     // Should produce a valid Ethereum address
@@ -156,18 +153,15 @@ fn test_key_derivation() {
 
 #[test]
 fn test_key_derivation_deterministic() {
-    use sp_core::crypto::Ss58Codec;
     use sp_core::Pair as _;
+    use sp_core::crypto::Ss58Codec;
 
     let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
     let (pair1, _) = sp_core::sr25519::Pair::from_phrase(mnemonic, None).unwrap();
     let (pair2, _) = sp_core::sr25519::Pair::from_phrase(mnemonic, None).unwrap();
 
-    assert_eq!(
-        pair1.public().to_ss58check(),
-        pair2.public().to_ss58check()
-    );
+    assert_eq!(pair1.public().to_ss58check(), pair2.public().to_ss58check());
 }
 
 #[test]
@@ -201,7 +195,10 @@ fn test_aes_different_encryptions_differ() {
     let enc1 = encrypt_mnemonic(mnemonic, passcode);
     let enc2 = encrypt_mnemonic(mnemonic, passcode);
 
-    assert_ne!(enc1, enc2, "Different salts should produce different ciphertexts");
+    assert_ne!(
+        enc1, enc2,
+        "Different salts should produce different ciphertexts"
+    );
 
     // But both should decrypt to the same value
     assert_eq!(decrypt_mnemonic(&enc1, passcode).unwrap(), mnemonic);

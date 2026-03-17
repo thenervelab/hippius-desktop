@@ -7,8 +7,8 @@
 
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::warn;
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -44,6 +44,7 @@ pub struct SyncFile {
     pub id: String,
     pub path: String,
     pub file_name: String,
+    pub label: String,
     pub action: FileAction,
     pub status: FileStatus,
     pub progress: u32,
@@ -74,6 +75,7 @@ pub struct RecentFile {
     pub id: String,
     pub path: String,
     pub file_name: String,
+    pub label: String,
     pub action: FileAction,
     pub completed_at: i64,
     pub size_bytes: u64,
@@ -146,7 +148,10 @@ fn generate_session_id() -> String {
 
 fn is_encrypted_file_id(file_name: &str) -> bool {
     // Pattern 1: Starts with "file_" followed by hex
-    if file_name.starts_with("file_") && file_name.len() > 5 && file_name[5..].chars().all(|c| c.is_ascii_hexdigit()) {
+    if file_name.starts_with("file_")
+        && file_name.len() > 5
+        && file_name[5..].chars().all(|c| c.is_ascii_hexdigit())
+    {
         return true;
     }
     // Pattern 2: Pure hex string 20+ chars
@@ -194,7 +199,7 @@ fn clean_expired(state: &mut SyncProgressState) {
 }
 
 /// Register files from a file list into the session.
-fn register_files(session: &mut SyncSession, file_list: &SessionFileList) {
+fn register_files(session: &mut SyncSession, file_list: &SessionFileList, label: &str) {
     let now = now_ms();
 
     let pairs: [(FileAction, &Option<Vec<String>>); 4] = [
@@ -212,6 +217,7 @@ fn register_files(session: &mut SyncSession, file_list: &SessionFileList) {
                         id: generate_file_id(path),
                         path: path.clone(),
                         file_name: extract_file_name(path),
+                        label: label.to_string(),
                         action: action.clone(),
                         status: FileStatus::Pending,
                         progress: 0,
@@ -256,6 +262,7 @@ fn move_completed_to_recent(state: &mut SyncProgressState) {
             id: f.id.clone(),
             path: f.path.clone(),
             file_name: f.file_name.clone(),
+            label: f.label.clone(),
             action: f.action.clone(),
             completed_at: f.completed_at.unwrap_or(now),
             size_bytes: f.total_bytes,
@@ -276,20 +283,15 @@ pub fn sp_start_session(
     expected_local_deletes: u32,
     expected_remote_deletes: u32,
     file_list: Option<SessionFileList>,
+    label: Option<String>,
 ) -> Result<SyncSession, String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_start_session");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_start_session");
+        poisoned.into_inner()
+    });
 
     // If there's an existing active session, move its completed files to recent
-    if state
-        .current_session
-        .as_ref()
-        .is_some_and(|s| s.is_active)
-    {
+    if state.current_session.as_ref().is_some_and(|s| s.is_active) {
         move_completed_to_recent(&mut state);
     }
 
@@ -306,8 +308,9 @@ pub fn sp_start_session(
         files: HashMap::new(),
     };
 
+    let lbl = label.as_deref().unwrap_or("default");
     if let Some(fl) = &file_list {
-        register_files(&mut session, fl);
+        register_files(&mut session, fl, lbl);
     }
 
     let result = session.clone();
@@ -324,15 +327,15 @@ pub fn sp_merge_into_session(
     expected_local_deletes: u32,
     expected_remote_deletes: u32,
     file_list: Option<SessionFileList>,
+    label: Option<String>,
 ) -> Result<(), String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_merge_into_session");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_merge_into_session");
+        poisoned.into_inner()
+    });
 
     let now = now_ms();
+    let lbl = label.as_deref().unwrap_or("default");
 
     if let Some(session) = state.current_session.as_mut().filter(|s| s.is_active) {
         // Merge into existing session
@@ -342,7 +345,7 @@ pub fn sp_merge_into_session(
         session.expected_remote_deletes += expected_remote_deletes;
 
         if let Some(fl) = &file_list {
-            register_files(session, fl);
+            register_files(session, fl, lbl);
         }
     } else {
         // No active session — start a new one
@@ -359,7 +362,7 @@ pub fn sp_merge_into_session(
         };
 
         if let Some(fl) = &file_list {
-            register_files(&mut session, fl);
+            register_files(&mut session, fl, lbl);
         }
 
         state.current_session = Some(session);
@@ -371,12 +374,10 @@ pub fn sp_merge_into_session(
 
 #[tauri::command]
 pub fn sp_complete_session(files_uploaded: u32, files_downloaded: u32) -> Result<(), String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_complete_session");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_complete_session");
+        poisoned.into_inner()
+    });
 
     let now = now_ms();
 
@@ -416,8 +417,7 @@ pub fn sp_complete_session(files_uploaded: u32, files_downloaded: u32) -> Result
         }
 
         // If no more pending work, finalize
-        if pending_uploads == 0
-            && pending_downloads == 0
+        if pending_uploads == 0 && pending_downloads == 0
             || (files_uploaded >= session.expected_uploads
                 && files_downloaded >= session.expected_downloads)
         {
@@ -428,6 +428,25 @@ pub fn sp_complete_session(files_uploaded: u32, files_downloaded: u32) -> Result
 
     // Move completed files to recent
     move_completed_to_recent(&mut state);
+
+    // If the session is inactive and has no pending/in-progress files, clear it
+    // so the tray icon resets to idle instead of staying stuck at 100%.
+    let should_clear = state.current_session.as_ref().is_some_and(|s| {
+        !s.is_active
+            && !s.files.values().any(|f| {
+                matches!(
+                    f.status,
+                    FileStatus::Pending
+                        | FileStatus::Uploading
+                        | FileStatus::Downloading
+                        | FileStatus::Deleting
+                )
+            })
+    });
+    if should_clear {
+        state.current_session = None;
+    }
+
     state.last_updated = now;
 
     Ok(())
@@ -435,12 +454,10 @@ pub fn sp_complete_session(files_uploaded: u32, files_downloaded: u32) -> Result
 
 #[tauri::command]
 pub fn sp_stop_session() -> Result<(), String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_stop_session");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_stop_session");
+        poisoned.into_inner()
+    });
 
     if let Some(session) = state.current_session.as_mut() {
         session.is_active = false;
@@ -457,13 +474,12 @@ pub fn sp_update_file_progress(
     bytes_transferred: u64,
     total_bytes: u64,
     action: FileAction,
+    label: Option<String>,
 ) -> Result<Option<SyncFile>, String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_update_file_progress");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_update_file_progress");
+        poisoned.into_inner()
+    });
 
     let now = now_ms();
 
@@ -472,19 +488,24 @@ pub fn sp_update_file_progress(
         None => return Ok(None),
     };
 
-    let file = session.files.entry(path.clone()).or_insert_with(|| SyncFile {
-        id: generate_file_id(&path),
-        path: path.clone(),
-        file_name: extract_file_name(&path),
-        action: action.clone(),
-        status: FileStatus::Pending,
-        progress: 0,
-        bytes_transferred: 0,
-        total_bytes: 0,
-        started_at: now,
-        completed_at: None,
-        error: None,
-    });
+    let lbl = label.unwrap_or_else(|| "default".to_string());
+    let file = session
+        .files
+        .entry(path.clone())
+        .or_insert_with(|| SyncFile {
+            id: generate_file_id(&path),
+            path: path.clone(),
+            file_name: extract_file_name(&path),
+            label: lbl.clone(),
+            action: action.clone(),
+            status: FileStatus::Pending,
+            progress: 0,
+            bytes_transferred: 0,
+            total_bytes: 0,
+            started_at: now,
+            completed_at: None,
+            error: None,
+        });
 
     file.bytes_transferred = bytes_transferred;
     file.total_bytes = total_bytes;
@@ -514,12 +535,10 @@ pub fn sp_update_file_progress(
 
 #[tauri::command]
 pub fn sp_complete_pending_files() -> Result<(), String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_complete_pending_files");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_complete_pending_files");
+        poisoned.into_inner()
+    });
 
     let now = now_ms();
 
@@ -546,12 +565,10 @@ pub fn sp_mark_pending_files_as_failed(
     actual_uploads: u32,
     actual_downloads: u32,
 ) -> Result<(), String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_mark_pending_files_as_failed");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_mark_pending_files_as_failed");
+        poisoned.into_inner()
+    });
 
     let now = now_ms();
 
@@ -618,12 +635,10 @@ pub fn sp_mark_pending_files_as_failed(
 
 #[tauri::command]
 pub fn sp_mark_all_pending_files_as_failed(error_message: String) -> Result<(), String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_mark_all_pending_files_as_failed");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_mark_all_pending_files_as_failed");
+        poisoned.into_inner()
+    });
 
     let now = now_ms();
 
@@ -647,12 +662,10 @@ pub fn sp_mark_all_pending_files_as_failed(error_message: String) -> Result<(), 
 
 #[tauri::command]
 pub fn sp_mark_file_error(path: String, error: String) -> Result<(), String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_mark_file_error");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_mark_file_error");
+        poisoned.into_inner()
+    });
 
     let now = now_ms();
 
@@ -670,12 +683,10 @@ pub fn sp_mark_file_error(path: String, error: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn sp_get_session_files() -> Result<Vec<SyncFile>, String> {
-    let state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_get_session_files");
-            poisoned.into_inner()
-        });
+    let state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_get_session_files");
+        poisoned.into_inner()
+    });
 
     let files = match &state.current_session {
         Some(session) => session
@@ -692,12 +703,10 @@ pub fn sp_get_session_files() -> Result<Vec<SyncFile>, String> {
 
 #[tauri::command]
 pub fn sp_get_recent_files() -> Result<Vec<RecentFile>, String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_get_recent_files");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_get_recent_files");
+        poisoned.into_inner()
+    });
 
     clean_expired(&mut state);
 
@@ -713,12 +722,10 @@ pub fn sp_get_recent_files() -> Result<Vec<RecentFile>, String> {
 
 #[tauri::command]
 pub fn sp_get_tray_menu_files() -> Result<Vec<serde_json::Value>, String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_get_tray_menu_files");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_get_tray_menu_files");
+        poisoned.into_inner()
+    });
 
     clean_expired(&mut state);
 
@@ -742,7 +749,9 @@ pub fn sp_get_tray_menu_files() -> Result<Vec<serde_json::Value>, String> {
                 b.status,
                 FileStatus::Uploading | FileStatus::Downloading | FileStatus::Deleting
             );
-            b_active.cmp(&a_active).then(b.started_at.cmp(&a.started_at))
+            b_active
+                .cmp(&a_active)
+                .then(b.started_at.cmp(&a.started_at))
         });
 
         for file in session_files.iter().take(TRAY_MENU_MAX_FILES) {
@@ -774,12 +783,10 @@ pub fn sp_get_tray_menu_files() -> Result<Vec<serde_json::Value>, String> {
 
 #[tauri::command]
 pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
-    let state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_get_overall_progress");
-            poisoned.into_inner()
-        });
+    let state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_get_overall_progress");
+        poisoned.into_inner()
+    });
 
     let session = match &state.current_session {
         Some(s) => s,
@@ -869,12 +876,10 @@ pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
 
 #[tauri::command]
 pub fn sp_has_any_sync_activity() -> Result<bool, String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_has_any_sync_activity");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_has_any_sync_activity");
+        poisoned.into_inner()
+    });
 
     clean_expired(&mut state);
 
@@ -890,12 +895,10 @@ pub fn sp_has_any_sync_activity() -> Result<bool, String> {
 
 #[tauri::command]
 pub fn sp_cleanup_expired_files() -> Result<u32, String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_cleanup_expired_files");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_cleanup_expired_files");
+        poisoned.into_inner()
+    });
 
     let before = state.recent_files.len();
     clean_expired(&mut state);
@@ -906,12 +909,10 @@ pub fn sp_cleanup_expired_files() -> Result<u32, String> {
 
 #[tauri::command]
 pub fn sp_record_deleted_file(file_name: String, size_bytes: u64) -> Result<(), String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_record_deleted_file");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_record_deleted_file");
+        poisoned.into_inner()
+    });
 
     let now = now_ms();
     let session_id = state
@@ -930,6 +931,7 @@ pub fn sp_record_deleted_file(file_name: String, size_bytes: u64) -> Result<(), 
         id: generate_file_id(&file_name),
         path: file_name.clone(),
         file_name: display_name,
+        label: String::new(),
         action: FileAction::LocalDelete,
         completed_at: now,
         size_bytes,
@@ -943,14 +945,66 @@ pub fn sp_record_deleted_file(file_name: String, size_bytes: u64) -> Result<(), 
     Ok(())
 }
 
+/// Remove all files for a given drive label from the current session.
+/// Completed files are moved to recent; remaining files are dropped.
+#[tauri::command]
+pub fn sp_remove_files_for_label(label: String) -> Result<(), String> {
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_remove_files_for_label");
+        poisoned.into_inner()
+    });
+
+    let now = now_ms();
+
+    // Collect new recent files first, then mutate
+    let new_recent: Vec<RecentFile> = if let Some(session) = &state.current_session {
+        let session_id = &session.session_id;
+
+        let existing: std::collections::HashSet<(&str, &str)> = state
+            .recent_files
+            .iter()
+            .map(|r| (r.path.as_str(), r.session_id.as_str()))
+            .collect();
+
+        session
+            .files
+            .values()
+            .filter(|f| f.label == label && f.status == FileStatus::Completed)
+            .filter(|f| !existing.contains(&(f.path.as_str(), session_id.as_str())))
+            .map(|f| RecentFile {
+                id: f.id.clone(),
+                path: f.path.clone(),
+                file_name: f.file_name.clone(),
+                label: f.label.clone(),
+                action: f.action.clone(),
+                completed_at: f.completed_at.unwrap_or(now),
+                size_bytes: f.total_bytes,
+                session_id: session_id.clone(),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    state.recent_files.extend(new_recent);
+
+    // Remove all files with this label from the session
+    if let Some(session) = state.current_session.as_mut() {
+        session.files.retain(|_, f| f.label != label);
+    }
+
+    clean_expired(&mut state);
+    state.last_updated = now;
+
+    Ok(())
+}
+
 #[tauri::command]
 pub fn sp_clear_all_data() -> Result<(), String> {
-    let mut state = SYNC_PROGRESS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in sp_clear_all_data");
-            poisoned.into_inner()
-        });
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_clear_all_data");
+        poisoned.into_inner()
+    });
 
     state.current_session = None;
     state.recent_files.clear();
@@ -967,4 +1021,177 @@ pub fn sp_is_encrypted_file_id(file_name: String) -> Result<bool, String> {
 #[tauri::command]
 pub fn sp_should_hide_file(path: String) -> Result<bool, String> {
     Ok(should_hide_file(&path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: reset global state before each test.
+    fn reset_state() {
+        let mut state = SYNC_PROGRESS.lock().unwrap();
+        state.current_session = None;
+        state.recent_files.clear();
+        state.last_updated = now_ms();
+    }
+
+    #[test]
+    fn complete_session_clears_inactive_session() {
+        reset_state();
+
+        // Start a session with 1 upload
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/test/file.txt".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_start_session(1, 0, 0, 0, Some(file_list), Some("drive1".to_string())).unwrap();
+
+        // Complete the file
+        sp_update_file_progress(
+            "/test/file.txt".to_string(),
+            100,
+            100,
+            FileAction::Upload,
+            Some("drive1".to_string()),
+        )
+        .unwrap();
+
+        // Complete the session
+        sp_complete_session(1, 0).unwrap();
+
+        // Session should be cleared (no pending files, inactive)
+        let state = SYNC_PROGRESS.lock().unwrap();
+        assert!(state.current_session.is_none());
+        // File should be in recent
+        assert!(!state.recent_files.is_empty());
+    }
+
+    #[test]
+    fn has_sync_activity_false_after_complete() {
+        reset_state();
+
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/test/a.txt".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_start_session(1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+        sp_update_file_progress(
+            "/test/a.txt".to_string(),
+            50,
+            50,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap();
+        sp_complete_session(1, 0).unwrap();
+
+        // Clear recent files to test pure session check
+        {
+            let mut state = SYNC_PROGRESS.lock().unwrap();
+            state.recent_files.clear();
+        }
+
+        let has = sp_has_any_sync_activity().unwrap();
+        assert!(
+            !has,
+            "No activity expected after session completed and recent cleared"
+        );
+    }
+
+    #[test]
+    fn remove_files_for_label_only_removes_matching() {
+        reset_state();
+
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/drive1/a.txt".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_start_session(1, 0, 0, 0, Some(file_list), Some("drive1".to_string())).unwrap();
+
+        // Add files for a second drive
+        let file_list2 = SessionFileList {
+            upload_files: Some(vec!["/drive2/b.txt".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_merge_into_session(1, 0, 0, 0, Some(file_list2), Some("drive2".to_string())).unwrap();
+
+        // Complete drive1's file
+        sp_update_file_progress(
+            "/drive1/a.txt".to_string(),
+            100,
+            100,
+            FileAction::Upload,
+            Some("drive1".to_string()),
+        )
+        .unwrap();
+
+        // Remove drive1 files
+        sp_remove_files_for_label("drive1".to_string()).unwrap();
+
+        let state = SYNC_PROGRESS.lock().unwrap();
+        let session = state.current_session.as_ref().unwrap();
+
+        // drive2's file should still exist
+        assert!(session.files.contains_key("/drive2/b.txt"));
+        // drive1's file should be gone
+        assert!(!session.files.contains_key("/drive1/a.txt"));
+        // drive1's completed file should be in recent
+        assert!(state.recent_files.iter().any(|r| r.path == "/drive1/a.txt"));
+    }
+
+    #[test]
+    fn label_propagates_to_sync_file() {
+        reset_state();
+
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/myfile.txt".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_start_session(1, 0, 0, 0, Some(file_list), Some("photos".to_string())).unwrap();
+
+        let state = SYNC_PROGRESS.lock().unwrap();
+        let session = state.current_session.as_ref().unwrap();
+        let file = session.files.get("/myfile.txt").unwrap();
+        assert_eq!(file.label, "photos");
+    }
+
+    #[test]
+    fn label_propagates_to_recent_file() {
+        reset_state();
+
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/myfile.txt".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_start_session(1, 0, 0, 0, Some(file_list), Some("docs".to_string())).unwrap();
+        sp_update_file_progress(
+            "/myfile.txt".to_string(),
+            100,
+            100,
+            FileAction::Upload,
+            Some("docs".to_string()),
+        )
+        .unwrap();
+        sp_complete_session(1, 0).unwrap();
+
+        let state = SYNC_PROGRESS.lock().unwrap();
+        let recent = state
+            .recent_files
+            .iter()
+            .find(|r| r.path == "/myfile.txt")
+            .unwrap();
+        assert_eq!(recent.label, "docs");
+    }
 }

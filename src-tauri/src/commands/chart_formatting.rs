@@ -50,8 +50,7 @@ const WEEKDAYS_FULL: [&str; 7] = [
 ];
 
 const MONTHS_SHORT: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
-    "Nov", "Dec",
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
 /// Hippius creation date (March 11, 2025).
@@ -85,7 +84,10 @@ fn format_bytes(bytes: f64) -> String {
     }
     let units = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
     let k: f64 = 1000.0;
-    let i = (bytes.ln() / k.ln()).floor().max(0.0).min((units.len() - 1) as f64) as usize;
+    let i = (bytes.ln() / k.ln())
+        .floor()
+        .max(0.0)
+        .min((units.len() - 1) as f64) as usize;
     let val = bytes / k.powi(i as i32);
     let formatted = format!("{:.2}", val);
     let trimmed = trim_trailing_zeros(&formatted);
@@ -227,10 +229,7 @@ struct RawPoint {
     credit: Option<f64>,
 }
 
-fn accounts_to_raw_points(
-    accounts: &[AccountInput],
-    divide_by_1e18: bool,
-) -> Vec<RawPoint> {
+fn accounts_to_raw_points(accounts: &[AccountInput], divide_by_1e18: bool) -> Vec<RawPoint> {
     let mut points: Vec<RawPoint> = accounts
         .iter()
         .filter_map(|acc| {
@@ -323,10 +322,7 @@ fn map_to_range_carry_forward(
             };
 
             let formatted_balance = if divide_by_1e18 {
-                format_balance(
-                    &format!("{}", (last_balance * 1e18) as u128),
-                    6,
-                )
+                format_balance(&format!("{}", (last_balance * 1e18) as u128), 6)
             } else {
                 format_bytes(last_balance)
             };

@@ -56,9 +56,7 @@ pub fn create_security_scoped_bookmark(path: &str) -> Result<Vec<u8>, String> {
                     ));
                 }
             }
-            error!(
-                "Failed to create security-scoped bookmark (unknown error)"
-            );
+            error!("Failed to create security-scoped bookmark (unknown error)");
             return Err("Failed to create security-scoped bookmark".to_string());
         }
 
@@ -67,10 +65,7 @@ pub fn create_security_scoped_bookmark(path: &str) -> Result<Vec<u8>, String> {
         let bytes: *const u8 = msg_send![bookmark_data, bytes];
         let data = std::slice::from_raw_parts(bytes, length).to_vec();
 
-        debug!(
-            "Successfully created bookmark ({} bytes)",
-            data.len()
-        );
+        debug!("Successfully created bookmark ({} bytes)", data.len());
         Ok(data)
     }
 }

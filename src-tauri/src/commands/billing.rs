@@ -47,10 +47,7 @@ pub async fn get_subscription_plans(
 ) -> Result<serde_json::Value, String> {
     let client = ApiClient::new(state.pool()?.clone());
     client
-        .get::<serde_json::Value>(
-            "/api/billing/stripe/subscription-plans/",
-            &account_id,
-        )
+        .get::<serde_json::Value>("/api/billing/stripe/subscription-plans/", &account_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -62,10 +59,7 @@ pub async fn get_active_subscription(
 ) -> Result<serde_json::Value, String> {
     let client = ApiClient::new(state.pool()?.clone());
     client
-        .get::<serde_json::Value>(
-            "/api/billing/stripe/active-subscription/",
-            &account_id,
-        )
+        .get::<serde_json::Value>("/api/billing/stripe/active-subscription/", &account_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -103,11 +97,7 @@ pub async fn get_customer_portal_url(
     let client = ApiClient::new(state.pool()?.clone());
     let body = serde_json::json!({ "return_url": return_url });
     client
-        .post::<serde_json::Value, _>(
-            "/api/billing/stripe/customer-portal/",
-            &body,
-            &account_id,
-        )
+        .post::<serde_json::Value, _>("/api/billing/stripe/customer-portal/", &body, &account_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -272,10 +262,7 @@ pub async fn get_node_locations(
     let indexer = IndexerClient::from_env().map_err(|e| e.to_string())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(1).to_string();
-    let mut params = vec![
-        ("page", page_str.as_str()),
-        ("limit", limit_str.as_str()),
-    ];
+    let mut params = vec![("page", page_str.as_str()), ("limit", limit_str.as_str())];
     if let Some(ref id) = miner_id {
         params.push(("miner_id", id.as_str()));
     }

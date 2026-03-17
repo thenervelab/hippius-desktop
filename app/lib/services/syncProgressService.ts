@@ -21,6 +21,7 @@ export interface SyncFile {
   id: string;
   path: string;
   fileName: string;
+  label: string;
   action: FileAction;
   status: FileStatus;
   progress: number;
@@ -47,6 +48,7 @@ export interface RecentFile {
   id: string;
   path: string;
   fileName: string;
+  label: string;
   action: FileAction;
   completedAt: number;
   sizeBytes: number;
@@ -87,7 +89,8 @@ export async function startSession(
   expectedDownloads: number,
   expectedLocalDeletes: number = 0,
   expectedRemoteDeletes: number = 0,
-  fileList?: SessionFileList
+  fileList?: SessionFileList,
+  label?: string
 ): Promise<SyncSession> {
   return invoke<SyncSession>("sp_start_session", {
     expectedUploads,
@@ -95,6 +98,7 @@ export async function startSession(
     expectedLocalDeletes,
     expectedRemoteDeletes,
     fileList: fileList ?? null,
+    label: label ?? null,
   });
 }
 
@@ -103,7 +107,8 @@ export async function mergeIntoSession(
   expectedDownloads: number,
   expectedLocalDeletes: number = 0,
   expectedRemoteDeletes: number = 0,
-  fileList?: SessionFileList
+  fileList?: SessionFileList,
+  label?: string
 ): Promise<void> {
   return invoke("sp_merge_into_session", {
     expectedUploads,
@@ -111,6 +116,7 @@ export async function mergeIntoSession(
     expectedLocalDeletes,
     expectedRemoteDeletes,
     fileList: fileList ?? null,
+    label: label ?? null,
   });
 }
 
@@ -130,13 +136,15 @@ export async function updateFileProgress(
   path: string,
   bytesTransferred: number,
   totalBytes: number,
-  action: FileAction
+  action: FileAction,
+  label?: string
 ): Promise<SyncFile | null> {
   return invoke<SyncFile | null>("sp_update_file_progress", {
     path,
     bytesTransferred,
     totalBytes,
     action,
+    label: label ?? null,
   });
 }
 

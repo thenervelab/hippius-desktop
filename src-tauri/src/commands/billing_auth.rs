@@ -19,8 +19,7 @@ const CHALLENGE_PATH: &str = "/api/auth/mnemonic/";
 const VERIFY_PATH: &str = "/api/auth/verify/";
 
 fn base_url() -> String {
-    std::env::var("HIPPIUS_API_BASE_URL")
-        .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
+    std::env::var("HIPPIUS_API_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
 }
 
 #[derive(serde::Serialize, Clone)]

@@ -5,8 +5,8 @@
 //! serialization, error mapping, and structured error responses.
 
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use sqlx::sqlite::SqlitePool;
 
 use crate::utils::account_key::account_key;
@@ -278,9 +278,7 @@ impl ApiClient {
         }
     }
 
-    async fn handle_response<T: DeserializeOwned>(
-        resp: reqwest::Response,
-    ) -> Result<T, ApiError> {
+    async fn handle_response<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T, ApiError> {
         let status = resp.status();
         if status.is_success() {
             resp.json::<T>()

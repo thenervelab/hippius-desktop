@@ -1,5 +1,5 @@
 use serde::Serialize;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 #[derive(Serialize)]
 pub struct VpnStatus {
@@ -38,14 +38,15 @@ pub async fn toggle_vpn_status(
     let pool = state.pool()?;
 
     // First get the current status
-    let current = match sqlx::query_as::<_, (bool,)>("SELECT is_enabled FROM vpn_status WHERE id = 1")
-        .fetch_optional(pool)
-        .await
-    {
-        Ok(Some((is_enabled,))) => VpnStatus { is_enabled },
-        Ok(None) => VpnStatus { is_enabled: false },
-        Err(e) => return Err(e.to_string()),
-    };
+    let current =
+        match sqlx::query_as::<_, (bool,)>("SELECT is_enabled FROM vpn_status WHERE id = 1")
+            .fetch_optional(pool)
+            .await
+        {
+            Ok(Some((is_enabled,))) => VpnStatus { is_enabled },
+            Ok(None) => VpnStatus { is_enabled: false },
+            Err(e) => return Err(e.to_string()),
+        };
 
     // Toggle the status
     let new_status = !current.is_enabled;
@@ -111,12 +112,10 @@ pub async fn get_autoconnect_status(
         Ok(Some((is_enabled,))) => Ok(AutoconnectStatus { is_enabled }),
         Ok(None) => {
             // This should never happen due to our initialization, but handle it just in case
-            sqlx::query(
-                "INSERT INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)",
-            )
-            .execute(pool)
-            .await
-            .map_err(|e| e.to_string())?;
+            sqlx::query("INSERT INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)")
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
             Ok(AutoconnectStatus { is_enabled: false })
         }
         Err(e) => Err(e.to_string()),

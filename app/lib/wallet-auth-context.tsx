@@ -179,10 +179,8 @@ export function WalletAuthProvider({
           localStorage.removeItem("hippius_oauth_provider");
         }
 
-        // NOTE: We intentionally do NOT clear sync progress data on logout.
-        // The data is preserved in the Rust backend so the tray and sync
-        // widget show the last-known state immediately after re-login.
-        // New sync sessions naturally replace stale data.
+        // Clear sync progress data to prevent cross-account data leaking
+        await invoke("sp_clear_all_data").catch(() => {});
 
         // Immediately invalidate login status cache so the tray watcher
         // picks up the logged-out state on its next 2-second tick.

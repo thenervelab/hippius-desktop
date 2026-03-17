@@ -49,17 +49,13 @@ pub async fn save_api_token(
 /// Returns the bearer token string or `None` if no token is stored.
 /// Falls back to the legacy `objectstore_auth` table (auto-migrates),
 /// then to the `auth_session` table (auto-migrates).
-pub async fn get_api_token(
-    pool: &SqlitePool,
-    account_id: &str,
-) -> Result<Option<String>, String> {
+pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> Result<Option<String>, String> {
     // Prefer scoped record
-    let scoped =
-        sqlx::query("SELECT temp_auth_key FROM objectstore_auth_scoped WHERE owner = ?")
-            .bind(account_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("DB error fetching API token: {}", e))?;
+    let scoped = sqlx::query("SELECT temp_auth_key FROM objectstore_auth_scoped WHERE owner = ?")
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error fetching API token: {}", e))?;
 
     if let Some(row) = scoped {
         if let Some(token) = row.get::<Option<String>, _>("temp_auth_key") {
@@ -115,11 +111,7 @@ pub async fn get_api_token(
 ///
 /// Returns `true` if the token should be refreshed (expired, expiring soon, or no session).
 /// Used by the sync loop to proactively refresh tokens before they cause 401 errors.
-pub async fn is_token_expiring(
-    pool: &SqlitePool,
-    account_id: &str,
-    margin_secs: i64,
-) -> bool {
+pub async fn is_token_expiring(pool: &SqlitePool, account_id: &str, margin_secs: i64) -> bool {
     let owner = crate::utils::account_key::account_key(account_id);
     let row = sqlx::query("SELECT token_expiry FROM auth_session WHERE owner = ?")
         .bind(&owner)
@@ -228,10 +220,7 @@ pub async fn get_s3_credentials(
 
 /// Ensure S3 credentials are stored in the DB, fetching from API if needed
 /// (migration use only). Does NOT set environment variables.
-pub async fn ensure_s3_credentials(
-    pool: &SqlitePool,
-    account_id: &str,
-) -> Result<(), String> {
+pub async fn ensure_s3_credentials(pool: &SqlitePool, account_id: &str) -> Result<(), String> {
     // Check if we already have credentials in the DB
     if get_s3_credentials(pool, account_id).await?.is_some() {
         return Ok(());

@@ -1,6 +1,5 @@
 use crate::utils::auth_tokens::get_api_token;
 use anyhow::{Result, anyhow};
-use tracing::{info, debug, warn, error};
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use reqwest::Client;
@@ -15,6 +14,7 @@ use sysinfo::Networks;
 use tauri::AppHandle;
 use tokio::fs;
 use tokio::task::JoinHandle;
+use tracing::{debug, error, info, warn};
 
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -26,16 +26,9 @@ mod macos_auth {
     /// Run a shell command with administrator privileges using
     /// osascript with a custom prompt. The dialog shows a
     /// standard macOS authentication window with our message.
-    pub fn run_admin_shell(
-        command: &str,
-        prompt: &str,
-    ) -> Result<(), String> {
-        let escaped_cmd = command
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"");
-        let escaped_prompt = prompt
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"");
+    pub fn run_admin_shell(command: &str, prompt: &str) -> Result<(), String> {
+        let escaped_cmd = command.replace('\\', "\\\\").replace('"', "\\\"");
+        let escaped_prompt = prompt.replace('\\', "\\\\").replace('"', "\\\"");
 
         let script = format!(
             "do shell script \"{escaped_cmd}\" \
@@ -52,16 +45,10 @@ mod macos_auth {
             .map_err(|e| format!("Failed to run osascript: {e}"))?;
 
         if !output.status.success() {
-            let stderr =
-                String::from_utf8_lossy(&output.stderr).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             let trimmed = stderr.trim();
-            if trimmed.contains("User canceled")
-                || trimmed.contains("user canceled")
-            {
-                return Err(
-                    "User cancelled the authorization dialog"
-                        .to_string(),
-                );
+            if trimmed.contains("User canceled") || trimmed.contains("user canceled") {
+                return Err("User cancelled the authorization dialog".to_string());
             }
             return Err(format!(
                 "Authorization failed: {}",
@@ -400,10 +387,7 @@ pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
             .unwrap_or(false);
 
         if installed != &latest_version {
-            info!(
-                "Update available: {} -> {}",
-                installed, latest_version
-            );
+            info!("Update available: {} -> {}", installed, latest_version);
             needs_install = true;
         } else if !cert_binary_exists {
             info!("nebula-cert binary missing, will reinstall");
@@ -566,9 +550,7 @@ pub async fn install_nebula(
             match check_permissions(&binary_path).await {
                 Ok(has_perms) => {
                     if !has_perms {
-                        info!(
-                            "Binary needs permissions, requesting elevated access..."
-                        );
+                        info!("Binary needs permissions, requesting elevated access...");
                         if let Err(e) = grant_permissions(&binary_path).await {
                             warn!(
                                 "Failed to grant permissions: {}. You may need to run the app with elevated privileges or grant permissions manually.",
@@ -716,10 +698,7 @@ async fn get_api_auth_header(pool: &sqlx::SqlitePool) -> Result<(String, String)
             anyhow!(e)
         })?
         .ok_or_else(|| {
-            error!(
-                "No API token found for account {}",
-                account_id
-            );
+            error!("No API token found for account {}", account_id);
             anyhow!("No API token found for account {}", account_id)
         })?;
 
@@ -877,15 +856,11 @@ async fn save_certificate_files(cert: &CertificateResponse, account_id: &str) ->
 
     fs::write(config_dir.join("config.yml"), updated_config).await?;
 
-    info!(
-        "Saved certificate files to {}",
-        config_dir.display()
-    );
+    info!("Saved certificate files to {}", config_dir.display());
     Ok(())
 }
 
 async fn update_certificate_db(pool: &sqlx::SqlitePool, cert: &CertificateResponse) -> Result<()> {
-
     // We assume there's only one active certificate for the VPN
     sqlx::query(
         r#"
@@ -925,28 +900,21 @@ pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()>
         if let Some(expires_at_str) = expires_at_str {
             if let Ok(expires_at) = DateTime::parse_from_rfc3339(&expires_at_str) {
                 if Utc::now() > expires_at {
-                    info!(
-                        "Certificate expired at {}, renewing...",
-                        expires_at
-                    );
+                    info!("Certificate expired at {}, renewing...", expires_at);
                     should_renew = true;
                 } else {
                     debug!("Certificate valid until {}", expires_at);
                     // Check if files exist, if not, we might need to re-fetch or just warn
                     let config_dir = get_nebula_config_dir(&account_id)?;
                     if !config_dir.join("host.crt").exists() {
-                        info!(
-                            "Certificate files missing but DB record exists. Re-fetching..."
-                        );
+                        info!("Certificate files missing but DB record exists. Re-fetching...");
                         // We can try to fetch the existing one
                         if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
                             save_certificate_files(&cert, &account_id).await?;
                             update_certificate_db(pool, &cert).await?;
                         } else {
                             // If fetch fails (e.g. 404), maybe we need to request new?
-                            warn!(
-                                "Could not fetch existing certificate, requesting new one..."
-                            );
+                            warn!("Could not fetch existing certificate, requesting new one...");
                             should_request = true;
                         }
                     }
@@ -956,9 +924,7 @@ pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()>
                 should_renew = true;
             }
         } else {
-            debug!(
-                "Certificate record exists but no expiration date. Fetching from API..."
-            );
+            debug!("Certificate record exists but no expiration date. Fetching from API...");
             if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
                 save_certificate_files(&cert, &account_id).await?;
                 update_certificate_db(pool, &cert).await?;
@@ -1101,7 +1067,9 @@ pub async fn start_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), String
 
     let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
 
-    let account_id = get_current_account_id(pool).await.map_err(|e| e.to_string())?;
+    let account_id = get_current_account_id(pool)
+        .await
+        .map_err(|e| e.to_string())?;
     let config_dir = get_nebula_config_dir(&account_id).map_err(|e| e.to_string())?;
 
     // Use config.yml (from API) instead of hostname-based config
@@ -1209,10 +1177,7 @@ async fn remove_existing_binaries(nebula_dir: &Path) {
 
         #[cfg(target_os = "macos")]
         {
-            let cmd = format!(
-                "/bin/rm -f '{}'",
-                path_str.replace('\'', "'\\''"),
-            );
+            let cmd = format!("/bin/rm -f '{}'", path_str.replace('\'', "'\\''"),);
             match macos_auth::run_admin_shell(
                 &cmd,
                 "Hippius needs to remove a previous VPN \
@@ -1225,10 +1190,7 @@ async fn remove_existing_binaries(nebula_dir: &Path) {
                     );
                 }
                 Err(e) => {
-                    warn!(
-                        "Could not authorize removal of {}: {}",
-                        name, e
-                    );
+                    warn!("Could not authorize removal of {}: {}", name, e);
                 }
             }
         }
@@ -1248,10 +1210,7 @@ async fn remove_existing_binaries(nebula_dir: &Path) {
                     warn!("Failed to remove {} with pkexec", name);
                 }
                 Err(e) => {
-                    warn!(
-                        "Could not run pkexec to remove {}: {}",
-                        name, e
-                    );
+                    warn!("Could not run pkexec to remove {}: {}", name, e);
                 }
             }
         }
@@ -1402,10 +1361,7 @@ pub async fn stop_nebula() -> Result<(), String> {
                 tokio::time::sleep(Duration::from_millis(100)).await;
 
                 if !check_nebula_running().await.unwrap_or(false) {
-                    info!(
-                        "Process stopped successfully after {} ms",
-                        (i + 1) * 100
-                    );
+                    info!("Process stopped successfully after {} ms", (i + 1) * 100);
                     return Ok(());
                 }
 
@@ -1469,10 +1425,7 @@ async fn read_lighthouse_ips_from_config(pool: &sqlx::SqlitePool) -> Vec<String>
     let config_file = config_dir.join("config.yml");
 
     if !config_file.exists() {
-        warn!(
-            "Config file not found: {}",
-            config_file.display()
-        );
+        warn!("Config file not found: {}", config_file.display());
         return Vec::new();
     }
 
@@ -1594,7 +1547,14 @@ pub async fn get_nebula_ip_internal(pool: &sqlx::SqlitePool) -> Result<String> {
     let nebula_cert_binary = get_nebula_cert_binary_path()?;
 
     let output = tokio::process::Command::new(&nebula_cert_binary)
-        .args(&["print", "-json", "-path", crt_path.to_str().ok_or_else(|| anyhow!("Certificate path contains invalid UTF-8"))?])
+        .args(&[
+            "print",
+            "-json",
+            "-path",
+            crt_path
+                .to_str()
+                .ok_or_else(|| anyhow!("Certificate path contains invalid UTF-8"))?,
+        ])
         .output()
         .await?;
 
@@ -1634,7 +1594,9 @@ pub async fn get_nebula_ip_internal(pool: &sqlx::SqlitePool) -> Result<String> {
 pub async fn get_nebula_ip(
     state: tauri::State<'_, crate::app_state::AppState>,
 ) -> Result<String, String> {
-    get_nebula_ip_internal(state.pool()?).await.map_err(|e| e.to_string())
+    get_nebula_ip_internal(state.pool()?)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Tries to find the Nebula network interface by checking common names and IP ranges
@@ -1731,10 +1693,7 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
                     if parts.len() > 1 {
                         let second_last = parts[parts.len() - 2];
                         if second_last.starts_with("utun") || second_last.starts_with("tun") {
-                            debug!(
-                                "Found interface by netstat (2nd last): {}",
-                                second_last
-                            );
+                            debug!("Found interface by netstat (2nd last): {}", second_last);
                             return Some(second_last.to_string());
                         }
                     }
@@ -1758,9 +1717,7 @@ pub async fn get_nebula_stats(
     if let Some(ip) = search_ip {
         debug!("Retrieved Nebula IP: {}", ip);
     } else {
-        debug!(
-            "Failed to retrieve Nebula IP from certificate, using default search"
-        );
+        debug!("Failed to retrieve Nebula IP from certificate, using default search");
     }
 
     // Try to find the Nebula interface dynamically
@@ -1840,10 +1797,7 @@ fn get_stats_via_sysinfo() -> Result<NebulaStats, String> {
     let mb_tx = current_tx as f64 / (1024.0 * 1024.0);
     let mb_rx = current_rx as f64 / (1024.0 * 1024.0);
 
-    debug!(
-        "Total TX: {:.3} MB, Total RX: {:.3} MB",
-        mb_tx, mb_rx
-    );
+    debug!("Total TX: {:.3} MB, Total RX: {:.3} MB", mb_tx, mb_rx);
 
     Ok(NebulaStats {
         udp_tx_bytes: mb_tx,
@@ -1986,10 +1940,18 @@ pub async fn generate_node_certificate(
     info!("Generating node certificate: {}", name);
 
     let duration_str = format!("{}h", duration_days * 24);
-    let ca_crt_str = ca_crt.to_str().ok_or_else(|| anyhow!("CA certificate path contains invalid UTF-8"))?;
-    let ca_key_str = ca_key.to_str().ok_or_else(|| anyhow!("CA key path contains invalid UTF-8"))?;
-    let node_crt_str = node_crt.to_str().ok_or_else(|| anyhow!("Node certificate path contains invalid UTF-8"))?;
-    let node_key_str = node_key.to_str().ok_or_else(|| anyhow!("Node key path contains invalid UTF-8"))?;
+    let ca_crt_str = ca_crt
+        .to_str()
+        .ok_or_else(|| anyhow!("CA certificate path contains invalid UTF-8"))?;
+    let ca_key_str = ca_key
+        .to_str()
+        .ok_or_else(|| anyhow!("CA key path contains invalid UTF-8"))?;
+    let node_crt_str = node_crt
+        .to_str()
+        .ok_or_else(|| anyhow!("Node certificate path contains invalid UTF-8"))?;
+    let node_key_str = node_key
+        .to_str()
+        .ok_or_else(|| anyhow!("Node key path contains invalid UTF-8"))?;
 
     let mut cmd = tokio::process::Command::new(&nebula_cert_binary);
     let mut args: Vec<&str> = vec![

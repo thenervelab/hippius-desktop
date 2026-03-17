@@ -102,9 +102,7 @@ pub async fn start_oauth_flow(provider: String) -> Result<OAuthUrlResult, String
     // Store PKCE state keyed by provider (with nonce to prevent replay)
     let nonce = uuid::Uuid::new_v4().to_string();
     {
-        let mut states = PKCE_STATES
-            .lock()
-            .map_err(|e| format!("Lock error: {e}"))?;
+        let mut states = PKCE_STATES.lock().map_err(|e| format!("Lock error: {e}"))?;
         states.insert(
             provider.clone(),
             PkceState {
@@ -126,10 +124,7 @@ pub async fn start_oauth_flow(provider: String) -> Result<OAuthUrlResult, String
         crate::api_client::urlencoding_pub(&next)
     );
 
-    Ok(OAuthUrlResult {
-        url,
-        provider,
-    })
+    Ok(OAuthUrlResult { url, provider })
 }
 
 /// Process the OAuth callback parameters:
@@ -161,9 +156,7 @@ pub async fn complete_oauth_flow(
     } else if let Some(ref code) = params.code {
         // Exchange code for token — look up PKCE state by any stored provider
         let provider = {
-            let states = PKCE_STATES
-                .lock()
-                .map_err(|e| format!("Lock error: {e}"))?;
+            let states = PKCE_STATES.lock().map_err(|e| format!("Lock error: {e}"))?;
             // There should be exactly one pending flow; use it
             states
                 .values()
@@ -210,9 +203,7 @@ pub async fn complete_oauth_flow(
 
     // Clear PKCE state for this provider
     {
-        let mut states = PKCE_STATES
-            .lock()
-            .map_err(|e| format!("Lock error: {e}"))?;
+        let mut states = PKCE_STATES.lock().map_err(|e| format!("Lock error: {e}"))?;
         states.clear();
     }
 
@@ -264,7 +255,7 @@ pub async fn complete_oauth_flow(
         sqlx::query(
             "INSERT INTO objectstore_auth_scoped (owner, temp_auth_key)
              VALUES (?, ?)
-             ON CONFLICT(owner) DO UPDATE SET temp_auth_key = excluded.temp_auth_key"
+             ON CONFLICT(owner) DO UPDATE SET temp_auth_key = excluded.temp_auth_key",
         )
         .bind(&owner)
         .bind(&token)

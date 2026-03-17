@@ -1,12 +1,12 @@
-use sqlx::sqlite::SqlitePool;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client as S3Client;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use sqlx::sqlite::SqlitePool;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
@@ -184,17 +184,13 @@ pub(crate) async fn upsert_migration_status(
     Ok(())
 }
 
-pub(crate) async fn get_server_url(
-    pool: &SqlitePool,
-    account_id: &str,
-) -> Result<String, String> {
+pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String, String> {
     let owner = crate::utils::account_key::account_key(account_id);
-    let row =
-        sqlx::query("SELECT server_url FROM hcfs_config WHERE owner = ?")
-            .bind(&owner)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("DB error reading hcfs_config: {e}"))?;
+    let row = sqlx::query("SELECT server_url FROM hcfs_config WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error reading hcfs_config: {e}"))?;
     match row {
         Some(r) => {
             let url: String = r.get("server_url");
@@ -216,11 +212,7 @@ pub(crate) async fn fetch_migration_files(
     server_url: &str,
     user_id: &str,
 ) -> Result<Vec<MigrationFile>, String> {
-    let url = format!(
-        "{}/migration/{}",
-        server_url.trim_end_matches('/'),
-        user_id
-    );
+    let url = format!("{}/migration/{}", server_url.trim_end_matches('/'), user_id);
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .build()
@@ -230,24 +222,18 @@ pub(crate) async fn fetch_migration_files(
         .header("X-API-Key", "Arion")
         .send()
         .await
-        .map_err(|e| {
-            format!("Failed to reach migration endpoint: {e}")
-        })?;
+        .map_err(|e| format!("Failed to reach migration endpoint: {e}"))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Migration check failed (status {status}): {text}"
-        ));
+        return Err(format!("Migration check failed (status {status}): {text}"));
     }
 
     let parsed: ServerMigrationResponse = resp
         .json()
         .await
-        .map_err(|e| {
-            format!("Failed to parse migration response: {e}")
-        })?;
+        .map_err(|e| format!("Failed to parse migration response: {e}"))?;
 
     Ok(parsed
         .files
@@ -273,7 +259,10 @@ pub async fn check_migration(
         // If the user already dismissed (skipped, cancelled, or completed)
         // the migration, never show the prompt again.
         let terminal_statuses = ["dismissed", "skipped", "cancelled", "complete"];
-        if terminal_statuses.iter().any(|s| status.eq_ignore_ascii_case(s)) {
+        if terminal_statuses
+            .iter()
+            .any(|s| status.eq_ignore_ascii_case(s))
+        {
             return Ok(MigrationCheckResult {
                 needs_migration: false,
                 file_count: 0,
@@ -286,8 +275,7 @@ pub async fn check_migration(
 
         // Status is "in_progress" — verify with the server
         let server_url = get_server_url(pool, &account_id).await?;
-        let files =
-            fetch_migration_files(&server_url, &account_id).await?;
+        let files = fetch_migration_files(&server_url, &account_id).await?;
         let pending: Vec<MigrationFile> = files
             .into_iter()
             .filter(|f| f.status.eq_ignore_ascii_case("pending"))
@@ -333,8 +321,7 @@ pub async fn check_migration(
 
     // 2. No local state -- check server
     let server_url = get_server_url(pool, &account_id).await?;
-    let files =
-        fetch_migration_files(&server_url, &account_id).await?;
+    let files = fetch_migration_files(&server_url, &account_id).await?;
     let pending: Vec<MigrationFile> = files
         .into_iter()
         .filter(|f| f.status.eq_ignore_ascii_case("pending"))
@@ -361,26 +348,15 @@ const MANIFEST_PREFIX: &str = ".hippius_manifest_v1";
 const MAX_RETRIES: u32 = 3;
 
 fn should_skip_key(key: &str) -> bool {
-    key == MANIFEST_PREFIX
-        || key.starts_with(&format!("{MANIFEST_PREFIX}/"))
+    key == MANIFEST_PREFIX || key.starts_with(&format!("{MANIFEST_PREFIX}/"))
 }
 
-async fn build_s3_client(
-    pool: &SqlitePool,
-    account_id: &str,
-) -> Result<S3Client, String> {
-    let (access_key, secret) =
-        crate::utils::auth_tokens::get_s3_credentials(pool, account_id)
-            .await?
-            .ok_or_else(|| "No S3 credentials found".to_string())?;
+async fn build_s3_client(pool: &SqlitePool, account_id: &str) -> Result<S3Client, String> {
+    let (access_key, secret) = crate::utils::auth_tokens::get_s3_credentials(pool, account_id)
+        .await?
+        .ok_or_else(|| "No S3 credentials found".to_string())?;
 
-    let credentials = Credentials::new(
-        &access_key,
-        &secret,
-        None,
-        None,
-        "hippius-migration",
-    );
+    let credentials = Credentials::new(&access_key, &secret, None, None, "hippius-migration");
 
     let config = aws_sdk_s3::config::Builder::new()
         .endpoint_url(S3_ENDPOINT)
@@ -393,14 +369,10 @@ async fn build_s3_client(
 }
 
 #[cfg(unix)]
-fn check_disk_space(
-    path: &std::path::Path,
-    required_bytes: u64,
-) -> Result<(), String> {
-    let stat = nix::sys::statvfs::statvfs(path)
-        .map_err(|e| format!("Failed to check disk space: {e}"))?;
-    let available =
-        stat.block_size() as u64 * stat.blocks_available() as u64;
+fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> Result<(), String> {
+    let stat =
+        nix::sys::statvfs::statvfs(path).map_err(|e| format!("Failed to check disk space: {e}"))?;
+    let available = stat.block_size() as u64 * stat.blocks_available() as u64;
     if available < required_bytes {
         return Err(format!(
             "Not enough disk space. Need {} bytes but only {} available.",
@@ -411,10 +383,7 @@ fn check_disk_space(
 }
 
 #[cfg(windows)]
-fn check_disk_space(
-    _path: &std::path::Path,
-    _required_bytes: u64,
-) -> Result<(), String> {
+fn check_disk_space(_path: &std::path::Path, _required_bytes: u64) -> Result<(), String> {
     // Disk space check not yet implemented on Windows
     Ok(())
 }
@@ -432,8 +401,7 @@ async fn download_file_with_retry(
             Err(e) => {
                 last_err = e;
                 if attempt < MAX_RETRIES {
-                    let delay =
-                        std::time::Duration::from_secs(2u64.pow(attempt));
+                    let delay = std::time::Duration::from_secs(2u64.pow(attempt));
                     tokio::time::sleep(delay).await;
                 }
             }
@@ -504,16 +472,11 @@ pub async fn start_migration(
     }
 
     // Ensure S3 credentials exist
-    crate::utils::auth_tokens::ensure_s3_credentials(
-        pool,
-        &account_id,
-    )
-    .await?;
+    crate::utils::auth_tokens::ensure_s3_credentials(pool, &account_id).await?;
 
     // Fetch pending files from server
     let server_url = get_server_url(pool, &account_id).await?;
-    let all_files =
-        fetch_migration_files(&server_url, &account_id).await?;
+    let all_files = fetch_migration_files(&server_url, &account_id).await?;
     let pending: Vec<MigrationFile> = all_files
         .into_iter()
         .filter(|f| f.status.eq_ignore_ascii_case("pending"))
@@ -570,12 +533,7 @@ pub async fn start_migration(
         )
         .await
         {
-            let _ = app_clone.emit(
-                "migration_error",
-                MigrationError {
-                    error: e.clone(),
-                },
-            );
+            let _ = app_clone.emit("migration_error", MigrationError { error: e.clone() });
             info!("[Migration] Background task failed: {e}");
         }
     });
@@ -623,18 +581,16 @@ async fn run_migration_download(
             continue;
         }
 
-        let dest = sync_dir
-            .join(&file.bucket_name)
-            .join(&file.key);
+        let dest = sync_dir.join(&file.bucket_name).join(&file.key);
 
         // Prevent path traversal via malicious S3 keys (fail-closed)
         let canonical = dest.canonicalize().or_else(|_| {
             // File doesn't exist yet — canonicalize parent
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent).ok();
-                parent.canonicalize().map(|p| {
-                    p.join(dest.file_name().unwrap_or_default())
-                })
+                parent
+                    .canonicalize()
+                    .map(|p| p.join(dest.file_name().unwrap_or_default()))
             } else {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -652,10 +608,7 @@ async fn run_migration_download(
                 let _ = app.emit(
                     "migration_file_error",
                     MigrationFileError {
-                        file_name: format!(
-                            "{}/{}",
-                            file.bucket_name, file.key
-                        ),
+                        file_name: format!("{}/{}", file.bucket_name, file.key),
                         bucket: file.bucket_name.clone(),
                         error: "Path traversal detected".to_string(),
                     },
@@ -669,10 +622,7 @@ async fn run_migration_download(
                 let _ = app.emit(
                     "migration_file_error",
                     MigrationFileError {
-                        file_name: format!(
-                            "{}/{}",
-                            file.bucket_name, file.key
-                        ),
+                        file_name: format!("{}/{}", file.bucket_name, file.key),
                         bucket: file.bucket_name.clone(),
                         error: format!("Path verification failed: {e}"),
                     },
@@ -688,10 +638,7 @@ async fn run_migration_download(
                 "migration_progress",
                 MigrationProgress {
                     phase: "downloading".to_string(),
-                    current_file: format!(
-                        "{}/{}",
-                        file.bucket_name, file.key
-                    ),
+                    current_file: format!("{}/{}", file.bucket_name, file.key),
                     completed,
                     total,
                     failed,
@@ -711,14 +658,7 @@ async fn run_migration_download(
             },
         );
 
-        match download_file_with_retry(
-            s3_client,
-            &file.bucket_name,
-            &file.key,
-            &dest,
-        )
-        .await
-        {
+        match download_file_with_retry(s3_client, &file.bucket_name, &file.key, &dest).await {
             Ok(()) => {
                 completed += 1;
             }
@@ -728,10 +668,7 @@ async fn run_migration_download(
                 let _ = app.emit(
                     "migration_file_error",
                     MigrationFileError {
-                        file_name: format!(
-                            "{}/{}",
-                            file.bucket_name, file.key
-                        ),
+                        file_name: format!("{}/{}", file.bucket_name, file.key),
                         bucket: file.bucket_name.clone(),
                         error: e,
                     },
@@ -741,8 +678,7 @@ async fn run_migration_download(
     }
 
     // Update DB with download results
-    let failed_json = serde_json::to_string(&failed_keys)
-        .unwrap_or_else(|_| "[]".to_string());
+    let failed_json = serde_json::to_string(&failed_keys).unwrap_or_else(|_| "[]".to_string());
     if let Err(e) = upsert_migration_status(
         pool,
         account_id,
@@ -807,15 +743,10 @@ async fn run_migration_download(
     .await
     {
         Ok(result) => {
-            info!(
-                "Migration drive initialized, user_id: {}",
-                result.user_id
-            );
+            info!("Migration drive initialized, user_id: {}", result.user_id);
         }
         Err(e) => {
-            return Err(format!(
-                "Failed to initialize migration drive: {e}"
-            ));
+            return Err(format!("Failed to initialize migration drive: {e}"));
         }
     }
 
@@ -834,17 +765,9 @@ pub async fn cancel_migration(
     // Persist cancelled state so the migration dialog won't reappear
     if !account_id.is_empty() {
         let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
-        if let Err(e) = upsert_migration_status(
-            pool,
-            &account_id,
-            "cancelled",
-            0,
-            0,
-            "[]",
-            "",
-            &server_url,
-        )
-        .await
+        if let Err(e) =
+            upsert_migration_status(pool, &account_id, "cancelled", 0, 0, "[]", "", &server_url)
+                .await
         {
             warn!("Failed to persist cancelled migration status: {e}");
         }
@@ -866,19 +789,13 @@ pub async fn dismiss_migration(
     let pool = state.pool()?;
     clear_migration_uploads();
     let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
-    let status = if reason.is_empty() { "dismissed" } else { &reason };
+    let status = if reason.is_empty() {
+        "dismissed"
+    } else {
+        &reason
+    };
 
-    upsert_migration_status(
-        pool,
-        &account_id,
-        status,
-        0,
-        0,
-        "[]",
-        "",
-        &server_url,
-    )
-    .await?;
+    upsert_migration_status(pool, &account_id, status, 0, 0, "[]", "", &server_url).await?;
     info!("Migration dismissed for account {account_id} with reason: {status}");
     Ok(())
 }
@@ -919,10 +836,7 @@ pub async fn complete_migration_transition(
         info!("Promoted migration sync path to 'default' for {account_id}");
     }
 
-    upsert_migration_status(
-        pool, &account_id, "completed", 0, 0, "[]", "", &server_url,
-    )
-    .await?;
+    upsert_migration_status(pool, &account_id, "completed", 0, 0, "[]", "", &server_url).await?;
     info!("Migration dismissed for account {account_id} with reason: completed");
 
     // 2. Stop the "migration" drive.
@@ -984,17 +898,12 @@ fn is_uploaded(uploaded_set: &HashSet<String>, relative: &str) -> bool {
 
 /// Report successfully synced files to the server.
 /// Called after each sync cycle for the "migration" drive.
-pub async fn report_migrated_files(
-    app: &AppHandle,
-    account_id: &str,
-) -> Result<(), String> {
+pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<(), String> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let pool = app_state.pool()?;
     let db_status = get_migration_status_db(pool, account_id).await?;
-    let Some((status, _total, _completed, sync_path, server_url)) =
-        db_status
-    else {
+    let Some((status, _total, _completed, sync_path, server_url)) = db_status else {
         return Ok(());
     };
     if status == "complete" {
@@ -1002,10 +911,11 @@ pub async fn report_migrated_files(
     }
 
     // Fetch current state from server
-    let files =
-        fetch_migration_files(&server_url, account_id).await?;
-    let pending: Vec<&MigrationFile> =
-        files.iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
+    let files = fetch_migration_files(&server_url, account_id).await?;
+    let pending: Vec<&MigrationFile> = files
+        .iter()
+        .filter(|f| f.status.eq_ignore_ascii_case("pending"))
+        .collect();
 
     if pending.is_empty() {
         // All files migrated
@@ -1044,10 +954,8 @@ pub async fn report_migrated_files(
         "Migration report: checking pending files against uploaded set"
     );
 
-    let mut bucket_keys: std::collections::HashMap<
-        String,
-        Vec<String>,
-    > = std::collections::HashMap::new();
+    let mut bucket_keys: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
 
     for file in &pending {
         let relative = format!("{}/{}", file.bucket_name, file.key);
@@ -1076,10 +984,7 @@ pub async fn report_migrated_files(
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
 
     for (bucket_name, keys) in &bucket_keys {
-        let url = format!(
-            "{}/migration",
-            server_url.trim_end_matches('/')
-        );
+        let url = format!("{}/migration", server_url.trim_end_matches('/'));
 
         #[derive(serde::Serialize)]
         struct ReportBody {
@@ -1102,31 +1007,20 @@ pub async fn report_migrated_files(
             .await
         {
             Ok(r) if r.status().is_success() => {
-                info!(
-                    "Reported {} files for bucket '{}'",
-                    keys.len(),
-                    bucket_name
-                );
+                info!("Reported {} files for bucket '{}'", keys.len(), bucket_name);
             }
             Ok(r) => {
                 let text = r.text().await.unwrap_or_default();
-                warn!(
-                    "Report failed for bucket '{}': {}",
-                    bucket_name, text
-                );
+                warn!("Report failed for bucket '{}': {}", bucket_name, text);
             }
             Err(e) => {
-                warn!(
-                    "Report request failed for '{}': {}",
-                    bucket_name, e
-                );
+                warn!("Report request failed for '{}': {}", bucket_name, e);
             }
         }
     }
 
     // Re-check completion after reporting
-    let files_after =
-        fetch_migration_files(&server_url, account_id).await?;
+    let files_after = fetch_migration_files(&server_url, account_id).await?;
     let still_pending = files_after
         .iter()
         .filter(|f| f.status.eq_ignore_ascii_case("pending"))
@@ -1218,9 +1112,7 @@ mod tests {
 
     #[test]
     fn do_not_skip_manifest_embedded_in_path() {
-        assert!(!should_skip_key(&format!(
-            "data/{MANIFEST_PREFIX}/file"
-        )));
+        assert!(!should_skip_key(&format!("data/{MANIFEST_PREFIX}/file")));
     }
 
     // -----------------------------------------------------------------------
@@ -1230,8 +1122,7 @@ mod tests {
     #[test]
     fn path_traversal_detected_for_dotdot_key() {
         // Create two sibling directories to simulate traversal
-        let parent_dir =
-            tempfile::tempdir().expect("create temp dir");
+        let parent_dir = tempfile::tempdir().expect("create temp dir");
         let parent = parent_dir.path().canonicalize().unwrap();
         let sync_dir = parent.join("sync_root");
         let escape_target = parent.join("secret");
@@ -1246,9 +1137,7 @@ mod tests {
         let dest_parent = dest.parent().unwrap();
         let canonical = dest_parent
             .canonicalize()
-            .map(|p| {
-                p.join(dest.file_name().unwrap_or_default())
-            })
+            .map(|p| p.join(dest.file_name().unwrap_or_default()))
             .unwrap();
 
         assert!(
@@ -1278,8 +1167,7 @@ mod tests {
         let parent_dir = tempfile::tempdir().expect("create temp dir");
         let parent = parent_dir.path().canonicalize().unwrap();
         let sync_dir = parent.join("sync_root");
-        std::fs::create_dir_all(sync_dir.join("legit_bucket"))
-            .unwrap();
+        std::fs::create_dir_all(sync_dir.join("legit_bucket")).unwrap();
         std::fs::create_dir_all(parent.join("escaped")).unwrap();
 
         // bucket_name itself contains traversal
@@ -1299,11 +1187,9 @@ mod tests {
 
     #[test]
     fn normal_key_stays_within_sync_dir() {
-        let sync_dir =
-            tempfile::tempdir().expect("create temp dir");
+        let sync_dir = tempfile::tempdir().expect("create temp dir");
         let base = sync_dir.path().canonicalize().unwrap();
-        std::fs::create_dir_all(base.join("files/documents"))
-            .unwrap();
+        std::fs::create_dir_all(base.join("files/documents")).unwrap();
 
         let dest = base.join("files").join("documents/report.pdf");
         let parent = dest.parent().unwrap();
@@ -1447,8 +1333,7 @@ mod tests {
             is_resuming: false,
         };
 
-        let json = serde_json::to_string(&result)
-            .expect("serialization failed");
+        let json = serde_json::to_string(&result).expect("serialization failed");
         assert!(json.contains("\"needs_migration\":true"));
         assert!(json.contains("\"file_count\":3"));
     }
@@ -1463,8 +1348,7 @@ mod tests {
             failed: 1,
         };
 
-        let json = serde_json::to_string(&progress)
-            .expect("serialization failed");
+        let json = serde_json::to_string(&progress).expect("serialization failed");
         assert!(json.contains("\"phase\":\"downloading\""));
         assert!(json.contains("\"completed\":5"));
     }
@@ -1480,8 +1364,7 @@ mod tests {
             "status": "Pending"
         }"#;
 
-        let file: MigrationFile =
-            serde_json::from_str(json).expect("deserialization failed");
+        let file: MigrationFile = serde_json::from_str(json).expect("deserialization failed");
         assert_eq!(file.bucket_name, "files");
         assert_eq!(file.key, "docs/readme.txt");
         assert_eq!(file.size_bytes, 2048);
@@ -1555,8 +1438,7 @@ mod tests {
     #[test]
     fn migration_file_rejects_missing_fields() {
         let json = r#"{"user_id": "u1", "bucket_name": "b1"}"#;
-        let result: Result<MigrationFile, _> =
-            serde_json::from_str(json);
+        let result: Result<MigrationFile, _> = serde_json::from_str(json);
         assert!(result.is_err());
     }
 
@@ -1705,8 +1587,7 @@ mod tests {
 
     #[test]
     fn is_uploaded_suffix_match_deep_prefix() {
-        let set: HashSet<String> =
-            ["a/b/c/mybucket/deep/file.txt".to_string()].into();
+        let set: HashSet<String> = ["a/b/c/mybucket/deep/file.txt".to_string()].into();
         assert!(is_uploaded(&set, "mybucket/deep/file.txt"));
     }
 }

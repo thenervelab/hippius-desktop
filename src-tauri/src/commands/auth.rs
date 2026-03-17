@@ -9,8 +9,8 @@ use alloy_signer::SignerSync;
 use alloy_signer_local::coins_bip39::English;
 use alloy_signer_local::{MnemonicBuilder, PrivateKeySigner};
 use sha2::{Digest, Sha256};
-use sp_core::crypto::Ss58Codec;
 use sp_core::Pair as _;
+use sp_core::crypto::Ss58Codec;
 use tracing::warn;
 use zeroize::Zeroizing;
 
@@ -324,7 +324,7 @@ pub async fn set_passcode(
     // However, since new passcodes will only be verified in Rust going forward,
     // we use a simpler approach: just store the encrypted data.
     let encrypted = {
-        use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+        use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 
         // CryptoJS key derivation: single MD5 of passphrase → key + IV
         // For forward-compatibility, use SHA-256 and a random salt
@@ -404,7 +404,7 @@ fn crypto_js_derive_key_iv(passphrase: &[u8], salt: &[u8]) -> ([u8; 32], [u8; 16
 
 /// Decrypt a CryptoJS-AES encrypted mnemonic with a passcode.
 fn decrypt_mnemonic_aes(encrypted: &str, passcode: &str) -> Result<String, String> {
-    use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+    use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
     use base64::Engine;
 
     let raw = base64::engine::general_purpose::STANDARD
@@ -559,20 +559,19 @@ pub async fn refresh_auth_token_internal(
         .map_err(|e| format!("Failed to persist API token: {e}"))?;
 
     // 6. Update live drive's bearer token
-    if let Err(e) = crate::commands::syncing::update_sync_bearer_token_internal(
-        pool,
-        account_id,
-        &token,
-    )
-    .await
+    if let Err(e) =
+        crate::commands::syncing::update_sync_bearer_token_internal(pool, account_id, &token).await
     {
         warn!("Could not update live drive token: {e}");
     }
 
     // 7. Emit event to frontend
-    if let Err(e) = app.emit("auth_token_refreshed", serde_json::json!({
-        "substrateAddress": substrate_address,
-    })) {
+    if let Err(e) = app.emit(
+        "auth_token_refreshed",
+        serde_json::json!({
+            "substrateAddress": substrate_address,
+        }),
+    ) {
         warn!(error = %e, "Failed to emit auth_token_refreshed");
     }
 

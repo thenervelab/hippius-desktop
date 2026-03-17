@@ -12,6 +12,7 @@
 
 mod api_client;
 mod app_state;
+mod block_subscription;
 mod builder_blocks;
 mod commands;
 mod constants;
@@ -21,7 +22,6 @@ mod macos_bookmarks;
 mod substrate_client;
 mod sync_progress;
 mod sync_shared;
-mod block_subscription;
 mod utils;
 
 use crate::commands::syncing::{
@@ -31,59 +31,31 @@ use crate::commands::syncing::{
     trigger_sync_now,
 };
 use crate::sync_progress::{
-    sp_clear_all_data, sp_cleanup_expired_files, sp_complete_pending_files,
-    sp_complete_session, sp_get_overall_progress, sp_get_recent_files, sp_get_session_files,
-    sp_get_tray_menu_files, sp_has_any_sync_activity, sp_is_encrypted_file_id,
-    sp_mark_all_pending_files_as_failed, sp_mark_file_error, sp_mark_pending_files_as_failed,
-    sp_merge_into_session, sp_record_deleted_file, sp_should_hide_file, sp_start_session,
+    sp_cleanup_expired_files, sp_clear_all_data, sp_complete_pending_files, sp_complete_session,
+    sp_get_overall_progress, sp_get_recent_files, sp_get_session_files, sp_get_tray_menu_files,
+    sp_has_any_sync_activity, sp_is_encrypted_file_id, sp_mark_all_pending_files_as_failed,
+    sp_mark_file_error, sp_mark_pending_files_as_failed, sp_merge_into_session,
+    sp_record_deleted_file, sp_remove_files_for_label, sp_should_hide_file, sp_start_session,
     sp_stop_session, sp_update_file_progress,
 };
 use crate::sync_shared::{app_close, get_sync_activity, get_sync_engine_health, get_sync_status};
+use block_subscription::{
+    get_current_block_number, start_block_subscription, stop_block_subscription,
+};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::accounts::{
     export_app_data, get_all_subaccount_addresses, import_app_data, reset_app,
-};
-use commands::billing::{
-    create_subscription, get_active_subscription, get_add_credit_events,
-    get_balance_transfers, get_billing_transactions, get_customer_portal_url,
-    get_deposit_address, get_file_nodes, get_files_size, get_indexer_credits,
-    get_marketplace_credits, get_node_locations, get_subscription_plans,
-    get_system_balance_history, get_user_credits_balance,
-};
-use commands::notifications::{get_notification_settings, update_notification_settings};
-use commands::ssh_keys::{create_ssh_key, delete_ssh_key, list_ssh_keys};
-use commands::support::{
-    create_support_ticket, get_support_ticket_messages, list_support_tickets,
-    post_ticket_message, update_support_ticket,
-};
-use commands::vm::{
-    create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images,
-    list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
 use commands::auth::{
     auth_logout, generate_mnemonic, get_eth_address, get_polkadot_address, login_with_mnemonic,
     refresh_auth_token, set_passcode, unlock_with_passcode, validate_mnemonic,
 };
-use commands::oauth::{complete_oauth_flow, start_oauth_flow};
-use commands::session::{
-    clear_auth_session, clear_wallet, get_auth_session, get_auth_token, get_last_auth_session,
-    get_wallet, has_wallet, is_token_valid, save_api_token_command, save_auth_session, save_wallet,
-    update_logout_time,
+use commands::billing::{
+    create_subscription, get_active_subscription, get_add_credit_events, get_balance_transfers,
+    get_billing_transactions, get_customer_portal_url, get_deposit_address, get_file_nodes,
+    get_files_size, get_indexer_credits, get_marketplace_credits, get_node_locations,
+    get_subscription_plans, get_system_balance_history, get_user_credits_balance,
 };
-use commands::local_db::{
-    add_notification, list_notifications, mark_notification_read, mark_notification_unread,
-    mark_all_notifications_read, delete_notification, delete_all_notifications,
-    delete_system_notification_by_version, get_unread_count, credit_already_notified,
-    low_credit_subtype_exists, has_active_low_credit_notification,
-    get_last_deleted_low_credit_time, hippius_version_notification_exists,
-    clear_all_notifications, get_local_notification_preferences,
-    update_local_notification_preferences, get_local_enabled_notification_types,
-    is_first_time, mark_first_time_seen, get_is_above_half_credit, update_is_above_half_credit,
-    add_contact, get_contacts, update_contact, delete_contact,
-    is_onboarding_done, set_onboarding_done,
-    get_user_preference, save_user_preference,
-};
-use commands::file_commands::{add_file, add_folder, allow_asset_scope, export_file, list_sync_folder, remove_file, resolve_file_path};
 use commands::blockchain::{
     from_plancks, get_account_balance, get_block_timestamp, get_explorer_url, get_referral_links,
     get_staking_info, stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded,
@@ -93,15 +65,44 @@ use commands::chart_formatting::{
     calculate_storage_cost, format_balance_chart, format_credits_chart, format_storage_chart,
     transform_marketplace_credits,
 };
-use block_subscription::{
-    get_current_block_number, start_block_subscription, stop_block_subscription,
+use commands::file_commands::{
+    add_file, add_folder, allow_asset_scope, export_file, list_sync_folder, remove_file,
+    resolve_file_path,
 };
+use commands::local_db::{
+    add_contact, add_notification, clear_all_notifications, credit_already_notified,
+    delete_all_notifications, delete_contact, delete_notification,
+    delete_system_notification_by_version, get_contacts, get_is_above_half_credit,
+    get_last_deleted_low_credit_time, get_local_enabled_notification_types,
+    get_local_notification_preferences, get_unread_count, get_user_preference,
+    has_active_low_credit_notification, hippius_version_notification_exists, is_first_time,
+    is_onboarding_done, list_notifications, low_credit_subtype_exists, mark_all_notifications_read,
+    mark_first_time_seen, mark_notification_read, mark_notification_unread, save_user_preference,
+    set_onboarding_done, update_contact, update_is_above_half_credit,
+    update_local_notification_preferences,
+};
+use commands::notifications::{get_notification_settings, update_notification_settings};
+use commands::oauth::{complete_oauth_flow, start_oauth_flow};
+use commands::session::{
+    clear_auth_session, clear_wallet, get_auth_session, get_auth_token, get_last_auth_session,
+    get_wallet, has_wallet, is_token_valid, save_api_token_command, save_auth_session, save_wallet,
+    update_logout_time,
+};
+use commands::ssh_keys::{create_ssh_key, delete_ssh_key, list_ssh_keys};
 use commands::substrate_tx::{
     get_all_sync_paths, get_sync_path, get_wss_endpoint, remove_sync_path, set_sync_path,
     transfer_balance_tauri, update_wss_endpoint_command,
 };
+use commands::support::{
+    create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message,
+    update_support_ticket,
+};
+use commands::vm::{
+    create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images,
+    list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
+};
 use tauri::{Builder, Emitter, Manager};
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 /// Load environment variables from `.env` file(s). Tries both the working
 /// directory and the `CARGO_MANIFEST_DIR` path (for development builds).
@@ -142,10 +143,7 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            info!(
-                "Another instance attempted to start with argv: {:?}",
-                argv
-            );
+            info!("Another instance attempted to start with argv: {:?}", argv);
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(e) = window.unminimize() {
                     debug!("Failed to unminimize window: {e}");
@@ -388,6 +386,7 @@ fn main() {
             sp_has_any_sync_activity,
             sp_cleanup_expired_files,
             sp_record_deleted_file,
+            sp_remove_files_for_label,
             sp_clear_all_data,
             sp_is_encrypted_file_id,
             sp_should_hide_file,

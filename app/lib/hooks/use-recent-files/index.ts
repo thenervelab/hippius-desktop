@@ -156,7 +156,7 @@ const useRecentFiles = () => {
               lastChargedAt: item.timestamp ? item.timestamp * 1000 : Date.now(),
               fileHash: "",
               isFolder: false,
-              type: item.action === "uploaded" ? "Uploaded" : item.action,
+              type: item.action.charAt(0).toUpperCase() + item.action.slice(1),
               isErasureCoded: false,
               mainReqHash: "",
               label: item.label,

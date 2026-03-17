@@ -1,12 +1,12 @@
 use crate::substrate_client::{
     get_current_wss_endpoint, get_substrate_client, update_wss_endpoint,
 };
-use sqlx::sqlite::SqlitePool;
 use crate::utils::account_key::account_key;
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
 use sqlx::Row;
+use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
@@ -124,19 +124,13 @@ pub(crate) async fn set_sync_path_internal(
 
     match res {
         Ok(_) => {
-            info!(
-                "Sync path for '{}' set successfully in DB",
-                path_type
-            );
+            info!("Sync path for '{}' set successfully in DB", path_type);
 
             #[cfg(target_os = "macos")]
             {
                 use crate::utils::bookmark_db::store_bookmark;
                 if let Err(e) = store_bookmark(pool, path, path_type).await {
-                    warn!(
-                        "Failed to create security-scoped bookmark: {}",
-                        e
-                    );
+                    warn!("Failed to create security-scoped bookmark: {}", e);
                 }
             }
 
@@ -245,13 +239,12 @@ pub async fn get_sync_path_internal(
                 .unwrap_or_else(|_| "default".to_string());
             Some((row.get::<String, _>("path"), label))
         } else {
-            let scoped_count: i64 = sqlx::query_scalar(
-                "SELECT COUNT(1) FROM sync_paths WHERE owner = ?",
-            )
-            .bind(owner)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+            let scoped_count: i64 =
+                sqlx::query_scalar("SELECT COUNT(1) FROM sync_paths WHERE owner = ?")
+                    .bind(owner)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap_or(0);
 
             if scoped_count == 0 {
                 let mut tx = pool
@@ -268,11 +261,12 @@ pub async fn get_sync_path_internal(
                 .map_err(|e| format!("DB error: {}", e))?;
 
                 if let Some((legacy_id, legacy_path)) = legacy {
-                    if let Err(e) = sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND type = ?")
-                        .bind(owner)
-                        .bind(path_type)
-                        .execute(&mut *tx)
-                        .await
+                    if let Err(e) =
+                        sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND type = ?")
+                            .bind(owner)
+                            .bind(path_type)
+                            .execute(&mut *tx)
+                            .await
                     {
                         warn!("Failed to delete scoped sync_paths during migration: {e}");
                     }

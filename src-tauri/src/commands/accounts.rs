@@ -4,7 +4,7 @@ use sp_core::Pair;
 use sp_core::crypto::Ss58Codec;
 use sp_core::sr25519;
 use sqlx::Row;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct SyncPathExport {
@@ -56,10 +56,7 @@ pub async fn import_app_data(
             if sp.path.trim().is_empty() {
                 continue;
             }
-            info!(
-                "Importing sync path: {}, label: {}",
-                sp.path, sp.label
-            );
+            info!("Importing sync path: {}, label: {}", sp.path, sp.label);
             let existing: Option<(String,)> =
                 sqlx::query_as("SELECT path FROM sync_paths WHERE owner = '' AND label = ?")
                     .bind(&sp.label)
@@ -218,9 +215,7 @@ pub async fn export_app_data(
 }
 
 #[tauri::command]
-pub async fn reset_app(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<(), String> {
+pub async fn reset_app(state: tauri::State<'_, crate::app_state::AppState>) -> Result<(), String> {
     info!("[Reset App] Starting app reset...");
 
     let pool = state.pool()?;

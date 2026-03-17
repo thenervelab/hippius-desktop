@@ -102,13 +102,11 @@ pub async fn has_wallet(
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
-    let row = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM wallet_store WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to check wallet: {e}"))?;
+    let row = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM wallet_store WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to check wallet: {e}"))?;
 
     Ok(row.0 > 0)
 }
@@ -196,16 +194,19 @@ pub async fn get_auth_session(
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
-    let row = sqlx::query_as::<_, (
-        Option<String>,
-        Option<i64>,
-        Option<i64>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-    )>(
+    let row = sqlx::query_as::<
+        _,
+        (
+            Option<String>,
+            Option<i64>,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+            Option<String>,
+        ),
+    >(
         r#"
         SELECT auth_token, token_expiry, user_id, username,
                provider, substrate_address, logout_time_minutes, last_login_at
@@ -219,7 +220,16 @@ pub async fn get_auth_session(
     .map_err(|e| format!("Failed to get auth session: {e}"))?;
 
     Ok(row.map(
-        |(auth_token, token_expiry, user_id, username, provider, substrate_address, logout_time_minutes, last_login_at)| {
+        |(
+            auth_token,
+            token_expiry,
+            user_id,
+            username,
+            provider,
+            substrate_address,
+            logout_time_minutes,
+            last_login_at,
+        )| {
             AuthSession {
                 auth_token,
                 token_expiry,
@@ -339,16 +349,19 @@ pub async fn get_last_auth_session(
 ) -> Result<Option<AuthSession>, String> {
     let pool = state.pool()?;
 
-    let row = sqlx::query_as::<_, (
-        Option<String>,
-        Option<i64>,
-        Option<i64>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-    )>(
+    let row = sqlx::query_as::<
+        _,
+        (
+            Option<String>,
+            Option<i64>,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+            Option<String>,
+        ),
+    >(
         r#"
         SELECT auth_token, token_expiry, user_id, username,
                provider, substrate_address, logout_time_minutes, last_login_at
@@ -362,7 +375,16 @@ pub async fn get_last_auth_session(
     .map_err(|e| format!("Failed to get last auth session: {e}"))?;
 
     Ok(row.map(
-        |(auth_token, token_expiry, user_id, username, provider, substrate_address, logout_time_minutes, last_login_at)| {
+        |(
+            auth_token,
+            token_expiry,
+            user_id,
+            username,
+            provider,
+            substrate_address,
+            logout_time_minutes,
+            last_login_at,
+        )| {
             AuthSession {
                 auth_token,
                 token_expiry,

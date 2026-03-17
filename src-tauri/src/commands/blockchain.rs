@@ -79,7 +79,10 @@ pub struct BlockTimestampResult {
 fn get_signer(
     app_state: &crate::app_state::AppState,
 ) -> Result<PairSigner<subxt::PolkadotConfig, sp_core::sr25519::Pair>, String> {
-    let auth = app_state.auth.lock().map_err(|e| format!("Lock error: {e}"))?;
+    let auth = app_state
+        .auth
+        .lock()
+        .map_err(|e| format!("Lock error: {e}"))?;
     let pair = auth
         .sr25519_pair
         .clone()
@@ -88,7 +91,10 @@ fn get_signer(
 }
 
 fn get_substrate_address(app_state: &crate::app_state::AppState) -> Result<String, String> {
-    let auth = app_state.auth.lock().map_err(|e| format!("Lock error: {e}"))?;
+    let auth = app_state
+        .auth
+        .lock()
+        .map_err(|e| format!("Lock error: {e}"))?;
     auth.substrate_address
         .clone()
         .ok_or("Not authenticated — please log in first".to_string())
@@ -179,9 +185,7 @@ pub async fn get_staking_info(
         .unwrap_or(0);
 
     // Try staking.ledger(address) — on newer runtimes the controller == stash.
-    let ledger_query = custom_runtime::storage()
-        .staking()
-        .ledger(&account_id);
+    let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
     if let Ok(Some(ledger)) = client
         .storage()
         .at_latest()
@@ -272,9 +276,8 @@ pub async fn get_referral_links(
     address: String,
 ) -> Result<Vec<ReferralLink>, String> {
     let client = get_substrate_client(state.pool()?).await?;
-    let target_account: subxt::utils::AccountId32 = address
-        .parse()
-        .map_err(|_| "Invalid address".to_string())?;
+    let target_account: subxt::utils::AccountId32 =
+        address.parse().map_err(|_| "Invalid address".to_string())?;
 
     let storage = client
         .storage()
@@ -347,18 +350,13 @@ pub async fn stake_bond(
     let client = get_substrate_client(state.pool()?).await?;
     let address = get_substrate_address(&state)?;
 
-    let amount: u128 = amount
-        .parse()
-        .map_err(|e| format!("Invalid amount: {e}"))?;
+    let amount: u128 = amount.parse().map_err(|e| format!("Invalid amount: {e}"))?;
 
-    let account_id: subxt::utils::AccountId32 = address
-        .parse()
-        .map_err(|_| "Invalid address".to_string())?;
+    let account_id: subxt::utils::AccountId32 =
+        address.parse().map_err(|_| "Invalid address".to_string())?;
 
     // Check if already bonded.
-    let ledger_query = custom_runtime::storage()
-        .staking()
-        .ledger(&account_id);
+    let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
     let already_bonded = client
         .storage()
         .at_latest()
@@ -383,9 +381,10 @@ pub async fn stake_bond(
             .extrinsic_hash()
     } else {
         info!("Submitting bond transaction...");
-        let tx = custom_runtime::tx()
-            .staking()
-            .bond(amount, custom_runtime::runtime_types::pallet_staking::RewardDestination::Staked);
+        let tx = custom_runtime::tx().staking().bond(
+            amount,
+            custom_runtime::runtime_types::pallet_staking::RewardDestination::Staked,
+        );
         client
             .tx()
             .sign_and_submit_then_watch_default(&tx, &signer)
@@ -413,9 +412,7 @@ pub async fn stake_unbond(
     let signer = get_signer(&state)?;
     let client = get_substrate_client(state.pool()?).await?;
 
-    let amount: u128 = amount
-        .parse()
-        .map_err(|e| format!("Invalid amount: {e}"))?;
+    let amount: u128 = amount.parse().map_err(|e| format!("Invalid amount: {e}"))?;
 
     info!("Submitting unbond transaction...");
     let tx = custom_runtime::tx().staking().unbond(amount);
@@ -445,9 +442,8 @@ pub async fn stake_withdraw_unbonded(
     let client = get_substrate_client(state.pool()?).await?;
     let address = get_substrate_address(&state)?;
 
-    let account_id: subxt::utils::AccountId32 = address
-        .parse()
-        .map_err(|_| "Invalid address".to_string())?;
+    let account_id: subxt::utils::AccountId32 =
+        address.parse().map_err(|_| "Invalid address".to_string())?;
 
     // Get slashing spans count for the withdrawal parameter.
     let spans_query = custom_runtime::storage()
@@ -496,9 +492,8 @@ pub async fn stake_claim_rewards(
     let client = get_substrate_client(state.pool()?).await?;
     let address = get_substrate_address(&state)?;
 
-    let account_id: subxt::utils::AccountId32 = address
-        .parse()
-        .map_err(|_| "Invalid address".to_string())?;
+    let account_id: subxt::utils::AccountId32 =
+        address.parse().map_err(|_| "Invalid address".to_string())?;
 
     // Get current era.
     let era_query = custom_runtime::storage().staking().current_era();
@@ -547,13 +542,10 @@ pub async fn transfer_balance(
     let signer = get_signer(&state)?;
     let client = get_substrate_client(state.pool()?).await?;
 
-    let amount: u128 = amount
-        .parse()
-        .map_err(|e| format!("Invalid amount: {e}"))?;
+    let amount: u128 = amount.parse().map_err(|e| format!("Invalid amount: {e}"))?;
 
-    let recipient =
-        <sp_core::crypto::AccountId32 as Ss58Codec>::from_ss58check(&recipient_address)
-            .map_err(|e| format!("Invalid recipient address: {e:?}"))?;
+    let recipient = <sp_core::crypto::AccountId32 as Ss58Codec>::from_ss58check(&recipient_address)
+        .map_err(|e| format!("Invalid recipient address: {e:?}"))?;
 
     info!("Submitting transfer_keep_alive transaction...");
     let tx = custom_runtime::tx()
@@ -591,7 +583,9 @@ pub fn to_plancks(amount: String) -> Result<String, String> {
         return Err("Invalid amount".to_string());
     }
     // Validate the input is a valid number
-    amount.parse::<f64>().map_err(|_| "Invalid amount".to_string())?;
+    amount
+        .parse::<f64>()
+        .map_err(|_| "Invalid amount".to_string())?;
 
     let (whole, fraction) = match amount.split_once('.') {
         Some((w, f)) => (w, f),

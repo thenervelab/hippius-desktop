@@ -1,5 +1,5 @@
 use tauri::{Builder, Manager, Wry};
-use tracing::{info, debug, warn};
+use tracing::{debug, info, warn};
 
 pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     builder.on_window_event(|window, event| {

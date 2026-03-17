@@ -106,10 +106,7 @@ pub async fn get_current_wss_endpoint(pool: &SqlitePool) -> Result<String, Strin
 }
 
 /// Update the WSS endpoint in database and clear the current client.
-pub async fn update_wss_endpoint(
-    pool: &SqlitePool,
-    new_endpoint: String,
-) -> Result<(), String> {
+pub async fn update_wss_endpoint(pool: &SqlitePool, new_endpoint: String) -> Result<(), String> {
     // Validate the endpoint format (basic check)
     if !new_endpoint.starts_with("ws://") && !new_endpoint.starts_with("wss://") {
         return Err("Invalid WSS endpoint format. Must start with ws:// or wss://".to_string());

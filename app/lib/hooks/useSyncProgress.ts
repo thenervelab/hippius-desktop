@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback } from "react";
 import { atom, useAtom, useAtomValue, useSetAtom } from "jotai";
 import {
   startSession,
@@ -12,7 +12,6 @@ import {
   getTrayMenuFiles,
   getOverallProgress,
   hasAnySyncActivity,
-  cleanupExpiredFiles,
   type SyncFile,
   type RecentFile,
   type FileAction,
@@ -73,9 +72,6 @@ export function useSyncProgress() {
   const [overallProgress, setOverallProgress] = useAtom(overallProgressAtom);
   const [hasSyncActivity, setHasSyncActivity] = useAtom(hasSyncActivityAtom);
   const setLastUpdate = useSetAtom(lastProgressUpdateAtom);
-
-  // Track cleanup interval
-  const cleanupIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /**
    * Refresh all state from Rust backend
@@ -140,27 +136,9 @@ export function useSyncProgress() {
     await refreshState();
   }, [refreshState]);
 
-  // Setup cleanup interval (check every minute for expired files)
+  // Initial refresh on mount (cleanup interval lives in useSyncEvents)
   useEffect(() => {
-    // Initial refresh
     refreshState();
-
-    // Cleanup interval
-    cleanupIntervalRef.current = setInterval(() => {
-      cleanupExpiredFiles().then((removed) => {
-        if (removed > 0) {
-          refreshState();
-        }
-      }).catch((err) => {
-        console.error("[useSyncProgress] Cleanup failed:", err);
-      });
-    }, 60 * 1000); // Check every minute
-
-    return () => {
-      if (cleanupIntervalRef.current) {
-        clearInterval(cleanupIntervalRef.current);
-      }
-    };
   }, [refreshState]);
 
   return {

@@ -13,7 +13,7 @@ use tauri::Manager;
 use tracing::{info, warn};
 
 use crate::hcfs_drive::HCFS_DRIVES;
-use crate::sync_shared::{update_state, SyncActivityItem};
+use crate::sync_shared::{SyncActivityItem, update_state};
 use crate::utils::account_key::account_key;
 
 /// Allow the given directory (recursively) in the Tauri asset protocol scope
@@ -143,7 +143,11 @@ pub async fn add_folder(sync_path: String, folder_path: String) -> Result<String
 /// When `label` is provided the deletion is recorded in the sync activity
 /// ring buffer so the frontend can immediately filter it from recent files.
 #[tauri::command]
-pub async fn remove_file(sync_path: String, name: String, label: Option<String>) -> Result<(), String> {
+pub async fn remove_file(
+    sync_path: String,
+    name: String,
+    label: Option<String>,
+) -> Result<(), String> {
     let parent = Path::new(&sync_path);
     let target = parent.join(&name);
     let target = ensure_within(parent, &target)?;
@@ -152,7 +156,10 @@ pub async fn remove_file(sync_path: String, name: String, label: Option<String>)
     let size_bytes = if target.is_dir() {
         0
     } else {
-        tokio::fs::metadata(&target).await.map(|m| m.len()).unwrap_or(0)
+        tokio::fs::metadata(&target)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0)
     };
 
     if target.is_dir() {
@@ -191,9 +198,7 @@ struct SyncedFileInfo {
 /// `path_hash` appears in the drive's persisted `synced` tree.
 /// Returns `None` when the drive isn't available (e.g. logged out)
 /// so the caller can fall back to "unknown".
-async fn synced_paths_for_label(
-    label: &str,
-) -> Option<HashMap<String, SyncedFileInfo>> {
+async fn synced_paths_for_label(label: &str) -> Option<HashMap<String, SyncedFileInfo>> {
     let guard = HCFS_DRIVES.lock().await;
     let manager = guard.get(label)?;
     let state = manager.load_sync_state().ok()?;
@@ -305,17 +310,9 @@ pub async fn list_sync_folder(
                         info.path_hash_hex.clone(),
                         info.arion_cid.clone(),
                     ),
-                    None => (
-                        "pending".to_string(),
-                        String::new(),
-                        String::new(),
-                    ),
+                    None => ("pending".to_string(), String::new(), String::new()),
                 },
-                None => (
-                    "unknown".to_string(),
-                    String::new(),
-                    String::new(),
-                ),
+                None => ("unknown".to_string(), String::new(), String::new()),
             }
         };
 

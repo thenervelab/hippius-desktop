@@ -3,8 +3,8 @@
 //! Uses an in-memory SQLite database — no Tauri AppHandle needed.
 //! Tests the raw SQL logic that the Tauri commands wrap.
 
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
+use sqlx::sqlite::SqlitePool;
 
 async fn setup_db() -> SqlitePool {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -143,13 +143,11 @@ async fn test_upsert_wallet() {
     assert_eq!(hash, "new-hash");
 
     // Only one row
-    let (count,) = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM wallet_store WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM wallet_store WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(count, 1);
 }
 
@@ -159,12 +157,11 @@ async fn test_has_wallet() {
     let owner = account_key("test-account-3");
 
     // Should not exist
-    let (count,) =
-        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM wallet_store WHERE owner = ?")
-            .bind(&owner)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM wallet_store WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(count, 0);
 
     // Insert
@@ -179,12 +176,11 @@ async fn test_has_wallet() {
     .unwrap();
 
     // Should exist
-    let (count,) =
-        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM wallet_store WHERE owner = ?")
-            .bind(&owner)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM wallet_store WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert!(count > 0);
 }
 
@@ -272,16 +268,31 @@ async fn test_save_and_get_auth_session() {
     .await
     .unwrap();
 
-    assert_eq!(row.get::<Option<String>, _>("auth_token").unwrap(), "test-token-123");
-    assert_eq!(row.get::<Option<i64>, _>("token_expiry").unwrap(), future_expiry);
+    assert_eq!(
+        row.get::<Option<String>, _>("auth_token").unwrap(),
+        "test-token-123"
+    );
+    assert_eq!(
+        row.get::<Option<i64>, _>("token_expiry").unwrap(),
+        future_expiry
+    );
     assert_eq!(row.get::<Option<i64>, _>("user_id").unwrap(), 42);
-    assert_eq!(row.get::<Option<String>, _>("username").unwrap(), "testuser");
-    assert_eq!(row.get::<Option<String>, _>("provider").unwrap(), "mnemonic");
+    assert_eq!(
+        row.get::<Option<String>, _>("username").unwrap(),
+        "testuser"
+    );
+    assert_eq!(
+        row.get::<Option<String>, _>("provider").unwrap(),
+        "mnemonic"
+    );
     assert_eq!(
         row.get::<Option<String>, _>("substrate_address").unwrap(),
         "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
     );
-    assert_eq!(row.get::<Option<i64>, _>("logout_time_minutes").unwrap(), 1440);
+    assert_eq!(
+        row.get::<Option<i64>, _>("logout_time_minutes").unwrap(),
+        1440
+    );
 }
 
 #[tokio::test]
@@ -324,15 +335,13 @@ async fn test_get_auth_token_expired() {
     let owner = account_key("test-account-7");
     let past_expiry: i64 = chrono::Utc::now().timestamp_millis() - 1000; // 1 second ago
 
-    sqlx::query(
-        "INSERT INTO auth_session (owner, auth_token, token_expiry) VALUES (?, ?, ?)",
-    )
-    .bind(&owner)
-    .bind("expired-token")
-    .bind(past_expiry)
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO auth_session (owner, auth_token, token_expiry) VALUES (?, ?, ?)")
+        .bind(&owner)
+        .bind("expired-token")
+        .bind(past_expiry)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let row = sqlx::query_as::<_, (Option<String>, Option<i64>)>(
         "SELECT auth_token, token_expiry FROM auth_session WHERE owner = ?",
@@ -400,16 +409,18 @@ async fn test_clear_auth_session_preserves_logout_minutes() {
     .unwrap();
 
     // Verify logout_time_minutes is preserved
-    let row = sqlx::query(
-        "SELECT auth_token, logout_time_minutes FROM auth_session WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let row =
+        sqlx::query("SELECT auth_token, logout_time_minutes FROM auth_session WHERE owner = ?")
+            .bind(&owner)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     assert!(row.get::<Option<String>, _>("auth_token").is_none());
-    assert_eq!(row.get::<Option<i64>, _>("logout_time_minutes").unwrap(), 60);
+    assert_eq!(
+        row.get::<Option<i64>, _>("logout_time_minutes").unwrap(),
+        60
+    );
 }
 
 #[tokio::test]
@@ -530,13 +541,17 @@ async fn test_session_upsert_preserves_logout_minutes_when_null() {
     .await
     .unwrap();
 
-    let row = sqlx::query("SELECT auth_token, logout_time_minutes FROM auth_session WHERE owner = ?")
-        .bind(&owner)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let row =
+        sqlx::query("SELECT auth_token, logout_time_minutes FROM auth_session WHERE owner = ?")
+            .bind(&owner)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
-    assert_eq!(row.get::<Option<String>, _>("auth_token").unwrap(), "token-2");
+    assert_eq!(
+        row.get::<Option<String>, _>("auth_token").unwrap(),
+        "token-2"
+    );
     assert_eq!(
         row.get::<Option<i64>, _>("logout_time_minutes").unwrap(),
         60,

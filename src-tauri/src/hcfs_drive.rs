@@ -16,11 +16,10 @@
 //! - `SYNC_IN_PROGRESS` — suppresses file watcher during active sync
 
 use crate::sync_shared::{
-    ConnectivityStatus, SyncActivityItem, SyncEngineHealth,
-    clear_review_entered, commit_pending_activity_for_label,
-    discard_pending_activity_for_label, get_health, get_sync_failures, is_cancelled,
-    is_review_timed_out, record_sync_failure, reset_sync_failures, set_review_entered,
-    update_state,
+    ConnectivityStatus, SyncActivityItem, SyncEngineHealth, clear_review_entered,
+    commit_pending_activity_for_label, discard_pending_activity_for_label, get_health,
+    get_sync_failures, is_cancelled, is_review_timed_out, record_sync_failure, reset_sync_failures,
+    set_review_entered, update_state,
 };
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::drive::Drive;
@@ -138,9 +137,7 @@ impl HcfsDriveManager {
     ///
     /// Returns the three-tree sync state (`local`, `remote`, `synced`) plus
     /// the `path_index` mapping path hashes to relative file paths.
-    pub fn load_sync_state(
-        &self,
-    ) -> Result<hcfs_client::sync::SyncState, String> {
+    pub fn load_sync_state(&self) -> Result<hcfs_client::sync::SyncState, String> {
         self.drive.load_sync_state().map_err(|e| e.to_string())
     }
 
@@ -352,7 +349,9 @@ impl HcfsDriveManager {
         );
         // Log each remote file's path_hash prefix for cross-referencing
         for file_id in state.remote.files.keys() {
-            let known_path = state.path_index.get(file_id)
+            let known_path = state
+                .path_index
+                .get(file_id)
                 .map(|p| p.display().to_string());
             let enc_path = state.remote_encrypted_paths.contains_key(file_id);
             debug!(
@@ -383,13 +382,13 @@ impl HcfsDriveManager {
             let name_str = name.to_string_lossy();
             if name_str.starts_with("downloaded_")
                 && name_str.len() > "downloaded_".len()
-                && name_str["downloaded_".len()..].chars().all(|c| c.is_ascii_hexdigit())
+                && name_str["downloaded_".len()..]
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit())
             {
                 info!(artifact = %name_str, "Removing failed download artifact");
                 let _ = std::fs::remove_file(entry.path());
-                failed_ids.push(
-                    name_str["downloaded_".len()..].to_string(),
-                );
+                failed_ids.push(name_str["downloaded_".len()..].to_string());
             }
         }
         failed_ids
@@ -403,13 +402,8 @@ impl HcfsDriveManager {
     /// lookups succeed regardless of how much of the ID is available,
     /// and full-ID entries prevent collisions when two files share the
     /// same 8-byte prefix.
-    pub fn build_path_index(
-        &self,
-    ) -> Result<HashMap<String, String>, String> {
-        let mut state = self
-            .drive
-            .load_sync_state()
-            .map_err(|e| e.to_string())?;
+    pub fn build_path_index(&self) -> Result<HashMap<String, String>, String> {
+        let mut state = self.drive.load_sync_state().map_err(|e| e.to_string())?;
         self.drive
             .scan_local_files(&mut state)
             .map_err(|e| e.to_string())?;
@@ -488,11 +482,10 @@ async fn check_server_health(app: &AppHandle) -> ConnectivityStatus {
             let status_code = resp.status().as_u16();
             match status_code {
                 200 => {
-                    let version = resp
-                        .json::<serde_json::Value>()
-                        .await
-                        .ok()
-                        .and_then(|v| v.get("version").and_then(|s| s.as_str()).map(String::from));
+                    let version =
+                        resp.json::<serde_json::Value>().await.ok().and_then(|v| {
+                            v.get("version").and_then(|s| s.as_str()).map(String::from)
+                        });
                     record_health_success(app, version, now)
                 }
                 401 | 403 => {
@@ -519,26 +512,37 @@ async fn check_server_health(app: &AppHandle) -> ConnectivityStatus {
 fn classify_request_error(e: &reqwest::Error) -> (ConnectivityStatus, String) {
     let msg = format!("{e}");
     if e.is_timeout() {
-        (ConnectivityStatus::Degraded, format!("Request timed out: {msg}"))
+        (
+            ConnectivityStatus::Degraded,
+            format!("Request timed out: {msg}"),
+        )
     } else if e.is_connect() {
         if msg.contains("dns") || msg.contains("resolve") || msg.contains("lookup") {
-            (ConnectivityStatus::NetworkOffline, format!("DNS resolution failed: {msg}"))
+            (
+                ConnectivityStatus::NetworkOffline,
+                format!("DNS resolution failed: {msg}"),
+            )
         } else {
-            (ConnectivityStatus::ServerUnreachable, format!("Connection failed: {msg}"))
+            (
+                ConnectivityStatus::ServerUnreachable,
+                format!("Connection failed: {msg}"),
+            )
         }
     } else if e.is_request() {
-        (ConnectivityStatus::NetworkOffline, format!("Request failed: {msg}"))
+        (
+            ConnectivityStatus::NetworkOffline,
+            format!("Request failed: {msg}"),
+        )
     } else {
-        (ConnectivityStatus::ServerUnreachable, format!("Unknown error: {msg}"))
+        (
+            ConnectivityStatus::ServerUnreachable,
+            format!("Unknown error: {msg}"),
+        )
     }
 }
 
 /// Record a successful health check. Emits event if status was previously unhealthy.
-fn record_health_success(
-    app: &AppHandle,
-    version: Option<String>,
-    now: i64,
-) -> ConnectivityStatus {
+fn record_health_success(app: &AppHandle, version: Option<String>, now: i64) -> ConnectivityStatus {
     let should_emit = update_health_atomic(|h| {
         let was_unhealthy = h.status != ConnectivityStatus::Connected;
         if was_unhealthy {
@@ -575,9 +579,11 @@ fn record_health_failure(
 
         match &new_status {
             ConnectivityStatus::AuthExpired => true,
-            _ => new_failures >= HEALTH_FAILURE_THRESHOLD
-                && (previous_status == ConnectivityStatus::Connected
-                    || previous_status != new_status),
+            _ => {
+                new_failures >= HEALTH_FAILURE_THRESHOLD
+                    && (previous_status == ConnectivityStatus::Connected
+                        || previous_status != new_status)
+            }
         }
     });
 
@@ -714,16 +720,24 @@ pub async fn start_sync_loop(app: AppHandle) {
                         {
                             use tauri::Manager;
                             let app_state = app.state::<crate::app_state::AppState>();
-                            if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state)) {
+                            if let (Ok(pool), Ok(acct)) = (
+                                app_state.pool(),
+                                crate::utils::sync::current_account_id(&app_state),
+                            ) {
                                 if crate::utils::auth_tokens::is_token_expiring(
                                     pool,
                                     &acct,
                                     crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS,
-                                ).await {
+                                )
+                                .await
+                                {
                                     info!("Token expiring soon, proactively refreshing");
-                                    if let Err(e) = crate::commands::auth::refresh_auth_token_internal(
-                                        pool, &app, &acct,
-                                    ).await {
+                                    if let Err(e) =
+                                        crate::commands::auth::refresh_auth_token_internal(
+                                            pool, &app, &acct,
+                                        )
+                                        .await
+                                    {
                                         warn!(error = %e, "Proactive token refresh failed");
                                     }
                                 }
@@ -892,7 +906,11 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             // Auto-exit review mode after 5 minutes to prevent indefinite stall
             const REVIEW_TIMEOUT_SECS: i64 = 300;
             if is_review_timed_out(REVIEW_TIMEOUT_SECS) {
-                warn!(timeout_secs = REVIEW_TIMEOUT_SECS, label = label, "Review mode timed out, auto-skipping conflicts and resuming sync");
+                warn!(
+                    timeout_secs = REVIEW_TIMEOUT_SECS,
+                    label = label,
+                    "Review mode timed out, auto-skipping conflicts and resuming sync"
+                );
                 SYNC_REVIEW_MODE.store(false, Ordering::Release);
                 clear_review_entered();
                 // Notify frontend that review mode was auto-cleared
@@ -911,17 +929,23 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         // Atomic check-and-set: check is_syncing and set it true in a single lock scope
         match states.get_mut(label) {
             Some(s) if s.is_syncing => {
-                debug!(label = label, "Sync already in progress, will retry on next cycle");
+                debug!(
+                    label = label,
+                    "Sync already in progress, will retry on next cycle"
+                );
                 return false;
             }
             Some(s) => {
                 s.is_syncing = true;
             }
             None => {
-                states.insert(label.to_string(), crate::sync_shared::HcfsSyncState {
-                    is_syncing: true,
-                    ..Default::default()
-                });
+                states.insert(
+                    label.to_string(),
+                    crate::sync_shared::HcfsSyncState {
+                        is_syncing: true,
+                        ..Default::default()
+                    },
+                );
             }
         }
     }
@@ -979,15 +1003,18 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                             "Staged (cached; running real sync)",
                         );
                         let empty: Vec<String> = Vec::new();
-                        if let Err(e) = app.emit("hcfs_sync_started", serde_json::json!({
-                            "label": label,
-                            "uploads": 0, "downloads": 0,
-                            "local_deletes": 0, "remote_deletes": 0,
-                            "upload_files": empty,
-                            "download_files": empty,
-                            "local_delete_files": empty,
-                            "remote_delete_files": empty,
-                        })) {
+                        if let Err(e) = app.emit(
+                            "hcfs_sync_started",
+                            serde_json::json!({
+                                "label": label,
+                                "uploads": 0, "downloads": 0,
+                                "local_deletes": 0, "remote_deletes": 0,
+                                "upload_files": empty,
+                                "download_files": empty,
+                                "local_delete_files": empty,
+                                "remote_delete_files": empty,
+                            }),
+                        ) {
                             warn!(error = %e, "Failed to emit hcfs_sync_started");
                         }
                         emitted_sync_started = true;
@@ -1179,8 +1206,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner());
                             pending.retain(|item| {
-                                !(item.label == label_owned
-                                    && item.action == "downloaded")
+                                !(item.label == label_owned && item.action == "downloaded")
                             });
                             pending.extend(new_items);
                         }
@@ -1202,8 +1228,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                                 && item.action == "downloaded"
                                 && item.file_name.starts_with("file_")
                             {
-                                let hash_prefix =
-                                    item.file_name.trim_start_matches("file_");
+                                let hash_prefix = item.file_name.trim_start_matches("file_");
                                 let resolved = path_index
                                     .as_ref()
                                     .and_then(|idx| idx.get(hash_prefix).cloned());
@@ -1221,7 +1246,12 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                                             encrypted_name = %item.file_name,
                                             "Could not resolve encrypted name",
                                         );
-                                        item.file_name = "synced file".to_string();
+                                        let short_hash = if hash_prefix.len() >= 6 {
+                                            &hash_prefix[..6]
+                                        } else {
+                                            hash_prefix
+                                        };
+                                        item.file_name = format!("file ({})", short_hash);
                                     }
                                 }
                             }
@@ -1309,12 +1339,21 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 {
                     use tauri::Manager;
                     let app_state = app.state::<crate::app_state::AppState>();
-                    if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state)) {
+                    if let (Ok(pool), Ok(acct)) = (
+                        app_state.pool(),
+                        crate::utils::sync::current_account_id(&app_state),
+                    ) {
                         let pool = pool.clone();
                         let app_clone = app.clone();
                         tokio::spawn(async move {
-                            match crate::commands::auth::refresh_auth_token_internal(&pool, &app_clone, &acct).await {
-                                Ok(()) => info!("Auto token refresh succeeded, next sync will use fresh token"),
+                            match crate::commands::auth::refresh_auth_token_internal(
+                                &pool, &app_clone, &acct,
+                            )
+                            .await
+                            {
+                                Ok(()) => info!(
+                                    "Auto token refresh succeeded, next sync will use fresh token"
+                                ),
                                 Err(e) => warn!(error = %e, "Auto token refresh failed"),
                             }
                         });

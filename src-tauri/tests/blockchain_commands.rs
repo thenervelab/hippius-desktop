@@ -5,8 +5,8 @@
 //! wrappers around subxt, so the primary value is in type-checking and
 //! ensuring the AUTH_STATE integration works.
 
-use sp_core::crypto::Ss58Codec;
 use sp_core::Pair as _;
+use sp_core::crypto::Ss58Codec;
 
 #[test]
 fn test_account_id_parse_valid_ss58() {

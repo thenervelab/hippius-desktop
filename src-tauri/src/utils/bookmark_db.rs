@@ -9,11 +9,7 @@ use crate::macos_bookmarks::{
 
 /// Stores a security-scoped bookmark for a path in the database
 #[cfg(target_os = "macos")]
-pub async fn store_bookmark(
-    pool: &SqlitePool,
-    path: &str,
-    scope_type: &str,
-) -> Result<(), String> {
+pub async fn store_bookmark(pool: &SqlitePool, path: &str, scope_type: &str) -> Result<(), String> {
     let bookmark_data = create_security_scoped_bookmark(path)?;
 
     sqlx::query(
@@ -58,10 +54,7 @@ pub async fn activate_bookmark(pool: &SqlitePool, path: &str) -> Result<bool, St
         .execute(pool)
         .await;
 
-        debug!(
-            "Activated security-scoped bookmark for: {}",
-            path
-        );
+        debug!("Activated security-scoped bookmark for: {}", path);
         Ok(true)
     } else {
         Err(format!("No bookmark found for path: {}", path))

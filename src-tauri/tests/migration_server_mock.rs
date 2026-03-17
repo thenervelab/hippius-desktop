@@ -126,10 +126,7 @@ async fn migration_report(
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
                     error: "user_not_found".into(),
-                    message: format!(
-                        "User {} not found in migration data",
-                        report.user_id
-                    ),
+                    message: format!("User {} not found in migration data", report.user_id),
                 }),
             )
                 .into_response();
@@ -137,18 +134,13 @@ async fn migration_report(
     };
 
     // Check bucket exists
-    let bucket_exists = files
-        .iter()
-        .any(|f| f.bucket_name == report.bucket_name);
+    let bucket_exists = files.iter().any(|f| f.bucket_name == report.bucket_name);
     if !bucket_exists {
         return (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: "bucket_not_found".into(),
-                message: format!(
-                    "Bucket {} not found for user",
-                    report.bucket_name
-                ),
+                message: format!("Bucket {} not found for user", report.bucket_name),
             }),
         )
             .into_response();
@@ -157,9 +149,7 @@ async fn migration_report(
     // Mark reported keys as Migrated
     for key in &report.keys {
         for file in files.iter_mut() {
-            if file.bucket_name == report.bucket_name
-                && file.key == *key
-            {
+            if file.bucket_name == report.bucket_name && file.key == *key {
                 file.status = "Migrated".to_string();
             }
         }
@@ -179,9 +169,7 @@ async fn internal_server_error() -> impl IntoResponse {
 async fn html_error_page() -> impl IntoResponse {
     (
         StatusCode::BAD_GATEWAY,
-        axum::response::Html(
-            "<html><body><h1>502 Bad Gateway</h1></body></html>",
-        ),
+        axum::response::Html("<html><body><h1>502 Bad Gateway</h1></body></html>"),
     )
         .into_response()
 }
@@ -204,27 +192,18 @@ fn mock_router(state: MockState) -> Router {
 /// Router that always returns 500 for GET /migration/{user_id}.
 fn error_500_router() -> Router {
     Router::new()
-        .route(
-            "/migration/{user_id}",
-            get(internal_server_error),
-        )
+        .route("/migration/{user_id}", get(internal_server_error))
         .route("/migration", post(internal_server_error))
 }
 
 /// Router that returns HTML instead of JSON.
 fn html_error_router() -> Router {
-    Router::new().route(
-        "/migration/{user_id}",
-        get(html_error_page),
-    )
+    Router::new().route("/migration/{user_id}", get(html_error_page))
 }
 
 /// Router that returns 200 OK with unexpected JSON shape.
 fn malformed_json_router() -> Router {
-    Router::new().route(
-        "/migration/{user_id}",
-        get(malformed_json),
-    )
+    Router::new().route("/migration/{user_id}", get(malformed_json))
 }
 
 /// Start a router (without state) and return its base URL.
@@ -280,11 +259,7 @@ async fn fetch_migration_files(
     base_url: &str,
     user_id: &str,
 ) -> Result<Vec<MigrationFile>, String> {
-    let url = format!(
-        "{}/migration/{}",
-        base_url.trim_end_matches('/'),
-        user_id
-    );
+    let url = format!("{}/migration/{}", base_url.trim_end_matches('/'), user_id);
     let client = test_client();
     let resp = client
         .get(&url)
@@ -309,10 +284,7 @@ async fn fetch_migration_files(
     Ok(parsed
         .files
         .into_iter()
-        .filter(|f| {
-            f.key != manifest_prefix
-                && !f.key.starts_with(&format!("{manifest_prefix}/"))
-        })
+        .filter(|f| f.key != manifest_prefix && !f.key.starts_with(&format!("{manifest_prefix}/")))
         .collect())
 }
 
@@ -363,8 +335,7 @@ async fn check_user_with_no_migration_data() {
     let state = MockState::new();
     let url = start_mock_server(state).await;
 
-    let files =
-        fetch_migration_files(&url, "unknown_user").await.unwrap();
+    let files = fetch_migration_files(&url, "unknown_user").await.unwrap();
     assert!(files.is_empty());
 }
 
@@ -504,14 +475,9 @@ async fn report_all_files_completes_migration() {
     let url = start_mock_server(state).await;
 
     // Report both files
-    report_migrated(
-        &url,
-        "user1",
-        "files",
-        vec!["a.txt".into(), "b.txt".into()],
-    )
-    .await
-    .unwrap();
+    report_migrated(&url, "user1", "files", vec!["a.txt".into(), "b.txt".into()])
+        .await
+        .unwrap();
 
     // Fetch raw response to check needs_migration flag
     let resp: MigrationStatusResponse = test_client()
@@ -532,13 +498,7 @@ async fn report_for_unknown_user_returns_error() {
     let state = MockState::new();
     let url = start_mock_server(state).await;
 
-    let result = report_migrated(
-        &url,
-        "nonexistent",
-        "files",
-        vec!["a.txt".into()],
-    )
-    .await;
+    let result = report_migrated(&url, "nonexistent", "files", vec!["a.txt".into()]).await;
 
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("user_not_found"));
@@ -560,13 +520,7 @@ async fn report_for_unknown_bucket_returns_error() {
     );
     let url = start_mock_server(state).await;
 
-    let result = report_migrated(
-        &url,
-        "user1",
-        "wrong_bucket",
-        vec!["a.txt".into()],
-    )
-    .await;
+    let result = report_migrated(&url, "user1", "wrong_bucket", vec!["a.txt".into()]).await;
 
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("bucket_not_found"));
@@ -589,13 +543,7 @@ async fn report_unknown_key_is_silently_ignored() {
     let url = start_mock_server(state).await;
 
     // Report a key that doesn't exist — should succeed (server ignores)
-    let result = report_migrated(
-        &url,
-        "user1",
-        "files",
-        vec!["nonexistent.txt".into()],
-    )
-    .await;
+    let result = report_migrated(&url, "user1", "files", vec!["nonexistent.txt".into()]).await;
 
     assert!(result.is_ok());
 
@@ -631,14 +579,9 @@ async fn multiple_buckets_tracked_independently() {
     let url = start_mock_server(state).await;
 
     // Report only the photos bucket
-    report_migrated(
-        &url,
-        "user1",
-        "photos",
-        vec!["img.jpg".into()],
-    )
-    .await
-    .unwrap();
+    report_migrated(&url, "user1", "photos", vec!["img.jpg".into()])
+        .await
+        .unwrap();
 
     let files = fetch_migration_files(&url, "user1").await.unwrap();
     let photo = files.iter().find(|f| f.key == "img.jpg").unwrap();
@@ -770,8 +713,7 @@ async fn large_batch_report() {
     let url = start_mock_server(state).await;
 
     // Report all 100 files at once
-    let keys: Vec<String> =
-        (0..100).map(|i| format!("file_{i}.dat")).collect();
+    let keys: Vec<String> = (0..100).map(|i| format!("file_{i}.dat")).collect();
     report_migrated(&url, "user1", "files", keys).await.unwrap();
 
     let resp: MigrationStatusResponse = test_client()
@@ -828,17 +770,13 @@ async fn full_migration_lifecycle() {
     // Step 1: Check migration — client filters out manifest
     let files = fetch_migration_files(&url, "user1").await.unwrap();
     assert_eq!(files.len(), 2);
-    let pending: Vec<&MigrationFile> =
-        files.iter().filter(|f| f.status == "Pending").collect();
+    let pending: Vec<&MigrationFile> = files.iter().filter(|f| f.status == "Pending").collect();
     assert_eq!(pending.len(), 2);
 
     // Step 2: Simulate download phase (just track what we'd download)
     let sync_dir = tempfile::tempdir().expect("create temp dir");
     for file in &pending {
-        let dest = sync_dir
-            .path()
-            .join(&file.bucket_name)
-            .join(&file.key);
+        let dest = sync_dir.path().join(&file.bucket_name).join(&file.key);
         std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
         std::fs::write(&dest, "mock content").unwrap();
     }
@@ -846,10 +784,7 @@ async fn full_migration_lifecycle() {
     // Step 3: Report migrated files (simulates report_migrated_files)
     let mut bucket_keys: HashMap<String, Vec<String>> = HashMap::new();
     for file in &pending {
-        let file_path = sync_dir
-            .path()
-            .join(&file.bucket_name)
-            .join(&file.key);
+        let file_path = sync_dir.path().join(&file.bucket_name).join(&file.key);
         if file_path.exists() {
             bucket_keys
                 .entry(file.bucket_name.clone())
@@ -865,8 +800,7 @@ async fn full_migration_lifecycle() {
     }
 
     // Step 4: Verify completion
-    let files_after =
-        fetch_migration_files(&url, "user1").await.unwrap();
+    let files_after = fetch_migration_files(&url, "user1").await.unwrap();
     let still_pending: Vec<&MigrationFile> = files_after
         .iter()
         .filter(|f| f.status == "Pending")
@@ -911,16 +845,14 @@ async fn client_migration_check_logic() {
     let state = MockState::new();
     state.seed_user(
         "user1",
-        vec![
-            MigrationFile {
-                user_id: "user1".into(),
-                bucket_name: "files".into(),
-                key: "a.txt".into(),
-                size_bytes: 100,
-                is_public: false,
-                status: "Pending".into(),
-            },
-        ],
+        vec![MigrationFile {
+            user_id: "user1".into(),
+            bucket_name: "files".into(),
+            key: "a.txt".into(),
+            size_bytes: 100,
+            is_public: false,
+            status: "Pending".into(),
+        }],
     );
     let url = start_mock_server(state).await;
 
@@ -1028,8 +960,7 @@ async fn malformed_json_returns_parse_error() {
 #[tokio::test]
 async fn connection_refused_returns_error() {
     // Use a URL that nothing is listening on
-    let result =
-        fetch_migration_files("http://127.0.0.1:1", "user1").await;
+    let result = fetch_migration_files("http://127.0.0.1:1", "user1").await;
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -1042,9 +973,7 @@ async fn connection_refused_returns_error() {
 async fn report_to_500_server_returns_error() {
     let url = start_stateless_server(error_500_router()).await;
 
-    let result =
-        report_migrated(&url, "user1", "files", vec!["a.txt".into()])
-            .await;
+    let result = report_migrated(&url, "user1", "files", vec!["a.txt".into()]).await;
     assert!(result.is_err());
 }
 
@@ -1065,8 +994,7 @@ async fn report_with_empty_keys_succeeds() {
     let url = start_mock_server(state).await;
 
     // Report with empty keys — should succeed but change nothing
-    let result =
-        report_migrated(&url, "user1", "files", vec![]).await;
+    let result = report_migrated(&url, "user1", "files", vec![]).await;
     assert!(result.is_ok());
 
     // File should still be Pending
@@ -1101,14 +1029,9 @@ async fn report_with_special_characters_in_key() {
     );
     let url = start_mock_server(state).await;
 
-    report_migrated(
-        &url,
-        "user1",
-        "files",
-        vec![special_key.into()],
-    )
-    .await
-    .unwrap();
+    report_migrated(&url, "user1", "files", vec![special_key.into()])
+        .await
+        .unwrap();
 
     let files = fetch_migration_files(&url, "user1").await.unwrap();
     let file = files.iter().find(|f| f.key == special_key).unwrap();
@@ -1206,14 +1129,9 @@ async fn zero_byte_files_handled_correctly() {
     assert_eq!(resp.file_count, 1);
 
     // Report it as migrated — zero-byte files should work the same
-    report_migrated(
-        &url,
-        "user1",
-        "files",
-        vec!["empty.txt".into()],
-    )
-    .await
-    .unwrap();
+    report_migrated(&url, "user1", "files", vec!["empty.txt".into()])
+        .await
+        .unwrap();
 
     let files = fetch_migration_files(&url, "user1").await.unwrap();
     assert_eq!(files[0].status, "Migrated");
@@ -1271,8 +1189,7 @@ async fn partial_batch_report_leaves_unreported_pending() {
     let url = start_mock_server(state).await;
 
     // Report only the first 5
-    let keys: Vec<String> =
-        (0..5).map(|i| format!("file_{i}.dat")).collect();
+    let keys: Vec<String> = (0..5).map(|i| format!("file_{i}.dat")).collect();
     report_migrated(&url, "user1", "files", keys).await.unwrap();
 
     let resp: MigrationStatusResponse = test_client()
@@ -1285,16 +1202,8 @@ async fn partial_batch_report_leaves_unreported_pending() {
         .unwrap();
 
     assert!(resp.needs_migration);
-    let migrated = resp
-        .files
-        .iter()
-        .filter(|f| f.status == "Migrated")
-        .count();
-    let pending = resp
-        .files
-        .iter()
-        .filter(|f| f.status == "Pending")
-        .count();
+    let migrated = resp.files.iter().filter(|f| f.status == "Migrated").count();
+    let pending = resp.files.iter().filter(|f| f.status == "Pending").count();
     assert_eq!(migrated, 5);
     assert_eq!(pending, 5);
 }
@@ -1326,24 +1235,13 @@ async fn report_cross_bucket_key_does_not_affect_other_bucket() {
     let url = start_mock_server(state).await;
 
     // Report same_name.txt only for bucket_a
-    report_migrated(
-        &url,
-        "user1",
-        "bucket_a",
-        vec!["same_name.txt".into()],
-    )
-    .await
-    .unwrap();
+    report_migrated(&url, "user1", "bucket_a", vec!["same_name.txt".into()])
+        .await
+        .unwrap();
 
     let files = fetch_migration_files(&url, "user1").await.unwrap();
-    let a = files
-        .iter()
-        .find(|f| f.bucket_name == "bucket_a")
-        .unwrap();
-    let b = files
-        .iter()
-        .find(|f| f.bucket_name == "bucket_b")
-        .unwrap();
+    let a = files.iter().find(|f| f.bucket_name == "bucket_a").unwrap();
+    let b = files.iter().find(|f| f.bucket_name == "bucket_b").unwrap();
     assert_eq!(a.status, "Migrated");
     assert_eq!(b.status, "Pending");
 }

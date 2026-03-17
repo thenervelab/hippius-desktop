@@ -15,8 +15,7 @@ static BLOCK_SUB_RUNNING: AtomicBool = AtomicBool::new(false);
 static LATEST_BLOCK: AtomicU64 = AtomicU64::new(0);
 static IS_CONNECTED: AtomicBool = AtomicBool::new(false);
 
-static BLOCK_SUB_HANDLE: Mutex<Option<tokio::task::JoinHandle<()>>> =
-    Mutex::const_new(None);
+static BLOCK_SUB_HANDLE: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::const_new(None);
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]

@@ -44,10 +44,7 @@ pub async fn get_support_ticket_messages(
     let path = format!("/api/support/tickets/{ticket_id}/messages/");
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(50).to_string();
-    let mut params = vec![
-        ("page", page_str.as_str()),
-        ("limit", limit_str.as_str()),
-    ];
+    let mut params = vec![("page", page_str.as_str()), ("limit", limit_str.as_str())];
     if let Some(ref s) = search {
         params.push(("search", s.as_str()));
     }

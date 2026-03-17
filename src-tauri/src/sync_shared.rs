@@ -68,22 +68,18 @@ pub fn update_health<F>(f: F)
 where
     F: FnOnce(&mut SyncEngineHealth),
 {
-    let mut health = SYNC_ENGINE_HEALTH
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in update_health");
-            poisoned.into_inner()
-        });
+    let mut health = SYNC_ENGINE_HEALTH.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in update_health");
+        poisoned.into_inner()
+    });
     f(&mut health);
 }
 
 pub fn reset_health() {
-    let mut health = SYNC_ENGINE_HEALTH
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in reset_health");
-            poisoned.into_inner()
-        });
+    let mut health = SYNC_ENGINE_HEALTH.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in reset_health");
+        poisoned.into_inner()
+    });
     *health = SyncEngineHealth::default();
 }
 
@@ -221,12 +217,10 @@ impl HcfsSyncState {
 
 /// Get or create a sync state for a given label.
 pub fn get_or_create_state(label: &str) -> HcfsSyncState {
-    let states = HCFS_SYNC_STATES
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in get_or_create_state");
-            poisoned.into_inner()
-        });
+    let states = HCFS_SYNC_STATES.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in get_or_create_state");
+        poisoned.into_inner()
+    });
     states.get(label).cloned().unwrap_or_default()
 }
 
@@ -235,35 +229,29 @@ pub fn update_state<F>(label: &str, f: F)
 where
     F: FnOnce(&mut HcfsSyncState),
 {
-    let mut states = HCFS_SYNC_STATES
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in update_state");
-            poisoned.into_inner()
-        });
+    let mut states = HCFS_SYNC_STATES.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in update_state");
+        poisoned.into_inner()
+    });
     let state = states.entry(label.to_string()).or_default();
     f(state);
 }
 
 /// Reset all sync states.
 pub fn reset_all_states() {
-    let mut states = HCFS_SYNC_STATES
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in reset_all_states");
-            poisoned.into_inner()
-        });
+    let mut states = HCFS_SYNC_STATES.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in reset_all_states");
+        poisoned.into_inner()
+    });
     states.clear();
 }
 
 /// Remove state for a specific label.
 pub fn remove_state(label: &str) {
-    let mut states = HCFS_SYNC_STATES
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in remove_state");
-            poisoned.into_inner()
-        });
+    let mut states = HCFS_SYNC_STATES.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in remove_state");
+        poisoned.into_inner()
+    });
     states.remove(label);
 }
 
@@ -283,12 +271,10 @@ pub static PENDING_ACTIVITY: Lazy<Arc<Mutex<Vec<SyncActivityItem>>>> =
 /// exists in the buffer, the duplicate is silently dropped. The hcfs-client
 /// progress callback can fire the "completed" event more than once per file.
 pub fn add_pending_activity(item: SyncActivityItem) {
-    let mut pending = PENDING_ACTIVITY
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in add_pending_activity");
-            poisoned.into_inner()
-        });
+    let mut pending = PENDING_ACTIVITY.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in add_pending_activity");
+        poisoned.into_inner()
+    });
     let already_exists = pending.iter().any(|existing| {
         existing.file_name == item.file_name
             && existing.action == item.action
@@ -304,12 +290,10 @@ pub fn add_pending_activity(item: SyncActivityItem) {
 /// Called after a successful sync cycle.
 pub fn commit_pending_activity_for_label(label: &str) {
     let items: Vec<SyncActivityItem> = {
-        let mut pending = PENDING_ACTIVITY
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                warn!("Poisoned mutex recovered in commit_pending_activity_for_label");
-                poisoned.into_inner()
-            });
+        let mut pending = PENDING_ACTIVITY.lock().unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in commit_pending_activity_for_label");
+            poisoned.into_inner()
+        });
         let (matching, remaining): (Vec<_>, Vec<_>) =
             pending.drain(..).partition(|item| item.label == label);
         *pending = remaining;
@@ -335,12 +319,10 @@ pub fn commit_pending_activity_for_label(label: &str) {
 /// Discard pending activity items for a specific label.
 /// Called when a sync cycle fails or produces no uploads/downloads.
 pub fn discard_pending_activity_for_label(label: &str) {
-    let mut pending = PENDING_ACTIVITY
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in discard_pending_activity_for_label");
-            poisoned.into_inner()
-        });
+    let mut pending = PENDING_ACTIVITY.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in discard_pending_activity_for_label");
+        poisoned.into_inner()
+    });
     let before = pending.len();
     pending.retain(|item| item.label != label);
     let removed = before - pending.len();
@@ -354,12 +336,10 @@ pub fn discard_pending_activity_for_label(label: &str) {
 
 /// Discard all pending activity items (used on full stop).
 pub fn discard_all_pending_activity() {
-    let mut pending = PENDING_ACTIVITY
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in discard_all_pending_activity");
-            poisoned.into_inner()
-        });
+    let mut pending = PENDING_ACTIVITY.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in discard_all_pending_activity");
+        poisoned.into_inner()
+    });
     if !pending.is_empty() {
         info!(
             "[Sync] Discarding all {} pending activity items",
@@ -381,12 +361,10 @@ pub struct CombinedSyncState {
 // === Tauri Commands ===
 #[tauri::command]
 pub fn get_sync_status() -> CombinedSyncState {
-    let states = HCFS_SYNC_STATES
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in get_sync_status");
-            poisoned.into_inner()
-        });
+    let states = HCFS_SYNC_STATES.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in get_sync_status");
+        poisoned.into_inner()
+    });
 
     let is_syncing = states.values().any(|s| s.is_syncing);
     let last_sync_time = states.values().filter_map(|s| s.last_sync_time).max();
@@ -407,12 +385,10 @@ pub fn get_sync_status() -> CombinedSyncState {
 
 #[tauri::command]
 pub fn get_sync_activity(limit: Option<usize>, label: Option<String>) -> Vec<SyncActivityItem> {
-    let states = HCFS_SYNC_STATES
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in get_sync_activity");
-            poisoned.into_inner()
-        });
+    let states = HCFS_SYNC_STATES.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in get_sync_activity");
+        poisoned.into_inner()
+    });
     let max = limit.unwrap_or(50);
 
     if let Some(lbl) = label {

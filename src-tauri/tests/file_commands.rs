@@ -98,7 +98,9 @@ async fn resolve_root_level_file() {
     let sync_root = tmp.path().to_str().unwrap();
 
     // Create a file at root level
-    fs::write(tmp.path().join("test.png"), b"image data").await.unwrap();
+    fs::write(tmp.path().join("test.png"), b"image data")
+        .await
+        .unwrap();
 
     insert_sync_path(&pool, "5ABC", sync_root, "default").await;
 
@@ -117,17 +119,13 @@ async fn resolve_subfolder_file() {
     // Create nested folder structure
     let subfolder = tmp.path().join("default").join("sub-folder");
     fs::create_dir_all(&subfolder).await.unwrap();
-    fs::write(subfolder.join("report.pdf"), b"pdf content").await.unwrap();
+    fs::write(subfolder.join("report.pdf"), b"pdf content")
+        .await
+        .unwrap();
 
     insert_sync_path(&pool, "5ABC", sync_root, "default").await;
 
-    let result = resolve_file_path(
-        &pool,
-        "5ABC",
-        "default",
-        "default/sub-folder/report.pdf",
-    )
-    .await;
+    let result = resolve_file_path(&pool, "5ABC", "default", "default/sub-folder/report.pdf").await;
     assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
     assert!(result.unwrap().ends_with("default/sub-folder/report.pdf"));
 }
@@ -177,7 +175,9 @@ async fn export_subfolder_file() {
     let sync_root = tmp.path().join("sync");
     let subfolder = sync_root.join("default").join("nested");
     fs::create_dir_all(&subfolder).await.unwrap();
-    fs::write(subfolder.join("data.csv"), b"a,b,c\n1,2,3").await.unwrap();
+    fs::write(subfolder.join("data.csv"), b"a,b,c\n1,2,3")
+        .await
+        .unwrap();
 
     let output_dir = tmp.path().join("output");
     fs::create_dir_all(&output_dir).await.unwrap();
@@ -188,7 +188,10 @@ async fn export_subfolder_file() {
     assert!(source.exists(), "Source file should exist");
 
     tokio::fs::copy(&source, &output_file).await.unwrap();
-    assert!(output_file.exists(), "Output file should exist after export");
+    assert!(
+        output_file.exists(),
+        "Output file should exist after export"
+    );
 
     let content = tokio::fs::read_to_string(&output_file).await.unwrap();
     assert_eq!(content, "a,b,c\n1,2,3");
@@ -237,8 +240,12 @@ async fn dir_size_empty_directory() {
 async fn dir_size_flat_files() {
     let tmp = tempfile::tempdir().unwrap();
     // 10 bytes + 20 bytes = 30 bytes
-    fs::write(tmp.path().join("a.txt"), &[0u8; 10]).await.unwrap();
-    fs::write(tmp.path().join("b.txt"), &[0u8; 20]).await.unwrap();
+    fs::write(tmp.path().join("a.txt"), &[0u8; 10])
+        .await
+        .unwrap();
+    fs::write(tmp.path().join("b.txt"), &[0u8; 20])
+        .await
+        .unwrap();
     let size = dir_size_recursive(tmp.path()).await;
     assert_eq!(size, 30);
 }
@@ -251,7 +258,9 @@ async fn dir_size_nested_folders() {
     let deep = sub.join("deep");
     fs::create_dir_all(&deep).await.unwrap();
 
-    fs::write(tmp.path().join("root.txt"), &[0u8; 5]).await.unwrap();
+    fs::write(tmp.path().join("root.txt"), &[0u8; 5])
+        .await
+        .unwrap();
     fs::write(sub.join("mid.txt"), &[0u8; 15]).await.unwrap();
     fs::write(deep.join("leaf.txt"), &[0u8; 25]).await.unwrap();
 
@@ -263,12 +272,18 @@ async fn dir_size_nested_folders() {
 #[tokio::test]
 async fn dir_size_excludes_hidden_files() {
     let tmp = tempfile::tempdir().unwrap();
-    fs::write(tmp.path().join("visible.txt"), &[0u8; 10]).await.unwrap();
-    fs::write(tmp.path().join(".hidden"), &[0u8; 100]).await.unwrap();
+    fs::write(tmp.path().join("visible.txt"), &[0u8; 10])
+        .await
+        .unwrap();
+    fs::write(tmp.path().join(".hidden"), &[0u8; 100])
+        .await
+        .unwrap();
 
     let hidden_dir = tmp.path().join(".hidden_dir");
     fs::create_dir_all(&hidden_dir).await.unwrap();
-    fs::write(hidden_dir.join("secret.txt"), &[0u8; 200]).await.unwrap();
+    fs::write(hidden_dir.join("secret.txt"), &[0u8; 200])
+        .await
+        .unwrap();
 
     let size = dir_size_recursive(tmp.path()).await;
     assert_eq!(size, 10); // only visible.txt counts

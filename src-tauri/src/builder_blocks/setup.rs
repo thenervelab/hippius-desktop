@@ -3,9 +3,9 @@ use dirs;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use tauri::{Builder, Manager, Wry, path::BaseDirectory};
-use tracing::{info, debug, warn, error};
 #[cfg(target_os = "linux")]
 use tauri_plugin_deep_link::DeepLinkExt;
+use tracing::{debug, error, info, warn};
 
 async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Define the expected table schemas (only tables still needed)
@@ -83,10 +83,7 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             });
 
             if !column_exists {
-                info!(
-                    "Adding column {} to table {}",
-                    column_name, table_name
-                );
+                info!("Adding column {} to table {}", column_name, table_name);
                 sqlx::query(&format!(
                     "ALTER TABLE {} ADD COLUMN {} {}",
                     table_name, column_name, column_type
@@ -353,11 +350,9 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_address)",
-    )
-    .execute(pool)
-    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_address)")
+        .execute(pool)
+        .await?;
 
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_notifications_user_deleted ON notifications(user_address, is_deleted)",
@@ -496,19 +491,12 @@ async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                     .await;
                 match result {
                     Ok(r) if r.rows_affected() > 0 => {
-                        info!(
-                            "Updated {} row(s) in {}",
-                            r.rows_affected(),
-                            table
-                        );
+                        info!("Updated {} row(s) in {}", r.rows_affected(), table);
                     }
                     Ok(_) => {} // No rows to update in this table
                     Err(e) => {
                         // Table may not exist yet — non-fatal
-                        warn!(
-                            "Could not update {}: {}",
-                            table, e
-                        );
+                        warn!("Could not update {}: {}", table, e);
                     }
                 }
             }
