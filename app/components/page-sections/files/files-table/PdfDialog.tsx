@@ -8,9 +8,11 @@ import {
   getViewableFilePosition
 } from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { Loader2 } from "lucide-react";
+import { Loader2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
+
+const LOAD_TIMEOUT_MS = 15000;
 
 export const PdfDialogTrigger: React.FC<{
   children: ReactNode;
@@ -44,6 +46,7 @@ const PdfDialog: React.FC<{
   const [nextFile, setNextFile] = useState<FormattedUserFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserFile | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [resolvedUrl, setResolvedUrl] = useState<string>("");
   const [position, setPosition] = useState<{ current: number; total: number } | null>(null);
   const { polkadotAddress } = useWalletAuth();
@@ -72,9 +75,23 @@ const PdfDialog: React.FC<{
 
     currentFileRef.current = file;
     setLoaded(false);
+    setLoadError(false);
 
     const result = getFileUrl(file);
     setResolvedUrl(result.url);
+
+    // Fallback: iframe onError is unreliable for asset protocol failures,
+    // so treat it as an error if still not loaded after timeout
+    const timeout = setTimeout(() => {
+      if (currentFileRef.current === file) {
+        setLoaded((wasLoaded) => {
+          if (!wasLoaded) setLoadError(true);
+          return wasLoaded;
+        });
+      }
+    }, LOAD_TIMEOUT_MS);
+
+    return () => clearTimeout(timeout);
   }, [file]);
 
   const handleNext = useCallback(() => {
@@ -192,28 +209,51 @@ const PdfDialog: React.FC<{
                   onClick={onCloseClicked}
                   className="w-full h-full flex items-center justify-center"
                 >
-                  {/* loader - show when resolving URL or loading PDF */}
-                  <div
-                    className={cn(
-                      "absolute top-0 left-0 h-full flex items-center justify-center w-full pointer-events-none",
-                      loaded && "opacity-0"
-                    )}
-                  >
-                    <Loader2 className="size-6 text-primary-50 animate-spin" />
-                  </div>
+                  {/* loader */}
+                  {!loaded && !loadError && (
+                    <div className="absolute top-0 left-0 h-full flex items-center justify-center w-full pointer-events-none">
+                      <Loader2 className="size-6 text-primary-50 animate-spin" />
+                    </div>
+                  )}
 
-                  {resolvedUrl && (
+                  {/* error state */}
+                  {loadError && (
                     <div
                       onClick={(e) => e.stopPropagation()}
-                      className="relative shadow-dialog flex w-full h-full flex-col rounded overflow-hidden animate-scale-in-95-0.4"
+                      className="flex flex-col items-center justify-center text-white p-6 w-full max-w-md mx-auto bg-black/70 backdrop-blur-sm rounded-lg"
+                    >
+                      <AlertCircle className="size-12 mx-auto mb-3 text-red-400" />
+                      <p className="text-lg font-medium mb-2">Failed to load PDF</p>
+                      <p className="text-sm text-gray-300 mb-6 text-center">
+                        The file could not be displayed. Try downloading it instead.
+                      </p>
+                      <button
+                        onClick={() => handleFileDownload(file, polkadotAddress ?? "")}
+                        className="flex items-center gap-x-2 bg-primary-50 hover:bg-primary-70 transition-colors px-4 py-2 rounded-md font-medium"
+                      >
+                        <Icons.DocumentDownload className="size-5" />
+                        <span>Download File Instead</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* PDF iframe */}
+                  {resolvedUrl && !loadError && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className={cn(
+                        "relative shadow-dialog flex w-full h-full flex-col rounded overflow-hidden animate-scale-in-95-0.4",
+                        !loaded && "invisible"
+                      )}
                     >
                       <iframe
-                        key={resolvedUrl} // Force re-mount on URL change
+                        key={resolvedUrl}
                         src={resolvedUrl}
                         width="100%"
                         height="100%"
                         className="border-none"
                         onLoad={() => setLoaded(true)}
+                        onError={() => setLoadError(true)}
                       />
                     </div>
                   )}
