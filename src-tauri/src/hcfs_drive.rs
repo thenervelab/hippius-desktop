@@ -1253,9 +1253,11 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 }
             }
 
-            // After a successful migration drive sync, report migrated files
-            // Only report when files were actually uploaded to avoid premature completion
-            if label_owned == "migration" && outcome.files_uploaded > 0 {
+            // After a successful migration drive sync, report migrated files.
+            // Called on every sync (not just when files_uploaded > 0) so that
+            // server-side status is re-checked even after the initial report.
+            // The report function itself is idempotent and skips already-complete migrations.
+            if label_owned == "migration" {
                 use tauri::Manager;
                 let app_state = app.state::<crate::app_state::AppState>();
                 match crate::utils::sync::current_account_id(&app_state) {

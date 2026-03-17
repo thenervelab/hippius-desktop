@@ -854,6 +854,9 @@ pub async fn cancel_migration(
 
 /// Dismiss migration permanently so the dialog never shows again.
 /// `reason` should be "skipped" (Start Fresh) or "completed".
+///
+/// When reason is "completed", the migration sync path is promoted to
+/// "default" so that `tryAutoInitSync` picks it up on subsequent logins.
 #[tauri::command]
 pub async fn dismiss_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -864,6 +867,29 @@ pub async fn dismiss_migration(
     clear_migration_uploads();
     let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
     let status = if reason.is_empty() { "dismissed" } else { &reason };
+
+    // When migration completed successfully, promote the "migration" sync
+    // path to "default" so the regular sync engine uses it going forward.
+    if status == "completed" {
+        let owner = crate::utils::account_key::account_key(&account_id);
+        if let Err(e) = sqlx::query(
+            r#"
+            UPDATE sync_paths
+            SET label = 'default',
+                timestamp = strftime('%s', 'now')
+            WHERE owner = ? AND label = 'migration'
+            "#,
+        )
+        .bind(&owner)
+        .execute(pool)
+        .await
+        {
+            warn!("Failed to promote migration sync path to default: {e}");
+        } else {
+            info!("Promoted migration sync path to 'default' for {account_id}");
+        }
+    }
+
     upsert_migration_status(
         pool,
         &account_id,
@@ -935,6 +961,12 @@ pub async fn report_migrated_files(
         .map(|s| s.clone())
         .unwrap_or_default();
 
+    info!(
+        pending_count = pending.len(),
+        uploaded_set_size = uploaded_set.len(),
+        "Migration report: checking pending files against uploaded set"
+    );
+
     let mut bucket_keys: std::collections::HashMap<
         String,
         Vec<String>,
@@ -947,10 +979,31 @@ pub async fn report_migrated_files(
                 .entry(file.bucket_name.clone())
                 .or_default()
                 .push(file.key.clone());
+        } else {
+            // Check if a path in the set ends with the expected relative
+            // (handles hcfs-client returning slightly different prefix)
+            let matched = uploaded_set.iter().any(|p| p.ends_with(&relative));
+            if matched {
+                info!(
+                    expected = %relative,
+                    "Migration: path matched via suffix"
+                );
+                bucket_keys
+                    .entry(file.bucket_name.clone())
+                    .or_default()
+                    .push(file.key.clone());
+            } else if !uploaded_set.is_empty() {
+                info!(
+                    expected = %relative,
+                    uploaded_paths = ?uploaded_set,
+                    "Migration: no match for pending file"
+                );
+            }
         }
     }
 
     if bucket_keys.is_empty() {
+        info!("Migration report: no files to report yet");
         return Ok(());
     }
 

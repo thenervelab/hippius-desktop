@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { MigrationFile } from "./MigrationProgressDialog";
-import { getHcfsConfig, saveHcfsConfig } from "@/lib/utils/hcfsConfigUtils";
+import { getHcfsConfig, saveHcfsConfig, initializeSync } from "@/lib/utils/hcfsConfigUtils";
 import { syncEngineStatusAtom, isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { migrationCheckAtom } from "@/lib/global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
@@ -363,13 +363,31 @@ export function useMigration(
   }, []);
 
   const closeMigration = useCallback(async () => {
+    const accountId = activeAccountIdRef.current;
     try {
-      const accountId = activeAccountIdRef.current;
       if (accountId) {
+        // dismiss_migration with "completed" promotes the migration sync
+        // path to "default" in the DB so tryAutoInitSync picks it up.
         await invoke("dismiss_migration", {
           accountId,
           reason: "completed",
         });
+
+        // Stop the "migration" drive and start a "default" drive so the
+        // user transitions seamlessly into normal sync.
+        try {
+          await invoke("stop_drive", { label: "migration" });
+        } catch (err) {
+          console.warn("[Migration] stop_drive(migration) failed:", err);
+        }
+        try {
+          const mnemonic = getMnemonic ? await getMnemonic() : null;
+          await initializeSync(accountId, "default", mnemonic ?? undefined);
+          appStore.set(syncEngineStatusAtom, "active");
+          appStore.set(isSyncConfiguredAtom, true);
+        } catch (err) {
+          console.error("[Migration] Failed to start default drive:", err);
+        }
       }
     } catch (err) {
       console.error("[Migration] Dismiss (close) failed:", err);
@@ -399,7 +417,7 @@ export function useMigration(
     setCurrentUploadFile("");
     uploadedFilesRef.current.clear();
     activeAccountIdRef.current = null;
-  }, []);
+  }, [getMnemonic]);
 
   return {
     currentStep,
