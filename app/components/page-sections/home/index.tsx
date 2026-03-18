@@ -54,10 +54,9 @@ const Home: React.FC = () => {
     checkSyncPath();
   }, []);
 
-  // Set active submenu item to "Private" when showing recent files
   useEffect(() => {
     if (!isCheckingSyncPath) {
-      setActiveSubMenuItem("Private");
+      setActiveSubMenuItem("");
       setIsViewingRecentFiles(true);
     }
 

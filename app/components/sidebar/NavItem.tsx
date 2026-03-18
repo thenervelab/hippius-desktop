@@ -5,11 +5,11 @@ import { ChevronDown } from "lucide-react";
 import * as NavigationMenu from "@radix-ui/react-navigation-menu";
 import { SubMenuItemData } from "./NavData";
 import SubMenuList from "./SubMenuList";
-import { activeSubMenuItemAtom, isViewingRecentFilesAtom } from "./sideBarAtoms";
+import { activeSubMenuItemAtom } from "./sideBarAtoms";
 import { usePathname } from "next/navigation";
 
 import { useState, useEffect, useRef } from "react";
-import { useAtom, useAtomValue } from "jotai";
+import { useAtom } from "jotai";
 
 interface NavItemProps {
   icon: React.ReactNode;
@@ -42,7 +42,6 @@ const NavItem: React.FC<NavItemProps> = ({
   const [activeSubMenuItem, setActiveSubMenuItem] = useAtom(
     activeSubMenuItemAtom
   );
-  const isViewingRecentFiles = useAtomValue(isViewingRecentFilesAtom);
 
 
   const pathname = usePathname();
@@ -106,20 +105,7 @@ const NavItem: React.FC<NavItemProps> = ({
             {label}
           </span>
 
-          {activeSubMenuItem &&
-            label === "Files" &&
-            !isViewingRecentFiles &&
-            (activeSubMenuItem === "Public" ||
-              activeSubMenuItem === "Private") &&
-            !collapsed && (
-              <span
-                className="ml-1 transform translate-x-[0.5px] shrink-0 rounded-full border border-primary-70
-                 bg-primary-90/20 px-2 py-[1px] text-[10px] leading-none
-                 font-medium text-primary-40"
-              >
-                {activeSubMenuItem}
-              </span>
-            )}
+
           {comingSoon && !collapsed && (
             <span className=" text-[9px]  text-amber-700 px-1.5 py-0.5 rounded-sm whitespace-nowrap absolute right-0 -top-1">
               Coming Soon
@@ -154,11 +140,6 @@ const NavItem: React.FC<NavItemProps> = ({
     const ITEM_VALUE = label;
 
     const closeMenu = () => setOpenValue?.(undefined);
-    // const handleClick = (e: React.MouseEvent) => {
-    //   if (comingSoon) return;
-    //   setActiveSubMenuItem("Private");
-    //   closeMenu();
-    // };
     return (
       <NavigationMenu.Root
         value={openValue}
