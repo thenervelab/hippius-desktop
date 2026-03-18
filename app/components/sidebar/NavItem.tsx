@@ -9,7 +9,7 @@ import { activeSubMenuItemAtom } from "./sideBarAtoms";
 import { usePathname } from "next/navigation";
 
 import { useState, useEffect, useRef } from "react";
-import { useAtom } from "jotai";
+import { useSetAtom } from "jotai";
 
 interface NavItemProps {
   icon: React.ReactNode;
@@ -39,7 +39,7 @@ const NavItem: React.FC<NavItemProps> = ({
   const [openValue, setOpenValue] = useState<string | undefined>(undefined);
 
   const hasSubMenu = subMenuItems.length > 0;
-  const [activeSubMenuItem, setActiveSubMenuItem] = useAtom(
+  const setActiveSubMenuItem = useSetAtom(
     activeSubMenuItemAtom
   );
 
