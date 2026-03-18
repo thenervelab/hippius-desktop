@@ -12,6 +12,7 @@ export interface TabItemProps {
   width?: string;
   height?: string;
   isJustifyStart?: boolean;
+  showTooltip?: boolean;
 }
 
 const TabItem: React.FC<TabItemProps> = ({
@@ -22,38 +23,45 @@ const TabItem: React.FC<TabItemProps> = ({
   width = "min-w-[148px]",
   height = "h-[36px]",
   isJustifyStart = false,
+  showTooltip = true,
 }) => {
+  const content = (
+    <div
+      className={cn(
+        "flex items-center gap-2 relative transition-all duration-300 cursor-pointer",
+        width,
+        height,
+        isActive ? "text-primary-50" : "text-grey-70",
+        isJustifyStart ? "px-2" : "px-4"
+      )}
+      onClick={onClick}
+    >
+      {isActive && <ActiveTabBg mainGroup={true} />}
+      <div
+        className={cn(
+          "relative z-10 flex items-center justify-center gap-2 w-full min-w-0",
+          isActive ? "text-primary-50" : "text-grey-70 hover:text-primary-50",
+          isJustifyStart ? "justify-start" : "justify-center"
+        )}
+      >
+        <span className="flex-shrink-0">
+          {icon &&
+            React.cloneElement(icon as React.ReactElement<any>, {
+              className: "size-[18px]",
+            })}
+        </span>
+        <span className="font-medium text-[14px] truncate">{label}</span>
+      </div>
+    </div>
+  );
+
+  if (!showTooltip) return content;
+
   return (
     <Tooltip.Provider delayDuration={200}>
       <Tooltip.Root>
         <Tooltip.Trigger asChild>
-          <div
-            className={cn(
-              "flex items-center gap-2 relative transition-all duration-300 cursor-pointer",
-              width,
-              height,
-              isActive ? "text-primary-50" : "text-grey-70",
-              isJustifyStart ? "px-2" : "px-4"
-            )}
-            onClick={onClick}
-          >
-            {isActive && <ActiveTabBg mainGroup={true} />}
-            <div
-              className={cn(
-                "relative z-10 flex items-center justify-center gap-2 w-full min-w-0",
-                isActive ? "text-primary-50" : "text-grey-70 hover:text-primary-50",
-                isJustifyStart ? "justify-start" : "justify-center"
-              )}
-            >
-              <span className="flex-shrink-0">
-                {icon &&
-                  React.cloneElement(icon as React.ReactElement<any>, {
-                    className: "size-[18px]",
-                  })}
-              </span>
-              <span className="font-medium text-[14px] truncate">{label}</span>
-            </div>
-          </div>
+          {content}
         </Tooltip.Trigger>
         <Tooltip.Portal>
           <Tooltip.Content

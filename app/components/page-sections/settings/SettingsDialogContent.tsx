@@ -63,6 +63,7 @@ const SettingsDialogContent: React.FC = () => {
           className=" flex-col"
           width="min-w-[168px]"
           isJustifyStart
+          showTooltip={false}
         />
       </div>
 
