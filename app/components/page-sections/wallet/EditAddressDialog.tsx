@@ -45,6 +45,7 @@ const EditAddressDialog: React.FC<EditAddressDialogProps> = ({
       setName(contact.name);
       setAddress(contact.walletAddress);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contact]);
 
   const validateForm = async () => {

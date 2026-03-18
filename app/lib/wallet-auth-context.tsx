@@ -109,6 +109,8 @@ const MAX_DELAY = 2_147_483_647; // ~24.8 days
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
 
+const TOKEN_REFRESH_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
 export function WalletAuthProvider({
   children,
 }: {
@@ -394,7 +396,6 @@ export function WalletAuthProvider({
   // Rust handles the entire challenge-response flow — no frontend crypto needed.
   const refreshingTokenRef = useRef(false);
   const lastRefreshAttemptRef = useRef(0);
-  const TOKEN_REFRESH_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;

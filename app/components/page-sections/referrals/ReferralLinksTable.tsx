@@ -94,7 +94,8 @@ export default function ReferralLinksTable() {
   const totalPages = Math.ceil(links.length / pageSize);
   const pageData = useMemo(
     () => links.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize),
-    [links, pageIndex]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pageIndex]
   );
 
   // Column resizing state

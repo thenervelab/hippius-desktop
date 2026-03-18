@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { addNotification } from "@/app/lib/helpers/notificationsDb";
@@ -137,6 +136,7 @@ export function useFilesNotification() {
     const intervalId = setInterval(getSyncStatus, 15000);
 
     return () => clearInterval(intervalId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     areFilesNotificationsEnabled,
     refreshUnread,

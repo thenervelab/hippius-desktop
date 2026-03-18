@@ -66,7 +66,7 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
     setShowEditDialog(true);
   };
 
-  const handleDelete = async (contact: Contact) => {
+  const handleDelete = useCallback(async (contact: Contact) => {
     try {
       setIsDeleting(true);
       const success = await deleteContact(contact.id);
@@ -82,7 +82,7 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
     } finally {
       setIsDeleting(false);
     }
-  };
+  }, [onContactChanged]);
 
   const createTableItems = useCallback(
     (contact: Contact) => {
@@ -100,7 +100,7 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
         }
       ];
     },
-    []
+    [handleDelete]
   );
 
   const columns = [

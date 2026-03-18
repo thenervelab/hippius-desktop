@@ -93,6 +93,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
         scrollToBottom();
       }, 150);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const scrollToBottom = () => {

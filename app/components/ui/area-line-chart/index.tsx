@@ -504,7 +504,7 @@ function AreaLineChart<T extends object>({
       zero: false,
       ...(yDomain ? { domain: yDomain } : {}),
     }),
-    [yScaleType, yDomain?.[0], yDomain?.[1]],
+    [yScaleType, yDomain],
   );
 
   return (

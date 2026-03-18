@@ -477,7 +477,6 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               const isFileCompleted = file.status === "uploaded";
               const isFileDeleted = file.status === "deleted" || (isFileCompleted && file.deleted);
               const isFileInProgress = file.status === "uploading";
-              const isFilePending = file.status === "pending";
               const isFailed = file.status === "failed";
               const fileProgress = (file as any).progress as number | undefined;
               const fileBytesTransferred = (file as any).bytesTransferred as number | undefined;
@@ -561,6 +560,13 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                             </span>
                           )}
                         </div>
+                      ) : file.status === "pending" ? (
+                        <>
+                          <Icons.InfoCircle className="w-5 h-5 text-warning-50" />
+                          <span className="text-sm ml-1 text-warning-50">
+                            Pending
+                          </span>
+                        </>
                       ) : (
                         <div className="flex items-center gap-2">
                           <div className="w-[60px] h-1.5 bg-grey-80 rounded-full overflow-hidden">

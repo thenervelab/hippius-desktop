@@ -37,7 +37,6 @@ export interface VMConfigurationData {
 type Props = {
   open: boolean;
   onClose: () => void;
-  // eslint-disable-next-line no-unused-vars
   onSubmit: (data: VMConfigurationData) => void;
   template: VMTemplate | null;
   isLoading?: boolean;

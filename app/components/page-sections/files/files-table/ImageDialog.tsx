@@ -1,4 +1,3 @@
-/* eslint-disable @next/next/no-img-element */
 import React, { ReactNode, useState, useEffect, useCallback, useMemo } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";

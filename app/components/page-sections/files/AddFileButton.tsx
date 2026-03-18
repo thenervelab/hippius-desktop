@@ -150,7 +150,8 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       droppedFiles,
       droppedPaths,
       closeDialog,
-      isPrivateView
+      isPrivateView,
+      defaultFolderLabel
     ]);
 
     return (

@@ -661,10 +661,6 @@ const FilesTable: FC<FilesTableProps> = memo(
         handleSetSelectedFile,
         createTableItems,
         isSelectionMode,
-        isPrivateFolder,
-        files,
-        currentPage,
-        selectedFiles,
         showFolderBadge,
       ]
     );
@@ -838,7 +834,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         getRowId: (row: FormattedUserFile, index: number) => row.arionHash ? `${row.arionHash}-${index}` : `${row.actualFileName || row.name}-${index}`,
 
       }),
-      [columns, allFiles, sorting, handleSortingChange, currentPage, files, isSelectionMode]
+      [columns, allFiles, sorting, handleSortingChange]
     );
 
     const table = useReactTable(tableConfig);
@@ -850,7 +846,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       const start = (currentPage - 1) * pageSize;
       const end = start + pageSize;
       return sortedRows.slice(start, end);
-    }, [table, currentPage, sorting, allFiles]);
+    }, [table, currentPage]);
 
     const headerRows = useMemo(
       () =>
@@ -868,7 +864,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             ))}
           </TableModule.Tr>
         )),
-      [table, columnWidths, handleResizeStart, isResizing, resizeData?.columnId, isSelectionMode, sorting, justResized]
+      [table, columnWidths, handleResizeStart, justResized]
     );
 
     const tableBody = useMemo(
