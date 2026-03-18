@@ -77,8 +77,9 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   const showIndeterminateProgress = isInProgress && (propSyncPercent === null || propSyncPercent === undefined);
   
   const calculatedMetrics = {
-    // Use displayed files for counts — includes both session and recent files
-    totalFiles: syncFiles?.length || propTotalFiles || 0,
+    // Prefer backend total (includes all files, even hidden downloads)
+    // over display list length so the "X of Y" counts are accurate.
+    totalFiles: propTotalFiles > 0 ? propTotalFiles : (syncFiles?.length || 0),
     syncedFiles: syncFiles?.filter((f) => f.status === "uploaded").length || 0,
     deletedFiles: syncFiles?.filter((f) => f.status === "deleted").length || 0,
     // For percentage: when in progress but no percent provided, use null to show indeterminate state
@@ -441,17 +442,23 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           </div>
 
           {/* Overall sync progress bar */}
-          {!isCompleted && percentage !== null && percentage < 100 && (
+          {!isCompleted && isInProgress && (
             <div className="px-4 pt-3">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-xs text-grey-40">Overall progress</span>
-                <span className="text-xs text-grey-40">{percentage}%</span>
+                <span className="text-xs text-grey-40">
+                  {percentage !== null ? `${percentage}%` : "Preparing..."}
+                </span>
               </div>
               <div className="w-full h-1.5 bg-grey-80 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-primary-50 rounded-full transition-all duration-300"
-                  style={{ width: `${percentage}%` }}
-                />
+                {percentage !== null ? (
+                  <div
+                    className="h-full bg-primary-50 rounded-full transition-all duration-300"
+                    style={{ width: `${percentage}%` }}
+                  />
+                ) : (
+                  <div className="h-full w-1/3 bg-primary-50 rounded-full animate-pulse" />
+                )}
               </div>
               {totalBytesExpected > 0 && (
                 <div className="text-[10px] text-grey-50 mt-1">
@@ -470,6 +477,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               const isFileCompleted = file.status === "uploaded";
               const isFileDeleted = file.status === "deleted" || (isFileCompleted && file.deleted);
               const isFileInProgress = file.status === "uploading";
+              const isFilePending = file.status === "pending";
               const isFailed = file.status === "failed";
               const fileProgress = (file as any).progress as number | undefined;
               const fileBytesTransferred = (file as any).bytesTransferred as number | undefined;
@@ -538,7 +546,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                         <div className="flex flex-col items-end gap-0.5">
                           <div className="flex items-center gap-2">
                             <div className="w-[60px] h-1.5 bg-grey-80 rounded-full overflow-hidden">
-                              <div 
+                              <div
                                 className="h-full bg-primary-50 rounded-full transition-all duration-300"
                                 style={{ width: `${fileProgress ?? 0}%` }}
                               />
@@ -554,7 +562,17 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                           )}
                         </div>
                       ) : (
-                        <span className="text-sm text-grey-50">Pending</span>
+                        <div className="flex items-center gap-2">
+                          <div className="w-[60px] h-1.5 bg-grey-80 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-grey-60 rounded-full"
+                              style={{ width: "0%" }}
+                            />
+                          </div>
+                          <span className="text-xs text-grey-50 min-w-[32px] text-right">
+                            0%
+                          </span>
+                        </div>
                       )}
                     </div>
                   </div>

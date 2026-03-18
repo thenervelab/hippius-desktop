@@ -337,7 +337,7 @@ impl HcfsDriveManager {
                 return;
             }
         };
-        debug!(
+        info!(
             label = label,
             ss58 = %state.ss58_address,
             folder_hash = %state.folder_hash,
@@ -667,18 +667,31 @@ pub async fn start_sync_loop(app: AppHandle) {
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(256);
 
-    // File watcher — always forwards events to channel; if sync is active,
-    // also sets SYNC_CHANGES_PENDING so a re-sync is triggered after completion.
+    // File watcher — forwards events to channel, filtering out internal
+    // metadata paths (.hcfs/, sync_progress/) that the sync engine writes.
+    // If sync is active, sets SYNC_CHANGES_PENDING for real user changes only.
     let tx_clone = tx.clone();
     let sync_flag = SYNC_IN_PROGRESS.clone();
     let mut watcher: RecommendedWatcher = match notify::recommended_watcher(
         move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(_event) = res {
+            if let Ok(event) = res {
+                // Filter out internal metadata files that the sync engine writes.
+                // These would otherwise create a feedback loop: sync writes state →
+                // watcher fires → triggers another sync → writes state → ...
+                let dominated_by_internal = event.paths.iter().all(|p| {
+                    let path_str = p.to_string_lossy();
+                    path_str.contains("/.hcfs/")
+                        || path_str.contains("\\.hcfs\\")
+                        || path_str.contains("/sync_progress/")
+                        || path_str.contains("\\sync_progress\\")
+                });
+                if dominated_by_internal {
+                    return;
+                }
+
                 if sync_flag.load(Ordering::Acquire) {
-                    // Record that changes arrived during sync so we re-sync immediately after
                     SYNC_CHANGES_PENDING.store(true, Ordering::Release);
                 }
-                // try_send: if channel is full the event is redundant (debounced anyway)
                 let _ = tx_clone.try_send(());
             }
         },
@@ -994,7 +1007,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         // frontend's ensureSession() creates ad-hoc
                         // sessions when upload/download progress events
                         // arrive unexpectedly.
-                        debug!(
+                        info!(
                             label = label,
                             uploads = staged.uploads.len(),
                             downloads = staged.downloads.len(),
@@ -1002,6 +1015,13 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                             remote_deletes = staged.remote_deletes.len(),
                             "Staged (cached; running real sync)",
                         );
+                        // Log individual staged file paths for debugging
+                        for f in &staged.uploads {
+                            info!(label = label, path = %f.path, "Staged upload");
+                        }
+                        for f in &staged.downloads {
+                            info!(label = label, path = %f.path, "Staged download");
+                        }
                         let empty: Vec<String> = Vec::new();
                         if let Err(e) = app.emit(
                             "hcfs_sync_started",
@@ -1019,7 +1039,33 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         }
                         emitted_sync_started = true;
 
-                        let outcome = m.sync_with_resolutions(HashMap::new()).await;
+                        info!(label = label, "sync_with_resolutions starting");
+                        let sync_timeout = Duration::from_secs(300); // 5 minutes
+                        let outcome = match tokio::time::timeout(
+                            sync_timeout,
+                            m.sync_with_resolutions(HashMap::new()),
+                        )
+                        .await
+                        {
+                            Ok(result) => {
+                                info!(
+                                    label = label,
+                                    success = result.is_ok(),
+                                    "sync_with_resolutions returned",
+                                );
+                                result
+                            }
+                            Err(_elapsed) => {
+                                error!(
+                                    label = label,
+                                    timeout_secs = 300,
+                                    "sync_with_resolutions timed out — \
+                                     hcfs-client may be stuck on a file \
+                                     download. Will retry next cycle.",
+                                );
+                                Err("Sync timed out after 5 minutes".to_string())
+                            }
+                        };
 
                         match &outcome {
                             Ok(o) if o.conflicts_skipped > 0 => {
@@ -1069,37 +1115,108 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         }
                     }
                     Ok(staged) => {
+                        // Cached stage detected conflicts, but the cache may be
+                        // stale (TOCTOU gap). Instead of entering review mode on
+                        // stale data, run a live sync that fetches fresh remote
+                        // state, syncs all non-conflicting files, and skips only
+                        // real conflicts. Review mode is entered only if the live
+                        // sync confirms conflicts_skipped > 0.
                         info!(
-                            conflicts = staged.conflicts.len(),
+                            cached_conflicts = staged.conflicts.len(),
                             label = label,
-                            "Conflicts detected, entering review mode",
+                            "Cached stage shows conflicts, running live sync to verify",
                         );
+                        let empty: Vec<String> = Vec::new();
                         if let Err(e) = app.emit("hcfs_sync_started", serde_json::json!({
                             "label": label,
-                            "uploads": staged.uploads.len(),
-                            "downloads": staged.downloads.len(),
-                            "local_deletes": staged.local_deletes.len(),
-                            "remote_deletes": staged.remote_deletes.len(),
-                            "upload_files": staged.uploads.iter().map(|f| &f.path).collect::<Vec<_>>(),
-                            "download_files": staged.downloads.iter().map(|f| &f.path).collect::<Vec<_>>(),
-                            "local_delete_files": staged.local_deletes.iter().map(|f| &f.path).collect::<Vec<_>>(),
-                            "remote_delete_files": staged.remote_deletes.iter().map(|f| &f.path).collect::<Vec<_>>(),
+                            "uploads": 0, "downloads": 0,
+                            "local_deletes": 0, "remote_deletes": 0,
+                            "upload_files": empty,
+                            "download_files": empty,
+                            "local_delete_files": empty,
+                            "remote_delete_files": empty,
                         })) {
                             warn!(error = %e, "Failed to emit hcfs_sync_started");
                         }
                         emitted_sync_started = true;
-                        SYNC_REVIEW_MODE.store(true, Ordering::Release);
-                        set_review_entered();
-                        if let Err(e) = app.emit(
-                            "hcfs_conflicts_pending",
-                            serde_json::json!({
-                                "label": label,
-                                "staged": staged,
-                            }),
-                        ) {
-                            warn!(error = %e, "Failed to emit hcfs_conflicts_pending");
+
+                        let sync_timeout = Duration::from_secs(300);
+                        let outcome = match tokio::time::timeout(
+                            sync_timeout,
+                            m.sync_with_resolutions(HashMap::new()),
+                        )
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(_elapsed) => {
+                                error!(
+                                    label = label,
+                                    timeout_secs = 300,
+                                    "sync_with_resolutions timed out",
+                                );
+                                Err("Sync timed out after 5 minutes".to_string())
+                            }
+                        };
+
+                        match &outcome {
+                            Ok(o) if o.conflicts_skipped > 0 => {
+                                info!(
+                                    conflicts_skipped = o.conflicts_skipped,
+                                    label = label,
+                                    "Live sync confirmed conflicts, entering review mode",
+                                );
+                                if let Err(e) = app.emit(
+                                    "hcfs_sync_completed",
+                                    serde_json::json!({
+                                        "label": label,
+                                        "files_uploaded": o.files_uploaded,
+                                        "files_downloaded": o.files_downloaded,
+                                        "files_deleted_locally": o.files_deleted_locally,
+                                        "files_deleted_remotely": o.files_deleted_remotely,
+                                        "conflicts_resolved": o.conflicts_resolved,
+                                        "conflicts_skipped": o.conflicts_skipped,
+                                    }),
+                                ) {
+                                    warn!(error = %e, "Failed to emit hcfs_sync_completed");
+                                }
+                                match m.stage_with_paths().await {
+                                    Ok(restaged) if !restaged.conflicts.is_empty() => {
+                                        SYNC_REVIEW_MODE.store(true, Ordering::Release);
+                                        set_review_entered();
+                                        if let Err(e) = app.emit(
+                                            "hcfs_conflicts_pending",
+                                            serde_json::json!({
+                                                "label": label,
+                                                "staged": restaged,
+                                            }),
+                                        ) {
+                                            warn!(error = %e, "Failed to emit hcfs_conflicts_pending");
+                                        }
+                                    }
+                                    _ => {
+                                        info!(
+                                            label = label,
+                                            "Re-stage after live sync found no conflicts",
+                                        );
+                                    }
+                                }
+                                SyncResult::ConflictsPending
+                            }
+                            Ok(_) => {
+                                info!(
+                                    label = label,
+                                    "Live sync resolved all cached conflicts — no review needed",
+                                );
+                                SyncResult::Synced {
+                                    outcome,
+                                    staged_downloads: Vec::new(),
+                                }
+                            }
+                            Err(_) => SyncResult::Synced {
+                                outcome,
+                                staged_downloads: Vec::new(),
+                            },
                         }
-                        SyncResult::ConflictsPending
                     }
                     Err(e) => {
                         error!(label = label, error = %e, "Staging failed");
@@ -1121,14 +1238,12 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         }
     };
 
-    // Re-enable file watcher after a brief delay to let the OS flush any
-    // trailing filesystem events generated by the sync (e.g. downloaded files).
-    // Kept short (200ms) to minimize the window where real user changes are missed.
-    let flag = SYNC_IN_PROGRESS.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        flag.store(false, Ordering::Release);
-    });
+    // Wait for the OS to flush trailing filesystem events generated by sync
+    // (e.g. sync_state.json writes, downloaded files). The drain in
+    // start_sync_loop happens AFTER this returns, so awaiting inline ensures
+    // the drain captures all trailing events instead of racing with them.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    SYNC_IN_PROGRESS.store(false, Ordering::Release);
 
     update_state(label, |s| {
         s.is_syncing = false;

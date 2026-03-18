@@ -213,19 +213,45 @@ export function useSyncEvents() {
     // progress events that arrive without a prior startSession call
     // (happens when staging shows 0 changes but real sync discovers files).
     let adHocSessionCreated = false;
+    // Prevent concurrent ensureSession() calls from racing
+    let ensureSessionInFlight = false;
 
     async function ensureSession(action: 'upload' | 'download') {
-      if (adHocSessionCreated) return;
-      const progress = await getOverallProgress();
-      if (!progress.isActive) {
-        const uploads = action === 'upload' ? 1 : 0;
-        const downloads = action === 'download' ? 1 : 0;
-        await startSession(uploads, downloads, 0, 0);
-        adHocSessionCreated = true;
-        setIsSyncing(true);
-        setIsSyncingAtom(true);
-        setHasSyncErrorAtom(false);
-        setSyncPercentAtom(0);
+      if (adHocSessionCreated || ensureSessionInFlight) return;
+      ensureSessionInFlight = true;
+      try {
+        const progress = await getOverallProgress();
+        if (!progress.isActive) {
+          const uploads = action === 'upload' ? 1 : 0;
+          const downloads = action === 'download' ? 1 : 0;
+          await startSession(uploads, downloads, 0, 0);
+          adHocSessionCreated = true;
+
+          // Cancel completion timer — real files are being transferred
+          if (completionTimerRef.current) {
+            clearTimeout(completionTimerRef.current);
+            completionTimerRef.current = null;
+          }
+
+          completedFilesRef.current.clear();
+          setCompletedFilesCountAtom(0);
+          setIsSyncing(true);
+          setIsSyncingAtom(true);
+          setHasSyncErrorAtom(false);
+          // null = indeterminate progress until backend accumulates data
+          setSyncPercentAtom(null);
+          setIsSyncConfiguredAtom(true);
+          setSyncActionCountsAtom({
+            uploads,
+            downloads,
+            localDeletes: 0,
+            remoteDeletes: 0,
+          });
+        }
+      } catch (err) {
+        console.error("[SyncEvents] ensureSession failed:", err);
+      } finally {
+        ensureSessionInFlight = false;
       }
     }
 
@@ -255,6 +281,11 @@ export function useSyncEvents() {
               // cycles fire immediately after the previous sync completes, and
               // cancelling the timer would prevent isSyncingAtom from ever being
               // set to false — leaving the spinner stuck indefinitely.
+
+              // Reset ad-hoc flag so ensureSession() can create a new session
+              // if progress events arrive during this cycle.
+              adHocSessionCreated = false;
+              setIsSyncConfiguredAtom(true);
               return;
             }
 
@@ -320,6 +351,80 @@ export function useSyncEvents() {
             setLastError(null);
             setLastSyncErrorAtom(null);
           }),
+          listen<SyncStartedPayload>("hcfs_sync_plan_ready", async (e) => {
+            // Fired by hcfs-client after the real sync plan is computed
+            // (after scanning + fetching remote state). Contains the exact
+            // file lists that will be synced — not stale cached counts.
+            const payload = e.payload || {};
+            const uploads = payload.uploads || 0;
+            const downloads = payload.downloads || 0;
+            const localDeletes = payload.local_deletes || 0;
+            const remoteDeletes = payload.remote_deletes || 0;
+            const totalExpected = uploads + downloads + localDeletes + remoteDeletes;
+
+            if (totalExpected === 0) return;
+
+            const label = payload.label || "default";
+
+            // Cancel any pending completion timer — real work is about to start
+            if (completionTimerRef.current) {
+              clearTimeout(completionTimerRef.current);
+              completionTimerRef.current = null;
+            }
+
+            // Build file lists from payload
+            const fileList: SessionFileList = {
+              uploadFiles: payload.upload_files,
+              downloadFiles: payload.download_files,
+              localDeleteFiles: payload.local_delete_files,
+              remoteDeleteFiles: payload.remote_delete_files,
+            };
+
+            // Check if there's already an active session
+            const currentProgress = await getOverallProgress();
+            const hasActiveSession = currentProgress.isActive;
+
+            adHocSessionCreated = false;
+
+            if (hasActiveSession) {
+              // Merge into existing session (multi-drive)
+              const prev = expectedCountsRef.current.get(label) ?? { uploads: 0, downloads: 0 };
+              expectedCountsRef.current.set(label, {
+                uploads: prev.uploads + uploads,
+                downloads: prev.downloads + downloads,
+              });
+              setSyncActionCountsAtom((prev) => ({
+                uploads: prev.uploads + uploads,
+                downloads: prev.downloads + downloads,
+                localDeletes: prev.localDeletes + localDeletes,
+                remoteDeletes: prev.remoteDeletes + remoteDeletes,
+              }));
+              setTotalFilesToSyncAtom((prev) => prev + totalExpected);
+              await mergeIntoSession(uploads, downloads, localDeletes, remoteDeletes, fileList, label);
+            } else {
+              // First drive — start fresh session with real file list
+              expectedCountsRef.current.clear();
+              expectedCountsRef.current.set(label, { uploads, downloads });
+              completedFilesRef.current.clear();
+              setCompletedFilesCountAtom(0);
+              setTotalFilesToSyncAtom(totalExpected);
+              setSyncActionCountsAtom({
+                uploads,
+                downloads,
+                localDeletes,
+                remoteDeletes,
+              });
+              await startSession(uploads, downloads, localDeletes, remoteDeletes, fileList, label);
+            }
+
+            await refreshProgressState();
+            setIsSyncing(true);
+            setIsSyncingAtom(true);
+            setHasSyncErrorAtom(false);
+            setSyncPercentAtom(0);
+            setLastError(null);
+            setLastSyncErrorAtom(null);
+          }),
           listen<SyncOutcome>("hcfs_sync_completed", async (e) => {
             const totalCompleted = e.payload.files_uploaded + e.payload.files_downloaded +
                                    e.payload.files_deleted_locally + e.payload.files_deleted_remotely;
@@ -329,10 +434,10 @@ export function useSyncEvents() {
             const expected = expectedCountsRef.current.get(label) ?? { uploads: 0, downloads: 0 };
             const hasExpectedWork = expected.uploads > 0 || expected.downloads > 0;
 
-            // Skip processing for no-op sync cycles (no work expected or completed).
-            // This avoids unnecessary backend calls that can duplicate recent files
-            // and disrupt the completed state display.
-            if (totalCompleted === 0 && !hasExpectedWork) {
+            // Skip processing for no-op sync cycles (no work expected or completed)
+            // UNLESS an ad-hoc session is active (files were registered via
+            // progress events but never completed — they need to be marked failed).
+            if (totalCompleted === 0 && !hasExpectedWork && !adHocSessionCreated) {
               return;
             }
 
@@ -380,7 +485,7 @@ export function useSyncEvents() {
               // All drives done — debounce finalization to avoid a brief
               // 100%→0%→syncing flash when the next drive starts immediately.
               const outcomeCopy = e.payload;
-              completionTimerRef.current = setTimeout(() => {
+              completionTimerRef.current = setTimeout(async () => {
                 completionTimerRef.current = null;
                 // Clear remaining expected counts so stale values don't leak.
                 expectedCountsRef.current.clear();
@@ -389,6 +494,13 @@ export function useSyncEvents() {
                   setCompletedFilesCountAtom(totalCompleted);
                   setTotalFilesToSyncAtom(totalCompleted);
                   setSyncPercentAtom(100);
+                  // Update action counts from the real sync outcome
+                  setSyncActionCountsAtom({
+                    uploads: outcomeCopy.files_uploaded,
+                    downloads: outcomeCopy.files_downloaded,
+                    localDeletes: outcomeCopy.files_deleted_locally,
+                    remoteDeletes: outcomeCopy.files_deleted_remotely,
+                  });
                 }
                 setIsSyncing(false);
                 setIsSyncingAtom(false);
@@ -397,6 +509,9 @@ export function useSyncEvents() {
                 setUploadProgressAtom(null);
                 setDownloadProgress(null);
                 setDownloadProgressAtom(null);
+                // Final refresh so the UI shows the completed state
+                // from the backend (session is kept intact after completion).
+                await refreshProgressState();
               }, 800);
             }
           }),

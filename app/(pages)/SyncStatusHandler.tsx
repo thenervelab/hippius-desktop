@@ -38,6 +38,8 @@ function syncFileToActivityRow(file: SyncFile): SyncActivityRow {
     status = file.action === 'local_delete' || file.action === 'remote_delete' ? 'deleted' : 'uploaded';
   } else if (file.status === 'error') {
     status = 'failed';
+  } else if (file.status === 'pending') {
+    status = 'pending';
   } else if (file.status === 'deleting') {
     status = 'uploading'; // Show as in-progress
   }
@@ -157,8 +159,18 @@ const SyncStatusHandler: React.FC = () => {
       }
     }
 
-    // Sort by timestamp (most recent first)
-    files.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    // Sort: in-progress first, then pending, then completed/recent by timestamp
+    const statusOrder = (s: string) => {
+      if (s === "uploading") return 0;
+      if (s === "pending") return 1;
+      if (s === "failed") return 2;
+      return 3; // uploaded, deleted
+    };
+    files.sort((a, b) => {
+      const orderDiff = statusOrder(a.status) - statusOrder(b.status);
+      if (orderDiff !== 0) return orderDiff;
+      return (b.timestamp || 0) - (a.timestamp || 0);
+    });
 
     return files;
   }, [sessionFiles, recentFiles]);

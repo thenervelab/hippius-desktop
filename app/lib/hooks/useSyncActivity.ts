@@ -19,7 +19,7 @@ export type SyncActivityRow = {
   fileName: string;
   rawName: string;
   scope: string;
-  status: "uploading" | "uploaded" | "deleted" | "failed";
+  status: "pending" | "uploading" | "uploaded" | "deleted" | "failed";
   fileType: string;
   timestamp?: number;
   rawPath?: string;

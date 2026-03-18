@@ -835,7 +835,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         enableExpanding: false,
         enableGrouping: false,
         // Use stable ID generation
-        getRowId: (row: FormattedUserFile, index: number) => row.arionHash || `${row.actualFileName || row.name}-${index}`,
+        getRowId: (row: FormattedUserFile, index: number) => row.arionHash ? `${row.arionHash}-${index}` : `${row.actualFileName || row.name}-${index}`,
 
       }),
       [columns, allFiles, sorting, handleSortingChange, currentPage, files, isSelectionMode]

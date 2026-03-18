@@ -1010,6 +1010,8 @@ pub async fn stop_sync(app: AppHandle) -> Result<(), String> {
 }
 
 /// Stop a single drive by label. If no drives remain, also stops the sync loop.
+/// Also removes the corresponding sync_paths DB row so the drive is not
+/// resurrected on restart (prevents ghost sync paths).
 #[tauri::command]
 pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
     let remaining = {
@@ -1022,6 +1024,27 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
     discard_pending_activity_for_label(&label);
     // Clean up sync progress files for this drive
     let _ = crate::sync_progress::sp_remove_files_for_label(label.clone());
+
+    // Remove the DB row so the drive isn't resurrected on app restart.
+    // Best-effort: if the account or pool isn't available, the in-memory
+    // cleanup above still takes effect for this session.
+    {
+        use tauri::Manager;
+        let app_state = app.state::<crate::app_state::AppState>();
+        if let (Ok(pool), Ok(acct)) = (
+            app_state.pool(),
+            crate::utils::sync::current_account_id(&app_state),
+        ) {
+            if let Err(e) =
+                crate::commands::substrate_tx::remove_sync_path_internal(pool, &acct, &label).await
+            {
+                warn!(
+                    "Failed to remove sync path for '{}' from DB: {e}",
+                    label
+                );
+            }
+        }
+    }
 
     if remaining == 0 {
         // No more drives — stop the sync loop entirely
@@ -1122,6 +1145,7 @@ pub async fn trigger_sync_now(app: AppHandle) -> Result<(), String> {
 }
 
 fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, label: &str) {
+    let a0 = app.clone();
     let a1 = app.clone();
     let a2 = app.clone();
     let a3 = app.clone();
@@ -1129,6 +1153,7 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
     let a5 = app.clone();
     let a6 = app.clone();
 
+    let l0 = label.to_string();
     let l1 = label.to_string();
     let l2 = label.to_string();
     let l3 = label.to_string();
@@ -1136,8 +1161,55 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
     let l5 = label.to_string();
     let l6 = label.to_string();
 
+    // Track first progress event per file for info-level "file started" logs
+    let upload_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
+        Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+    let download_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
+        Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+    let upload_started_cb = Arc::clone(&upload_started);
+    let download_started_cb = Arc::clone(&download_started);
+
     manager.set_progress(SyncProgress {
+        on_sync_plan_ready: Some(Arc::new(move |uploads, downloads, local_deletes, remote_deletes| {
+            let total = uploads.len() + downloads.len() + local_deletes.len() + remote_deletes.len();
+            if total == 0 {
+                return;
+            }
+            info!(
+                "Sync plan ready [{}]: {} uploads, {} downloads, {} local_deletes, {} remote_deletes",
+                l0, uploads.len(), downloads.len(), local_deletes.len(), remote_deletes.len()
+            );
+            let _ = a0.emit(
+                "hcfs_sync_plan_ready",
+                serde_json::json!({
+                    "label": l0,
+                    "uploads": uploads.len(),
+                    "downloads": downloads.len(),
+                    "local_deletes": local_deletes.len(),
+                    "remote_deletes": remote_deletes.len(),
+                    "upload_files": uploads,
+                    "download_files": downloads,
+                    "local_delete_files": local_deletes,
+                    "remote_delete_files": remote_deletes,
+                }),
+            );
+        })),
         on_upload_progress: Some(Arc::new(move |b, t, p| {
+            // Log first progress event for each file at info level
+            if let Some(path_str) = p {
+                let file_name = Path::new(path_str)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path_str.to_string());
+                if let Ok(mut set) = upload_started_cb.lock() {
+                    if set.insert(path_str.to_string()) {
+                        info!(
+                            "Upload started [{}]: {} ({} bytes)",
+                            l1, file_name, t
+                        );
+                    }
+                }
+            }
             debug!("Upload [{}]: {}/{} bytes, path: {:?}", l1, b, t, p);
             let _ = a1.emit(
                 "hcfs_upload_progress",
@@ -1149,7 +1221,7 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
                         .file_name()
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| path_str.to_string());
-                    debug!("Upload sent [{}]: {}", l1, file_name);
+                    info!("Upload complete [{}]: {} ({} bytes)", l1, file_name, t);
                     add_pending_activity(SyncActivityItem {
                         file_name,
                         action: "uploaded".to_string(),
@@ -1164,6 +1236,21 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
             }
         })),
         on_download_progress: Some(Arc::new(move |b, t, p| {
+            // Log first progress event for each file at info level
+            if let Some(path_str) = p {
+                let file_name = Path::new(path_str)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path_str.to_string());
+                if let Ok(mut set) = download_started_cb.lock() {
+                    if set.insert(path_str.to_string()) {
+                        info!(
+                            "Download started [{}]: {} ({} bytes)",
+                            l2, file_name, t
+                        );
+                    }
+                }
+            }
             debug!("Download [{}]: {}/{} bytes, path: {:?}", l2, b, t, p);
             let _ = a2.emit(
                 "hcfs_download_progress",
@@ -1178,6 +1265,7 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
                         .file_name()
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| path_str.to_string());
+                    info!("Download complete [{}]: {} ({} bytes)", l2, file_name, t);
                     add_pending_activity(SyncActivityItem {
                         file_name,
                         action: "downloaded".to_string(),
@@ -1189,24 +1277,38 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
             }
         })),
         on_encrypt_progress: Some(Arc::new(move |b, t, p| {
+            if b == 0 {
+                info!("Encrypt starting [{}]: {:?} ({} bytes)", l3, p, t);
+            }
+            if b == t && t > 0 {
+                info!("Encrypt complete [{}]: {:?} ({} bytes)", l3, p, t);
+            }
             let _ = a3.emit(
                 "hcfs_encrypt_progress",
                 serde_json::json!({"label": l3, "bytes": b, "total": t, "path": p}),
             );
         })),
         on_decrypt_progress: Some(Arc::new(move |b, t, p| {
+            if b == 0 {
+                info!("Decrypt starting [{}]: {:?} ({} bytes)", l4, p, t);
+            }
+            if b == t && t > 0 {
+                info!("Decrypt complete [{}]: {:?} ({} bytes)", l4, p, t);
+            }
             let _ = a4.emit(
                 "hcfs_decrypt_progress",
                 serde_json::json!({"label": l4, "bytes": b, "total": t, "path": p}),
             );
         })),
         on_scan_progress: Some(Arc::new(move |n, p| {
+            info!("Scan [{}]: {} files scanned, current: {:?}", l5, n, p);
             let _ = a5.emit(
                 "hcfs_scan_progress",
                 serde_json::json!({"label": l5, "scanned": n, "path": p}),
             );
         })),
         on_fetch_state_progress: Some(Arc::new(move |f, t| {
+            info!("Fetch state [{}]: {}/{} entries", l6, f, t);
             let _ = a6.emit(
                 "hcfs_fetch_progress",
                 serde_json::json!({"label": l6, "fetched": f, "total": t}),

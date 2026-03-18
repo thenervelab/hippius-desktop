@@ -98,35 +98,37 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
           {file.createdAt === 0 ? "Unknown" : <FormattedTimestamp timestamp={file.createdAt} />}
         </DetailRow>
 
-        <DetailRow label="File Size">
+        <DetailRow label="File Size" lastChild={!!file.isFolder}>
           <div className="flex items-center gap-2">
             <Icons.File className="size-4 text-grey-70" />
             <span>{fileSize}</span>
           </div>
         </DetailRow>
 
-        <DetailRow label="Arion Hash" lastChild>
-          {hasCid ? (
-            <>
-              <TableModule.CopyableCell
-                title="Copy Arion Hash"
-                toastMessage="Arion Hash Copied Successfully!"
-                copyAbleText={arionCid || ""}
-                isTable={true}
-                className="max-sm:[200px] max-w-[400px] h-full"
-              />
-              <div
-                className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"
-                onClick={handleViewOnExplorer}
-              >
-                View on File Tracker
-                <Icons.SendSquare2 className="size-5 text-primary-50" />
-              </div>
-            </>
-          ) : (
-            <span className="text-grey-50">Not yet synced</span>
-          )}
-        </DetailRow>
+        {!file.isFolder && (
+          <DetailRow label="Arion Hash" lastChild>
+            {hasCid ? (
+              <>
+                <TableModule.CopyableCell
+                  title="Copy Arion Hash"
+                  toastMessage="Arion Hash Copied Successfully!"
+                  copyAbleText={arionCid || ""}
+                  isTable={true}
+                  className="max-sm:[200px] max-w-[400px] h-full"
+                />
+                <div
+                  className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"
+                  onClick={handleViewOnExplorer}
+                >
+                  View on File Tracker
+                  <Icons.SendSquare2 className="size-5 text-primary-50" />
+                </div>
+              </>
+            ) : (
+              <span className="text-grey-50">Not yet synced</span>
+            )}
+          </DetailRow>
+        )}
       </div>
     </div>
   );

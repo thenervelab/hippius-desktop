@@ -121,7 +121,7 @@ fn main() {
     // Set RUST_LOG env var to customize (e.g., RUST_LOG=hcfs_client=debug).
     use tracing_subscriber::{EnvFilter, fmt, prelude::*};
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("warn,hcfs_client=warn,Hippius=info"));
+        .unwrap_or_else(|_| EnvFilter::new("warn,hcfs_client=info,Hippius=info"));
     tracing_subscriber::registry()
         .with(
             fmt::layer()

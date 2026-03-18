@@ -290,8 +290,9 @@ pub fn sp_start_session(
         poisoned.into_inner()
     });
 
-    // If there's an existing active session, move its completed files to recent
-    if state.current_session.as_ref().is_some_and(|s| s.is_active) {
+    // Always move completed files from any existing session to recent
+    // before replacing it, regardless of whether it was active or inactive.
+    if state.current_session.is_some() {
         move_completed_to_recent(&mut state);
     }
 
@@ -412,6 +413,10 @@ pub fn sp_complete_session(files_uploaded: u32, files_downloaded: u32) -> Result
                     file.status = FileStatus::Completed;
                     file.progress = 100;
                     file.completed_at = Some(now);
+                    // Sync bytes so overall percent reaches 100%
+                    if file.total_bytes > 0 {
+                        file.bytes_transferred = file.total_bytes;
+                    }
                 }
             }
         }
@@ -426,26 +431,12 @@ pub fn sp_complete_session(files_uploaded: u32, files_downloaded: u32) -> Result
         }
     }
 
-    // Move completed files to recent
+    // Move completed files to recent (duplicates are skipped automatically)
     move_completed_to_recent(&mut state);
 
-    // If the session is inactive and has no pending/in-progress files, clear it
-    // so the tray icon resets to idle instead of staying stuck at 100%.
-    let should_clear = state.current_session.as_ref().is_some_and(|s| {
-        !s.is_active
-            && !s.files.values().any(|f| {
-                matches!(
-                    f.status,
-                    FileStatus::Pending
-                        | FileStatus::Uploading
-                        | FileStatus::Downloading
-                        | FileStatus::Deleting
-                )
-            })
-    });
-    if should_clear {
-        state.current_session = None;
-    }
+    // Keep the session around (even when inactive with no pending files)
+    // so the UI can display the completed state via overallProgress. The
+    // session is replaced when the next sync cycle calls sp_start_session.
 
     state.last_updated = now;
 
@@ -549,9 +540,21 @@ pub fn sp_complete_pending_files() -> Result<(), String> {
                 || file.status == FileStatus::Downloading
                 || file.status == FileStatus::Deleting
             {
-                file.status = FileStatus::Completed;
-                file.progress = 100;
-                file.completed_at = Some(now);
+                // Files that never received any progress data (0 bytes
+                // transferred) are stalled — mark them as errors so the
+                // UI doesn't show them stuck at 0% forever.
+                if file.bytes_transferred == 0 {
+                    file.status = FileStatus::Error;
+                    file.error = Some("Transfer stalled – no data received".to_string());
+                    file.completed_at = Some(now);
+                } else {
+                    file.status = FileStatus::Completed;
+                    file.progress = 100;
+                    file.completed_at = Some(now);
+                    if file.total_bytes > 0 {
+                        file.bytes_transferred = file.total_bytes;
+                    }
+                }
             }
         }
     }
@@ -625,6 +628,9 @@ pub fn sp_mark_pending_files_as_failed(
                 file.status = FileStatus::Completed;
                 file.progress = 100;
                 file.completed_at = Some(now);
+                if file.total_bytes > 0 {
+                    file.bytes_transferred = file.total_bytes;
+                }
             }
         }
     }
@@ -688,13 +694,11 @@ pub fn sp_get_session_files() -> Result<Vec<SyncFile>, String> {
         poisoned.into_inner()
     });
 
+    // Return all files — encrypted-name downloads are shown with
+    // "Encrypted file" as their display name (set by extract_file_name)
+    // so per-file progress bars render correctly.
     let files = match &state.current_session {
-        Some(session) => session
-            .files
-            .values()
-            .filter(|f| !should_hide_file(&f.path))
-            .cloned()
-            .collect(),
+        Some(session) => session.files.values().cloned().collect(),
         None => Vec::new(),
     };
 
@@ -805,21 +809,18 @@ pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
         }
     };
 
-    // Only consider visible (non-hidden) files
-    let visible_files: Vec<&SyncFile> = session
-        .files
-        .values()
-        .filter(|f| !should_hide_file(&f.path))
-        .collect();
+    // Count ALL files for progress tracking (including encrypted-name
+    // downloads) so the overall percentage and file counts are accurate.
+    let all_files: Vec<&SyncFile> = session.files.values().collect();
 
-    let total_files = visible_files.len();
+    let total_files = all_files.len();
 
-    let completed_files = visible_files
+    let completed_files = all_files
         .iter()
         .filter(|f| f.status == FileStatus::Completed)
         .count();
 
-    let in_progress_files = visible_files
+    let in_progress_files = all_files
         .iter()
         .filter(|f| {
             matches!(
@@ -829,27 +830,48 @@ pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
         })
         .count();
 
-    let failed_files = visible_files
+    let failed_files = all_files
         .iter()
         .filter(|f| f.status == FileStatus::Error)
         .count();
 
-    let total_bytes_transferred: u64 = visible_files.iter().map(|f| f.bytes_transferred).sum();
-    let total_bytes_expected: u64 = visible_files.iter().map(|f| f.total_bytes).sum();
+    // Only sum bytes from files that have reported their total size.
+    // Files registered upfront have total_bytes=0 until their first
+    // progress event, which would deflate total_bytes_expected and
+    // inflate the percentage.
+    let files_with_size: Vec<&&SyncFile> = all_files
+        .iter()
+        .filter(|f| f.total_bytes > 0)
+        .collect();
+    let total_bytes_transferred: u64 = files_with_size.iter().map(|f| f.bytes_transferred).sum();
+    let total_bytes_expected: u64 = files_with_size.iter().map(|f| f.total_bytes).sum();
 
-    // Calculate overall percent
+    // Calculate overall percent using a blended approach:
+    // - If all files are completed, always return 100.
+    // - If we have byte info for some files, compute a weighted percent
+    //   that accounts for files that haven't started yet.
+    // - Otherwise fall back to file-count-based progress.
+    let pending_files = total_files - completed_files - failed_files;
     let overall_percent = if total_files == 0 {
         0
-    } else if total_bytes_expected > 0 {
-        // Use byte-based progress when we have byte info
-        ((total_bytes_transferred as f64 / total_bytes_expected as f64) * 100.0).min(100.0) as u32
+    } else if pending_files == 0 && in_progress_files == 0 {
+        // All files finished (completed or failed) — report 100%
+        100
+    } else if total_bytes_expected > 0 && !files_with_size.is_empty() {
+        // Byte-based progress weighted by the fraction of files that have
+        // reported sizes. E.g. if 2 of 5 files have started and transferred
+        // 50% of their bytes, effective progress = (2/5) * 50% = 20%.
+        let byte_pct =
+            (total_bytes_transferred as f64 / total_bytes_expected as f64).min(1.0);
+        let file_fraction = files_with_size.len() as f64 / total_files as f64;
+        (byte_pct * file_fraction * 100.0) as u32
     } else {
         // Fall back to file-count-based progress
         ((completed_files as f64 / total_files as f64) * 100.0) as u32
     };
 
-    // Find the current in-progress file (most recently started)
-    let current_file = visible_files
+    // Find the current in-progress file for display (prefer visible name)
+    let current_file = all_files
         .iter()
         .filter(|f| {
             matches!(
@@ -857,6 +879,7 @@ pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
                 FileStatus::Uploading | FileStatus::Downloading | FileStatus::Deleting
             )
         })
+        .filter(|f| !should_hide_file(&f.path))
         .max_by_key(|f| f.started_at)
         .cloned()
         .cloned();
@@ -1036,7 +1059,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_session_clears_inactive_session() {
+    fn complete_session_keeps_inactive_session() {
         reset_state();
 
         // Start a session with 1 upload
@@ -1061,15 +1084,62 @@ mod tests {
         // Complete the session
         sp_complete_session(1, 0).unwrap();
 
-        // Session should be cleared (no pending files, inactive)
+        // Session should still exist (inactive) so the UI can show
+        // completed state via overallProgress. It gets replaced on
+        // the next sp_start_session call.
         let state = SYNC_PROGRESS.lock().unwrap();
-        assert!(state.current_session.is_none());
-        // File should be in recent
+        let session = state.current_session.as_ref().expect("Session should be kept");
+        assert!(!session.is_active, "Session should be inactive");
+        assert!(
+            session.files.values().all(|f| f.status == FileStatus::Completed),
+            "All files should be completed"
+        );
+        // File should also be in recent
         assert!(!state.recent_files.is_empty());
     }
 
     #[test]
-    fn has_sync_activity_false_after_complete() {
+    fn start_session_replaces_completed_session() {
+        reset_state();
+
+        // Create and complete a session
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/test/old.txt".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_start_session(1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+        sp_update_file_progress(
+            "/test/old.txt".to_string(),
+            50,
+            50,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap();
+        sp_complete_session(1, 0).unwrap();
+
+        // Start a new session — old completed files should move to recent
+        let new_list = SessionFileList {
+            upload_files: Some(vec!["/test/new.txt".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_start_session(1, 0, 0, 0, Some(new_list), Some("d1".to_string())).unwrap();
+
+        let state = SYNC_PROGRESS.lock().unwrap();
+        let session = state.current_session.as_ref().unwrap();
+        assert!(session.is_active);
+        assert!(session.files.contains_key("/test/new.txt"));
+        assert!(!session.files.contains_key("/test/old.txt"));
+        // Old file should be in recent
+        assert!(state.recent_files.iter().any(|r| r.path == "/test/old.txt"));
+    }
+
+    #[test]
+    fn has_sync_activity_true_while_session_exists() {
         reset_state();
 
         let file_list = SessionFileList {
@@ -1089,17 +1159,14 @@ mod tests {
         .unwrap();
         sp_complete_session(1, 0).unwrap();
 
-        // Clear recent files to test pure session check
-        {
-            let mut state = SYNC_PROGRESS.lock().unwrap();
-            state.recent_files.clear();
-        }
-
+        // Session is kept (inactive) so activity should still be true
         let has = sp_has_any_sync_activity().unwrap();
-        assert!(
-            !has,
-            "No activity expected after session completed and recent cleared"
-        );
+        assert!(has, "Activity expected while completed session exists");
+
+        // After clearing all data, activity should be false
+        sp_clear_all_data().unwrap();
+        let has = sp_has_any_sync_activity().unwrap();
+        assert!(!has, "No activity after clear_all_data");
     }
 
     #[test]
@@ -1193,5 +1260,165 @@ mod tests {
             .find(|r| r.path == "/myfile.txt")
             .unwrap();
         assert_eq!(recent.label, "docs");
+    }
+
+    #[test]
+    fn overall_progress_counts_encrypted_downloads() {
+        reset_state();
+
+        // Start session with 1 upload and 1 download
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/photo.jpg".to_string()]),
+            download_files: Some(vec![
+                "file_a7339456c25845c2deadbeef0123".to_string(),
+            ]),
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_start_session(1, 1, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // Upload is 50% done
+        sp_update_file_progress(
+            "/photo.jpg".to_string(),
+            500,
+            1000,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap();
+
+        let progress = sp_get_overall_progress().unwrap();
+        // Both files should be counted (including the encrypted download)
+        assert_eq!(progress.total_files, 2);
+        assert_eq!(progress.in_progress_files, 1);
+        // Percent is weighted: 1 of 2 files has size info, 50% of its bytes
+        // = (500/1000) * (1/2) * 100 = 25%
+        assert_eq!(progress.overall_percent, 25);
+    }
+
+    #[test]
+    fn session_files_includes_encrypted_downloads() {
+        reset_state();
+
+        let file_list = SessionFileList {
+            upload_files: None,
+            download_files: Some(vec![
+                "file_a7339456c25845c2deadbeef0123".to_string(),
+            ]),
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_start_session(0, 1, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        let files = sp_get_session_files().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].file_name, "Encrypted file");
+    }
+
+    #[test]
+    fn overall_percent_reaches_100_after_force_complete() {
+        reset_state();
+
+        // Register 2 files, both with progress data
+        let file_list = SessionFileList {
+            upload_files: Some(vec![
+                "/a.txt".to_string(),
+                "/b.txt".to_string(),
+            ]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_start_session(2, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // File A reports partial progress
+        sp_update_file_progress(
+            "/a.txt".to_string(),
+            500,
+            1000,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap();
+
+        // File B reports partial progress too
+        sp_update_file_progress(
+            "/b.txt".to_string(),
+            200,
+            400,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap();
+
+        // Force-complete all pending files
+        sp_complete_pending_files().unwrap();
+
+        let progress = sp_get_overall_progress().unwrap();
+        assert_eq!(progress.completed_files, 2);
+        // All files are completed, so overall_percent should be 100
+        assert_eq!(progress.overall_percent, 100);
+    }
+
+    #[test]
+    fn complete_pending_marks_stalled_files_as_error() {
+        reset_state();
+
+        // Register 3 files: one completes, one has partial progress,
+        // one never receives any progress data (stalled).
+        let file_list = SessionFileList {
+            upload_files: Some(vec![
+                "/completed.txt".to_string(),
+                "/partial.txt".to_string(),
+                "/stalled.txt".to_string(),
+            ]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_start_session(3, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // File 1: fully transferred (auto-completes in update)
+        sp_update_file_progress(
+            "/completed.txt".to_string(),
+            1000,
+            1000,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap();
+
+        // File 2: partial progress (bytes_transferred > 0)
+        sp_update_file_progress(
+            "/partial.txt".to_string(),
+            500,
+            1000,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap();
+
+        // File 3 (/stalled.txt): never receives progress — stays Pending
+        // with bytes_transferred == 0.
+
+        // Force-complete all pending files
+        sp_complete_pending_files().unwrap();
+
+        let state = SYNC_PROGRESS.lock().unwrap();
+        let session = state.current_session.as_ref().unwrap();
+
+        // Completed file stays Completed
+        let completed = session.files.get("/completed.txt").unwrap();
+        assert_eq!(completed.status, FileStatus::Completed);
+
+        // Partial file gets Completed (had some progress)
+        let partial = session.files.get("/partial.txt").unwrap();
+        assert_eq!(partial.status, FileStatus::Completed);
+        assert_eq!(partial.progress, 100);
+
+        // Stalled file gets Error (0 bytes transferred)
+        let stalled = session.files.get("/stalled.txt").unwrap();
+        assert_eq!(stalled.status, FileStatus::Error);
+        assert!(stalled.error.as_ref().unwrap().contains("stalled"));
     }
 }
