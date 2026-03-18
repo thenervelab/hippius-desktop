@@ -164,7 +164,7 @@ export default function FolderUploadDialog({
                     <form onSubmit={handleSubmit} className="space-y-4">
                         <div className="text-grey-70 text-sm text-center">
                             <RevealTextLine rotate reveal={true} className="delay-300">
-                                Upload a folder to encrypted IPFS storage.
+                                Upload a folder to encrypted arion storage.
                             </RevealTextLine>
                         </div>
 

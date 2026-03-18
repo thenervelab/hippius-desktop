@@ -165,7 +165,7 @@ export default function DetailList() {
       showAddCreditsButton: (!isCreditsLoading && (credits === undefined || getCreditsAsNumber(credits) === 0)) ? true : false,
       onRefresh: handleRefreshCredits,
       isLoading: isRefreshingCredits,
-      info: "Credits available for storage usage. Each credit equals $1 and can be used to pay for IPFS storage costs.",
+      info: "Credits available for storage usage. Each credit equals $1 and can be used to pay for arion storage costs.",
     },
     {
       id: "total-files",

@@ -182,8 +182,8 @@ export default function FolderToFolderUploadDialog({
                         <div className="text-grey-70 text-sm text-center">
                             <RevealTextLine rotate reveal={true} className="delay-300">
                                 {isPrivateFolder
-                                    ? "Upload a folder to private IPFS storage."
-                                    : "Upload a folder to public IPFS storage."}
+                                    ? "Upload a folder to private Arion storage."
+                                    : "Upload a folder to public arion storage."}
                             </RevealTextLine>
                         </div>
 

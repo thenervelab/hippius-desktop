@@ -27,7 +27,7 @@ type Props = {
 
 export const categories = [
   { value: "billing", label: "Account & Billing" },
-  { value: "storage", label: "Storage (IPFS & S3)" },
+  { value: "storage", label: "Storage (Arion & S3)" },
   { value: "general", label: "General" },
 ];
 

@@ -318,7 +318,7 @@ const FilesContent: FC<FilesContentProps> = ({
               </div>
               <div className="flex items-center justify-center">
                 <HardDrive className="size-6 text-white mr-2" />
-                <div className="text-white text-lg font-bold">IPFS Storage</div>
+                <div className="text-white text-lg font-bold">Arion Storage</div>
               </div>
             </div>
           </div>

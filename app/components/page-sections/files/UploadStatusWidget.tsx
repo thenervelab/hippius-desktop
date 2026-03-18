@@ -63,7 +63,7 @@ const UploadStatusWidget: React.FC = () => {
                         </span>
                     )}
                     {requestState === "uploading" && (
-                        <span key={requestState}>Uploading files to IPFS.... </span>
+                        <span key={requestState}>Uploading files to arion.... </span>
                     )}
                     <span className="text-grey-10">{Math.round(progress)} %</span>
                 </div>
