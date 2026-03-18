@@ -269,9 +269,15 @@ export default function FolderView({
 
   const initiateDownloadFolder = async () => {
     try {
-      // Ask for output directory
-      const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
-      const defaultPath = await getSyncFolderDefaultPath(polkadotAddress ?? undefined);
+      // Ask for output directory — default to Downloads so the dialog
+      // always opens in a predictable location regardless of cancel/retry.
+      const { downloadDir } = await import("@tauri-apps/api/path");
+      let defaultPath: string | undefined;
+      try {
+        defaultPath = await downloadDir();
+      } catch {
+        // Fall back to no directory hint
+      }
       const outputDir = (await open({
         directory: true,
         multiple: false,

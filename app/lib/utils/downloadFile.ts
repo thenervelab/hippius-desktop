@@ -35,8 +35,9 @@ function resolveRelativeName(
   return file.actualFileName || file.name;
 }
 
-const getFileSavePath = async (name: string) => {
+const getFileSavePath = async (name: string, directory?: string) => {
   const fileExtension = name.split(".").pop() || "";
+  const defaultPath = directory ? `${directory}/${name}` : name;
   return await save({
     filters: [
       {
@@ -46,7 +47,7 @@ const getFileSavePath = async (name: string) => {
         extensions: [fileExtension || "*"]
       }
     ],
-    defaultPath: name
+    defaultPath,
   });
 };
 
@@ -70,7 +71,15 @@ const downloadFileExport = async (
   try {
     const syncPath = await resolveSyncPath(file, polkadotAddress);
 
-    const filePath = await getFileSavePath(name);
+    const { downloadDir } = await import("@tauri-apps/api/path");
+    let saveDir: string | undefined;
+    try {
+      saveDir = await downloadDir();
+    } catch {
+      // Fall back to no directory hint
+    }
+
+    const filePath = await getFileSavePath(name, saveDir);
     if (!filePath) {
       toast.error("Download cancelled", { id: toastId });
       return;
@@ -105,8 +114,13 @@ const downloadFolderExport = async (
   const toastId = toast.loading(`Preparing folder download: ${name}`);
 
   try {
-    const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
-    const defaultPath = await getSyncFolderDefaultPath(polkadotAddress);
+    const { downloadDir } = await import("@tauri-apps/api/path");
+    let defaultPath: string | undefined;
+    try {
+      defaultPath = await downloadDir();
+    } catch {
+      // Fall back to no directory hint
+    }
     const selectedDir = await open({
       directory: true,
       multiple: false,

@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { getPrivateSyncPath, getAllSyncPaths, getSyncFolderDefaultPath } from "@/lib/utils/syncPathUtils";
+import { getPrivateSyncPath, getAllSyncPaths } from "@/lib/utils/syncPathUtils";
 
 export interface DownloadIpfsFolderOptions {
     folderName: string;
@@ -19,7 +19,13 @@ export const downloadFolder = async ({
 }: DownloadIpfsFolderOptions) => {
     let selectedOutputDir = outputDir;
     if (!selectedOutputDir) {
-        const defaultPath = await getSyncFolderDefaultPath(polkadotAddress);
+        const { downloadDir } = await import("@tauri-apps/api/path");
+        let defaultPath: string | undefined;
+        try {
+            defaultPath = await downloadDir();
+        } catch {
+            // Fall back to no directory hint
+        }
         selectedOutputDir = (await open({
             directory: true,
             multiple: false,

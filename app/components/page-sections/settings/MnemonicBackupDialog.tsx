@@ -141,9 +141,17 @@ export function MnemonicBackupDialog({
       const { save } = await import("@tauri-apps/plugin-dialog");
       const { invoke } = await import("@tauri-apps/api/core");
 
+      const { downloadDir } = await import("@tauri-apps/api/path");
+      let saveDir = "";
+      try {
+        saveDir = await downloadDir();
+      } catch {
+        // Fall back to filename only
+      }
+      const fileName = `hippius-recovery-backup-${new Date().toISOString().slice(0, 10)}.zip`;
       const filePath = await save({
         filters: [{ name: "Zip Archive", extensions: ["zip"] }],
-        defaultPath: `hippius-recovery-backup-${new Date().toISOString().slice(0, 10)}.zip`,
+        defaultPath: saveDir ? `${saveDir}/${fileName}` : fileName,
       });
 
       if (!filePath) {

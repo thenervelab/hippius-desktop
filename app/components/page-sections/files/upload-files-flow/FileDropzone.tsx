@@ -46,7 +46,7 @@ const FileDropzone: FC<{
       console.error("File selection error:", error);
       toast.error("Failed to select files");
     }
-  }, [setFiles, defaultBrowsePath]);
+  }, [setFiles, defaultBrowsePath, polkadotAddress]);
 
   // Listen to Tauri native drag-drop events for the dropzone
   useEffect(() => {
