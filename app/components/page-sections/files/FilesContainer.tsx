@@ -601,15 +601,22 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     }
   }, [error]);
 
-  // Get displayed file count
+  // Get displayed file count (count files directly + files inside folders recursively)
   const displayedFileCount = useMemo(() => {
-    if (searchTerm || activeFilters.length > 0) {
-      return filteredData.length;
-    }
-    return allFilteredData.length;
+    const source = searchTerm || activeFilters.length > 0
+      ? filteredData
+      : allFilteredData;
+    return source.reduce((count, item) => {
+      if (item.isFolder) {
+        // Use nested file count; treat empty folders as 1 item
+        const nested = item.fileCount ?? 0;
+        return count + (nested > 0 ? nested : 1);
+      }
+      return count + 1;
+    }, 0);
   }, [
-    filteredData.length,
-    allFilteredData.length,
+    filteredData,
+    allFilteredData,
     searchTerm,
     activeFilters.length,
   ]);

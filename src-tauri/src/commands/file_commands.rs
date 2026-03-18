@@ -54,6 +54,9 @@ pub struct FileEntry {
     pub arion_hash: String,
     /// Arion CID from storage backend (empty if not available)
     pub arion_cid: String,
+    /// For folders: total number of files (not directories) recursively inside.
+    /// For files: 0.
+    pub file_count: u64,
 }
 
 /// Verify that `child` is contained within `parent` after canonicalization.
@@ -253,6 +256,30 @@ async fn dir_size_recursive(path: &Path) -> u64 {
     total
 }
 
+/// Recursively count the total number of files (not directories) within a directory.
+/// Hidden files (starting with '.') are excluded to match listing behaviour.
+async fn dir_file_count_recursive(path: &Path) -> u64 {
+    let mut count: u64 = 0;
+    let Ok(mut dir) = tokio::fs::read_dir(path).await else {
+        return 0;
+    };
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let Ok(meta) = entry.metadata().await else {
+            continue;
+        };
+        if meta.is_dir() {
+            count += Box::pin(dir_file_count_recursive(&entry.path())).await;
+        } else {
+            count += 1;
+        }
+    }
+    count
+}
+
 /// List contents of sync folder
 #[tauri::command]
 pub async fn list_sync_folder(
@@ -328,6 +355,12 @@ pub async fn list_sync_folder(
             meta.len()
         };
 
+        let file_count = if is_folder {
+            dir_file_count_recursive(&target.join(&name)).await
+        } else {
+            0
+        };
+
         entries.push(FileEntry {
             name,
             is_folder,
@@ -340,6 +373,7 @@ pub async fn list_sync_folder(
             sync_status,
             arion_hash,
             arion_cid,
+            file_count,
         });
     }
 

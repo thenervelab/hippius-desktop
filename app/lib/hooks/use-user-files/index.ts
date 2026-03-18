@@ -44,6 +44,7 @@ export type FormattedUserFile = {
   mainReqHash: string;
   syncStatus?: "synced" | "pending" | "unknown";
   label?: string;
+  fileCount?: number;
 };
 
 type FileEntry = {
@@ -54,6 +55,7 @@ type FileEntry = {
   sync_status: "synced" | "pending" | "unknown";
   arion_hash: string;
   arion_cid: string;
+  file_count: number;
 };
 
 export const GET_USER_IPFS_FILES_QUERY_KEY = "get-user-ipfs-files";
@@ -163,6 +165,7 @@ export const useUserFiles = () => {
                 mainReqHash: "",
                 syncStatus: entry.sync_status,
                 label,
+                fileCount: entry.is_folder ? entry.file_count : undefined,
               });
             }
           } catch (err) {
