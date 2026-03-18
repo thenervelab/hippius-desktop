@@ -3,7 +3,8 @@
 import React, { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CloseCircle, FolderAdd } from "@/components/ui/icons";
-import { AbstractIconWrapper, RevealTextLine, Icons } from "@/app/components/ui";
+import { AbstractIconWrapper, RevealTextLine } from "@/app/components/ui";
+import PrivacyBadge from "@/components/ui/PrivacyBadge";
 import { Input } from "@/components/ui";
 import { Label } from "@/components/ui/label";
 import { AlertCircle, FolderIcon } from "lucide-react";
@@ -157,39 +158,21 @@ export default function FolderUploadDialog({
                         </div>
                     </div>
 
-                    <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center">
+                    <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center flex items-center justify-center gap-2">
                         Upload Folder
+                        {!IS_SYNC_PAUSED && <PrivacyBadge variant="folder" />}
                     </Dialog.Title>
 
                     <form onSubmit={handleSubmit} className="space-y-4">
                         <div className="text-grey-70 text-sm text-center">
                             <RevealTextLine rotate reveal={true} className="delay-300">
-                                Upload a folder to encrypted arion storage.
+                                Upload a folder to encrypted Arion storage.
                             </RevealTextLine>
                         </div>
 
                         {/* Sync Paused Notice */}
                         {IS_SYNC_PAUSED && (
                             <SyncPausedAlert variant="inline" className="mt-2" />
-                        )}
-
-                        {/* Privacy Notice */}
-                        {!IS_SYNC_PAUSED && (
-                            <div className="p-3 bg-primary-95 border border-primary-80 rounded-lg">
-                                <div className="flex items-start gap-2">
-                                    <div className="flex-shrink-0 mt-0.5">
-                                        <Icons.ShieldSecurity className="size-4 text-primary-50" />
-                                    </div>
-                                    <div className="flex-1">
-                                        <p className="text-sm font-medium text-primary-40 mb-1">
-                                            Private Storage
-                                        </p>
-                                        <p className="text-xs text-primary-60">
-                                            This folder will be added to your private sync folder and encrypted for security.
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
                         )}
 
                         {/* Sync folder selector (shown when 2+ folders) */}

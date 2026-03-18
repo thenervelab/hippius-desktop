@@ -19,6 +19,7 @@ import UploadFilesFlow from "./upload-files-flow";
 import { Icons } from "@/components/ui";
 import { uploadToIpfsAndSubmitToBlockcahinRequestStateAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
 import { useAtomValue } from "jotai";
+import PrivacyBadge from "@/components/ui/PrivacyBadge";
 
 import { cn } from "@/lib/utils";
 import { useIsPrivateView } from "@/app/lib/utils/viewUtils";
@@ -198,8 +199,9 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
 
                 {/* Header */}
                 <div className="flex p-4 items-center text-grey-10 relative">
-                  <div className="lg:text-xl flex w-full 2xl:text-2xl font-medium relative">
+                  <div className="lg:text-xl flex w-full items-center gap-2 2xl:text-2xl font-medium relative">
                     <span className="capitalize">{title}</span>
+                    {isPrivateView && <PrivacyBadge variant="file" />}
                   </div>
                   <button
                     type="button"

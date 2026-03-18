@@ -2,8 +2,8 @@
 
 import React, { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { CloseCircle, FolderAdd } from "@/components/ui/icons";
-import { AbstractIconWrapper, RevealTextLine, Icons } from "@/app/components/ui";
+import { Icons } from "@/components/ui";
+import PrivacyBadge from "@/components/ui/PrivacyBadge";
 import { Input } from "@/components/ui";
 import { Label } from "@/components/ui/label";
 import { AlertCircle, FolderIcon } from "lucide-react";
@@ -145,125 +145,89 @@ export default function FolderToFolderUploadDialog({
     return (
         <Dialog.Root open={open} onOpenChange={(o) => !o && handleClose()}>
             <Dialog.Portal>
-                <Dialog.Overlay className="fixed inset-0 bg-white/60 z-50" />
-                <Dialog.Content
-                    className="
-                        fixed left-1/2 top-1/2 z-50 
-                        w-full max-w-sm sm:max-w-[488px] 
-                        -translate-x-1/2 -translate-y-1/2
-                        bg-white rounded-[8px]
-                        shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
-                        p-[16px]
-                    "
-                >
-                    <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[8px] sm:hidden" />
-                    <Dialog.Close asChild className="sm:hidden">
-                        <button
-                            aria-label="Close"
-                            className="absolute top-11 right-4 text-grey-10 hover:text-grey-20"
-                        >
-                            <CloseCircle className="size-6" />
-                        </button>
-                    </Dialog.Close>
+                <Dialog.Overlay className="bg-white/70 fixed p-4 z-30 top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
+                    <Dialog.Content className="border shadow-dialog bg-white flex flex-col max-w-[428px] border-grey-80 bg-background-1 rounded-[8px] overflow-hidden w-full relative data-[state=open]:animate-scale-in-95-0.2">
+                        <Dialog.Title className="hidden">Add Folder to {parentFolderName}</Dialog.Title>
 
-                    <div className="flex items-center sm:justify-center">
-                        <div className="flex items-center sm:justify-center h-[56px] w-[56px] relative">
-                            <AbstractIconWrapper className="size-10 rounded-2xl text-primary-50 ">
-                                <FolderAdd className="absolute size-6 text-primary-50" />
-                            </AbstractIconWrapper>
-                        </div>
-                    </div>
-
-                    <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center">
-                        Add Folder to {parentFolderName}
-                    </Dialog.Title>
-
-                    <form onSubmit={handleSubmit} className="space-y-4">
-                        <div className="text-grey-70 text-sm text-center">
-                            <RevealTextLine rotate reveal={true} className="delay-300">
-                                {isPrivateFolder
-                                    ? "Upload a folder to private Arion storage."
-                                    : "Upload a folder to public arion storage."}
-                            </RevealTextLine>
-                        </div>
-
-                        {/* Privacy Notice */}
-                        {isPrivateFolder && (
-                            <div className="p-3 bg-primary-95 border border-primary-80 rounded-lg">
-                                <div className="flex items-start gap-2">
-                                    <div className="flex-shrink-0 mt-0.5">
-                                        <Icons.ShieldSecurity className="size-4 text-primary-50" />
-                                    </div>
-                                    <div className="flex-1">
-                                        <p className="text-sm font-medium text-primary-40 mb-1">
-                                            Private Storage
-                                        </p>
-                                        <p className="text-xs text-primary-60">
-                                            This folder will be added to your private sync folder and encrypted for security.
-                                        </p>
-                                    </div>
-                                </div>
+                        <div className="flex p-4 items-center text-grey-10 relative">
+                            <div className="lg:text-xl flex w-full items-center gap-2 2xl:text-2xl font-medium relative">
+                                <span className="capitalize">Add Folder to {parentFolderName}</span>
+                                <PrivacyBadge variant="folder" />
                             </div>
-                        )}
-
-                        <div className="space-y-2">
-                            <Label htmlFor="folderPath" className="text-sm font-medium text-grey-70">
-                                Folder Location
-                            </Label>
-                            <div className="relative flex items-start w-full">
-                                <FolderIcon className="size-6 absolute left-3 top-[28px] transform -translate-y-1/2 text-grey-60" />
-                                <div className="flex-1 min-w-0">
-                                    <Input
-                                        id="folderPath"
-                                        placeholder="Select folder location"
-                                        value={folderPath}
-                                        readOnly
-                                        onClick={handleSelectFolder}
-                                        className={cn(
-                                            "pl-11 pr-24 border-grey-80 h-14 text-grey-30 w-full cursor-pointer",
-                                            "bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none",
-                                            "hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus",
-                                            "overflow-x-auto whitespace-nowrap"
-                                        )}
-                                        style={{ textOverflow: "ellipsis" }}
-                                    />
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={handleSelectFolder}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-primary-50 hover:text-primary-40 z-10"
-                                    style={{ maxWidth: "80px" }}
-                                >
-                                    Browse
-                                </button>
-                            </div>
-                            {folderError && (
-                                <div className="flex text-error-70 text-sm font-medium items-center gap-2">
-                                    <AlertCircle className="size-4 !relative" />
-                                    <span>{folderError}</span>
-                                </div>
-                            )}
-                        </div>
-
-                        <div className="flex flex-col gap-2">
-                            <button
-                                type="submit"
-                                className="w-full p-1 bg-primary-50 text-grey-100 rounded shadow border border-primary-40 hover:bg-primary-40 transition"
-                            >
-                                <div className="py-2.5 rounded border border-primary-40 text-lg">
-                                    Upload Folder
-                                </div>
-                            </button>
                             <button
                                 type="button"
+                                className="ml-auto"
                                 onClick={handleClose}
-                                className="w-full py-3.5 bg-grey-100 border border-grey-80 rounded text-grey-10 hover:bg-grey-90 transition text-lg font-medium"
                             >
-                                Cancel
+                                <Icons.CloseCircle
+                                    className="size-6 relative"
+                                    strokeWidth={2.5}
+                                />
                             </button>
                         </div>
-                    </form>
-                </Dialog.Content>
+
+                        <div className="grow max-h-[calc(85vh-120px)] p-4 pt-2 overflow-y-auto">
+                            <form onSubmit={handleSubmit} className="space-y-4">
+                                <div className="space-y-2">
+                                    <Label htmlFor="folderPath" className="text-sm font-medium text-grey-70">
+                                        Folder Location
+                                    </Label>
+                                    <div className="relative flex items-start w-full">
+                                        <FolderIcon className="size-6 absolute left-3 top-[28px] transform -translate-y-1/2 text-grey-60" />
+                                        <div className="flex-1 min-w-0">
+                                            <Input
+                                                id="folderPath"
+                                                placeholder="Select folder location"
+                                                value={folderPath}
+                                                readOnly
+                                                onClick={handleSelectFolder}
+                                                className={cn(
+                                                    "pl-11 pr-24 border-grey-80 h-14 text-grey-30 w-full cursor-pointer",
+                                                    "bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none",
+                                                    "hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus",
+                                                    "overflow-x-auto whitespace-nowrap"
+                                                )}
+                                                style={{ textOverflow: "ellipsis" }}
+                                            />
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={handleSelectFolder}
+                                            className="absolute right-3 top-1/2 -translate-y-1/2 text-primary-50 hover:text-primary-40 z-10"
+                                            style={{ maxWidth: "80px" }}
+                                        >
+                                            Browse
+                                        </button>
+                                    </div>
+                                    {folderError && (
+                                        <div className="flex text-error-70 text-sm font-medium items-center gap-2">
+                                            <AlertCircle className="size-4 !relative" />
+                                            <span>{folderError}</span>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="flex flex-col gap-2">
+                                    <button
+                                        type="submit"
+                                        className="w-full p-1 bg-primary-50 text-grey-100 rounded shadow border border-primary-40 hover:bg-primary-40 transition"
+                                    >
+                                        <div className="py-2.5 rounded border border-primary-40 text-lg">
+                                            Upload Folder
+                                        </div>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleClose}
+                                        className="w-full py-3.5 bg-grey-100 border border-grey-80 rounded text-grey-10 hover:bg-grey-90 transition text-lg font-medium"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </Dialog.Content>
+                </Dialog.Overlay>
             </Dialog.Portal>
         </Dialog.Root>
     );

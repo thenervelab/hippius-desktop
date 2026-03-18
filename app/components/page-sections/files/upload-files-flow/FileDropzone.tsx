@@ -160,12 +160,6 @@ const FileDropzone: FC<{
             >
               Drag and drop or click to add one or more files here to upload
             </P>
-            {isPrivateView && (
-              <div className="mt-2 flex items-center justify-center gap-1 text-xs text-primary-50">
-                <Icons.ShieldSecurity className="size-3" />
-                <span>Private & Encrypted</span>
-              </div>
-            )}
           </div>
         </div>
       </button>
