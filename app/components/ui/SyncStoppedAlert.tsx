@@ -9,6 +9,9 @@ import { syncEngineStatusAtom, isSyncConfiguredAtom } from "@/app/lib/global-ato
 interface SyncStoppedAlertProps {
   className?: string;
   variant?: "banner" | "compact";
+  /** When false (or undefined), the alert is hidden regardless of sync status.
+   *  Callers should pass true only when at least one sync folder exists. */
+  hasSyncPaths?: boolean;
 }
 
 /**
@@ -21,13 +24,16 @@ interface SyncStoppedAlertProps {
 export const SyncStoppedAlert: React.FC<SyncStoppedAlertProps> = ({
   className,
   variant = "banner",
+  hasSyncPaths,
 }) => {
   const syncStatus = useAtomValue(syncEngineStatusAtom);
   const isSyncConfigured = useAtomValue(isSyncConfiguredAtom);
 
-  // Only show when sync is stopped/stopping AND sync has been configured
-  // This prevents new users from seeing "stopped" before they've set up sync
-  if (syncStatus === "active" || !isSyncConfigured) return null;
+  // Only show when:
+  // 1. Sync is stopped/stopping (not active)
+  // 2. Sync has been configured (HCFS password exists)
+  // 3. At least one sync folder exists (hasSyncPaths)
+  if (syncStatus === "active" || !isSyncConfigured || hasSyncPaths === false) return null;
 
   const isStopping = syncStatus === "stopping";
 

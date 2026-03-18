@@ -17,6 +17,9 @@ import StartSyncingButton from "@/app/components/StartSyncingButton";
 import FilterPills from "./FilterPills";
 import { FileTypes } from "@/lib/types/fileTypes";
 import { IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
+import { useAtomValue } from "jotai";
+import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { toast } from "sonner";
 
 
 interface FilesHeaderProps {
@@ -83,6 +86,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   defaultFolderLabel,
 }) => {
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
+  const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
 
   const { navigateToFilesView } = useFilesNavigation();
   const { push } = useNavigationLoader();
@@ -203,7 +207,13 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             {/* Folder Upload button - disabled for recent files with no sync paths or when sync is paused */}
             {(!isRecentFiles || !hasNoSyncPaths) && !isSyncPathEmpty && (
               <button
-                onClick={() => setIsFolderUploadOpen(true)}
+                onClick={() => {
+                  if (syncEngineStatus === "stopped") {
+                    toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading folders.");
+                    return;
+                  }
+                  setIsFolderUploadOpen(true);
+                }}
                 disabled={IS_SYNC_PAUSED}
                 className={cn(
                   "flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50",

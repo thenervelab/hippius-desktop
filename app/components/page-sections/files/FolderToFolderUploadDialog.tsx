@@ -17,6 +17,7 @@ import { getFullPath } from "@/app/utils/folderPathUtils";
 import { useAtomValue } from "jotai";
 import { queryClientAtom } from "jotai-tanstack-query";
 import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
+import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
 type Props = {
     open: boolean;
@@ -44,6 +45,7 @@ export default function FolderToFolderUploadDialog({
 }: Props) {
     const { polkadotAddress } = useWalletAuth();
     const queryClient = useAtomValue(queryClientAtom);
+    const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
 
     const [folderPath, setFolderPath] = useState<string>("");
     const [folderError, setFolderError] = useState<string | null>(null);
@@ -87,6 +89,11 @@ export default function FolderToFolderUploadDialog({
 
         if (!folderPath) {
             setFolderError("Please select a folder");
+            return;
+        }
+
+        if (syncEngineStatus === "stopped") {
+            toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading folders.");
             return;
         }
 

@@ -769,7 +769,10 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           {/* Sync connectivity and stopped alerts */}
           <div className="mb-4 space-y-2">
             <SyncConnectivityAlert variant={isRecentFiles ? "compact" : "banner"} />
-            <SyncStoppedAlert variant={isRecentFiles ? "compact" : "banner"} />
+            <SyncStoppedAlert
+              variant={isRecentFiles ? "compact" : "banner"}
+              hasSyncPaths={isRecentFiles ? hasAnySyncPath : (isSyncPathConfigured ?? false)}
+            />
           </div>
 
           <FilesHeader

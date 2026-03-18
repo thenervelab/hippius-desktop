@@ -299,7 +299,7 @@ const UpdateSyncFolder: React.FC = () => {
                     {/* Sync connectivity and stopped alerts */}
                     <div className="mt-4 space-y-2">
                       <SyncConnectivityAlert variant="banner" />
-                      <SyncStoppedAlert variant="banner" />
+                      <SyncStoppedAlert variant="banner" hasSyncPaths={!!selectedPrivateFolderPath} />
                     </div>
                     <div className={cn("flex justify-between p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full", IS_SYNC_PAUSED && "opacity-60")}>
                       {selectedPrivateFolderName ? (

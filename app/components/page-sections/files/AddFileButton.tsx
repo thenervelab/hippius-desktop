@@ -23,6 +23,8 @@ import { useAtomValue } from "jotai";
 import { cn } from "@/lib/utils";
 import { useIsPrivateView } from "@/app/lib/utils/viewUtils";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
+import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { toast } from "sonner";
 
 // Custom event name for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -59,6 +61,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     );
     const isLoading = uploadingState !== "idle";
     const isPrivateViewFromHook = useIsPrivateView();
+    const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
 
     // Use prop if provided, otherwise use hook
     const isPrivateView = isPrivateViewProp ?? isPrivateViewFromHook;
@@ -68,18 +71,26 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       ref,
       () => ({
         openWithFiles: (files: FileList) => {
+          if (syncEngineStatus === "stopped") {
+            toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading files.");
+            return;
+          }
           setDroppedPaths(null);
           setDroppedFiles(files);
           setIsOpen(true);
         },
         openWithPaths: (paths: string[]) => {
+          if (syncEngineStatus === "stopped") {
+            toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading files.");
+            return;
+          }
           setDroppedFiles(null);
           setDroppedPaths(paths);
           setIsOpen(true);
         },
         isDialogOpen: () => isOpen
       }),
-      [isOpen]
+      [isOpen, syncEngineStatus]
     );
 
     // Memoize title to prevent recalculation
@@ -148,6 +159,10 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           className={cn("h-10 w-fit p-1", externalDisabled && "opacity-50 cursor-not-allowed", className)}
           onClick={() => {
             if (IS_SYNC_PAUSED) return;
+            if (syncEngineStatus === "stopped") {
+              toast.warning("Syncing is stopped. Resume syncing from Settings → Sync & Storage before uploading files.");
+              return;
+            }
             setDroppedFiles(null);
             setDroppedPaths(null);
             setIsOpen(true);

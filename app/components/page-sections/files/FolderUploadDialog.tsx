@@ -19,6 +19,7 @@ import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteSto
 import { GET_USER_IPFS_FILES_QUERY_KEY } from "@/app/lib/hooks/use-user-files";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
+import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
 type Props = {
     open: boolean;
@@ -37,6 +38,7 @@ export default function FolderUploadDialog({
 }: Props) {
     const { polkadotAddress } = useWalletAuth();
     const queryClient = useAtomValue(queryClientAtom);
+    const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
 
     const [folderPath, setFolderPath] = useState<string>("");
     const [folderError, setFolderError] = useState<string | null>(null);
@@ -73,6 +75,11 @@ export default function FolderUploadDialog({
 
         if (!folderPath) {
             setFolderError("Please select a folder");
+            return;
+        }
+
+        if (syncEngineStatus === "stopped") {
+            toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading folders.");
             return;
         }
 
