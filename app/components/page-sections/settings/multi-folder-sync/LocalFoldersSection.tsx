@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef, useCallback } from "react";
 import { Icons, RevealTextLine, IconButton } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { formatBytes } from "@/lib/utils/formatBytes";
 import SectionHeader from "../SectionHeader";
 import { InView } from "react-intersection-observer";
 import {
@@ -14,6 +15,8 @@ import {
   PauseCircle,
   PlayCircle,
   ServerCrash,
+  Clock,
+  HardDrive,
 } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
@@ -55,19 +58,54 @@ function getStatusText(status: SyncFolder["status"]) {
   }
 }
 
-function formatLastSynced(timestamp?: number) {
-  if (!timestamp) return null;
-  const diff = Date.now() - timestamp;
-  if (diff < 60000) return "Just now";
-  if (diff < 3600000) {
-    const minutes = Math.floor(diff / 60000);
-    return `${minutes} minute${minutes !== 1 ? "s" : ""} ago`;
+function PathWithTooltip({ path }: { path: string }) {
+  const textRef = useRef<HTMLParagraphElement>(null);
+  const [isTruncated, setIsTruncated] = useState(false);
+
+  const checkTruncation = useCallback(() => {
+    const el = textRef.current;
+    if (el) {
+      setIsTruncated(el.scrollWidth > el.clientWidth);
+    }
+  }, []);
+
+  if (!isTruncated) {
+    return (
+      <p
+        ref={textRef}
+        onMouseEnter={checkTruncation}
+        className="text-sm text-grey-60 truncate mb-1 cursor-default"
+      >
+        {path}
+      </p>
+    );
   }
-  if (diff < 86400000) {
-    const hours = Math.floor(diff / 3600000);
-    return `${hours} hour${hours !== 1 ? "s" : ""} ago`;
-  }
-  return new Date(timestamp).toLocaleString();
+
+  return (
+    <Tooltip.Provider delayDuration={200}>
+      <Tooltip.Root>
+        <Tooltip.Trigger asChild>
+          <p
+            ref={textRef}
+            className="text-sm text-grey-60 truncate cursor-default"
+          >
+            {path}
+          </p>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content
+            side="bottom"
+            align="start"
+            sideOffset={0}
+            className="z-[9999] max-w-[400px] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+          >
+            {path}
+            <Tooltip.Arrow className="fill-white" width={12} height={6} />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    </Tooltip.Provider>
+  );
 }
 
 export function LocalFoldersSection({
@@ -159,36 +197,40 @@ export function LocalFoldersSection({
                               {getStatusText(folder.status)}
                             </span>
                           </div>
-                          <Tooltip.Provider delayDuration={200}>
-                            <Tooltip.Root>
-                              <Tooltip.Trigger asChild>
-                                <p className="text-sm text-grey-60 truncate mb-1 cursor-default">
-                                  {folder.localPath}
-                                </p>
-                              </Tooltip.Trigger>
-                              <Tooltip.Portal>
-                                <Tooltip.Content
-                                  side="bottom"
-                                  align="start"
-                                  sideOffset={4}
-                                  className="z-[9999] max-w-[400px] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
-                                >
-                                  {folder.localPath}
-                                  <Tooltip.Arrow className="fill-white" width={12} height={6} />
-                                </Tooltip.Content>
-                              </Tooltip.Portal>
-                            </Tooltip.Root>
-                          </Tooltip.Provider>
+                          <PathWithTooltip path={folder.localPath} />
                           {(folder.fileCount !== undefined ||
-                            folder.lastSynced) && (
-                            <div className="flex items-center gap-3 text-xs text-grey-70">
-                              {folder.fileCount !== undefined && (
-                                <span>{folder.fileCount} files</span>
+                            folder.totalBytes !== undefined ||
+                            folder.lastModified) && (
+                            <div className="flex items-center gap-3 text-xs text-grey-60 mt-1">
+                              {folder.fileCount !== undefined &&
+                                folder.fileCount > 0 && (
+                                <span className="flex items-center gap-1">
+                                  <Icons.File2 className="size-3" />
+                                  {folder.fileCount}{" "}
+                                  {folder.fileCount === 1 ? "file" : "files"}
+                                </span>
                               )}
-                              {folder.lastSynced && (
-                                <span>
-                                  · Last synced{" "}
-                                  {formatLastSynced(folder.lastSynced)}
+                              {folder.totalBytes !== undefined &&
+                                folder.totalBytes > 0 && (
+                                <span className="flex items-center gap-1">
+                                  <HardDrive className="size-3" />
+                                  {formatBytes(folder.totalBytes)}
+                                </span>
+                              )}
+                              {folder.lastModified !== undefined &&
+                                folder.lastModified > 0 && (
+                                <span className="flex items-center gap-1">
+                                  <Clock className="size-3" />
+                                  {new Date(folder.lastModified).toLocaleDateString(
+                                    "en-US",
+                                    {
+                                      month: "short",
+                                      day: "numeric",
+                                      year: "numeric",
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                    }
+                                  )}
                                 </span>
                               )}
                             </div>

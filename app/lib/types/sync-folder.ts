@@ -11,6 +11,8 @@ export interface SyncFolder {
   lastSynced?: number;
   status: "syncing" | "paused" | "error";
   fileCount?: number;
+  totalBytes?: number;
+  lastModified?: number;
 }
 
 export interface RemoteFolder {

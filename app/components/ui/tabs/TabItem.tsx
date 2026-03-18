@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import React from "react";
+import React, { useRef, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import ActiveTabBg from "./ActiveTabBg";
 import * as Tooltip from "@radix-ui/react-tooltip";
@@ -25,6 +25,16 @@ const TabItem: React.FC<TabItemProps> = ({
   isJustifyStart = false,
   showTooltip = true,
 }) => {
+  const labelRef = useRef<HTMLSpanElement>(null);
+  const [isTruncated, setIsTruncated] = useState(false);
+
+  const checkTruncation = useCallback(() => {
+    const el = labelRef.current;
+    if (el) {
+      setIsTruncated(el.scrollWidth > el.clientWidth);
+    }
+  }, []);
+
   const content = (
     <div
       className={cn(
@@ -35,6 +45,7 @@ const TabItem: React.FC<TabItemProps> = ({
         isJustifyStart ? "px-2" : "px-4"
       )}
       onClick={onClick}
+      onMouseEnter={showTooltip ? checkTruncation : undefined}
     >
       {isActive && <ActiveTabBg mainGroup={true} />}
       <div
@@ -50,12 +61,12 @@ const TabItem: React.FC<TabItemProps> = ({
               className: "size-[18px]",
             })}
         </span>
-        <span className="font-medium text-[14px] truncate">{label}</span>
+        <span ref={labelRef} className="font-medium text-[14px] truncate">{label}</span>
       </div>
     </div>
   );
 
-  if (!showTooltip) return content;
+  if (!showTooltip || !isTruncated) return content;
 
   return (
     <Tooltip.Provider delayDuration={200}>

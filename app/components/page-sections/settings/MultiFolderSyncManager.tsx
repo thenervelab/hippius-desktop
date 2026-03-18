@@ -117,15 +117,22 @@ export default function MultiFolderSyncManager() {
         }),
       ]);
 
+      // Build a lookup from remote data so we can attach stats to local folders
+      const remoteByLabel = new Map(
+        remoteList.map((r) => [r.label, r])
+      );
+
       const localFolders: SyncFolder[] = await Promise.all(
         syncPaths.map(async (syncPath, index) => {
           const folderName =
-            syncPath.path.split(/[\\\u002f]/).filter(Boolean).pop() ||
+            syncPath.path.split(/[\\/]/).filter(Boolean).pop() ||
             syncPath.label;
           const label = syncPath.label || `sync-folder-${index}`;
           const isActive = await invoke<boolean>("is_drive_active", {
             label,
           }).catch(() => true);
+
+          const remoteInfo = remoteByLabel.get(label);
 
           return {
             id: label,
@@ -133,6 +140,11 @@ export default function MultiFolderSyncManager() {
             localPath: syncPath.path,
             isLocal: true,
             status: isActive ? ("syncing" as const) : ("paused" as const),
+            fileCount: remoteInfo?.file_count,
+            totalBytes: remoteInfo?.total_bytes,
+            lastModified: remoteInfo
+              ? (remoteInfo.updated_at || remoteInfo.created_at) * 1000
+              : undefined,
           };
         })
       );
