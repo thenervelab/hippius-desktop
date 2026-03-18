@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
+use std::path::Path;
 use tracing::{debug, error, info, warn};
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
@@ -73,6 +74,40 @@ pub struct SyncPathResult {
     pub label: String,
 }
 
+/// Reject a new sync path if it overlaps (is a parent or child of) any existing sync path.
+fn validate_no_path_overlap(
+    new_path: &Path,
+    new_label: &str,
+    existing: &[(String, String)], // (label, path) pairs
+) -> Result<(), String> {
+    let canonical_new =
+        std::fs::canonicalize(new_path).unwrap_or_else(|_| new_path.to_path_buf());
+
+    for (label, path_str) in existing {
+        if label == new_label {
+            continue; // skip self on update
+        }
+        let existing_path = Path::new(path_str);
+        let canonical_existing =
+            std::fs::canonicalize(existing_path).unwrap_or_else(|_| existing_path.to_path_buf());
+
+        if canonical_new.starts_with(&canonical_existing) {
+            return Err(format!(
+                "This folder is already being synced as part of '{}'",
+                label
+            ));
+        }
+        if canonical_existing.starts_with(&canonical_new) {
+            return Err(format!(
+                "This folder contains '{}' which is already being synced separately. \
+                 Remove it first if you want to sync the parent folder instead.",
+                label
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Core DB upsert + macOS bookmark logic, shared by `set_sync_path` and `restore_remote_folders`.
 pub(crate) async fn set_sync_path_internal(
     pool: &SqlitePool,
@@ -85,6 +120,20 @@ pub(crate) async fn set_sync_path_internal(
     let label = label.unwrap_or("default");
     let timestamp = Utc::now().timestamp();
     let owner = account_key(account_id);
+
+    // Check for overlapping sync paths before inserting
+    let rows = sqlx::query("SELECT label, path FROM sync_paths WHERE owner = ?")
+        .bind(&owner)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("DB error checking path overlap: {e}"))?;
+
+    let existing: Vec<(String, String)> = rows
+        .iter()
+        .map(|r| (r.get("label"), r.get("path")))
+        .collect();
+
+    validate_no_path_overlap(Path::new(path), label, &existing)?;
 
     // Legacy cleanup: if a pre-owner row exists (owner is empty) with the same type, replace it once.
     if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>(
@@ -455,4 +504,111 @@ pub async fn update_wss_endpoint_command(
 ) -> Result<String, String> {
     update_wss_endpoint(state.pool()?, endpoint.clone()).await?;
     Ok(format!("WSS endpoint updated to: {}", endpoint))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
+        items
+            .iter()
+            .map(|(l, p)| (l.to_string(), p.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn sibling_paths_are_allowed() {
+        let existing = pairs(&[("photos", "/home/user/Photos")]);
+        assert!(validate_no_path_overlap(
+            Path::new("/home/user/Documents"),
+            "docs",
+            &existing
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn child_of_existing_path_is_rejected() {
+        let existing = pairs(&[("docs", "/home/user/Documents")]);
+        let result = validate_no_path_overlap(
+            Path::new("/home/user/Documents/Work"),
+            "work",
+            &existing,
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("already being synced as part of"));
+    }
+
+    #[test]
+    fn parent_of_existing_path_is_rejected() {
+        let existing = pairs(&[("work", "/home/user/Documents/Work")]);
+        let result =
+            validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("already being synced separately"));
+    }
+
+    #[test]
+    fn same_label_skips_self() {
+        let existing = pairs(&[("docs", "/home/user/Documents")]);
+        // Re-setting the same label to a child path should be allowed (it's an update)
+        assert!(validate_no_path_overlap(
+            Path::new("/home/user/Documents/Work"),
+            "docs",
+            &existing
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn exact_same_path_different_label_is_rejected() {
+        let existing = pairs(&[("docs", "/home/user/Documents")]);
+        let result = validate_no_path_overlap(
+            Path::new("/home/user/Documents"),
+            "docs2",
+            &existing,
+        );
+        // starts_with returns true for equal paths, so this is caught as child-of-existing
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn multiple_existing_paths_checked() {
+        let existing = pairs(&[
+            ("photos", "/home/user/Photos"),
+            ("music", "/home/user/Music"),
+            ("docs", "/home/user/Documents"),
+        ]);
+        // Child of third entry
+        let result = validate_no_path_overlap(
+            Path::new("/home/user/Documents/Work"),
+            "work",
+            &existing,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_existing_always_passes() {
+        assert!(validate_no_path_overlap(
+            Path::new("/home/user/Documents"),
+            "docs",
+            &[]
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn error_message_includes_conflicting_label() {
+        let existing = pairs(&[("my-photos", "/home/user/Photos")]);
+        let result = validate_no_path_overlap(
+            Path::new("/home/user/Photos/Vacation"),
+            "vacation",
+            &existing,
+        );
+        assert!(result.unwrap_err().contains("my-photos"));
+    }
 }
