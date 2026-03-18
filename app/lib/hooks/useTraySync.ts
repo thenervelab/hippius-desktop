@@ -517,8 +517,8 @@ export function useTrayInit(isAuthenticated: boolean) {
       // Clear any stale file entries from previous sessions
       void clearTrayFileEntries();
 
-      // Start VPN status watcher with state setter
-      startVpnStatusWatcher(setVpnState);
+      // Start login status watcher (updates tray menu on login/logout)
+      startLoginStatusWatcher(setVpnState);
 
       // Add separator before quit
       if (!openItemsSeparator) {
@@ -962,23 +962,20 @@ export async function setTraySyncPercent(percent: number | null) {
   await updateTraySyncPercent(percent);
 }
 
-/* ─ VPN Status watcher ─────────────────────────────────────────── */
+/* ─ Login status watcher (updates tray menu on login/logout) ──── */
 let vpnStateSetter: ((enabled: boolean) => void) | null = null;
 let lastLoginStatus: boolean | null = null;
 
-function startVpnStatusWatcher(setVpnState?: (enabled: boolean) => void) {
+function startLoginStatusWatcher(setVpnState?: (enabled: boolean) => void) {
   if (setVpnState) {
     vpnStateSetter = setVpnState;
   }
 
-  const INTERVAL_MS = 2000; // Check every 2 seconds for faster updates
-  let lastKnownStatus: boolean | null = null;
+  const INTERVAL_MS = 2000;
 
   const tick = async () => {
-    // Use async check so mnemonic-only logins (not in localStorage) are detected
     const currentLoginStatus = await refreshLoginStatus();
 
-    // If login status changed, update menu immediately
     if (lastLoginStatus !== currentLoginStatus) {
       const wasLoggedIn = lastLoginStatus;
       lastLoginStatus = currentLoginStatus;
@@ -986,34 +983,13 @@ function startVpnStatusWatcher(setVpnState?: (enabled: boolean) => void) {
       await updateOpenFilesMenuItem();
       await updateOpenVmMenuItem();
 
-      // If user logged out, turn off VPN and reset tray icon to default
       if (!currentLoginStatus && wasLoggedIn) {
         if (vpnStateSetter) {
           vpnStateSetter(false);
         }
-        lastKnownStatus = false;
-        // Reset tray icon to default on logout
         void setTrayIconSyncing(false, false);
         void updateTraySyncLabel(null);
       }
-      return;
-    }
-
-    // Only check VPN status if user is logged in
-    if (!currentLoginStatus) {
-      return;
-    }
-
-    const currentStatus = await getVpnStatus();
-
-    // Only update menu if status actually changed
-    if (lastKnownStatus !== currentStatus) {
-      if (vpnStateSetter) {
-        vpnStateSetter(currentStatus);
-      }
-      lastKnownStatus = currentStatus;
-      // Update menu with known status to avoid redundant backend calls
-      await updateVpnMenuItem(currentStatus);
     }
   };
 
