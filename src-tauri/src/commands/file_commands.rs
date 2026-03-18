@@ -199,7 +199,13 @@ struct SyncedFileInfo {
 /// Returns `None` when the drive isn't available (e.g. logged out)
 /// so the caller can fall back to "unknown".
 async fn synced_paths_for_label(label: &str) -> Option<HashMap<String, SyncedFileInfo>> {
-    let guard = HCFS_DRIVES.lock().await;
+    // Use try_lock to avoid blocking file listing while sync holds the lock.
+    // When sync is in progress the lock is held for the entire network cycle;
+    // returning None here lets list_sync_folder report "unknown" sync status
+    // instead of hanging until sync completes.
+    let Ok(guard) = HCFS_DRIVES.try_lock() else {
+        return None;
+    };
     let manager = guard.get(label)?;
     let state = manager.load_sync_state().ok()?;
 
