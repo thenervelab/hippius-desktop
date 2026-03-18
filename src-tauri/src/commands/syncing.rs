@@ -1734,6 +1734,7 @@ pub async fn list_remote_folders(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
 ) -> Result<Vec<RemoteFolderInfoResult>, String> {
+    info!("Listing remote folders for account '{}'", account_id);
     let pool = state.pool()?;
     let config = get_hcfs_config_internal(pool, &account_id).await?;
     let server_url = if config.server_url.is_empty() {
@@ -1763,7 +1764,16 @@ pub async fn list_remote_folders(
     let folders = client
         .list_remote_folders(&account_id)
         .await
-        .map_err(|e| format!("Failed to list remote folders: {e}"))?;
+        .map_err(|e| {
+            error!("Failed to list remote folders for account '{}': {e}", account_id);
+            format!("Failed to list remote folders: {e}")
+        })?;
+
+    info!(
+        "Found {} remote folders for account '{}'",
+        folders.len(),
+        account_id
+    );
 
     Ok(folders
         .into_iter()
@@ -1816,6 +1826,12 @@ pub async fn restore_remote_folders(
     folders: Vec<RestoreFolderRequest>,
     existing_mnemonic: Option<String>,
 ) -> Result<Vec<RestoreResult>, String> {
+    info!(
+        "Restoring {} remote folder(s) to '{}' for account '{}'",
+        folders.len(),
+        base_path,
+        account_id
+    );
     let pool = state.pool()?;
     let mut results = Vec::with_capacity(folders.len());
     let mut any_success = false;
@@ -1894,6 +1910,7 @@ pub async fn restore_remote_folders(
         {
             Ok(_) => {
                 any_success = true;
+                info!("Successfully restored remote folder '{}'", folder.label);
                 results.push(RestoreResult {
                     label: folder.label.clone(),
                     success: true,
@@ -1901,6 +1918,10 @@ pub async fn restore_remote_folders(
                 });
             }
             Err(e) => {
+                error!(
+                    "Failed to restore remote folder '{}': {e}",
+                    folder.label
+                );
                 // Rollback: remove the sync path we just inserted
                 if let Err(rollback_err) = crate::commands::substrate_tx::remove_sync_path_internal(
                     pool,
@@ -1950,6 +1971,10 @@ pub async fn delete_remote_folder(
     account_id: String,
     label: String,
 ) -> Result<DeleteRemoteFolderResult, String> {
+    info!(
+        "Deleting remote folder '{}' for account '{}'",
+        label, account_id
+    );
     let pool = state.pool()?;
     let config = get_hcfs_config_internal(pool, &account_id).await?;
     let server_url = if config.server_url.is_empty() {

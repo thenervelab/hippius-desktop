@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
-use tracing::{info, warn};
+use tracing::{debug, error, info, warn};
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
@@ -152,6 +152,12 @@ pub async fn set_sync_path(
     app_handle: tauri::AppHandle,
     params: SetSyncPathParams,
 ) -> Result<String, String> {
+    info!(
+        "Setting sync path for label '{}': path='{}', is_public={}",
+        params.label.as_deref().unwrap_or("default"),
+        params.path,
+        params.is_public
+    );
     crate::utils::sync::set_active_account(&*state, &params.account_id);
     let pool = state.pool()?;
     let result = set_sync_path_internal(
@@ -166,6 +172,10 @@ pub async fn set_sync_path(
     // Expand asset protocol scope so the frontend can display files from this path
     crate::commands::file_commands::allow_asset_directory(&app_handle, &params.path);
 
+    info!(
+        "Sync path set successfully for label '{}'",
+        params.label.as_deref().unwrap_or("default")
+    );
     Ok(result)
 }
 
@@ -352,7 +362,7 @@ pub async fn get_all_sync_paths(
         .await
         .map_err(|e| format!("DB error: {}", e))?;
 
-    Ok(rows
+    let results: Vec<SyncPathResult> = rows
         .iter()
         .map(|row| {
             let path_type: String = row.get("type");
@@ -364,7 +374,21 @@ pub async fn get_all_sync_paths(
                     .unwrap_or_else(|_| "default".to_string()),
             }
         })
-        .collect())
+        .collect();
+
+    info!(
+        "Retrieved {} sync path(s) for account '{}'",
+        results.len(),
+        account_id
+    );
+    for sp in &results {
+        debug!(
+            "  Sync path: label='{}', path='{}', is_public={}",
+            sp.label, sp.path, sp.is_public
+        );
+    }
+
+    Ok(results)
 }
 
 /// Delete a sync path row from the DB without stopping the drive.
@@ -393,6 +417,10 @@ pub async fn remove_sync_path(
     account_id: String,
     label: String,
 ) -> Result<(), String> {
+    info!(
+        "Removing sync path for label '{}', account '{}'",
+        label, account_id
+    );
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -401,11 +429,15 @@ pub async fn remove_sync_path(
         .bind(&label)
         .execute(pool)
         .await
-        .map_err(|e| format!("Failed to remove sync path: {}", e))?;
+        .map_err(|e| {
+            error!("Failed to remove sync path for label '{}': {}", label, e);
+            format!("Failed to remove sync path: {}", e)
+        })?;
 
     // Stop the corresponding drive
-    crate::commands::syncing::stop_drive(app, label).await?;
+    crate::commands::syncing::stop_drive(app, label.clone()).await?;
 
+    info!("Sync path removed and drive stopped for label '{}'", label);
     Ok(())
 }
 
