@@ -8,6 +8,7 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sqlx::sqlite::SqlitePool;
+use tracing::warn;
 
 use crate::utils::account_key::account_key;
 
@@ -274,18 +275,25 @@ impl ApiClient {
         } else {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
+            warn!(status = status, path = %path, "API DELETE request failed");
             Err(ApiError::Http { status, body })
         }
     }
 
     async fn handle_response<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T, ApiError> {
         let status = resp.status();
+        let url = resp.url().path().to_string();
         if status.is_success() {
             resp.json::<T>()
                 .await
                 .map_err(|e| ApiError::Other(format!("JSON parse error: {e}")))
         } else {
             let body = resp.text().await.unwrap_or_default();
+            warn!(
+                status = status.as_u16(),
+                path = %url,
+                "API request failed"
+            );
             Err(ApiError::Http {
                 status: status.as_u16(),
                 body,

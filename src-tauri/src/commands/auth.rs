@@ -11,7 +11,7 @@ use alloy_signer_local::{MnemonicBuilder, PrivateKeySigner};
 use sha2::{Digest, Sha256};
 use sp_core::Pair as _;
 use sp_core::crypto::Ss58Codec;
-use tracing::warn;
+use tracing::{info, warn};
 use zeroize::Zeroizing;
 
 use crate::commands::syncing::get_mnemonic_for_account;
@@ -222,6 +222,7 @@ pub async fn login_with_mnemonic(
     referral_code: Option<String>,
     logout_time_minutes: Option<i64>,
 ) -> Result<LoginResult, String> {
+    info!("Login initiated via mnemonic");
     let mnemonic = Zeroizing::new(mnemonic);
 
     // 1. Derive keys (mnemonic auto-zeroized on drop)
@@ -268,6 +269,12 @@ pub async fn login_with_mnemonic(
     save_api_token(pool, &substrate_address, &token)
         .await
         .map_err(|e| format!("Failed to persist API token: {e}"))?;
+
+    info!(
+        address = %substrate_address,
+        is_new = is_new,
+        "Mnemonic login successful"
+    );
 
     Ok(LoginResult {
         substrate_address,
@@ -316,6 +323,7 @@ pub async fn set_passcode(
 ) -> Result<(), String> {
     let mnemonic = Zeroizing::new(mnemonic);
 
+    info!("Setting passcode for account");
     let passcode_hash = hash_passcode(&passcode);
 
     // AES encrypt using the same method as crypto-js:
@@ -440,6 +448,7 @@ pub async fn unlock_with_passcode(
     passcode: String,
     logout_time_minutes: Option<i64>,
 ) -> Result<LoginResult, String> {
+    info!("Passcode unlock initiated");
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -507,6 +516,8 @@ pub async fn unlock_with_passcode(
         .await
         .map_err(|e| format!("Failed to persist API token: {e}"))?;
 
+    info!(address = %substrate_address, "Passcode unlock successful");
+
     Ok(LoginResult {
         substrate_address,
         eth_address,
@@ -526,6 +537,7 @@ pub async fn refresh_auth_token_internal(
     app: &tauri::AppHandle,
     account_id: &str,
 ) -> Result<(), String> {
+    info!(account_id = %account_id, "Auth token refresh started");
     // Block sync during token refresh to avoid 401 races
     let _guard = crate::sync_shared::TokenRefreshGuard::new();
 
@@ -565,6 +577,8 @@ pub async fn refresh_auth_token_internal(
         warn!("Could not update live drive token: {e}");
     }
 
+    info!(address = %substrate_address, "Auth token refreshed");
+
     // 7. Emit event to frontend
     if let Err(e) = app.emit(
         "auth_token_refreshed",
@@ -599,6 +613,8 @@ pub async fn auth_logout(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
 ) -> Result<(), String> {
+    info!(account_id = %account_id, "Logout initiated");
+
     // 1. Clear auth info
     {
         let mut auth = state
@@ -633,6 +649,7 @@ pub async fn auth_logout(
     .await
     .map_err(|e| format!("Failed to clear auth session: {e}"))?;
 
+    info!("Logout complete");
     Ok(())
 }
 

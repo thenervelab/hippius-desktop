@@ -8,7 +8,7 @@ use crate::utils::account_key::account_key;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tracing::error;
+use tracing::{error, info};
 
 use once_cell::sync::Lazy;
 
@@ -90,6 +90,7 @@ struct ExchangeUser {
 /// The frontend opens this URL in the external browser.
 #[tauri::command]
 pub async fn start_oauth_flow(provider: String) -> Result<OAuthUrlResult, String> {
+    info!(provider = %provider, "OAuth flow started");
     let base = api_base_url();
 
     let auth_path = match provider.as_str() {
@@ -263,6 +264,12 @@ pub async fn complete_oauth_flow(
         .await
         .map_err(|e| format!("DB objectstore error: {e}"))?;
     }
+
+    info!(
+        provider = %provider_name,
+        address = %substrate_address,
+        "OAuth flow completed"
+    );
 
     Ok(OAuthSessionResult {
         token,

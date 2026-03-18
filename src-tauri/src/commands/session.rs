@@ -5,6 +5,7 @@
 //! Rust-managed SQLite database at `~/.hippius/hippius.db`.
 
 use crate::utils::account_key::account_key;
+use tracing::info;
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -47,6 +48,7 @@ pub async fn save_wallet(
     encrypted_mnemonic: String,
     passcode_hash: String,
 ) -> Result<(), String> {
+    info!("Saving wallet credentials");
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -117,6 +119,7 @@ pub async fn clear_wallet(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
 ) -> Result<(), String> {
+    info!("Clearing wallet credentials");
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -147,6 +150,7 @@ pub async fn save_auth_session(
     substrate_address: Option<String>,
     logout_time_minutes: Option<i64>,
 ) -> Result<(), String> {
+    info!("Saving auth session");
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -287,6 +291,7 @@ pub async fn clear_auth_session(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
 ) -> Result<(), String> {
+    info!("Clearing auth session");
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -436,5 +441,6 @@ pub async fn save_api_token_command(
     account_id: String,
     token: String,
 ) -> Result<(), String> {
+    info!("Saving API token");
     crate::utils::auth_tokens::save_api_token(state.pool()?, &account_id, &token).await
 }

@@ -5,6 +5,7 @@
 
 use crate::api_client::ApiClient;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 // ---------------------------------------------------------------------------
 // Response types — match the API JSON shapes
@@ -148,6 +149,12 @@ pub async fn create_vm(
     account_id: String,
     params: CreateVMParams,
 ) -> Result<serde_json::Value, String> {
+    info!(
+        name = %params.name,
+        flavor_id = params.flavor_id,
+        image_id = params.image_id,
+        "Creating VM instance"
+    );
     let client = ApiClient::new(state.pool()?.clone());
     let body = CreateVMBody {
         flavor_id: params.flavor_id,
@@ -168,6 +175,7 @@ pub async fn reboot_vm(
     account_id: String,
     instance_id: i64,
 ) -> Result<serde_json::Value, String> {
+    info!(instance_id = instance_id, "Rebooting VM");
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/reboot/");
     client
@@ -182,6 +190,7 @@ pub async fn start_vm(
     account_id: String,
     instance_id: i64,
 ) -> Result<serde_json::Value, String> {
+    info!(instance_id = instance_id, "Starting VM");
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/start/");
     client
@@ -196,6 +205,7 @@ pub async fn stop_vm(
     account_id: String,
     instance_id: i64,
 ) -> Result<serde_json::Value, String> {
+    info!(instance_id = instance_id, "Stopping VM");
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/stop/");
     client
@@ -210,6 +220,7 @@ pub async fn terminate_vm(
     account_id: String,
     instance_id: i64,
 ) -> Result<serde_json::Value, String> {
+    info!(instance_id = instance_id, "Terminating VM");
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/terminate/");
     client

@@ -6,6 +6,7 @@
 //! `userPreferencesDb.ts`, and the app_state table.
 
 use crate::app_state::AppState;
+use tracing::info;
 
 // ── Notification Types ──────────────────────────────────────────────────
 
@@ -394,6 +395,7 @@ pub async fn hippius_version_notification_exists(
 /// Hard-delete all notifications. Intended for testing / reset.
 #[tauri::command]
 pub async fn clear_all_notifications(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    info!("Clearing all notifications");
     let pool = state.pool()?;
 
     sqlx::query("DELETE FROM notifications")
@@ -574,6 +576,7 @@ pub async fn add_contact(
 ) -> Result<i64, String> {
     let pool = state.pool()?;
 
+    info!(name = %name, "Adding contact");
     let result = sqlx::query("INSERT INTO address_book (name, wallet_address) VALUES (?, ?)")
         .bind(&name)
         .bind(&wallet_address)
@@ -631,6 +634,7 @@ pub async fn update_contact(
 /// Delete a contact from the address book.
 #[tauri::command]
 pub async fn delete_contact(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
+    info!(id = id, "Deleting contact");
     let pool = state.pool()?;
 
     sqlx::query("DELETE FROM address_book WHERE id = ?")
@@ -663,6 +667,7 @@ pub async fn set_onboarding_done(
     state: tauri::State<'_, AppState>,
     done: bool,
 ) -> Result<(), String> {
+    info!(done = done, "Onboarding status updated");
     let pool = state.pool()?;
     let val: i32 = if done { 1 } else { 0 };
 

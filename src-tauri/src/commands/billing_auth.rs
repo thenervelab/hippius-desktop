@@ -12,6 +12,7 @@ use sp_core::Pair as _;
 use zeroize::Zeroize;
 
 use crate::commands::syncing::get_mnemonic_for_account;
+use tracing::info;
 
 const MAX_ATTEMPTS: u32 = 3;
 const DEFAULT_BASE_URL: &str = "https://api.hippius.com";
@@ -75,6 +76,7 @@ pub async fn billing_auth(
     account_id: String,
     mnemonic: Option<String>,
 ) -> Result<BillingAuthResult, String> {
+    info!("Billing auth initiated");
     let pool = state.pool()?;
     let mut mnemonic = match mnemonic {
         Some(m) if !m.is_empty() => m,
@@ -106,7 +108,10 @@ pub async fn billing_auth(
         )
         .await
         {
-            Ok(result) => return Ok(result),
+            Ok(result) => {
+                info!("Billing auth successful");
+                return Ok(result);
+            }
             Err(e) => last_err = e,
         }
     }

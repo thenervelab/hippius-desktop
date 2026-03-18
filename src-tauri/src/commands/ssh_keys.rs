@@ -2,6 +2,7 @@
 
 use crate::api_client::ApiClient;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 #[derive(Serialize, Deserialize)]
 pub struct SSHKey {
@@ -55,6 +56,7 @@ pub async fn create_ssh_key(
     name: String,
     public_key: String,
 ) -> Result<SSHKey, String> {
+    info!(name = %name, "Creating SSH key");
     let client = ApiClient::new(state.pool()?.clone());
     let body = serde_json::json!({
         "name": name,
@@ -72,6 +74,7 @@ pub async fn delete_ssh_key(
     account_id: String,
     key_id: i64,
 ) -> Result<(), String> {
+    info!(key_id = key_id, "Deleting SSH key");
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/ssh-keys/{key_id}/");
     client

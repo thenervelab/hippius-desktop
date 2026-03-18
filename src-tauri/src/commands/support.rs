@@ -2,6 +2,7 @@
 
 use crate::api_client::ApiClient;
 use serde::Deserialize;
+use tracing::info;
 
 #[tauri::command]
 pub async fn list_support_tickets(
@@ -74,6 +75,11 @@ pub async fn create_support_ticket(
     account_id: String,
     params: CreateTicketParams,
 ) -> Result<serde_json::Value, String> {
+    info!(
+        subject = %params.subject,
+        category = %params.category,
+        "Creating support ticket"
+    );
     let client = ApiClient::new(state.pool()?.clone());
     let body = serde_json::json!({
         "subject": params.subject,
@@ -97,6 +103,7 @@ pub async fn post_ticket_message(
     message_type: String,
     body: String,
 ) -> Result<serde_json::Value, String> {
+    info!(ticket_id = ticket_id, "Posting ticket message");
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/support/tickets/{ticket_id}/messages/");
     let payload = serde_json::json!({

@@ -2,6 +2,7 @@
 
 use crate::api_client::{ApiClient, IndexerClient};
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 // ---------------------------------------------------------------------------
 // Credits & transactions (API)
@@ -72,6 +73,7 @@ pub async fn create_subscription(
     success_url: Option<String>,
     cancel_url: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    info!(price_id = %price_id, "Creating subscription");
     let client = ApiClient::new(state.pool()?.clone());
     let body = serde_json::json!({
         "price_id": price_id,
