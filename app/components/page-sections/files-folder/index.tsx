@@ -54,7 +54,9 @@ interface SyncFileEntry {
   is_folder: boolean;
   size: number;
   modified: number | null;
+  arion_hash?: string;
   arion_cid?: string;
+  sync_status?: string;
 }
 
 interface FolderViewProps {
@@ -92,6 +94,7 @@ export default function FolderView({
   const [selectedFileSize, setSelectedFileSize] = useState(0);
 
   const [syncFolderPath, setSyncFolderPath] = useState<string>("");
+  const [syncFolderLabel, setSyncFolderLabel] = useState<string>("");
   const [isLoadingSyncPath, setIsLoadingSyncPath] = useState(true);
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
   const folderSource = getParam("folderSource");
@@ -146,6 +149,7 @@ export default function FolderView({
         const entries = await invoke<SyncFileEntry[]>("list_sync_folder", {
           syncPath,
           subfolder,
+          label: syncFolderLabel || null,
         });
 
         console.log("Fetched folder contents:", entries);
@@ -160,11 +164,11 @@ export default function FolderView({
             actualFileName: (subfolder && !entry.is_folder) ? `${subfolder}/${entry.name}` : entry.name,
             size: entry.size,
             createdAt: modifiedMs,
-            arionHash: "",
+            arionHash: entry.arion_hash || "",
             arionCid: entry.arion_cid || "",
             source: filePath,
             minerIds: [],
-            isAssigned: true,
+            isAssigned: entry.is_folder || entry.sync_status === "synced",
             lastChargedAt: modifiedMs,
             isFolder: entry.is_folder,
             type: "private",
@@ -193,6 +197,7 @@ export default function FolderView({
       subFolderPath,
       polkadotAddress,
       syncFolderPath,
+      syncFolderLabel,
     ]
   );
 
@@ -200,19 +205,20 @@ export default function FolderView({
     loadFolderContents();
   }, [loadFolderContents]);
 
-  // Resolve the correct sync path by matching folderSource against all sync paths.
+  // Resolve the correct sync path + label by matching folderSource against all sync paths.
   // Falls back to getPrivateSyncPath when folderSource is unavailable.
-  const resolveSyncPath = useCallback(async (): Promise<string> => {
+  const resolveSyncPath = useCallback(async (): Promise<{ path: string; label: string }> => {
     if (folderSource) {
       try {
         const allPaths = await getAllSyncPaths(polkadotAddress ?? undefined);
         const match = allPaths.find((sp) => folderSource.startsWith(sp.path));
-        if (match) return match.path;
+        if (match) return { path: match.path, label: match.label };
       } catch {
         // Fall through to default
       }
     }
-    return (await getPrivateSyncPath(polkadotAddress ?? undefined))?.path ?? "";
+    const result = await getPrivateSyncPath(polkadotAddress ?? undefined);
+    return { path: result?.path ?? "", label: result?.label ?? "" };
   }, [folderSource, polkadotAddress]);
 
   // Load sync path (all files use private/encrypted HCFS path)
@@ -220,10 +226,13 @@ export default function FolderView({
     (async () => {
       try {
         setIsLoadingSyncPath(true);
-        setSyncFolderPath(await resolveSyncPath());
+        const { path, label } = await resolveSyncPath();
+        setSyncFolderPath(path);
+        setSyncFolderLabel(label);
       } catch (error) {
         console.error("Failed to load sync path:", error);
         setSyncFolderPath("");
+        setSyncFolderLabel("");
       } finally {
         setIsLoadingSyncPath(false);
       }
@@ -236,10 +245,13 @@ export default function FolderView({
       (async () => {
         try {
           setIsLoadingSyncPath(true);
-          setSyncFolderPath(await resolveSyncPath());
+          const { path, label } = await resolveSyncPath();
+          setSyncFolderPath(path);
+          setSyncFolderLabel(label);
         } catch (error) {
           console.error("Failed to reload sync path:", error);
           setSyncFolderPath("");
+          setSyncFolderLabel("");
         } finally {
           setIsLoadingSyncPath(false);
         }
