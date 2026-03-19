@@ -1,7 +1,7 @@
 "use client";
 
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useSetAtom } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -26,25 +26,10 @@ import {
   stopSession,
   updateFileProgress,
   getOverallProgress,
-  cleanupExpiredFiles,
   completePendingFiles,
   markPendingFilesAsFailed,
   markAllPendingFilesAsFailed,
   type SessionFileList,
-} from "../services/syncProgressService";
-import {
-  sessionFilesAtom,
-  recentFilesAtom,
-  trayMenuFilesAtom,
-  overallProgressAtom,
-  hasSyncActivityAtom,
-  lastProgressUpdateAtom,
-} from "./useSyncProgress";
-import {
-  getCurrentSessionFiles,
-  getRecentFiles,
-  getTrayMenuFiles,
-  hasAnySyncActivity,
 } from "../services/syncProgressService";
 import { isSyncConfiguredAtom } from "../global-atoms/unpinAtoms";
 import { queryClientAtom } from "jotai-tanstack-query";
@@ -113,67 +98,11 @@ export function useSyncEvents() {
   const setTotalFilesToSyncAtom = useSetAtom(totalFilesToSyncAtom);
   const setSyncActionCountsAtom = useSetAtom(syncActionCountsAtom);
 
-  // New atoms for sync progress
-  const setSessionFilesAtom = useSetAtom(sessionFilesAtom);
-  const setRecentFilesAtom = useSetAtom(recentFilesAtom);
-  const setTrayMenuFilesAtom = useSetAtom(trayMenuFilesAtom);
-  const setOverallProgressAtom = useSetAtom(overallProgressAtom);
-  const setHasSyncActivityAtom = useSetAtom(hasSyncActivityAtom);
-  const setLastProgressUpdateAtom = useSetAtom(lastProgressUpdateAtom);
-
   // Atom to track that sync is configured (so SyncStoppedAlert knows to show)
   const setIsSyncConfiguredAtom = useSetAtom(isSyncConfiguredAtom);
 
   // Connectivity health atom
   const setSyncEngineHealthAtom = useSetAtom(syncEngineHealthAtom);
-
-  /**
-   * Refresh atoms from Rust backend service
-   */
-  const refreshProgressState = useCallback(async () => {
-    try {
-      const [sessionFiles, recentFiles, trayFiles, overall, activity] = await Promise.all([
-        getCurrentSessionFiles(),
-        getRecentFiles(),
-        getTrayMenuFiles(),
-        getOverallProgress(),
-        hasAnySyncActivity(),
-      ]);
-      setSessionFilesAtom(sessionFiles);
-      setRecentFilesAtom(recentFiles);
-      setTrayMenuFilesAtom(trayFiles);
-      setOverallProgressAtom(overall);
-      setHasSyncActivityAtom(activity);
-      setLastProgressUpdateAtom(Date.now());
-    } catch (err) {
-      console.error("[SyncEvents] Failed to refresh progress state:", err);
-    }
-  }, [setSessionFilesAtom, setRecentFilesAtom, setTrayMenuFilesAtom, setOverallProgressAtom, setHasSyncActivityAtom, setLastProgressUpdateAtom]);
-
-  // Throttle refreshProgressState so it fires at most once per 250ms.
-  // Shorter interval than the previous 500ms to keep per-file progress
-  // bars visually smooth without overwhelming the IPC bridge.
-  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const refreshPendingRef = useRef(false);
-
-  const throttledRefreshProgressState = useCallback(() => {
-    if (refreshTimerRef.current) {
-      // A refresh is already scheduled — just mark that another was requested
-      refreshPendingRef.current = true;
-      return;
-    }
-    refreshProgressState();
-    refreshTimerRef.current = setTimeout(() => {
-      refreshTimerRef.current = null;
-      if (refreshPendingRef.current) {
-        refreshPendingRef.current = false;
-        refreshProgressState();
-      }
-    }, 250);
-  }, [refreshProgressState]);
-
-  // Cleanup interval ref
-  const cleanupIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Debounce timer for completion across drives (prevents 100% flash between drives)
   const completionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -181,9 +110,6 @@ export function useSyncEvents() {
   useEffect(() => {
     let cancelled = false;
     const unsubs: (() => void)[] = [];
-
-    // Initial state refresh
-    refreshProgressState();
 
     // Query current health state on mount (backend may already be running)
     invoke<SyncEngineHealthState>("get_sync_engine_health")
@@ -195,21 +121,6 @@ export function useSyncEvents() {
       .catch((err) => {
         console.warn("[SyncEvents] Failed to get initial health state:", err);
       });
-
-    // Setup periodic cleanup for expired files (every minute)
-    cleanupIntervalRef.current = setInterval(() => {
-      cleanupExpiredFiles().then((removed) => {
-        if (removed > 0) {
-          refreshProgressState();
-        }
-      }).catch((err) => {
-        console.error("[SyncEvents] Cleanup failed:", err);
-      });
-    }, 60 * 1000);
-
-    // Listen for manual sync progress updates (e.g. file deletions from UI)
-    const handleSyncProgressUpdate = () => { refreshProgressState(); };
-    window.addEventListener("sync_progress_update", handleSyncProgressUpdate);
 
     // Track whether we've already created an ad-hoc session for
     // progress events that arrive without a prior startSession call
@@ -345,7 +256,6 @@ export function useSyncEvents() {
               await startSession(uploads, downloads, localDeletes, remoteDeletes, fileList, label);
             }
 
-            await refreshProgressState();
             setIsSyncing(true);
             setIsSyncingAtom(true);
             setHasSyncErrorAtom(false);
@@ -419,7 +329,6 @@ export function useSyncEvents() {
               await startSession(uploads, downloads, localDeletes, remoteDeletes, fileList, label);
             }
 
-            await refreshProgressState();
             setIsSyncing(true);
             setIsSyncingAtom(true);
             setHasSyncErrorAtom(false);
@@ -456,7 +365,6 @@ export function useSyncEvents() {
             // Try to complete session — if other drives still have pending
             // files the session will stay active automatically.
             await completeSession(e.payload.files_uploaded, e.payload.files_downloaded);
-            await refreshProgressState();
 
             // Dispatch event to trigger recent files refetch immediately
             if (totalCompleted > 0) {
@@ -511,9 +419,6 @@ export function useSyncEvents() {
                 setUploadProgressAtom(null);
                 setDownloadProgress(null);
                 setDownloadProgressAtom(null);
-                // Final refresh so the UI shows the completed state
-                // from the backend (session is kept intact after completion).
-                await refreshProgressState();
               }, 200);
             }
           }),
@@ -528,8 +433,6 @@ export function useSyncEvents() {
             setHasSyncErrorAtom(true);
             // Mark ALL pending files as failed
             await markAllPendingFilesAsFailed(e.payload.error || 'Sync failed');
-            // Refresh progress state to update atoms with failed files
-            await refreshProgressState();
             // Clear progress on error
             setUploadProgress(null);
             setUploadProgressAtom(null);
@@ -548,7 +451,6 @@ export function useSyncEvents() {
               ensureSession('upload')
                 .then(() => updateFileProgress(e.payload.path!, e.payload.bytes, e.payload.total, 'upload'))
                 .catch((err) => console.error("[SyncEvents] updateFileProgress failed:", err));
-              throttledRefreshProgressState();
             }
 
             // When a file reaches 100%, track it as completed
@@ -580,7 +482,6 @@ export function useSyncEvents() {
               ensureSession('download')
                 .then(() => updateFileProgress(e.payload.path!, e.payload.bytes, e.payload.total, 'download'))
                 .catch((err) => console.error("[SyncEvents] updateFileProgress failed:", err));
-              throttledRefreshProgressState();
             }
 
             // When a file reaches 100%, track it as completed
@@ -609,7 +510,6 @@ export function useSyncEvents() {
             await stopSession().catch((err) =>
               console.error("[SyncEvents] stopSession failed:", err)
             );
-            await refreshProgressState();
 
             // Reset completed files tracking
             completedFilesRef.current.clear();
@@ -633,7 +533,6 @@ export function useSyncEvents() {
           listen("hcfs_sync_reset", async () => {
             // Full reset — clear all progress data and show setup UI
             await invoke("sp_clear_all_data").catch(() => {});
-            await refreshProgressState();
 
             // Reset completed files tracking
             completedFilesRef.current.clear();
@@ -671,24 +570,13 @@ export function useSyncEvents() {
     return () => {
       cancelled = true;
       unsubs.forEach((u) => u());
-      window.removeEventListener("sync_progress_update", handleSyncProgressUpdate);
-      // Cleanup the periodic interval
-      if (cleanupIntervalRef.current) {
-        clearInterval(cleanupIntervalRef.current);
-        cleanupIntervalRef.current = null;
-      }
-      // Cleanup throttle timer
-      if (refreshTimerRef.current) {
-        clearTimeout(refreshTimerRef.current);
-        refreshTimerRef.current = null;
-      }
       // Cleanup completion debounce timer
       if (completionTimerRef.current) {
         clearTimeout(completionTimerRef.current);
         completionTimerRef.current = null;
       }
     };
-  }, [setIsSyncingAtom, setUploadProgressAtom, setDownloadProgressAtom, setLastSyncErrorAtom, setHasSyncErrorAtom, setSyncPercentAtom, setCompletedFilesCountAtom, setTotalFilesToSyncAtom, setSyncActionCountsAtom, setIsSyncConfiguredAtom, setSyncEngineHealthAtom, refreshProgressState, throttledRefreshProgressState, queryClient]);
+  }, [setIsSyncingAtom, setUploadProgressAtom, setDownloadProgressAtom, setLastSyncErrorAtom, setHasSyncErrorAtom, setSyncPercentAtom, setCompletedFilesCountAtom, setTotalFilesToSyncAtom, setSyncActionCountsAtom, setIsSyncConfiguredAtom, setSyncEngineHealthAtom, queryClient]);
 
   return {
     isSyncing,
