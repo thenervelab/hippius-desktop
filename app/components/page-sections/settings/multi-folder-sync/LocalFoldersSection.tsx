@@ -18,7 +18,8 @@ import {
   Clock,
   HardDrive,
 } from "lucide-react";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import TableActionMenu, { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
+import { Button } from "@/components/ui/button";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import type { SyncFolder } from "@/app/lib/types/sync-folder";
 import { Pagination } from "@/components/ui/alt-table";
@@ -237,73 +238,46 @@ export function LocalFoldersSection({
                           )}
                         </div>
 
-                        <DropdownMenu.Root>
-                          <DropdownMenu.Trigger asChild>
-                            <button className="p-2 hover:bg-grey-95 rounded transition-colors">
-                              <MoreVertical className="size-4 text-grey-40" />
-                            </button>
-                          </DropdownMenu.Trigger>
-                          <DropdownMenu.Portal>
-                            <DropdownMenu.Content
-                              className="bg-white border border-grey-80 rounded-lg shadow-lg p-1 min-w-[200px] z-[60]"
-                              sideOffset={5}
-                              align="end"
-                              avoidCollisions
-                            >
-                              {folder.status === "syncing" ? (
-                                <DropdownMenu.Item
-                                  className="flex items-center gap-2 px-3 py-2 text-sm text-grey-10 hover:bg-grey-95 rounded cursor-pointer outline-none"
-                                  onSelect={() => onPauseFolder(folder)}
-                                >
-                                  <PauseCircle className="size-4" />
-                                  Pause Sync
-                                </DropdownMenu.Item>
-                              ) : (
-                                <DropdownMenu.Item
-                                  className="flex items-center gap-2 px-3 py-2 text-sm text-grey-10 hover:bg-grey-95 rounded cursor-pointer outline-none"
-                                  onSelect={() => onResumeFolder(folder)}
-                                >
-                                  <PlayCircle className="size-4" />
-                                  Resume Sync
-                                </DropdownMenu.Item>
-                              )}
-                              <DropdownMenu.Separator className="h-px bg-grey-80 my-1" />
-                              <DropdownMenu.Item
-                                className="flex items-center gap-2 px-3 py-2 text-sm text-grey-10 hover:bg-grey-95 rounded cursor-pointer outline-none"
-                                onSelect={async () => {
-                                  try {
-                                    await revealItemInDir(folder.localPath);
-                                  } catch (error) {
-                                    console.error("Failed to open in Finder:", error);
-                                  }
-                                }}
-                              >
-                                <FolderOpen className="size-4" />
-                                Open in Finder
-                              </DropdownMenu.Item>
-                              <DropdownMenu.Separator className="h-px bg-grey-80 my-1" />
-                              <DropdownMenu.Item
-                                className="flex items-center gap-2 px-3 py-2 text-sm text-grey-10 hover:bg-grey-95 rounded cursor-pointer outline-none"
-                                onSelect={() => onRemoveFolder(folder)}
-                              >
-                                <Trash2 className="size-4" />
-                                Remove from Sync
-                              </DropdownMenu.Item>
-                              <DropdownMenu.Item
-                                className="flex items-center gap-2 px-3 py-2 text-sm text-error-50 hover:bg-error-95 rounded cursor-pointer outline-none"
-                                onSelect={() =>
-                                  onDeleteFromServer(
-                                    folder.folderName,
-                                    folder.id
-                                  )
+                        <TableActionMenu
+                          dropdownTitle=""
+                          items={[
+                            {
+                              icon: folder.status === "syncing"
+                                ? <PauseCircle className="size-4" />
+                                : <PlayCircle className="size-4" />,
+                              itemTitle: folder.status === "syncing" ? "Pause Sync" : "Resume Sync",
+                              onItemClick: () => folder.status === "syncing"
+                                ? onPauseFolder(folder)
+                                : onResumeFolder(folder),
+                            },
+                            {
+                              icon: <FolderOpen className="size-4" />,
+                              itemTitle: "Open in Finder",
+                              onItemClick: async () => {
+                                try {
+                                  await revealItemInDir(folder.localPath);
+                                } catch (error) {
+                                  console.error("Failed to open in Finder:", error);
                                 }
-                              >
-                                <ServerCrash className="size-4" />
-                                Delete from Server
-                              </DropdownMenu.Item>
-                            </DropdownMenu.Content>
-                          </DropdownMenu.Portal>
-                        </DropdownMenu.Root>
+                              },
+                            },
+                            {
+                              icon: <Trash2 className="size-4" />,
+                              itemTitle: "Remove from Sync",
+                              onItemClick: () => onRemoveFolder(folder),
+                            },
+                            {
+                              icon: <ServerCrash className="size-4" />,
+                              itemTitle: "Delete from Server",
+                              variant: "destructive" as const,
+                              onItemClick: () => onDeleteFromServer(folder.folderName, folder.id),
+                            },
+                          ] satisfies ActionItem[]}
+                        >
+                          <Button variant="ghost" size="md" className="h-8 w-8 p-0 text-grey-70 action-menu-area">
+                            <MoreVertical className="size-4" />
+                          </Button>
+                        </TableActionMenu>
                       </div>
                     </div>
                   ))}

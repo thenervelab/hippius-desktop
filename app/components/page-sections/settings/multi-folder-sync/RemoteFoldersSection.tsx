@@ -13,7 +13,8 @@ import {
   Clock,
   HardDrive,
 } from "lucide-react";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import TableActionMenu, { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
+import { Button } from "@/components/ui/button";
 import type { RemoteFolder } from "@/app/lib/types/sync-folder";
 import { Pagination } from "@/components/ui/alt-table";
 
@@ -120,39 +121,26 @@ export function RemoteFoldersSection({
                           </div>
                         </div>
 
-                        <DropdownMenu.Root>
-                          <DropdownMenu.Trigger asChild>
-                            <button className="p-2 hover:bg-grey-95 rounded transition-colors">
-                              <MoreVertical className="size-4 text-grey-40" />
-                            </button>
-                          </DropdownMenu.Trigger>
-                          <DropdownMenu.Portal>
-                            <DropdownMenu.Content
-                              className="bg-white border border-grey-80 rounded-lg shadow-lg p-1 min-w-[200px] z-[60]"
-                              sideOffset={5}
-                              align="end"
-                              avoidCollisions
-                            >
-                              <DropdownMenu.Item
-                                className="flex items-center gap-2 px-3 py-2 text-sm text-grey-10 hover:bg-grey-95 rounded cursor-pointer outline-none"
-                                onSelect={() => onSyncFolder(folder)}
-                              >
-                                <CloudDownload className="size-4" />
-                                Sync to This Device
-                              </DropdownMenu.Item>
-                              <DropdownMenu.Separator className="h-px bg-grey-80 my-1" />
-                              <DropdownMenu.Item
-                                className="flex items-center gap-2 px-3 py-2 text-sm text-error-50 hover:bg-error-95 rounded cursor-pointer outline-none"
-                                onSelect={() =>
-                                  onDeleteFromServer(folder.folderName)
-                                }
-                              >
-                                <ServerCrash className="size-4" />
-                                Delete from Server
-                              </DropdownMenu.Item>
-                            </DropdownMenu.Content>
-                          </DropdownMenu.Portal>
-                        </DropdownMenu.Root>
+                        <TableActionMenu
+                          dropdownTitle=""
+                          items={[
+                            {
+                              icon: <CloudDownload className="size-4" />,
+                              itemTitle: "Sync to This Device",
+                              onItemClick: () => onSyncFolder(folder),
+                            },
+                            {
+                              icon: <ServerCrash className="size-4" />,
+                              itemTitle: "Delete from Server",
+                              variant: "destructive" as const,
+                              onItemClick: () => onDeleteFromServer(folder.folderName),
+                            },
+                          ] satisfies ActionItem[]}
+                        >
+                          <Button variant="ghost" size="md" className="h-8 w-8 p-0 text-grey-70 action-menu-area">
+                            <MoreVertical className="size-4" />
+                          </Button>
+                        </TableActionMenu>
                       </div>
                     </div>
                   ))}
