@@ -73,7 +73,10 @@ function renderWithJotai(
   const store = createStore();
   store.set(syncEngineHealthAtom, {
     status: "connected",
-    last_check: Date.now(),
+    last_check_time: Date.now(),
+    last_successful_check: Date.now(),
+    consecutive_failures: 0,
+    server_version: null,
     error_message: null,
   });
   if (atomValues) {
