@@ -88,7 +88,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
         </DetailRow>
 
         <DetailRow label="Date Uploaded">
-          {file.createdAt === 0 ? "Unknown" : <FormattedTimestamp timestamp={file.createdAt} />}
+          {file.createdAt === 0 ? "—" : <FormattedTimestamp timestamp={file.createdAt} />}
         </DetailRow>
 
         <DetailRow label="File Size" lastChild={!!file.isFolder}>

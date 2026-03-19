@@ -156,6 +156,8 @@ const useRecentFiles = () => {
             // Prefer server-side upload timestamp over activity timestamp
             const uploadedAtSec = uploadedAtMap.get(key) ?? 0;
             const updatedAtSec = updatedAtMap.get(key) ?? 0;
+            // Recent files were already uploaded — use server timestamp,
+            // or fall back to activity timestamp if server hasn't returned it yet.
             const createdAtMs = uploadedAtSec ? uploadedAtSec * 1000 : activityMs;
             const lastChargedAtMs = updatedAtSec ? updatedAtSec * 1000 : (uploadedAtSec ? uploadedAtSec * 1000 : activityMs);
 

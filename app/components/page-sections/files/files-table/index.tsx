@@ -584,7 +584,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             cell: (cell) => {
               const createdAt = cell.row.original.createdAt;
               return createdAt === 0 ? (
-                <div className="truncate">Unknown</div>
+                <div className="truncate text-grey-50">—</div>
               ) : (
                 <div className="truncate">
                   <FormattedTimestamp timestamp={createdAt} />

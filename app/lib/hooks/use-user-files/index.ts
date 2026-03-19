@@ -148,7 +148,11 @@ export const useUserFiles = () => {
               // Prefer server-side upload timestamp over local modified time
               const uploadedAtMs = entry.uploaded_at ? entry.uploaded_at * 1000 : 0;
               const updatedAtMs = entry.updated_at ? entry.updated_at * 1000 : 0;
-              const createdAtMs = uploadedAtMs || localModifiedMs;
+              // Use server timestamp when available. For synced files where
+              // the server hasn't returned a timestamp yet, fall back to local
+              // modified time. Pending (not-yet-uploaded) files show "—" (0).
+              const isSynced = entry.sync_status === "synced";
+              const createdAtMs = uploadedAtMs || (isSynced ? localModifiedMs : 0);
               const lastChargedAtMs = updatedAtMs || uploadedAtMs || localModifiedMs;
 
               // Check if this is an encrypted file name and provide friendly display name

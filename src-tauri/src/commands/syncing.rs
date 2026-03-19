@@ -1148,8 +1148,6 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
     let a0 = app.clone();
     let a1 = app.clone();
     let a2 = app.clone();
-    let a3 = app.clone();
-    let a4 = app.clone();
     let a5 = app.clone();
     let a6 = app.clone();
 
@@ -1279,26 +1277,19 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
         on_encrypt_progress: Some(Arc::new(move |b, t, p| {
             if b == 0 {
                 info!("Encrypt starting [{}]: {:?} ({} bytes)", l3, p, t);
-            }
-            if b == t && t > 0 {
+            } else if b == t && t > 0 {
                 info!("Encrypt complete [{}]: {:?} ({} bytes)", l3, p, t);
             }
-            let _ = a3.emit(
-                "hcfs_encrypt_progress",
-                serde_json::json!({"label": l3, "bytes": b, "total": t, "path": p}),
-            );
+            // No per-chunk emit — nobody listens for hcfs_encrypt_progress
+            // and emitting on every 256KB chunk (~1333 times for 341MB)
+            // was the main encryption bottleneck.
         })),
         on_decrypt_progress: Some(Arc::new(move |b, t, p| {
             if b == 0 {
                 info!("Decrypt starting [{}]: {:?} ({} bytes)", l4, p, t);
-            }
-            if b == t && t > 0 {
+            } else if b == t && t > 0 {
                 info!("Decrypt complete [{}]: {:?} ({} bytes)", l4, p, t);
             }
-            let _ = a4.emit(
-                "hcfs_decrypt_progress",
-                serde_json::json!({"label": l4, "bytes": b, "total": t, "path": p}),
-            );
         })),
         on_scan_progress: Some(Arc::new(move |n, p| {
             info!("Scan [{}]: {} files scanned, current: {:?}", l5, n, p);

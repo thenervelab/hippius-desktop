@@ -733,7 +733,7 @@ pub fn sp_update_file_progress(
     file.total_bytes = total_bytes;
 
     if total_bytes > 0 {
-        file.progress = ((bytes_transferred as f64 / total_bytes as f64) * 100.0).min(100.0) as u32;
+        file.progress = ((bytes_transferred as f64 / total_bytes as f64) * 100.0).round().min(100.0) as u32;
     }
 
     // Update status based on progress
