@@ -10,7 +10,7 @@ import { useSetAtom } from "jotai";
 import { refreshEnabledTypesAtom } from "@/components/page-sections/notifications/notificationStore";
 import CustomizeRPC from "./CustomizeRPC";
 
-import OAuthTokenSection from "./OAuthTokenSection";
+import { ApiTokenCard, ApiTokenUsageCard } from "./OAuthTokenSection";
 import EmailNotificationSection from "./EmailNotificationSection";
 import VPNSettings from "./VPNSettings";
 import RecoveryPhraseSettings from "./RecoveryPhraseSettings";
@@ -129,15 +129,27 @@ const SettingsDialogContent: React.FC = () => {
               </div>
             )}
             {activeTab === "API Token" && (
-              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
-                <RevealTextLine
-                  rotate
-                  reveal={inView}
-                  className="delay-300 w-full"
-                  parentClassName="w-full"
-                >
-                  <OAuthTokenSection />
-                </RevealTextLine>
+              <div className="flex flex-col gap-4 w-full">
+                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                  <RevealTextLine
+                    rotate
+                    reveal={inView}
+                    className="delay-300 w-full"
+                    parentClassName="w-full"
+                  >
+                    <ApiTokenCard />
+                  </RevealTextLine>
+                </div>
+                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                  <RevealTextLine
+                    rotate
+                    reveal={inView}
+                    className="delay-500 w-full"
+                    parentClassName="w-full"
+                  >
+                    <ApiTokenUsageCard />
+                  </RevealTextLine>
+                </div>
               </div>
             )}
 
