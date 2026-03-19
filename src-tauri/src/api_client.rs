@@ -3,6 +3,10 @@
 //! Provides `ApiClient` (for the main Hippius API) and `IndexerClient`
 //! (for the indexer API with X-API-KEY auth). Both handle JSON
 //! serialization, error mapping, and structured error responses.
+//!
+//! Pure logic (URL encoding, URL construction, `ApiError` type) lives in
+//! `api_client_logic` so it can be unit-tested via the lib target without
+//! pulling in the full binary dependency tree.
 
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::Serialize;
@@ -12,42 +16,12 @@ use tracing::warn;
 
 use crate::utils::account_key::account_key;
 
-/// Build a URL with query parameters appended.
-fn url_with_params(base: &str, path: &str, params: &[(&str, &str)]) -> String {
-    let mut url = format!("{}{}", base, path);
-    if !params.is_empty() {
-        url.push('?');
-        for (i, (key, value)) in params.iter().enumerate() {
-            if i > 0 {
-                url.push('&');
-            }
-            url.push_str(&urlencoding(key));
-            url.push('=');
-            url.push_str(&urlencoding(value));
-        }
-    }
-    url
-}
+pub use crate::api_client_logic::{ApiError, url_with_params, urlencoding};
 
-/// Minimal percent-encoding for query parameter values.
+/// Public re-export kept for backward compatibility with callers
+/// that used the old `urlencoding_pub` name.
 pub fn urlencoding_pub(s: &str) -> String {
     urlencoding(s)
-}
-
-fn urlencoding(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => result.push(c),
-            ' ' => result.push_str("%20"),
-            _ => {
-                for b in c.to_string().as_bytes() {
-                    result.push_str(&format!("%{b:02X}"));
-                }
-            }
-        }
-    }
-    result
 }
 
 const DEFAULT_BASE_URL: &str = "https://api.hippius.com";
@@ -59,33 +33,6 @@ fn api_base_url() -> String {
 
 fn indexer_base_url() -> String {
     std::env::var("HIPPIUS_INDEXER_URL").unwrap_or_else(|_| DEFAULT_INDEXER_URL.to_string())
-}
-
-// ---------------------------------------------------------------------------
-// Error type
-// ---------------------------------------------------------------------------
-
-#[derive(Debug)]
-pub enum ApiError {
-    /// HTTP error with status code and body.
-    Http { status: u16, body: String },
-    /// Network or serialization error.
-    Other(String),
-}
-
-impl std::fmt::Display for ApiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ApiError::Http { status, body } => write!(f, "HTTP {status}: {body}"),
-            ApiError::Other(msg) => write!(f, "{msg}"),
-        }
-    }
-}
-
-impl From<ApiError> for String {
-    fn from(e: ApiError) -> String {
-        e.to_string()
-    }
 }
 
 // ---------------------------------------------------------------------------

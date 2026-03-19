@@ -11,6 +11,7 @@
 //! is the actual application entry point.
 
 mod api_client;
+mod api_client_logic;
 mod app_state;
 mod block_subscription;
 mod builder_blocks;

@@ -1,3 +1,4 @@
+pub mod api_client_logic;
 pub mod sync_logic;
 pub mod sync_shared;
 
