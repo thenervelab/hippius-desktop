@@ -272,7 +272,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    (e.nativeEvent as any).stopImmediatePropagation?.();
+                    (e.nativeEvent as unknown as { stopImmediatePropagation?: () => void }).stopImmediatePropagation?.();
 
                     onClose?.();
                   }}

@@ -68,6 +68,7 @@ vi.mock("../../lib/utils/fileTypeUtils", () => ({
 
 function renderWithJotai(
   ui: React.ReactElement,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Jotai atoms are generic, type erasure needed for test helper
   atomValues?: Array<[any, any]>,
 ) {
   const store = createStore();
