@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import SyncStatusDialog from "./SyncStatusDialog";
 import useSyncActivity, { SyncActivityRow } from "../lib/hooks/useSyncActivity";
+import { useSyncSnapshot } from "../lib/hooks/useSyncSnapshot";
 import {
   isSyncingAtom,
   uploadProgressAtom,
@@ -106,6 +107,7 @@ function getFileTypeFromName(fileName: string): string {
 
 const SyncStatusHandler: React.FC = () => {
   const { data: syncFiles, isLoading, refetch } = useSyncActivity();
+  const snapshot = useSyncSnapshot();
   const [isSyncOpen, setIsSyncOpen] = useState(false);
   const [isPermanentlyClosed, setIsPermanentlyClosed] = useState(false);
   
@@ -441,18 +443,10 @@ const SyncStatusHandler: React.FC = () => {
 
   return (
     <SyncStatusDialog
+      snapshot={snapshot}
       open={!isLoading && isSyncOpen}
       onClose={handleClose}
-      syncFiles={filesToRender}
-      syncPercent={syncMetrics.syncPercent}
-      totalFiles={syncMetrics.totalFiles}
-      filesFailed={filesFailed}
-      isInProgress={syncMetrics.isInProgress}
-      uploadProgress={uploadProgress}
-      downloadProgress={downloadProgress}
       actionCounts={syncActionCounts}
-      totalBytesTransferred={overallProgress.totalBytesTransferred}
-      totalBytesExpected={overallProgress.totalBytesExpected}
     />
   );
 };

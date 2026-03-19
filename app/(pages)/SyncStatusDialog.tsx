@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import { ChevronDown, ChevronUp } from "lucide-react";
@@ -13,56 +12,28 @@ import {
   getFileTypeFromExtension,
 } from "@/lib/utils";
 import InfoTooltip from "@/components/ui/info-tooltip";
-import { SyncActivityRow } from "@/lib/hooks/useSyncActivity";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
 import { syncEngineHealthAtom, CONNECTIVITY_STATUS_LABELS } from "../lib/store/syncAtoms";
+import { type SyncSnapshot } from "../lib/types/syncSnapshot";
+import { type SyncActionCounts } from "../lib/store/syncAtoms";
 
 const COLLAPSED_HEIGHT = 64;
 const EXPANDED_HEIGHT = 460;
 const BODY_MAX_HEIGHT = EXPANDED_HEIGHT - COLLAPSED_HEIGHT;
 
-interface ProgressPayload {
-  bytes: number;
-  total: number;
-  path?: string;
-}
-
 interface SyncStatusDialogProps {
+  snapshot: SyncSnapshot;
   open: boolean;
-  syncFiles: SyncActivityRow[];
   onClose?: () => void;
-  syncPercent?: number | null;
-  totalFiles?: number;
-  filesFailed?: number;
-  isInProgress?: boolean;
-  uploadProgress?: ProgressPayload | null;
-  downloadProgress?: ProgressPayload | null;
-  // Sync action counts to determine what type of sync is happening
-  actionCounts?: {
-    uploads: number;
-    downloads: number;
-    localDeletes: number;
-    remoteDeletes: number;
-  };
-  // Overall bytes synced
-  totalBytesTransferred?: number;
-  totalBytesExpected?: number;
+  actionCounts?: SyncActionCounts;
 }
 
 const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
+  snapshot,
   open,
-  syncFiles,
   onClose,
-  syncPercent: propSyncPercent = null,
-  totalFiles: propTotalFiles = 0,
-  filesFailed: propFilesFailed = 0,
-  isInProgress = false,
-  uploadProgress = null,
-  downloadProgress = null,
   actionCounts,
-  totalBytesTransferred = 0,
-  totalBytesExpected = 0,
 }) => {
   const fileListRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -70,38 +41,15 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 
   const isUnhealthy = engineHealth.status !== "connected";
 
-  // Track if there's any active transfer (upload or download) for progress detection
-  const activeTransfer = uploadProgress || downloadProgress;
-
-  // Calculate metrics from syncFiles if not provided
-  // Use explicit checks to avoid JS falsy issues (0 is falsy but valid)
-  const showIndeterminateProgress = isInProgress && (propSyncPercent === null || propSyncPercent === undefined);
-  
-  const calculatedMetrics = {
-    // Use whichever is larger: backend total or display list length.
-    // The display list includes recent files, so it can exceed the backend's
-    // current-session total — never show "7 of 1".
-    totalFiles: Math.max(propTotalFiles || 0, syncFiles?.length || 0),
-    syncedFiles: syncFiles?.filter((f) => f.status === "uploaded").length || 0,
-    deletedFiles: syncFiles?.filter((f) => f.status === "deleted").length || 0,
-    // For percentage: when in progress but no percent provided, use null
-    // to show indeterminate state. Use the raw byte-weighted value from
-    // the backend — no client-side clamping so the bar always matches
-    // the "X MB / Y MB" display.
-    percentage: showIndeterminateProgress
-      ? null
-      : (propSyncPercent !== null && propSyncPercent !== undefined
-        ? Math.round(propSyncPercent)
-        : 0),
-    // Never mark as completed while sync is still in progress — follow the tray's behavior
-    isCompleted:
-      !isInProgress &&
-      ((propSyncPercent !== null && propSyncPercent !== undefined && propSyncPercent >= 100) ||
-      (!syncFiles?.some((f) => f.status === "uploading") &&
-        syncFiles?.length > 0 && !activeTransfer)),
-    hasActiveSync:
-      isInProgress || syncFiles?.some((f) => f.status === "uploading") || !!activeTransfer,
-  };
+  // Derive all display state from the snapshot
+  const isInProgress = snapshot.isActive;
+  const isCompleted = !snapshot.isActive && (snapshot.completedFiles > 0 || snapshot.failedFiles > 0);
+  const hasFailed = snapshot.failedFiles > 0 && isCompleted;
+  const percentage = isInProgress && snapshot.totalFiles > 0 && snapshot.overallPercent === 0 && snapshot.bytesExpected === 0
+    ? null
+    : snapshot.overallPercent;
+  const totalFiles = snapshot.totalFiles;
+  const hasActiveSync = snapshot.isActive;
 
   useEffect(() => {
     const fileList = fileListRef.current;
@@ -149,12 +97,14 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     [toggleExpanded]
   );
 
-  if (!syncFiles?.length && !calculatedMetrics.hasActiveSync) return null;
-
-  const { totalFiles, syncedFiles, deletedFiles, percentage, isCompleted } =
-    calculatedMetrics;
-  const hasFailed = propFilesFailed > 0 && isCompleted;
+  if (!snapshot.files.length && !hasActiveSync && !isCompleted) return null;
   if (!open) return null;
+
+  // Derive counts for the status banner
+  const syncedFiles = snapshot.completedFiles;
+  const deletedFiles = snapshot.files.filter(
+    (f) => (f.action === "local_delete" || f.action === "remote_delete") && f.status === "completed"
+  ).length;
 
   return (
     <div
@@ -351,7 +301,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             <div
               className={cn(
                 "w-fit px-2 py-0.5 border rounded",
-                propFilesFailed > 0
+                snapshot.failedFiles > 0
                   ? "bg-error-100/40 border-error-80"
                   : isCompleted
                     ? "bg-success-100/40 border-success-80"
@@ -361,7 +311,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               <div
                 className={cn(
                   "text-sm",
-                  propFilesFailed > 0 
+                  snapshot.failedFiles > 0 
                     ? "text-error-40"
                     : isCompleted 
                       ? "text-success-40" 
@@ -372,8 +322,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   // Total completed = synced (uploaded) + deleted
                   const completedFiles = syncedFiles + deletedFiles;
                   // Calculate actual total including failed files
-                  const actualTotal = propFilesFailed > 0 
-                    ? Math.max(totalFiles, completedFiles + propFilesFailed) 
+                  const actualTotal = snapshot.failedFiles > 0 
+                    ? Math.max(totalFiles, completedFiles + snapshot.failedFiles) 
                     : totalFiles;
                   
                   // Determine what type of sync is happening based on action counts
@@ -383,14 +333,14 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   const hasRemoteDeletes = actionCounts?.remoteDeletes && actionCounts.remoteDeletes > 0;
                   
                   // If there are failed files, show appropriate failure message
-                  if (propFilesFailed > 0 && !isInProgress) {
+                  if (snapshot.failedFiles > 0 && !isInProgress) {
                     if (hasDownloads && !hasUploads) {
-                      return `${propFilesFailed} of ${actualTotal} files failed to download`;
+                      return `${snapshot.failedFiles} of ${actualTotal} files failed to download`;
                     }
                     if (hasUploads && !hasDownloads) {
-                      return `${propFilesFailed} of ${actualTotal} files failed to upload`;
+                      return `${snapshot.failedFiles} of ${actualTotal} files failed to upload`;
                     }
-                    return `${propFilesFailed} of ${actualTotal} files failed to sync`;
+                    return `${snapshot.failedFiles} of ${actualTotal} files failed to sync`;
                   }
                   
                   // When completed successfully
@@ -465,9 +415,9 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   <div className="h-full w-1/3 bg-primary-50 rounded-full animate-pulse" />
                 )}
               </div>
-              {totalBytesExpected > 0 && (
+              {snapshot.bytesExpected > 0 && (
                 <div className="text-[10px] text-grey-50 mt-1">
-                  {formatBytes(totalBytesTransferred)} / {formatBytes(totalBytesExpected)}
+                  {formatBytes(snapshot.bytesTransferred)} / {formatBytes(snapshot.bytesExpected)}
                 </div>
               )}
             </div>
@@ -478,25 +428,20 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             ref={fileListRef} 
             className="overflow-y-auto p-4 flex-1 min-h-0"
           >
-            {syncFiles.map((file, index) => {
-              const isFileCompleted = file.status === "uploaded";
-              const isFileDeleted = file.status === "deleted" || (isFileCompleted && file.deleted);
-              const isFileInProgress = file.status === "uploading";
-              const isFailed = file.status === "failed";
-              const fileProgress = (file as any).progress as number | undefined;
-              const fileBytesTransferred = (file as any).bytesTransferred as number | undefined;
-              const fileTotalBytes = (file as any).totalBytes as number | undefined;
+            {snapshot.files.map((file, index) => {
+              const isFileCompleted = file.status === "completed";
+              const isFileDeleted = isFileCompleted && (file.action === "local_delete" || file.action === "remote_delete");
+              const isFileInProgress = file.status === "inProgress";
+              const isFailed = file.status === "error";
               const { fileFormat } = getFilePartsFromFileName(file.fileName);
               const fileType = getFileTypeFromExtension(fileFormat || null);
-              const { icon: Icon, color } = getFileIcon(
-                fileType ? fileType : undefined,
-                false
-              );
+              const { icon: Icon, color } = getFileIcon(fileType ? fileType : undefined, false);
               return (
                 <div
-                  key={`${file.id}-${index}`}
+                  key={`${file.path}-${index}`}
                   className="mb-4 last:mb-0 transition-opacity duration-200"
                   data-file-item
+                  data-testid="file-item"
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -504,47 +449,38 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                         <Icon className={cn("size-5 relative", color)} />
                       </AbstractIconWrapper>
                       <div className="flex flex-col justify-center min-w-0">
-                      <div className="flex items-center gap-1 justify-center">
-                        <div className="text-sm font-medium text-grey-10 truncate flex items-center gap-2">
-                          <span>
-                            {file.fileName.length > 25
-                              ? `${file.fileName.slice(
-                                0,
-                                18
-                              )}...${file.fileName.slice(-5)}`
-                              : file.fileName}
-                          </span>
+                        <div className="flex items-center gap-1 justify-center">
+                          <div className="text-sm font-medium text-grey-10 truncate flex items-center gap-2">
+                            <span>
+                              {file.fileName.length > 25
+                                ? `${file.fileName.slice(0, 18)}...${file.fileName.slice(-5)}`
+                                : file.fileName}
+                            </span>
+                          </div>
                         </div>
+                        {file.totalBytes > 0 && (
+                          <div className="text-xs text-grey-70 mt-1">
+                            {formatBytes(file.totalBytes)}
+                          </div>
+                        )}
                       </div>
-                      {file.size > 0 && (
-                        <div className="text-xs text-grey-70 mt-1">
-                          {formatBytes(file.size)}
-                        </div>
-                      )}
                     </div>
-                  </div>
 
                     <div className="flex items-center flex-shrink-0">
                       {isFileDeleted ? (
                         <>
                           <Icons.TickCircle className="w-5 h-5 text-error-50" />
-                          <span className="text-sm ml-1 text-error-50">
-                            Deleted
-                          </span>
+                          <span className="text-sm ml-1 text-error-50">Deleted</span>
                         </>
                       ) : isFileCompleted ? (
                         <>
                           <Icons.TickCircle className="w-5 h-5 text-success-50" />
-                          <span className="text-sm ml-1 text-success-50">
-                            Synced
-                          </span>
+                          <span className="text-sm ml-1 text-success-50">Synced</span>
                         </>
                       ) : isFailed ? (
                         <>
                           <Icons.InfoCircle className="w-5 h-5 text-error-50" />
-                          <span className="text-sm ml-1 text-error-50">
-                            Failed
-                          </span>
+                          <span className="text-sm ml-1 text-error-50">Failed</span>
                         </>
                       ) : isFileInProgress ? (
                         <div className="flex flex-col items-end gap-0.5">
@@ -552,37 +488,30 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                             <div className="w-[60px] h-1.5 bg-grey-80 rounded-full overflow-hidden">
                               <div
                                 className="h-full bg-primary-50 rounded-full transition-all duration-300"
-                                style={{ width: `${fileProgress ?? 0}%` }}
+                                style={{ width: `${file.progressPercent}%` }}
                               />
                             </div>
                             <span className="text-xs text-primary-50 min-w-[32px] text-right">
-                              {fileProgress ?? 0}%
+                              {file.progressPercent}%
                             </span>
                           </div>
-                          {fileTotalBytes != null && fileTotalBytes > 0 && (
+                          {file.totalBytes > 0 && (
                             <span className="text-[10px] text-grey-50">
-                              {formatBytes(fileBytesTransferred ?? 0)} / {formatBytes(fileTotalBytes)}
+                              {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
                             </span>
                           )}
                         </div>
                       ) : file.status === "pending" ? (
                         <>
                           <Icons.InfoCircle className="w-5 h-5 text-warning-50" />
-                          <span className="text-sm ml-1 text-warning-50">
-                            Pending
-                          </span>
+                          <span className="text-sm ml-1 text-warning-50">Pending</span>
                         </>
                       ) : (
                         <div className="flex items-center gap-2">
                           <div className="w-[60px] h-1.5 bg-grey-80 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-grey-60 rounded-full"
-                              style={{ width: "0%" }}
-                            />
+                            <div className="h-full bg-grey-60 rounded-full" style={{ width: "0%" }} />
                           </div>
-                          <span className="text-xs text-grey-50 min-w-[32px] text-right">
-                            0%
-                          </span>
+                          <span className="text-xs text-grey-50 min-w-[32px] text-right">0%</span>
                         </div>
                       )}
                     </div>
