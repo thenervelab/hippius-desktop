@@ -40,7 +40,6 @@ import {
   triggerSyncPathRefreshAtom,
   syncEngineStatusAtom,
   isSyncConfiguredAtom,
-  FILES_ONBOARDING_SKIPPED_KEY,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
@@ -51,8 +50,6 @@ import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-
-const SKIP_ONBOARDING_KEY = FILES_ONBOARDING_SKIPPED_KEY;
 
 const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
@@ -464,10 +461,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
 
         const syncPath = selectedPrivateFolderPath;
 
-        // Sync path is configured if it exists, OR if user previously skipped onboarding
-        const skipped = localStorage.getItem(SKIP_ONBOARDING_KEY) === "true";
         setIsSyncPathConfigured(
-          (syncPath !== null && syncPath !== undefined) || skipped
+          syncPath !== null && syncPath !== undefined
         );
       } catch (error) {
         console.error(
@@ -495,13 +490,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     refetchRecentFiles();
   }, [refetchRecentFiles]);
 
-  // Handle skipping sync folder setup — UI-only, persisted so it survives navigation
-  const handleSkipSyncFolder = useCallback(() => {
-    localStorage.setItem(SKIP_ONBOARDING_KEY, "true");
-    setIsSyncPathConfigured(true);
-    setShowPrivateStartSyncingSelector(false);
-  }, []);
-
   // Handle sync started from onboarding (folder added or remote folder synced)
   const handleOnboardingSyncStarted = useCallback(async () => {
     if (!polkadotAddress) return;
@@ -512,8 +500,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     } catch {
       // Ignore — we still want to mark as configured
     }
-    // Clear skip flag — user has a real sync folder now
-    localStorage.removeItem(SKIP_ONBOARDING_KEY);
     setIsSyncPathConfigured(true);
     setShowPrivateStartSyncingSelector(false);
     triggerSyncPathRefresh((prev) => prev + 1);
@@ -725,7 +711,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   } else if (isSyncPathConfigured === false && !isRecentFiles) {
     content = (
       <FilesOnboarding
-        onSkip={handleSkipSyncFolder}
         onSyncStarted={handleOnboardingSyncStarted}
       />
     );
@@ -733,7 +718,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     // Show onboarding when Start Syncing is clicked
     content = (
       <FilesOnboarding
-        onSkip={handleSkipSyncFolder}
         onSyncStarted={handleOnboardingSyncStarted}
       />
     );

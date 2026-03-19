@@ -27,7 +27,6 @@ import {
   isSyncConfiguredAtom,
   triggerSyncPathRefreshAtom,
   SYNC_STOPPED_STORAGE_KEY,
-  FILES_ONBOARDING_SKIPPED_KEY,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 import {
@@ -89,7 +88,6 @@ export default function MultiFolderSyncManager() {
       return [];
     });
     if (remainingPaths.length === 0) {
-      localStorage.removeItem(FILES_ONBOARDING_SKIPPED_KEY);
       appStore.set(isSyncConfiguredAtom, false);
     }
     appStore.set(triggerSyncPathRefreshAtom, (prev) => prev + 1);

@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { CardButton } from "@/components/ui";
 import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
@@ -38,12 +37,10 @@ import { appStore } from "@/lib/store/jotaiStore";
 import { useAtomValue } from "jotai";
 
 interface FilesOnboardingProps {
-  onSkip: () => void;
   onSyncStarted: () => void;
 }
 
 const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
-  onSkip,
   onSyncStarted,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
@@ -408,16 +405,6 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
           }
         />
 
-        {/* ──────── Skip button ──────── */}
-        <div className="flex justify-end">
-          <CardButton
-            className="w-[120px] h-[48px]"
-            variant="secondary"
-            onClick={onSkip}
-          >
-            Skip for Now
-          </CardButton>
-        </div>
       </div>
 
       {/* ──────── Dialogs ──────── */}
