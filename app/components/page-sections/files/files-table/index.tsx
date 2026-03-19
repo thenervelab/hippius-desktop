@@ -831,14 +831,18 @@ const FilesTable: FC<FilesTableProps> = memo(
 
     const table = useReactTable(tableConfig);
 
-    // Get sorted rows and manually paginate them
+    // Get sorted rows and manually paginate them.
+    // Include allFiles in deps so rows recompute when the data source changes
+    // (e.g. folder tab switch). useReactTable returns a stable reference, so
+    // without allFiles this memo would stay stale.
     const paginatedRows = useMemo(() => {
       const sortedRows = table.getRowModel().rows;
       const pageSize = 12; // Use the same page size as the paginated data
       const start = (currentPage - 1) * pageSize;
       const end = start + pageSize;
       return sortedRows.slice(start, end);
-    }, [table, currentPage]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [table, currentPage, allFiles]);
 
     const headerRows = useMemo(
       () =>

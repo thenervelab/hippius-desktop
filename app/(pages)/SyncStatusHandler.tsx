@@ -285,10 +285,18 @@ const SyncStatusHandler: React.FC = () => {
     // Check if there are failed files that need to be shown
     const hasFailedFiles = filesFailed > 0 || overallProgress.failedFiles > 0 || hasSyncError;
 
-    // Only reset isPermanentlyClosed when a new sync session starts.
-    // This is now primarily handled by the hcfs_sync_started event listener.
-    // Don't reopen if user explicitly closed
+    // Don't reopen if user explicitly closed — only the hcfs_sync_started
+    // event listener (which checks for totalExpected > 0) can reset this.
     if (isPermanentlyClosed) {
+      // If new files appeared since dismissal, reopen automatically
+      const dismissedCount = dismissedFileCountRef.current;
+      const hasNewFiles = dismissedCount !== null && displayFiles.length > dismissedCount;
+
+      if (hasNewFiles && hasAnyActivity) {
+        dismissedFileCountRef.current = null;
+        setIsPermanentlyClosed(false);
+        setIsSyncOpen(true);
+      }
       return;
     }
 
@@ -346,6 +354,9 @@ const SyncStatusHandler: React.FC = () => {
     };
   }, [isSyncOpen, isPermanentlyClosed]);
 
+  // Track the session file count when user dismissed, so we can detect new files
+  const dismissedFileCountRef = useRef<number | null>(null);
+
   // Listen for explicit sync stop event and immediately close the widget
   useEffect(() => {
     let cancelled = false;
@@ -363,11 +374,19 @@ const SyncStatusHandler: React.FC = () => {
       console.warn("[SyncStatusHandler] Failed to listen for sync_stopped:", err);
     });
 
-    // Listen for new sync starting — reopen widget if it was manually closed
-    listen("hcfs_sync_started", () => {
+    // Listen for new sync starting — only reopen widget if there are actual files to sync
+    listen<{ uploads?: number; downloads?: number; local_deletes?: number; remote_deletes?: number }>("hcfs_sync_started", (event) => {
       if (!cancelled) {
-        setIsPermanentlyClosed(false);
-        setIsSyncOpen(true);
+        const payload = event.payload || {};
+        const totalExpected = (payload.uploads || 0) + (payload.downloads || 0) +
+          (payload.local_deletes || 0) + (payload.remote_deletes || 0);
+
+        // Only reopen if this sync cycle has actual files to sync
+        if (totalExpected > 0) {
+          dismissedFileCountRef.current = null;
+          setIsPermanentlyClosed(false);
+          setIsSyncOpen(true);
+        }
       }
     }).then((u) => {
       if (cancelled) { u(); } else { unsubStart = u; }
@@ -386,6 +405,8 @@ const SyncStatusHandler: React.FC = () => {
   const handleClose = () => {
     setIsSyncOpen(false);
     setIsPermanentlyClosed(true);
+    // Remember how many files were shown when user dismissed
+    dismissedFileCountRef.current = displayFiles.length;
   };
 
   // Don't render anything if there are no files to display, no active sync, and sync is not completed

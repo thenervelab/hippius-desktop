@@ -77,9 +77,10 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   const showIndeterminateProgress = isInProgress && (propSyncPercent === null || propSyncPercent === undefined);
   
   const calculatedMetrics = {
-    // Prefer backend total (includes all files, even hidden downloads)
-    // over display list length so the "X of Y" counts are accurate.
-    totalFiles: propTotalFiles > 0 ? propTotalFiles : (syncFiles?.length || 0),
+    // Use whichever is larger: backend total or display list length.
+    // The display list includes recent files, so it can exceed the backend's
+    // current-session total — never show "7 of 1".
+    totalFiles: Math.max(propTotalFiles || 0, syncFiles?.length || 0),
     syncedFiles: syncFiles?.filter((f) => f.status === "uploaded").length || 0,
     deletedFiles: syncFiles?.filter((f) => f.status === "deleted").length || 0,
     // For percentage: when in progress but no percent provided, use null to show indeterminate state
@@ -340,7 +341,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           opacity: isExpanded ? 1 : 0,
         }}
       >
-        <div className="bg-grey-100 border border-grey-80 rounded-b-[8px] w-[378px] overflow-hidden">
+        <div className="bg-grey-100 border border-grey-80 rounded-b-[8px] w-[378px] flex flex-col" style={{ maxHeight: `${BODY_MAX_HEIGHT}px` }}>
           {/* Status banner */}
           <div className="flex w-full mt-4 ml-4 gap-2">
             <div
@@ -468,10 +469,10 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             </div>
           )}
 
-          {/* File list */}
+          {/* File list — flex-1 + min-h-0 lets it fill remaining space and scroll */}
           <div 
             ref={fileListRef} 
-            className="overflow-y-auto p-4 max-h-[320px]"
+            className="overflow-y-auto p-4 flex-1 min-h-0"
           >
             {syncFiles.map((file, index) => {
               const isFileCompleted = file.status === "uploaded";
