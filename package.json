@@ -12,7 +12,8 @@
     "tauri:dev": "tauri dev",
     "tauri:static": "rm -rf out && next build && tauri dev --config '{\"build\":{\"beforeDevCommand\":\"npx -y serve out -l 3000 -s\"}}'",
     "tauri:static:nobuild": "test -f out/index.html && tauri dev --config '{\"build\":{\"beforeDevCommand\":\"npx -y serve out -l 3000 -s\"}}' || echo 'No static build found in out/. Run `pnpm tauri:static` first.'",
-    "tauri:build": "next build && tauri build"
+    "tauri:build": "next build && tauri build",
+    "test": "vitest run"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.15",
@@ -75,6 +76,8 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@tauri-apps/cli": "^2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/d3-interpolate-path": "^2.0.3",
     "@types/d3-shape": "^3.1.7",
     "@types/flubber": "^0.4.0",
@@ -87,6 +90,7 @@
     "autoprefixer": "^10.4.21",
     "eslint": "^9.25.1",
     "eslint-config-next": "15.3.6",
+    "jsdom": "^29.0.0",
     "raw-loader": "^4.0.2",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.8.3",
