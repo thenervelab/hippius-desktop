@@ -5,7 +5,7 @@ import { useAtomValue } from "jotai";
 import { listen } from "@tauri-apps/api/event";
 
 import SyncStatusDialog from "./SyncStatusDialog";
-import useSyncActivity, { SyncActivityRow } from "../lib/hooks/useSyncActivity";
+import useSyncActivity from "../lib/hooks/useSyncActivity";
 import { useSyncSnapshot } from "../lib/hooks/useSyncSnapshot";
 import {
   isSyncingAtom,
@@ -18,92 +18,6 @@ import {
   syncActionCountsAtom,
   hasSyncErrorAtom,
 } from "../lib/store/syncAtoms";
-import {
-  sessionFilesAtom,
-  recentFilesAtom,
-  overallProgressAtom,
-  hasSyncActivityAtom,
-} from "../lib/hooks/useSyncProgress";
-import {
-  type SyncFile,
-  type RecentFile,
-} from "../lib/services/syncProgressService";
-
-/**
- * Convert SyncFile (from localStorage service) to SyncActivityRow (for display)
- */
-function syncFileToActivityRow(file: SyncFile): SyncActivityRow {
-  // Determine status for display
-  let status: SyncActivityRow['status'] = 'uploading';
-  if (file.status === 'completed') {
-    status = file.action === 'local_delete' || file.action === 'remote_delete' ? 'deleted' : 'uploaded';
-  } else if (file.status === 'error') {
-    status = 'failed';
-  } else if (file.status === 'pending') {
-    status = 'pending';
-  } else if (file.status === 'deleting') {
-    status = 'uploading'; // Show as in-progress
-  }
-  
-  // Check if this is a delete operation
-  const isDelete = file.action === 'local_delete' || file.action === 'remote_delete';
-  
-  return {
-    id: file.id,
-    fileName: file.fileName,
-    rawName: file.fileName,
-    scope: file.action === 'upload' || file.action === 'remote_delete' ? 'private' : 'private',
-    status,
-    fileType: getFileTypeFromName(file.fileName),
-    timestamp: file.completedAt || file.startedAt,
-    rawPath: file.path,
-    size: file.totalBytes,
-    deleted: isDelete,
-    error: file.error, // Pass through error message for failed files
-    // Extra fields for progress display and stable sorting
-    progress: file.progress,
-    bytesTransferred: file.bytesTransferred,
-    totalBytes: file.totalBytes,
-    startedAt: file.startedAt,
-    isActive: file.status === 'uploading' || file.status === 'downloading' || file.status === 'deleting',
-  } as SyncActivityRow & { progress?: number; bytesTransferred?: number; totalBytes?: number; startedAt?: number; isActive?: boolean; error?: string };
-}
-
-/**
- * Convert RecentFile to SyncActivityRow
- */
-function recentFileToActivityRow(file: RecentFile): SyncActivityRow {
-  const isDelete = file.action === 'local_delete' || file.action === 'remote_delete';
-  return {
-    id: file.id,
-    fileName: file.fileName,
-    rawName: file.fileName,
-    scope: 'private',
-    status: isDelete ? 'deleted' : 'uploaded',
-    fileType: getFileTypeFromName(file.fileName),
-    timestamp: file.completedAt,
-    rawPath: file.path,
-    size: file.sizeBytes,
-    deleted: isDelete,
-  };
-}
-
-/**
- * Simple file type detection from file name
- */
-function getFileTypeFromName(fileName: string): string {
-  const ext = fileName.split('.').pop()?.toLowerCase() || '';
-  const typeMap: Record<string, string> = {
-    jpg: 'Image', jpeg: 'Image', png: 'Image', gif: 'Image', webp: 'Image', svg: 'Image',
-    pdf: 'PDF',
-    doc: 'Document', docx: 'Document', txt: 'Document', rtf: 'Document',
-    xls: 'Spreadsheet', xlsx: 'Spreadsheet', csv: 'Spreadsheet',
-    mp4: 'Video', mov: 'Video', avi: 'Video', mkv: 'Video',
-    mp3: 'Audio', wav: 'Audio', flac: 'Audio', aac: 'Audio',
-    zip: 'Archive', rar: 'Archive', '7z': 'Archive', tar: 'Archive', gz: 'Archive',
-  };
-  return typeMap[ext] || 'File';
-}
 
 const SyncStatusHandler: React.FC = () => {
   const { data: syncFiles, isLoading, refetch } = useSyncActivity();
@@ -120,101 +34,52 @@ const SyncStatusHandler: React.FC = () => {
   const currentSyncFile = useAtomValue(currentSyncFileAtom);
   const syncPercentFromAtom = useAtomValue(syncPercentAtom);
   
-  // New localStorage-based sync tracking
-  const sessionFiles = useAtomValue(sessionFilesAtom);
-  const recentFiles = useAtomValue(recentFilesAtom);
-  const overallProgress = useAtomValue(overallProgressAtom);
-  const hasSyncActivity = useAtomValue(hasSyncActivityAtom);
-  
+  // Derive activity flag from snapshot
+  const hasSyncActivity = snapshot.isActive || snapshot.files.length > 0;
+
   // Sync action counts to determine what type of sync is happening
   const syncActionCounts = useAtomValue(syncActionCountsAtom);
   
   // Track if sync ended with error (to keep widget visible)
   const hasSyncError = useAtomValue(hasSyncErrorAtom);
   
-  // Merge session files and recent files for display
-  // Recent deletes take priority over session entries (user just deleted from UI),
-  // then session files, then remaining recent files.
-  const displayFiles = useMemo(() => {
-    const files: SyncActivityRow[] = [];
-    const addedPaths = new Set<string>();
-
-    // Collect paths of recently deleted files so they override stale session entries
-    const recentDeletePaths = new Set<string>();
-    for (const file of recentFiles) {
-      if (file.action === "local_delete" || file.action === "remote_delete") {
-        recentDeletePaths.add(file.path);
-      }
-    }
-
-    // Add session files, but skip any that were recently deleted from the UI
-    for (const file of sessionFiles) {
-      if (recentDeletePaths.has(file.path)) continue;
-      files.push(syncFileToActivityRow(file));
-      addedPaths.add(file.path);
-    }
-
-    // Add recent files that aren't already covered by session entries
-    for (const file of recentFiles) {
-      if (!addedPaths.has(file.path)) {
-        files.push(recentFileToActivityRow(file));
-        addedPaths.add(file.path);
-      }
-    }
-
-    // Stable sort: session files first (by startedAt, preserving
-    // registration order), then recent files by completedAt. Files
-    // never jump positions when their status changes — a file that
-    // completes stays where it was, only its indicator changes.
-    files.sort((a, b) => {
-      // Session files (have startedAt) before recent-only files
-      const aStarted = (a as any).startedAt as number | undefined;
-      const bStarted = (b as any).startedAt as number | undefined;
-      if (aStarted != null && bStarted != null) {
-        return aStarted - bStarted; // registration order
-      }
-      if (aStarted != null) return -1;
-      if (bStarted != null) return 1;
-      // Both are recent files — most recent first
-      return (b.timestamp || 0) - (a.timestamp || 0);
-    });
-
-    return files;
-  }, [sessionFiles, recentFiles]);
+  // Display files now come from snapshot — no merging needed
+  const displayFiles = snapshot.files;
 
   const syncMetrics = useMemo(() => {
-    // Comprehensive sync detection matching tray menu logic — the tray is always
-    // correct, so the widget should use the same signals.
     const hasActiveUpload = uploadProgress !== null && uploadProgress.bytes < uploadProgress.total;
     const hasActiveDownload = downloadProgress !== null && downloadProgress.bytes < downloadProgress.total;
+
+    const inProgressFiles = snapshot.files.filter(
+      (f) => f.status === "inProgress" || f.status === "pending"
+    ).length;
 
     const isActivelySyncing = isSyncingFromEvents ||
       hasActiveUpload ||
       hasActiveDownload ||
-      overallProgress.isActive ||
-      (overallProgress.inProgressFiles > 0) ||
-      (overallProgress.totalFiles > 0 &&
-       overallProgress.completedFiles < overallProgress.totalFiles &&
-       overallProgress.failedFiles === 0);
+      snapshot.isActive ||
+      inProgressFiles > 0 ||
+      (snapshot.totalFiles > 0 &&
+       snapshot.completedFiles < snapshot.totalFiles &&
+       snapshot.failedFiles === 0);
 
-    // Priority 1: overallProgress has file data
-    if (overallProgress.totalFiles > 0) {
+    if (snapshot.totalFiles > 0) {
+      const activeFile = snapshot.files.find((f) => f.status === "inProgress");
       return {
-        syncPercent: overallProgress.overallPercent,
-        totalFiles: overallProgress.totalFiles,
-        syncedFiles: overallProgress.completedFiles,
-        uploadingFiles: overallProgress.inProgressFiles,
-        filesFailed: overallProgress.failedFiles,
+        syncPercent: snapshot.overallPercent,
+        totalFiles: snapshot.totalFiles,
+        syncedFiles: snapshot.completedFiles,
+        uploadingFiles: inProgressFiles,
+        filesFailed: snapshot.failedFiles,
         isInProgress: isActivelySyncing,
-        isCompleted: !isActivelySyncing && (overallProgress.completedFiles > 0 || overallProgress.failedFiles > 0),
-        currentFile: overallProgress.currentFile?.fileName || null,
+        isCompleted: !isActivelySyncing && (snapshot.completedFiles > 0 || snapshot.failedFiles > 0),
+        currentFile: activeFile?.fileName ?? null,
       };
     }
 
-    // Priority 2: Sync is active but overallProgress has no files yet
     if (isActivelySyncing) {
       return {
-        syncPercent: null, // Don't show percentage — no file data yet
+        syncPercent: null,
         totalFiles: totalFilesToSync > 0 ? totalFilesToSync : 0,
         syncedFiles: completedFilesCount,
         uploadingFiles: totalFilesToSync > completedFilesCount ? 1 : 0,
@@ -225,7 +90,6 @@ const SyncStatusHandler: React.FC = () => {
       };
     }
 
-    // Priority 3: Sync just completed via old atoms (no localStorage data)
     if (syncPercentFromAtom === 100 && completedFilesCount > 0) {
       return {
         syncPercent: 100,
@@ -239,7 +103,6 @@ const SyncStatusHandler: React.FC = () => {
       };
     }
 
-    // Priority 4: Use local file list from synced activity (historical)
     if (!syncFiles || syncFiles.length === 0) {
       return {
         syncPercent: null,
@@ -273,7 +136,7 @@ const SyncStatusHandler: React.FC = () => {
       isCompleted,
       currentFile: null,
     };
-  }, [overallProgress, isSyncingFromEvents, totalFilesToSync, completedFilesCount, currentSyncFile, syncPercentFromAtom, syncFiles, uploadProgress, downloadProgress]);
+  }, [snapshot, isSyncingFromEvents, totalFilesToSync, completedFilesCount, currentSyncFile, syncPercentFromAtom, syncFiles, uploadProgress, downloadProgress]);
 
   const { isInProgress, isCompleted, uploadingFiles, filesFailed } = syncMetrics;
 
@@ -287,10 +150,10 @@ const SyncStatusHandler: React.FC = () => {
       downloadProgress !== null;
     const hasAnyActivity = isInProgress || hasUploadingFiles || hasLocalSyncActivity;
     // Only consider sync completed if files were actually synced
-    const hasSyncCompleted = isCompleted && syncMetrics.syncPercent === 100 && 
-      (completedFilesCount > 0 || overallProgress.completedFiles > 0);
+    const hasSyncCompleted = isCompleted && syncMetrics.syncPercent === 100 &&
+      (completedFilesCount > 0 || snapshot.completedFiles > 0);
     // Check if there are failed files that need to be shown
-    const hasFailedFiles = filesFailed > 0 || overallProgress.failedFiles > 0 || hasSyncError;
+    const hasFailedFiles = filesFailed > 0 || snapshot.failedFiles > 0 || hasSyncError;
 
     // Don't reopen if user explicitly closed — only the hcfs_sync_started
     // event listener (which checks for totalExpected > 0) can reset this.
@@ -336,8 +199,8 @@ const SyncStatusHandler: React.FC = () => {
     isSyncOpen,
     syncMetrics.syncPercent,
     hasSyncActivity,
-    overallProgress.completedFiles,
-    overallProgress.failedFiles,
+    snapshot.completedFiles,
+    snapshot.failedFiles,
     hasSyncError,
   ]);
 
@@ -437,9 +300,6 @@ const SyncStatusHandler: React.FC = () => {
   if (isPermanentlyClosed) {
     return null;
   }
-
-  // Use displayFiles if available, otherwise fall back to syncFiles
-  const filesToRender = displayFiles.length > 0 ? displayFiles : (syncFiles || []);
 
   return (
     <SyncStatusDialog

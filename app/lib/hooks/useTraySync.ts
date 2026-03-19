@@ -28,14 +28,8 @@ import {
 import { useAtomValue, useAtom, useSetAtom } from "jotai";
 import { vpnConnectedAtom } from "@/components/dashboard-title-wrapper/vpn-menu/vpnAtoms";
 // API_CONFIG removed - credits now fetched via invoke
-import {
-  overallProgressAtom,
-  hasSyncActivityAtom,
-} from "./useSyncProgress";
-import {
-  getOverallProgress,
-  getRecentFiles,
-} from "../services/syncProgressService";
+import { snapshotAtom } from "./useSyncSnapshot";
+import type { SyncSnapshot } from "../types/syncSnapshot";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 
 /* ─ IDs ───────────────────────────────────────────────────────── */
@@ -279,9 +273,9 @@ export function useTrayInit(isAuthenticated: boolean) {
   const downloadProgress = useAtomValue(downloadProgressAtom);
   
   
-  // Watch new localStorage-based tracking for overall progress
-  const overallProgress = useAtomValue(overallProgressAtom);
-  const hasSyncActivity = useAtomValue(hasSyncActivityAtom);
+  // Watch snapshot for overall progress
+  const snapshot = useAtomValue(snapshotAtom);
+  const hasSyncActivity = snapshot.isActive || snapshot.files.length > 0;
 
   // Effect to update tray when sync state changes
   useEffect(() => {
@@ -311,24 +305,24 @@ export function useTrayInit(isAuthenticated: boolean) {
     const isCurrentlySyncing = isSyncingFromEvents ||
       hasActiveUpload ||
       hasActiveDownload ||
-      overallProgress.isActive ||
-      (overallProgress.inProgressFiles > 0) || 
-      (overallProgress.totalFiles > 0 && overallProgress.completedFiles < overallProgress.totalFiles && overallProgress.failedFiles === 0);
+      snapshot.isActive ||
+      (snapshot.files.filter((f) => f.status === "inProgress").length > 0) || 
+      (snapshot.totalFiles > 0 && snapshot.completedFiles < snapshot.totalFiles && snapshot.failedFiles === 0);
     
     // Only consider sync complete if NOT currently syncing
     const isSyncComplete = !isCurrentlySyncing && 
-      (overallProgress.completedFiles > 0 || overallProgress.failedFiles > 0);
+      (snapshot.completedFiles > 0 || snapshot.failedFiles > 0);
     
     // Build the tray menu label
     let labelText: string | null = null;
     if (isCurrentlySyncing) {
       // Use localStorage-based progress percentage - same source as the widget
       // This ensures tray and widget always show consistent percentages
-      const percent = overallProgress.overallPercent;
+      const percent = snapshot.overallPercent;
       labelText = `⟳ Syncing: ${percent}%`;
     } else if (isSyncComplete) {
       // Show completed header — detail rows (file count + size) are managed by the watcher
-      if (overallProgress.failedFiles > 0) {
+      if (snapshot.failedFiles > 0) {
         labelText = `⚠ Sync Failed`;
       } else {
         labelText = `✓ Sync Complete`;
@@ -342,7 +336,7 @@ export function useTrayInit(isAuthenticated: boolean) {
     void updateTraySyncLabel(labelText);
     
     // Determine if there are failures to show the error icon
-    const hasFailed = overallProgress.failedFiles > 0;
+    const hasFailed = snapshot.failedFiles > 0;
     
     // Update icon state
     if (isCurrentlySyncing) {
@@ -363,7 +357,7 @@ export function useTrayInit(isAuthenticated: boolean) {
     }
     
     // Track state for comparison
-    if (isCurrentlySyncing && overallProgress.totalFiles > 0) {
+    if (isCurrentlySyncing && snapshot.totalFiles > 0) {
       setLastUpdatedPercent(0);
     } else if (isSyncComplete || hasSyncActivity) {
       setLastUpdatedPercent(100);
@@ -371,7 +365,7 @@ export function useTrayInit(isAuthenticated: boolean) {
       // The cleanup happens automatically when files expire from localStorage
     }
     
-  }, [isAuthenticated, overallProgress, hasSyncActivity, lastUpdatedPercent, setLastUpdatedPercent, isSyncingFromEvents, uploadProgress, downloadProgress]);
+  }, [isAuthenticated, snapshot, hasSyncActivity, lastUpdatedPercent, setLastUpdatedPercent, isSyncingFromEvents, uploadProgress, downloadProgress]);
 
   useEffect(() => {
     if (menuPromise) return;
@@ -1042,23 +1036,24 @@ function startSyncActivityWatcher() {
       // Clean up any legacy per-file rows from old implementation
       await removeAllSyncActivityRows(menu);
 
-      // Read progress directly from Rust backend (no atom dependency)
-      const progress = await getOverallProgress();
+      // Read progress snapshot directly from Rust backend
+      const progress = await invoke<SyncSnapshot>("sp_get_snapshot");
+      const inProgressCount = progress.files.filter(
+        (f) => f.status === "inProgress" || f.status === "pending"
+      ).length;
       const isActive = progress.isActive ||
-        progress.inProgressFiles > 0 ||
+        inProgressCount > 0 ||
         (progress.totalFiles > 0 && progress.completedFiles < progress.totalFiles && progress.failedFiles === 0);
       const hasFailed = progress.failedFiles > 0;
       const isCompleted = !isActive && (progress.completedFiles > 0 || hasFailed);
 
-      // Check for recent deletions (from UI-triggered deletes)
-      const recentFiles = await getRecentFiles();
-      const recentDeletes = recentFiles.filter(
+      // Count delete actions in the current file list
+      const recentDeleteCount = progress.files.filter(
         (f) => f.action === "local_delete" || f.action === "remote_delete"
-      );
-      const recentDeleteCount = recentDeletes.length;
+      ).length;
 
       // Build signature to avoid redundant updates
-      const signature = `${isActive}:${isCompleted}:${hasFailed}:${progress.completedFiles}/${progress.totalFiles}:${progress.failedFiles}:${progress.overallPercent}:${progress.totalBytesTransferred}:del${recentDeleteCount}`;
+      const signature = `${isActive}:${isCompleted}:${hasFailed}:${progress.completedFiles}/${progress.totalFiles}:${progress.failedFiles}:${progress.overallPercent}:${progress.bytesTransferred}:del${recentDeleteCount}`;
       if (signature === lastSyncSummarySignature) return;
       lastSyncSummarySignature = signature;
 
@@ -1082,7 +1077,7 @@ function startSyncActivityWatcher() {
       // Update the header label to reflect the watcher's view
       if (isActive) {
         const percent = progress.overallPercent;
-        if (progress.totalFiles > 0 && percent === 0 && progress.completedFiles === 0 && progress.totalBytesTransferred === 0) {
+        if (progress.totalFiles > 0 && percent === 0 && progress.completedFiles === 0 && progress.bytesTransferred === 0) {
           await updateTraySyncLabel(`⟳ Preparing sync…`);
         } else {
           await updateTraySyncLabel(`⟳ Syncing: ${percent}%`);
@@ -1099,29 +1094,29 @@ function startSyncActivityWatcher() {
 
         if (isActive) {
           // In-progress: show current progress
-          if (progress.totalFiles > 0 && progress.overallPercent === 0 && progress.completedFiles === 0 && progress.totalBytesTransferred === 0) {
+          if (progress.totalFiles > 0 && progress.overallPercent === 0 && progress.completedFiles === 0 && progress.bytesTransferred === 0) {
             progressText = `${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} pending`;
           } else {
             progressText = progress.totalFiles > 0
               ? `${progress.completedFiles} of ${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} synced`
               : "Preparing files…";
           }
-          if (progress.totalBytesExpected > 0) {
-            sizeText = `${formatBytes(progress.totalBytesTransferred)} / ${formatBytes(progress.totalBytesExpected)}`;
+          if (progress.bytesExpected > 0) {
+            sizeText = `${formatBytes(progress.bytesTransferred)} / ${formatBytes(progress.bytesExpected)}`;
           }
         } else if (hasFailed) {
           // Failed: show failure counts
           const totalFiles = progress.completedFiles + progress.failedFiles;
           progressText = `${progress.failedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} failed`;
-          if (progress.totalBytesExpected > 0) {
-            sizeText = `${formatBytes(progress.totalBytesTransferred)} / ${formatBytes(progress.totalBytesExpected)}`;
+          if (progress.bytesExpected > 0) {
+            sizeText = `${formatBytes(progress.bytesTransferred)} / ${formatBytes(progress.bytesExpected)}`;
           }
         } else {
           // Completed successfully: show final counts
           const totalFiles = progress.completedFiles + progress.failedFiles;
           progressText = `${progress.completedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} synced`;
-          if (progress.totalBytesExpected > 0) {
-            sizeText = `${formatBytes(progress.totalBytesExpected)} / ${formatBytes(progress.totalBytesExpected)}`;
+          if (progress.bytesExpected > 0) {
+            sizeText = `${formatBytes(progress.bytesExpected)} / ${formatBytes(progress.bytesExpected)}`;
           }
         }
 
