@@ -30,10 +30,10 @@ const SyncStatusHandler: React.FC = () => {
     !snapshot.isActive &&
     (snapshot.completedFiles > 0 || snapshot.failedFiles > 0);
   const hasFailedFiles = snapshot.failedFiles > 0 || hasSyncError;
+  const hasAnyActivity =
+    isActive || isSyncingFromEvents || hasFilesToDisplay;
 
   useEffect(() => {
-    const hasAnyActivity =
-      isActive || isSyncingFromEvents || hasFilesToDisplay;
     const hasSyncCompleted =
       isCompleted && snapshot.overallPercent === 100;
 
@@ -76,6 +76,7 @@ const SyncStatusHandler: React.FC = () => {
   }, [
     isActive,
     isCompleted,
+    hasAnyActivity,
     hasFilesToDisplay,
     hasFailedFiles,
     isSyncingFromEvents,
@@ -165,19 +166,14 @@ const SyncStatusHandler: React.FC = () => {
   }
 
   // Hide if nothing to show
-  if (
-    !hasFilesToDisplay &&
-    !isActive &&
-    !isCompleted &&
-    !isSyncingFromEvents
-  ) {
+  if (!hasAnyActivity && !isCompleted && !hasFailedFiles) {
     return null;
   }
 
   return (
     <SyncStatusDialog
       snapshot={snapshot}
-      open={isSyncOpen}
+      open={isSyncOpen || hasAnyActivity}
       onClose={handleClose}
       actionCounts={syncActionCounts}
     />
