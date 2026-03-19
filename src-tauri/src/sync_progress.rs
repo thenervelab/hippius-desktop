@@ -1173,6 +1173,306 @@ mod tests {
         state.last_updated = now_ms();
     }
 
+    /// Create a SyncFile for testing with common defaults.
+    fn make_file(
+        path: &str,
+        total_bytes: u64,
+        action: FileAction,
+        status: FileStatus,
+        bytes_transferred: u64,
+    ) -> SyncFile {
+        SyncFile {
+            id: generate_file_id(path),
+            path: path.to_string(),
+            file_name: extract_file_name(path),
+            label: "default".to_string(),
+            action,
+            status: status.clone(),
+            progress: if total_bytes > 0 {
+                ((bytes_transferred as f64 / total_bytes as f64) * 100.0)
+                    as u32
+            } else {
+                0
+            },
+            bytes_transferred,
+            total_bytes,
+            started_at: now_ms(),
+            completed_at: if status == FileStatus::Completed {
+                Some(now_ms())
+            } else {
+                None
+            },
+            error: None,
+        }
+    }
+
+    /// Create a SyncProgressState with the given files in an active session.
+    fn state_with_files(files: Vec<SyncFile>) -> SyncProgressState {
+        let mut file_map = HashMap::new();
+        for f in files {
+            file_map.insert(f.path.clone(), f);
+        }
+        SyncProgressState {
+            current_session: Some(SyncSession {
+                session_id: "test_session".to_string(),
+                started_at: now_ms(),
+                completed_at: None,
+                is_active: true,
+                expected_uploads: 0,
+                expected_downloads: 0,
+                expected_local_deletes: 0,
+                expected_remote_deletes: 0,
+                files: file_map,
+            }),
+            recent_files: Vec::new(),
+            last_updated: now_ms(),
+        }
+    }
+
+    // ── build_snapshot tests ─────────────────────────────────────────
+
+    #[test]
+    fn snapshot_sorts_biggest_first() {
+        let state = state_with_files(vec![
+            make_file(
+                "/small.txt",
+                100,
+                FileAction::Upload,
+                FileStatus::Pending,
+                0,
+            ),
+            make_file(
+                "/big.zip",
+                50_000,
+                FileAction::Upload,
+                FileStatus::Pending,
+                0,
+            ),
+            make_file(
+                "/medium.pdf",
+                5_000,
+                FileAction::Download,
+                FileStatus::Pending,
+                0,
+            ),
+        ]);
+        let snapshot = build_snapshot(&state);
+        assert_eq!(snapshot.files.len(), 3);
+        assert_eq!(snapshot.files[0].file_name, "big.zip");
+        assert_eq!(snapshot.files[1].file_name, "medium.pdf");
+        assert_eq!(snapshot.files[2].file_name, "small.txt");
+    }
+
+    #[test]
+    fn snapshot_unknown_size_files_last() {
+        let state = state_with_files(vec![
+            make_file(
+                "/known.txt",
+                500,
+                FileAction::Upload,
+                FileStatus::Pending,
+                0,
+            ),
+            make_file(
+                "/unknown.dat",
+                0,
+                FileAction::Download,
+                FileStatus::Pending,
+                0,
+            ),
+            make_file(
+                "/also_known.pdf",
+                200,
+                FileAction::Upload,
+                FileStatus::Pending,
+                0,
+            ),
+        ]);
+        let snapshot = build_snapshot(&state);
+        assert_eq!(snapshot.files[0].file_name, "known.txt");
+        assert_eq!(snapshot.files[1].file_name, "also_known.pdf");
+        assert_eq!(snapshot.files[2].file_name, "unknown.dat");
+    }
+
+    #[test]
+    fn snapshot_overall_percent_byte_weighted() {
+        let state = state_with_files(vec![
+            make_file(
+                "/a.txt",
+                1000,
+                FileAction::Upload,
+                FileStatus::Uploading,
+                800,
+            ),
+            make_file(
+                "/b.txt",
+                4000,
+                FileAction::Upload,
+                FileStatus::Uploading,
+                200,
+            ),
+        ]);
+        let snapshot = build_snapshot(&state);
+        assert_eq!(snapshot.bytes_transferred, 1000);
+        assert_eq!(snapshot.bytes_expected, 5000);
+        assert_eq!(snapshot.overall_percent, 20);
+    }
+
+    #[test]
+    fn snapshot_100_when_all_completed() {
+        let state = state_with_files(vec![
+            make_file(
+                "/a.txt",
+                1000,
+                FileAction::Upload,
+                FileStatus::Completed,
+                1000,
+            ),
+            make_file(
+                "/b.txt",
+                2000,
+                FileAction::Download,
+                FileStatus::Completed,
+                2000,
+            ),
+        ]);
+        let snapshot = build_snapshot(&state);
+        assert_eq!(snapshot.overall_percent, 100);
+        assert_eq!(snapshot.completed_files, 2);
+        assert_eq!(snapshot.total_files, 2);
+    }
+
+    #[test]
+    fn snapshot_100_when_all_completed_or_failed() {
+        let state = state_with_files(vec![
+            make_file(
+                "/a.txt",
+                1000,
+                FileAction::Upload,
+                FileStatus::Completed,
+                1000,
+            ),
+            make_file(
+                "/b.txt",
+                2000,
+                FileAction::Upload,
+                FileStatus::Error,
+                500,
+            ),
+        ]);
+        let snapshot = build_snapshot(&state);
+        assert_eq!(snapshot.overall_percent, 100);
+        assert_eq!(snapshot.completed_files, 1);
+        assert_eq!(snapshot.failed_files, 1);
+    }
+
+    #[test]
+    fn snapshot_empty_when_no_session() {
+        let state = SyncProgressState {
+            current_session: None,
+            recent_files: Vec::new(),
+            last_updated: now_ms(),
+        };
+        let snapshot = build_snapshot(&state);
+        assert!(!snapshot.is_active);
+        assert_eq!(snapshot.total_files, 0);
+        assert_eq!(snapshot.overall_percent, 0);
+        assert!(snapshot.files.is_empty());
+    }
+
+    #[test]
+    fn snapshot_maps_status_correctly() {
+        let state = state_with_files(vec![
+            make_file(
+                "/pending.txt",
+                100,
+                FileAction::Upload,
+                FileStatus::Pending,
+                0,
+            ),
+            make_file(
+                "/uploading.txt",
+                100,
+                FileAction::Upload,
+                FileStatus::Uploading,
+                50,
+            ),
+            make_file(
+                "/downloading.txt",
+                100,
+                FileAction::Download,
+                FileStatus::Downloading,
+                50,
+            ),
+            make_file(
+                "/deleting.txt",
+                100,
+                FileAction::LocalDelete,
+                FileStatus::Deleting,
+                0,
+            ),
+            make_file(
+                "/completed.txt",
+                100,
+                FileAction::Upload,
+                FileStatus::Completed,
+                100,
+            ),
+            make_file(
+                "/error.txt",
+                100,
+                FileAction::Upload,
+                FileStatus::Error,
+                0,
+            ),
+        ]);
+        let snapshot = build_snapshot(&state);
+        let find = |name: &str| {
+            snapshot
+                .files
+                .iter()
+                .find(|f| f.file_name == name)
+                .unwrap()
+        };
+        assert_eq!(
+            find("pending.txt").status,
+            FileProgressStatus::Pending
+        );
+        assert_eq!(
+            find("uploading.txt").status,
+            FileProgressStatus::InProgress
+        );
+        assert_eq!(
+            find("downloading.txt").status,
+            FileProgressStatus::InProgress
+        );
+        assert_eq!(
+            find("deleting.txt").status,
+            FileProgressStatus::InProgress
+        );
+        assert_eq!(
+            find("completed.txt").status,
+            FileProgressStatus::Completed
+        );
+        assert_eq!(
+            find("error.txt").status,
+            FileProgressStatus::Error
+        );
+    }
+
+    #[test]
+    fn snapshot_encrypted_file_name_detected() {
+        let state = state_with_files(vec![make_file(
+            "file_a7339456c25845c2deadbeef0123",
+            500,
+            FileAction::Download,
+            FileStatus::Downloading,
+            100,
+        )]);
+        let snapshot = build_snapshot(&state);
+        assert_eq!(snapshot.files[0].file_name, "Encrypted file");
+    }
+
     #[test]
     fn complete_session_keeps_inactive_session() {
         reset_state();
