@@ -24,7 +24,6 @@ type Props = {
     onClose: () => void;
     onSuccess?: (folderCid: string) => void;
     onRefresh?: () => void;
-    isPrivateFolder: boolean;
     parentFolderName: string;
     mainFolderActualName?: string;
     subFolderPath?: string;
@@ -37,7 +36,6 @@ export default function FolderToFolderUploadDialog({
     onClose,
     onSuccess,
     onRefresh,
-    isPrivateFolder,
     parentFolderName,
     mainFolderActualName,
     subFolderPath,

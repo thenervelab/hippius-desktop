@@ -73,10 +73,10 @@ const MIN_COLUMN_WIDTHS = {
 };
 
 // Store the "base" column widths (without selection column) to preserve user preferences
-const getStoredBaseColumnWidths = (isRecentFiles: boolean, isPrivateFolder: boolean) => {
+const getStoredBaseColumnWidths = (isRecentFiles: boolean) => {
   if (typeof window === "undefined") return DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
   try {
-    const key = `filesTable_baseColumnWidths_${isRecentFiles ? 'recent' : 'main'}_${isPrivateFolder ? 'private' : 'public'}`;
+    const key = `filesTable_baseColumnWidths_${isRecentFiles ? 'recent' : 'main'}`;
     const stored = localStorage.getItem(key);
     if (stored) {
       return JSON.parse(stored);
@@ -87,14 +87,14 @@ const getStoredBaseColumnWidths = (isRecentFiles: boolean, isPrivateFolder: bool
   }
 };
 
-const saveBaseColumnWidths = (columnWidths: Record<string, number>, isRecentFiles: boolean, isPrivateFolder: boolean) => {
+const saveBaseColumnWidths = (columnWidths: Record<string, number>, isRecentFiles: boolean) => {
   if (typeof window === "undefined") return;
   try {
     // Remove selection column before saving as base widths
     const baseWidths = { ...columnWidths };
     delete baseWidths.selection;
 
-    const key = `filesTable_baseColumnWidths_${isRecentFiles ? 'recent' : 'main'}_${isPrivateFolder ? 'private' : 'public'}`;
+    const key = `filesTable_baseColumnWidths_${isRecentFiles ? 'recent' : 'main'}`;
     localStorage.setItem(key, JSON.stringify(baseWidths));
   } catch { }
 };
@@ -173,14 +173,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       enterSelectionModeAndSelectFile,
       toggleFileSelection,
     } = useFileSelection();
-
-    // Determine if this is a private folder based on the files
-    const isPrivateFolder = useMemo(() => {
-      return (
-        allFiles.length > 0 &&
-        allFiles.some((file) => file.type?.toLowerCase() === "private")
-      );
-    }, [allFiles]);
 
     // State for captured files to delete (to handle timing issue with clearSelection)
     const [filesToDelete, setFilesToDelete] = useState<FormattedUserFile[]>(
@@ -667,7 +659,7 @@ const FilesTable: FC<FilesTableProps> = memo(
 
 
     const [columnWidths, setColumnWidths] = useState(() => {
-      const baseWidths = getStoredBaseColumnWidths(isRecentFiles, isPrivateFolder);
+      const baseWidths = getStoredBaseColumnWidths(isRecentFiles);
       return convertBaseWidthsToMode(baseWidths, isSelectionMode);
     });
 
@@ -683,18 +675,18 @@ const FilesTable: FC<FilesTableProps> = memo(
 
     // Load base widths when file context changes (not selection mode)
     useEffect(() => {
-      const baseWidths = getStoredBaseColumnWidths(isRecentFiles, isPrivateFolder);
+      const baseWidths = getStoredBaseColumnWidths(isRecentFiles);
       const newWidths = convertBaseWidthsToMode(baseWidths, isSelectionMode);
       setColumnWidths(newWidths);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isRecentFiles, isPrivateFolder]);
+    }, [isRecentFiles]);
 
     useEffect(() => {
       const timeoutId = setTimeout(() => {
-        saveBaseColumnWidths(columnWidths, isRecentFiles, isPrivateFolder);
+        saveBaseColumnWidths(columnWidths, isRecentFiles);
       }, 300);
       return () => clearTimeout(timeoutId);
-    }, [columnWidths, isRecentFiles, isPrivateFolder]);
+    }, [columnWidths, isRecentFiles]);
 
     // Handle smooth transition when entering/exiting selection mode
     const [prevSelectionMode, setPrevSelectionMode] = useState(isSelectionMode);

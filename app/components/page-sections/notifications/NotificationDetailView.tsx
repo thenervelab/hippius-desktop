@@ -9,8 +9,6 @@ import NotificationContextMenu from "./NotificationContextMenu";
 import RevealTextLine from "@/components/ui/reveal-text-line";
 import { InView } from "react-intersection-observer";
 import { useRouter } from "next/navigation";
-import { useSetAtom } from "jotai";
-import { activeSubMenuItemAtom } from "@/components/sidebar/sideBarAtoms";
 import BasicMarkdown from "@/components/updater/BasicMarkdown";
 import { getVersion } from "@tauri-apps/api/app";
 
@@ -49,7 +47,6 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   selectedNotification,
   onReadStatusChange,
 }) => {
-  const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   const router = useRouter();
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -114,7 +111,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   };
 
   const handleLinkClick = (e: React.MouseEvent) => {
-    handleButtonLink(e, actionLink, router, setActiveSubMenuItem);
+    handleButtonLink(e, actionLink, router);
   };
 
   return (

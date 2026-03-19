@@ -7,8 +7,6 @@ import { cn } from "@/lib/utils";
 import { Key } from "@/components/ui/icons";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import SectionHeader from "./SectionHeader";
-import { RevealTextLine } from "@/components/ui";
-import { InView } from "react-intersection-observer";
 import { Code } from "lucide-react";
 
 const API_TOKEN_DOCS_URL =

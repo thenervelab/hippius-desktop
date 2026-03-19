@@ -40,7 +40,6 @@ export const handleButtonLink = (
   e: React.MouseEvent,
   buttonLink: string | undefined,
   router: AppRouterInstance,
-  setActiveSubMenuItem?: (item: string) => void,
 ) => {
   if (buttonLink) {
     e.preventDefault();
@@ -50,9 +49,6 @@ export const handleButtonLink = (
     } else if (buttonLink.includes("BILLING")) {
       openLinkByKey(buttonLink);
     } else {
-      if (buttonLink.includes("/files") && setActiveSubMenuItem) {
-        setActiveSubMenuItem("Private");
-      }
       router.push(buttonLink);
     }
   }

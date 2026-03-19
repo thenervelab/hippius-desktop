@@ -10,7 +10,6 @@ import { useRouter } from "next/navigation";
 import NotificationType from "@/components/page-sections/notifications/NotificationType";
 import NotificationContextMenu from "@/components/page-sections/notifications/NotificationContextMenu";
 import { useSetAtom } from "jotai";
-import { activeSubMenuItemAtom } from "@/components/sidebar/sideBarAtoms";
 import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
 import { useNotifications } from "@/lib/hooks/useNotifications";
@@ -69,7 +68,6 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
   const [isArchiving, setIsArchiving] = useState(false);
   const [currentVersion, setCurrentVersion] = useState<string>("");
   const router = useRouter();
-  const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const { refresh } = useNotifications();
 
@@ -92,7 +90,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
     buttonText && buttonLink && !isUpdateAlreadyInstalled;
 
   const handleLinkClick = (e: React.MouseEvent) => {
-    handleButtonLink(e, buttonLink, router, setActiveSubMenuItem);
+    handleButtonLink(e, buttonLink, router);
     onClose?.();
   };
 
@@ -135,7 +133,6 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
               isArchiving && "opacity-0 translate-y-1 scale-[0.98]",
             )}
             onClick={() => {
-              setActiveSubMenuItem("");
               onClick?.();
             }}
             onContextMenu={handleContextMenu}

@@ -22,7 +22,6 @@ import { useAtomValue } from "jotai";
 import PrivacyBadge from "@/components/ui/PrivacyBadge";
 
 import { cn } from "@/lib/utils";
-import { useIsPrivateView } from "@/app/lib/utils/viewUtils";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { toast } from "sonner";
@@ -37,7 +36,6 @@ const HIPPIUS_OPEN_MODAL_EVENT = "hippius:open-modal";
 
 type AddButtonProps = {
   className?: string;
-  isPrivateView?: boolean; // Optional override for private/public view
   disabled?: boolean; // Optional external disabled state
   defaultFolderLabel?: string | null;
 };
@@ -50,7 +48,7 @@ export interface AddButtonRef {
 }
 
 const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
-  ({ className, isPrivateView: isPrivateViewProp, disabled: externalDisabled, defaultFolderLabel }, ref) => {
+  ({ className, disabled: externalDisabled, defaultFolderLabel }, ref) => {
     // Keep state simple and isolated
     const [isOpen, setIsOpen] = useState(false);
 
@@ -61,11 +59,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       uploadToIpfsAndSubmitToBlockcahinRequestStateAtom
     );
     const isLoading = uploadingState !== "idle";
-    const isPrivateViewFromHook = useIsPrivateView();
     const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
-
-    // Use prop if provided, otherwise use hook
-    const isPrivateView = isPrivateViewProp ?? isPrivateViewFromHook;
 
     // Expose methods to parent components
     useImperativeHandle(
@@ -132,7 +126,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         window.removeEventListener(HIPPIUS_DROP_EVENT, handleDroppedFiles);
         window.removeEventListener(HIPPIUS_OPEN_MODAL_EVENT, handleOpenModal);
       };
-    }, [isOpen, isPrivateView]);
+    }, [isOpen]);
 
     // Render current step content - memoized to prevent unnecessary re-renders
     const renderStepContent = useMemo(() => {
@@ -141,7 +135,6 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         <UploadFilesFlow
           key="upload-file"
           reset={closeDialog}
-          isPrivateView={isPrivateView}
           initialFiles={droppedFiles}
           initialPaths={droppedPaths}
           defaultFolderLabel={defaultFolderLabel}
@@ -151,7 +144,6 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       droppedFiles,
       droppedPaths,
       closeDialog,
-      isPrivateView,
       defaultFolderLabel
     ]);
 
@@ -201,7 +193,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
                 <div className="flex p-4 items-center text-grey-10 relative">
                   <div className="lg:text-xl flex w-full items-center gap-2 2xl:text-2xl font-medium relative">
                     <span className="capitalize">{title}</span>
-                    {isPrivateView && <PrivacyBadge variant="file" />}
+                    <PrivacyBadge variant="file" />
                   </div>
                   <button
                     type="button"

@@ -8,7 +8,6 @@ import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getFileIcon } from "@/app/lib/utils/fileTypeUtils";
 import { cn } from "@/app/lib/utils";
-import { useIsPrivateView } from "@/app/lib/utils/viewUtils";
 
 interface DetailRowProps {
   label: string;
@@ -38,7 +37,6 @@ interface FileDetailsDialogContentProps {
 const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
   file
 }) => {
-  const isPrivateView = useIsPrivateView();
 
   // Get Arion Hash for display
   const arionCid = file ? file.arionCid : null;
@@ -85,12 +83,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
                   ? fileType.charAt(0).toUpperCase() + fileType.slice(1)
                   : ""}
             </div>
-            {!isPrivateView && file.isErasureCoded && (
-              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-white text-primary-60 border border-primary-50 shadow-sm">
-                <Icons.ShieldSecurity className="size-3 mr-1.5 text-primary-50" />
-                Erasure Coded
-              </span>
-            )}
+
           </div>
         </DetailRow>
 

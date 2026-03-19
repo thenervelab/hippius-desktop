@@ -42,7 +42,6 @@ interface FilesContentProps {
   shouldResetPagination: boolean;
   handlePaginationReset: () => void;
   error?: unknown;
-  isPrivateView: boolean;
   addButtonRef?: React.RefObject<{ openWithFiles(files: FileList): void; openWithPaths(paths: string[]): void; isDialogOpen(): boolean } | null>;
   currentPage: number;
   totalPages: number;
@@ -63,7 +62,6 @@ const FilesContent: FC<FilesContentProps> = ({
   shouldResetPagination,
   handlePaginationReset,
   error,
-  isPrivateView,
   addButtonRef,
   currentPage,
   totalPages,
@@ -238,7 +236,6 @@ const FilesContent: FC<FilesContentProps> = ({
       return (
         <IPFSNoEntriesFound
           isRecentFiles={isRecentFiles}
-          isPrivateView={isPrivateView}
           isSyncPathConfigured={!isSyncPathEmpty}
           onStartSyncing={onSyncPathConfigured}
         />
@@ -408,7 +405,6 @@ const FilesContent: FC<FilesContentProps> = ({
           file={selectedFile}
           allFiles={filteredData}
           onNavigate={setSelectedFile}
-          isPrivateView={isPrivateView}
         />
       )}
       {selectedFileType === "image" && (
@@ -418,7 +414,6 @@ const FilesContent: FC<FilesContentProps> = ({
           file={selectedFile}
           allFiles={filteredData}
           onNavigate={setSelectedFile}
-          isPrivateView={isPrivateView}
         />
       )}
       {selectedFileType === "PDF" && (
@@ -428,7 +423,6 @@ const FilesContent: FC<FilesContentProps> = ({
           file={selectedFile}
           allFiles={filteredData}
           onNavigate={setSelectedFile}
-          isPrivateView={isPrivateView}
         />
       )}
 

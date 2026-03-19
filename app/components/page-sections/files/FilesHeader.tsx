@@ -46,7 +46,6 @@ interface FilesHeaderProps {
   onStartSyncing?: () => void;
   hasNoSyncPaths?: boolean;
   onNavigateToSettings?: () => void;
-  isPrivateView?: boolean; // For recent files to determine upload type
   // New filter props
   selectedFileTypes: FileTypes[];
   selectedDate: string;
@@ -75,7 +74,6 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   onStartSyncing,
   hasNoSyncPaths = false,
   onNavigateToSettings,
-  isPrivateView,
   // New filter props
   selectedFileTypes,
   selectedDate,
@@ -251,7 +249,6 @@ const FilesHeader: FC<FilesHeaderProps> = ({
                 <AddButton
                   ref={addButtonRef}
                   className="h-9"
-                  isPrivateView={isPrivateView}
                   disabled={IS_SYNC_PAUSED}
                   defaultFolderLabel={defaultFolderLabel}
                 />

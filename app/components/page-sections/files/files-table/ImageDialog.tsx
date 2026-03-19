@@ -74,8 +74,7 @@ const ImageDialog: React.FC<{
     file: FormattedUserFile,
     polkadotAddress: string
   ) => void;
-  isPrivateView?: boolean;
-}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload, isPrivateView = false }) => {
+}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload }) => {
   const { polkadotAddress } = useWalletAuth();
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
@@ -87,8 +86,8 @@ const ImageDialog: React.FC<{
   // Track the current file to prevent race conditions
   const currentFileRef = React.useRef<FormattedUserFile | null>(null);
 
-  // For private files, only navigate between locally synced files
-  const navigationOptions = useMemo(() => ({ localOnly: isPrivateView }), [isPrivateView]);
+  // All files are private — only navigate between locally synced files
+  const navigationOptions = useMemo(() => ({ localOnly: true }), []);
 
   // Calculate next and previous files whenever the current file changes
   useEffect(() => {

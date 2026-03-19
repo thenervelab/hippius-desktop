@@ -35,7 +35,6 @@ interface RootUploadProps extends BaseProps {
   /** Root-level upload mode — files go through `useFilesUpload` with a SyncFolderSelect. */
   mode?: "root";
   reset: () => void;
-  isPrivateView: boolean;
   defaultFolderLabel?: string | null;
 }
 
@@ -43,7 +42,6 @@ interface FolderUploadProps extends BaseProps {
   /** Folder-targeted upload mode — files are added directly into a specific subfolder. */
   mode: "folder";
   folderName: string;
-  isPrivateFolder: boolean;
   /** Relative path from sync root to the current folder (e.g. "ProjectA/sub"). */
   subfolder?: string;
   /** Resolved sync root path (avoids incorrect getPrivateSyncPath in multi-drive). */
@@ -272,7 +270,6 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       props.reset();
       upload(
         processedPaths,
-        props.isPrivateView,
         { toastId },
         selectedSyncPath ?? undefined
       );
@@ -379,7 +376,6 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
 
   const handleUpload = isFolder ? uploadFilesFolder : uploadFilesRoot;
   const handleCancel = isFolder ? props.onCancel : props.reset;
-  const isPrivateView = isFolder ? props.isPrivateFolder : props.isPrivateView;
   const uploadLabel = isFolder
     ? `Add ${files.length > 1 ? "Files" : "File"} to Folder`
     : `Upload File${files.length > 1 ? "s" : ""}`;
@@ -391,7 +387,6 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
     <div className="w-full">
       <FileDropzone
         setFiles={handleFiles}
-        isPrivateView={isPrivateView}
         defaultBrowsePath={isFolder ? folderBrowsePath : selectedSyncPath}
       />
 

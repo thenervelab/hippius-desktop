@@ -1,13 +1,6 @@
-import { useSetAtom } from "jotai";
-import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
-
 export function useFilesNavigation() {
-  const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
-
-  // Navigate to the files view
-  const navigateToFilesView = () => {
-    setActiveSubMenuItem("");
-  };
+  // Navigate to the files view (no sub-menu distinction needed)
+  const navigateToFilesView = () => {};
 
   return {
     navigateToFilesView,

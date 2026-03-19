@@ -47,7 +47,6 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
   async function upload(
     filePaths: string[],
-    isPrivateView: boolean,
     options?: UploadOptions,
     syncPathOverride?: string,
   ) {

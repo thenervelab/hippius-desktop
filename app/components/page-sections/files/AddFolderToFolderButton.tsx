@@ -10,7 +10,6 @@ import { toast } from "sonner";
 interface AddFolderToFolderButtonProps {
     className?: string;
     folderName: string;
-    isPrivateFolder: boolean;
     mainFolderActualName?: string;
     subFolderPath?: string;
     onFolderAdded?: () => void;
@@ -22,7 +21,6 @@ const AddFolderToFolderButton = forwardRef<unknown, AddFolderToFolderButtonProps
     (
         {
             folderName,
-            isPrivateFolder,
             mainFolderActualName,
             subFolderPath,
             onFolderAdded,
@@ -57,7 +55,6 @@ const AddFolderToFolderButton = forwardRef<unknown, AddFolderToFolderButtonProps
                     open={isDialogOpen}
                     onClose={() => setIsDialogOpen(false)}
                     onRefresh={onFolderAdded}
-                    isPrivateFolder={isPrivateFolder}
                     parentFolderName={folderName}
                     mainFolderActualName={mainFolderActualName}
                     subFolderPath={subFolderPath}

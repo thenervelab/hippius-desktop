@@ -19,10 +19,9 @@ type SetFilesFunction = (paths: string[], browserFiles?: File[]) => void;
 
 const FileDropzone: FC<{
   setFiles: SetFilesFunction;
-  isPrivateView?: boolean;
   /** Override the default path the OS file dialog opens at. */
   defaultBrowsePath?: string | null;
-}> = ({ setFiles, isPrivateView = false, defaultBrowsePath }) => {
+}> = ({ setFiles, defaultBrowsePath }) => {
   const [isDragging, setIsDragging] = useState(false);
   const { polkadotAddress } = useWalletAuth();
 

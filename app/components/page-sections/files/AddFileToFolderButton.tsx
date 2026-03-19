@@ -23,7 +23,6 @@ const HIPPIUS_DROP_EVENT = "hippius:folder-file-drop";
 export interface AddFileToFolderButtonProps {
     className?: string;
     folderName: string;
-    isPrivateFolder: boolean;
     /** Relative path from sync root to the current folder. */
     subfolder?: string;
     onFileAdded: () => void;
@@ -39,7 +38,7 @@ export interface AddFileToFolderButtonRef {
 }
 
 const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFolderButtonProps>(
-    ({ className, folderName, isPrivateFolder, subfolder, onFileAdded, disabled: externalDisabled, syncBasePath }, ref) => {
+    ({ className, folderName, subfolder, onFileAdded, disabled: externalDisabled, syncBasePath }, ref) => {
         const [isOpen, setIsOpen] = useState(false);
         const [droppedFiles, setDroppedFiles] = useState<FileList | null>(null);
         const [droppedPaths, setDroppedPaths] = useState<string[] | null>(null);
@@ -106,7 +105,6 @@ const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFold
             <UploadFilesFlow
                 mode="folder"
                 folderName={folderName}
-                isPrivateFolder={isPrivateFolder}
                 subfolder={subfolder}
                 syncBasePath={syncBasePath}
                 initialFiles={droppedFiles}
@@ -114,7 +112,7 @@ const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFold
                 onSuccess={handleSuccess}
                 onCancel={closeDialog}
             />
-        ), [folderName, isPrivateFolder, subfolder, syncBasePath, droppedFiles, droppedPaths, handleSuccess, closeDialog]);
+        ), [folderName, subfolder, syncBasePath, droppedFiles, droppedPaths, handleSuccess, closeDialog]);
 
         return (
             <>

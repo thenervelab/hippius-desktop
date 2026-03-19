@@ -26,8 +26,6 @@ import {
 } from "@/lib/utils/fileFilterUtils";
 import { SearchInput } from "@/components/ui";
 import FilterChips from "@/app/components/page-sections/files/filter-chips";
-import { useAtom } from "jotai";
-import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { downloadFolder } from "@/app/lib/utils/downloadFolder";
 import AddFileToFolderButton from "@/app/components/page-sections/files/AddFileToFolderButton";
 import {
@@ -76,13 +74,11 @@ export default function FolderView({
   const router = useRouter();
   const { getParam } = useUrlParams();
   const { polkadotAddress } = useWalletAuth();
-  const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
   const [files, setFiles] = useState<FormattedUserFile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
   const [isDownloading, setIsDownloading] = useState(false);
-  const isPrivateFolder = activeSubMenuItem === "Private";
   const addButtonRef = useRef<{ openWithFiles(files: FileList): void; openWithPaths(paths: string[]): void; isDialogOpen(): boolean }>(null);
   const addFolderButtonRef = useRef<object>({});
 
@@ -434,7 +430,6 @@ export default function FolderView({
                   ref={addFolderButtonRef}
                   className="h-9"
                   folderName={folderName}
-                  isPrivateFolder={isPrivateFolder}
                   mainFolderActualName={mainFolderActualName}
                   subFolderPath={subFolderPath}
                   onFolderAdded={handleRefresh}
@@ -446,7 +441,6 @@ export default function FolderView({
                   ref={addButtonRef}
                   className="h-9"
                   folderName={folderName}
-                  isPrivateFolder={isPrivateFolder}
                   subfolder={getFullPath(mainFolderActualName, subFolderPath) || undefined}
                   onFileAdded={handleRefresh}
                   disabled={IS_SYNC_PAUSED}
@@ -524,7 +518,6 @@ export default function FolderView({
                 viewMode={viewMode}
                 shouldResetPagination={shouldResetPagination}
                 handlePaginationReset={handlePaginationReset}
-                isPrivateView={isPrivateFolder}
                 currentPage={currentPage}
                 totalPages={totalPages}
                 setCurrentPage={setCurrentPage}

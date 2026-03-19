@@ -41,8 +41,7 @@ const PdfDialog: React.FC<{
     file: FormattedUserFile,
     polkadotAddress: string
   ) => void;
-  isPrivateView?: boolean;
-}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload, isPrivateView = false }) => {
+}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload }) => {
   const [nextFile, setNextFile] = useState<FormattedUserFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserFile | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -54,8 +53,8 @@ const PdfDialog: React.FC<{
   // Track the current file to prevent race conditions
   const currentFileRef = React.useRef<FormattedUserFile | null>(null);
 
-  // For private files, only navigate between locally synced files
-  const navigationOptions = useMemo(() => ({ localOnly: isPrivateView }), [isPrivateView]);
+  // All files are private — only navigate between locally synced files
+  const navigationOptions = useMemo(() => ({ localOnly: true }), []);
 
   useEffect(() => {
     if (!file) return;

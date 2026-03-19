@@ -16,7 +16,6 @@ const HIPPIUS_OPEN_MODAL_EVENT = "hippius:open-modal";
 
 interface NoEntriesFoundProps {
   isRecentFiles?: boolean;
-  isPrivateView?: boolean;
   isSyncPathConfigured?: boolean;
   isCheckingSyncPath?: boolean;
   onStartSyncing?: () => void;
@@ -24,7 +23,6 @@ interface NoEntriesFoundProps {
 
 const NoEntriesFound: React.FC<NoEntriesFoundProps> = ({
   isRecentFiles = false,
-  isPrivateView = false,
   isSyncPathConfigured = true,
   isCheckingSyncPath = false,
   onStartSyncing,
@@ -41,7 +39,7 @@ const NoEntriesFound: React.FC<NoEntriesFoundProps> = ({
     // Check if sync path is configured for non-recent files
     if (!isRecentFiles && !isSyncPathConfigured) {
       toast.error(
-        `Please select a sync path for ${isPrivateView ? "private" : "public"} files before uploading.`
+        `Please select a sync path before uploading.`
       );
       return;
     }
@@ -53,7 +51,7 @@ const NoEntriesFound: React.FC<NoEntriesFoundProps> = ({
         `${files.length} ${files.length === 1 ? "file" : "files"} ready to upload`
       );
     }
-  }, [isRecentFiles, isSyncPathConfigured, isPrivateView]);
+  }, [isRecentFiles, isSyncPathConfigured]);
 
   const handleOpenModal = useCallback((e?: React.MouseEvent) => {
     e?.preventDefault();
@@ -175,7 +173,7 @@ const NoEntriesFound: React.FC<NoEntriesFoundProps> = ({
                     <>
                       You need to select a sync path for{" "}
                       <span className="text-primary-50">
-                        {isPrivateView ? "private" : "public"} files
+                        your files
                       </span>{" "}
                       before uploading.
                     </>

@@ -714,11 +714,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     return hasPrivate;
   }, [isRecentFiles, selectedPrivateFolderPath, isLoadingPrivatePath]);
 
-  // Effective is private view (always true for private-only)
-  const effectiveIsPrivateView = useMemo(() => {
-    return true;
-  }, []);
-
   // Determine what content to render
   let content;
 
@@ -805,7 +800,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             onStartSyncing={handleStartSyncing}
             hasNoSyncPaths={hasNoSyncPaths}
             onNavigateToSettings={handleNavigateToSettings}
-            isPrivateView={effectiveIsPrivateView}
             selectedFileTypes={filterState.fileTypes}
             selectedDate={filterState.date}
             selectedFileSizes={filterState.fileSizes}
@@ -826,7 +820,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           <FilesContent
             isRecentFiles={isRecentFiles}
             isLoading={isLoading}
-            isPrivateView={effectiveIsPrivateView}
             filteredData={filteredData}
             displayedData={paginatedData}
             searchTerm={searchTerm}
