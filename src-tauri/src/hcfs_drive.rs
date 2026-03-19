@@ -39,6 +39,9 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
+/// Maximum time to wait for a single `sync_with_resolutions` call.
+const SYNC_TIMEOUT_SECS: u64 = 300;
+
 /// Flag to suppress file watcher events while a sync is in progress,
 /// preventing a feedback loop where sync-generated file changes trigger more syncs.
 pub(crate) static SYNC_IN_PROGRESS: Lazy<Arc<AtomicBool>> =
@@ -121,13 +124,6 @@ impl HcfsDriveManager {
     #[allow(dead_code)]
     pub fn user_id(&self) -> Option<String> {
         self.drive.user_id()
-    }
-    /// Override the user_id to use substrate address instead of derived ed25519 hex.
-    /// This is now done via the HcfsClientConfig.ss58_address field.
-    /// Deprecated: set ss58_address in the config instead.
-    pub fn set_user_id(&mut self, _user_id: String) {
-        // No-op: user_id is now set via config.ss58_address
-        // The Drive will use ss58_address if set, otherwise derives from mnemonic
     }
     pub fn sync_path(&self) -> &Path {
         &self.sync_path
@@ -1072,7 +1068,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         emitted_sync_started = true;
 
                         info!(label = label, "sync_with_resolutions starting");
-                        let sync_timeout = Duration::from_secs(300); // 5 minutes
+                        let sync_timeout = Duration::from_secs(SYNC_TIMEOUT_SECS);
                         let outcome = match tokio::time::timeout(
                             sync_timeout,
                             m.sync_with_resolutions(HashMap::new()),
@@ -1172,7 +1168,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         }
                         emitted_sync_started = true;
 
-                        let sync_timeout = Duration::from_secs(300);
+                        let sync_timeout = Duration::from_secs(SYNC_TIMEOUT_SECS);
                         let outcome = match tokio::time::timeout(
                             sync_timeout,
                             m.sync_with_resolutions(HashMap::new()),

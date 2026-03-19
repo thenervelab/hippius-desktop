@@ -368,21 +368,15 @@ pub async fn list_sync_folder(
         };
 
         // Folders don't have server-side entries — their children do
-        let (sync_status, arion_hash, arion_cid, uploaded_at, updated_at) = if is_folder {
-            ("synced".to_string(), String::new(), String::new(), 0i64, 0i64)
+        let (sync_status, info) = if is_folder {
+            ("synced", None)
         } else {
             match &synced_set {
                 Some(map) => match map.get(&relative_path) {
-                    Some(info) => (
-                        "synced".to_string(),
-                        info.path_hash_hex.clone(),
-                        info.arion_cid.clone(),
-                        info.uploaded_at,
-                        info.updated_at,
-                    ),
-                    None => ("pending".to_string(), String::new(), String::new(), 0, 0),
+                    Some(i) => ("synced", Some(i)),
+                    None => ("pending", None),
                 },
-                None => ("unknown".to_string(), String::new(), String::new(), 0, 0),
+                None => ("unknown", None),
             }
         };
 
@@ -407,12 +401,12 @@ pub async fn list_sync_folder(
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs()),
-            sync_status,
-            arion_hash,
-            arion_cid,
+            sync_status: sync_status.to_string(),
+            arion_hash: info.map_or_else(String::new, |i| i.path_hash_hex.clone()),
+            arion_cid: info.map_or_else(String::new, |i| i.arion_cid.clone()),
             file_count,
-            uploaded_at,
-            updated_at,
+            uploaded_at: info.map_or(0, |i| i.uploaded_at),
+            updated_at: info.map_or(0, |i| i.updated_at),
         });
     }
 

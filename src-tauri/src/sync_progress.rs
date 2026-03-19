@@ -787,12 +787,12 @@ pub fn sp_get_tray_menu_files() -> Result<Vec<serde_json::Value>, String> {
 
 #[tauri::command]
 pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+    let state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
         warn!("Poisoned mutex recovered in sp_get_overall_progress");
         poisoned.into_inner()
     });
 
-    let session = match state.current_session.as_mut() {
+    let session = match state.current_session.as_ref() {
         Some(s) => s,
         None => {
             return Ok(OverallProgress {
@@ -809,49 +809,42 @@ pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
         }
     };
 
-    // Count ALL files for progress tracking (including encrypted-name
-    // downloads) so the overall percentage and file counts are accurate.
-    let all_files: Vec<&SyncFile> = session.files.values().collect();
+    // Single pass over all files to collect counts, byte totals, and
+    // the current in-progress file for display.
+    let total_files = session.files.len();
+    let mut completed_files: usize = 0;
+    let mut in_progress_files: usize = 0;
+    let mut failed_files: usize = 0;
+    let mut total_bytes_transferred: u64 = 0;
+    let mut total_bytes_expected: u64 = 0;
+    let mut current_file: Option<SyncFile> = None;
 
-    let total_files = all_files.len();
-
-    let completed_files = all_files
-        .iter()
-        .filter(|f| f.status == FileStatus::Completed)
-        .count();
-
-    let in_progress_files = all_files
-        .iter()
-        .filter(|f| {
-            matches!(
-                f.status,
-                FileStatus::Uploading | FileStatus::Downloading | FileStatus::Deleting
-            )
-        })
-        .count();
-
-    let failed_files = all_files
-        .iter()
-        .filter(|f| f.status == FileStatus::Error)
-        .count();
-
-    // Sum bytes from files that have reported their total size.
-    let total_bytes_transferred: u64 = all_files
-        .iter()
-        .filter(|f| f.total_bytes > 0)
-        .map(|f| f.bytes_transferred)
-        .sum();
-    let total_bytes_expected: u64 = all_files
-        .iter()
-        .filter(|f| f.total_bytes > 0)
-        .map(|f| f.total_bytes)
-        .sum();
+    for f in session.files.values() {
+        match f.status {
+            FileStatus::Completed => completed_files += 1,
+            FileStatus::Uploading | FileStatus::Downloading | FileStatus::Deleting => {
+                in_progress_files += 1;
+                if !should_hide_file(&f.path) {
+                    let dominated = current_file
+                        .as_ref()
+                        .map_or(true, |cur| f.started_at > cur.started_at);
+                    if dominated {
+                        current_file = Some(f.clone());
+                    }
+                }
+            }
+            FileStatus::Error => failed_files += 1,
+            _ => {}
+        }
+        if f.total_bytes > 0 {
+            total_bytes_transferred += f.bytes_transferred;
+            total_bytes_expected += f.total_bytes;
+        }
+    }
 
     // Byte-weighted progress so the percentage matches the "X MB / Y MB"
-    // display. No artificial cap — when all known bytes are transferred
-    // the bar reaches 100%. The "all finished" guard handles the exact
-    // completion case, and the high-water mark prevents regressions.
-    let raw_percent = if total_files == 0 {
+    // display.
+    let overall_percent = if total_files == 0 {
         0u32
     } else if completed_files + failed_files == total_files {
         100
@@ -862,30 +855,6 @@ pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
         let pct = (completed_files as f64 / total_files as f64) * 100.0;
         (pct.round() as u32).min(100)
     };
-
-    // Use the raw byte-weighted percent directly. A high-water mark
-    // was previously used here but it caused the percentage to get
-    // stuck at inflated values: when only small files had reported
-    // sizes the ratio was high, then a large file arrived and diluted
-    // it, but the high-water lock prevented the displayed value from
-    // correcting. The byte ratio can dip briefly when a new large
-    // file reports its size, but this is more accurate than showing
-    // a frozen wrong number.
-    let overall_percent = raw_percent;
-
-    // Find the current in-progress file for display (prefer visible name)
-    let current_file = all_files
-        .iter()
-        .filter(|f| {
-            matches!(
-                f.status,
-                FileStatus::Uploading | FileStatus::Downloading | FileStatus::Deleting
-            )
-        })
-        .filter(|f| !should_hide_file(&f.path))
-        .max_by_key(|f| f.started_at)
-        .cloned()
-        .cloned();
 
     Ok(OverallProgress {
         is_active: session.is_active,
@@ -1583,7 +1552,7 @@ mod tests {
     }
 
     #[test]
-    fn overall_percent_capped_at_99_while_files_pending() {
+    fn overall_percent_100_when_all_known_bytes_transferred() {
         reset_state();
 
         // 2 files: both in-progress at 100% bytes but not marked Completed
