@@ -11,7 +11,8 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
             tauri::async_runtime::spawn(async move {
                 debug!("Stopping Nebula VPN...");
                 // Stop Nebula before exiting
-                if let Err(e) = crate::utils::nebula::stop_nebula().await {
+                let nebula_st = &app_handle.state::<crate::app_state::AppState>().nebula;
+                if let Err(e) = crate::utils::nebula::stop_nebula(nebula_st).await {
                     warn!("Failed to stop Nebula: {}", e);
                 }
 

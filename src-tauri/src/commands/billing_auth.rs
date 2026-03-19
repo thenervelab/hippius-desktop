@@ -12,7 +12,7 @@ use sp_core::Pair as _;
 use zeroize::Zeroize;
 
 use crate::commands::syncing::get_mnemonic_for_account;
-use tracing::info;
+use tracing::{info, warn};
 
 const MAX_ATTEMPTS: u32 = 3;
 const DEFAULT_BASE_URL: &str = "https://api.hippius.com";
@@ -77,10 +77,9 @@ pub async fn billing_auth(
     mnemonic: Option<String>,
 ) -> Result<BillingAuthResult, String> {
     info!("Billing auth initiated");
-    let pool = state.pool()?;
     let mut mnemonic = match mnemonic {
         Some(m) if !m.is_empty() => m,
-        _ => get_mnemonic_for_account(pool, &account_id).await?,
+        _ => get_mnemonic_for_account(&state, &account_id).await?,
     };
 
     // Derive keys from the mnemonic, then zeroize it immediately.
@@ -90,7 +89,7 @@ pub async fn billing_auth(
     mnemonic.zeroize();
     let (substrate_address, eth_signer, eth_address) = derive_result?;
 
-    let client = reqwest::Client::new();
+    let client = state.api_client.clone();
     let base = base_url();
     let challenge_url = format!("{base}{CHALLENGE_PATH}");
     let verify_url = format!("{base}{VERIFY_PATH}");
@@ -144,7 +143,8 @@ async fn attempt(
     if !challenge_res.status().is_success() {
         let status = challenge_res.status();
         let body = challenge_res.text().await.unwrap_or_default();
-        return Err(format!("Challenge failed: {status} {body}"));
+        warn!(status = %status, "Challenge request failed: {body}");
+        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
     }
 
     let cr: ChallengeResponse = challenge_res
@@ -182,7 +182,8 @@ async fn attempt(
     if !verify_res.status().is_success() {
         let status = verify_res.status();
         let body = verify_res.text().await.unwrap_or_default();
-        return Err(format!("Verify failed: {status} {body}"));
+        warn!(status = %status, "Verify request failed: {body}");
+        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
     }
 
     let vr: VerifyResponse = verify_res

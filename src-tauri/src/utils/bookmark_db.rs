@@ -2,10 +2,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::debug;
 
 #[cfg(target_os = "macos")]
-use crate::macos_bookmarks::{
-    create_security_scoped_bookmark, resolve_security_scoped_bookmark,
-    stop_accessing_security_scoped_resource,
-};
+use crate::macos_bookmarks::create_security_scoped_bookmark;
 
 /// Stores a security-scoped bookmark for a path in the database
 #[cfg(target_os = "macos")]
@@ -27,59 +24,6 @@ pub async fn store_bookmark(pool: &SqlitePool, path: &str, scope_type: &str) -> 
     Ok(())
 }
 
-/// Retrieves and activates a security-scoped bookmark for a path
-/// Returns true if bookmark was found and activated successfully
-#[cfg(target_os = "macos")]
-pub async fn activate_bookmark(pool: &SqlitePool, path: &str) -> Result<bool, String> {
-    let row: Option<(Vec<u8>,)> =
-        sqlx::query_as("SELECT bookmark_data FROM security_scoped_bookmarks WHERE path = ?")
-            .bind(path)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to fetch bookmark: {}", e))?;
-
-    if let Some((bookmark_data,)) = row {
-        // Resolve and start accessing the security-scoped resource.
-        // The URL handle is intentionally discarded here because resolve_security_scoped_bookmark
-        // starts accessing but does NOT stop accessing - the security scope remains active
-        // for the app's lifetime, allowing sync operations to work continuously.
-        // macOS will automatically clean up when the app terminates.
-        let _ = resolve_security_scoped_bookmark(&bookmark_data)?;
-
-        // Update last_accessed timestamp
-        let _ = sqlx::query(
-            "UPDATE security_scoped_bookmarks SET last_accessed = CURRENT_TIMESTAMP WHERE path = ?",
-        )
-        .bind(path)
-        .execute(pool)
-        .await;
-
-        debug!("Activated security-scoped bookmark for: {}", path);
-        Ok(true)
-    } else {
-        Err(format!("No bookmark found for path: {}", path))
-    }
-}
-
-/// Deactivates a security-scoped resource
-#[cfg(target_os = "macos")]
-pub fn deactivate_bookmark(url: cocoa::base::id) {
-    stop_accessing_security_scoped_resource(url);
-}
-
-/// Removes a bookmark from the database
-#[cfg(target_os = "macos")]
-pub async fn remove_bookmark(pool: &SqlitePool, path: &str) -> Result<(), String> {
-    sqlx::query("DELETE FROM security_scoped_bookmarks WHERE path = ?")
-        .bind(path)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to remove bookmark: {}", e))?;
-
-    debug!("Removed security-scoped bookmark for: {}", path);
-    Ok(())
-}
-
 // Non-macOS stubs
 #[cfg(not(target_os = "macos"))]
 pub async fn store_bookmark(
@@ -87,18 +31,5 @@ pub async fn store_bookmark(
     _path: &str,
     _scope_type: &str,
 ) -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub async fn activate_bookmark(_pool: &SqlitePool, _path: &str) -> Result<bool, String> {
-    Ok(true)
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn deactivate_bookmark(_url: ()) {}
-
-#[cfg(not(target_os = "macos"))]
-pub async fn remove_bookmark(_pool: &SqlitePool, _path: &str) -> Result<(), String> {
     Ok(())
 }

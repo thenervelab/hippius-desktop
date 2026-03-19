@@ -106,7 +106,8 @@ async fn challenge_response(
     if !challenge_res.status().is_success() {
         let status = challenge_res.status();
         let body = challenge_res.text().await.unwrap_or_default();
-        return Err(format!("Challenge failed: {status} {body}"));
+        warn!(status = %status, "Challenge request failed: {body}");
+        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
     }
 
     let cr: ChallengeResponse = challenge_res
@@ -144,7 +145,8 @@ async fn challenge_response(
     if !verify_res.status().is_success() {
         let status = verify_res.status();
         let body = verify_res.text().await.unwrap_or_default();
-        return Err(format!("Verify failed: {status} {body}"));
+        warn!(status = %status, "Verify request failed: {body}");
+        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
     }
 
     let vr: VerifyResponse = verify_res
@@ -229,9 +231,8 @@ pub async fn login_with_mnemonic(
     let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
 
     // 2. Challenge-response auth
-    let client = reqwest::Client::new();
     let (token, user_id, username, is_new, token_expiry) = challenge_response(
-        &client,
+        &state.api_client,
         &eth_signer,
         &eth_address,
         &substrate_address,
@@ -482,9 +483,8 @@ pub async fn unlock_with_passcode(
     let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
 
     // 6. Challenge-response auth to get a fresh token
-    let client = reqwest::Client::new();
     let (token, user_id, username, is_new, token_expiry) =
-        challenge_response(&client, &eth_signer, &eth_address, &substrate_address, None).await?;
+        challenge_response(&state.api_client, &eth_signer, &eth_address, &substrate_address, None).await?;
 
     // 7. Store keypair in AppState.auth
     {
@@ -539,18 +539,20 @@ pub async fn refresh_auth_token_internal(
 ) -> Result<(), String> {
     info!(account_id = %account_id, "Auth token refresh started");
     // Block sync during token refresh to avoid 401 races
-    let _guard = crate::sync_shared::TokenRefreshGuard::new();
+    use tauri::Manager;
+    let sync = app.state::<crate::app_state::AppState>().sync.clone();
+    let _guard = crate::sync_engine::TokenRefreshGuard::new(sync);
 
     // 1. Get mnemonic from Drive (auto-zeroized on drop)
-    let mnemonic = Zeroizing::new(get_mnemonic_for_account(pool, account_id).await?);
+    let app_state = app.state::<crate::app_state::AppState>();
+    let mnemonic = Zeroizing::new(get_mnemonic_for_account(&app_state, account_id).await?);
 
     // 2. Derive keys
     let (_sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
 
     // 3. Challenge-response
-    let client = reqwest::Client::new();
     let (token, user_id, username, _is_new, token_expiry) =
-        challenge_response(&client, &eth_signer, &eth_address, &substrate_address, None).await?;
+        challenge_response(&app_state.api_client, &eth_signer, &eth_address, &substrate_address, None).await?;
 
     // 4. Persist new session
     persist_session(
@@ -572,7 +574,7 @@ pub async fn refresh_auth_token_internal(
 
     // 6. Update live drive's bearer token
     if let Err(e) =
-        crate::commands::syncing::update_sync_bearer_token_internal(pool, account_id, &token).await
+        crate::commands::syncing::update_sync_bearer_token_internal(&app_state, account_id, &token).await
     {
         warn!("Could not update live drive token: {e}");
     }

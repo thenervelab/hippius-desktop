@@ -51,12 +51,6 @@ pub struct VMInstance {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct VMActionResponse {
-    #[serde(flatten)]
-    pub data: serde_json::Value,
-}
-
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------

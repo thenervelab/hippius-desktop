@@ -5,7 +5,6 @@
 //! keypair stored in `AppState.auth` (populated by login/unlock).
 
 use crate::substrate_client::get_substrate_client;
-use futures::StreamExt;
 use serde::Serialize;
 use sp_core::crypto::Ss58Codec;
 use subxt::tx::PairSigner;
@@ -110,7 +109,7 @@ pub async fn get_account_balance(
     state: tauri::State<'_, crate::app_state::AppState>,
     address: String,
 ) -> Result<AccountBalance, String> {
-    let client = get_substrate_client(state.pool()?).await?;
+    let client = get_substrate_client(&state).await?;
 
     let account_id: subxt::utils::AccountId32 = address
         .parse()
@@ -146,7 +145,7 @@ pub async fn get_staking_info(
     state: tauri::State<'_, crate::app_state::AppState>,
 ) -> Result<StakingInfo, String> {
     let address = get_substrate_address(&state)?;
-    let client = get_substrate_client(state.pool()?).await?;
+    let client = get_substrate_client(&state).await?;
 
     let account_id: subxt::utils::AccountId32 = address
         .parse()
@@ -239,7 +238,7 @@ pub async fn get_block_timestamp(
     use subxt::backend::legacy::LegacyRpcMethods;
     use subxt::backend::rpc::RpcClient;
 
-    let client = get_substrate_client(state.pool()?).await?;
+    let client = get_substrate_client(&state).await?;
 
     // Build LegacyRpcMethods from the same RPC client to get block hash by number.
     let rpc_url = crate::substrate_client::get_current_wss_endpoint(state.pool()?)
@@ -275,7 +274,7 @@ pub async fn get_referral_links(
     state: tauri::State<'_, crate::app_state::AppState>,
     address: String,
 ) -> Result<Vec<ReferralLink>, String> {
-    let client = get_substrate_client(state.pool()?).await?;
+    let client = get_substrate_client(&state).await?;
     let target_account: subxt::utils::AccountId32 =
         address.parse().map_err(|_| "Invalid address".to_string())?;
 
@@ -347,7 +346,7 @@ pub async fn stake_bond(
     amount: String,
 ) -> Result<TxResult, String> {
     let signer = get_signer(&state)?;
-    let client = get_substrate_client(state.pool()?).await?;
+    let client = get_substrate_client(&state).await?;
     let address = get_substrate_address(&state)?;
 
     let amount: u128 = amount.parse().map_err(|e| format!("Invalid amount: {e}"))?;
@@ -410,7 +409,7 @@ pub async fn stake_unbond(
     amount: String,
 ) -> Result<TxResult, String> {
     let signer = get_signer(&state)?;
-    let client = get_substrate_client(state.pool()?).await?;
+    let client = get_substrate_client(&state).await?;
 
     let amount: u128 = amount.parse().map_err(|e| format!("Invalid amount: {e}"))?;
 
@@ -439,7 +438,7 @@ pub async fn stake_withdraw_unbonded(
     state: tauri::State<'_, crate::app_state::AppState>,
 ) -> Result<TxResult, String> {
     let signer = get_signer(&state)?;
-    let client = get_substrate_client(state.pool()?).await?;
+    let client = get_substrate_client(&state).await?;
     let address = get_substrate_address(&state)?;
 
     let account_id: subxt::utils::AccountId32 =
@@ -489,7 +488,7 @@ pub async fn stake_claim_rewards(
     state: tauri::State<'_, crate::app_state::AppState>,
 ) -> Result<TxResult, String> {
     let signer = get_signer(&state)?;
-    let client = get_substrate_client(state.pool()?).await?;
+    let client = get_substrate_client(&state).await?;
     let address = get_substrate_address(&state)?;
 
     let account_id: subxt::utils::AccountId32 =
@@ -540,7 +539,7 @@ pub async fn transfer_balance(
     amount: String,
 ) -> Result<TxResult, String> {
     let signer = get_signer(&state)?;
-    let client = get_substrate_client(state.pool()?).await?;
+    let client = get_substrate_client(&state).await?;
 
     let amount: u128 = amount.parse().map_err(|e| format!("Invalid amount: {e}"))?;
 

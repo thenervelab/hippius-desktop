@@ -136,8 +136,6 @@ export const useUserFiles = () => {
               label,
             });
 
-            console.log(`[useUserFiles] Raw entries from list_sync_folder (label: "${label}", path: "${syncPath}"):`, JSON.stringify(entries.slice(0, 5), null, 2));
-
             totalPrivateSize += entries.reduce(
               (sum, entry) => sum + BigInt(entry.size),
               BigInt(0)
@@ -153,7 +151,7 @@ export const useUserFiles = () => {
               // modified time. Pending (not-yet-uploaded) files show "—" (0).
               const isSynced = entry.sync_status === "synced";
               const createdAtMs = uploadedAtMs || (isSynced ? localModifiedMs : 0);
-              const lastChargedAtMs = updatedAtMs || uploadedAtMs || localModifiedMs;
+              const lastChargedAtMs = updatedAtMs || uploadedAtMs || (isSynced ? localModifiedMs : 0);
 
               // Check if this is an encrypted file name and provide friendly display name
               const displayName = isEncryptedFileId(entry.name)

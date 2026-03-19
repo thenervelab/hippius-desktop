@@ -1,14 +1,6 @@
 //! Notification settings commands.
 
 use crate::api_client::ApiClient;
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize)]
-pub struct NotificationSettings {
-    #[serde(flatten)]
-    pub data: serde_json::Value,
-}
-
 #[tauri::command]
 pub async fn get_notification_settings(
     state: tauri::State<'_, crate::app_state::AppState>,

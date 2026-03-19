@@ -12,8 +12,7 @@ use std::path::{Path, PathBuf};
 use tauri::Manager;
 use tracing::{info, warn};
 
-use crate::hcfs_drive::HCFS_DRIVES;
-use crate::sync_shared::{SyncActivityItem, update_state};
+use crate::sync_shared::SyncActivityItem;
 use crate::utils::account_key::account_key;
 
 /// Allow the given directory (recursively) in the Tauri asset protocol scope
@@ -153,6 +152,7 @@ pub async fn add_folder(sync_path: String, folder_path: String) -> Result<String
 /// ring buffer so the frontend can immediately filter it from recent files.
 #[tauri::command]
 pub async fn remove_file(
+    state: tauri::State<'_, crate::app_state::AppState>,
     sync_path: String,
     name: String,
     label: Option<String>,
@@ -183,8 +183,8 @@ pub async fn remove_file(
 
     // Record "deleted" activity so recent-files filtering works immediately.
     if let Some(lbl) = label {
-        update_state(&lbl, |state| {
-            state.add_activity(SyncActivityItem {
+        state.sync.update_state(&lbl, |st| {
+            st.add_activity(SyncActivityItem {
                 file_name: name.clone(),
                 action: "deleted".to_string(),
                 timestamp: chrono::Utc::now().timestamp(),
@@ -199,7 +199,8 @@ pub async fn remove_file(
 
 /// Sync info for a single file: path_hash (hex), optional Arion CID,
 /// and server-side timestamps.
-struct SyncedFileInfo {
+#[derive(Clone)]
+pub(crate) struct SyncedFileInfo {
     path_hash_hex: String,
     arion_cid: String,
     /// Unix timestamp when file was first uploaded (0 if unknown)
@@ -208,21 +209,11 @@ struct SyncedFileInfo {
     updated_at: i64,
 }
 
-/// Build a map of relative paths → sync info for files whose
-/// `path_hash` appears in the drive's persisted `synced` tree.
-/// Returns `None` when the drive isn't available (e.g. logged out)
-/// so the caller can fall back to "unknown".
-async fn synced_paths_for_label(label: &str) -> Option<HashMap<String, SyncedFileInfo>> {
-    // Use try_lock to avoid blocking file listing while sync holds the lock.
-    // When sync is in progress the lock is held for the entire network cycle;
-    // returning None here lets list_sync_folder report "unknown" sync status
-    // instead of hanging until sync completes.
-    let Ok(guard) = HCFS_DRIVES.try_lock() else {
-        return None;
-    };
-    let manager = guard.get(label)?;
-    let state = manager.load_sync_state().ok()?;
-
+/// Build a map of relative paths → sync info from a loaded `SyncState`.
+/// Extracted so it can be reused from the cache-update path in `hcfs_drive.rs`.
+pub(crate) fn build_synced_paths_from_state(
+    state: &hcfs_client::sync::SyncState,
+) -> HashMap<String, SyncedFileInfo> {
     let mut paths = HashMap::new();
     for (hash, rel_path) in &state.path_index {
         if state.synced.files.contains_key(hash) {
@@ -243,60 +234,71 @@ async fn synced_paths_for_label(label: &str) -> Option<HashMap<String, SyncedFil
             );
         }
     }
-    Some(paths)
+    paths
 }
 
-/// Recursively compute the total size of all files within a directory.
-/// Hidden files (starting with '.') are excluded to match listing behaviour.
-async fn dir_size_recursive(path: &Path) -> u64 {
-    let mut total: u64 = 0;
-    let Ok(mut dir) = tokio::fs::read_dir(path).await else {
-        return 0;
-    };
-    while let Ok(Some(entry)) = dir.next_entry().await {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
-            continue;
+/// Build a map of relative paths → sync info for files whose
+/// `path_hash` appears in the drive's persisted `synced` tree.
+/// Returns `None` when the drive isn't available (e.g. logged out)
+/// so the caller can fall back to "unknown".
+///
+/// Tries the live drive lock first (non-blocking). On success the cache
+/// is also refreshed. When the lock is unavailable (sync in progress),
+/// falls back to the last cached snapshot so the file browser still
+/// shows accurate sync status instead of "unknown".
+async fn synced_paths_for_label(
+    sync: &crate::sync_engine::SyncEngine,
+    label: &str,
+) -> Option<HashMap<String, SyncedFileInfo>> {
+    // Use try_lock to avoid blocking file listing while sync holds the lock.
+    match sync.drives.try_lock() {
+        Ok(guard) => {
+            let manager = guard.get(label)?;
+            let state = manager.load_sync_state().ok()?;
+            let paths = build_synced_paths_from_state(&state);
+            // Refresh the cache so future fallback reads are up-to-date.
+            sync.update_synced_paths_cache(label, paths.clone());
+            Some(paths)
         }
-        let Ok(meta) = entry.metadata().await else {
-            continue;
-        };
-        if meta.is_dir() {
-            total += Box::pin(dir_size_recursive(&entry.path())).await;
-        } else {
-            total += meta.len();
+        Err(_) => {
+            // Lock unavailable (sync in progress) — fall back to cache.
+            sync.get_cached_synced_paths(label)
         }
     }
-    total
 }
 
-/// Recursively count the total number of files (not directories) within a directory.
-/// Hidden files (starting with '.') are excluded to match listing behaviour.
-async fn dir_file_count_recursive(path: &Path) -> u64 {
+/// Recursively compute total size and file count within a directory.
+/// Hidden files (starting with '.') are excluded.
+async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
+    let mut size: u64 = 0;
     let mut count: u64 = 0;
     let Ok(mut dir) = tokio::fs::read_dir(path).await else {
-        return 0;
+        return (0, 0);
     };
     while let Ok(Some(entry)) = dir.next_entry().await {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') {
             continue;
         }
         let Ok(meta) = entry.metadata().await else {
             continue;
         };
         if meta.is_dir() {
-            count += Box::pin(dir_file_count_recursive(&entry.path())).await;
+            let (sub_size, sub_count) = Box::pin(dir_stats_recursive(&entry.path())).await;
+            size += sub_size;
+            count += sub_count;
         } else {
+            size += meta.len();
             count += 1;
         }
     }
-    count
+    (size, count)
 }
 
 /// List contents of sync folder
 #[tauri::command]
 pub async fn list_sync_folder(
+    state: tauri::State<'_, crate::app_state::AppState>,
     sync_path: String,
     subfolder: Option<String>,
     label: Option<String>,
@@ -319,7 +321,7 @@ pub async fn list_sync_folder(
 
     // Load synced file paths from the drive's persisted sync state
     let synced_set = match label {
-        Some(ref l) => synced_paths_for_label(l).await,
+        Some(ref l) => synced_paths_for_label(&state.sync, l).await,
         None => None,
     };
 
@@ -380,16 +382,10 @@ pub async fn list_sync_folder(
             }
         };
 
-        let size = if is_folder {
-            dir_size_recursive(&target.join(&name)).await
+        let (size, file_count) = if is_folder {
+            dir_stats_recursive(&target.join(&name)).await
         } else {
-            meta.len()
-        };
-
-        let file_count = if is_folder {
-            dir_file_count_recursive(&target.join(&name)).await
-        } else {
-            0
+            (meta.len(), 0)
         };
 
         entries.push(FileEntry {

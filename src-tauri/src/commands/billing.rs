@@ -1,7 +1,6 @@
 //! Billing, credits, and subscription commands.
 
 use crate::api_client::{ApiClient, IndexerClient};
-use serde::{Deserialize, Serialize};
 use tracing::info;
 
 // ---------------------------------------------------------------------------
@@ -119,12 +118,6 @@ pub async fn get_deposit_address(
 // ---------------------------------------------------------------------------
 // Indexer queries (credits, marketplace, balance history, events)
 // ---------------------------------------------------------------------------
-
-#[derive(Serialize, Deserialize)]
-pub struct IndexerResponse {
-    #[serde(flatten)]
-    pub data: serde_json::Value,
-}
 
 #[tauri::command]
 pub async fn get_indexer_credits(

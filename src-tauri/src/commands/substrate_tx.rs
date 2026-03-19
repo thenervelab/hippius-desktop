@@ -249,7 +249,7 @@ pub async fn transfer_balance_tauri(
     let recipient = sp_core::crypto::AccountId32::from_ss58check(&recipient_address)
         .map_err(|e| format!("Invalid recipient address: {e:?}"))?;
 
-    let api = get_substrate_client(state.pool()?)
+    let api = get_substrate_client(&state)
         .await
         .map_err(|e| format!("Failed to connect to Substrate node: {e}"))?;
 
@@ -502,7 +502,7 @@ pub async fn update_wss_endpoint_command(
     state: tauri::State<'_, crate::app_state::AppState>,
     endpoint: String,
 ) -> Result<String, String> {
-    update_wss_endpoint(state.pool()?, endpoint.clone()).await?;
+    update_wss_endpoint(&state, endpoint.clone()).await?;
     Ok(format!("WSS endpoint updated to: {}", endpoint))
 }
 

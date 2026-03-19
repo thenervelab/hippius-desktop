@@ -68,13 +68,13 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 
 ### Key Patterns
 
-**Global state in Rust** uses `once_cell::sync::OnceCell` (e.g., `DB_POOL`) and `once_cell::sync::Lazy` with `tokio::sync::Mutex` for async-safe singletons (e.g., `HCFS_DRIVES`).
+**Global state in Rust** is centralized in `AppState` (`app_state.rs`), registered via `app.manage(AppState::new())` at startup. Sub-states: `AuthInfo`, `BlockchainState`, `BlockSubscriptionState`, `OAuthState`, `NebulaState`, `MigrationState`, and `SyncEngine` (Arc). Command handlers access it via `tauri::State<'_, AppState>`, background tasks via `app.state::<AppState>()`. The DB pool uses `OnceLock` within AppState. No module-level `static` variables remain.
 
 **Multi-drive sync**: Drives are keyed by label string. The sync loop iterates all drives sequentially (round-robin). `SyncActivityItem` includes a `label` field; all Tauri events include `"label"` in JSON payload. DB constraint: `UNIQUE(owner, label)` in sync_paths table.
 
 **hcfs-client dependency**: The sync engine delegates to `hcfs-client` (from the `hippius-arion` repo, pinned to a git rev in Cargo.toml). Drive API: `new()`, `init()`, `unlock()`, `sync_async(SyncMode)`, `stage()`, `set_config()`, `set_progress_handlers()`. All file encryption is handled by hcfs-client via BIP-39 mnemonic.
 
-**SQLite**: Database pool is a global `OnceCell<SqlitePool>`. Schema is maintained via `ensure_table_schema()` in `builder_blocks/setup.rs` (not migration files). Access pattern: `DB_POOL.get().ok_or("Database not initialized")?`.
+**SQLite**: Database pool lives in `AppState` as a `OnceLock<SqlitePool>`. Schema is maintained via `ensure_table_schema()` in `builder_blocks/setup.rs` (not migration files). Access pattern: `state.pool()?` (from command handlers) or `app.state::<AppState>().pool()?` (from background tasks).
 
 **Logging**: All Rust code uses `tracing` macros (`info!`, `debug!`, `warn!`, `error!`) — never `println!`/`eprintln!`. The subscriber is initialized in `main.rs` with module-path targets. Set `RUST_LOG=debug` for verbose output.
 

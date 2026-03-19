@@ -1,31 +1,30 @@
-//! Lazy Substrate/Polkadot RPC client with auto-retry.
+//! Substrate/Polkadot RPC client with auto-retry.
 //!
-//! Maintains a cached `OnlineClient<PolkadotConfig>` behind a `RwLock`.
-//! On first use (or after `clear_substrate_client()`), connects to the WSS
-//! endpoint from the database with up to 10 retries at 5-second intervals.
+//! Maintains a cached `OnlineClient<PolkadotConfig>` behind the `RwLock`
+//! in `AppState.blockchain.client`. On first use (or after
+//! `clear_substrate_client()`), connects to the WSS endpoint from the
+//! database with up to 10 retries using exponential backoff.
 
 use crate::constants::substrate::WSS_ENDPOINT;
-use once_cell::sync::Lazy;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
-use std::sync::RwLock;
 use std::time::Duration;
 use subxt::{OnlineClient, PolkadotConfig};
 use tokio::time::sleep;
 use tracing::{info, warn};
 
-static SUBSTRATE_CLIENT: Lazy<RwLock<Option<Arc<OnlineClient<PolkadotConfig>>>>> =
-    Lazy::new(|| RwLock::new(None));
-
 const MAX_RETRIES: usize = 10;
 
+/// Get or create the shared Substrate RPC client from `AppState.blockchain.client`.
 pub async fn get_substrate_client(
-    pool: &SqlitePool,
+    app_state: &crate::app_state::AppState,
 ) -> Result<Arc<OnlineClient<PolkadotConfig>>, String> {
+    let lock = &app_state.blockchain.client;
+
     // Check if we have an existing client
     let existing_client = {
-        let client = SUBSTRATE_CLIENT
+        let client = lock
             .read()
             .map_err(|e| format!("Substrate client lock failed: {e}"))?;
         client.clone()
@@ -34,6 +33,8 @@ pub async fn get_substrate_client(
     if let Some(client) = existing_client {
         return Ok(client);
     }
+
+    let pool = app_state.pool()?;
 
     // Get the current WSS endpoint from database, fallback to default constant
     let wss_endpoint = get_current_wss_endpoint(pool)
@@ -46,7 +47,7 @@ pub async fn get_substrate_client(
         match OnlineClient::<PolkadotConfig>::from_url(&wss_endpoint).await {
             Ok(client) => {
                 let arc = Arc::new(client);
-                let mut client_lock = SUBSTRATE_CLIENT
+                let mut client_lock = lock
                     .write()
                     .map_err(|e| format!("Substrate client lock failed: {e}"))?;
                 *client_lock = Some(arc.clone());
@@ -80,8 +81,10 @@ pub async fn get_substrate_client(
     }
 }
 
-pub fn clear_substrate_client() {
-    if let Ok(mut client) = SUBSTRATE_CLIENT.write() {
+/// Clear the cached Substrate client so the next call to `get_substrate_client`
+/// will reconnect.
+pub fn clear_substrate_client(app_state: &crate::app_state::AppState) {
+    if let Ok(mut client) = app_state.blockchain.client.write() {
         *client = None;
         info!("Cleared substrate client");
     } else {
@@ -106,11 +109,16 @@ pub async fn get_current_wss_endpoint(pool: &SqlitePool) -> Result<String, Strin
 }
 
 /// Update the WSS endpoint in database and clear the current client.
-pub async fn update_wss_endpoint(pool: &SqlitePool, new_endpoint: String) -> Result<(), String> {
+pub async fn update_wss_endpoint(
+    app_state: &crate::app_state::AppState,
+    new_endpoint: String,
+) -> Result<(), String> {
     // Validate the endpoint format (basic check)
     if !new_endpoint.starts_with("ws://") && !new_endpoint.starts_with("wss://") {
         return Err("Invalid WSS endpoint format. Must start with ws:// or wss://".to_string());
     }
+
+    let pool = app_state.pool()?;
 
     // Update or insert the endpoint
     let result = sqlx::query(
@@ -123,7 +131,7 @@ pub async fn update_wss_endpoint(pool: &SqlitePool, new_endpoint: String) -> Res
 
     if result.rows_affected() > 0 {
         // Clear the current client so it will reconnect with new endpoint
-        clear_substrate_client();
+        clear_substrate_client(app_state);
         info!("WSS endpoint updated to: {}", new_endpoint);
         Ok(())
     } else {

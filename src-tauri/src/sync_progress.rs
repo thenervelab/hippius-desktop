@@ -2,16 +2,18 @@
 //!
 //! Replaces the frontend's localStorage-based `syncProgressService.ts`.
 //! All state is transient (not persisted to SQLite) — it only lives for the
-//! duration of the app process. Uses a global `Mutex<SyncProgressState>`
-//! following the same pattern as `sync_shared.rs`.
+//! duration of the app process. State is stored in `SyncEngine::progress`
+//! (see `sync_engine.rs`) and accessed via `AppState::sync`.
+//!
+//! Each public function has two forms:
+//! - An inner function (e.g. `start_session`) that takes `&SyncEngine` and
+//!   contains the business logic. Called from both Tauri wrappers and Rust code.
+//! - A `#[tauri::command]` wrapper (e.g. `sp_start_session`) that extracts the
+//!   `SyncEngine` from `tauri::State<AppState>` and delegates to the inner fn.
 
-use once_cell::sync::Lazy;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashMap;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
-use tauri::{AppHandle, Emitter};
+use std::sync::atomic::Ordering;
 use tracing::warn;
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -25,6 +27,8 @@ pub enum FileStatus {
     Pending,
     Uploading,
     Downloading,
+    Encrypting,
+    Decrypting,
     Deleting,
     Completed,
     Error,
@@ -35,6 +39,8 @@ pub enum FileStatus {
 pub enum FileAction {
     Upload,
     Download,
+    Encrypt,
+    Decrypt,
     LocalDelete,
     RemoteDelete,
 }
@@ -119,6 +125,8 @@ pub struct SessionFileList {
 pub enum FileProgressStatus {
     Pending,
     InProgress,
+    Encrypting,
+    Decrypting,
     Completed,
     Error,
 }
@@ -150,99 +158,12 @@ pub struct SyncSnapshot {
     pub files: Vec<FileProgress>,
 }
 
-// ── Global State ───────────────────────────────────────────────────────
-
-pub static SYNC_PROGRESS: Lazy<Mutex<SyncProgressState>> = Lazy::new(|| {
-    Mutex::new(SyncProgressState {
-        current_session: None,
-        recent_files: Vec::new(),
-        last_updated: now_ms(),
-    })
-});
-
-/// Global app handle for emitting snapshot events.
-static SYNC_APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
-
-/// Last time a snapshot was emitted (for byte-update throttling).
-static LAST_EMIT_TIME: Lazy<Mutex<Instant>> = Lazy::new(|| Mutex::new(Instant::now()));
-
-/// Whether a delayed emit is already scheduled.
-static EMIT_SCHEDULED: Lazy<std::sync::atomic::AtomicBool> =
-    Lazy::new(|| std::sync::atomic::AtomicBool::new(false));
-
-const EMIT_THROTTLE_MS: u64 = 250;
-
-/// Store the app handle for later event emission.
-/// Call once during app setup.
-pub fn set_app_handle(app: AppHandle) {
-    if let Ok(mut handle) = SYNC_APP_HANDLE.lock() {
-        *handle = Some(app);
-    }
-}
-
-/// Emit a snapshot event to the frontend.
-///
-/// `immediate`: bypasses throttle for status transitions (file completed,
-/// error, session start/stop). When false, throttles to one emit per 250ms
-/// and schedules a delayed flush for pending byte-progress updates.
-fn emit_snapshot_inner(immediate: bool) {
-    let snapshot = {
-        let state = SYNC_PROGRESS.lock().unwrap_or_else(|p| {
-            warn!("Poisoned mutex in emit_snapshot");
-            p.into_inner()
-        });
-        build_snapshot(&state)
-    };
-
-    let app = SYNC_APP_HANDLE
-        .lock()
-        .ok()
-        .and_then(|g| g.clone());
-
-    let Some(app) = app else { return };
-
-    if immediate {
-        if let Ok(mut t) = LAST_EMIT_TIME.lock() {
-            *t = Instant::now();
-        }
-        let _ = app.emit("sync_progress_snapshot", &snapshot);
-        return;
-    }
-
-    // Throttled path
-    let should_emit = LAST_EMIT_TIME
-        .lock()
-        .ok()
-        .map_or(true, |t| t.elapsed().as_millis() >= u128::from(EMIT_THROTTLE_MS));
-
-    if should_emit {
-        if let Ok(mut t) = LAST_EMIT_TIME.lock() {
-            *t = Instant::now();
-        }
-        let _ = app.emit("sync_progress_snapshot", &snapshot);
-    } else if !EMIT_SCHEDULED.swap(true, Ordering::AcqRel) {
-        let app_clone = app.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(EMIT_THROTTLE_MS));
-            EMIT_SCHEDULED.store(false, Ordering::Release);
-            let snapshot = {
-                let state = SYNC_PROGRESS.lock().unwrap_or_else(|p| {
-                    warn!("Poisoned mutex in delayed emit");
-                    p.into_inner()
-                });
-                build_snapshot(&state)
-            };
-            if let Ok(mut t) = LAST_EMIT_TIME.lock() {
-                *t = Instant::now();
-            }
-            let _ = app_clone.emit("sync_progress_snapshot", &snapshot);
-        });
-    }
-}
+// Global state is stored in `SyncEngine` (see `sync_engine.rs`).
+// Tauri commands access it via `AppState::sync`; Rust callers pass `&SyncEngine` directly.
 
 // ── Helper Functions ───────────────────────────────────────────────────
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
@@ -254,12 +175,11 @@ fn generate_file_id(path: &str) -> String {
     format!("file_{:x}", hash.unsigned_abs())
 }
 
-fn generate_session_id() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
+fn generate_session_id(sync: &crate::sync_engine::SyncEngine) -> String {
     format!(
         "session_{}_{}",
         now_ms(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
+        sync.session_counter.fetch_add(1, Ordering::Relaxed)
     )
 }
 
@@ -423,6 +343,8 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
                 FileStatus::Uploading
                 | FileStatus::Downloading
                 | FileStatus::Deleting => FileProgressStatus::InProgress,
+                FileStatus::Encrypting => FileProgressStatus::Encrypting,
+                FileStatus::Decrypting => FileProgressStatus::Decrypting,
                 FileStatus::Completed => FileProgressStatus::Completed,
                 FileStatus::Error => FileProgressStatus::Error,
             };
@@ -497,10 +419,11 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
     }
 }
 
-// ── Tauri Commands ─────────────────────────────────────────────────────
+// ── Inner Functions (business logic, callable from Rust and tests) ─────
 
-#[tauri::command]
-pub fn sp_start_session(
+/// Start a new sync session, moving any existing completed files to recent.
+pub fn start_session(
+    sync: &crate::sync_engine::SyncEngine,
     expected_uploads: u32,
     expected_downloads: u32,
     expected_local_deletes: u32,
@@ -508,8 +431,8 @@ pub fn sp_start_session(
     file_list: Option<SessionFileList>,
     label: Option<String>,
 ) -> Result<SyncSession, String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_start_session");
+    let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in start_session");
         poisoned.into_inner()
     });
 
@@ -521,7 +444,7 @@ pub fn sp_start_session(
 
     let now = now_ms();
     let mut session = SyncSession {
-        session_id: generate_session_id(),
+        session_id: generate_session_id(sync),
         started_at: now,
         completed_at: None,
         is_active: true,
@@ -542,12 +465,28 @@ pub fn sp_start_session(
     state.last_updated = now;
 
     drop(state);
-    emit_snapshot_inner(true);
+    sync.emit_snapshot(true);
     Ok(result)
 }
 
+// ── Tauri Commands (thin wrappers delegating to inner functions) ───────
+
 #[tauri::command]
-pub fn sp_merge_into_session(
+pub fn sp_start_session(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    expected_uploads: u32,
+    expected_downloads: u32,
+    expected_local_deletes: u32,
+    expected_remote_deletes: u32,
+    file_list: Option<SessionFileList>,
+    label: Option<String>,
+) -> Result<SyncSession, String> {
+    start_session(&state.sync, expected_uploads, expected_downloads, expected_local_deletes, expected_remote_deletes, file_list, label)
+}
+
+/// Merge file expectations into the current active session, or start a new one.
+pub fn merge_into_session(
+    sync: &crate::sync_engine::SyncEngine,
     expected_uploads: u32,
     expected_downloads: u32,
     expected_local_deletes: u32,
@@ -555,8 +494,8 @@ pub fn sp_merge_into_session(
     file_list: Option<SessionFileList>,
     label: Option<String>,
 ) -> Result<(), String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_merge_into_session");
+    let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in merge_into_session");
         poisoned.into_inner()
     });
 
@@ -576,7 +515,7 @@ pub fn sp_merge_into_session(
     } else {
         // No active session — start a new one
         let mut session = SyncSession {
-            session_id: generate_session_id(),
+            session_id: generate_session_id(sync),
             started_at: now,
             completed_at: None,
             is_active: true,
@@ -585,7 +524,7 @@ pub fn sp_merge_into_session(
             expected_local_deletes,
             expected_remote_deletes,
             files: HashMap::new(),
-            };
+        };
 
         if let Some(fl) = &file_list {
             register_files(&mut session, fl, lbl);
@@ -596,14 +535,31 @@ pub fn sp_merge_into_session(
 
     state.last_updated = now;
     drop(state);
-    emit_snapshot_inner(true);
+    sync.emit_snapshot(true);
     Ok(())
 }
 
 #[tauri::command]
-pub fn sp_complete_session(files_uploaded: u32, files_downloaded: u32) -> Result<(), String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_complete_session");
+pub fn sp_merge_into_session(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    expected_uploads: u32,
+    expected_downloads: u32,
+    expected_local_deletes: u32,
+    expected_remote_deletes: u32,
+    file_list: Option<SessionFileList>,
+    label: Option<String>,
+) -> Result<(), String> {
+    merge_into_session(&state.sync, expected_uploads, expected_downloads, expected_local_deletes, expected_remote_deletes, file_list, label)
+}
+
+/// Complete the current session, marking remaining files as done if counts match.
+pub fn complete_session(
+    sync: &crate::sync_engine::SyncEngine,
+    files_uploaded: u32,
+    files_downloaded: u32,
+) -> Result<(), String> {
+    let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in complete_session");
         poisoned.into_inner()
     });
 
@@ -616,7 +572,9 @@ pub fn sp_complete_session(files_uploaded: u32, files_downloaded: u32) -> Result
             .values()
             .filter(|f| {
                 f.action == FileAction::Upload
-                    && (f.status == FileStatus::Pending || f.status == FileStatus::Uploading)
+                    && (f.status == FileStatus::Pending
+                        || f.status == FileStatus::Uploading
+                        || f.status == FileStatus::Encrypting)
             })
             .count() as u32;
         let pending_downloads = session
@@ -624,7 +582,9 @@ pub fn sp_complete_session(files_uploaded: u32, files_downloaded: u32) -> Result
             .values()
             .filter(|f| {
                 f.action == FileAction::Download
-                    && (f.status == FileStatus::Pending || f.status == FileStatus::Downloading)
+                    && (f.status == FileStatus::Pending
+                        || f.status == FileStatus::Downloading
+                        || f.status == FileStatus::Decrypting)
             })
             .count() as u32;
 
@@ -636,6 +596,8 @@ pub fn sp_complete_session(files_uploaded: u32, files_downloaded: u32) -> Result
                 if file.status == FileStatus::Pending
                     || file.status == FileStatus::Uploading
                     || file.status == FileStatus::Downloading
+                    || file.status == FileStatus::Encrypting
+                    || file.status == FileStatus::Decrypting
                 {
                     file.status = FileStatus::Completed;
                     file.progress = 100;
@@ -663,19 +625,28 @@ pub fn sp_complete_session(files_uploaded: u32, files_downloaded: u32) -> Result
 
     // Keep the session around (even when inactive with no pending files)
     // so the UI can display the completed state via overallProgress. The
-    // session is replaced when the next sync cycle calls sp_start_session.
+    // session is replaced when the next sync cycle calls start_session.
 
     state.last_updated = now;
 
     drop(state);
-    emit_snapshot_inner(true);
+    sync.emit_snapshot(true);
     Ok(())
 }
 
 #[tauri::command]
-pub fn sp_stop_session() -> Result<(), String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_stop_session");
+pub fn sp_complete_session(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    files_uploaded: u32,
+    files_downloaded: u32,
+) -> Result<(), String> {
+    complete_session(&state.sync, files_uploaded, files_downloaded)
+}
+
+/// Stop the current session, marking it as inactive.
+pub fn stop_session(sync: &crate::sync_engine::SyncEngine) -> Result<(), String> {
+    let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in stop_session");
         poisoned.into_inner()
     });
 
@@ -686,20 +657,28 @@ pub fn sp_stop_session() -> Result<(), String> {
 
     state.last_updated = now_ms();
     drop(state);
-    emit_snapshot_inner(true);
+    sync.emit_snapshot(true);
     Ok(())
 }
 
 #[tauri::command]
-pub fn sp_update_file_progress(
+pub fn sp_stop_session(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<(), String> {
+    stop_session(&state.sync)
+}
+
+/// Update progress for a single file within the current session.
+pub fn update_file_progress(
+    sync: &crate::sync_engine::SyncEngine,
     path: String,
     bytes_transferred: u64,
     total_bytes: u64,
     action: FileAction,
     label: Option<String>,
 ) -> Result<Option<SyncFile>, String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_update_file_progress");
+    let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in update_file_progress");
         poisoned.into_inner()
     });
 
@@ -736,15 +715,34 @@ pub fn sp_update_file_progress(
         file.progress = ((bytes_transferred as f64 / total_bytes as f64) * 100.0).round().min(100.0) as u32;
     }
 
-    // Update status based on progress
+    // Update status based on progress.
+    // Encrypt/Decrypt completing does NOT mean the file is done — the real
+    // upload/download follows. Only Upload/Download/Delete reaching 100%
+    // mark the file Completed.
     if bytes_transferred >= total_bytes && total_bytes > 0 {
-        file.status = FileStatus::Completed;
-        file.progress = 100;
-        file.completed_at = Some(now);
+        match action {
+            FileAction::Encrypt | FileAction::Decrypt => {
+                // Keep the encrypting/decrypting status — the actual
+                // transfer will update the file again with Upload/Download.
+                file.status = match action {
+                    FileAction::Encrypt => FileStatus::Encrypting,
+                    FileAction::Decrypt => FileStatus::Decrypting,
+                    _ => unreachable!(),
+                };
+                file.progress = 100;
+            }
+            _ => {
+                file.status = FileStatus::Completed;
+                file.progress = 100;
+                file.completed_at = Some(now);
+            }
+        }
     } else {
         file.status = match action {
             FileAction::Upload => FileStatus::Uploading,
             FileAction::Download => FileStatus::Downloading,
+            FileAction::Encrypt => FileStatus::Encrypting,
+            FileAction::Decrypt => FileStatus::Decrypting,
             FileAction::LocalDelete | FileAction::RemoteDelete => FileStatus::Deleting,
         };
     }
@@ -753,14 +751,26 @@ pub fn sp_update_file_progress(
     state.last_updated = now;
 
     drop(state);
-    emit_snapshot_inner(false);
+    sync.emit_snapshot(false);
     Ok(Some(result))
 }
 
 #[tauri::command]
-pub fn sp_complete_pending_files() -> Result<(), String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_complete_pending_files");
+pub fn sp_update_file_progress(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    path: String,
+    bytes_transferred: u64,
+    total_bytes: u64,
+    action: FileAction,
+    label: Option<String>,
+) -> Result<Option<SyncFile>, String> {
+    update_file_progress(&state.sync, path, bytes_transferred, total_bytes, action, label)
+}
+
+/// Force-complete all pending files. Stalled files (0 bytes) become errors.
+pub fn complete_pending_files(sync: &crate::sync_engine::SyncEngine) -> Result<(), String> {
+    let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in complete_pending_files");
         poisoned.into_inner()
     });
 
@@ -771,6 +781,8 @@ pub fn sp_complete_pending_files() -> Result<(), String> {
             if file.status == FileStatus::Pending
                 || file.status == FileStatus::Uploading
                 || file.status == FileStatus::Downloading
+                || file.status == FileStatus::Encrypting
+                || file.status == FileStatus::Decrypting
                 || file.status == FileStatus::Deleting
             {
                 // Files that never received any progress data (0 bytes
@@ -794,17 +806,25 @@ pub fn sp_complete_pending_files() -> Result<(), String> {
 
     state.last_updated = now;
     drop(state);
-    emit_snapshot_inner(true);
+    sync.emit_snapshot(true);
     Ok(())
 }
 
 #[tauri::command]
-pub fn sp_mark_pending_files_as_failed(
+pub fn sp_complete_pending_files(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<(), String> {
+    complete_pending_files(&state.sync)
+}
+
+/// Mark excess pending files as failed based on actual vs expected counts.
+pub fn mark_pending_files_as_failed(
+    sync: &crate::sync_engine::SyncEngine,
     actual_uploads: u32,
     actual_downloads: u32,
 ) -> Result<(), String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_mark_pending_files_as_failed");
+    let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in mark_pending_files_as_failed");
         poisoned.into_inner()
     });
 
@@ -831,7 +851,9 @@ pub fn sp_mark_pending_files_as_failed(
         for key in keys {
             if let Some(file) = session.files.get_mut(&key) {
                 if file.action == FileAction::Upload
-                    && (file.status == FileStatus::Pending || file.status == FileStatus::Uploading)
+                    && (file.status == FileStatus::Pending
+                        || file.status == FileStatus::Uploading
+                        || file.status == FileStatus::Encrypting)
                     && failed_uploads < excess_uploads
                 {
                     file.status = FileStatus::Error;
@@ -840,7 +862,8 @@ pub fn sp_mark_pending_files_as_failed(
                     failed_uploads += 1;
                 } else if file.action == FileAction::Download
                     && (file.status == FileStatus::Pending
-                        || file.status == FileStatus::Downloading)
+                        || file.status == FileStatus::Downloading
+                        || file.status == FileStatus::Decrypting)
                     && failed_downloads < excess_downloads
                 {
                     file.status = FileStatus::Error;
@@ -855,10 +878,13 @@ pub fn sp_mark_pending_files_as_failed(
         // (these are the ones that actually succeeded)
         for file in session.files.values_mut() {
             if (file.action == FileAction::Upload
-                && (file.status == FileStatus::Pending || file.status == FileStatus::Uploading))
+                && (file.status == FileStatus::Pending
+                    || file.status == FileStatus::Uploading
+                    || file.status == FileStatus::Encrypting))
                 || (file.action == FileAction::Download
                     && (file.status == FileStatus::Pending
-                        || file.status == FileStatus::Downloading))
+                        || file.status == FileStatus::Downloading
+                        || file.status == FileStatus::Decrypting))
             {
                 file.status = FileStatus::Completed;
                 file.progress = 100;
@@ -872,14 +898,26 @@ pub fn sp_mark_pending_files_as_failed(
 
     state.last_updated = now;
     drop(state);
-    emit_snapshot_inner(true);
+    sync.emit_snapshot(true);
     Ok(())
 }
 
 #[tauri::command]
-pub fn sp_mark_all_pending_files_as_failed(error_message: String) -> Result<(), String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_mark_all_pending_files_as_failed");
+pub fn sp_mark_pending_files_as_failed(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    actual_uploads: u32,
+    actual_downloads: u32,
+) -> Result<(), String> {
+    mark_pending_files_as_failed(&state.sync, actual_uploads, actual_downloads)
+}
+
+/// Mark every pending/in-progress file as failed with the given error message.
+pub fn mark_all_pending_files_as_failed(
+    sync: &crate::sync_engine::SyncEngine,
+    error_message: String,
+) -> Result<(), String> {
+    let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in mark_all_pending_files_as_failed");
         poisoned.into_inner()
     });
 
@@ -890,6 +928,8 @@ pub fn sp_mark_all_pending_files_as_failed(error_message: String) -> Result<(), 
             if file.status == FileStatus::Pending
                 || file.status == FileStatus::Uploading
                 || file.status == FileStatus::Downloading
+                || file.status == FileStatus::Encrypting
+                || file.status == FileStatus::Decrypting
                 || file.status == FileStatus::Deleting
             {
                 file.status = FileStatus::Error;
@@ -901,14 +941,26 @@ pub fn sp_mark_all_pending_files_as_failed(error_message: String) -> Result<(), 
 
     state.last_updated = now;
     drop(state);
-    emit_snapshot_inner(true);
+    sync.emit_snapshot(true);
     Ok(())
 }
 
 #[tauri::command]
-pub fn sp_mark_file_error(path: String, error: String) -> Result<(), String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_mark_file_error");
+pub fn sp_mark_all_pending_files_as_failed(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    error_message: String,
+) -> Result<(), String> {
+    mark_all_pending_files_as_failed(&state.sync, error_message)
+}
+
+/// Mark a specific file as having encountered an error.
+pub fn mark_file_error(
+    sync: &crate::sync_engine::SyncEngine,
+    path: String,
+    error: String,
+) -> Result<(), String> {
+    let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in mark_file_error");
         poisoned.into_inner()
     });
 
@@ -924,15 +976,26 @@ pub fn sp_mark_file_error(path: String, error: String) -> Result<(), String> {
 
     state.last_updated = now;
     drop(state);
-    emit_snapshot_inner(true);
+    sync.emit_snapshot(true);
     Ok(())
 }
 
-
 #[tauri::command]
-pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
-    let state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_get_overall_progress");
+pub fn sp_mark_file_error(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    path: String,
+    error: String,
+) -> Result<(), String> {
+    mark_file_error(&state.sync, path, error)
+}
+
+
+/// Compute overall progress from the current session.
+pub fn get_overall_progress(
+    sync: &crate::sync_engine::SyncEngine,
+) -> Result<OverallProgress, String> {
+    let state = sync.progress.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in get_overall_progress");
         poisoned.into_inner()
     });
 
@@ -966,7 +1029,11 @@ pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
     for f in session.files.values() {
         match f.status {
             FileStatus::Completed => completed_files += 1,
-            FileStatus::Uploading | FileStatus::Downloading | FileStatus::Deleting => {
+            FileStatus::Uploading
+            | FileStatus::Downloading
+            | FileStatus::Encrypting
+            | FileStatus::Decrypting
+            | FileStatus::Deleting => {
                 in_progress_files += 1;
                 if !should_hide_file(&f.path) {
                     let dominated = current_file
@@ -1013,11 +1080,22 @@ pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
     })
 }
 
-
 #[tauri::command]
-pub fn sp_record_deleted_file(file_name: String, size_bytes: u64) -> Result<(), String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_record_deleted_file");
+pub fn sp_get_overall_progress(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<OverallProgress, String> {
+    get_overall_progress(&state.sync)
+}
+
+
+/// Record a deleted file in the recent files list.
+pub fn record_deleted_file(
+    sync: &crate::sync_engine::SyncEngine,
+    file_name: String,
+    size_bytes: u64,
+) -> Result<(), String> {
+    let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in record_deleted_file");
         poisoned.into_inner()
     });
 
@@ -1049,15 +1127,28 @@ pub fn sp_record_deleted_file(file_name: String, size_bytes: u64) -> Result<(), 
     clean_expired(&mut state);
     state.last_updated = now;
 
+    drop(state);
+    sync.emit_snapshot(true);
     Ok(())
+}
+
+#[tauri::command]
+pub fn sp_record_deleted_file(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    file_name: String,
+    size_bytes: u64,
+) -> Result<(), String> {
+    record_deleted_file(&state.sync, file_name, size_bytes)
 }
 
 /// Remove all files for a given drive label from the current session.
 /// Completed files are moved to recent; remaining files are dropped.
-#[tauri::command]
-pub fn sp_remove_files_for_label(label: String) -> Result<(), String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_remove_files_for_label");
+pub fn remove_files_for_label(
+    sync: &crate::sync_engine::SyncEngine,
+    label: String,
+) -> Result<(), String> {
+    let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in remove_files_for_label");
         poisoned.into_inner()
     });
 
@@ -1104,14 +1195,22 @@ pub fn sp_remove_files_for_label(label: String) -> Result<(), String> {
     state.last_updated = now;
 
     drop(state);
-    emit_snapshot_inner(true);
+    sync.emit_snapshot(true);
     Ok(())
 }
 
 #[tauri::command]
-pub fn sp_clear_all_data() -> Result<(), String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_clear_all_data");
+pub fn sp_remove_files_for_label(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    label: String,
+) -> Result<(), String> {
+    remove_files_for_label(&state.sync, label)
+}
+
+/// Clear all sync progress data (session + recent files).
+pub fn clear_all_data(sync: &crate::sync_engine::SyncEngine) -> Result<(), String> {
+    let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in clear_all_data");
         poisoned.into_inner()
     });
 
@@ -1120,26 +1219,50 @@ pub fn sp_clear_all_data() -> Result<(), String> {
     state.last_updated = now_ms();
 
     drop(state);
-    emit_snapshot_inner(true);
+    sync.emit_snapshot(true);
     Ok(())
 }
 
 #[tauri::command]
-pub fn sp_get_snapshot() -> Result<SyncSnapshot, String> {
-    let state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_get_snapshot");
+pub fn sp_clear_all_data(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<(), String> {
+    clear_all_data(&state.sync)
+}
+
+/// Get a full snapshot of the current sync progress state.
+pub fn get_snapshot(sync: &crate::sync_engine::SyncEngine) -> Result<SyncSnapshot, String> {
+    let state = sync.progress.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in get_snapshot");
         poisoned.into_inner()
     });
     Ok(build_snapshot(&state))
 }
 
+#[tauri::command]
+pub fn sp_get_snapshot(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<SyncSnapshot, String> {
+    get_snapshot(&state.sync)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::OnceLock;
 
-    /// Helper: reset global state before each test.
+    /// Test-only shared `SyncEngine` instance. Not used in production code.
+    /// Tests share a single engine because the Rust test runner may run tests
+    /// in the same process; `reset_state()` clears the progress between tests.
+    fn test_sync() -> &'static crate::sync_engine::SyncEngine {
+        static ENG: OnceLock<crate::sync_engine::SyncEngine> = OnceLock::new();
+        ENG.get_or_init(crate::sync_engine::SyncEngine::new)
+    }
+
+    /// Helper: reset shared engine state before each test.
     fn reset_state() {
-        let mut state = SYNC_PROGRESS.lock().unwrap();
+        let eng = test_sync();
+        let mut state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
         state.current_session = None;
         state.recent_files.clear();
         state.last_updated = now_ms();
@@ -1448,6 +1571,7 @@ mod tests {
     #[test]
     fn complete_session_keeps_inactive_session() {
         reset_state();
+        let eng = test_sync();
 
         // Start a session with 1 upload
         let file_list = SessionFileList {
@@ -1456,10 +1580,11 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_start_session(1, 0, 0, 0, Some(file_list), Some("drive1".to_string())).unwrap();
+        start_session(eng, 1, 0, 0, 0, Some(file_list), Some("drive1".to_string())).unwrap();
 
         // Complete the file
-        sp_update_file_progress(
+        update_file_progress(
+            eng,
             "/test/file.txt".to_string(),
             100,
             100,
@@ -1469,12 +1594,12 @@ mod tests {
         .unwrap();
 
         // Complete the session
-        sp_complete_session(1, 0).unwrap();
+        complete_session(eng, 1, 0).unwrap();
 
         // Session should still exist (inactive) so the UI can show
         // completed state via overallProgress. It gets replaced on
-        // the next sp_start_session call.
-        let state = SYNC_PROGRESS.lock().unwrap();
+        // the next start_session call.
+        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
         let session = state.current_session.as_ref().expect("Session should be kept");
         assert!(!session.is_active, "Session should be inactive");
         assert!(
@@ -1488,6 +1613,7 @@ mod tests {
     #[test]
     fn start_session_replaces_completed_session() {
         reset_state();
+        let eng = test_sync();
 
         // Create and complete a session
         let file_list = SessionFileList {
@@ -1496,8 +1622,9 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_start_session(1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
-        sp_update_file_progress(
+        start_session(eng, 1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+        update_file_progress(
+            eng,
             "/test/old.txt".to_string(),
             50,
             50,
@@ -1505,7 +1632,7 @@ mod tests {
             Some("d1".to_string()),
         )
         .unwrap();
-        sp_complete_session(1, 0).unwrap();
+        complete_session(eng, 1, 0).unwrap();
 
         // Start a new session — old completed files should move to recent
         let new_list = SessionFileList {
@@ -1514,9 +1641,9 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_start_session(1, 0, 0, 0, Some(new_list), Some("d1".to_string())).unwrap();
+        start_session(eng, 1, 0, 0, 0, Some(new_list), Some("d1".to_string())).unwrap();
 
-        let state = SYNC_PROGRESS.lock().unwrap();
+        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
         let session = state.current_session.as_ref().unwrap();
         assert!(session.is_active);
         assert!(session.files.contains_key("/test/new.txt"));
@@ -1528,6 +1655,7 @@ mod tests {
     #[test]
     fn completed_session_still_reports_files_in_snapshot() {
         reset_state();
+        let eng = test_sync();
 
         let file_list = SessionFileList {
             upload_files: Some(vec!["/test/a.txt".to_string()]),
@@ -1535,8 +1663,9 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_start_session(1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
-        sp_update_file_progress(
+        start_session(eng, 1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+        update_file_progress(
+            eng,
             "/test/a.txt".to_string(),
             50,
             50,
@@ -1544,21 +1673,22 @@ mod tests {
             Some("d1".to_string()),
         )
         .unwrap();
-        sp_complete_session(1, 0).unwrap();
+        complete_session(eng, 1, 0).unwrap();
 
         // Session is kept (inactive) so snapshot should still show files
-        let snapshot = sp_get_snapshot().unwrap();
+        let snapshot = get_snapshot(eng).unwrap();
         assert!(snapshot.total_files > 0, "Completed session should still report files");
 
         // After clearing all data, snapshot should be empty
-        sp_clear_all_data().unwrap();
-        let snapshot = sp_get_snapshot().unwrap();
+        clear_all_data(eng).unwrap();
+        let snapshot = get_snapshot(eng).unwrap();
         assert_eq!(snapshot.total_files, 0, "No files after clear_all_data");
     }
 
     #[test]
     fn remove_files_for_label_only_removes_matching() {
         reset_state();
+        let eng = test_sync();
 
         let file_list = SessionFileList {
             upload_files: Some(vec!["/drive1/a.txt".to_string()]),
@@ -1566,7 +1696,7 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_start_session(1, 0, 0, 0, Some(file_list), Some("drive1".to_string())).unwrap();
+        start_session(eng, 1, 0, 0, 0, Some(file_list), Some("drive1".to_string())).unwrap();
 
         // Add files for a second drive
         let file_list2 = SessionFileList {
@@ -1575,10 +1705,11 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_merge_into_session(1, 0, 0, 0, Some(file_list2), Some("drive2".to_string())).unwrap();
+        merge_into_session(eng, 1, 0, 0, 0, Some(file_list2), Some("drive2".to_string())).unwrap();
 
         // Complete drive1's file
-        sp_update_file_progress(
+        update_file_progress(
+            eng,
             "/drive1/a.txt".to_string(),
             100,
             100,
@@ -1588,9 +1719,9 @@ mod tests {
         .unwrap();
 
         // Remove drive1 files
-        sp_remove_files_for_label("drive1".to_string()).unwrap();
+        remove_files_for_label(eng, "drive1".to_string()).unwrap();
 
-        let state = SYNC_PROGRESS.lock().unwrap();
+        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
         let session = state.current_session.as_ref().unwrap();
 
         // drive2's file should still exist
@@ -1604,6 +1735,7 @@ mod tests {
     #[test]
     fn label_propagates_to_sync_file() {
         reset_state();
+        let eng = test_sync();
 
         let file_list = SessionFileList {
             upload_files: Some(vec!["/myfile.txt".to_string()]),
@@ -1611,9 +1743,9 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_start_session(1, 0, 0, 0, Some(file_list), Some("photos".to_string())).unwrap();
+        start_session(eng, 1, 0, 0, 0, Some(file_list), Some("photos".to_string())).unwrap();
 
-        let state = SYNC_PROGRESS.lock().unwrap();
+        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
         let session = state.current_session.as_ref().unwrap();
         let file = session.files.get("/myfile.txt").unwrap();
         assert_eq!(file.label, "photos");
@@ -1622,6 +1754,7 @@ mod tests {
     #[test]
     fn label_propagates_to_recent_file() {
         reset_state();
+        let eng = test_sync();
 
         let file_list = SessionFileList {
             upload_files: Some(vec!["/myfile.txt".to_string()]),
@@ -1629,8 +1762,9 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_start_session(1, 0, 0, 0, Some(file_list), Some("docs".to_string())).unwrap();
-        sp_update_file_progress(
+        start_session(eng, 1, 0, 0, 0, Some(file_list), Some("docs".to_string())).unwrap();
+        update_file_progress(
+            eng,
             "/myfile.txt".to_string(),
             100,
             100,
@@ -1638,9 +1772,9 @@ mod tests {
             Some("docs".to_string()),
         )
         .unwrap();
-        sp_complete_session(1, 0).unwrap();
+        complete_session(eng, 1, 0).unwrap();
 
-        let state = SYNC_PROGRESS.lock().unwrap();
+        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
         let recent = state
             .recent_files
             .iter()
@@ -1652,6 +1786,7 @@ mod tests {
     #[test]
     fn overall_progress_counts_encrypted_downloads() {
         reset_state();
+        let eng = test_sync();
 
         // Start session with 1 upload and 1 download
         let file_list = SessionFileList {
@@ -1662,10 +1797,11 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_start_session(1, 1, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+        start_session(eng, 1, 1, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
         // Upload is 50% done
-        sp_update_file_progress(
+        update_file_progress(
+            eng,
             "/photo.jpg".to_string(),
             500,
             1000,
@@ -1674,7 +1810,7 @@ mod tests {
         )
         .unwrap();
 
-        let progress = sp_get_overall_progress().unwrap();
+        let progress = get_overall_progress(eng).unwrap();
         // Both files should be counted (including the encrypted download)
         assert_eq!(progress.total_files, 2);
         assert_eq!(progress.in_progress_files, 1);
@@ -1687,6 +1823,7 @@ mod tests {
     #[test]
     fn snapshot_includes_encrypted_downloads_with_display_name() {
         reset_state();
+        let eng = test_sync();
 
         let file_list = SessionFileList {
             upload_files: None,
@@ -1696,9 +1833,9 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_start_session(0, 1, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+        start_session(eng, 0, 1, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
-        let snapshot = sp_get_snapshot().unwrap();
+        let snapshot = get_snapshot(eng).unwrap();
         assert_eq!(snapshot.files.len(), 1);
         assert_eq!(snapshot.files[0].file_name, "Encrypted file");
     }
@@ -1706,6 +1843,7 @@ mod tests {
     #[test]
     fn overall_percent_reaches_100_after_force_complete() {
         reset_state();
+        let eng = test_sync();
 
         // Register 2 files, both with progress data
         let file_list = SessionFileList {
@@ -1717,10 +1855,11 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_start_session(2, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+        start_session(eng, 2, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
         // File A reports partial progress
-        sp_update_file_progress(
+        update_file_progress(
+            eng,
             "/a.txt".to_string(),
             500,
             1000,
@@ -1730,7 +1869,8 @@ mod tests {
         .unwrap();
 
         // File B reports partial progress too
-        sp_update_file_progress(
+        update_file_progress(
+            eng,
             "/b.txt".to_string(),
             200,
             400,
@@ -1740,9 +1880,9 @@ mod tests {
         .unwrap();
 
         // Force-complete all pending files
-        sp_complete_pending_files().unwrap();
+        complete_pending_files(eng).unwrap();
 
-        let progress = sp_get_overall_progress().unwrap();
+        let progress = get_overall_progress(eng).unwrap();
         assert_eq!(progress.completed_files, 2);
         // All files are completed, so overall_percent should be 100
         assert_eq!(progress.overall_percent, 100);
@@ -1751,6 +1891,7 @@ mod tests {
     #[test]
     fn complete_pending_marks_stalled_files_as_error() {
         reset_state();
+        let eng = test_sync();
 
         // Register 3 files: one completes, one has partial progress,
         // one never receives any progress data (stalled).
@@ -1764,10 +1905,11 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_start_session(3, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+        start_session(eng, 3, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
         // File 1: fully transferred (auto-completes in update)
-        sp_update_file_progress(
+        update_file_progress(
+            eng,
             "/completed.txt".to_string(),
             1000,
             1000,
@@ -1777,7 +1919,8 @@ mod tests {
         .unwrap();
 
         // File 2: partial progress (bytes_transferred > 0)
-        sp_update_file_progress(
+        update_file_progress(
+            eng,
             "/partial.txt".to_string(),
             500,
             1000,
@@ -1790,9 +1933,9 @@ mod tests {
         // with bytes_transferred == 0.
 
         // Force-complete all pending files
-        sp_complete_pending_files().unwrap();
+        complete_pending_files(eng).unwrap();
 
-        let state = SYNC_PROGRESS.lock().unwrap();
+        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
         let session = state.current_session.as_ref().unwrap();
 
         // Completed file stays Completed
@@ -1882,6 +2025,7 @@ mod tests {
     #[test]
     fn overall_percent_reflects_actual_byte_ratio() {
         reset_state();
+        let eng = test_sync();
 
         // Start with 1 file at 80% progress
         let file_list = SessionFileList {
@@ -1890,9 +2034,10 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_start_session(1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+        start_session(eng, 1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
-        sp_update_file_progress(
+        update_file_progress(
+            eng,
             "/a.txt".to_string(),
             800,
             1000,
@@ -1901,7 +2046,7 @@ mod tests {
         )
         .unwrap();
 
-        let p1 = sp_get_overall_progress().unwrap();
+        let p1 = get_overall_progress(eng).unwrap();
         assert_eq!(p1.overall_percent, 80);
 
         // Merge a large file — this dilutes byte progress:
@@ -1913,10 +2058,11 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_merge_into_session(1, 0, 0, 0, Some(merge_list), Some("d1".to_string()))
+        merge_into_session(eng, 1, 0, 0, 0, Some(merge_list), Some("d1".to_string()))
             .unwrap();
 
-        sp_update_file_progress(
+        update_file_progress(
+            eng,
             "/big.bin".to_string(),
             0,
             10000,
@@ -1925,7 +2071,7 @@ mod tests {
         )
         .unwrap();
 
-        let p2 = sp_get_overall_progress().unwrap();
+        let p2 = get_overall_progress(eng).unwrap();
         assert_eq!(p2.total_files, 2);
         // 800 / 11000 = 7.27% → rounds to 7
         assert_eq!(p2.overall_percent, 7);
@@ -1937,6 +2083,7 @@ mod tests {
     #[test]
     fn overall_percent_reaches_100_when_all_finished() {
         reset_state();
+        let eng = test_sync();
 
         // 3 files: all completed → must be exactly 100, not 99
         let file_list = SessionFileList {
@@ -1949,10 +2096,11 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_start_session(3, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+        start_session(eng, 3, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
         for path in ["/a.txt", "/b.txt", "/c.txt"] {
-            sp_update_file_progress(
+            update_file_progress(
+                eng,
                 path.to_string(),
                 1000,
                 1000,
@@ -1962,13 +2110,14 @@ mod tests {
             .unwrap();
         }
 
-        let p = sp_get_overall_progress().unwrap();
+        let p = get_overall_progress(eng).unwrap();
         assert_eq!(p.overall_percent, 100);
     }
 
     #[test]
     fn overall_percent_100_when_all_known_bytes_transferred() {
         reset_state();
+        let eng = test_sync();
 
         // 2 files: both in-progress at 100% bytes but not marked Completed
         // (simulating edge case where bytes match but status hasn't flipped)
@@ -1981,10 +2130,11 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        sp_start_session(2, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+        start_session(eng, 2, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
         // Only update one file — the other stays Pending
-        sp_update_file_progress(
+        update_file_progress(
+            eng,
             "/a.txt".to_string(),
             1000,
             1000,
@@ -1993,7 +2143,7 @@ mod tests {
         )
         .unwrap();
 
-        let p = sp_get_overall_progress().unwrap();
+        let p = get_overall_progress(eng).unwrap();
         // /a.txt auto-completed (1000/1000), /b.txt still Pending (no bytes).
         // Byte-weighted: 1000/1000 = 100%. No artificial cap — when all
         // known bytes are transferred the bar reaches 100%.

@@ -6,24 +6,17 @@
 
 use crate::utils::account_key::account_key;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Mutex;
 use tracing::{error, info};
-
-use once_cell::sync::Lazy;
 
 // ---------------------------------------------------------------------------
 // PKCE state (in-memory, keyed by provider to prevent race conditions)
 // ---------------------------------------------------------------------------
 
-struct PkceState {
+pub struct PkceState {
     provider: String,
     #[allow(dead_code)] // stored for future nonce validation in complete_oauth_flow
     nonce: String,
 }
-
-static PKCE_STATES: Lazy<Mutex<HashMap<String, PkceState>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
 
 const API_BASE_URL: &str = "https://api.hippius.com";
 const CALLBACK_URL: &str = "https://console.hippius.com/auth/callback";
@@ -89,7 +82,10 @@ struct ExchangeUser {
 /// Build the OAuth authorization URL for the given provider and return it.
 /// The frontend opens this URL in the external browser.
 #[tauri::command]
-pub async fn start_oauth_flow(provider: String) -> Result<OAuthUrlResult, String> {
+pub async fn start_oauth_flow(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    provider: String,
+) -> Result<OAuthUrlResult, String> {
     info!(provider = %provider, "OAuth flow started");
     let base = api_base_url();
 
@@ -103,7 +99,11 @@ pub async fn start_oauth_flow(provider: String) -> Result<OAuthUrlResult, String
     // Store PKCE state keyed by provider (with nonce to prevent replay)
     let nonce = uuid::Uuid::new_v4().to_string();
     {
-        let mut states = PKCE_STATES.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let mut states = state
+            .oauth
+            .pkce_states
+            .lock()
+            .map_err(|e| format!("Lock error: {e}"))?;
         states.insert(
             provider.clone(),
             PkceState {
@@ -146,7 +146,15 @@ pub async fn complete_oauth_flow(
     }
 
     let (token, user_id, username, email, substrate_address) = if let Some(ref t) = params.token {
-        // Token returned directly by backend
+        // Token returned directly by backend — clear all PKCE state
+        {
+            let mut states = state
+                .oauth
+                .pkce_states
+                .lock()
+                .map_err(|e| format!("Lock error: {e}"))?;
+            states.clear();
+        }
         (
             t.clone(),
             params.user_id.unwrap_or(0),
@@ -155,10 +163,20 @@ pub async fn complete_oauth_flow(
             params.substrate_address.clone().unwrap_or_default(),
         )
     } else if let Some(ref code) = params.code {
-        // Exchange code for token — look up PKCE state by any stored provider
+        // Exchange code for token — look up PKCE state.
+        // Validate there's exactly one pending flow to prevent ambiguity.
         let provider = {
-            let states = PKCE_STATES.lock().map_err(|e| format!("Lock error: {e}"))?;
-            // There should be exactly one pending flow; use it
+            let states = state
+                .oauth
+                .pkce_states
+                .lock()
+                .map_err(|e| format!("Lock error: {e}"))?;
+            if states.is_empty() {
+                return Err("No pending OAuth flow found".to_string());
+            }
+            if states.len() > 1 {
+                return Err("Multiple pending OAuth flows — cannot determine provider".to_string());
+            }
             states
                 .values()
                 .next()
@@ -167,8 +185,7 @@ pub async fn complete_oauth_flow(
         };
 
         let base = api_base_url();
-        let client = reqwest::Client::new();
-        let resp = client
+        let resp = state.api_client
             .post(format!("{base}/api/auth/exchange/"))
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
@@ -191,6 +208,16 @@ pub async fn complete_oauth_flow(
             .await
             .map_err(|e| format!("Token exchange parse error: {e}"))?;
 
+        // Remove only the matching provider's PKCE state (not all entries)
+        {
+            let mut states = state
+                .oauth
+                .pkce_states
+                .lock()
+                .map_err(|e| format!("Lock error: {e}"))?;
+            states.remove(&provider);
+        }
+
         (
             data.token,
             data.user.id,
@@ -201,12 +228,6 @@ pub async fn complete_oauth_flow(
     } else {
         return Err("Missing both token and authorization code".into());
     };
-
-    // Clear PKCE state for this provider
-    {
-        let mut states = PKCE_STATES.lock().map_err(|e| format!("Lock error: {e}"))?;
-        states.clear();
-    }
 
     // Session expires in 30 days
     let expires_at = {

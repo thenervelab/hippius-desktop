@@ -149,36 +149,6 @@ impl ApiClient {
         Self::handle_response(resp).await
     }
 
-    /// POST request with auth, returns empty body (204 etc).
-    pub async fn post_no_body<B: Serialize>(
-        &self,
-        path: &str,
-        body: &B,
-        account_id: &str,
-    ) -> Result<(), ApiError> {
-        let token = get_auth_token_for_account(&self.pool, account_id).await?;
-        let url = format!("{}{}", self.base_url, path);
-
-        let resp = self
-            .client
-            .post(&url)
-            .header(AUTHORIZATION, format!("Token {token}"))
-            .header(CONTENT_TYPE, "application/json")
-            .header(ACCEPT, "application/json")
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| ApiError::Other(e.to_string()))?;
-
-        if resp.status().is_success() {
-            Ok(())
-        } else {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
-            Err(ApiError::Http { status, body })
-        }
-    }
-
     /// PATCH request with auth and JSON body.
     pub async fn patch<T: DeserializeOwned, B: Serialize>(
         &self,

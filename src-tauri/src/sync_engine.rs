@@ -1,0 +1,708 @@
+//! Consolidated sync engine state.
+//!
+//! Lives as `AppState.sync: Arc<SyncEngine>` (see `app_state.rs`). Tauri
+//! commands access it via `state.sync`, background tasks via
+//! `app.state::<AppState>().sync.clone()`, and sync callbacks capture the
+//! `Arc<SyncEngine>` at setup time.
+//!
+//! All fields use interior mutability so `&SyncEngine` suffices everywhere:
+//! - `AtomicBool` / `AtomicI64` for simple flags and counters
+//! - `std::sync::Mutex` for complex types accessed from sync callbacks
+//! - `tokio::sync::Mutex` for drive registry (async-only access)
+
+use crate::hcfs_drive::HcfsDriveManager;
+use crate::sync_progress::SyncProgressState;
+use crate::sync_shared::{HcfsSyncState, SyncActivityItem, SyncEngineHealth};
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::Mutex as StdMutex;
+use std::time::Instant;
+use tauri::{AppHandle, Emitter};
+use tokio::sync::Mutex as TokioMutex;
+use tokio::task::JoinHandle;
+use tracing::{info, warn};
+
+/// Maximum number of recent activity items to keep per drive.
+const MAX_ACTIVITY: usize = 100;
+
+/// RAII guard that sets `token_refreshing` to true on creation and false on drop.
+/// Holds an `Arc<SyncEngine>` so it works without global state.
+pub struct TokenRefreshGuard {
+    sync: std::sync::Arc<SyncEngine>,
+}
+
+impl TokenRefreshGuard {
+    pub fn new(sync: std::sync::Arc<SyncEngine>) -> Self {
+        sync.set_token_refreshing(true);
+        Self { sync }
+    }
+}
+
+impl Drop for TokenRefreshGuard {
+    fn drop(&mut self) {
+        self.sync.set_token_refreshing(false);
+    }
+}
+
+// Manual Debug impl because several fields (Mutex internals, JoinHandle, AppHandle)
+// don't implement Debug. We only need the derive for Tauri's `manage()`.
+impl std::fmt::Debug for SyncEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncEngine").finish_non_exhaustive()
+    }
+}
+
+pub struct SyncEngine {
+    // ── Drive Registry (async-only access) ──────────────────────────────
+    pub drives: TokioMutex<HashMap<String, HcfsDriveManager>>,
+    pub loop_handle: TokioMutex<Option<JoinHandle<()>>>,
+
+    // ── Atomic Flags (lock-free, any context) ───────────────────────────
+    pub cancel_token: AtomicBool,
+    pub sync_in_progress: AtomicBool,
+    pub changes_pending: AtomicBool,
+    pub review_mode: AtomicBool,
+    pub review_entered_at: AtomicI64,
+    pub token_refreshing: AtomicBool,
+    pub consecutive_failures: AtomicI64,
+    pub emit_scheduled: AtomicBool,
+    /// Epoch timestamp of the last progress callback. Used by stall detection
+    /// to abort syncs that stop making forward progress (e.g. hung upload).
+    pub last_progress_time: AtomicI64,
+
+    // ── Blocking Mutex State (sync-callback safe) ───────────────────────
+    pub states: StdMutex<HashMap<String, HcfsSyncState>>,
+    pub pending_activity: StdMutex<Vec<SyncActivityItem>>,
+    pub health: StdMutex<SyncEngineHealth>,
+    pub progress: StdMutex<SyncProgressState>,
+    pub app_handle: StdMutex<Option<AppHandle>>,
+    pub last_emit_time: StdMutex<Instant>,
+    pub session_counter: AtomicU64,
+
+    // ── Synced Paths Cache (fallback when drives lock unavailable) ────
+    pub synced_paths_cache: StdMutex<HashMap<String, HashMap<String, crate::commands::file_commands::SyncedFileInfo>>>,
+}
+
+impl SyncEngine {
+    pub fn new() -> Self {
+        Self {
+            drives: TokioMutex::new(HashMap::new()),
+            loop_handle: TokioMutex::new(None),
+            cancel_token: AtomicBool::new(false),
+            sync_in_progress: AtomicBool::new(false),
+            changes_pending: AtomicBool::new(false),
+            review_mode: AtomicBool::new(false),
+            review_entered_at: AtomicI64::new(0),
+            token_refreshing: AtomicBool::new(false),
+            consecutive_failures: AtomicI64::new(0),
+            emit_scheduled: AtomicBool::new(false),
+            last_progress_time: AtomicI64::new(0),
+            states: StdMutex::new(HashMap::new()),
+            pending_activity: StdMutex::new(Vec::new()),
+            health: StdMutex::new(SyncEngineHealth::default()),
+            progress: StdMutex::new(SyncProgressState {
+                current_session: None,
+                recent_files: Vec::new(),
+                last_updated: crate::sync_progress::now_ms(),
+            }),
+            app_handle: StdMutex::new(None),
+            last_emit_time: StdMutex::new(Instant::now()),
+            session_counter: AtomicU64::new(0),
+            synced_paths_cache: StdMutex::new(HashMap::new()),
+        }
+    }
+
+    // ── Cancellation ────────────────────────────────────────────────────
+
+    pub fn request_cancel(&self) {
+        self.cancel_token.store(true, Ordering::SeqCst);
+    }
+
+    pub fn clear_cancel(&self) {
+        self.cancel_token.store(false, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_token.load(Ordering::SeqCst)
+    }
+
+    // ── Stall Detection ────────────────────────────────────────────────
+
+    /// Record that forward progress was just made (called from every
+    /// progress callback).
+    pub fn touch_progress_time(&self) {
+        self.last_progress_time
+            .store(chrono::Utc::now().timestamp(), Ordering::Release);
+    }
+
+    /// Reset the progress clock at the start of a sync cycle.
+    pub fn reset_progress_time(&self) {
+        self.last_progress_time
+            .store(chrono::Utc::now().timestamp(), Ordering::Release);
+    }
+
+    /// Returns `true` when no progress callback has fired for 3 minutes,
+    /// indicating the sync is probably hung.
+    pub fn is_progress_stalled(&self) -> bool {
+        let last = self.last_progress_time.load(Ordering::Acquire);
+        if last == 0 {
+            return false;
+        }
+        (chrono::Utc::now().timestamp() - last) > 180
+    }
+
+    // ── Review Mode ─────────────────────────────────────────────────────
+
+    pub fn set_review_entered(&self) {
+        let now = chrono::Utc::now().timestamp_millis();
+        self.review_entered_at.store(now, Ordering::Release);
+    }
+
+    pub fn clear_review_entered(&self) {
+        self.review_entered_at.store(0, Ordering::Release);
+    }
+
+    pub fn is_review_timed_out(&self, timeout_secs: i64) -> bool {
+        let entered = self.review_entered_at.load(Ordering::Acquire);
+        if entered == 0 {
+            return false;
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        (now - entered) > timeout_secs * 1000
+    }
+
+    // ── Token Refresh ───────────────────────────────────────────────────
+
+    pub fn is_token_refreshing(&self) -> bool {
+        self.token_refreshing.load(Ordering::SeqCst)
+    }
+
+    pub fn set_token_refreshing(&self, v: bool) {
+        self.token_refreshing.store(v, Ordering::SeqCst);
+    }
+
+    // ── Consecutive Failures ────────────────────────────────────────────
+
+    pub fn record_sync_failure(&self) -> i64 {
+        self.consecutive_failures.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    pub fn reset_sync_failures(&self) {
+        self.consecutive_failures.store(0, Ordering::SeqCst);
+    }
+
+    pub fn get_sync_failures(&self) -> i64 {
+        self.consecutive_failures.load(Ordering::SeqCst)
+    }
+
+    // ── Health ──────────────────────────────────────────────────────────
+
+    pub fn get_health(&self) -> SyncEngineHealth {
+        self.health
+            .lock()
+            .unwrap_or_else(|p| {
+                warn!("Poisoned mutex recovered in get_health");
+                p.into_inner()
+            })
+            .clone()
+    }
+
+    pub fn reset_health(&self) {
+        let mut health = self.health.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in reset_health");
+            p.into_inner()
+        });
+        *health = SyncEngineHealth::default();
+    }
+
+    // ── Per-Drive Sync State ────────────────────────────────────────────
+
+    pub fn update_state<F>(&self, label: &str, f: F)
+    where
+        F: FnOnce(&mut HcfsSyncState),
+    {
+        let mut states = self.states.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in update_state");
+            p.into_inner()
+        });
+        let state = states.entry(label.to_string()).or_default();
+        f(state);
+    }
+
+    pub fn reset_all_states(&self) {
+        let mut states = self.states.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in reset_all_states");
+            p.into_inner()
+        });
+        states.clear();
+    }
+
+    pub fn remove_state(&self, label: &str) {
+        let mut states = self.states.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in remove_state");
+            p.into_inner()
+        });
+        states.remove(label);
+    }
+
+    // ── Pending Activity ────────────────────────────────────────────────
+
+    pub fn add_pending_activity(&self, item: SyncActivityItem) {
+        let mut pending = self.pending_activity.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in add_pending_activity");
+            p.into_inner()
+        });
+        let already_exists = pending.iter().any(|existing| {
+            existing.file_name == item.file_name
+                && existing.action == item.action
+                && existing.label == item.label
+                && existing.size_bytes == item.size_bytes
+        });
+        if !already_exists {
+            pending.push(item);
+        }
+    }
+
+    pub fn commit_pending_activity_for_label(&self, label: &str) {
+        let items: Vec<SyncActivityItem> = {
+            let mut pending = self.pending_activity.lock().unwrap_or_else(|p| {
+                warn!("Poisoned mutex recovered in commit_pending_activity_for_label");
+                p.into_inner()
+            });
+            let (matching, remaining): (Vec<_>, Vec<_>) =
+                pending.drain(..).partition(|item| item.label == label);
+            *pending = remaining;
+            matching
+        };
+        if !items.is_empty() {
+            info!(
+                "[Sync] Committing {} activity items for label '{}' to recent files",
+                items.len(),
+                label
+            );
+            self.update_state(label, |state| {
+                for item in &items {
+                    info!("[Sync] -> {} ({})", item.file_name, item.action);
+                }
+                for item in items {
+                    state.add_activity(item);
+                }
+            });
+        }
+    }
+
+    pub fn discard_pending_activity_for_label(&self, label: &str) {
+        let mut pending = self.pending_activity.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in discard_pending_activity_for_label");
+            p.into_inner()
+        });
+        let before = pending.len();
+        pending.retain(|item| item.label != label);
+        let removed = before - pending.len();
+        if removed > 0 {
+            info!(
+                "[Sync] Discarding {} pending activity items for label '{}' (sync failed or no real transfers)",
+                removed, label
+            );
+        }
+    }
+
+    pub fn discard_all_pending_activity(&self) {
+        let mut pending = self.pending_activity.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in discard_all_pending_activity");
+            p.into_inner()
+        });
+        if !pending.is_empty() {
+            info!(
+                "[Sync] Discarding all {} pending activity items",
+                pending.len()
+            );
+        }
+        pending.clear();
+    }
+
+    // ── Combined Sync Status (Tauri commands) ───────────────────────────
+
+    pub fn get_sync_status(&self) -> crate::sync_shared::CombinedSyncState {
+        let states = self.states.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in get_sync_status");
+            p.into_inner()
+        });
+
+        let is_syncing = states.values().any(|s| s.is_syncing);
+        let last_sync_time = states.values().filter_map(|s| s.last_sync_time).max();
+
+        let mut all_activity: Vec<SyncActivityItem> = states
+            .values()
+            .flat_map(|s| s.recent_activity.iter().cloned())
+            .collect();
+        all_activity.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        all_activity.truncate(MAX_ACTIVITY);
+
+        crate::sync_shared::CombinedSyncState {
+            is_syncing,
+            last_sync_time,
+            recent_activity: all_activity.into(),
+        }
+    }
+
+    pub fn get_sync_activity(
+        &self,
+        limit: Option<usize>,
+        label: Option<String>,
+    ) -> Vec<SyncActivityItem> {
+        let states = self.states.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in get_sync_activity");
+            p.into_inner()
+        });
+        let max = limit.unwrap_or(50);
+
+        if let Some(lbl) = label {
+            states
+                .get(&lbl)
+                .map(|s| s.recent_activity.iter().take(max).cloned().collect())
+                .unwrap_or_default()
+        } else {
+            let mut all: Vec<SyncActivityItem> = states
+                .values()
+                .flat_map(|s| s.recent_activity.iter().cloned())
+                .collect();
+            all.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+            all.truncate(max);
+            all
+        }
+    }
+
+    // ── App Handle (for snapshot emission) ──────────────────────────────
+
+    pub fn set_app_handle(&self, app: AppHandle) {
+        if let Ok(mut handle) = self.app_handle.lock() {
+            *handle = Some(app);
+        }
+    }
+
+    // ── Snapshot Emission (throttled) ───────────────────────────────────
+
+    pub fn emit_snapshot(&self, immediate: bool) {
+        let snapshot = {
+            let state = self.progress.lock().unwrap_or_else(|p| {
+                warn!("Poisoned mutex in emit_snapshot");
+                p.into_inner()
+            });
+            crate::sync_progress::build_snapshot(&state)
+        };
+
+        let app = self
+            .app_handle
+            .lock()
+            .ok()
+            .and_then(|g| g.clone());
+
+        let Some(app) = app else { return };
+
+        if immediate {
+            if let Ok(mut t) = self.last_emit_time.lock() {
+                *t = Instant::now();
+            }
+            let _ = app.emit("sync_progress_snapshot", &snapshot);
+            return;
+        }
+
+        // Throttled path
+        let should_emit = self
+            .last_emit_time
+            .lock()
+            .ok()
+            .map_or(true, |t| t.elapsed().as_millis() >= 250);
+
+        if should_emit {
+            if let Ok(mut t) = self.last_emit_time.lock() {
+                *t = Instant::now();
+            }
+            let _ = app.emit("sync_progress_snapshot", &snapshot);
+        } else if !self.emit_scheduled.swap(true, Ordering::AcqRel) {
+            let app_clone = app.clone();
+            // Retrieve the SyncEngine from Tauri managed AppState inside the
+            // thread — avoids raw pointers and lifetime issues.
+            std::thread::spawn(move || {
+                use tauri::Manager;
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                let app_state = app_clone.state::<crate::app_state::AppState>();
+                let sync = &app_state.sync;
+                sync.emit_scheduled.store(false, Ordering::Release);
+                let snapshot = {
+                    let state = sync.progress.lock().unwrap_or_else(|p| {
+                        warn!("Poisoned mutex in delayed emit");
+                        p.into_inner()
+                    });
+                    crate::sync_progress::build_snapshot(&state)
+                };
+                if let Ok(mut t) = sync.last_emit_time.lock() {
+                    *t = Instant::now();
+                }
+                let _ = app_clone.emit("sync_progress_snapshot", &snapshot);
+            });
+        }
+    }
+
+    // ── Synced Paths Cache ───────────────────────────────────────────────
+
+    /// Update the cached synced-paths map for a given drive label.
+    /// Called after each successful sync so the file browser can fall back
+    /// to this snapshot when the drives lock is unavailable.
+    pub fn update_synced_paths_cache(
+        &self,
+        label: &str,
+        paths: HashMap<String, crate::commands::file_commands::SyncedFileInfo>,
+    ) {
+        if let Ok(mut cache) = self.synced_paths_cache.lock() {
+            cache.insert(label.to_string(), paths);
+        }
+    }
+
+    /// Return a clone of the cached synced-paths for `label`, if available.
+    pub fn get_cached_synced_paths(
+        &self,
+        label: &str,
+    ) -> Option<HashMap<String, crate::commands::file_commands::SyncedFileInfo>> {
+        let cache = self.synced_paths_cache.lock().ok()?;
+        cache.get(label).cloned()
+    }
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync_shared::SyncActivityItem;
+
+    fn activity(name: &str, action: &str, label: &str, size: u64) -> SyncActivityItem {
+        SyncActivityItem {
+            file_name: name.to_string(),
+            action: action.to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            size_bytes: size,
+            label: label.to_string(),
+        }
+    }
+
+    #[test]
+    fn duplicate_pending_activity_is_skipped() {
+        let eng = SyncEngine::new();
+        let item = activity("a.txt", "uploaded", "docs", 100);
+        eng.add_pending_activity(item.clone());
+        eng.add_pending_activity(item);
+        eng.commit_pending_activity_for_label("docs");
+        let states = eng.states.lock().unwrap();
+        assert_eq!(states.get("docs").unwrap().recent_activity.len(), 1);
+    }
+
+    #[test]
+    fn different_action_is_not_deduplicated() {
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity("a.txt", "uploaded", "docs", 100));
+        eng.add_pending_activity(activity("a.txt", "downloaded", "docs", 100));
+        eng.commit_pending_activity_for_label("docs");
+        let states = eng.states.lock().unwrap();
+        assert_eq!(states.get("docs").unwrap().recent_activity.len(), 2);
+    }
+
+    #[test]
+    fn different_size_is_not_deduplicated() {
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity("a.txt", "uploaded", "docs", 100));
+        eng.add_pending_activity(activity("a.txt", "uploaded", "docs", 200));
+        eng.commit_pending_activity_for_label("docs");
+        let states = eng.states.lock().unwrap();
+        assert_eq!(states.get("docs").unwrap().recent_activity.len(), 2);
+    }
+
+    #[test]
+    fn different_label_is_not_deduplicated() {
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity("a.txt", "uploaded", "docs", 100));
+        eng.add_pending_activity(activity("a.txt", "uploaded", "photos", 100));
+        eng.commit_pending_activity_for_label("docs");
+        eng.commit_pending_activity_for_label("photos");
+        let states = eng.states.lock().unwrap();
+        assert_eq!(states.get("docs").unwrap().recent_activity.len(), 1);
+        assert_eq!(states.get("photos").unwrap().recent_activity.len(), 1);
+    }
+
+    #[test]
+    fn commit_moves_matching_label_only() {
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity("d.txt", "uploaded", "docs", 10));
+        eng.add_pending_activity(activity("p.jpg", "uploaded", "photos", 20));
+        eng.commit_pending_activity_for_label("docs");
+        let states = eng.states.lock().unwrap();
+        assert_eq!(states.get("docs").unwrap().recent_activity.len(), 1);
+        assert!(states.get("photos").is_none());
+    }
+
+    #[test]
+    fn discard_removes_matching_label_only() {
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity("d.txt", "uploaded", "docs", 10));
+        eng.add_pending_activity(activity("p.jpg", "uploaded", "photos", 20));
+        eng.discard_pending_activity_for_label("docs");
+        eng.commit_pending_activity_for_label("photos");
+        let states = eng.states.lock().unwrap();
+        assert!(states.get("docs").is_none());
+        assert_eq!(states.get("photos").unwrap().recent_activity.len(), 1);
+    }
+
+    #[test]
+    fn discard_all_clears_everything() {
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity("a.txt", "uploaded", "docs", 10));
+        eng.add_pending_activity(activity("b.jpg", "uploaded", "photos", 20));
+        eng.discard_all_pending_activity();
+        eng.commit_pending_activity_for_label("docs");
+        eng.commit_pending_activity_for_label("photos");
+        let states = eng.states.lock().unwrap();
+        assert!(states.get("docs").is_none());
+        assert!(states.get("photos").is_none());
+    }
+
+    #[test]
+    fn activity_ring_buffer_caps_at_100() {
+        let eng = SyncEngine::new();
+        for i in 0..120 {
+            eng.update_state("docs", |state| {
+                state.add_activity(activity(
+                    &format!("file_{i}.txt"),
+                    "uploaded",
+                    "docs",
+                    i as u64,
+                ));
+            });
+        }
+        let states = eng.states.lock().unwrap();
+        assert_eq!(states.get("docs").unwrap().recent_activity.len(), 100);
+    }
+
+    #[test]
+    fn per_label_state_is_isolated() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| s.is_syncing = true);
+        eng.update_state("photos", |s| s.last_sync_time = Some(1234));
+        let states = eng.states.lock().unwrap();
+        let docs = states.get("docs").unwrap();
+        let photos = states.get("photos").unwrap();
+        assert!(docs.is_syncing);
+        assert_eq!(docs.last_sync_time, None);
+        assert!(!photos.is_syncing);
+        assert_eq!(photos.last_sync_time, Some(1234));
+    }
+
+    #[test]
+    fn remove_state_deletes_label() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| s.is_syncing = true);
+        eng.remove_state("docs");
+        let states = eng.states.lock().unwrap();
+        assert!(states.get("docs").is_none());
+    }
+
+    #[test]
+    fn combined_status_any_syncing() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| s.is_syncing = false);
+        eng.update_state("photos", |s| s.is_syncing = true);
+        let combined = eng.get_sync_status();
+        assert!(combined.is_syncing);
+    }
+
+    #[test]
+    fn combined_status_last_sync_time_is_max() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| s.last_sync_time = Some(100));
+        eng.update_state("photos", |s| s.last_sync_time = Some(500));
+        eng.update_state("music", |s| s.last_sync_time = Some(300));
+        let combined = eng.get_sync_status();
+        assert_eq!(combined.last_sync_time, Some(500));
+    }
+
+    #[test]
+    fn combined_status_merges_activity_sorted_by_time() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| {
+            s.add_activity(SyncActivityItem {
+                file_name: "old.txt".to_string(),
+                action: "uploaded".to_string(),
+                timestamp: 100,
+                size_bytes: 1,
+                label: "docs".to_string(),
+            });
+        });
+        eng.update_state("photos", |s| {
+            s.add_activity(SyncActivityItem {
+                file_name: "new.jpg".to_string(),
+                action: "uploaded".to_string(),
+                timestamp: 200,
+                size_bytes: 2,
+                label: "photos".to_string(),
+            });
+        });
+        let combined = eng.get_sync_status();
+        assert_eq!(combined.recent_activity.len(), 2);
+        assert_eq!(combined.recent_activity[0].file_name, "new.jpg");
+        assert_eq!(combined.recent_activity[1].file_name, "old.txt");
+    }
+
+    #[test]
+    fn get_activity_filters_by_label() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| {
+            s.add_activity(activity("a.txt", "uploaded", "docs", 1));
+        });
+        eng.update_state("photos", |s| {
+            s.add_activity(activity("b.jpg", "uploaded", "photos", 2));
+        });
+        let result = eng.get_sync_activity(None, Some("docs".to_string()));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].file_name, "a.txt");
+    }
+
+    #[test]
+    fn get_activity_no_label_returns_all() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| {
+            s.add_activity(activity("a.txt", "uploaded", "docs", 1));
+        });
+        eng.update_state("photos", |s| {
+            s.add_activity(activity("b.jpg", "uploaded", "photos", 2));
+        });
+        let result = eng.get_sync_activity(None, None);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn get_activity_respects_limit() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| {
+            for i in 0..10 {
+                s.add_activity(activity(
+                    &format!("file_{i}.txt"),
+                    "uploaded",
+                    "docs",
+                    i as u64,
+                ));
+            }
+        });
+        let result = eng.get_sync_activity(Some(3), Some("docs".to_string()));
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn get_activity_unknown_label_returns_empty() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| {
+            s.add_activity(activity("a.txt", "uploaded", "docs", 1));
+        });
+        let result = eng.get_sync_activity(None, Some("nonexistent".to_string()));
+        assert!(result.is_empty());
+    }
+}

@@ -1,16 +1,12 @@
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client as S3Client;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use std::collections::HashSet;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{AppHandle, Emitter};
+use std::sync::atomic::Ordering;
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,43 +71,21 @@ struct ServerMigrationResponse {
     files: Vec<MigrationFile>,
 }
 
-// ---------------------------------------------------------------------------
-// Globals
-// ---------------------------------------------------------------------------
-
-/// Cancellation flag for the current migration download loop.
-pub static MIGRATION_CANCEL: AtomicBool = AtomicBool::new(false);
-
-/// Handle to the background migration task so it can be aborted.
-pub(crate) static MIGRATION_TASK: Lazy<Arc<Mutex<Option<JoinHandle<()>>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(None)));
-
-/// Tracks file paths that have been confirmed uploaded to HCFS by the
-/// upload progress handler. Keyed by relative path within the sync folder
-/// (e.g. "bucket_name/key"). Only files in this set are reported as
-/// migrated to the server — disk existence alone is not sufficient.
-///
-/// Uses `std::sync::Mutex` (not tokio) because the upload progress
-/// callback is synchronous and the critical section is trivial
-/// (HashSet insert/clone). A blocking lock guarantees no uploads are
-/// silently dropped due to contention.
-pub(crate) static MIGRATION_UPLOADED: Lazy<std::sync::Mutex<HashSet<String>>> =
-    Lazy::new(|| std::sync::Mutex::new(HashSet::new()));
-
 /// Record that a file has been successfully uploaded to HCFS.
 /// Called from the upload progress handler in syncing.rs when
 /// a migration-drive file upload completes (bytes == total).
 /// `relative_path` should be the path relative to the sync folder.
-pub fn record_migration_upload(relative_path: String) {
-    if let Ok(mut set) = MIGRATION_UPLOADED.lock() {
+pub fn record_migration_upload(app: &AppHandle, relative_path: String) {
+    let migration = &app.state::<crate::app_state::AppState>().migration;
+    if let Ok(mut set) = migration.uploaded.lock() {
         set.insert(relative_path);
     }
 }
 
 /// Clear the uploaded-files tracker (called when migration completes
 /// or is cancelled/dismissed).
-pub fn clear_migration_uploads() {
-    if let Ok(mut set) = MIGRATION_UPLOADED.lock() {
+fn clear_migration_uploads(migration: &crate::app_state::MigrationState) {
+    if let Ok(mut set) = migration.uploaded.lock() {
         set.clear();
     }
 }
@@ -458,8 +432,8 @@ pub async fn start_migration(
     sync_path: String,
     mnemonic: Option<String>,
 ) -> Result<(), String> {
-    MIGRATION_CANCEL.store(false, Ordering::SeqCst);
-    clear_migration_uploads();
+    state.migration.cancel.store(false, Ordering::SeqCst);
+    clear_migration_uploads(&state.migration);
 
     let pool = state.pool()?;
 
@@ -538,7 +512,7 @@ pub async fn start_migration(
         }
     });
 
-    let mut task_guard = MIGRATION_TASK.lock().await;
+    let mut task_guard = state.migration.task.lock().await;
     if let Some(old) = task_guard.take() {
         old.abort();
     }
@@ -570,8 +544,10 @@ async fn run_migration_download(
         .canonicalize()
         .unwrap_or_else(|_| raw_sync_dir.to_path_buf());
 
+    let migration_state = &app.state::<crate::app_state::AppState>().migration;
+
     for file in files {
-        if MIGRATION_CANCEL.load(Ordering::SeqCst) {
+        if migration_state.cancel.load(Ordering::SeqCst) {
             info!("[Migration] Cancelled by user");
             break;
         }
@@ -728,7 +704,6 @@ async fn run_migration_download(
     // Ensure the active account is set so the sync loop can report
     // migrated files after a successful sync cycle.
     {
-        use tauri::Manager;
         let app_state = app.state::<crate::app_state::AppState>();
         crate::utils::sync::set_active_account(&app_state, account_id);
     }
@@ -759,8 +734,8 @@ pub async fn cancel_migration(
     account_id: String,
 ) -> Result<(), String> {
     let pool = state.pool()?;
-    MIGRATION_CANCEL.store(true, Ordering::SeqCst);
-    clear_migration_uploads();
+    state.migration.cancel.store(true, Ordering::SeqCst);
+    clear_migration_uploads(&state.migration);
 
     // Persist cancelled state so the migration dialog won't reappear
     if !account_id.is_empty() {
@@ -787,7 +762,7 @@ pub async fn dismiss_migration(
     reason: String,
 ) -> Result<(), String> {
     let pool = state.pool()?;
-    clear_migration_uploads();
+    clear_migration_uploads(&state.migration);
     let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
     let status = if reason.is_empty() {
         "dismissed"
@@ -815,7 +790,7 @@ pub async fn complete_migration_transition(
     let pool = state.pool()?;
 
     // 1. Dismiss migration and promote sync path label to "default".
-    clear_migration_uploads();
+    clear_migration_uploads(&state.migration);
     let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
 
     let owner = crate::utils::account_key::account_key(&account_id);
@@ -854,26 +829,29 @@ pub async fn complete_migration_transition(
 
 /// Stop the migration drive and clean up its state.
 async fn stop_migration_drive(app: &AppHandle) {
+    let app_state = app.state::<crate::app_state::AppState>();
+    let sync = &app_state.sync;
+
     let remaining = {
-        let mut guard = crate::hcfs_drive::HCFS_DRIVES.lock().await;
+        let mut guard = sync.drives.lock().await;
         guard.remove("migration");
         guard.len()
     };
 
-    crate::sync_shared::remove_state("migration");
-    crate::sync_shared::discard_pending_activity_for_label("migration");
+    sync.remove_state("migration");
+    sync.discard_pending_activity_for_label("migration");
 
     if remaining == 0 {
-        crate::sync_shared::request_cancel();
-        let mut handle_guard = crate::hcfs_drive::SYNC_LOOP_HANDLE.lock().await;
+        sync.request_cancel();
+        let mut handle_guard = sync.loop_handle.lock().await;
         if let Some(prev) = handle_guard.take() {
             prev.abort();
         }
-        crate::hcfs_drive::SYNC_REVIEW_MODE.store(false, std::sync::atomic::Ordering::Release);
-        crate::sync_shared::clear_review_entered();
+        sync.review_mode.store(false, std::sync::atomic::Ordering::Release);
+        sync.clear_review_entered();
         let _ = app.emit("hcfs_sync_stopped", ());
     } else {
-        crate::sync_shared::clear_cancel();
+        sync.clear_cancel();
         crate::hcfs_drive::start_sync_loop(app.clone()).await;
     }
 
@@ -899,7 +877,6 @@ fn is_uploaded(uploaded_set: &HashSet<String>, relative: &str) -> bool {
 /// Report successfully synced files to the server.
 /// Called after each sync cycle for the "migration" drive.
 pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<(), String> {
-    use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let pool = app_state.pool()?;
     let db_status = get_migration_status_db(pool, account_id).await?;
@@ -942,8 +919,10 @@ pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<
 
     // Only report files confirmed uploaded to HCFS (not just on disk).
     // The upload progress handler records relative paths in
-    // MIGRATION_UPLOADED when each file finishes uploading.
-    let uploaded_set = MIGRATION_UPLOADED
+    // migration.uploaded when each file finishes uploading.
+    let uploaded_set = app_state
+        .migration
+        .uploaded
         .lock()
         .map(|s| s.clone())
         .unwrap_or_default();
@@ -1031,7 +1010,7 @@ pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<
         .count() as u64;
 
     if still_pending == 0 {
-        clear_migration_uploads();
+        clear_migration_uploads(&app_state.migration);
         upsert_migration_status(
             pool,
             account_id,
@@ -1205,20 +1184,22 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Cancellation flag
+    // Cancellation flag (uses a local MigrationState, no global statics)
     // -----------------------------------------------------------------------
 
     #[test]
     fn cancel_flag_defaults_to_false() {
-        MIGRATION_CANCEL.store(false, Ordering::SeqCst);
-        assert!(!MIGRATION_CANCEL.load(Ordering::SeqCst));
+        let ms = crate::app_state::MigrationState::new();
+        assert!(!ms.cancel.load(Ordering::SeqCst));
     }
 
     #[test]
     fn cancel_flag_can_be_toggled() {
-        MIGRATION_CANCEL.store(true, Ordering::SeqCst);
-        assert!(MIGRATION_CANCEL.load(Ordering::SeqCst));
-        MIGRATION_CANCEL.store(false, Ordering::SeqCst);
+        let ms = crate::app_state::MigrationState::new();
+        ms.cancel.store(true, Ordering::SeqCst);
+        assert!(ms.cancel.load(Ordering::SeqCst));
+        ms.cancel.store(false, Ordering::SeqCst);
+        assert!(!ms.cancel.load(Ordering::SeqCst));
     }
 
     // -----------------------------------------------------------------------
@@ -1477,43 +1458,40 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // MIGRATION_UPLOADED tracker
+    // Migration uploaded tracker (uses local MigrationState, no statics)
     // -----------------------------------------------------------------------
 
     #[test]
     fn record_and_clear_migration_uploads() {
-        clear_migration_uploads();
+        let ms = crate::app_state::MigrationState::new();
 
-        record_migration_upload("bucket/file1.txt".to_string());
-        record_migration_upload("bucket/file2.txt".to_string());
+        ms.uploaded.lock().unwrap().insert("bucket/file1.txt".to_string());
+        ms.uploaded.lock().unwrap().insert("bucket/file2.txt".to_string());
 
         {
-            let set = MIGRATION_UPLOADED.lock().unwrap();
+            let set = ms.uploaded.lock().unwrap();
             assert_eq!(set.len(), 2);
             assert!(set.contains("bucket/file1.txt"));
             assert!(set.contains("bucket/file2.txt"));
         }
 
-        clear_migration_uploads();
+        clear_migration_uploads(&ms);
 
         {
-            let set = MIGRATION_UPLOADED.lock().unwrap();
+            let set = ms.uploaded.lock().unwrap();
             assert!(set.is_empty());
         }
     }
 
     #[test]
     fn duplicate_upload_records_are_deduplicated() {
-        clear_migration_uploads();
+        let ms = crate::app_state::MigrationState::new();
 
-        record_migration_upload("bucket/same.txt".to_string());
-        record_migration_upload("bucket/same.txt".to_string());
+        ms.uploaded.lock().unwrap().insert("bucket/same.txt".to_string());
+        ms.uploaded.lock().unwrap().insert("bucket/same.txt".to_string());
 
-        let set = MIGRATION_UPLOADED.lock().unwrap();
+        let set = ms.uploaded.lock().unwrap();
         assert_eq!(set.len(), 1);
-        drop(set);
-
-        clear_migration_uploads();
     }
 
     // -----------------------------------------------------------------------

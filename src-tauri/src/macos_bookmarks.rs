@@ -15,7 +15,6 @@ pub fn create_security_scoped_bookmark(path: &str) -> Result<Vec<u8>, String> {
 
         let ns_string_class = class!(NSString);
         let ns_url_class = class!(NSURL);
-        let ns_data_class = class!(NSData);
 
         // Create NSString from path
         let c_path = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
@@ -67,82 +66,6 @@ pub fn create_security_scoped_bookmark(path: &str) -> Result<Vec<u8>, String> {
 
         debug!("Successfully created bookmark ({} bytes)", data.len());
         Ok(data)
-    }
-}
-
-#[cfg(target_os = "macos")]
-pub fn resolve_security_scoped_bookmark(bookmark_data: &[u8]) -> Result<(String, id), String> {
-    unsafe {
-        debug!(
-            "Attempting to resolve security-scoped bookmark ({} bytes)",
-            bookmark_data.len()
-        );
-
-        let ns_data_class = class!(NSData);
-        let ns_url_class = class!(NSURL);
-
-        // Create NSData from bookmark bytes
-        let data: id = msg_send![
-            ns_data_class,
-            dataWithBytes: bookmark_data.as_ptr()
-            length: bookmark_data.len()
-        ];
-
-        if data.is_null() {
-            error!("Failed to create NSData from bookmark");
-            return Err("Failed to create NSData from bookmark".to_string());
-        }
-
-        debug!("Bookmark NSData created successfully");
-
-        // Resolve bookmark
-        let url: id = msg_send![
-            ns_url_class,
-            URLByResolvingBookmarkData: data
-            options: 0x400  // NSURLBookmarkResolutionWithSecurityScope
-            relativeToURL: std::ptr::null::<id>()
-            bookmarkDataIsStale: std::ptr::null_mut::<i8>()
-            error: std::ptr::null_mut::<id>()
-        ];
-
-        if url.is_null() {
-            error!("Failed to resolve security-scoped bookmark");
-            return Err("Failed to resolve security-scoped bookmark".to_string());
-        }
-
-        debug!("Bookmark resolved successfully");
-
-        // Start accessing security-scoped resource
-        let did_start: bool = msg_send![url, startAccessingSecurityScopedResource];
-        if !did_start {
-            error!("Failed to start accessing security-scoped resource");
-            return Err("Failed to start accessing security-scoped resource".to_string());
-        }
-
-        debug!("Successfully started accessing security-scoped resource");
-
-        // Get path string
-        let path: id = msg_send![url, path];
-        let path_cstr: *const i8 = msg_send![path, UTF8String];
-        let path_str = std::ffi::CStr::from_ptr(path_cstr)
-            .to_string_lossy()
-            .into_owned();
-
-        debug!("Resolved bookmark path: {}", path_str);
-
-        // NOTE: We intentionally do NOT call stopAccessingSecurityScopedResource here.
-        // For a sync app, we need persistent access to the folder for the app's lifetime.
-        // The security scope will remain active and be automatically cleaned up when the app terminates.
-        // Calling stopAccessing here would immediately revoke permissions, causing sync operations to fail.
-
-        Ok((path_str, url))
-    }
-}
-
-#[cfg(target_os = "macos")]
-pub fn stop_accessing_security_scoped_resource(url: id) {
-    unsafe {
-        let _: () = msg_send![url, stopAccessingSecurityScopedResource];
     }
 }
 

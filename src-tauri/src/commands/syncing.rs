@@ -13,14 +13,9 @@
 use tracing::{debug, error, info, warn};
 
 use crate::hcfs_drive::{
-    HCFS_DRIVES, HcfsDriveManager, SYNC_IN_PROGRESS, SYNC_LOOP_HANDLE, SYNC_REVIEW_MODE,
-    StagedChanges, start_sync_loop,
+    HcfsDriveManager, StagedChanges, start_sync_loop,
 };
-use crate::sync_shared::{
-    SyncActivityItem, add_pending_activity, clear_cancel, clear_review_entered,
-    discard_all_pending_activity, discard_pending_activity_for_label, remove_state, request_cancel,
-    reset_all_states, reset_health, reset_sync_failures, update_state,
-};
+use crate::sync_shared::SyncActivityItem;
 use crate::utils::account_key::account_key;
 use crate::utils::auth_tokens::get_api_token;
 use hcfs_client::client::HcfsClientConfig;
@@ -106,18 +101,23 @@ pub async fn update_hcfs_server_url(
 }
 
 /// Internal implementation for updating bearer token.
+///
+/// Takes `&crate::app_state::AppState` to access both the DB pool and the
+/// live drive registry without relying on global state.
 pub(crate) async fn update_sync_bearer_token_internal(
-    pool: &SqlitePool,
+    app_state: &crate::app_state::AppState,
     account_id: &str,
     bearer_token: &str,
 ) -> Result<(), String> {
+    let pool = app_state.pool()?;
+
     // 1. Persist to DB so future initialize_sync calls use the fresh token
     crate::utils::auth_tokens::save_api_token(pool, account_id, bearer_token)
         .await
         .map_err(|e| format!("Failed to persist auth token: {e}"))?;
 
     // 2. Update all live drives in-memory
-    let mut guard = HCFS_DRIVES.lock().await;
+    let mut guard = app_state.sync.drives.lock().await;
     for (label, manager) in guard.iter_mut() {
         if let Err(e) = manager.update_bearer_token(bearer_token.to_string()) {
             error!("Failed to update bearer token for drive '{}': {}", label, e);
@@ -139,7 +139,7 @@ pub async fn update_sync_bearer_token(
     account_id: String,
     bearer_token: String,
 ) -> Result<(), String> {
-    update_sync_bearer_token_internal(state.pool()?, &account_id, &bearer_token).await
+    update_sync_bearer_token_internal(&state, &account_id, &bearer_token).await
 }
 
 /// Internal helper that accepts a pool reference directly.
@@ -552,7 +552,12 @@ async fn initialize_sync_inner(
     start_loop: bool,
 ) -> Result<InitSyncResult, String> {
     use tauri::Manager;
-    let pool_owned = app.state::<crate::app_state::AppState>().pool()?.clone();
+    // Sanitize label early — before it's used for filesystem paths or DB lookups.
+    let label = sanitize_label(&label)?;
+
+    let app_state = app.state::<crate::app_state::AppState>();
+    let sync = &app_state.sync;
+    let pool_owned = app_state.pool()?.clone();
     let pool = &pool_owned;
 
     info!(
@@ -562,16 +567,16 @@ async fn initialize_sync_inner(
 
     // 0. Stop only the drive with the matching label if it exists
     {
-        let mut drives_guard = HCFS_DRIVES.lock().await;
+        let mut drives_guard = sync.drives.lock().await;
         if drives_guard.remove(&label).is_some() {
             debug!("Dropped previous drive instance for label '{}'", label);
         }
-        discard_pending_activity_for_label(&label);
-        remove_state(&label);
+        sync.discard_pending_activity_for_label(&label);
+        sync.remove_state(&label);
     }
-    SYNC_IN_PROGRESS.store(false, Ordering::Release);
-    SYNC_REVIEW_MODE.store(false, Ordering::Release);
-    clear_review_entered();
+    sync.sync_in_progress.store(false, Ordering::Release);
+    sync.review_mode.store(false, Ordering::Release);
+    sync.clear_review_entered();
 
     // 1. Read sync path for the given label from database
     let sync_path = get_sync_path_for_label(pool, &account_id, &label).await?;
@@ -694,7 +699,6 @@ async fn initialize_sync_inner(
         // Existing folder — just unlock
         debug!("Drive already initialized for '{}', unlocking...", label);
         debug!("Config dir: {:?}", folder_dir);
-        debug!("Password length: {} chars", drive_password.len());
 
         match manager.unlock(&drive_password) {
             Ok(uid) => {
@@ -900,10 +904,10 @@ async fn initialize_sync_inner(
     }
 
     // 9. Setup progress event handlers with label
-    setup_progress_handlers(&app, &mut manager, &label);
+    setup_progress_handlers(&app, &mut manager, &label, sync);
 
     // 10. Clear any previous cancellation flag
-    clear_cancel();
+    sync.clear_cancel();
 
     // 11. If ensure_derived_mnemonic left a rekey marker, just consume it.
     //     We intentionally do NOT delete remote files — doing so destroys
@@ -923,7 +927,7 @@ async fn initialize_sync_inner(
 
     // 12. Store the manager in the drives registry
     {
-        let mut guard = HCFS_DRIVES.lock().await;
+        let mut guard = sync.drives.lock().await;
         guard.insert(label.clone(), manager);
     }
 
@@ -984,24 +988,28 @@ async fn initialize_sync_inner(
 /// Stop ALL drives (used on logout).
 #[tauri::command]
 pub async fn stop_sync(app: AppHandle) -> Result<(), String> {
-    request_cancel();
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let sync = &app_state.sync;
+
+    sync.request_cancel();
 
     // Abort the background sync loop task to prevent spurious error events
     {
-        let mut handle_guard = SYNC_LOOP_HANDLE.lock().await;
+        let mut handle_guard = sync.loop_handle.lock().await;
         if let Some(prev) = handle_guard.take() {
             prev.abort();
         }
     }
 
-    let mut guard = HCFS_DRIVES.lock().await;
+    let mut guard = sync.drives.lock().await;
     guard.clear();
-    SYNC_REVIEW_MODE.store(false, Ordering::Release);
-    clear_review_entered();
-    reset_all_states();
-    reset_health();
-    reset_sync_failures();
-    discard_all_pending_activity();
+    sync.review_mode.store(false, Ordering::Release);
+    sync.clear_review_entered();
+    sync.reset_all_states();
+    sync.reset_health();
+    sync.reset_sync_failures();
+    sync.discard_all_pending_activity();
 
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
     let _ = app.emit("hcfs_sync_stopped", ());
@@ -1014,23 +1022,25 @@ pub async fn stop_sync(app: AppHandle) -> Result<(), String> {
 /// resurrected on restart (prevents ghost sync paths).
 #[tauri::command]
 pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let sync = &app_state.sync;
+
     let remaining = {
-        let mut guard = HCFS_DRIVES.lock().await;
+        let mut guard = sync.drives.lock().await;
         guard.remove(&label);
         guard.len()
     };
 
-    remove_state(&label);
-    discard_pending_activity_for_label(&label);
+    sync.remove_state(&label);
+    sync.discard_pending_activity_for_label(&label);
     // Clean up sync progress files for this drive
-    let _ = crate::sync_progress::sp_remove_files_for_label(label.clone());
+    let _ = crate::sync_progress::remove_files_for_label(sync, label.clone());
 
     // Remove the DB row so the drive isn't resurrected on app restart.
     // Best-effort: if the account or pool isn't available, the in-memory
     // cleanup above still takes effect for this session.
     {
-        use tauri::Manager;
-        let app_state = app.state::<crate::app_state::AppState>();
         if let (Ok(pool), Ok(acct)) = (
             app_state.pool(),
             crate::utils::sync::current_account_id(&app_state),
@@ -1048,17 +1058,17 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
 
     if remaining == 0 {
         // No more drives — stop the sync loop entirely
-        request_cancel();
-        let mut handle_guard = SYNC_LOOP_HANDLE.lock().await;
+        sync.request_cancel();
+        let mut handle_guard = sync.loop_handle.lock().await;
         if let Some(prev) = handle_guard.take() {
             prev.abort();
         }
-        SYNC_REVIEW_MODE.store(false, Ordering::Release);
-        clear_review_entered();
+        sync.review_mode.store(false, Ordering::Release);
+        sync.clear_review_entered();
         let _ = app.emit("hcfs_sync_stopped", ());
     } else {
         // Restart sync loop to update watchers (removed drive's path)
-        clear_cancel();
+        sync.clear_cancel();
         start_sync_loop(app.clone()).await;
     }
 
@@ -1124,8 +1134,11 @@ pub async fn reset_sync_data(
 /// With optional label: checks if that specific drive is active.
 /// Without label: checks if any drive is active.
 #[tauri::command]
-pub fn is_drive_active(label: Option<String>) -> bool {
-    match HCFS_DRIVES.try_lock() {
+pub fn is_drive_active(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    label: Option<String>,
+) -> bool {
+    match state.sync.drives.try_lock() {
         Ok(guard) => {
             if let Some(lbl) = label {
                 guard.contains_key(&lbl)
@@ -1144,7 +1157,12 @@ pub async fn trigger_sync_now(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, label: &str) {
+fn setup_progress_handlers(
+    app: &AppHandle,
+    manager: &mut HcfsDriveManager,
+    label: &str,
+    sync: &Arc<crate::sync_engine::SyncEngine>,
+) {
     let a0 = app.clone();
     let a1 = app.clone();
     let a2 = app.clone();
@@ -1159,6 +1177,15 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
     let l5 = label.to_string();
     let l6 = label.to_string();
 
+    // Clone Arc<SyncEngine> for each callback that needs engine access
+    let sync_plan = sync.clone();
+    let sync_for_upload = sync.clone();
+    let sync_for_download = sync.clone();
+    let sync_encrypt = sync.clone();
+    let sync_decrypt = sync.clone();
+    let sync_scan = sync.clone();
+    let sync_fetch = sync.clone();
+
     // Track first progress event per file for info-level "file started" logs
     let upload_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
         Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
@@ -1169,6 +1196,7 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
 
     manager.set_progress(SyncProgress {
         on_sync_plan_ready: Some(Arc::new(move |uploads, downloads, local_deletes, remote_deletes| {
+            sync_plan.touch_progress_time();
             let total = uploads.len() + downloads.len() + local_deletes.len() + remote_deletes.len();
             if total == 0 {
                 return;
@@ -1177,6 +1205,21 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
                 "Sync plan ready [{}]: {} uploads, {} downloads, {} local_deletes, {} remote_deletes",
                 l0, uploads.len(), downloads.len(), local_deletes.len(), remote_deletes.len()
             );
+
+            // Merge real file counts into the empty session created before sync started
+            let file_list = crate::sync_progress::SessionFileList {
+                upload_files: Some(uploads.iter().map(|s| s.to_string()).collect()),
+                download_files: Some(downloads.iter().map(|s| s.to_string()).collect()),
+                local_delete_files: Some(local_deletes.iter().map(|s| s.to_string()).collect()),
+                remote_delete_files: Some(remote_deletes.iter().map(|s| s.to_string()).collect()),
+            };
+            let _ = crate::sync_progress::merge_into_session(
+                &sync_plan,
+                uploads.len() as u32, downloads.len() as u32,
+                local_deletes.len() as u32, remote_deletes.len() as u32,
+                Some(file_list), Some(l0.clone()),
+            );
+
             let _ = a0.emit(
                 "hcfs_sync_plan_ready",
                 serde_json::json!({
@@ -1193,6 +1236,7 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
             );
         })),
         on_upload_progress: Some(Arc::new(move |b, t, p| {
+            sync_for_upload.touch_progress_time();
             // Log first progress event for each file at info level
             if let Some(path_str) = p {
                 let file_name = Path::new(path_str)
@@ -1207,6 +1251,12 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
                         );
                     }
                 }
+                // Track per-file progress for the sync progress UI
+                let _ = crate::sync_progress::update_file_progress(
+                    &sync_for_upload, path_str.to_string(), b, t,
+                    crate::sync_progress::FileAction::Upload,
+                    Some(l1.clone()),
+                );
             }
             debug!("Upload [{}]: {}/{} bytes, path: {:?}", l1, b, t, p);
             let _ = a1.emit(
@@ -1220,7 +1270,7 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| path_str.to_string());
                     info!("Upload complete [{}]: {} ({} bytes)", l1, file_name, t);
-                    add_pending_activity(SyncActivityItem {
+                    sync_for_upload.add_pending_activity(SyncActivityItem {
                         file_name,
                         action: "uploaded".to_string(),
                         timestamp: chrono::Utc::now().timestamp(),
@@ -1228,12 +1278,13 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
                         label: l1.clone(),
                     });
                     if l1 == "migration" {
-                        crate::commands::migration::record_migration_upload(path_str.to_string());
+                        crate::commands::migration::record_migration_upload(&a1, path_str.to_string());
                     }
                 }
             }
         })),
         on_download_progress: Some(Arc::new(move |b, t, p| {
+            sync_for_download.touch_progress_time();
             // Log first progress event for each file at info level
             if let Some(path_str) = p {
                 let file_name = Path::new(path_str)
@@ -1248,6 +1299,12 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
                         );
                     }
                 }
+                // Track per-file progress for the sync progress UI
+                let _ = crate::sync_progress::update_file_progress(
+                    &sync_for_download, path_str.to_string(), b, t,
+                    crate::sync_progress::FileAction::Download,
+                    Some(l2.clone()),
+                );
             }
             debug!("Download [{}]: {}/{} bytes, path: {:?}", l2, b, t, p);
             let _ = a2.emit(
@@ -1264,7 +1321,7 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| path_str.to_string());
                     info!("Download complete [{}]: {} ({} bytes)", l2, file_name, t);
-                    add_pending_activity(SyncActivityItem {
+                    sync_for_download.add_pending_activity(SyncActivityItem {
                         file_name,
                         action: "downloaded".to_string(),
                         timestamp: chrono::Utc::now().timestamp(),
@@ -1275,23 +1332,40 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
             }
         })),
         on_encrypt_progress: Some(Arc::new(move |b, t, p| {
+            sync_encrypt.touch_progress_time();
             if b == 0 {
                 info!("Encrypt starting [{}]: {:?} ({} bytes)", l3, p, t);
             } else if b == t && t > 0 {
                 info!("Encrypt complete [{}]: {:?} ({} bytes)", l3, p, t);
             }
-            // No per-chunk emit — nobody listens for hcfs_encrypt_progress
-            // and emitting on every 256KB chunk (~1333 times for 341MB)
-            // was the main encryption bottleneck.
+            // Track encrypt progress for UI (no per-chunk Tauri emit — that
+            // was the main encryption bottleneck at ~1333 emits per 341MB).
+            if let Some(path_str) = p {
+                let _ = crate::sync_progress::update_file_progress(
+                    &sync_encrypt, path_str.to_string(), b, t,
+                    crate::sync_progress::FileAction::Encrypt,
+                    Some(l3.clone()),
+                );
+            }
         })),
         on_decrypt_progress: Some(Arc::new(move |b, t, p| {
+            sync_decrypt.touch_progress_time();
             if b == 0 {
                 info!("Decrypt starting [{}]: {:?} ({} bytes)", l4, p, t);
             } else if b == t && t > 0 {
                 info!("Decrypt complete [{}]: {:?} ({} bytes)", l4, p, t);
             }
+            // Track decrypt progress for UI (no per-chunk Tauri emit).
+            if let Some(path_str) = p {
+                let _ = crate::sync_progress::update_file_progress(
+                    &sync_decrypt, path_str.to_string(), b, t,
+                    crate::sync_progress::FileAction::Decrypt,
+                    Some(l4.clone()),
+                );
+            }
         })),
         on_scan_progress: Some(Arc::new(move |n, p| {
+            sync_scan.touch_progress_time();
             info!("Scan [{}]: {} files scanned, current: {:?}", l5, n, p);
             let _ = a5.emit(
                 "hcfs_scan_progress",
@@ -1299,6 +1373,7 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
             );
         })),
         on_fetch_state_progress: Some(Arc::new(move |f, t| {
+            sync_fetch.touch_progress_time();
             info!("Fetch state [{}]: {}/{} entries", l6, f, t);
             let _ = a6.emit(
                 "hcfs_fetch_progress",
@@ -1311,10 +1386,14 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
 /// Retrieve the master BIP-39 mnemonic for an account by decrypting it from
 /// disk. Shared implementation used by both the Tauri command and the billing
 /// auth module.
+///
+/// Takes `&AppState` to access both the DB pool and the live drive registry
+/// without relying on global state.
 pub async fn get_mnemonic_for_account(
-    pool: &SqlitePool,
+    app_state: &crate::app_state::AppState,
     account_id: &str,
 ) -> Result<String, String> {
+    let pool = app_state.pool()?;
     let drive_password = get_drive_password(pool, account_id).await?;
 
     // Prefer the master mnemonic at account level
@@ -1330,7 +1409,7 @@ pub async fn get_mnemonic_for_account(
         "Master mnemonic not found at {:?}, falling back to per-folder mnemonic",
         master_path
     );
-    let guard = HCFS_DRIVES.lock().await;
+    let guard = app_state.sync.drives.lock().await;
     let first_drive = guard.values().next();
     match first_drive {
         Some(m) if m.is_initialized() => m.export_mnemonic(&drive_password),
@@ -1367,7 +1446,7 @@ pub async fn get_drive_mnemonic(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
 ) -> Result<String, String> {
-    get_mnemonic_for_account(state.pool()?, &account_id).await
+    get_mnemonic_for_account(&state, &account_id).await
 }
 
 /// Persist the master mnemonic to disk early (during login), even before any
@@ -1428,30 +1507,34 @@ pub async fn persist_master_mnemonic(
 /// Stage changes and return a preview of what will sync.
 /// Pauses auto-sync while the user reviews.
 #[tauri::command]
-pub async fn stage_changes() -> Result<StagedChanges, String> {
-    // Pause auto-sync so the review is stable
-    SYNC_REVIEW_MODE.store(true, Ordering::Release);
+pub async fn stage_changes(app: tauri::AppHandle) -> Result<StagedChanges, String> {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let sync = &app_state.sync;
 
-    let guard = HCFS_DRIVES.lock().await;
+    // Pause auto-sync so the review is stable
+    sync.review_mode.store(true, Ordering::Release);
+
+    let guard = sync.drives.lock().await;
     // For V1, stage the first available drive
     let first_drive = guard.values().next();
     match first_drive {
         Some(m) if m.is_unlocked() => match m.stage_with_paths().await {
             Ok(changes) => Ok(changes),
             Err(e) => {
-                SYNC_REVIEW_MODE.store(false, Ordering::Release);
-                clear_review_entered();
+                sync.review_mode.store(false, Ordering::Release);
+                sync.clear_review_entered();
                 Err(e)
             }
         },
         Some(_) => {
-            SYNC_REVIEW_MODE.store(false, Ordering::Release);
-            clear_review_entered();
+            sync.review_mode.store(false, Ordering::Release);
+            sync.clear_review_entered();
             Err("Drive is not unlocked".to_string())
         }
         None => {
-            SYNC_REVIEW_MODE.store(false, Ordering::Release);
-            clear_review_entered();
+            sync.review_mode.store(false, Ordering::Release);
+            sync.clear_review_entered();
             Err("Drive not initialized".to_string())
         }
     }
@@ -1465,6 +1548,10 @@ pub async fn sync_with_conflict_resolutions(
     app: AppHandle,
     resolutions: HashMap<String, String>,
 ) -> Result<(), String> {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let sync = &app_state.sync;
+
     // Validate resolution values before proceeding
     for (file_id, resolution) in &resolutions {
         if !matches!(
@@ -1480,7 +1567,7 @@ pub async fn sync_with_conflict_resolutions(
 
     // For V1, use the first drive's label
     let label = {
-        let guard = HCFS_DRIVES.lock().await;
+        let guard = sync.drives.lock().await;
         guard
             .keys()
             .next()
@@ -1489,17 +1576,17 @@ pub async fn sync_with_conflict_resolutions(
     };
 
     // Mark syncing in shared state
-    update_state(&label, |s| {
+    sync.update_state(&label, |s| {
         s.is_syncing = true;
     });
 
     let _ = app.emit("hcfs_sync_started", serde_json::json!({"label": label}));
 
     // Suppress file watcher during sync to prevent feedback loops
-    SYNC_IN_PROGRESS.store(true, Ordering::Release);
+    sync.sync_in_progress.store(true, Ordering::Release);
 
     let result = {
-        let mut guard = HCFS_DRIVES.lock().await;
+        let mut guard = sync.drives.lock().await;
         match guard.get_mut(&label) {
             Some(m) if m.is_unlocked() => Some(m.sync_with_resolutions(resolutions).await),
             _ => None,
@@ -1508,19 +1595,19 @@ pub async fn sync_with_conflict_resolutions(
 
     // Re-enable file watcher after a short delay to ignore trailing FS events
     {
-        let flag = SYNC_IN_PROGRESS.clone();
+        let sync_for_delay = sync.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            flag.store(false, Ordering::Release);
+            sync_for_delay.sync_in_progress.store(false, Ordering::Release);
         });
     }
 
     // Resume auto-sync
-    SYNC_REVIEW_MODE.store(false, Ordering::Release);
-    clear_review_entered();
+    sync.review_mode.store(false, Ordering::Release);
+    sync.clear_review_entered();
 
     // Update shared state
-    update_state(&label, |s| {
+    sync.update_state(&label, |s| {
         s.is_syncing = false;
         s.last_sync_time = Some(chrono::Utc::now().timestamp());
     });
@@ -1570,9 +1657,13 @@ pub async fn sync_with_conflict_resolutions(
 
 /// Cancel the review dialog and resume auto-sync without syncing.
 #[tauri::command]
-pub async fn cancel_review() -> Result<(), String> {
-    SYNC_REVIEW_MODE.store(false, Ordering::Release);
-    clear_review_entered();
+pub async fn cancel_review(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let sync = &app_state.sync;
+
+    sync.review_mode.store(false, Ordering::Release);
+    sync.clear_review_entered();
     info!("Review cancelled, auto-sync resumed");
     Ok(())
 }
@@ -2001,7 +2092,7 @@ pub async fn delete_remote_folder(
 
     // If this folder is also synced locally, stop the drive and remove the path
     let was_local = {
-        let guard = HCFS_DRIVES.lock().await;
+        let guard = state.sync.drives.lock().await;
         guard.contains_key(&label)
     };
 

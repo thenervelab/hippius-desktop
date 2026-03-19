@@ -1,19 +1,17 @@
 use crate::utils::auth_tokens::get_api_token;
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
-use once_cell::sync::Lazy;
 use reqwest::Client;
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
 use sqlx::Row;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::Duration;
 use sysinfo::Networks;
 use tauri::AppHandle;
+use tauri::Manager;
 use tokio::fs;
-use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 #[cfg(unix)]
@@ -73,31 +71,13 @@ const HIPPIUS_API_BASE: &str = "https://api.hippius.com/api";
 const PING_INTERVAL_SECS: u64 = 10;
 
 // State to share between setup commands
-struct NebulaSetupState {
-    latest_version: Option<String>,
-    download_url: Option<String>,
-    needs_update: bool,
+#[derive(Default)]
+pub struct NebulaSetupState {
+    pub latest_version: Option<String>,
+    pub download_url: Option<String>,
+    pub needs_update: bool,
 }
 
-static SETUP_STATE: Lazy<Mutex<NebulaSetupState>> = Lazy::new(|| {
-    Mutex::new(NebulaSetupState {
-        latest_version: None,
-        download_url: None,
-        needs_update: false,
-    })
-});
-
-// Handle for the background ping task
-static PING_TASK_HANDLE: Lazy<Mutex<Option<JoinHandle<()>>>> = Lazy::new(|| Mutex::new(None));
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum NebulaSetupPhase {
-    CheckingBinary,
-    DownloadingNebula,
-    InstallingNebula,
-    VerifyingInstallation,
-    Ready,
-}
 
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
@@ -154,6 +134,7 @@ struct CertificateResponse {
     ca: String,
     cert: String,
     key: String,
+    #[allow(dead_code)]
     ip: String,
     config: String,
     is_active: Option<bool>,
@@ -411,10 +392,14 @@ pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
 
     // Update state
     {
-        let mut state = SETUP_STATE.lock().unwrap();
-        state.latest_version = Some(latest_version);
-        state.download_url = download_url;
-        state.needs_update = needs_install;
+        let app_state = app.state::<crate::app_state::AppState>();
+        let mut setup = app_state.nebula.setup.lock().unwrap_or_else(|p| {
+            tracing::warn!("Poisoned mutex recovered in nebula setup");
+            p.into_inner()
+        });
+        setup.latest_version = Some(latest_version);
+        setup.download_url = download_url;
+        setup.needs_update = needs_install;
     }
 
     Ok(())
@@ -423,16 +408,21 @@ pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
     let (needs_update, download_url, latest_version) = {
-        let state = SETUP_STATE.lock().unwrap();
+        let app_state = app.state::<crate::app_state::AppState>();
+        let setup = app_state.nebula.setup.lock().unwrap_or_else(|p| {
+            tracing::warn!("Poisoned mutex recovered in nebula setup");
+            p.into_inner()
+        });
         (
-            state.needs_update,
-            state.download_url.clone(),
-            state.latest_version.clone(),
+            setup.needs_update,
+            setup.download_url.clone(),
+            setup.latest_version.clone(),
         )
     };
 
     if needs_update {
         if let (Some(url), Some(version)) = (download_url, latest_version) {
+            info!("Downloading Nebula version {}", version);
             // Check if temp file already exists (maybe from previous run?)
             // But we should re-download to be safe or check size.
             // For now, just download.
@@ -471,12 +461,15 @@ pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn install_nebula(
     state: tauri::State<'_, crate::app_state::AppState>,
-    app: AppHandle,
+    _app: AppHandle,
 ) -> Result<(), String> {
     let pool = state.pool()?;
     let (needs_update, latest_version) = {
-        let state = SETUP_STATE.lock().unwrap();
-        (state.needs_update, state.latest_version.clone())
+        let setup = state.nebula.setup.lock().unwrap_or_else(|p| {
+            tracing::warn!("Poisoned mutex recovered in nebula setup");
+            p.into_inner()
+        });
+        (setup.needs_update, setup.latest_version.clone())
     };
 
     if needs_update {
@@ -735,8 +728,9 @@ async fn fetch_certificate_from_api(auth_header: &str) -> Result<Option<Certific
     // But if it's a list endpoint, maybe it returns [ { ... } ]?
     // I'll try to parse as single first, then list.
 
+    let resp_status = response.status();
     let text = response.text().await?;
-    debug!("Fetch certificate response: {}", text);
+    debug!("Fetch certificate response: status={}, body_len={}", resp_status, text.len());
 
     if let Ok(cert) = serde_json::from_str::<CertificateResponse>(&text) {
         return Ok(Some(cert));
@@ -776,8 +770,9 @@ async fn request_certificate_from_api(auth_header: &str) -> Result<CertificateRe
         return Err(anyhow!(error_msg));
     }
 
+    let resp_status = status;
     let text = response.text().await?;
-    debug!("Request certificate response body: {}", text);
+    debug!("Request certificate response: status={}, body_len={}", resp_status, text.len());
 
     let cert: CertificateResponse =
         serde_json::from_str(&text).map_err(|e| anyhow!("Failed to parse JSON: {}", e))?;
@@ -814,8 +809,9 @@ async fn renew_certificate_from_api(auth_header: &str) -> Result<CertificateResp
         return Err(anyhow!(error_msg));
     }
 
+    let resp_status = status;
     let text = response.text().await?;
-    debug!("Renew certificate response body: {}", text);
+    debug!("Renew certificate response: status={}, body_len={}", resp_status, text.len());
 
     let cert: CertificateResponse =
         serde_json::from_str(&text).map_err(|e| anyhow!("Failed to parse JSON: {}", e))?;
@@ -1027,7 +1023,7 @@ pub async fn finish_setup(
     state: tauri::State<'_, crate::app_state::AppState>,
 ) -> Result<(), String> {
     // Try to start Nebula if enabled
-    if let Err(e) = start_nebula_internal(state.pool()?).await {
+    if let Err(e) = start_nebula_internal(&state.nebula, state.pool()?).await {
         warn!("Failed to auto-start in finish_setup: {}", e);
         // We don't return error here to not block the UI flow, just log it
     }
@@ -1039,10 +1035,13 @@ pub async fn finish_setup(
 pub async fn start_nebula(
     state: tauri::State<'_, crate::app_state::AppState>,
 ) -> Result<(), String> {
-    start_nebula_internal(state.pool()?).await
+    start_nebula_internal(&state.nebula, state.pool()?).await
 }
 
-pub async fn start_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), String> {
+pub async fn start_nebula_internal(
+    nebula_state: &crate::app_state::NebulaState,
+    pool: &sqlx::SqlitePool,
+) -> Result<(), String> {
     info!("Attempting to start Nebula...");
 
     // Check DB status
@@ -1061,7 +1060,7 @@ pub async fn start_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), String
     if check_nebula_running().await.unwrap_or(false) {
         debug!("Already running");
         // Start ping task even if already running (in case it was stopped)
-        start_ping_task(pool.clone());
+        start_ping_task(nebula_state, pool.clone());
         return Ok(());
     }
 
@@ -1138,7 +1137,7 @@ pub async fn start_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), String
     }
 
     // Start the background ping task to keep stats active
-    start_ping_task(pool.clone());
+    start_ping_task(nebula_state, pool.clone());
 
     Ok(())
 }
@@ -1336,11 +1335,11 @@ pub async fn check_nebula_running() -> Result<bool> {
 }
 
 /// Stop the Nebula process and the background ping task
-pub async fn stop_nebula() -> Result<(), String> {
+pub async fn stop_nebula(nebula_state: &crate::app_state::NebulaState) -> Result<(), String> {
     info!("Stopping Nebula process...");
 
     // Stop the background ping task first
-    stop_ping_task();
+    stop_ping_task(nebula_state);
 
     #[cfg(unix)]
     {
@@ -1449,9 +1448,9 @@ async fn read_lighthouse_ips_from_config(pool: &sqlx::SqlitePool) -> Vec<String>
 }
 
 /// Start the background ping task to keep VPN stats active
-fn start_ping_task(pool: sqlx::SqlitePool) {
+fn start_ping_task(nebula_state: &crate::app_state::NebulaState, pool: sqlx::SqlitePool) {
     // Stop any existing ping task first
-    stop_ping_task();
+    stop_ping_task(nebula_state);
 
     let handle = tokio::spawn(async move {
         debug!(
@@ -1510,15 +1509,15 @@ fn start_ping_task(pool: sqlx::SqlitePool) {
     });
 
     // Store the handle
-    if let Ok(mut guard) = PING_TASK_HANDLE.lock() {
+    if let Ok(mut guard) = nebula_state.ping_handle.lock() {
         *guard = Some(handle);
         debug!("Background ping task started");
     }
 }
 
 /// Stop the background ping task
-fn stop_ping_task() {
-    if let Ok(mut guard) = PING_TASK_HANDLE.lock() {
+fn stop_ping_task(nebula_state: &crate::app_state::NebulaState) {
+    if let Ok(mut guard) = nebula_state.ping_handle.lock() {
         if let Some(handle) = guard.take() {
             handle.abort();
             debug!("Background ping task stopped");
@@ -1914,87 +1913,6 @@ pub async fn get_nebula_status() -> Result<NebulaStatus, String> {
         has_interface,
         message,
     })
-}
-
-/// Generate a Nebula node certificate
-pub async fn generate_node_certificate(
-    pool: &sqlx::SqlitePool,
-    name: &str,
-    ip: &str,
-    groups: Vec<String>,
-    duration_days: u32,
-) -> Result<()> {
-    let nebula_cert_binary = get_nebula_cert_binary_path()?;
-    let account_id = get_current_account_id(pool).await?;
-    let config_dir = get_nebula_config_dir(&account_id)?;
-
-    let ca_crt = config_dir.join("ca.crt");
-    let ca_key = config_dir.join("ca.key");
-    let node_crt = config_dir.join(format!("{}.crt", name));
-    let node_key = config_dir.join(format!("{}.key", name));
-
-    if !ca_crt.exists() || !ca_key.exists() {
-        return Err(anyhow!("CA certificate not found. Generate CA first."));
-    }
-
-    info!("Generating node certificate: {}", name);
-
-    let duration_str = format!("{}h", duration_days * 24);
-    let ca_crt_str = ca_crt
-        .to_str()
-        .ok_or_else(|| anyhow!("CA certificate path contains invalid UTF-8"))?;
-    let ca_key_str = ca_key
-        .to_str()
-        .ok_or_else(|| anyhow!("CA key path contains invalid UTF-8"))?;
-    let node_crt_str = node_crt
-        .to_str()
-        .ok_or_else(|| anyhow!("Node certificate path contains invalid UTF-8"))?;
-    let node_key_str = node_key
-        .to_str()
-        .ok_or_else(|| anyhow!("Node key path contains invalid UTF-8"))?;
-
-    let mut cmd = tokio::process::Command::new(&nebula_cert_binary);
-    let mut args: Vec<&str> = vec![
-        "sign",
-        "-name",
-        name,
-        "-ip",
-        ip,
-        "-duration",
-        &duration_str,
-        "-ca-crt",
-        ca_crt_str,
-        "-ca-key",
-        ca_key_str,
-        "-out-crt",
-        node_crt_str,
-        "-out-key",
-        node_key_str,
-    ];
-
-    // Add groups
-    let group_strs: Vec<String> = groups.iter().map(|g| g.as_str().to_string()).collect();
-    for group in &group_strs {
-        args.push("-groups");
-        args.push(group);
-    }
-
-    cmd.args(&args);
-
-    let output = cmd.output().await?;
-
-    if !output.status.success() {
-        return Err(anyhow!(
-            "Node certificate generation failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    info!("Node certificate generated successfully");
-    debug!("  Certificate: {}", node_crt.display());
-    debug!("  Key: {}", node_key.display());
-
-    Ok(())
 }
 
 #[tauri::command]

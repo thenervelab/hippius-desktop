@@ -17,10 +17,10 @@ mod block_subscription;
 mod builder_blocks;
 mod commands;
 mod constants;
-mod events;
 mod hcfs_drive;
 mod macos_bookmarks;
 mod substrate_client;
+mod sync_engine;
 mod sync_logic;
 mod sync_progress;
 mod sync_shared;
@@ -39,7 +39,7 @@ use crate::sync_progress::{
     sp_record_deleted_file, sp_remove_files_for_label,
     sp_start_session, sp_stop_session, sp_update_file_progress,
 };
-use crate::sync_shared::{app_close, get_sync_activity, get_sync_engine_health, get_sync_status};
+use crate::commands::sync_status::{app_close, get_sync_activity, get_sync_engine_health, get_sync_status};
 use block_subscription::{
     get_current_block_number, start_block_subscription, stop_block_subscription,
 };

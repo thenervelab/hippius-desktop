@@ -50,6 +50,10 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     : snapshot.overallPercent;
   const totalFiles = snapshot.totalFiles;
   const hasActiveSync = snapshot.isActive;
+  // True when any file is in an encrypt/decrypt phase (changes colors to yellow)
+  const isEncryptingPhase = snapshot.files.some(
+    (f) => f.status === "encrypting" || f.status === "decrypting"
+  );
 
   useEffect(() => {
     const fileList = fileListRef.current;
@@ -111,7 +115,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       onClick={(e: React.MouseEvent) => e.stopPropagation()}
       className={cn(
         " outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out",
-        isExpanded ? "w-[378px]" : (isUnhealthy || hasFailed) ? "w-[210px]" : "w-[170px]"
+        isExpanded ? "w-[378px]" : (isUnhealthy || hasFailed) ? "w-[210px]" : "w-[200px]"
       )}
     >
       {/* Header */}
@@ -120,7 +124,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           "shadow-menu bg-grey-100 border border-grey-80 cursor-pointer hover:bg-grey-90 transition-all duration-300 ease-in-out",
           isExpanded
             ? "rounded-t-[8px] w-[378px]"
-            : (isUnhealthy || hasFailed) ? "rounded-[8px] w-[210px]" : "rounded-[8px] w-[170px]"
+            : (isUnhealthy || hasFailed) ? "rounded-[8px] w-[210px]" : "rounded-[8px] w-[200px]"
         )}
         onClick={handleHeaderClick}
       >
@@ -165,7 +169,10 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   cx="24"
                   cy="24"
                   r="22"
-                  className="fill-none stroke-[4] stroke-[#e8eeff]"
+                  className={cn(
+                    "fill-none stroke-[4]",
+                    isEncryptingPhase ? "stroke-[#fef3c7]" : "stroke-[#e8eeff]"
+                  )}
                 />
                 <circle
                   cx="24"
@@ -177,7 +184,9 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                       ? "stroke-[#ef4444]"
                       : isCompleted
                         ? "stroke-[#4ade80]"
-                        : "stroke-[#4171e0]"
+                        : isEncryptingPhase
+                          ? "stroke-[#f59e0b]"
+                          : "stroke-[#4171e0]"
                   )}
                   strokeLinecap="round"
                   strokeDasharray={isUnhealthy || hasFailed ? "138 138" : isCompleted ? "138 138" : percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
@@ -195,7 +204,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     {isCompleted ? (
                       <Icons.TickCircle className="size-6 relative text-success-50" />
                     ) : (
-                      <Icons.Refresh className="size-6 relative text-primary-50 animate-spin" />
+                      <Icons.Refresh className={cn("size-6 relative animate-spin", isEncryptingPhase ? "text-warning-50" : "text-primary-50")} />
                     )}
                   </AbstractIconWrapper>
                 )}
@@ -246,8 +255,10 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     : isCompleted
                       ? "Complete"
                       : percentage !== null && percentage < 100
-                        ? `${percentage}%`
-                        : "Syncing..."
+                        ? `${isEncryptingPhase ? "Encrypting" : "Syncing"} ${percentage}%`
+                        : isEncryptingPhase
+                          ? "Encrypting..."
+                          : "Syncing..."
                 }
               </span>
             )}
@@ -408,11 +419,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               <div className="w-full h-1.5 bg-grey-80 rounded-full overflow-hidden">
                 {percentage !== null ? (
                   <div
-                    className="h-full bg-primary-50 rounded-full transition-all duration-300"
+                    className={cn("h-full rounded-full transition-all duration-300", isEncryptingPhase ? "bg-warning-50" : "bg-primary-50")}
                     style={{ width: `${percentage}%` }}
                   />
                 ) : (
-                  <div className="h-full w-1/3 bg-primary-50 rounded-full animate-pulse" />
+                  <div className={cn("h-full w-1/3 rounded-full animate-pulse", isEncryptingPhase ? "bg-warning-50" : "bg-primary-50")} />
                 )}
               </div>
               {snapshot.bytesExpected > 0 && (
@@ -432,6 +443,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               const isFileCompleted = file.status === "completed";
               const isFileDeleted = isFileCompleted && (file.action === "local_delete" || file.action === "remote_delete");
               const isFileInProgress = file.status === "inProgress";
+              const isEncrypting = file.status === "encrypting";
+              const isDecrypting = file.status === "decrypting";
               const isFailed = file.status === "error";
               const { fileFormat } = getFilePartsFromFileName(file.fileName);
               const fileType = getFileTypeFromExtension(fileFormat || null);
@@ -482,6 +495,25 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                           <Icons.InfoCircle className="w-5 h-5 text-error-50" />
                           <span className="text-sm ml-1 text-error-50">Failed</span>
                         </>
+                      ) : (isEncrypting || isDecrypting) ? (
+                        <div className="flex flex-col items-end gap-0.5">
+                          <div className="flex items-center gap-2">
+                            <div className="w-[60px] h-1.5 bg-grey-80 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-warning-50 rounded-full transition-all duration-300"
+                                style={{ width: `${file.progressPercent}%` }}
+                              />
+                            </div>
+                            <span className="text-xs text-warning-50 min-w-[32px] text-right">
+                              {isEncrypting ? "Encrypting" : "Decrypting"}
+                            </span>
+                          </div>
+                          {file.totalBytes > 0 && (
+                            <span className="text-[10px] text-grey-50">
+                              {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
+                            </span>
+                          )}
+                        </div>
                       ) : isFileInProgress ? (
                         <div className="flex flex-col items-end gap-0.5">
                           <div className="flex items-center gap-2">

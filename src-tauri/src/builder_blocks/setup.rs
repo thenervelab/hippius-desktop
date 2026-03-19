@@ -527,8 +527,11 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             }
 
             let app_handle = app.handle().clone();
-            crate::sync_progress::set_app_handle(app_handle.clone());
-            app_handle.manage(crate::app_state::AppState::new());
+
+            // Single AppState holds all mutable state — zero statics.
+            let app_state = crate::app_state::AppState::new();
+            app_state.sync.set_app_handle(app_handle.clone());
+            app_handle.manage(app_state);
             let win = app.get_webview_window("main").expect("main window not found");
 
             if let Some(m) = win.current_monitor()? {
@@ -562,12 +565,18 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 }
 
                 let db_url = format!("sqlite:{}", db_path.display());
-                let pool = SqlitePool::connect(&db_url).await.unwrap();
+                let pool = match SqlitePool::connect(&db_url).await {
+                    Ok(pool) => pool,
+                    Err(e) => {
+                        error!("FATAL: Failed to open database at {}: {e}", db_path.display());
+                        return; // cannot propagate from spawned task; error is logged
+                    }
+                };
                 app_handle.state::<crate::app_state::AppState>().set_pool(pool.clone());
 
                 // Ensure all tables and columns exist
                 if let Err(e) = ensure_table_schema(&pool).await {
-                    error!("Failed to ensure table schema: {}", e);
+                    error!("FATAL: Failed to ensure table schema: {}", e);
                     return;
                 }
 
@@ -646,7 +655,8 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     }
 
                     debug!("Ensuring Nebula is stopped on startup...");
-                    if let Err(e) = crate::utils::nebula::stop_nebula().await {
+                    let nebula_st = &app_handle.state::<crate::app_state::AppState>().nebula;
+                    if let Err(e) = crate::utils::nebula::stop_nebula(nebula_st).await {
                         warn!("Failed to stop Nebula: {}", e);
                     }
                 } else {

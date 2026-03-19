@@ -1,5 +1,5 @@
 export type FileAction = "upload" | "download" | "local_delete" | "remote_delete";
-export type FileProgressStatus = "pending" | "inProgress" | "completed" | "error";
+export type FileProgressStatus = "pending" | "inProgress" | "encrypting" | "decrypting" | "completed" | "error";
 
 export interface FileProgress {
   path: string;
