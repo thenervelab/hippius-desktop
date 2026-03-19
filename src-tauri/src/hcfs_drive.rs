@@ -39,8 +39,6 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
-/// Maximum time to wait for a single `sync_with_resolutions` call.
-const SYNC_TIMEOUT_SECS: u64 = 300;
 
 /// Flag to suppress file watcher events while a sync is in progress,
 /// preventing a feedback loop where sync-generated file changes trigger more syncs.
@@ -1068,32 +1066,12 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         emitted_sync_started = true;
 
                         info!(label = label, "sync_with_resolutions starting");
-                        let sync_timeout = Duration::from_secs(SYNC_TIMEOUT_SECS);
-                        let outcome = match tokio::time::timeout(
-                            sync_timeout,
-                            m.sync_with_resolutions(HashMap::new()),
-                        )
-                        .await
-                        {
-                            Ok(result) => {
-                                info!(
-                                    label = label,
-                                    success = result.is_ok(),
-                                    "sync_with_resolutions returned",
-                                );
-                                result
-                            }
-                            Err(_elapsed) => {
-                                error!(
-                                    label = label,
-                                    timeout_secs = 300,
-                                    "sync_with_resolutions timed out — \
-                                     hcfs-client may be stuck on a file \
-                                     download. Will retry next cycle.",
-                                );
-                                Err("Sync timed out after 5 minutes".to_string())
-                            }
-                        };
+                        let outcome = m.sync_with_resolutions(HashMap::new()).await;
+                        info!(
+                            label = label,
+                            success = outcome.is_ok(),
+                            "sync_with_resolutions returned",
+                        );
 
                         match &outcome {
                             Ok(o) if o.conflicts_skipped > 0 => {
@@ -1168,23 +1146,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         }
                         emitted_sync_started = true;
 
-                        let sync_timeout = Duration::from_secs(SYNC_TIMEOUT_SECS);
-                        let outcome = match tokio::time::timeout(
-                            sync_timeout,
-                            m.sync_with_resolutions(HashMap::new()),
-                        )
-                        .await
-                        {
-                            Ok(result) => result,
-                            Err(_elapsed) => {
-                                error!(
-                                    label = label,
-                                    timeout_secs = 300,
-                                    "sync_with_resolutions timed out",
-                                );
-                                Err("Sync timed out after 5 minutes".to_string())
-                            }
-                        };
+                        let outcome = m.sync_with_resolutions(HashMap::new()).await;
 
                         match &outcome {
                             Ok(o) if o.conflicts_skipped > 0 => {
