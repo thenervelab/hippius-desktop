@@ -20,6 +20,7 @@ mod events;
 mod hcfs_drive;
 mod macos_bookmarks;
 mod substrate_client;
+mod sync_logic;
 mod sync_progress;
 mod sync_shared;
 mod utils;

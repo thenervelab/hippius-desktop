@@ -18,15 +18,7 @@ use tracing::{info, warn};
 
 // === Connectivity Health ===
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConnectivityStatus {
-    Connected,
-    ServerUnreachable,
-    NetworkOffline,
-    AuthExpired,
-    Degraded,
-}
+pub use crate::sync_logic::ConnectivityStatus;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct SyncEngineHealth {

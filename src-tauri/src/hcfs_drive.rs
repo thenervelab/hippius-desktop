@@ -380,15 +380,12 @@ impl HcfsDriveManager {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str.starts_with("downloaded_")
-                && name_str.len() > "downloaded_".len()
-                && name_str["downloaded_".len()..]
-                    .chars()
-                    .all(|c| c.is_ascii_hexdigit())
+            if let Some(hex_part) =
+                crate::sync_logic::is_failed_download_artifact(&name_str)
             {
                 info!(artifact = %name_str, "Removing failed download artifact");
                 let _ = std::fs::remove_file(entry.path());
-                failed_ids.push(name_str["downloaded_".len()..].to_string());
+                failed_ids.push(hex_part.to_string());
             }
         }
         failed_ids
@@ -577,14 +574,12 @@ fn record_health_failure(
         h.consecutive_failures = new_failures;
         h.error_message = Some(error_msg);
 
-        match &new_status {
-            ConnectivityStatus::AuthExpired => true,
-            _ => {
-                new_failures >= HEALTH_FAILURE_THRESHOLD
-                    && (previous_status == ConnectivityStatus::Connected
-                        || previous_status != new_status)
-            }
-        }
+        crate::sync_logic::should_emit_health_change(
+            &previous_status,
+            &new_status,
+            new_failures,
+            HEALTH_FAILURE_THRESHOLD,
+        )
     });
 
     if should_emit {
@@ -623,9 +618,11 @@ fn emit_health_event(app: &AppHandle) {
 
 /// Check if sync should be skipped based on health status.
 fn should_skip_sync(status: &ConnectivityStatus) -> bool {
-    matches!(status, ConnectivityStatus::AuthExpired)
-        || (!matches!(status, ConnectivityStatus::Connected)
-            && get_health().consecutive_failures >= HEALTH_FAILURE_THRESHOLD)
+    crate::sync_logic::should_skip_sync_check(
+        status,
+        get_health().consecutive_failures,
+        HEALTH_FAILURE_THRESHOLD,
+    )
 }
 
 /// Heartbeat interval: sync every 30 seconds regardless of local changes
@@ -710,12 +707,8 @@ pub async fn start_sync_loop(app: AppHandle) {
                 loop {
                     // Apply exponential backoff on consecutive failures
                     let failures = get_sync_failures();
-                    let backoff_secs = if failures > 0 {
-                        let backed_off = HEARTBEAT_SECS * (1u64 << failures.min(4) as u64);
-                        backed_off.min(300)
-                    } else {
-                        HEARTBEAT_SECS
-                    };
+                    let backoff_secs =
+                        crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);
                     if failures > 0 {
                         // Override interval for backoff
                         tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
@@ -807,14 +800,10 @@ pub async fn start_sync_loop(app: AppHandle) {
                 _ = debounce.tick() => {
                     // Exponential backoff: after consecutive failures, extend the
                     // heartbeat interval to avoid hammering the server.
-                    // 0 failures → 30s, 1 → 60s, 2 → 120s, capped at 5 min.
+                    // 0 failures -> 30s, 1 -> 60s, 2 -> 120s, capped at 5 min.
                     let failures = get_sync_failures();
-                    let backoff_secs = if failures > 0 {
-                        let backed_off = HEARTBEAT_SECS * (1u64 << failures.min(4) as u64);
-                        backed_off.min(300) // cap at 5 minutes
-                    } else {
-                        HEARTBEAT_SECS
-                    };
+                    let backoff_secs =
+                        crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);
                     let heartbeat_due = last_sync.elapsed() >= Duration::from_secs(backoff_secs);
                     if has_changes || heartbeat_due {
                         // Run health check on heartbeat ticks
