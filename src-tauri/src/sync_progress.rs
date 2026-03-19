@@ -67,10 +67,6 @@ pub struct SyncSession {
     pub expected_local_deletes: u32,
     pub expected_remote_deletes: u32,
     pub files: HashMap<String, SyncFile>,
-    /// High-water mark for overall percent — ensures monotonic progress.
-    /// Only increases within a session; reset when a new session starts.
-    #[serde(default)]
-    pub high_water_percent: u32,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -311,7 +307,6 @@ pub fn sp_start_session(
         expected_local_deletes,
         expected_remote_deletes,
         files: HashMap::new(),
-        high_water_percent: 0,
     };
 
     let lbl = label.as_deref().unwrap_or("default");
@@ -365,8 +360,7 @@ pub fn sp_merge_into_session(
             expected_local_deletes,
             expected_remote_deletes,
             files: HashMap::new(),
-            high_water_percent: 0,
-        };
+            };
 
         if let Some(fl) = &file_list {
             register_files(&mut session, fl, lbl);
@@ -869,11 +863,15 @@ pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
         (pct.round() as u32).min(100)
     };
 
-    // Enforce monotonic progress: never report less than the previous
-    // high-water mark within this session. This prevents the progress
-    // bar from jumping backwards due to timing of file registrations.
-    let overall_percent = raw_percent.max(session.high_water_percent);
-    session.high_water_percent = overall_percent;
+    // Use the raw byte-weighted percent directly. A high-water mark
+    // was previously used here but it caused the percentage to get
+    // stuck at inflated values: when only small files had reported
+    // sizes the ratio was high, then a large file arrived and diluted
+    // it, but the high-water lock prevented the displayed value from
+    // correcting. The byte ratio can dip briefly when a new large
+    // file reports its size, but this is more accurate than showing
+    // a frozen wrong number.
+    let overall_percent = raw_percent;
 
     // Find the current in-progress file for display (prefer visible name)
     let current_file = all_files
@@ -1498,7 +1496,7 @@ mod tests {
     // ── Monotonic progress (high-water mark) ─────────────────────────
 
     #[test]
-    fn overall_percent_never_decreases_after_merge() {
+    fn overall_percent_reflects_actual_byte_ratio() {
         reset_state();
 
         // Start with 1 file at 80% progress
@@ -1520,12 +1518,11 @@ mod tests {
         .unwrap();
 
         let p1 = sp_get_overall_progress().unwrap();
-        // Byte-weighted: 800/1000 = 80%
         assert_eq!(p1.overall_percent, 80);
 
-        // Merge a large file that reports its size immediately — this
-        // dilutes byte progress: 800 / (1000 + 10000) = 7%.
-        // The high-water mark must keep it at 80.
+        // Merge a large file — this dilutes byte progress:
+        // 800 / (1000 + 10000) = 7%. The percent correctly reflects
+        // the actual transfer state rather than staying frozen at 80.
         let merge_list = SessionFileList {
             upload_files: Some(vec!["/big.bin".to_string()]),
             download_files: None,
@@ -1535,7 +1532,6 @@ mod tests {
         sp_merge_into_session(1, 0, 0, 0, Some(merge_list), Some("d1".to_string()))
             .unwrap();
 
-        // The new file reports 0 bytes transferred of 10000 total
         sp_update_file_progress(
             "/big.bin".to_string(),
             0,
@@ -1547,13 +1543,11 @@ mod tests {
 
         let p2 = sp_get_overall_progress().unwrap();
         assert_eq!(p2.total_files, 2);
-        // Must not decrease — high-water mark enforces monotonic progress
-        assert!(
-            p2.overall_percent >= p1.overall_percent,
-            "Progress went backwards: {} -> {}",
-            p1.overall_percent,
-            p2.overall_percent,
-        );
+        // 800 / 11000 = 7.27% → rounds to 7
+        assert_eq!(p2.overall_percent, 7);
+        // Bytes display matches: 800 transferred, 11000 expected
+        assert_eq!(p2.total_bytes_transferred, 800);
+        assert_eq!(p2.total_bytes_expected, 11000);
     }
 
     #[test]
