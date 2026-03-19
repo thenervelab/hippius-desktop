@@ -90,6 +90,22 @@ pub fn is_failed_download_artifact(name: &str) -> Option<&str> {
     }
 }
 
+/// Check if a filename is an encrypted-name stub left by hcfs-client
+/// when decryption fails.
+///
+/// These files are named `file_<hex>` where `<hex>` is 16+ ASCII hex
+/// digits. Returns `Some(hex_part)` if the name matches, `None` otherwise.
+pub fn is_encrypted_name_stub(name: &str) -> Option<&str> {
+    let prefix = "file_";
+    let rest = name.strip_prefix(prefix)?;
+    // Encrypted names are long hex strings (≥16 chars for 8-byte hash prefix)
+    if rest.len() >= 16 && rest.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(rest)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,5 +318,55 @@ mod tests {
     #[test]
     fn artifact_mixed_hex_nonhex_rejected() {
         assert_eq!(is_failed_download_artifact("downloaded_a1b2c3zz"), None);
+    }
+
+    // --- is_encrypted_name_stub ---
+
+    #[test]
+    fn encrypted_stub_valid_long_hex() {
+        assert_eq!(
+            is_encrypted_name_stub("file_a7339456c25845c2abcdef01"),
+            Some("a7339456c25845c2abcdef01"),
+        );
+    }
+
+    #[test]
+    fn encrypted_stub_exactly_16_hex_chars() {
+        assert_eq!(
+            is_encrypted_name_stub("file_0123456789abcdef"),
+            Some("0123456789abcdef"),
+        );
+    }
+
+    #[test]
+    fn encrypted_stub_short_hex_rejected() {
+        // Fewer than 16 hex chars — likely a user file, not an artifact
+        assert_eq!(is_encrypted_name_stub("file_abc123"), None);
+        assert_eq!(is_encrypted_name_stub("file_0123456789abcde"), None);
+    }
+
+    #[test]
+    fn encrypted_stub_non_hex_rejected() {
+        assert_eq!(is_encrypted_name_stub("file_hello_world_1234"), None);
+    }
+
+    #[test]
+    fn encrypted_stub_no_suffix_rejected() {
+        assert_eq!(is_encrypted_name_stub("file_"), None);
+    }
+
+    #[test]
+    fn encrypted_stub_unrelated_file_rejected() {
+        assert_eq!(is_encrypted_name_stub("file_report.pdf"), None);
+        assert_eq!(is_encrypted_name_stub("readme.txt"), None);
+        assert_eq!(is_encrypted_name_stub(""), None);
+    }
+
+    #[test]
+    fn encrypted_stub_wrong_prefix_rejected() {
+        assert_eq!(
+            is_encrypted_name_stub("files_0123456789abcdef"),
+            None,
+        );
     }
 }

@@ -367,28 +367,71 @@ impl HcfsDriveManager {
     /// hex-encoded file IDs (the full `path_hash`).
     ///
     /// When hcfs-client cannot decrypt a downloaded file it leaves a
-    /// partial or empty file on disk named `downloaded_<hex>`. These
-    /// are not real user files — they are artifacts of the fallback
-    /// naming in `resolve_download_path`. Scan the sync folder,
-    /// delete any that match, and return the file IDs so the caller
-    /// can also purge them from the server.
+    /// partial or empty file on disk named `downloaded_<hex>`. It may
+    /// also leave a 0-byte stub with the encrypted name (`file_<hex>`)
+    /// when decryption fails. These are not real user files — they are
+    /// artifacts of the fallback naming in `resolve_download_path`.
+    /// Scan the sync folder (recursively), delete any that match, and
+    /// return the file IDs so the caller can also purge them from the
+    /// server.
     pub fn cleanup_failed_downloads(&self) -> Vec<String> {
         let mut failed_ids = Vec::new();
-        let Ok(entries) = std::fs::read_dir(&self.sync_path) else {
-            return failed_ids;
+        self.cleanup_failed_downloads_recursive(&self.sync_path, &mut failed_ids);
+        failed_ids
+    }
+
+    fn cleanup_failed_downloads_recursive(
+        &self,
+        dir: &std::path::Path,
+        failed_ids: &mut Vec<String>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
         };
         for entry in entries.flatten() {
+            let path = entry.path();
+
+            // Use file_type() (not is_dir()) to avoid following symlinks,
+            // which could escape the sync folder or cause infinite loops.
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
+                self.cleanup_failed_downloads_recursive(&path, failed_ids);
+                continue;
+            }
+
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
+
+            // Pattern 1: `downloaded_<hex>` — raw encrypted content artifact
             if let Some(hex_part) =
                 crate::sync_logic::is_failed_download_artifact(&name_str)
             {
                 info!(artifact = %name_str, "Removing failed download artifact");
-                let _ = std::fs::remove_file(entry.path());
+                if let Err(e) = std::fs::remove_file(&path) {
+                    warn!(artifact = %name_str, error = %e, "Failed to remove download artifact");
+                }
                 failed_ids.push(hex_part.to_string());
+                continue;
+            }
+
+            // Pattern 2: `file_<hex>` with 0 bytes — encrypted-name stub
+            // from a decryption failure. The full name (including `file_`
+            // prefix) is pushed to `failed_ids` to match how pending
+            // activity entries store encrypted filenames.
+            if crate::sync_logic::is_encrypted_name_stub(&name_str).is_some() {
+                let is_empty = entry.metadata().map(|m| m.len() == 0).unwrap_or(false);
+                if is_empty {
+                    info!(stub = %name_str, "Removing 0-byte encrypted-name stub");
+                    if let Err(e) = std::fs::remove_file(&path) {
+                        warn!(stub = %name_str, error = %e, "Failed to remove encrypted-name stub");
+                    }
+                    failed_ids.push(name_str.to_string());
+                }
             }
         }
-        failed_ids
     }
 
     /// Build a path_index from the current sync state + local scan,
@@ -1240,10 +1283,11 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
     });
 
     // Log post-sync diagnostics and clean up local artifacts from
-    // failed downloads (e.g. files named `downloaded_<hex>`).
-    // We intentionally do NOT delete the corresponding remote files —
-    // decryption failures usually mean a different device encrypted
-    // with a different key, and deleting would destroy their data.
+    // failed downloads (e.g. files named `downloaded_<hex>` or 0-byte
+    // `file_<hex>` stubs). We intentionally do NOT delete the
+    // corresponding remote files — decryption failures usually mean a
+    // different device encrypted with a different key, and deleting
+    // would destroy their data.
     {
         let guard = HCFS_DRIVES.lock().await;
         if let Some(m) = guard.get(label) {
@@ -1255,6 +1299,26 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     label = label,
                     "Cleaned up local download artifact(s) (remote files preserved)",
                 );
+                // Remove pending activity entries for cleaned-up files so
+                // they don't appear in recent activity.
+                let mut pending = crate::sync_shared::PENDING_ACTIVITY
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                let before = pending.len();
+                pending.retain(|item| {
+                    if item.label != label || item.action != "downloaded" {
+                        return true;
+                    }
+                    !failed_ids.iter().any(|id| item.file_name.contains(id))
+                });
+                let removed = before - pending.len();
+                if removed > 0 {
+                    info!(
+                        removed,
+                        label = label,
+                        "Removed pending activity for failed downloads",
+                    );
+                }
             }
         }
     }

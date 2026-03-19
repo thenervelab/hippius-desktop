@@ -339,6 +339,27 @@ pub async fn list_sync_folder(
         let meta = entry.metadata().await.map_err(|e| e.to_string())?;
         let is_folder = meta.is_dir();
 
+        // Remove and skip failed download artifacts (`downloaded_<hex>`) and
+        // 0-byte encrypted-name stubs (`file_<hex>`) left by decryption
+        // failures. Deleting on sight closes the gap between sync cycles
+        // where post-sync cleanup hasn't run yet.
+        if !is_folder {
+            if crate::sync_logic::is_failed_download_artifact(&name).is_some() {
+                let path = entry.path();
+                info!(artifact = %name, "Removing failed download artifact on list");
+                let _ = tokio::fs::remove_file(&path).await;
+                continue;
+            }
+            if crate::sync_logic::is_encrypted_name_stub(&name).is_some()
+                && meta.len() == 0
+            {
+                let path = entry.path();
+                info!(stub = %name, "Removing 0-byte encrypted-name stub on list");
+                let _ = tokio::fs::remove_file(&path).await;
+                continue;
+            }
+        }
+
         // Build relative path matching hcfs-client convention:
         // BLAKE3 is computed over relative_path.to_string_lossy()
         let relative_path = match subfolder {
