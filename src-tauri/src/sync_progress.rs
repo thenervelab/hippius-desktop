@@ -6,6 +6,7 @@
 //! following the same pattern as `sync_shared.rs`.
 
 use once_cell::sync::Lazy;
+use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -111,6 +112,42 @@ pub struct SessionFileList {
     pub download_files: Option<Vec<String>>,
     pub local_delete_files: Option<Vec<String>>,
     pub remote_delete_files: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileProgressStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Error,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileProgress {
+    pub path: String,
+    pub file_name: String,
+    pub label: String,
+    pub action: FileAction,
+    pub status: FileProgressStatus,
+    pub progress_percent: u32,
+    pub bytes_transferred: u64,
+    pub total_bytes: u64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncSnapshot {
+    pub is_active: bool,
+    pub overall_percent: u32,
+    pub bytes_transferred: u64,
+    pub bytes_expected: u64,
+    pub total_files: usize,
+    pub completed_files: usize,
+    pub failed_files: usize,
+    pub files: Vec<FileProgress>,
 }
 
 // ── Global State ───────────────────────────────────────────────────────
@@ -272,6 +309,112 @@ fn move_completed_to_recent(state: &mut SyncProgressState) {
 
     state.recent_files.extend(new_completed);
     clean_expired(state);
+}
+
+// ── Snapshot Builder ──────────────────────────────────────────────────
+
+/// Build a sorted snapshot from the current state.
+///
+/// Pure function: no side effects, no Tauri dependency. Unit tests call this
+/// directly with constructed state.
+pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
+    let session = match &state.current_session {
+        Some(s) => s,
+        None => {
+            return SyncSnapshot {
+                is_active: false,
+                overall_percent: 0,
+                bytes_transferred: 0,
+                bytes_expected: 0,
+                total_files: 0,
+                completed_files: 0,
+                failed_files: 0,
+                files: Vec::new(),
+            };
+        }
+    };
+
+    let mut files: Vec<FileProgress> = session
+        .files
+        .values()
+        .map(|f| {
+            let status = match f.status {
+                FileStatus::Pending => FileProgressStatus::Pending,
+                FileStatus::Uploading
+                | FileStatus::Downloading
+                | FileStatus::Deleting => FileProgressStatus::InProgress,
+                FileStatus::Completed => FileProgressStatus::Completed,
+                FileStatus::Error => FileProgressStatus::Error,
+            };
+            FileProgress {
+                path: f.path.clone(),
+                file_name: f.file_name.clone(),
+                label: f.label.clone(),
+                action: f.action.clone(),
+                status,
+                progress_percent: f.progress,
+                bytes_transferred: f.bytes_transferred,
+                total_bytes: f.total_bytes,
+                error: f.error.clone(),
+            }
+        })
+        .collect();
+
+    // Sort: known sizes descending, then unknowns (total_bytes == 0) at bottom
+    files.sort_by(|a, b| {
+        let a_known = a.total_bytes > 0;
+        let b_known = b.total_bytes > 0;
+        match (a_known, b_known) {
+            (true, false) => CmpOrdering::Less,
+            (false, true) => CmpOrdering::Greater,
+            _ => b.total_bytes.cmp(&a.total_bytes),
+        }
+    });
+
+    // Single pass for stats
+    let mut completed_files: usize = 0;
+    let mut failed_files: usize = 0;
+    let mut total_bytes_transferred: u64 = 0;
+    let mut total_bytes_expected: u64 = 0;
+
+    for f in &files {
+        match f.status {
+            FileProgressStatus::Completed => completed_files += 1,
+            FileProgressStatus::Error => failed_files += 1,
+            _ => {}
+        }
+        if f.total_bytes > 0 {
+            total_bytes_transferred += f.bytes_transferred;
+            total_bytes_expected += f.total_bytes;
+        }
+    }
+
+    let total_files = files.len();
+    let overall_percent = if total_files == 0 {
+        0
+    } else if completed_files + failed_files == total_files {
+        100
+    } else if total_bytes_expected > 0 {
+        let pct = (total_bytes_transferred as f64
+            / total_bytes_expected as f64)
+            * 100.0;
+        (pct.round() as u32).min(100)
+    } else {
+        let pct =
+            (completed_files as f64 / total_files as f64) * 100.0;
+        (pct.round() as u32).min(100)
+    };
+
+    SyncSnapshot {
+        is_active: session.is_active,
+        overall_percent,
+        bytes_transferred: total_bytes_transferred,
+        bytes_expected: total_bytes_expected,
+        total_files,
+        completed_files,
+        failed_files,
+        files,
+    }
 }
 
 // ── Tauri Commands ─────────────────────────────────────────────────────
