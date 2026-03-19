@@ -1421,4 +1421,71 @@ mod tests {
         assert_eq!(stalled.status, FileStatus::Error);
         assert!(stalled.error.as_ref().unwrap().contains("stalled"));
     }
+
+    // ── Encrypted file detection ──────────────────────────────────────
+
+    #[test]
+    fn file_hex_prefix_is_encrypted() {
+        assert!(is_encrypted_file_id("file_abcdef0123456789"));
+    }
+
+    #[test]
+    fn pure_hex_20_plus_chars_is_encrypted() {
+        assert!(is_encrypted_file_id("abcdef0123456789abcd"));
+    }
+
+    #[test]
+    fn hex_16_chars_no_dot_is_encrypted() {
+        assert!(is_encrypted_file_id("abcdef0123456789"));
+    }
+
+    #[test]
+    fn normal_filename_is_not_encrypted() {
+        assert!(!is_encrypted_file_id("document.pdf"));
+    }
+
+    #[test]
+    fn hex_with_dot_is_not_encrypted() {
+        assert!(!is_encrypted_file_id("abcdef0123456789.txt"));
+    }
+
+    #[test]
+    fn short_hex_is_not_encrypted() {
+        assert!(!is_encrypted_file_id("abcdef"));
+    }
+
+    #[test]
+    fn empty_string_is_not_encrypted() {
+        assert!(!is_encrypted_file_id(""));
+    }
+
+    // ── File ID generation ────────────────────────────────────────────
+
+    #[test]
+    fn file_id_is_deterministic() {
+        let id1 = generate_file_id("/home/user/photos/sunset.jpg");
+        let id2 = generate_file_id("/home/user/photos/sunset.jpg");
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn file_id_differs_for_different_paths() {
+        let id1 = generate_file_id("/home/user/a.txt");
+        let id2 = generate_file_id("/home/user/b.txt");
+        assert_ne!(id1, id2);
+    }
+
+    // ── extract_file_name ─────────────────────────────────────────────
+
+    #[test]
+    fn extract_name_returns_encrypted_for_hex() {
+        let name = extract_file_name("abcdef0123456789abcd");
+        assert_eq!(name, "Encrypted file");
+    }
+
+    #[test]
+    fn extract_name_returns_original_for_normal() {
+        let name = extract_file_name("readme.md");
+        assert_eq!(name, "readme.md");
+    }
 }
