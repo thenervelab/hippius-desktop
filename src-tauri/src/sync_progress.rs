@@ -222,8 +222,8 @@ fn emit_snapshot_inner(immediate: bool) {
         let _ = app.emit("sync_progress_snapshot", &snapshot);
     } else if !EMIT_SCHEDULED.swap(true, Ordering::AcqRel) {
         let app_clone = app.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(EMIT_THROTTLE_MS)).await;
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(EMIT_THROTTLE_MS));
             EMIT_SCHEDULED.store(false, Ordering::Release);
             let snapshot = {
                 let state = SYNC_PROGRESS.lock().unwrap_or_else(|p| {
