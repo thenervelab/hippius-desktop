@@ -44,23 +44,6 @@ export interface SyncSession {
   files: Record<string, SyncFile>;
 }
 
-export interface RecentFile {
-  id: string;
-  path: string;
-  fileName: string;
-  label: string;
-  action: FileAction;
-  completedAt: number;
-  sizeBytes: number;
-  sessionId: string;
-}
-
-export interface SyncProgressState {
-  currentSession: SyncSession | null;
-  recentFiles: RecentFile[];
-  lastUpdated: number;
-}
-
 export interface SessionFileList {
   uploadFiles?: string[];
   downloadFiles?: string[];
@@ -168,33 +151,13 @@ export async function markFileError(path: string, error: string): Promise<void> 
 // Query Functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function getCurrentSessionFiles(): Promise<SyncFile[]> {
-  return invoke<SyncFile[]>("sp_get_session_files");
-}
-
-export async function getRecentFiles(): Promise<RecentFile[]> {
-  return invoke<RecentFile[]>("sp_get_recent_files");
-}
-
-export async function getTrayMenuFiles(): Promise<(SyncFile | RecentFile)[]> {
-  return invoke<(SyncFile | RecentFile)[]>("sp_get_tray_menu_files");
-}
-
 export async function getOverallProgress(): Promise<OverallProgress> {
   return invoke<OverallProgress>("sp_get_overall_progress");
-}
-
-export async function hasAnySyncActivity(): Promise<boolean> {
-  return invoke<boolean>("sp_has_any_sync_activity");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cleanup & Utility
 // ─────────────────────────────────────────────────────────────────────────────
-
-export async function cleanupExpiredFiles(): Promise<number> {
-  return invoke<number>("sp_cleanup_expired_files");
-}
 
 export async function recordDeletedFile(fileName: string, sizeBytes: number = 0): Promise<void> {
   return invoke("sp_record_deleted_file", { fileName, sizeBytes: sizeBytes || 0 });
@@ -202,12 +165,4 @@ export async function recordDeletedFile(fileName: string, sizeBytes: number = 0)
 
 export async function clearAllData(): Promise<void> {
   return invoke("sp_clear_all_data");
-}
-
-export async function isEncryptedFileId(fileName: string): Promise<boolean> {
-  return invoke<boolean>("sp_is_encrypted_file_id", { fileName });
-}
-
-export async function shouldHideFile(path: string): Promise<boolean> {
-  return invoke<boolean>("sp_should_hide_file", { path });
 }

@@ -33,11 +33,10 @@ use crate::commands::syncing::{
     trigger_sync_now,
 };
 use crate::sync_progress::{
-    sp_cleanup_expired_files, sp_clear_all_data, sp_complete_pending_files, sp_complete_session,
-    sp_get_overall_progress, sp_get_recent_files, sp_get_session_files, sp_get_tray_menu_files,
-    sp_has_any_sync_activity, sp_is_encrypted_file_id, sp_mark_all_pending_files_as_failed,
+    sp_clear_all_data, sp_complete_pending_files, sp_complete_session,
+    sp_get_overall_progress, sp_get_snapshot, sp_mark_all_pending_files_as_failed,
     sp_mark_file_error, sp_mark_pending_files_as_failed, sp_merge_into_session,
-    sp_get_snapshot, sp_record_deleted_file, sp_remove_files_for_label, sp_should_hide_file,
+    sp_record_deleted_file, sp_remove_files_for_label,
     sp_start_session, sp_stop_session, sp_update_file_progress,
 };
 use crate::sync_shared::{app_close, get_sync_activity, get_sync_engine_health, get_sync_status};
@@ -381,17 +380,10 @@ fn main() {
             sp_mark_pending_files_as_failed,
             sp_mark_all_pending_files_as_failed,
             sp_mark_file_error,
-            sp_get_session_files,
-            sp_get_recent_files,
-            sp_get_tray_menu_files,
             sp_get_overall_progress,
-            sp_has_any_sync_activity,
-            sp_cleanup_expired_files,
             sp_record_deleted_file,
             sp_remove_files_for_label,
             sp_clear_all_data,
-            sp_is_encrypted_file_id,
-            sp_should_hide_file,
             sp_get_snapshot,
             // Chart data formatting
             format_credits_chart,

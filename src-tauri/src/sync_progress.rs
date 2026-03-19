@@ -17,8 +17,6 @@ use tracing::warn;
 // ── Constants ──────────────────────────────────────────────────────────
 
 const RECENT_FILES_RETENTION_MS: i64 = 60 * 60 * 1000; // 1 hour
-const TRAY_MENU_MAX_FILES: usize = 20;
-
 // ── Types ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -930,103 +928,6 @@ pub fn sp_mark_file_error(path: String, error: String) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub fn sp_get_session_files() -> Result<Vec<SyncFile>, String> {
-    let state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_get_session_files");
-        poisoned.into_inner()
-    });
-
-    // Return all files — encrypted-name downloads are shown with
-    // "Encrypted file" as their display name (set by extract_file_name)
-    // so per-file progress bars render correctly.
-    let files = match &state.current_session {
-        Some(session) => session.files.values().cloned().collect(),
-        None => Vec::new(),
-    };
-
-    Ok(files)
-}
-
-#[tauri::command]
-pub fn sp_get_recent_files() -> Result<Vec<RecentFile>, String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_get_recent_files");
-        poisoned.into_inner()
-    });
-
-    clean_expired(&mut state);
-
-    let files: Vec<RecentFile> = state
-        .recent_files
-        .iter()
-        .filter(|f| !should_hide_file(&f.path))
-        .cloned()
-        .collect();
-
-    Ok(files)
-}
-
-#[tauri::command]
-pub fn sp_get_tray_menu_files() -> Result<Vec<serde_json::Value>, String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_get_tray_menu_files");
-        poisoned.into_inner()
-    });
-
-    clean_expired(&mut state);
-
-    let mut items: Vec<serde_json::Value> = Vec::new();
-
-    // Add active session files first (in-progress ones prioritized)
-    if let Some(session) = &state.current_session {
-        let mut session_files: Vec<&SyncFile> = session
-            .files
-            .values()
-            .filter(|f| !should_hide_file(&f.path))
-            .collect();
-
-        // Sort: in-progress first, then by started_at descending
-        session_files.sort_by(|a, b| {
-            let a_active = matches!(
-                a.status,
-                FileStatus::Uploading | FileStatus::Downloading | FileStatus::Deleting
-            );
-            let b_active = matches!(
-                b.status,
-                FileStatus::Uploading | FileStatus::Downloading | FileStatus::Deleting
-            );
-            b_active
-                .cmp(&a_active)
-                .then(b.started_at.cmp(&a.started_at))
-        });
-
-        for file in session_files.iter().take(TRAY_MENU_MAX_FILES) {
-            if let Ok(val) = serde_json::to_value(file) {
-                items.push(val);
-            }
-        }
-    }
-
-    // Fill remaining slots with recent files
-    let remaining = TRAY_MENU_MAX_FILES.saturating_sub(items.len());
-    if remaining > 0 {
-        let mut recent: Vec<&RecentFile> = state
-            .recent_files
-            .iter()
-            .filter(|f| !should_hide_file(&f.path))
-            .collect();
-        recent.sort_by(|a, b| b.completed_at.cmp(&a.completed_at));
-
-        for file in recent.iter().take(remaining) {
-            if let Ok(val) = serde_json::to_value(file) {
-                items.push(val);
-            }
-        }
-    }
-
-    Ok(items)
-}
 
 #[tauri::command]
 pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
@@ -1112,38 +1013,6 @@ pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
     })
 }
 
-#[tauri::command]
-pub fn sp_has_any_sync_activity() -> Result<bool, String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_has_any_sync_activity");
-        poisoned.into_inner()
-    });
-
-    clean_expired(&mut state);
-
-    let has_session = state
-        .current_session
-        .as_ref()
-        .is_some_and(|s| s.is_active || !s.files.is_empty());
-
-    let has_recent = !state.recent_files.is_empty();
-
-    Ok(has_session || has_recent)
-}
-
-#[tauri::command]
-pub fn sp_cleanup_expired_files() -> Result<u32, String> {
-    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
-        warn!("Poisoned mutex recovered in sp_cleanup_expired_files");
-        poisoned.into_inner()
-    });
-
-    let before = state.recent_files.len();
-    clean_expired(&mut state);
-    let removed = before - state.recent_files.len();
-
-    Ok(removed as u32)
-}
 
 #[tauri::command]
 pub fn sp_record_deleted_file(file_name: String, size_bytes: u64) -> Result<(), String> {
@@ -1253,16 +1122,6 @@ pub fn sp_clear_all_data() -> Result<(), String> {
     drop(state);
     emit_snapshot_inner(true);
     Ok(())
-}
-
-#[tauri::command]
-pub fn sp_is_encrypted_file_id(file_name: String) -> Result<bool, String> {
-    Ok(is_encrypted_file_id(&file_name))
-}
-
-#[tauri::command]
-pub fn sp_should_hide_file(path: String) -> Result<bool, String> {
-    Ok(should_hide_file(&path))
 }
 
 #[tauri::command]
@@ -1667,7 +1526,7 @@ mod tests {
     }
 
     #[test]
-    fn has_sync_activity_true_while_session_exists() {
+    fn completed_session_still_reports_files_in_snapshot() {
         reset_state();
 
         let file_list = SessionFileList {
@@ -1687,14 +1546,14 @@ mod tests {
         .unwrap();
         sp_complete_session(1, 0).unwrap();
 
-        // Session is kept (inactive) so activity should still be true
-        let has = sp_has_any_sync_activity().unwrap();
-        assert!(has, "Activity expected while completed session exists");
+        // Session is kept (inactive) so snapshot should still show files
+        let snapshot = sp_get_snapshot().unwrap();
+        assert!(snapshot.total_files > 0, "Completed session should still report files");
 
-        // After clearing all data, activity should be false
+        // After clearing all data, snapshot should be empty
         sp_clear_all_data().unwrap();
-        let has = sp_has_any_sync_activity().unwrap();
-        assert!(!has, "No activity after clear_all_data");
+        let snapshot = sp_get_snapshot().unwrap();
+        assert_eq!(snapshot.total_files, 0, "No files after clear_all_data");
     }
 
     #[test]
@@ -1826,7 +1685,7 @@ mod tests {
     }
 
     #[test]
-    fn session_files_includes_encrypted_downloads() {
+    fn snapshot_includes_encrypted_downloads_with_display_name() {
         reset_state();
 
         let file_list = SessionFileList {
@@ -1839,9 +1698,9 @@ mod tests {
         };
         sp_start_session(0, 1, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
-        let files = sp_get_session_files().unwrap();
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].file_name, "Encrypted file");
+        let snapshot = sp_get_snapshot().unwrap();
+        assert_eq!(snapshot.files.len(), 1);
+        assert_eq!(snapshot.files[0].file_name, "Encrypted file");
     }
 
     #[test]
