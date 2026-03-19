@@ -67,6 +67,15 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   const fileListRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const engineHealth = useAtomValue(syncEngineHealthAtom);
+
+  // Monotonic progress: never let the displayed percentage go backwards.
+  // Reset when sync completes or stops (isInProgress goes false).
+  const highWaterRef = useRef<number>(0);
+  useEffect(() => {
+    if (!isInProgress) {
+      highWaterRef.current = 0;
+    }
+  }, [isInProgress]);
   const isUnhealthy = engineHealth.status !== "connected";
 
   // Track if there's any active transfer (upload or download) for progress detection
@@ -83,12 +92,17 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     totalFiles: Math.max(propTotalFiles || 0, syncFiles?.length || 0),
     syncedFiles: syncFiles?.filter((f) => f.status === "uploaded").length || 0,
     deletedFiles: syncFiles?.filter((f) => f.status === "deleted").length || 0,
-    // For percentage: when in progress but no percent provided, use null to show indeterminate state
-    percentage: showIndeterminateProgress 
-      ? null 
-      : (propSyncPercent !== null && propSyncPercent !== undefined 
-        ? Math.round(propSyncPercent) 
-        : 0),
+    // For percentage: when in progress but no percent provided, use null to show indeterminate state.
+    // Enforce monotonic progress via highWaterRef so the bar never jumps backwards.
+    percentage: (() => {
+      if (showIndeterminateProgress) return null;
+      const raw = propSyncPercent !== null && propSyncPercent !== undefined
+        ? Math.round(propSyncPercent)
+        : 0;
+      const clamped = Math.max(raw, highWaterRef.current);
+      highWaterRef.current = clamped;
+      return clamped;
+    })(),
     // Never mark as completed while sync is still in progress — follow the tray's behavior
     isCompleted:
       !isInProgress &&

@@ -67,6 +67,10 @@ pub struct SyncSession {
     pub expected_local_deletes: u32,
     pub expected_remote_deletes: u32,
     pub files: HashMap<String, SyncFile>,
+    /// High-water mark for overall percent — ensures monotonic progress.
+    /// Only increases within a session; reset when a new session starts.
+    #[serde(default)]
+    pub high_water_percent: u32,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -307,6 +311,7 @@ pub fn sp_start_session(
         expected_local_deletes,
         expected_remote_deletes,
         files: HashMap::new(),
+        high_water_percent: 0,
     };
 
     let lbl = label.as_deref().unwrap_or("default");
@@ -360,6 +365,7 @@ pub fn sp_merge_into_session(
             expected_local_deletes,
             expected_remote_deletes,
             files: HashMap::new(),
+            high_water_percent: 0,
         };
 
         if let Some(fl) = &file_list {
@@ -787,12 +793,12 @@ pub fn sp_get_tray_menu_files() -> Result<Vec<serde_json::Value>, String> {
 
 #[tauri::command]
 pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
-    let state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+    let mut state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
         warn!("Poisoned mutex recovered in sp_get_overall_progress");
         poisoned.into_inner()
     });
 
-    let session = match &state.current_session {
+    let session = match state.current_session.as_mut() {
         Some(s) => s,
         None => {
             return Ok(OverallProgress {
@@ -835,40 +841,60 @@ pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
         .filter(|f| f.status == FileStatus::Error)
         .count();
 
-    // Only sum bytes from files that have reported their total size.
-    // Files registered upfront have total_bytes=0 until their first
-    // progress event, which would deflate total_bytes_expected and
-    // inflate the percentage.
-    let files_with_size: Vec<&&SyncFile> = all_files
+    // Sum bytes from files that have reported their total size.
+    let total_bytes_transferred: u64 = all_files
         .iter()
         .filter(|f| f.total_bytes > 0)
-        .collect();
-    let total_bytes_transferred: u64 = files_with_size.iter().map(|f| f.bytes_transferred).sum();
-    let total_bytes_expected: u64 = files_with_size.iter().map(|f| f.total_bytes).sum();
+        .map(|f| f.bytes_transferred)
+        .sum();
+    let total_bytes_expected: u64 = all_files
+        .iter()
+        .filter(|f| f.total_bytes > 0)
+        .map(|f| f.total_bytes)
+        .sum();
 
-    // Calculate overall percent using a blended approach:
-    // - If all files are completed, always return 100.
-    // - If we have byte info for some files, compute a weighted percent
-    //   that accounts for files that haven't started yet.
-    // - Otherwise fall back to file-count-based progress.
-    let pending_files = total_files - completed_files - failed_files;
-    let overall_percent = if total_files == 0 {
-        0
-    } else if pending_files == 0 && in_progress_files == 0 {
-        // All files finished (completed or failed) — report 100%
+    // Stable per-file progress calculation:
+    // Each file contributes equally (1/total_files of the 100%).
+    // - Completed files contribute their full share (100%).
+    // - In-progress files contribute their byte-based progress.
+    // - Pending/failed files contribute 0%.
+    // This avoids the instability of the old blended formula where
+    // `file_fraction` changed as new files reported their first bytes.
+    let raw_percent = if total_files == 0 {
+        0u32
+    } else if completed_files + failed_files == total_files {
+        // All files finished — always report exactly 100% to avoid
+        // floating-point truncation rounding down to 99%.
         100
-    } else if total_bytes_expected > 0 && !files_with_size.is_empty() {
-        // Byte-based progress weighted by the fraction of files that have
-        // reported sizes. E.g. if 2 of 5 files have started and transferred
-        // 50% of their bytes, effective progress = (2/5) * 50% = 20%.
-        let byte_pct =
-            (total_bytes_transferred as f64 / total_bytes_expected as f64).min(1.0);
-        let file_fraction = files_with_size.len() as f64 / total_files as f64;
-        (byte_pct * file_fraction * 100.0) as u32
     } else {
-        // Fall back to file-count-based progress
-        ((completed_files as f64 / total_files as f64) * 100.0) as u32
+        let per_file_weight = 100.0 / total_files as f64;
+        let mut progress = 0.0f64;
+        for f in &all_files {
+            match f.status {
+                FileStatus::Completed => {
+                    progress += per_file_weight;
+                }
+                FileStatus::Uploading
+                | FileStatus::Downloading
+                | FileStatus::Deleting => {
+                    if f.total_bytes > 0 {
+                        let file_pct = (f.bytes_transferred as f64
+                            / f.total_bytes as f64)
+                            .min(1.0);
+                        progress += per_file_weight * file_pct;
+                    }
+                }
+                FileStatus::Pending | FileStatus::Error => {}
+            }
+        }
+        (progress as u32).min(99)
     };
+
+    // Enforce monotonic progress: never report less than the previous
+    // high-water mark within this session. This prevents the progress
+    // bar from jumping backwards due to timing of file registrations.
+    let overall_percent = raw_percent.max(session.high_water_percent);
+    session.high_water_percent = overall_percent;
 
     // Find the current in-progress file for display (prefer visible name)
     let current_file = all_files
@@ -1291,8 +1317,8 @@ mod tests {
         // Both files should be counted (including the encrypted download)
         assert_eq!(progress.total_files, 2);
         assert_eq!(progress.in_progress_files, 1);
-        // Percent is weighted: 1 of 2 files has size info, 50% of its bytes
-        // = (500/1000) * (1/2) * 100 = 25%
+        // Per-file weight = 50. Upload at 50% → 50 * 0.5 = 25.
+        // Pending download → 0. Total = 25%.
         assert_eq!(progress.overall_percent, 25);
     }
 
@@ -1487,5 +1513,128 @@ mod tests {
     fn extract_name_returns_original_for_normal() {
         let name = extract_file_name("readme.md");
         assert_eq!(name, "readme.md");
+    }
+
+    // ── Monotonic progress (high-water mark) ─────────────────────────
+
+    #[test]
+    fn overall_percent_never_decreases_after_merge() {
+        reset_state();
+
+        // Start with 1 file at 80% progress
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/a.txt".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_start_session(1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        sp_update_file_progress(
+            "/a.txt".to_string(),
+            800,
+            1000,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap();
+
+        let p1 = sp_get_overall_progress().unwrap();
+        // 1 file, 80% byte progress → per_file_weight=100, 100*0.8 = 80
+        assert_eq!(p1.overall_percent, 80);
+
+        // Merge 4 more files — dilutes per_file_weight from 100 to 20.
+        // Raw percent would drop to 20*0.8 = 16, but high-water keeps it at 80.
+        let merge_list = SessionFileList {
+            upload_files: Some(vec![
+                "/b.txt".to_string(),
+                "/c.txt".to_string(),
+                "/d.txt".to_string(),
+                "/e.txt".to_string(),
+            ]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_merge_into_session(4, 0, 0, 0, Some(merge_list), Some("d1".to_string()))
+            .unwrap();
+
+        let p2 = sp_get_overall_progress().unwrap();
+        assert_eq!(p2.total_files, 5);
+        // Must not decrease — high-water mark enforces monotonic progress
+        assert!(
+            p2.overall_percent >= p1.overall_percent,
+            "Progress went backwards: {} -> {}",
+            p1.overall_percent,
+            p2.overall_percent,
+        );
+    }
+
+    #[test]
+    fn overall_percent_reaches_100_when_all_finished() {
+        reset_state();
+
+        // 3 files: all completed → must be exactly 100, not 99
+        let file_list = SessionFileList {
+            upload_files: Some(vec![
+                "/a.txt".to_string(),
+                "/b.txt".to_string(),
+                "/c.txt".to_string(),
+            ]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_start_session(3, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        for path in ["/a.txt", "/b.txt", "/c.txt"] {
+            sp_update_file_progress(
+                path.to_string(),
+                1000,
+                1000,
+                FileAction::Upload,
+                Some("d1".to_string()),
+            )
+            .unwrap();
+        }
+
+        let p = sp_get_overall_progress().unwrap();
+        assert_eq!(p.overall_percent, 100);
+    }
+
+    #[test]
+    fn overall_percent_capped_at_99_while_files_pending() {
+        reset_state();
+
+        // 2 files: both in-progress at 100% bytes but not marked Completed
+        // (simulating edge case where bytes match but status hasn't flipped)
+        let file_list = SessionFileList {
+            upload_files: Some(vec![
+                "/a.txt".to_string(),
+                "/b.txt".to_string(),
+            ]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        sp_start_session(2, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // Only update one file — the other stays Pending
+        sp_update_file_progress(
+            "/a.txt".to_string(),
+            1000,
+            1000,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap();
+
+        let p = sp_get_overall_progress().unwrap();
+        // /a.txt auto-completed (100%), /b.txt still Pending
+        // completed+failed (1) != total (2), so raw calc is used
+        // Per-file weight=50, completed=50, pending=0 → 50
+        assert_eq!(p.overall_percent, 50);
+        // Ensure it doesn't hit 100 while files are pending
+        assert!(p.overall_percent < 100);
     }
 }
