@@ -527,6 +527,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             }
 
             let app_handle = app.handle().clone();
+            crate::sync_progress::set_app_handle(app_handle.clone());
             app_handle.manage(crate::app_state::AppState::new());
             let win = app.get_webview_window("main").expect("main window not found");
 

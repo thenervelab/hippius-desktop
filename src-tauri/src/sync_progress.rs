@@ -10,6 +10,8 @@ use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
+use tauri::{AppHandle, Emitter};
 use tracing::warn;
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -159,6 +161,86 @@ pub static SYNC_PROGRESS: Lazy<Mutex<SyncProgressState>> = Lazy::new(|| {
         last_updated: now_ms(),
     })
 });
+
+/// Global app handle for emitting snapshot events.
+static SYNC_APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
+
+/// Last time a snapshot was emitted (for byte-update throttling).
+static LAST_EMIT_TIME: Lazy<Mutex<Instant>> = Lazy::new(|| Mutex::new(Instant::now()));
+
+/// Whether a delayed emit is already scheduled.
+static EMIT_SCHEDULED: Lazy<std::sync::atomic::AtomicBool> =
+    Lazy::new(|| std::sync::atomic::AtomicBool::new(false));
+
+const EMIT_THROTTLE_MS: u64 = 250;
+
+/// Store the app handle for later event emission.
+/// Call once during app setup.
+pub fn set_app_handle(app: AppHandle) {
+    if let Ok(mut handle) = SYNC_APP_HANDLE.lock() {
+        *handle = Some(app);
+    }
+}
+
+/// Emit a snapshot event to the frontend.
+///
+/// `immediate`: bypasses throttle for status transitions (file completed,
+/// error, session start/stop). When false, throttles to one emit per 250ms
+/// and schedules a delayed flush for pending byte-progress updates.
+fn emit_snapshot_inner(immediate: bool) {
+    let snapshot = {
+        let state = SYNC_PROGRESS.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex in emit_snapshot");
+            p.into_inner()
+        });
+        build_snapshot(&state)
+    };
+
+    let app = SYNC_APP_HANDLE
+        .lock()
+        .ok()
+        .and_then(|g| g.clone());
+
+    let Some(app) = app else { return };
+
+    if immediate {
+        if let Ok(mut t) = LAST_EMIT_TIME.lock() {
+            *t = Instant::now();
+        }
+        let _ = app.emit("sync_progress_snapshot", &snapshot);
+        return;
+    }
+
+    // Throttled path
+    let should_emit = LAST_EMIT_TIME
+        .lock()
+        .ok()
+        .map_or(true, |t| t.elapsed().as_millis() >= u128::from(EMIT_THROTTLE_MS));
+
+    if should_emit {
+        if let Ok(mut t) = LAST_EMIT_TIME.lock() {
+            *t = Instant::now();
+        }
+        let _ = app.emit("sync_progress_snapshot", &snapshot);
+    } else if !EMIT_SCHEDULED.swap(true, Ordering::AcqRel) {
+        let app_clone = app.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(EMIT_THROTTLE_MS)).await;
+            EMIT_SCHEDULED.store(false, Ordering::Release);
+            let snapshot = {
+                let state = SYNC_PROGRESS.lock().unwrap_or_else(|p| {
+                    warn!("Poisoned mutex in delayed emit");
+                    p.into_inner()
+                });
+                build_snapshot(&state)
+            };
+            if let Ok(mut t) = LAST_EMIT_TIME.lock() {
+                *t = Instant::now();
+            }
+            let _ = app_clone.emit("sync_progress_snapshot", &snapshot);
+        });
+    }
+}
 
 // ── Helper Functions ───────────────────────────────────────────────────
 
@@ -461,6 +543,8 @@ pub fn sp_start_session(
     state.current_session = Some(session);
     state.last_updated = now;
 
+    drop(state);
+    emit_snapshot_inner(true);
     Ok(result)
 }
 
@@ -513,6 +597,8 @@ pub fn sp_merge_into_session(
     }
 
     state.last_updated = now;
+    drop(state);
+    emit_snapshot_inner(true);
     Ok(())
 }
 
@@ -583,6 +669,8 @@ pub fn sp_complete_session(files_uploaded: u32, files_downloaded: u32) -> Result
 
     state.last_updated = now;
 
+    drop(state);
+    emit_snapshot_inner(true);
     Ok(())
 }
 
@@ -599,6 +687,8 @@ pub fn sp_stop_session() -> Result<(), String> {
     }
 
     state.last_updated = now_ms();
+    drop(state);
+    emit_snapshot_inner(true);
     Ok(())
 }
 
@@ -664,6 +754,8 @@ pub fn sp_update_file_progress(
     let result = file.clone();
     state.last_updated = now;
 
+    drop(state);
+    emit_snapshot_inner(false);
     Ok(Some(result))
 }
 
@@ -703,6 +795,8 @@ pub fn sp_complete_pending_files() -> Result<(), String> {
     }
 
     state.last_updated = now;
+    drop(state);
+    emit_snapshot_inner(true);
     Ok(())
 }
 
@@ -779,6 +873,8 @@ pub fn sp_mark_pending_files_as_failed(
     }
 
     state.last_updated = now;
+    drop(state);
+    emit_snapshot_inner(true);
     Ok(())
 }
 
@@ -806,6 +902,8 @@ pub fn sp_mark_all_pending_files_as_failed(error_message: String) -> Result<(), 
     }
 
     state.last_updated = now;
+    drop(state);
+    emit_snapshot_inner(true);
     Ok(())
 }
 
@@ -827,6 +925,8 @@ pub fn sp_mark_file_error(path: String, error: String) -> Result<(), String> {
     }
 
     state.last_updated = now;
+    drop(state);
+    emit_snapshot_inner(true);
     Ok(())
 }
 
@@ -1134,6 +1234,8 @@ pub fn sp_remove_files_for_label(label: String) -> Result<(), String> {
     clean_expired(&mut state);
     state.last_updated = now;
 
+    drop(state);
+    emit_snapshot_inner(true);
     Ok(())
 }
 
@@ -1148,6 +1250,8 @@ pub fn sp_clear_all_data() -> Result<(), String> {
     state.recent_files.clear();
     state.last_updated = now_ms();
 
+    drop(state);
+    emit_snapshot_inner(true);
     Ok(())
 }
 
@@ -1159,6 +1263,15 @@ pub fn sp_is_encrypted_file_id(file_name: String) -> Result<bool, String> {
 #[tauri::command]
 pub fn sp_should_hide_file(path: String) -> Result<bool, String> {
     Ok(should_hide_file(&path))
+}
+
+#[tauri::command]
+pub fn sp_get_snapshot() -> Result<SyncSnapshot, String> {
+    let state = SYNC_PROGRESS.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in sp_get_snapshot");
+        poisoned.into_inner()
+    });
+    Ok(build_snapshot(&state))
 }
 
 #[cfg(test)]
