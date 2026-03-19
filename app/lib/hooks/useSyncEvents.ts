@@ -514,7 +514,7 @@ export function useSyncEvents() {
                 // Final refresh so the UI shows the completed state
                 // from the backend (session is kept intact after completion).
                 await refreshProgressState();
-              }, 800);
+              }, 200);
             }
           }),
           listen<SyncError>("hcfs_sync_error", async (e) => {

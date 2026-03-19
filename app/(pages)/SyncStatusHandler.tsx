@@ -59,12 +59,13 @@ function syncFileToActivityRow(file: SyncFile): SyncActivityRow {
     size: file.totalBytes,
     deleted: isDelete,
     error: file.error, // Pass through error message for failed files
-    // Extra fields for progress display (custom extension)
+    // Extra fields for progress display and stable sorting
     progress: file.progress,
     bytesTransferred: file.bytesTransferred,
     totalBytes: file.totalBytes,
+    startedAt: file.startedAt,
     isActive: file.status === 'uploading' || file.status === 'downloading' || file.status === 'deleting',
-  } as SyncActivityRow & { progress?: number; bytesTransferred?: number; totalBytes?: number; isActive?: boolean; error?: string };
+  } as SyncActivityRow & { progress?: number; bytesTransferred?: number; totalBytes?: number; startedAt?: number; isActive?: boolean; error?: string };
 }
 
 /**
@@ -159,25 +160,20 @@ const SyncStatusHandler: React.FC = () => {
       }
     }
 
-    // Sort: in-progress first, then pending, then completed/recent.
-    // Within the same status group, use stable ordering:
-    // - In-progress and pending files sort by path (deterministic, never changes)
-    // - Completed/failed files sort by timestamp (most recent first)
-    const statusOrder = (s: string) => {
-      if (s === "uploading") return 0;
-      if (s === "pending") return 1;
-      if (s === "failed") return 2;
-      return 3; // uploaded, deleted
-    };
+    // Stable sort: session files first (by startedAt, preserving
+    // registration order), then recent files by completedAt. Files
+    // never jump positions when their status changes — a file that
+    // completes stays where it was, only its indicator changes.
     files.sort((a, b) => {
-      const orderDiff = statusOrder(a.status) - statusOrder(b.status);
-      if (orderDiff !== 0) return orderDiff;
-      const aOrder = statusOrder(a.status);
-      if (aOrder <= 1) {
-        // In-progress / pending: stable alphabetical by path
-        return (a.rawPath || a.fileName).localeCompare(b.rawPath || b.fileName);
+      // Session files (have startedAt) before recent-only files
+      const aStarted = (a as any).startedAt as number | undefined;
+      const bStarted = (b as any).startedAt as number | undefined;
+      if (aStarted != null && bStarted != null) {
+        return aStarted - bStarted; // registration order
       }
-      // Completed / failed: most recent first
+      if (aStarted != null) return -1;
+      if (bStarted != null) return 1;
+      // Both are recent files — most recent first
       return (b.timestamp || 0) - (a.timestamp || 0);
     });
 

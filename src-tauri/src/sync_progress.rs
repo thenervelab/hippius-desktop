@@ -853,25 +853,20 @@ pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
         .map(|f| f.total_bytes)
         .sum();
 
-    // Progress calculation: use byte-weighted progress when available so
-    // the percentage matches the "X MB / Y MB" display beneath the bar.
-    // Completed files that never reported sizes are accounted for by
-    // file-count fallback. The old per-file equal-weight formula inflated
-    // progress when many small files completed while a large file was
-    // still transferring.
+    // Byte-weighted progress so the percentage matches the "X MB / Y MB"
+    // display. No artificial cap — when all known bytes are transferred
+    // the bar reaches 100%. The "all finished" guard handles the exact
+    // completion case, and the high-water mark prevents regressions.
     let raw_percent = if total_files == 0 {
         0u32
     } else if completed_files + failed_files == total_files {
         100
     } else if total_bytes_expected > 0 {
-        // Byte-weighted: directly reflects actual transfer progress.
-        // This is inherently monotonic (bytes only increase).
         let pct = (total_bytes_transferred as f64 / total_bytes_expected as f64) * 100.0;
-        (pct as u32).min(99)
+        (pct.round() as u32).min(100)
     } else {
-        // No byte data yet — fall back to file-count progress.
         let pct = (completed_files as f64 / total_files as f64) * 100.0;
-        (pct as u32).min(99)
+        (pct.round() as u32).min(100)
     };
 
     // Enforce monotonic progress: never report less than the previous
@@ -1622,9 +1617,8 @@ mod tests {
 
         let p = sp_get_overall_progress().unwrap();
         // /a.txt auto-completed (1000/1000), /b.txt still Pending (no bytes).
-        // Byte-weighted: 1000/1000 = 100%, but capped at 99 since not all
-        // files are finished (completed+failed != total).
-        assert_eq!(p.overall_percent, 99);
-        assert!(p.overall_percent < 100);
+        // Byte-weighted: 1000/1000 = 100%. No artificial cap — when all
+        // known bytes are transferred the bar reaches 100%.
+        assert_eq!(p.overall_percent, 100);
     }
 }
