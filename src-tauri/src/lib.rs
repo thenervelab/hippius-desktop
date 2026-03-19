@@ -1,4 +1,5 @@
 pub mod sync_logic;
+pub mod sync_shared;
 
 #[tauri::command]
 fn greet(name: &str) -> String {

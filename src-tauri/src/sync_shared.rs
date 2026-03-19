@@ -326,6 +326,15 @@ pub fn discard_pending_activity_for_label(label: &str) {
     }
 }
 
+/// Clear the pending activity buffer (test helper).
+pub fn clear_pending_activity_for_test() {
+    let mut pending = PENDING_ACTIVITY.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in clear_pending_activity_for_test");
+        poisoned.into_inner()
+    });
+    pending.clear();
+}
+
 /// Discard all pending activity items (used on full stop).
 pub fn discard_all_pending_activity() {
     let mut pending = PENDING_ACTIVITY.lock().unwrap_or_else(|poisoned| {
