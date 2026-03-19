@@ -56,6 +56,10 @@ type FileEntry = {
   arion_hash: string;
   arion_cid: string;
   file_count: number;
+  /** Server-side timestamp: when the file was first uploaded (Unix seconds, 0 if unknown) */
+  uploaded_at: number;
+  /** Server-side timestamp: when the file was last updated (Unix seconds, 0 if unknown) */
+  updated_at: number;
 };
 
 export const GET_USER_IPFS_FILES_QUERY_KEY = "get-user-ipfs-files";
@@ -140,24 +144,29 @@ export const useUserFiles = () => {
             );
 
             for (const entry of entries) {
-              const modifiedMs = (entry.modified ?? 0) * 1000;
-              
+              const localModifiedMs = (entry.modified ?? 0) * 1000;
+              // Prefer server-side upload timestamp over local modified time
+              const uploadedAtMs = entry.uploaded_at ? entry.uploaded_at * 1000 : 0;
+              const updatedAtMs = entry.updated_at ? entry.updated_at * 1000 : 0;
+              const createdAtMs = uploadedAtMs || localModifiedMs;
+              const lastChargedAtMs = updatedAtMs || uploadedAtMs || localModifiedMs;
+
               // Check if this is an encrypted file name and provide friendly display name
-              const displayName = isEncryptedFileId(entry.name) 
-                ? "Encrypted file" 
+              const displayName = isEncryptedFileId(entry.name)
+                ? "Encrypted file"
                 : entry.name;
-              
+
               allFiles.push({
                 name: displayName,
                 actualFileName: entry.name, // Keep original name for backend operations
                 size: entry.size,
-                createdAt: modifiedMs,
+                createdAt: createdAtMs,
                 arionHash: entry.arion_hash || "",
                 arionCid: entry.arion_cid || "",
                 source: `${syncPath}/${entry.name}`,
                 minerIds: [],
                 isAssigned: true,
-                lastChargedAt: modifiedMs,
+                lastChargedAt: lastChargedAtMs,
                 fileDetails: [],
                 isFolder: entry.is_folder,
                 type: "private",

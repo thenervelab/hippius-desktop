@@ -57,6 +57,12 @@ pub struct FileEntry {
     /// For folders: total number of files (not directories) recursively inside.
     /// For files: 0.
     pub file_count: u64,
+    /// Server-side timestamp: when the file was first uploaded (Unix seconds).
+    /// 0 when not available (file not yet synced).
+    pub uploaded_at: i64,
+    /// Server-side timestamp: when the file was last updated (Unix seconds).
+    /// 0 when not available (file not yet synced).
+    pub updated_at: i64,
 }
 
 /// Verify that `child` is contained within `parent` after canonicalization.
@@ -191,10 +197,15 @@ pub async fn remove_file(
     Ok(())
 }
 
-/// Sync info for a single file: path_hash (hex) and optional Arion CID.
+/// Sync info for a single file: path_hash (hex), optional Arion CID,
+/// and server-side timestamps.
 struct SyncedFileInfo {
     path_hash_hex: String,
     arion_cid: String,
+    /// Unix timestamp when file was first uploaded (0 if unknown)
+    uploaded_at: i64,
+    /// Unix timestamp when file was last updated (0 if unknown)
+    updated_at: i64,
 }
 
 /// Build a map of relative paths → sync info for files whose
@@ -220,11 +231,14 @@ async fn synced_paths_for_label(label: &str) -> Option<HashMap<String, SyncedFil
                 .get(hash)
                 .cloned()
                 .unwrap_or_default();
+            let timestamps = state.remote_timestamps.get(hash);
             paths.insert(
                 rel_path.to_string_lossy().to_string(),
                 SyncedFileInfo {
                     path_hash_hex: hex::encode(hash),
                     arion_cid,
+                    uploaded_at: timestamps.map_or(0, |t| t.created_at),
+                    updated_at: timestamps.map_or(0, |t| t.updated_at),
                 },
             );
         }
@@ -333,8 +347,8 @@ pub async fn list_sync_folder(
         };
 
         // Folders don't have server-side entries — their children do
-        let (sync_status, arion_hash, arion_cid) = if is_folder {
-            ("synced".to_string(), String::new(), String::new())
+        let (sync_status, arion_hash, arion_cid, uploaded_at, updated_at) = if is_folder {
+            ("synced".to_string(), String::new(), String::new(), 0i64, 0i64)
         } else {
             match &synced_set {
                 Some(map) => match map.get(&relative_path) {
@@ -342,10 +356,12 @@ pub async fn list_sync_folder(
                         "synced".to_string(),
                         info.path_hash_hex.clone(),
                         info.arion_cid.clone(),
+                        info.uploaded_at,
+                        info.updated_at,
                     ),
-                    None => ("pending".to_string(), String::new(), String::new()),
+                    None => ("pending".to_string(), String::new(), String::new(), 0, 0),
                 },
-                None => ("unknown".to_string(), String::new(), String::new()),
+                None => ("unknown".to_string(), String::new(), String::new(), 0, 0),
             }
         };
 
@@ -374,6 +390,8 @@ pub async fn list_sync_folder(
             arion_hash,
             arion_cid,
             file_count,
+            uploaded_at,
+            updated_at,
         });
     }
 

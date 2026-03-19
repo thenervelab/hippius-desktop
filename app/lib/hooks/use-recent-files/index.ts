@@ -89,13 +89,15 @@ const useRecentFiles = () => {
           }
         }
 
-        // Fetch arion hashes and CIDs from list_sync_folder for each sync path
+        // Fetch arion hashes, CIDs, and server timestamps from list_sync_folder
         const arionHashMap = new Map<string, string>();
         const arionCidMap = new Map<string, string>();
+        const uploadedAtMap = new Map<string, number>();
+        const updatedAtMap = new Map<string, number>();
         for (const { path: syncPath, label } of syncPaths) {
           if (!syncPath) continue;
           try {
-            const entries = await invoke<{ name: string; arion_hash: string; arion_cid: string }[]>("list_sync_folder", {
+            const entries = await invoke<{ name: string; arion_hash: string; arion_cid: string; uploaded_at: number; updated_at: number }[]>("list_sync_folder", {
               syncPath,
               subfolder: null,
               label,
@@ -108,9 +110,15 @@ const useRecentFiles = () => {
               if (entry.arion_cid) {
                 arionCidMap.set(key, entry.arion_cid);
               }
+              if (entry.uploaded_at) {
+                uploadedAtMap.set(key, entry.uploaded_at);
+              }
+              if (entry.updated_at) {
+                updatedAtMap.set(key, entry.updated_at);
+              }
             }
           } catch {
-            // Ignore - arion hash is supplementary
+            // Ignore - supplementary data
           }
         }
 
@@ -143,17 +151,25 @@ const useRecentFiles = () => {
               ? `${syncFolderPath}/${item.file_name}`
               : "";
 
+            const key = `${item.file_name}::${item.label}`;
+            const activityMs = item.timestamp ? item.timestamp * 1000 : Date.now();
+            // Prefer server-side upload timestamp over activity timestamp
+            const uploadedAtSec = uploadedAtMap.get(key) ?? 0;
+            const updatedAtSec = updatedAtMap.get(key) ?? 0;
+            const createdAtMs = uploadedAtSec ? uploadedAtSec * 1000 : activityMs;
+            const lastChargedAtMs = updatedAtSec ? updatedAtSec * 1000 : (uploadedAtSec ? uploadedAtSec * 1000 : activityMs);
+
             return {
               name: item.file_name || "Unknown",
               actualFileName: item.file_name,
               size: item.size_bytes,
-              createdAt: item.timestamp ? item.timestamp * 1000 : Date.now(),
-              arionHash: arionHashMap.get(`${item.file_name}::${item.label}`) || "",
-              arionCid: arionCidMap.get(`${item.file_name}::${item.label}`) || "",
+              createdAt: createdAtMs,
+              arionHash: arionHashMap.get(key) || "",
+              arionCid: arionCidMap.get(key) || "",
               source,
               minerIds: [],
               isAssigned: true,
-              lastChargedAt: item.timestamp ? item.timestamp * 1000 : Date.now(),
+              lastChargedAt: lastChargedAtMs,
               fileHash: "",
               isFolder: false,
               type: item.action.charAt(0).toUpperCase() + item.action.slice(1),
