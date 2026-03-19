@@ -150,7 +150,9 @@ export function useSyncEvents() {
     }
   }, [setSessionFilesAtom, setRecentFilesAtom, setTrayMenuFilesAtom, setOverallProgressAtom, setHasSyncActivityAtom, setLastProgressUpdateAtom]);
 
-  // Throttle refreshProgressState so it fires at most once per 500ms
+  // Throttle refreshProgressState so it fires at most once per 250ms.
+  // Shorter interval than the previous 500ms to keep per-file progress
+  // bars visually smooth without overwhelming the IPC bridge.
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshPendingRef = useRef(false);
 
@@ -167,7 +169,7 @@ export function useSyncEvents() {
         refreshPendingRef.current = false;
         refreshProgressState();
       }
-    }, 500);
+    }, 250);
   }, [refreshProgressState]);
 
   // Cleanup interval ref
@@ -539,12 +541,14 @@ export function useSyncEvents() {
               ? Math.round((e.payload.bytes / e.payload.total) * 100)
               : 0;
 
-            // Update Rust backend with progress (fire-and-forget for high-frequency calls)
+            // Update Rust backend with progress (fire-and-forget for high-frequency calls).
+            // Refresh is triggered independently of the update to avoid stalling
+            // the UI when IPC calls queue up.
             if (e.payload.path) {
               ensureSession('upload')
                 .then(() => updateFileProgress(e.payload.path!, e.payload.bytes, e.payload.total, 'upload'))
-                .then(() => throttledRefreshProgressState())
                 .catch((err) => console.error("[SyncEvents] updateFileProgress failed:", err));
+              throttledRefreshProgressState();
             }
 
             // When a file reaches 100%, track it as completed
@@ -569,12 +573,14 @@ export function useSyncEvents() {
               ? Math.round((e.payload.bytes / e.payload.total) * 100)
               : 0;
 
-            // Update Rust backend with progress (fire-and-forget for high-frequency calls)
+            // Update Rust backend with progress (fire-and-forget for high-frequency calls).
+            // Refresh is triggered independently of the update to avoid stalling
+            // the UI when IPC calls queue up.
             if (e.payload.path) {
               ensureSession('download')
                 .then(() => updateFileProgress(e.payload.path!, e.payload.bytes, e.payload.total, 'download'))
-                .then(() => throttledRefreshProgressState())
                 .catch((err) => console.error("[SyncEvents] updateFileProgress failed:", err));
+              throttledRefreshProgressState();
             }
 
             // When a file reaches 100%, track it as completed

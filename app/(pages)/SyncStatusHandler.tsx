@@ -159,7 +159,10 @@ const SyncStatusHandler: React.FC = () => {
       }
     }
 
-    // Sort: in-progress first, then pending, then completed/recent by timestamp
+    // Sort: in-progress first, then pending, then completed/recent.
+    // Within the same status group, use stable ordering:
+    // - In-progress and pending files sort by path (deterministic, never changes)
+    // - Completed/failed files sort by timestamp (most recent first)
     const statusOrder = (s: string) => {
       if (s === "uploading") return 0;
       if (s === "pending") return 1;
@@ -169,6 +172,12 @@ const SyncStatusHandler: React.FC = () => {
     files.sort((a, b) => {
       const orderDiff = statusOrder(a.status) - statusOrder(b.status);
       if (orderDiff !== 0) return orderDiff;
+      const aOrder = statusOrder(a.status);
+      if (aOrder <= 1) {
+        // In-progress / pending: stable alphabetical by path
+        return (a.rawPath || a.fileName).localeCompare(b.rawPath || b.fileName);
+      }
+      // Completed / failed: most recent first
       return (b.timestamp || 0) - (a.timestamp || 0);
     });
 
