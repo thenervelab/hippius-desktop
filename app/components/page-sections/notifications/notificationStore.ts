@@ -64,8 +64,10 @@ export const refreshNotificationsAtom = atom(null, async (get, set) => {
     return;
   }
 
-  // First get the enabled types so we can filter by them
-  const enabledTypes = get(enabledNotificationTypesAtom);
+  // Always fetch enabled types fresh from the backend so we never rely
+  // on a stale atom value (the atom may still be at its default `[]`).
+  const enabledTypes = await getEnabledNotificationTypes();
+  set(enabledNotificationTypesAtom, enabledTypes);
 
   // Fetch all notifications for this user (Rust returns objects, not raw rows)
   const rows = await listNotifications(userAddress, 100);
@@ -94,14 +96,13 @@ export const refreshNotificationsAtom = atom(null, async (get, set) => {
     };
   });
 
-  const filteredNotifications =
-    enabledTypes.length > 0
-      ? mapped.filter(
-        (notification) =>
-          enabledTypes.includes(notification.type) ||
-          notification.type === "Hippius"
-      )
-      : mapped;
+  // Filter: only show notifications whose type is enabled, plus Hippius system
+  // notifications which are always visible.
+  const filteredNotifications = mapped.filter(
+    (notification) =>
+      enabledTypes.includes(notification.type) ||
+      notification.type === "Hippius"
+  );
 
   set(notificationsAtom, filteredNotifications);
 

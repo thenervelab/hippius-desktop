@@ -771,3 +771,108 @@ async fn hard_delete_clears_all() {
 
     assert_eq!(count, 0);
 }
+
+// ── Unread Count Respects Preferences ───────────────────────────────────
+
+/// Helper: mirrors the updated `get_unread_count` logic that filters by enabled
+/// notification preferences and always includes "Hippius" system notifications.
+async fn preference_filtered_unread_count(pool: &SqlitePool, user_address: &str) -> i64 {
+    let enabled: Vec<String> = sqlx::query_as::<_, (String,)>(
+        "SELECT label FROM notification_preferences WHERE enabled = 1",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|(l,)| l)
+    .collect();
+
+    if enabled.is_empty() {
+        let (count,) = sqlx::query_as::<_, (i64,)>(
+            "SELECT COUNT(*) FROM notifications \
+             WHERE (user_address = ? OR user_address = 'system') \
+             AND is_unread = 1 AND is_deleted = 0 \
+             AND notification_type = 'Hippius'",
+        )
+        .bind(user_address)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        return count;
+    }
+
+    let placeholders: Vec<&str> = enabled.iter().map(|_| "?").collect();
+    let in_clause = placeholders.join(", ");
+    let query = format!(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE (user_address = ? OR user_address = 'system') \
+         AND is_unread = 1 AND is_deleted = 0 \
+         AND (notification_type IN ({}) OR notification_type = 'Hippius')",
+        in_clause
+    );
+    let mut q = sqlx::query_as::<_, (i64,)>(&query).bind(user_address);
+    for label in &enabled {
+        q = q.bind(label);
+    }
+    q.fetch_one(pool).await.unwrap().0
+}
+
+#[tokio::test]
+async fn unread_count_respects_disabled_files_preference() {
+    let pool = setup_db().await;
+    let alice = "alice";
+
+    // Insert 1 Credits and 2 Files notifications (all unread)
+    insert_notification(&pool, alice, Some("Credits"), None, "credit-n1").await;
+    insert_notification(&pool, alice, Some("Files"), None, "file-n1").await;
+    insert_notification(&pool, alice, Some("Files"), None, "file-n2").await;
+
+    // Both preferences enabled → should count all 3
+    assert_eq!(preference_filtered_unread_count(&pool, alice).await, 3);
+
+    // Disable Files preference
+    sqlx::query("UPDATE notification_preferences SET enabled = 0 WHERE id = 'files'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Only Credits enabled → should count 1
+    assert_eq!(preference_filtered_unread_count(&pool, alice).await, 1);
+}
+
+#[tokio::test]
+async fn unread_count_always_includes_hippius_system_notifications() {
+    let pool = setup_db().await;
+    let alice = "alice";
+
+    // Insert a Hippius system notification + a Files notification
+    insert_notification(&pool, alice, Some("Hippius"), Some("Welcome"), "Welcome!").await;
+    insert_notification(&pool, alice, Some("Files"), None, "file-n1").await;
+
+    // Disable both preferences
+    sqlx::query("UPDATE notification_preferences SET enabled = 0 WHERE id IN ('credits', 'files')")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Only Hippius system should remain visible
+    assert_eq!(preference_filtered_unread_count(&pool, alice).await, 1);
+}
+
+#[tokio::test]
+async fn unread_count_zero_when_all_disabled_and_no_system() {
+    let pool = setup_db().await;
+    let alice = "alice";
+
+    insert_notification(&pool, alice, Some("Credits"), None, "credit-n1").await;
+    insert_notification(&pool, alice, Some("Files"), None, "file-n1").await;
+
+    // Disable all preferences
+    sqlx::query("UPDATE notification_preferences SET enabled = 0 WHERE 1=1")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // No Hippius system notifications → count should be 0
+    assert_eq!(preference_filtered_unread_count(&pool, alice).await, 0);
+}

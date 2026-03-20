@@ -281,7 +281,11 @@ pub async fn delete_system_notification_by_version(
     Ok(())
 }
 
-/// Get the count of unread, non-deleted notifications for a user (includes system).
+/// Get the count of unread, non-deleted notifications for a user.
+///
+/// Only counts notifications whose `notification_type` matches an enabled
+/// preference label, plus any "Hippius" system notifications which are
+/// always shown regardless of preferences.
 #[tauri::command]
 pub async fn get_unread_count(
     state: tauri::State<'_, AppState>,
@@ -289,13 +293,52 @@ pub async fn get_unread_count(
 ) -> Result<i64, String> {
     let pool = state.pool()?;
 
-    let row = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM notifications WHERE (user_address = ? OR user_address = 'system') AND is_unread = 1 AND is_deleted = 0",
+    // Fetch enabled notification type labels (e.g. ["Credits"])
+    let enabled: Vec<String> = sqlx::query_as::<_, (String,)>(
+        "SELECT label FROM notification_preferences WHERE enabled = 1",
     )
-    .bind(&user_address)
-    .fetch_one(pool)
+    .fetch_all(pool)
     .await
-    .map_err(|e| format!("Failed to get unread count: {e}"))?;
+    .map_err(|e| format!("Failed to get enabled types: {e}"))?
+    .into_iter()
+    .map(|(l,)| l)
+    .collect();
+
+    if enabled.is_empty() {
+        // Only count system ("Hippius") notifications when no types enabled
+        let row = sqlx::query_as::<_, (i64,)>(
+            "SELECT COUNT(*) FROM notifications \
+             WHERE (user_address = ? OR user_address = 'system') \
+             AND is_unread = 1 AND is_deleted = 0 \
+             AND notification_type = 'Hippius'",
+        )
+        .bind(&user_address)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to get unread count: {e}"))?;
+        return Ok(row.0);
+    }
+
+    // Build placeholders for the IN clause
+    let placeholders: Vec<&str> = enabled.iter().map(|_| "?").collect();
+    let in_clause = placeholders.join(", ");
+    let query = format!(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE (user_address = ? OR user_address = 'system') \
+         AND is_unread = 1 AND is_deleted = 0 \
+         AND (notification_type IN ({}) OR notification_type = 'Hippius')",
+        in_clause
+    );
+
+    let mut q = sqlx::query_as::<_, (i64,)>(&query).bind(&user_address);
+    for label in &enabled {
+        q = q.bind(label);
+    }
+
+    let row = q
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to get unread count: {e}"))?;
 
     Ok(row.0)
 }
