@@ -12,9 +12,7 @@
 
 use tracing::{debug, error, info, warn};
 
-use crate::hcfs_drive::{
-    HcfsDriveManager, StagedChanges, start_sync_loop,
-};
+use crate::hcfs_drive::{HcfsDriveManager, StagedChanges, start_sync_loop};
 use crate::sync_shared::SyncActivityItem;
 use crate::utils::account_key::account_key;
 use crate::utils::auth_tokens::get_api_token;
@@ -1048,10 +1046,7 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
             if let Err(e) =
                 crate::commands::substrate_tx::remove_sync_path_internal(pool, &acct, &label).await
             {
-                warn!(
-                    "Failed to remove sync path for '{}' from DB: {e}",
-                    label
-                );
+                warn!("Failed to remove sync path for '{}' from DB: {e}", label);
             }
         }
     }
@@ -1598,7 +1593,9 @@ pub async fn sync_with_conflict_resolutions(
         let sync_for_delay = sync.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            sync_for_delay.sync_in_progress.store(false, Ordering::Release);
+            sync_for_delay
+                .sync_in_progress
+                .store(false, Ordering::Release);
         });
     }
 
@@ -1843,13 +1840,13 @@ pub async fn list_remote_folders(
     let client = hcfs_client::client::HcfsClient::new(client_config)
         .map_err(|e| format!("Failed to create HCFS client: {e}"))?;
 
-    let folders = client
-        .list_remote_folders(&account_id)
-        .await
-        .map_err(|e| {
-            error!("Failed to list remote folders for account '{}': {e}", account_id);
-            format!("Failed to list remote folders: {e}")
-        })?;
+    let folders = client.list_remote_folders(&account_id).await.map_err(|e| {
+        error!(
+            "Failed to list remote folders for account '{}': {e}",
+            account_id
+        );
+        format!("Failed to list remote folders: {e}")
+    })?;
 
     info!(
         "Found {} remote folders for account '{}'",
@@ -2000,10 +1997,7 @@ pub async fn restore_remote_folders(
                 });
             }
             Err(e) => {
-                error!(
-                    "Failed to restore remote folder '{}': {e}",
-                    folder.label
-                );
+                error!("Failed to restore remote folder '{}': {e}", folder.label);
                 // Rollback: remove the sync path we just inserted
                 if let Err(rollback_err) = crate::commands::substrate_tx::remove_sync_path_internal(
                     pool,

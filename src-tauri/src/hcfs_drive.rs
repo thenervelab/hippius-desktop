@@ -26,7 +26,6 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tracing::{debug, error, info, warn};
 
-
 // --- Serializable types for staged changes ---
 
 #[derive(Debug, Serialize, Clone)]
@@ -355,9 +354,7 @@ impl HcfsDriveManager {
             let name_str = name.to_string_lossy();
 
             // Pattern 1: `downloaded_<hex>` — raw encrypted content artifact
-            if let Some(hex_part) =
-                crate::sync_logic::is_failed_download_artifact(&name_str)
-            {
+            if let Some(hex_part) = crate::sync_logic::is_failed_download_artifact(&name_str) {
                 info!(artifact = %name_str, "Removing failed download artifact");
                 if let Err(e) = std::fs::remove_file(&path) {
                     warn!(artifact = %name_str, error = %e, "Failed to remove download artifact");
@@ -577,13 +574,10 @@ fn update_health_atomic<F, R>(sync: &crate::sync_engine::SyncEngine, f: F) -> R
 where
     F: FnOnce(&mut SyncEngineHealth) -> R,
 {
-    let mut health = sync
-        .health
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            warn!("Poisoned mutex recovered in update_health_atomic");
-            poisoned.into_inner()
-        });
+    let mut health = sync.health.lock().unwrap_or_else(|poisoned| {
+        warn!("Poisoned mutex recovered in update_health_atomic");
+        poisoned.into_inner()
+    });
     f(&mut health)
 }
 
@@ -674,7 +668,9 @@ pub async fn start_sync_loop(app: AppHandle) {
                 }
 
                 if sync_for_watcher.sync_in_progress.load(Ordering::Acquire) {
-                    sync_for_watcher.changes_pending.store(true, Ordering::Release);
+                    sync_for_watcher
+                        .changes_pending
+                        .store(true, Ordering::Release);
                 }
                 let _ = tx_clone.try_send(());
             }
@@ -695,8 +691,7 @@ pub async fn start_sync_loop(app: AppHandle) {
                 loop {
                     // Apply exponential backoff on consecutive failures
                     let failures = sync_fallback.get_sync_failures();
-                    let backoff_secs =
-                        crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);
+                    let backoff_secs = crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);
                     if failures > 0 {
                         // Override interval for backoff
                         tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
@@ -886,13 +881,10 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
 
     // Atomically check review mode, is_syncing, and token refresh under a single lock scope
     {
-        let mut states = sync
-            .states
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                warn!("Poisoned mutex recovered in trigger_sync_for_drive");
-                poisoned.into_inner()
-            });
+        let mut states = sync.states.lock().unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in trigger_sync_for_drive");
+            poisoned.into_inner()
+        });
 
         // Block sync during token refresh to avoid 401 races
         if sync.is_token_refreshing() {
@@ -1000,7 +992,13 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 // Create empty session — the plan_ready callback will
                 // merge real counts once the sync engine has a plan.
                 let _ = crate::sync_progress::merge_into_session(
-                    sync, 0, 0, 0, 0, None, Some(label.to_string()),
+                    sync,
+                    0,
+                    0,
+                    0,
+                    0,
+                    None,
+                    Some(label.to_string()),
                 );
 
                 // Run sync with stall detection.  Every 10 s we check
@@ -1072,10 +1070,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                                 }
                             }
                             _ => {
-                                info!(
-                                    label = label,
-                                    "Re-stage after sync found no conflicts",
-                                );
+                                info!(label = label, "Re-stage after sync found no conflicts",);
                             }
                         }
                         SyncResult::ConflictsPending
@@ -1170,6 +1165,10 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             staged_downloads,
         } => {
             sync.reset_sync_failures();
+            sync.retry_at.store(0, std::sync::atomic::Ordering::Relaxed);
+            if let Ok(mut guard) = sync.last_error.lock() {
+                *guard = None;
+            }
             info!(
                 label = %label_owned,
                 uploaded = outcome.files_uploaded,
@@ -1333,6 +1332,20 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 "Sync failed",
             );
 
+            // Compute when the next retry will happen (exponential backoff)
+            let backoff_secs = crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);
+            let now_epoch = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            sync.retry_at.store(
+                now_epoch + backoff_secs as i64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            if let Ok(mut guard) = sync.last_error.lock() {
+                *guard = Some(err_str.clone());
+            }
+
             // Detect auth token expiration — attempt automatic refresh so
             // the next sync cycle uses a valid token without frontend round-trip.
             if err_str.contains("401") || err_str.contains("Unauthorized") {
@@ -1369,17 +1382,29 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 }
             }
 
-            if emitted_sync_started {
-                if let Err(e) = app.emit(
-                    "hcfs_sync_error",
-                    serde_json::json!({"label": label_owned, "error": err_str}),
-                ) {
-                    warn!(error = %e, "Failed to emit hcfs_sync_error");
-                }
+            // Always emit sync error to frontend — even if sync_started
+            // was never emitted (e.g. early failure during staging).
+            if let Err(e) = app.emit(
+                "hcfs_sync_error",
+                serde_json::json!({
+                    "label": label_owned,
+                    "error": err_str,
+                    "retry_in_secs": backoff_secs,
+                    "consecutive_failures": failures,
+                }),
+            ) {
+                warn!(error = %e, "Failed to emit hcfs_sync_error");
             }
+
+            // Emit snapshot with retry state so UI updates immediately
+            sync.emit_snapshot(true);
         }
         SyncResult::NoChanges => {
             sync.reset_sync_failures();
+            sync.retry_at.store(0, std::sync::atomic::Ordering::Relaxed);
+            if let Ok(mut guard) = sync.last_error.lock() {
+                *guard = None;
+            }
             sync.discard_pending_activity_for_label(&label_owned);
         }
         SyncResult::ConflictsPending => {

@@ -107,7 +107,9 @@ async fn challenge_response(
         let status = challenge_res.status();
         let body = challenge_res.text().await.unwrap_or_default();
         warn!(status = %status, "Challenge request failed: {body}");
-        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
+        return Err(format!(
+            "Authentication failed (HTTP {status}). Please try again."
+        ));
     }
 
     let cr: ChallengeResponse = challenge_res
@@ -146,7 +148,9 @@ async fn challenge_response(
         let status = verify_res.status();
         let body = verify_res.text().await.unwrap_or_default();
         warn!(status = %status, "Verify request failed: {body}");
-        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
+        return Err(format!(
+            "Authentication failed (HTTP {status}). Please try again."
+        ));
     }
 
     let vr: VerifyResponse = verify_res
@@ -483,8 +487,14 @@ pub async fn unlock_with_passcode(
     let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
 
     // 6. Challenge-response auth to get a fresh token
-    let (token, user_id, username, is_new, token_expiry) =
-        challenge_response(&state.api_client, &eth_signer, &eth_address, &substrate_address, None).await?;
+    let (token, user_id, username, is_new, token_expiry) = challenge_response(
+        &state.api_client,
+        &eth_signer,
+        &eth_address,
+        &substrate_address,
+        None,
+    )
+    .await?;
 
     // 7. Store keypair in AppState.auth
     {
@@ -551,8 +561,14 @@ pub async fn refresh_auth_token_internal(
     let (_sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
 
     // 3. Challenge-response
-    let (token, user_id, username, _is_new, token_expiry) =
-        challenge_response(&app_state.api_client, &eth_signer, &eth_address, &substrate_address, None).await?;
+    let (token, user_id, username, _is_new, token_expiry) = challenge_response(
+        &app_state.api_client,
+        &eth_signer,
+        &eth_address,
+        &substrate_address,
+        None,
+    )
+    .await?;
 
     // 4. Persist new session
     persist_session(
@@ -574,7 +590,8 @@ pub async fn refresh_auth_token_internal(
 
     // 6. Update live drive's bearer token
     if let Err(e) =
-        crate::commands::syncing::update_sync_bearer_token_internal(&app_state, account_id, &token).await
+        crate::commands::syncing::update_sync_bearer_token_internal(&app_state, account_id, &token)
+            .await
     {
         warn!("Could not update live drive token: {e}");
     }

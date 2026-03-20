@@ -352,9 +352,7 @@ pub async fn list_sync_folder(
                 let _ = tokio::fs::remove_file(&path).await;
                 continue;
             }
-            if crate::sync_logic::is_encrypted_name_stub(&name).is_some()
-                && meta.len() == 0
-            {
+            if crate::sync_logic::is_encrypted_name_stub(&name).is_some() && meta.len() == 0 {
                 let path = entry.path();
                 info!(stub = %name, "Removing 0-byte encrypted-name stub on list");
                 let _ = tokio::fs::remove_file(&path).await;

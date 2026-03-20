@@ -26,6 +26,9 @@ mod sync_progress;
 mod sync_shared;
 mod utils;
 
+use crate::commands::sync_status::{
+    app_close, get_sync_activity, get_sync_engine_health, get_sync_status,
+};
 use crate::commands::syncing::{
     delete_remote_folder, get_device_name, get_drive_mnemonic, get_remote_storage_stats,
     initialize_sync, is_drive_active, list_remote_folders, persist_master_mnemonic,
@@ -33,13 +36,11 @@ use crate::commands::syncing::{
     trigger_sync_now,
 };
 use crate::sync_progress::{
-    sp_clear_all_data, sp_complete_pending_files, sp_complete_session,
-    sp_get_overall_progress, sp_get_snapshot, sp_mark_all_pending_files_as_failed,
-    sp_mark_file_error, sp_mark_pending_files_as_failed, sp_merge_into_session,
-    sp_record_deleted_file, sp_remove_files_for_label,
-    sp_start_session, sp_stop_session, sp_update_file_progress,
+    sp_clear_all_data, sp_complete_pending_files, sp_complete_session, sp_get_overall_progress,
+    sp_get_snapshot, sp_mark_all_pending_files_as_failed, sp_mark_file_error,
+    sp_mark_pending_files_as_failed, sp_merge_into_session, sp_record_deleted_file,
+    sp_remove_files_for_label, sp_start_session, sp_stop_session, sp_update_file_progress,
 };
-use crate::commands::sync_status::{app_close, get_sync_activity, get_sync_engine_health, get_sync_status};
 use block_subscription::{
     get_current_block_number, start_block_subscription, stop_block_subscription,
 };

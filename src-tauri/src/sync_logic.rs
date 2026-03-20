@@ -251,11 +251,7 @@ mod tests {
 
     #[test]
     fn skip_degraded_above_threshold_skips() {
-        assert!(should_skip_sync_check(
-            &ConnectivityStatus::Degraded,
-            2,
-            2,
-        ));
+        assert!(should_skip_sync_check(&ConnectivityStatus::Degraded, 2, 2,));
         assert!(should_skip_sync_check(
             &ConnectivityStatus::ServerUnreachable,
             5,
@@ -265,11 +261,7 @@ mod tests {
 
     #[test]
     fn skip_degraded_below_threshold_does_not_skip() {
-        assert!(!should_skip_sync_check(
-            &ConnectivityStatus::Degraded,
-            1,
-            2,
-        ));
+        assert!(!should_skip_sync_check(&ConnectivityStatus::Degraded, 1, 2,));
         assert!(!should_skip_sync_check(
             &ConnectivityStatus::NetworkOffline,
             0,
@@ -364,9 +356,6 @@ mod tests {
 
     #[test]
     fn encrypted_stub_wrong_prefix_rejected() {
-        assert_eq!(
-            is_encrypted_name_stub("files_0123456789abcdef"),
-            None,
-        );
+        assert_eq!(is_encrypted_name_stub("files_0123456789abcdef"), None,);
     }
 }

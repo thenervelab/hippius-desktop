@@ -15,8 +15,8 @@ use crate::sync_progress::SyncProgressState;
 use crate::sync_shared::{HcfsSyncState, SyncActivityItem, SyncEngineHealth};
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex as TokioMutex;
@@ -70,6 +70,11 @@ pub struct SyncEngine {
     /// Epoch timestamp of the last progress callback. Used by stall detection
     /// to abort syncs that stop making forward progress (e.g. hung upload).
     pub last_progress_time: AtomicI64,
+    /// Epoch-second timestamp when the next retry will be attempted after a failure.
+    /// 0 means no retry is scheduled.
+    pub retry_at: AtomicI64,
+    /// Last sync error message (cleared on success).
+    pub last_error: StdMutex<Option<String>>,
 
     // ── Blocking Mutex State (sync-callback safe) ───────────────────────
     pub states: StdMutex<HashMap<String, HcfsSyncState>>,
@@ -81,7 +86,8 @@ pub struct SyncEngine {
     pub session_counter: AtomicU64,
 
     // ── Synced Paths Cache (fallback when drives lock unavailable) ────
-    pub synced_paths_cache: StdMutex<HashMap<String, HashMap<String, crate::commands::file_commands::SyncedFileInfo>>>,
+    pub synced_paths_cache:
+        StdMutex<HashMap<String, HashMap<String, crate::commands::file_commands::SyncedFileInfo>>>,
 }
 
 impl SyncEngine {
@@ -98,6 +104,8 @@ impl SyncEngine {
             consecutive_failures: AtomicI64::new(0),
             emit_scheduled: AtomicBool::new(false),
             last_progress_time: AtomicI64::new(0),
+            retry_at: AtomicI64::new(0),
+            last_error: StdMutex::new(None),
             states: StdMutex::new(HashMap::new()),
             pending_activity: StdMutex::new(Vec::new()),
             health: StdMutex::new(SyncEngineHealth::default()),
@@ -385,7 +393,7 @@ impl SyncEngine {
     // ── Snapshot Emission (throttled) ───────────────────────────────────
 
     pub fn emit_snapshot(&self, immediate: bool) {
-        let snapshot = {
+        let mut snapshot = {
             let state = self.progress.lock().unwrap_or_else(|p| {
                 warn!("Poisoned mutex in emit_snapshot");
                 p.into_inner()
@@ -393,11 +401,18 @@ impl SyncEngine {
             crate::sync_progress::build_snapshot(&state)
         };
 
-        let app = self
-            .app_handle
-            .lock()
-            .ok()
-            .and_then(|g| g.clone());
+        // Inject retry state from SyncEngine atomics
+        let retry_at = self.retry_at.load(Ordering::Relaxed);
+        if retry_at > 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
+        }
+        snapshot.last_error = self.last_error.lock().ok().and_then(|g| g.clone());
+
+        let app = self.app_handle.lock().ok().and_then(|g| g.clone());
 
         let Some(app) = app else { return };
 
@@ -431,13 +446,23 @@ impl SyncEngine {
                 let app_state = app_clone.state::<crate::app_state::AppState>();
                 let sync = &app_state.sync;
                 sync.emit_scheduled.store(false, Ordering::Release);
-                let snapshot = {
+                let mut snapshot = {
                     let state = sync.progress.lock().unwrap_or_else(|p| {
                         warn!("Poisoned mutex in delayed emit");
                         p.into_inner()
                     });
                     crate::sync_progress::build_snapshot(&state)
                 };
+                // Inject retry state
+                let retry_at = sync.retry_at.load(Ordering::Relaxed);
+                if retry_at > 0 {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
+                }
+                snapshot.last_error = sync.last_error.lock().ok().and_then(|g| g.clone());
                 if let Ok(mut t) = sync.last_emit_time.lock() {
                     *t = Instant::now();
                 }
@@ -469,7 +494,6 @@ impl SyncEngine {
         let cache = self.synced_paths_cache.lock().ok()?;
         cache.get(label).cloned()
     }
-
 }
 
 #[cfg(test)]

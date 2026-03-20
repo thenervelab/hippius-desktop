@@ -8,6 +8,7 @@ export interface FileProgress {
   action: FileAction;
   status: FileProgressStatus;
   progressPercent: number;
+  bytesEncrypted: number;
   bytesTransferred: number;
   totalBytes: number;
   error?: string;
@@ -16,21 +17,28 @@ export interface FileProgress {
 export interface SyncSnapshot {
   isActive: boolean;
   overallPercent: number;
-  bytesTransferred: number;
+  /** Best progress bytes across all files — consistent with overallPercent. */
+  progressBytes: number;
   bytesExpected: number;
   totalFiles: number;
   completedFiles: number;
   failedFiles: number;
+  /** Seconds until next retry attempt. 0 = no retry scheduled. */
+  retryInSecs: number;
+  /** Error message from the last failed sync cycle. */
+  lastError: string | null;
   files: FileProgress[];
 }
 
 export const EMPTY_SNAPSHOT: SyncSnapshot = {
   isActive: false,
   overallPercent: 0,
-  bytesTransferred: 0,
+  progressBytes: 0,
   bytesExpected: 0,
   totalFiles: 0,
   completedFiles: 0,
   failedFiles: 0,
+  retryInSecs: 0,
+  lastError: null,
   files: [],
 };

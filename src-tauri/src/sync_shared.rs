@@ -58,7 +58,6 @@ impl HcfsSyncState {
         self.recent_activity.push_front(item);
         self.recent_activity.truncate(MAX_ACTIVITY);
     }
-
 }
 
 // === Combined Sync State ===

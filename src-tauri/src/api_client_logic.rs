@@ -159,11 +159,7 @@ mod tests {
 
     #[test]
     fn url_params_with_special_chars() {
-        let url = url_with_params(
-            "https://api.example.com",
-            "/data",
-            &[("filter", "a&b=c")],
-        );
+        let url = url_with_params("https://api.example.com", "/data", &[("filter", "a&b=c")]);
         assert_eq!(url, "https://api.example.com/data?filter=a%26b%3Dc");
     }
 

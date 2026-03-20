@@ -25,6 +25,7 @@ export interface SyncFile {
   action: FileAction;
   status: FileStatus;
   progress: number;
+  bytesEncrypted: number;
   bytesTransferred: number;
   totalBytes: number;
   startedAt: number;
@@ -58,7 +59,7 @@ export interface OverallProgress {
   inProgressFiles: number;
   failedFiles: number;
   overallPercent: number;
-  totalBytesTransferred: number;
+  progressBytes: number;
   totalBytesExpected: number;
   currentFile: SyncFile | null;
 }

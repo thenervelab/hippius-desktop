@@ -185,7 +185,8 @@ pub async fn complete_oauth_flow(
         };
 
         let base = api_base_url();
-        let resp = state.api_client
+        let resp = state
+            .api_client
             .post(format!("{base}/api/auth/exchange/"))
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")

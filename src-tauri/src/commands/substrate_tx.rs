@@ -80,8 +80,7 @@ fn validate_no_path_overlap(
     new_label: &str,
     existing: &[(String, String)], // (label, path) pairs
 ) -> Result<(), String> {
-    let canonical_new =
-        std::fs::canonicalize(new_path).unwrap_or_else(|_| new_path.to_path_buf());
+    let canonical_new = std::fs::canonicalize(new_path).unwrap_or_else(|_| new_path.to_path_buf());
 
     for (label, path_str) in existing {
         if label == new_label {
@@ -520,57 +519,51 @@ mod tests {
     #[test]
     fn sibling_paths_are_allowed() {
         let existing = pairs(&[("photos", "/home/user/Photos")]);
-        assert!(validate_no_path_overlap(
-            Path::new("/home/user/Documents"),
-            "docs",
-            &existing
-        )
-        .is_ok());
+        assert!(
+            validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing).is_ok()
+        );
     }
 
     #[test]
     fn child_of_existing_path_is_rejected() {
         let existing = pairs(&[("docs", "/home/user/Documents")]);
-        let result = validate_no_path_overlap(
-            Path::new("/home/user/Documents/Work"),
-            "work",
-            &existing,
-        );
+        let result =
+            validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "work", &existing);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("already being synced as part of"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("already being synced as part of")
+        );
     }
 
     #[test]
     fn parent_of_existing_path_is_rejected() {
         let existing = pairs(&[("work", "/home/user/Documents/Work")]);
-        let result =
-            validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing);
+        let result = validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("already being synced separately"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("already being synced separately")
+        );
     }
 
     #[test]
     fn same_label_skips_self() {
         let existing = pairs(&[("docs", "/home/user/Documents")]);
         // Re-setting the same label to a child path should be allowed (it's an update)
-        assert!(validate_no_path_overlap(
-            Path::new("/home/user/Documents/Work"),
-            "docs",
-            &existing
-        )
-        .is_ok());
+        assert!(
+            validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "docs", &existing)
+                .is_ok()
+        );
     }
 
     #[test]
     fn exact_same_path_different_label_is_rejected() {
         let existing = pairs(&[("docs", "/home/user/Documents")]);
-        let result = validate_no_path_overlap(
-            Path::new("/home/user/Documents"),
-            "docs2",
-            &existing,
-        );
+        let result =
+            validate_no_path_overlap(Path::new("/home/user/Documents"), "docs2", &existing);
         // starts_with returns true for equal paths, so this is caught as child-of-existing
         assert!(result.is_err());
     }
@@ -583,22 +576,14 @@ mod tests {
             ("docs", "/home/user/Documents"),
         ]);
         // Child of third entry
-        let result = validate_no_path_overlap(
-            Path::new("/home/user/Documents/Work"),
-            "work",
-            &existing,
-        );
+        let result =
+            validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "work", &existing);
         assert!(result.is_err());
     }
 
     #[test]
     fn empty_existing_always_passes() {
-        assert!(validate_no_path_overlap(
-            Path::new("/home/user/Documents"),
-            "docs",
-            &[]
-        )
-        .is_ok());
+        assert!(validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &[]).is_ok());
     }
 
     #[test]

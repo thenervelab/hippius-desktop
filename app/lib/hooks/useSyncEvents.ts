@@ -24,7 +24,6 @@ import {
   mergeIntoSession,
   completeSession,
   stopSession,
-  updateFileProgress,
   getOverallProgress,
   completePendingFiles,
   markPendingFilesAsFailed,
@@ -48,6 +47,8 @@ interface SyncOutcome {
 
 interface SyncError {
   error: string;
+  retry_in_secs?: number;
+  consecutive_failures?: number;
 }
 
 interface ProgressPayload {
@@ -423,7 +424,12 @@ export function useSyncEvents() {
             }
           }),
           listen<SyncError>("hcfs_sync_error", async (e) => {
-            console.error("[SyncEvents] Sync error:", e.payload);
+            const willRetry = (e.payload.retry_in_secs ?? 0) > 0;
+            console.error(
+              "[SyncEvents] Sync error:",
+              e.payload.error,
+              willRetry ? `(retrying in ${e.payload.retry_in_secs}s)` : "(no retry)"
+            );
             setIsSyncing(false);
             setIsSyncingAtom(false);
             setSyncPercentAtom(null);
@@ -431,9 +437,10 @@ export function useSyncEvents() {
             setLastSyncErrorAtom(e.payload.error);
             // Set error flag to keep widget visible
             setHasSyncErrorAtom(true);
-            // Mark ALL pending files as failed
+            // Mark ALL pending files as failed with the real error message
             await markAllPendingFilesAsFailed(e.payload.error || 'Sync failed');
-            // Clear progress on error
+            // Clear byte-level progress — the snapshot's retry_in_secs
+            // drives the UI state from here.
             setUploadProgress(null);
             setUploadProgressAtom(null);
             setDownloadProgress(null);
@@ -444,13 +451,15 @@ export function useSyncEvents() {
               ? Math.round((e.payload.bytes / e.payload.total) * 100)
               : 0;
 
-            // Update Rust backend with progress (fire-and-forget for high-frequency calls).
-            // Refresh is triggered independently of the update to avoid stalling
-            // the UI when IPC calls queue up.
+            // Ensure an ad-hoc session exists when staging reported 0 changes
+            // but the sync engine discovers files to transfer.
+            // NOTE: We do NOT call updateFileProgress here — the Rust upload
+            // callback already updates progress inline and emits the snapshot.
+            // Calling it again via async IPC would introduce stale writes that
+            // cause the progress bar to bounce on large files.
             if (e.payload.path) {
               ensureSession('upload')
-                .then(() => updateFileProgress(e.payload.path!, e.payload.bytes, e.payload.total, 'upload'))
-                .catch((err) => console.error("[SyncEvents] updateFileProgress failed:", err));
+                .catch((err) => console.error("[SyncEvents] ensureSession failed:", err));
             }
 
             // When a file reaches 100%, track it as completed
@@ -475,13 +484,10 @@ export function useSyncEvents() {
               ? Math.round((e.payload.bytes / e.payload.total) * 100)
               : 0;
 
-            // Update Rust backend with progress (fire-and-forget for high-frequency calls).
-            // Refresh is triggered independently of the update to avoid stalling
-            // the UI when IPC calls queue up.
+            // Ensure an ad-hoc session exists (see upload handler comment above).
             if (e.payload.path) {
               ensureSession('download')
-                .then(() => updateFileProgress(e.payload.path!, e.payload.bytes, e.payload.total, 'download'))
-                .catch((err) => console.error("[SyncEvents] updateFileProgress failed:", err));
+                .catch((err) => console.error("[SyncEvents] ensureSession failed:", err));
             }
 
             // When a file reaches 100%, track it as completed

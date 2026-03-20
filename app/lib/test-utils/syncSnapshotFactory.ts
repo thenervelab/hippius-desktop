@@ -16,6 +16,7 @@ export function makeFileProgress(
     action: "upload" as FileAction,
     status: "pending" as FileProgressStatus,
     progressPercent: 0,
+    bytesEncrypted: 0,
     bytesTransferred: 0,
     totalBytes: 0,
     ...overrides,
@@ -30,35 +31,43 @@ export function makeSnapshot(
     (f) => f.status === "completed",
   ).length;
   const failedFiles = files.filter((f) => f.status === "error").length;
-  const bytesTransferred = files.reduce(
-    (sum, f) => sum + f.bytesTransferred,
-    0,
-  );
-  const bytesExpected = files.reduce(
-    (sum, f) => sum + f.totalBytes,
-    0,
-  );
+  // Failed files count toward expected but NOT toward progress bytes.
+  let bytesExpected = 0;
+  let progressBytes = 0;
+  for (const f of files) {
+    if (f.status === "completed") {
+      bytesExpected += f.totalBytes;
+      progressBytes += f.totalBytes;
+    } else if (f.status === "error") {
+      bytesExpected += f.totalBytes;
+    } else if (f.totalBytes > 0) {
+      bytesExpected += f.totalBytes;
+      progressBytes += f.bytesTransferred > 0 ? f.bytesTransferred : f.bytesEncrypted;
+    }
+  }
   const overallPercent =
     files.length === 0
       ? 0
-      : completedFiles + failedFiles === files.length
+      : failedFiles === 0 && completedFiles === files.length
         ? 100
         : bytesExpected > 0
           ? Math.round(
-              (bytesTransferred / bytesExpected) * 100,
+              (progressBytes / bytesExpected) * 100,
             )
           : 0;
 
   return {
     isActive: files.some(
-      (f) => f.status === "pending" || f.status === "inProgress",
+      (f) => f.status === "pending" || f.status === "inProgress" || f.status === "encrypting" || f.status === "decrypting",
     ),
     overallPercent,
-    bytesTransferred,
+    progressBytes,
     bytesExpected,
     totalFiles: files.length,
     completedFiles,
     failedFiles,
+    retryInSecs: 0,
+    lastError: null,
     files,
     ...overrides,
   };

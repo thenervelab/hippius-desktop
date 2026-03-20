@@ -3,8 +3,8 @@
 //! Uses an in-memory SQLite database — no Tauri AppHandle needed.
 //! Tests the raw SQL logic that the Tauri commands wrap.
 
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
+use sqlx::sqlite::SqlitePool;
 
 async fn setup_db() -> SqlitePool {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -79,13 +79,11 @@ async fn save_and_get_token_from_scoped_table() {
     .await
     .unwrap();
 
-    let row = sqlx::query(
-        "SELECT api_token FROM objectstore_auth_scoped WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let row = sqlx::query("SELECT api_token FROM objectstore_auth_scoped WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(
         row.get::<Option<String>, _>("api_token").unwrap(),
@@ -99,30 +97,24 @@ async fn fallback_to_legacy_single_row() {
     let owner = account_key("legacy-account-1");
 
     // Scoped table has no row for this owner
-    let scoped = sqlx::query(
-        "SELECT api_token FROM objectstore_auth_scoped WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
+    let scoped = sqlx::query("SELECT api_token FROM objectstore_auth_scoped WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
     assert!(scoped.is_none(), "Scoped table should be empty");
 
     // Legacy single-row table has a token
-    sqlx::query(
-        "INSERT INTO objectstore_auth (id, api_token) VALUES (1, ?)",
-    )
-    .bind("legacy-token-xyz")
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO objectstore_auth (id, api_token) VALUES (1, ?)")
+        .bind("legacy-token-xyz")
+        .execute(&pool)
+        .await
+        .unwrap();
 
-    let legacy = sqlx::query(
-        "SELECT api_token FROM objectstore_auth WHERE id = 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let legacy = sqlx::query("SELECT api_token FROM objectstore_auth WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(
         legacy.get::<Option<String>, _>("api_token").unwrap(),
@@ -138,40 +130,32 @@ async fn fallback_to_auth_session() {
     let owner = account_key("session-account-1");
 
     // Neither objectstore table has a token
-    let scoped = sqlx::query(
-        "SELECT api_token FROM objectstore_auth_scoped WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
+    let scoped = sqlx::query("SELECT api_token FROM objectstore_auth_scoped WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
     assert!(scoped.is_none());
 
-    let legacy = sqlx::query(
-        "SELECT api_token FROM objectstore_auth WHERE id = 1",
-    )
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
+    let legacy = sqlx::query("SELECT api_token FROM objectstore_auth WHERE id = 1")
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
     assert!(legacy.is_none());
 
     // auth_session has a token
-    sqlx::query(
-        "INSERT INTO auth_session (owner, auth_token) VALUES (?, ?)",
-    )
-    .bind(&owner)
-    .bind("session-fallback-token")
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO auth_session (owner, auth_token) VALUES (?, ?)")
+        .bind(&owner)
+        .bind("session-fallback-token")
+        .execute(&pool)
+        .await
+        .unwrap();
 
-    let session = sqlx::query(
-        "SELECT auth_token FROM auth_session WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let session = sqlx::query("SELECT auth_token FROM auth_session WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(
         session.get::<Option<String>, _>("auth_token").unwrap(),
@@ -197,8 +181,7 @@ fn is_expiring(expiry: Option<i64>) -> bool {
 async fn token_not_expiring_when_far_future() {
     let pool = setup_db().await;
     let owner = account_key("expiry-far-future");
-    let two_hours_out =
-        chrono::Utc::now().timestamp_millis() + 2 * MARGIN_MS;
+    let two_hours_out = chrono::Utc::now().timestamp_millis() + 2 * MARGIN_MS;
 
     sqlx::query(
         "INSERT INTO auth_session (owner, auth_token, token_expiry) \
@@ -211,13 +194,11 @@ async fn token_not_expiring_when_far_future() {
     .await
     .unwrap();
 
-    let row = sqlx::query(
-        "SELECT token_expiry FROM auth_session WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let row = sqlx::query("SELECT token_expiry FROM auth_session WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     let expiry = row.get::<Option<i64>, _>("token_expiry");
     assert!(
@@ -230,8 +211,7 @@ async fn token_not_expiring_when_far_future() {
 async fn token_expiring_when_within_margin() {
     let pool = setup_db().await;
     let owner = account_key("expiry-within-margin");
-    let ten_minutes_out =
-        chrono::Utc::now().timestamp_millis() + 600_000;
+    let ten_minutes_out = chrono::Utc::now().timestamp_millis() + 600_000;
 
     sqlx::query(
         "INSERT INTO auth_session (owner, auth_token, token_expiry) \
@@ -244,13 +224,11 @@ async fn token_expiring_when_within_margin() {
     .await
     .unwrap();
 
-    let row = sqlx::query(
-        "SELECT token_expiry FROM auth_session WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let row = sqlx::query("SELECT token_expiry FROM auth_session WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     let expiry = row.get::<Option<i64>, _>("token_expiry");
     assert!(
@@ -263,8 +241,7 @@ async fn token_expiring_when_within_margin() {
 async fn token_expiring_when_already_expired() {
     let pool = setup_db().await;
     let owner = account_key("expiry-past");
-    let one_hour_ago =
-        chrono::Utc::now().timestamp_millis() - MARGIN_MS;
+    let one_hour_ago = chrono::Utc::now().timestamp_millis() - MARGIN_MS;
 
     sqlx::query(
         "INSERT INTO auth_session (owner, auth_token, token_expiry) \
@@ -277,19 +254,14 @@ async fn token_expiring_when_already_expired() {
     .await
     .unwrap();
 
-    let row = sqlx::query(
-        "SELECT token_expiry FROM auth_session WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let row = sqlx::query("SELECT token_expiry FROM auth_session WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     let expiry = row.get::<Option<i64>, _>("token_expiry");
-    assert!(
-        is_expiring(expiry),
-        "Token in the past should be expiring"
-    );
+    assert!(is_expiring(expiry), "Token in the past should be expiring");
 }
 
 #[tokio::test]
@@ -297,22 +269,18 @@ async fn token_expiring_when_no_expiry_set() {
     let pool = setup_db().await;
     let owner = account_key("expiry-null");
 
-    sqlx::query(
-        "INSERT INTO auth_session (owner, auth_token) VALUES (?, ?)",
-    )
-    .bind(&owner)
-    .bind("no-expiry-token")
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO auth_session (owner, auth_token) VALUES (?, ?)")
+        .bind(&owner)
+        .bind("no-expiry-token")
+        .execute(&pool)
+        .await
+        .unwrap();
 
-    let row = sqlx::query(
-        "SELECT token_expiry FROM auth_session WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let row = sqlx::query("SELECT token_expiry FROM auth_session WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     let expiry = row.get::<Option<i64>, _>("token_expiry");
     assert!(expiry.is_none(), "token_expiry should be NULL");
@@ -327,13 +295,11 @@ async fn token_expiring_when_no_session_row() {
     let pool = setup_db().await;
     let owner = account_key("expiry-missing");
 
-    let row = sqlx::query(
-        "SELECT token_expiry FROM auth_session WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
+    let row = sqlx::query("SELECT token_expiry FROM auth_session WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
 
     assert!(row.is_none(), "No session row should exist");
     // No row means no expiry — treat as expiring
@@ -373,7 +339,8 @@ async fn save_and_get_s3_credentials() {
     .unwrap();
 
     assert_eq!(
-        row.get::<Option<String>, _>("master_access_key_id").unwrap(),
+        row.get::<Option<String>, _>("master_access_key_id")
+            .unwrap(),
         "AKIAIOSFODNN7EXAMPLE"
     );
     assert_eq!(
@@ -432,7 +399,8 @@ async fn upsert_token_preserves_s3_credentials() {
         "api_token should be updated"
     );
     assert_eq!(
-        row.get::<Option<String>, _>("master_access_key_id").unwrap(),
+        row.get::<Option<String>, _>("master_access_key_id")
+            .unwrap(),
         "AKID_KEEP",
         "S3 access key should be preserved after token upsert"
     );
@@ -443,12 +411,11 @@ async fn upsert_token_preserves_s3_credentials() {
     );
 
     // Verify only one row exists
-    let (count,) = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM objectstore_auth_scoped WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (count,) =
+        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM objectstore_auth_scoped WHERE owner = ?")
+            .bind(&owner)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(count, 1);
 }

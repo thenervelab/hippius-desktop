@@ -847,7 +847,8 @@ async fn stop_migration_drive(app: &AppHandle) {
         if let Some(prev) = handle_guard.take() {
             prev.abort();
         }
-        sync.review_mode.store(false, std::sync::atomic::Ordering::Release);
+        sync.review_mode
+            .store(false, std::sync::atomic::Ordering::Release);
         sync.clear_review_entered();
         let _ = app.emit("hcfs_sync_stopped", ());
     } else {
@@ -1465,8 +1466,14 @@ mod tests {
     fn record_and_clear_migration_uploads() {
         let ms = crate::app_state::MigrationState::new();
 
-        ms.uploaded.lock().unwrap().insert("bucket/file1.txt".to_string());
-        ms.uploaded.lock().unwrap().insert("bucket/file2.txt".to_string());
+        ms.uploaded
+            .lock()
+            .unwrap()
+            .insert("bucket/file1.txt".to_string());
+        ms.uploaded
+            .lock()
+            .unwrap()
+            .insert("bucket/file2.txt".to_string());
 
         {
             let set = ms.uploaded.lock().unwrap();
@@ -1487,8 +1494,14 @@ mod tests {
     fn duplicate_upload_records_are_deduplicated() {
         let ms = crate::app_state::MigrationState::new();
 
-        ms.uploaded.lock().unwrap().insert("bucket/same.txt".to_string());
-        ms.uploaded.lock().unwrap().insert("bucket/same.txt".to_string());
+        ms.uploaded
+            .lock()
+            .unwrap()
+            .insert("bucket/same.txt".to_string());
+        ms.uploaded
+            .lock()
+            .unwrap()
+            .insert("bucket/same.txt".to_string());
 
         let set = ms.uploaded.lock().unwrap();
         assert_eq!(set.len(), 1);

@@ -78,7 +78,6 @@ pub struct NebulaSetupState {
     pub needs_update: bool,
 }
 
-
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
     tag_name: String,
@@ -730,7 +729,11 @@ async fn fetch_certificate_from_api(auth_header: &str) -> Result<Option<Certific
 
     let resp_status = response.status();
     let text = response.text().await?;
-    debug!("Fetch certificate response: status={}, body_len={}", resp_status, text.len());
+    debug!(
+        "Fetch certificate response: status={}, body_len={}",
+        resp_status,
+        text.len()
+    );
 
     if let Ok(cert) = serde_json::from_str::<CertificateResponse>(&text) {
         return Ok(Some(cert));
@@ -772,7 +775,11 @@ async fn request_certificate_from_api(auth_header: &str) -> Result<CertificateRe
 
     let resp_status = status;
     let text = response.text().await?;
-    debug!("Request certificate response: status={}, body_len={}", resp_status, text.len());
+    debug!(
+        "Request certificate response: status={}, body_len={}",
+        resp_status,
+        text.len()
+    );
 
     let cert: CertificateResponse =
         serde_json::from_str(&text).map_err(|e| anyhow!("Failed to parse JSON: {}", e))?;
@@ -811,7 +818,11 @@ async fn renew_certificate_from_api(auth_header: &str) -> Result<CertificateResp
 
     let resp_status = status;
     let text = response.text().await?;
-    debug!("Renew certificate response: status={}, body_len={}", resp_status, text.len());
+    debug!(
+        "Renew certificate response: status={}, body_len={}",
+        resp_status,
+        text.len()
+    );
 
     let cert: CertificateResponse =
         serde_json::from_str(&text).map_err(|e| anyhow!("Failed to parse JSON: {}", e))?;

@@ -55,6 +55,7 @@ pub struct SyncFile {
     pub action: FileAction,
     pub status: FileStatus,
     pub progress: u32,
+    pub bytes_encrypted: u64,
     pub bytes_transferred: u64,
     pub total_bytes: u64,
     pub started_at: i64,
@@ -106,7 +107,7 @@ pub struct OverallProgress {
     pub in_progress_files: usize,
     pub failed_files: usize,
     pub overall_percent: u32,
-    pub total_bytes_transferred: u64,
+    pub progress_bytes: u64,
     pub total_bytes_expected: u64,
     pub current_file: Option<SyncFile>,
 }
@@ -140,6 +141,7 @@ pub struct FileProgress {
     pub action: FileAction,
     pub status: FileProgressStatus,
     pub progress_percent: u32,
+    pub bytes_encrypted: u64,
     pub bytes_transferred: u64,
     pub total_bytes: u64,
     pub error: Option<String>,
@@ -150,11 +152,18 @@ pub struct FileProgress {
 pub struct SyncSnapshot {
     pub is_active: bool,
     pub overall_percent: u32,
-    pub bytes_transferred: u64,
+    /// Best progress bytes across all files (encrypt or transfer, whichever is
+    /// further along per file). Always consistent with `overall_percent`.
+    pub progress_bytes: u64,
     pub bytes_expected: u64,
     pub total_files: usize,
     pub completed_files: usize,
     pub failed_files: usize,
+    /// When > 0, the sync engine is waiting to retry after a failure.
+    /// Value is the number of seconds until the next retry attempt.
+    pub retry_in_secs: u64,
+    /// The error message from the last failed sync cycle, if any.
+    pub last_error: Option<String>,
     pub files: Vec<FileProgress>,
 }
 
@@ -258,6 +267,7 @@ fn register_files(session: &mut SyncSession, file_list: &SessionFileList, label:
                         action: action.clone(),
                         status: FileStatus::Pending,
                         progress: 0,
+                        bytes_encrypted: 0,
                         bytes_transferred: 0,
                         total_bytes: 0,
                         started_at: now,
@@ -324,11 +334,13 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
             return SyncSnapshot {
                 is_active: false,
                 overall_percent: 0,
-                bytes_transferred: 0,
+                progress_bytes: 0,
                 bytes_expected: 0,
                 total_files: 0,
                 completed_files: 0,
                 failed_files: 0,
+                retry_in_secs: 0,
+                last_error: None,
                 files: Vec::new(),
             };
         }
@@ -340,9 +352,9 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
         .map(|f| {
             let status = match f.status {
                 FileStatus::Pending => FileProgressStatus::Pending,
-                FileStatus::Uploading
-                | FileStatus::Downloading
-                | FileStatus::Deleting => FileProgressStatus::InProgress,
+                FileStatus::Uploading | FileStatus::Downloading | FileStatus::Deleting => {
+                    FileProgressStatus::InProgress
+                }
                 FileStatus::Encrypting => FileProgressStatus::Encrypting,
                 FileStatus::Decrypting => FileProgressStatus::Decrypting,
                 FileStatus::Completed => FileProgressStatus::Completed,
@@ -355,6 +367,7 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
                 action: f.action.clone(),
                 status,
                 progress_percent: f.progress,
+                bytes_encrypted: f.bytes_encrypted,
                 bytes_transferred: f.bytes_transferred,
                 total_bytes: f.total_bytes,
                 error: f.error.clone(),
@@ -373,48 +386,81 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
         }
     });
 
-    // Single pass for stats
+    // Single pass for stats.
+    // For each file, pick the best progress metric based on its current status:
+    // - Encrypting/Decrypting → use bytes_encrypted (transfer hasn't started)
+    // - Uploading/Downloading/Completed → use bytes_transferred
+    // - Error → do NOT count progress bytes (failed files must not inflate the bar)
     let mut completed_files: usize = 0;
     let mut failed_files: usize = 0;
-    let mut total_bytes_transferred: u64 = 0;
     let mut total_bytes_expected: u64 = 0;
+    let mut total_progress_bytes: u64 = 0;
 
     for f in &files {
         match f.status {
-            FileProgressStatus::Completed => completed_files += 1,
-            FileProgressStatus::Error => failed_files += 1,
-            _ => {}
-        }
-        if f.total_bytes > 0 {
-            total_bytes_transferred += f.bytes_transferred;
-            total_bytes_expected += f.total_bytes;
+            FileProgressStatus::Completed => {
+                completed_files += 1;
+                if f.total_bytes > 0 {
+                    total_bytes_expected += f.total_bytes;
+                    total_progress_bytes += f.total_bytes;
+                }
+            }
+            FileProgressStatus::Error => {
+                failed_files += 1;
+                // Failed files count toward expected total but NOT toward
+                // progress bytes — this keeps the progress bar honest.
+                if f.total_bytes > 0 {
+                    total_bytes_expected += f.total_bytes;
+                }
+            }
+            _ => {
+                if f.total_bytes > 0 {
+                    total_bytes_expected += f.total_bytes;
+                    // Per-file best progress: use transfer bytes if available,
+                    // otherwise fall back to encrypt bytes.
+                    let file_progress = if f.bytes_transferred > 0 {
+                        f.bytes_transferred
+                    } else {
+                        f.bytes_encrypted
+                    };
+                    total_progress_bytes += file_progress;
+                }
+            }
         }
     }
 
     let total_files = files.len();
+
+    // Progress percentage:
+    // - If all files completed successfully: 100%
+    // - If some failed: cap at the real byte ratio (never claim 100%)
+    // - If all done (mix of completed + failed): show actual success ratio
     let overall_percent = if total_files == 0 {
         0
-    } else if completed_files + failed_files == total_files {
+    } else if failed_files == 0 && completed_files == total_files {
         100
     } else if total_bytes_expected > 0 {
-        let pct = (total_bytes_transferred as f64
-            / total_bytes_expected as f64)
-            * 100.0;
+        let pct = (total_progress_bytes as f64 / total_bytes_expected as f64) * 100.0;
+        (pct.round() as u32).min(100)
+    } else if completed_files + failed_files == total_files {
+        // All files processed but no byte info — use file count ratio
+        let pct = (completed_files as f64 / total_files as f64) * 100.0;
         (pct.round() as u32).min(100)
     } else {
-        let pct =
-            (completed_files as f64 / total_files as f64) * 100.0;
+        let pct = (completed_files as f64 / total_files as f64) * 100.0;
         (pct.round() as u32).min(100)
     };
 
     SyncSnapshot {
         is_active: session.is_active,
         overall_percent,
-        bytes_transferred: total_bytes_transferred,
+        progress_bytes: total_progress_bytes,
         bytes_expected: total_bytes_expected,
         total_files,
         completed_files,
         failed_files,
+        retry_in_secs: 0,
+        last_error: None,
         files,
     }
 }
@@ -481,7 +527,15 @@ pub fn sp_start_session(
     file_list: Option<SessionFileList>,
     label: Option<String>,
 ) -> Result<SyncSession, String> {
-    start_session(&state.sync, expected_uploads, expected_downloads, expected_local_deletes, expected_remote_deletes, file_list, label)
+    start_session(
+        &state.sync,
+        expected_uploads,
+        expected_downloads,
+        expected_local_deletes,
+        expected_remote_deletes,
+        file_list,
+        label,
+    )
 }
 
 /// Merge file expectations into the current active session, or start a new one.
@@ -549,7 +603,15 @@ pub fn sp_merge_into_session(
     file_list: Option<SessionFileList>,
     label: Option<String>,
 ) -> Result<(), String> {
-    merge_into_session(&state.sync, expected_uploads, expected_downloads, expected_local_deletes, expected_remote_deletes, file_list, label)
+    merge_into_session(
+        &state.sync,
+        expected_uploads,
+        expected_downloads,
+        expected_local_deletes,
+        expected_remote_deletes,
+        file_list,
+        label,
+    )
 }
 
 /// Complete the current session, marking remaining files as done if counts match.
@@ -604,6 +666,7 @@ pub fn complete_session(
                     file.completed_at = Some(now);
                     // Sync bytes so overall percent reaches 100%
                     if file.total_bytes > 0 {
+                        file.bytes_encrypted = file.total_bytes;
                         file.bytes_transferred = file.total_bytes;
                     }
                 }
@@ -662,9 +725,7 @@ pub fn stop_session(sync: &crate::sync_engine::SyncEngine) -> Result<(), String>
 }
 
 #[tauri::command]
-pub fn sp_stop_session(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<(), String> {
+pub fn sp_stop_session(state: tauri::State<'_, crate::app_state::AppState>) -> Result<(), String> {
     stop_session(&state.sync)
 }
 
@@ -701,50 +762,60 @@ pub fn update_file_progress(
             action: action.clone(),
             status: FileStatus::Pending,
             progress: 0,
+            bytes_encrypted: 0,
             bytes_transferred: 0,
-            total_bytes: 0,
+            total_bytes,
             started_at: now,
             completed_at: None,
             error: None,
         });
 
-    file.bytes_transferred = bytes_transferred;
-    file.total_bytes = total_bytes;
-
-    if total_bytes > 0 {
-        file.progress = ((bytes_transferred as f64 / total_bytes as f64) * 100.0).round().min(100.0) as u32;
+    // Set total_bytes once — file size doesn't change.
+    if file.total_bytes == 0 && total_bytes > 0 {
+        file.total_bytes = total_bytes;
     }
 
-    // Update status based on progress.
-    // Encrypt/Decrypt completing does NOT mean the file is done — the real
-    // upload/download follows. Only Upload/Download/Delete reaching 100%
-    // mark the file Completed.
-    if bytes_transferred >= total_bytes && total_bytes > 0 {
-        match action {
-            FileAction::Encrypt | FileAction::Decrypt => {
-                // Keep the encrypting/decrypting status — the actual
-                // transfer will update the file again with Upload/Download.
-                file.status = match action {
-                    FileAction::Encrypt => FileStatus::Encrypting,
-                    FileAction::Decrypt => FileStatus::Decrypting,
-                    _ => unreachable!(),
-                };
-                file.progress = 100;
+    // Update action so the UI knows the current phase.
+    file.action = action.clone();
+
+    match action {
+        FileAction::Encrypt | FileAction::Decrypt => {
+            // Encrypt/decrypt: update bytes_encrypted (monotonic), don't touch bytes_transferred.
+            file.bytes_encrypted = file.bytes_encrypted.max(bytes_transferred);
+            if bytes_transferred >= total_bytes && total_bytes > 0 {
+                file.bytes_encrypted = total_bytes;
             }
-            _ => {
+            file.status = match action {
+                FileAction::Encrypt => FileStatus::Encrypting,
+                _ => FileStatus::Decrypting,
+            };
+            // Progress during encrypt phase is based on bytes_encrypted.
+            if file.total_bytes > 0 {
+                file.progress = ((file.bytes_encrypted as f64 / file.total_bytes as f64) * 100.0)
+                    .round()
+                    .min(100.0) as u32;
+            }
+        }
+        _ => {
+            // Upload/Download/Delete: update bytes_transferred (monotonic).
+            file.bytes_transferred = file.bytes_transferred.max(bytes_transferred);
+            if file.total_bytes > 0 {
+                file.progress = ((file.bytes_transferred as f64 / file.total_bytes as f64) * 100.0)
+                    .round()
+                    .min(100.0) as u32;
+            }
+            if file.bytes_transferred >= file.total_bytes && file.total_bytes > 0 {
                 file.status = FileStatus::Completed;
                 file.progress = 100;
                 file.completed_at = Some(now);
+            } else {
+                file.status = match action {
+                    FileAction::Upload => FileStatus::Uploading,
+                    FileAction::Download => FileStatus::Downloading,
+                    _ => FileStatus::Deleting,
+                };
             }
         }
-    } else {
-        file.status = match action {
-            FileAction::Upload => FileStatus::Uploading,
-            FileAction::Download => FileStatus::Downloading,
-            FileAction::Encrypt => FileStatus::Encrypting,
-            FileAction::Decrypt => FileStatus::Decrypting,
-            FileAction::LocalDelete | FileAction::RemoteDelete => FileStatus::Deleting,
-        };
     }
 
     let result = file.clone();
@@ -764,7 +835,14 @@ pub fn sp_update_file_progress(
     action: FileAction,
     label: Option<String>,
 ) -> Result<Option<SyncFile>, String> {
-    update_file_progress(&state.sync, path, bytes_transferred, total_bytes, action, label)
+    update_file_progress(
+        &state.sync,
+        path,
+        bytes_transferred,
+        total_bytes,
+        action,
+        label,
+    )
 }
 
 /// Force-complete all pending files. Stalled files (0 bytes) become errors.
@@ -786,9 +864,9 @@ pub fn complete_pending_files(sync: &crate::sync_engine::SyncEngine) -> Result<(
                 || file.status == FileStatus::Deleting
             {
                 // Files that never received any progress data (0 bytes
-                // transferred) are stalled — mark them as errors so the
-                // UI doesn't show them stuck at 0% forever.
-                if file.bytes_transferred == 0 {
+                // encrypted or transferred) are stalled — mark them as
+                // errors so the UI doesn't show them stuck at 0% forever.
+                if file.bytes_transferred == 0 && file.bytes_encrypted == 0 {
                     file.status = FileStatus::Error;
                     file.error = Some("Transfer stalled – no data received".to_string());
                     file.completed_at = Some(now);
@@ -797,6 +875,7 @@ pub fn complete_pending_files(sync: &crate::sync_engine::SyncEngine) -> Result<(
                     file.progress = 100;
                     file.completed_at = Some(now);
                     if file.total_bytes > 0 {
+                        file.bytes_encrypted = file.total_bytes;
                         file.bytes_transferred = file.total_bytes;
                     }
                 }
@@ -890,6 +969,7 @@ pub fn mark_pending_files_as_failed(
                 file.progress = 100;
                 file.completed_at = Some(now);
                 if file.total_bytes > 0 {
+                    file.bytes_encrypted = file.total_bytes;
                     file.bytes_transferred = file.total_bytes;
                 }
             }
@@ -989,7 +1069,6 @@ pub fn sp_mark_file_error(
     mark_file_error(&state.sync, path, error)
 }
 
-
 /// Compute overall progress from the current session.
 pub fn get_overall_progress(
     sync: &crate::sync_engine::SyncEngine,
@@ -1009,7 +1088,7 @@ pub fn get_overall_progress(
                 in_progress_files: 0,
                 failed_files: 0,
                 overall_percent: 0,
-                total_bytes_transferred: 0,
+                progress_bytes: 0,
                 total_bytes_expected: 0,
                 current_file: None,
             });
@@ -1022,17 +1101,23 @@ pub fn get_overall_progress(
     let mut completed_files: usize = 0;
     let mut in_progress_files: usize = 0;
     let mut failed_files: usize = 0;
-    let mut total_bytes_transferred: u64 = 0;
     let mut total_bytes_expected: u64 = 0;
+    let mut total_progress_bytes: u64 = 0;
     let mut current_file: Option<SyncFile> = None;
 
     for f in session.files.values() {
         match f.status {
-            FileStatus::Completed => completed_files += 1,
-            FileStatus::Uploading
-            | FileStatus::Downloading
-            | FileStatus::Encrypting
+            FileStatus::Completed => {
+                completed_files += 1;
+                if f.total_bytes > 0 {
+                    total_bytes_expected += f.total_bytes;
+                    total_progress_bytes += f.total_bytes;
+                }
+            }
+            FileStatus::Encrypting
             | FileStatus::Decrypting
+            | FileStatus::Uploading
+            | FileStatus::Downloading
             | FileStatus::Deleting => {
                 in_progress_files += 1;
                 if !should_hide_file(&f.path) {
@@ -1043,24 +1128,41 @@ pub fn get_overall_progress(
                         current_file = Some(f.clone());
                     }
                 }
+                if f.total_bytes > 0 {
+                    total_bytes_expected += f.total_bytes;
+                    let file_progress = if f.bytes_transferred > 0 {
+                        f.bytes_transferred
+                    } else {
+                        f.bytes_encrypted
+                    };
+                    total_progress_bytes += file_progress;
+                }
             }
-            FileStatus::Error => failed_files += 1,
-            _ => {}
-        }
-        if f.total_bytes > 0 {
-            total_bytes_transferred += f.bytes_transferred;
-            total_bytes_expected += f.total_bytes;
+            FileStatus::Error => {
+                failed_files += 1;
+                // Failed files count toward expected but NOT progress bytes.
+                if f.total_bytes > 0 {
+                    total_bytes_expected += f.total_bytes;
+                }
+            }
+            _ => {
+                if f.total_bytes > 0 {
+                    total_bytes_expected += f.total_bytes;
+                }
+            }
         }
     }
 
-    // Byte-weighted progress so the percentage matches the "X MB / Y MB"
-    // display.
+    // Byte-weighted progress. Failed files do NOT inflate the bar.
     let overall_percent = if total_files == 0 {
         0u32
-    } else if completed_files + failed_files == total_files {
+    } else if failed_files == 0 && completed_files == total_files {
         100
     } else if total_bytes_expected > 0 {
-        let pct = (total_bytes_transferred as f64 / total_bytes_expected as f64) * 100.0;
+        let pct = (total_progress_bytes as f64 / total_bytes_expected as f64) * 100.0;
+        (pct.round() as u32).min(100)
+    } else if completed_files + failed_files == total_files {
+        let pct = (completed_files as f64 / total_files as f64) * 100.0;
         (pct.round() as u32).min(100)
     } else {
         let pct = (completed_files as f64 / total_files as f64) * 100.0;
@@ -1074,7 +1176,7 @@ pub fn get_overall_progress(
         in_progress_files,
         failed_files,
         overall_percent,
-        total_bytes_transferred,
+        progress_bytes: total_progress_bytes,
         total_bytes_expected,
         current_file,
     })
@@ -1086,7 +1188,6 @@ pub fn sp_get_overall_progress(
 ) -> Result<OverallProgress, String> {
     get_overall_progress(&state.sync)
 }
-
 
 /// Record a deleted file in the recent files list.
 pub fn record_deleted_file(
@@ -1236,7 +1337,20 @@ pub fn get_snapshot(sync: &crate::sync_engine::SyncEngine) -> Result<SyncSnapsho
         warn!("Poisoned mutex recovered in get_snapshot");
         poisoned.into_inner()
     });
-    Ok(build_snapshot(&state))
+    let mut snapshot = build_snapshot(&state);
+
+    // Inject retry state from SyncEngine
+    let retry_at = sync.retry_at.load(std::sync::atomic::Ordering::Relaxed);
+    if retry_at > 0 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
+    }
+    snapshot.last_error = sync.last_error.lock().ok().and_then(|g| g.clone());
+
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -1284,11 +1398,11 @@ mod tests {
             action,
             status: status.clone(),
             progress: if total_bytes > 0 {
-                ((bytes_transferred as f64 / total_bytes as f64) * 100.0)
-                    as u32
+                ((bytes_transferred as f64 / total_bytes as f64) * 100.0) as u32
             } else {
                 0
             },
+            bytes_encrypted: 0,
             bytes_transferred,
             total_bytes,
             started_at: now_ms(),
@@ -1408,7 +1522,7 @@ mod tests {
             ),
         ]);
         let snapshot = build_snapshot(&state);
-        assert_eq!(snapshot.bytes_transferred, 1000);
+        assert_eq!(snapshot.progress_bytes, 1000);
         assert_eq!(snapshot.bytes_expected, 5000);
         assert_eq!(snapshot.overall_percent, 20);
     }
@@ -1447,13 +1561,7 @@ mod tests {
                 FileStatus::Completed,
                 1000,
             ),
-            make_file(
-                "/b.txt",
-                2000,
-                FileAction::Upload,
-                FileStatus::Error,
-                500,
-            ),
+            make_file("/b.txt", 2000, FileAction::Upload, FileStatus::Error, 500),
         ]);
         let snapshot = build_snapshot(&state);
         assert_eq!(snapshot.overall_percent, 100);
@@ -1513,46 +1621,19 @@ mod tests {
                 FileStatus::Completed,
                 100,
             ),
-            make_file(
-                "/error.txt",
-                100,
-                FileAction::Upload,
-                FileStatus::Error,
-                0,
-            ),
+            make_file("/error.txt", 100, FileAction::Upload, FileStatus::Error, 0),
         ]);
         let snapshot = build_snapshot(&state);
-        let find = |name: &str| {
-            snapshot
-                .files
-                .iter()
-                .find(|f| f.file_name == name)
-                .unwrap()
-        };
-        assert_eq!(
-            find("pending.txt").status,
-            FileProgressStatus::Pending
-        );
-        assert_eq!(
-            find("uploading.txt").status,
-            FileProgressStatus::InProgress
-        );
+        let find = |name: &str| snapshot.files.iter().find(|f| f.file_name == name).unwrap();
+        assert_eq!(find("pending.txt").status, FileProgressStatus::Pending);
+        assert_eq!(find("uploading.txt").status, FileProgressStatus::InProgress);
         assert_eq!(
             find("downloading.txt").status,
             FileProgressStatus::InProgress
         );
-        assert_eq!(
-            find("deleting.txt").status,
-            FileProgressStatus::InProgress
-        );
-        assert_eq!(
-            find("completed.txt").status,
-            FileProgressStatus::Completed
-        );
-        assert_eq!(
-            find("error.txt").status,
-            FileProgressStatus::Error
-        );
+        assert_eq!(find("deleting.txt").status, FileProgressStatus::InProgress);
+        assert_eq!(find("completed.txt").status, FileProgressStatus::Completed);
+        assert_eq!(find("error.txt").status, FileProgressStatus::Error);
     }
 
     #[test]
@@ -1600,10 +1681,16 @@ mod tests {
         // completed state via overallProgress. It gets replaced on
         // the next start_session call.
         let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
-        let session = state.current_session.as_ref().expect("Session should be kept");
+        let session = state
+            .current_session
+            .as_ref()
+            .expect("Session should be kept");
         assert!(!session.is_active, "Session should be inactive");
         assert!(
-            session.files.values().all(|f| f.status == FileStatus::Completed),
+            session
+                .files
+                .values()
+                .all(|f| f.status == FileStatus::Completed),
             "All files should be completed"
         );
         // File should also be in recent
@@ -1677,7 +1764,10 @@ mod tests {
 
         // Session is kept (inactive) so snapshot should still show files
         let snapshot = get_snapshot(eng).unwrap();
-        assert!(snapshot.total_files > 0, "Completed session should still report files");
+        assert!(
+            snapshot.total_files > 0,
+            "Completed session should still report files"
+        );
 
         // After clearing all data, snapshot should be empty
         clear_all_data(eng).unwrap();
@@ -1705,7 +1795,16 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        merge_into_session(eng, 1, 0, 0, 0, Some(file_list2), Some("drive2".to_string())).unwrap();
+        merge_into_session(
+            eng,
+            1,
+            0,
+            0,
+            0,
+            Some(file_list2),
+            Some("drive2".to_string()),
+        )
+        .unwrap();
 
         // Complete drive1's file
         update_file_progress(
@@ -1791,9 +1890,7 @@ mod tests {
         // Start session with 1 upload and 1 download
         let file_list = SessionFileList {
             upload_files: Some(vec!["/photo.jpg".to_string()]),
-            download_files: Some(vec![
-                "file_a7339456c25845c2deadbeef0123".to_string(),
-            ]),
+            download_files: Some(vec!["file_a7339456c25845c2deadbeef0123".to_string()]),
             local_delete_files: None,
             remote_delete_files: None,
         };
@@ -1827,9 +1924,7 @@ mod tests {
 
         let file_list = SessionFileList {
             upload_files: None,
-            download_files: Some(vec![
-                "file_a7339456c25845c2deadbeef0123".to_string(),
-            ]),
+            download_files: Some(vec!["file_a7339456c25845c2deadbeef0123".to_string()]),
             local_delete_files: None,
             remote_delete_files: None,
         };
@@ -1847,10 +1942,7 @@ mod tests {
 
         // Register 2 files, both with progress data
         let file_list = SessionFileList {
-            upload_files: Some(vec![
-                "/a.txt".to_string(),
-                "/b.txt".to_string(),
-            ]),
+            upload_files: Some(vec!["/a.txt".to_string(), "/b.txt".to_string()]),
             download_files: None,
             local_delete_files: None,
             remote_delete_files: None,
@@ -2058,8 +2150,7 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        merge_into_session(eng, 1, 0, 0, 0, Some(merge_list), Some("d1".to_string()))
-            .unwrap();
+        merge_into_session(eng, 1, 0, 0, 0, Some(merge_list), Some("d1".to_string())).unwrap();
 
         update_file_progress(
             eng,
@@ -2076,7 +2167,7 @@ mod tests {
         // 800 / 11000 = 7.27% → rounds to 7
         assert_eq!(p2.overall_percent, 7);
         // Bytes display matches: 800 transferred, 11000 expected
-        assert_eq!(p2.total_bytes_transferred, 800);
+        assert_eq!(p2.progress_bytes, 800);
         assert_eq!(p2.total_bytes_expected, 11000);
     }
 
@@ -2122,10 +2213,7 @@ mod tests {
         // 2 files: both in-progress at 100% bytes but not marked Completed
         // (simulating edge case where bytes match but status hasn't flipped)
         let file_list = SessionFileList {
-            upload_files: Some(vec![
-                "/a.txt".to_string(),
-                "/b.txt".to_string(),
-            ]),
+            upload_files: Some(vec!["/a.txt".to_string(), "/b.txt".to_string()]),
             download_files: None,
             local_delete_files: None,
             remote_delete_files: None,
@@ -2148,5 +2236,203 @@ mod tests {
         // Byte-weighted: 1000/1000 = 100%. No artificial cap — when all
         // known bytes are transferred the bar reaches 100%.
         assert_eq!(p.overall_percent, 100);
+    }
+
+    /// Out-of-order upload callbacks must not regress bytes_transferred.
+    #[test]
+    fn upload_progress_is_monotonic() {
+        reset_state();
+        let eng = test_sync();
+
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/big.bin".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        start_session(eng, 1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        let total: u64 = 7_000_000_000;
+        let mut prev_bytes: u64 = 0;
+
+        for step in 1..=20 {
+            let bytes = (total / 20) * step;
+            let result = update_file_progress(
+                eng,
+                "/big.bin".to_string(),
+                bytes,
+                total,
+                FileAction::Upload,
+                Some("d1".to_string()),
+            )
+            .unwrap()
+            .expect("file should exist");
+
+            assert!(
+                result.bytes_transferred >= prev_bytes,
+                "bytes_transferred regressed: {} -> {} at step {}",
+                prev_bytes,
+                result.bytes_transferred,
+                step
+            );
+            prev_bytes = result.bytes_transferred;
+        }
+
+        assert_eq!(prev_bytes, total);
+
+        // Simulate an out-of-order callback with a lower value — must not regress
+        let stale = update_file_progress(
+            eng,
+            "/big.bin".to_string(),
+            1_000_000, // 1MB — way below the 7GB already reported
+            total,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap()
+        .expect("file should exist");
+        assert_eq!(
+            stale.bytes_transferred, total,
+            "stale callback must not regress bytes"
+        );
+    }
+
+    /// Encrypt→Upload transition: bytes_encrypted tracks encrypt phase,
+    /// bytes_transferred tracks upload phase independently.
+    #[test]
+    fn encrypt_then_upload_no_regression() {
+        reset_state();
+        let eng = test_sync();
+
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/doc.pdf".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        start_session(eng, 1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        let total: u64 = 6_000_000_000;
+
+        // Encrypt phase: bytes_encrypted climbs, bytes_transferred stays 0
+        for pct in &[25, 50, 75, 100] {
+            let bytes = total * pct / 100;
+            let r = update_file_progress(
+                eng,
+                "/doc.pdf".to_string(),
+                bytes,
+                total,
+                FileAction::Encrypt,
+                Some("d1".to_string()),
+            )
+            .unwrap()
+            .expect("file should exist");
+
+            assert_eq!(
+                r.bytes_transferred, 0,
+                "encrypt must not touch bytes_transferred"
+            );
+            assert_eq!(r.bytes_encrypted, bytes);
+            assert!(
+                matches!(r.status, FileStatus::Encrypting),
+                "status should be Encrypting during encrypt phase"
+            );
+        }
+
+        // Upload phase starts: bytes_transferred climbs, bytes_encrypted stays at total
+        for pct in &[10, 50, 100] {
+            let bytes = total * pct / 100;
+            let r = update_file_progress(
+                eng,
+                "/doc.pdf".to_string(),
+                bytes,
+                total,
+                FileAction::Upload,
+                Some("d1".to_string()),
+            )
+            .unwrap()
+            .expect("file should exist");
+
+            assert_eq!(
+                r.bytes_encrypted, total,
+                "encrypt bytes must not change during upload"
+            );
+            assert_eq!(r.bytes_transferred, bytes);
+        }
+
+        // File should be completed after upload reaches 100%
+        let state = eng.progress.lock().unwrap();
+        let file = state
+            .current_session
+            .as_ref()
+            .unwrap()
+            .files
+            .get("/doc.pdf")
+            .unwrap();
+        assert_eq!(file.status, FileStatus::Completed);
+        assert_eq!(file.progress, 100);
+    }
+
+    /// total_bytes is set once from the first callback and never changes.
+    #[test]
+    fn total_bytes_set_once() {
+        reset_state();
+        let eng = test_sync();
+
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/f.txt".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        start_session(eng, 1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // First callback sets total_bytes
+        update_file_progress(
+            eng,
+            "/f.txt".to_string(),
+            0,
+            5000,
+            FileAction::Encrypt,
+            Some("d1".to_string()),
+        )
+        .unwrap();
+        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(
+            state
+                .current_session
+                .as_ref()
+                .unwrap()
+                .files
+                .get("/f.txt")
+                .unwrap()
+                .total_bytes,
+            5000
+        );
+        drop(state);
+
+        // Subsequent callback with different total must not overwrite
+        update_file_progress(
+            eng,
+            "/f.txt".to_string(),
+            100,
+            9999,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap();
+        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(
+            state
+                .current_session
+                .as_ref()
+                .unwrap()
+                .files
+                .get("/f.txt")
+                .unwrap()
+                .total_bytes,
+            5000,
+            "total_bytes must not change after initial set"
+        );
     }
 }

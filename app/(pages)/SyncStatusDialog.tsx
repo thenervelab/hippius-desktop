@@ -43,17 +43,38 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 
   // Derive all display state from the snapshot
   const isInProgress = snapshot.isActive;
-  const isCompleted = !snapshot.isActive && (snapshot.completedFiles > 0 || snapshot.failedFiles > 0);
-  const hasFailed = snapshot.failedFiles > 0 && isCompleted;
+  const isRetrying = !snapshot.isActive && snapshot.retryInSecs > 0;
+  const isCompleted = !snapshot.isActive && !isRetrying && (snapshot.completedFiles > 0 || snapshot.failedFiles > 0);
+  const hasFailed = (snapshot.failedFiles > 0 && isCompleted) || isRetrying;
   const percentage = isInProgress && snapshot.totalFiles > 0 && snapshot.overallPercent === 0 && snapshot.bytesExpected === 0
     ? null
     : snapshot.overallPercent;
   const totalFiles = snapshot.totalFiles;
-  const hasActiveSync = snapshot.isActive;
+  const hasActiveSync = snapshot.isActive || isRetrying;
   // True when any file is in an encrypt/decrypt phase (changes colors to yellow)
   const isEncryptingPhase = snapshot.files.some(
     (f) => f.status === "encrypting" || f.status === "decrypting"
   );
+
+  // Live countdown for retry timer
+  const [retryCountdown, setRetryCountdown] = useState(0);
+  useEffect(() => {
+    if (snapshot.retryInSecs <= 0) {
+      setRetryCountdown(0);
+      return;
+    }
+    setRetryCountdown(snapshot.retryInSecs);
+    const timer = setInterval(() => {
+      setRetryCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [snapshot.retryInSecs]);
 
   useEffect(() => {
     const fileList = fileListRef.current;
@@ -101,7 +122,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     [toggleExpanded]
   );
 
-  if (!snapshot.files.length && !hasActiveSync && !isCompleted) return null;
+  if (!snapshot.files.length && !hasActiveSync && !isCompleted && !isRetrying) return null;
   if (!open) return null;
 
   // Derive counts for the status banner
@@ -223,18 +244,22 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               <span className="text-base font-medium text-grey-10">
                 {isUnhealthy
                   ? CONNECTIVITY_STATUS_LABELS[engineHealth.status as keyof typeof CONNECTIVITY_STATUS_LABELS]
-                  : hasFailed
+                  : isRetrying
                     ? "Sync Failed"
-                    : isCompleted
-                      ? "Sync Complete"
-                      : "File Sync"}
+                    : hasFailed
+                      ? "Sync Failed"
+                      : isCompleted
+                        ? "Sync Complete"
+                        : "File Sync"}
               </span>
               <InfoTooltip className="ml-2">
-                {hasFailed
-                  ? "Some files failed to sync. Please try again."
-                  : isCompleted
-                    ? "All files have been successfully synced to the network."
-                    : "Your files are being synced to the Hippius network. This process may take a few minutes."}
+                {isRetrying
+                  ? `Sync failed. Retrying ${retryCountdown > 0 ? `in ${retryCountdown}s` : "now"}...`
+                  : hasFailed
+                    ? "Some files failed to sync. Please try again."
+                    : isCompleted
+                      ? "All files have been successfully synced to the network."
+                      : "Your files are being synced to the Hippius network. This process may take a few minutes."}
               </InfoTooltip>
             </h2>
           </div>
@@ -250,13 +275,15 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               <span className={cn("text-sm mr-2", hasFailed ? "text-error-50" : "text-grey-40")}>
                 {isUnhealthy
                   ? "Disconnected"
-                  : hasFailed
-                    ? "Failed"
-                    : isCompleted
-                      ? "Complete"
-                      : percentage !== null && percentage < 100
-                        ? `${isEncryptingPhase ? "Encrypting" : "Syncing"} ${percentage}%`
-                        : isEncryptingPhase
+                  : isRetrying
+                    ? retryCountdown > 0 ? `Retry ${retryCountdown}s` : "Retrying..."
+                    : hasFailed
+                      ? "Failed"
+                      : isCompleted
+                        ? "Complete"
+                        : percentage !== null && percentage < 100
+                          ? `${isEncryptingPhase ? "Encrypting" : "Syncing"} ${percentage}%`
+                          : isEncryptingPhase
                           ? "Encrypting..."
                           : "Syncing..."
                 }
@@ -308,11 +335,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       >
         <div className="bg-grey-100 border border-grey-80 rounded-b-[8px] w-[378px] flex flex-col" style={{ maxHeight: `${BODY_MAX_HEIGHT}px` }}>
           {/* Status banner */}
-          <div className="flex w-full mt-4 ml-4 gap-2">
+          <div className="flex flex-col w-full mt-4 ml-4 gap-2">
             <div
               className={cn(
                 "w-fit px-2 py-0.5 border rounded",
-                snapshot.failedFiles > 0
+                isRetrying || snapshot.failedFiles > 0
                   ? "bg-error-100/40 border-error-80"
                   : isCompleted
                     ? "bg-success-100/40 border-success-80"
@@ -322,27 +349,34 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               <div
                 className={cn(
                   "text-sm",
-                  snapshot.failedFiles > 0 
+                  isRetrying || snapshot.failedFiles > 0
                     ? "text-error-40"
-                    : isCompleted 
-                      ? "text-success-40" 
+                    : isCompleted
+                      ? "text-success-40"
                       : "text-primary-40"
                 )}
               >
                 {(() => {
+                  // Retry state — show countdown
+                  if (isRetrying) {
+                    return retryCountdown > 0
+                      ? `Sync failed \u2014 retrying in ${retryCountdown}s`
+                      : "Retrying sync...";
+                  }
+
                   // Total completed = synced (uploaded) + deleted
                   const completedFiles = syncedFiles + deletedFiles;
                   // Calculate actual total including failed files
-                  const actualTotal = snapshot.failedFiles > 0 
-                    ? Math.max(totalFiles, completedFiles + snapshot.failedFiles) 
+                  const actualTotal = snapshot.failedFiles > 0
+                    ? Math.max(totalFiles, completedFiles + snapshot.failedFiles)
                     : totalFiles;
-                  
+
                   // Determine what type of sync is happening based on action counts
                   const hasUploads = actionCounts?.uploads && actionCounts.uploads > 0;
                   const hasDownloads = actionCounts?.downloads && actionCounts.downloads > 0;
                   const hasLocalDeletes = actionCounts?.localDeletes && actionCounts.localDeletes > 0;
                   const hasRemoteDeletes = actionCounts?.remoteDeletes && actionCounts.remoteDeletes > 0;
-                  
+
                   // If there are failed files, show appropriate failure message
                   if (snapshot.failedFiles > 0 && !isInProgress) {
                     if (hasDownloads && !hasUploads) {
@@ -405,6 +439,13 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                 })()}
               </div>
             </div>
+
+            {/* Error detail — shown when retrying or when lastError is present */}
+            {snapshot.lastError && (isRetrying || hasFailed) && (
+              <p className="text-xs text-error-50 mt-1 mr-4 line-clamp-2 break-words">
+                {snapshot.lastError}
+              </p>
+            )}
           </div>
 
           {/* Overall sync progress bar */}
@@ -428,7 +469,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               </div>
               {snapshot.bytesExpected > 0 && (
                 <div className="text-[10px] text-grey-50 mt-1">
-                  {formatBytes(snapshot.bytesTransferred)} / {formatBytes(snapshot.bytesExpected)}
+                  {formatBytes(snapshot.progressBytes)} / {formatBytes(snapshot.bytesExpected)}
                 </div>
               )}
             </div>
@@ -510,7 +551,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                           </div>
                           {file.totalBytes > 0 && (
                             <span className="text-[10px] text-grey-50">
-                              {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
+                              {formatBytes(file.bytesEncrypted)} / {formatBytes(file.totalBytes)}
                             </span>
                           )}
                         </div>

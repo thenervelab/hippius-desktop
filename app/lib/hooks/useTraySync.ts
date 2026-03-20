@@ -1053,7 +1053,7 @@ function startSyncActivityWatcher() {
       ).length;
 
       // Build signature to avoid redundant updates
-      const signature = `${isActive}:${isCompleted}:${hasFailed}:${progress.completedFiles}/${progress.totalFiles}:${progress.failedFiles}:${progress.overallPercent}:${progress.bytesTransferred}:del${recentDeleteCount}`;
+      const signature = `${isActive}:${isCompleted}:${hasFailed}:${progress.completedFiles}/${progress.totalFiles}:${progress.failedFiles}:${progress.overallPercent}:${progress.progressBytes}:del${recentDeleteCount}`;
       if (signature === lastSyncSummarySignature) return;
       lastSyncSummarySignature = signature;
 
@@ -1077,7 +1077,7 @@ function startSyncActivityWatcher() {
       // Update the header label to reflect the watcher's view
       if (isActive) {
         const percent = progress.overallPercent;
-        if (progress.totalFiles > 0 && percent === 0 && progress.completedFiles === 0 && progress.bytesTransferred === 0) {
+        if (progress.totalFiles > 0 && percent === 0 && progress.completedFiles === 0 && progress.progressBytes === 0) {
           await updateTraySyncLabel(`⟳ Preparing sync…`);
         } else {
           await updateTraySyncLabel(`⟳ Syncing: ${percent}%`);
@@ -1094,7 +1094,7 @@ function startSyncActivityWatcher() {
 
         if (isActive) {
           // In-progress: show current progress
-          if (progress.totalFiles > 0 && progress.overallPercent === 0 && progress.completedFiles === 0 && progress.bytesTransferred === 0) {
+          if (progress.totalFiles > 0 && progress.overallPercent === 0 && progress.completedFiles === 0 && progress.progressBytes === 0) {
             progressText = `${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} pending`;
           } else {
             progressText = progress.totalFiles > 0
@@ -1102,14 +1102,14 @@ function startSyncActivityWatcher() {
               : "Preparing files…";
           }
           if (progress.bytesExpected > 0) {
-            sizeText = `${formatBytes(progress.bytesTransferred)} / ${formatBytes(progress.bytesExpected)}`;
+            sizeText = `${formatBytes(progress.progressBytes)} / ${formatBytes(progress.bytesExpected)}`;
           }
         } else if (hasFailed) {
           // Failed: show failure counts
           const totalFiles = progress.completedFiles + progress.failedFiles;
           progressText = `${progress.failedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} failed`;
           if (progress.bytesExpected > 0) {
-            sizeText = `${formatBytes(progress.bytesTransferred)} / ${formatBytes(progress.bytesExpected)}`;
+            sizeText = `${formatBytes(progress.progressBytes)} / ${formatBytes(progress.bytesExpected)}`;
           }
         } else {
           // Completed successfully: show final counts

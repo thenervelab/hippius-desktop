@@ -144,7 +144,9 @@ async fn attempt(
         let status = challenge_res.status();
         let body = challenge_res.text().await.unwrap_or_default();
         warn!(status = %status, "Challenge request failed: {body}");
-        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
+        return Err(format!(
+            "Authentication failed (HTTP {status}). Please try again."
+        ));
     }
 
     let cr: ChallengeResponse = challenge_res
@@ -183,7 +185,9 @@ async fn attempt(
         let status = verify_res.status();
         let body = verify_res.text().await.unwrap_or_default();
         warn!(status = %status, "Verify request failed: {body}");
-        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
+        return Err(format!(
+            "Authentication failed (HTTP {status}). Please try again."
+        ));
     }
 
     let vr: VerifyResponse = verify_res

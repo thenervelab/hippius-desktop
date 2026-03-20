@@ -132,13 +132,11 @@ async fn count_notifications(pool: &SqlitePool, user_address: &str) -> i64 {
 
 /// Check whether a notification is unread.
 async fn is_unread(pool: &SqlitePool, id: i64) -> bool {
-    let (val,) = sqlx::query_as::<_, (i32,)>(
-        "SELECT is_unread FROM notifications WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .unwrap();
+    let (val,) = sqlx::query_as::<_, (i32,)>("SELECT is_unread FROM notifications WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
     val != 0
 }
 
@@ -337,7 +335,14 @@ async fn welcome_notification_is_deduplicated() {
 async fn version_notification_exists_check() {
     let pool = setup_db().await;
 
-    insert_notification(&pool, "system", Some("Hippius"), Some("v2.1.0"), "New version").await;
+    insert_notification(
+        &pool,
+        "system",
+        Some("Hippius"),
+        Some("v2.1.0"),
+        "New version",
+    )
+    .await;
 
     // hippius_version_notification_exists query
     let (count,) = sqlx::query_as::<_, (i64,)>(
@@ -498,11 +503,10 @@ async fn last_deleted_low_credit_time() {
 async fn default_preferences_are_seeded() {
     let pool = setup_db().await;
 
-    let (count,) =
-        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notification_preferences")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notification_preferences")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(count, 2);
 }
@@ -517,13 +521,12 @@ async fn update_preference_disables_type() {
         .await
         .unwrap();
 
-    let (enabled,) = sqlx::query_as::<_, (i32,)>(
-        "SELECT enabled FROM notification_preferences WHERE id = ?",
-    )
-    .bind("credits")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (enabled,) =
+        sqlx::query_as::<_, (i32,)>("SELECT enabled FROM notification_preferences WHERE id = ?")
+            .bind("credits")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     assert_eq!(enabled, 0);
 }
@@ -556,11 +559,10 @@ async fn get_enabled_types_only() {
 async fn is_first_time_defaults_true() {
     let pool = setup_db().await;
 
-    let (val,) =
-        sqlx::query_as::<_, (i32,)>("SELECT is_first_time FROM app_state WHERE id = 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (val,) = sqlx::query_as::<_, (i32,)>("SELECT is_first_time FROM app_state WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(val, 1);
 }
@@ -574,11 +576,10 @@ async fn mark_first_time_seen_sets_false() {
         .await
         .unwrap();
 
-    let (val,) =
-        sqlx::query_as::<_, (i32,)>("SELECT is_first_time FROM app_state WHERE id = 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (val,) = sqlx::query_as::<_, (i32,)>("SELECT is_first_time FROM app_state WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(val, 0);
 }
@@ -588,12 +589,11 @@ async fn above_half_credit_toggle() {
     let pool = setup_db().await;
 
     // Default is 0
-    let (val,) = sqlx::query_as::<_, (i32,)>(
-        "SELECT is_above_half_credit FROM app_state WHERE id = 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (val,) =
+        sqlx::query_as::<_, (i32,)>("SELECT is_above_half_credit FROM app_state WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(val, 0);
 
     // Set to 1
@@ -602,12 +602,11 @@ async fn above_half_credit_toggle() {
         .await
         .unwrap();
 
-    let (val,) = sqlx::query_as::<_, (i32,)>(
-        "SELECT is_above_half_credit FROM app_state WHERE id = 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (val,) =
+        sqlx::query_as::<_, (i32,)>("SELECT is_above_half_credit FROM app_state WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(val, 1);
 }
 
@@ -631,11 +630,10 @@ async fn add_and_list_contacts() {
         .await
         .unwrap();
 
-    let (count,) =
-        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM address_book")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM address_book")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(count, 2);
 }
@@ -644,13 +642,12 @@ async fn add_and_list_contacts() {
 async fn update_contact_name() {
     let pool = setup_db().await;
 
-    let result =
-        sqlx::query("INSERT INTO address_book (name, wallet_address) VALUES (?, ?)")
-            .bind("Old Name")
-            .bind("5Grw...")
-            .execute(&pool)
-            .await
-            .unwrap();
+    let result = sqlx::query("INSERT INTO address_book (name, wallet_address) VALUES (?, ?)")
+        .bind("Old Name")
+        .bind("5Grw...")
+        .execute(&pool)
+        .await
+        .unwrap();
     let id = result.last_insert_rowid();
 
     sqlx::query("UPDATE address_book SET name = ?, wallet_address = ? WHERE id = ?")
@@ -661,13 +658,11 @@ async fn update_contact_name() {
         .await
         .unwrap();
 
-    let (name,) = sqlx::query_as::<_, (String,)>(
-        "SELECT name FROM address_book WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (name,) = sqlx::query_as::<_, (String,)>("SELECT name FROM address_book WHERE id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(name, "New Name");
 }
@@ -676,13 +671,12 @@ async fn update_contact_name() {
 async fn delete_contact() {
     let pool = setup_db().await;
 
-    let result =
-        sqlx::query("INSERT INTO address_book (name, wallet_address) VALUES (?, ?)")
-            .bind("Charlie")
-            .bind("5Cha...")
-            .execute(&pool)
-            .await
-            .unwrap();
+    let result = sqlx::query("INSERT INTO address_book (name, wallet_address) VALUES (?, ?)")
+        .bind("Charlie")
+        .bind("5Cha...")
+        .execute(&pool)
+        .await
+        .unwrap();
     let id = result.last_insert_rowid();
 
     sqlx::query("DELETE FROM address_book WHERE id = ?")
@@ -691,11 +685,10 @@ async fn delete_contact() {
         .await
         .unwrap();
 
-    let (count,) =
-        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM address_book")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM address_book")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(count, 0);
 }
@@ -726,12 +719,10 @@ async fn contacts_sorted_by_name() {
         .unwrap();
 
     // get_contacts query uses ORDER BY name ASC
-    let rows = sqlx::query_as::<_, (String,)>(
-        "SELECT name FROM address_book ORDER BY name ASC",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let rows = sqlx::query_as::<_, (String,)>("SELECT name FROM address_book ORDER BY name ASC")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
 
     let names: Vec<String> = rows.into_iter().map(|(n,)| n).collect();
     assert_eq!(names, vec!["Alice", "Mia", "Zara"]);
@@ -773,11 +764,10 @@ async fn hard_delete_clears_all() {
         .await
         .unwrap();
 
-    let (count,) =
-        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(count, 0);
 }
