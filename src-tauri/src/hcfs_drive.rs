@@ -100,6 +100,14 @@ impl HcfsDriveManager {
         &self.sync_path
     }
 
+    pub fn config_dir(&self) -> &Path {
+        &self.config_dir
+    }
+
+    pub fn client_config(&self) -> Option<&HcfsClientConfig> {
+        self.client_config.as_ref()
+    }
+
     /// Load the persisted sync state from disk.
     ///
     /// Returns the three-tree sync state (`local`, `remote`, `synced`) plus
@@ -872,6 +880,122 @@ pub async fn trigger_sync(app: &AppHandle) -> bool {
     any_ran
 }
 
+/// Pre-sync check: verify the folder still exists on the server.
+///
+/// When another device calls `delete_remote_folder` (unregister), the folder
+/// vanishes from the server. If we then run `sync_with_resolutions`, the
+/// three-tree algorithm sees an empty remote tree and deletes all local files.
+///
+/// This function queries `list_remote_folders` *before* syncing. If our
+/// folder_hash is missing it:
+///   1. Re-registers the folder on the server.
+///   2. Wipes local `sync_state.json` (so hcfs-client sees all local files as
+///      new uploads rather than computing deletions).
+///   3. Returns `true` so the caller can re-initialise the drive before syncing.
+///
+/// The function takes extracted data instead of `&HcfsDriveManager` so that
+/// callers can drop the drives lock before making network calls.
+///
+/// Returns `Ok(true)` if recovery was performed,
+/// `Ok(false)` if the folder exists and no action was needed,
+/// `Err` if the server check itself failed.
+async fn check_and_recover_remote_folder(
+    config: &HcfsClientConfig,
+    config_dir: &std::path::Path,
+    label: &str,
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+) -> Result<bool, String> {
+    let folder_hash = config.folder_hash.clone();
+    let ss58 = config.ss58_address.clone();
+
+    // Build a client with an empty folder_hash — list_remote_folders is account-scoped
+    let list_config = HcfsClientConfig {
+        folder_hash: String::new(),
+        ..config.clone()
+    };
+    let client = hcfs_client::client::HcfsClient::new(list_config)
+        .map_err(|e| format!("Failed to create HCFS client: {e}"))?;
+
+    let folders = client
+        .list_remote_folders(&ss58)
+        .await
+        .map_err(|e| format!("Failed to list remote folders: {e}"))?;
+
+    let exists = !crate::sync_logic::folder_needs_recovery(&folders, &folder_hash);
+    if exists {
+        return Ok(false);
+    }
+
+    // Folder is gone — recover
+    warn!(
+        label = label,
+        folder_hash = %folder_hash,
+        "Remote folder missing — re-registering and resetting sync state",
+    );
+
+    // 1. Re-register the folder on the server
+    ensure_folder_registered(config, label, pool).await?;
+
+    // 2. Wipe sync_state.json so hcfs-client sees a fresh remote tree.
+    //    All local files will be treated as new uploads.
+    let state_path = config_dir.join("sync_state.json");
+    let state_bak = config_dir.join("sync_state.json.bak");
+    let _ = std::fs::remove_file(&state_path);
+    let _ = std::fs::remove_file(&state_bak);
+
+    info!(
+        label = label,
+        account_id = account_id,
+        "Remote folder recovery complete — next sync will re-upload local files",
+    );
+
+    Ok(true)
+}
+
+/// Ensure the folder is registered in the server's folder registry.
+///
+/// This is idempotent — the server uses `ON CONFLICT DO UPDATE`, so calling it
+/// when the folder already exists simply refreshes the `updated_at` timestamp.
+/// This is critical because the server's upload endpoint does NOT check folder
+/// registration: files can be uploaded to a folder that isn't in the registry,
+/// making the folder invisible to `list_remote_folders` on other devices.
+async fn ensure_folder_registered(
+    config: &HcfsClientConfig,
+    label: &str,
+    pool: &sqlx::SqlitePool,
+) -> Result<(), String> {
+    let folder_hash = &config.folder_hash;
+    let ss58 = &config.ss58_address;
+
+    let register_client = hcfs_client::client::HcfsClient::new(config.clone())
+        .map_err(|e| format!("Failed to create HCFS client for registration: {e}"))?;
+
+    let dev_name: Option<String> = sqlx::query_scalar::<_, String>(
+        "SELECT device_name FROM device_settings WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to read device name: {e}"))
+    .ok()
+    .flatten();
+
+    register_client
+        .register_folder(ss58, folder_hash, label, dev_name.as_deref())
+        .await
+        .map_err(|e| {
+            error!(
+                label = label,
+                error = %e,
+                "Failed to register folder on server",
+            );
+            format!("Failed to register folder: {e}")
+        })?;
+
+    info!(label = label, folder_hash = %folder_hash, "Folder registered on server");
+    Ok(())
+}
+
 /// Execute one sync cycle for a specific drive by label.
 /// Returns true if sync was executed, false if skipped (e.g., already in progress).
 pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
@@ -947,6 +1071,57 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
 
     // Track whether we emitted sync_started - only emit sync_completed if we did
     let mut emitted_sync_started = false;
+
+    // ── Pre-sync check: verify the folder still exists on the server ──
+    // If another device deleted the remote folder, re-register it and
+    // wipe sync state so local files are re-uploaded instead of deleted.
+    //
+    // Extract needed data under the drives lock, then drop it before doing
+    // network I/O to avoid blocking other drive operations.
+    {
+        let drive_info = {
+            let guard = sync.drives.lock().await;
+            guard.get(label).and_then(|m| {
+                m.client_config().map(|c| (c.clone(), m.config_dir().to_path_buf()))
+            })
+        }; // drives lock dropped here
+
+        if let Some((config, config_dir)) = drive_info
+            && let (Ok(pool), Ok(acct)) = (
+                app_state.pool(),
+                crate::utils::sync::current_account_id(&app_state),
+            )
+        {
+                match check_and_recover_remote_folder(&config, &config_dir, label, pool, &acct)
+                    .await
+                {
+                    Ok(true) => {
+                        // Sync state has been wiped and the folder re-registered.
+                        // The drive is still unlocked, so sync_with_resolutions
+                        // will see an empty synced tree, fetch fresh remote state,
+                        // and upload all local files as new.
+                        info!(
+                            label = label,
+                            "Remote folder recovered — sync will re-upload local files",
+                        );
+                        if let Err(e) = app.emit(
+                            "hcfs_folder_recovered",
+                            serde_json::json!({ "label": label }),
+                        ) {
+                            warn!(error = %e, "Failed to emit hcfs_folder_recovered");
+                        }
+                    }
+                    Ok(false) => {} // folder exists, no recovery needed
+                    Err(e) => {
+                        warn!(
+                            label = label,
+                            error = %e,
+                            "Pre-sync folder check failed, continuing with sync",
+                        );
+                    }
+                }
+            }
+        }
 
     // Tri-state result: synced, conflicts pending (user must resolve), or not available.
     // Carries staged file lists so we can record activity with real file names
@@ -1296,6 +1471,32 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 }
             }
 
+            // After uploading files, ensure the folder is registered in the
+            // server's folder registry.  The upload endpoint does NOT check
+            // registration, so files can land on the server while the folder
+            // remains invisible to `list_remote_folders` on other devices.
+            // This call is idempotent (server uses ON CONFLICT DO UPDATE).
+            if crate::sync_logic::should_register_after_upload(outcome.files_uploaded) {
+                let maybe_config_and_pool = {
+                    let guard = sync.drives.lock().await;
+                    guard
+                        .get(&label_owned)
+                        .and_then(|m| m.client_config().cloned())
+                        .zip(app_state.pool().ok())
+                };
+                if let Some((config, pool)) = maybe_config_and_pool {
+                    if let Err(e) =
+                        ensure_folder_registered(&config, &label_owned, pool).await
+                    {
+                        warn!(
+                            label = %label_owned,
+                            error = %e,
+                            "Post-upload folder registration failed",
+                        );
+                    }
+                }
+            }
+
             // After a successful migration drive sync, report migrated files.
             // Called on every sync (not just when files_uploaded > 0) so that
             // server-side status is re-checked even after the initial report.
@@ -1339,36 +1540,61 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             );
 
             // Detect remote folder removal — another device deleted
-            // this folder from the server.  Notify the user so they can
-            // decide whether to remove the local copy or re-sync.
+            // this folder from the server.  Auto-recover by re-registering
+            // the folder and re-initializing the drive so local files are
+            // re-uploaded on the next sync cycle.
             if crate::sync_logic::is_remote_folder_removed_error(&err_str) {
                 warn!(
                     label = %label_owned,
                     local_path = %drive_sync_path.display(),
-                    "Remote folder was removed by another device",
+                    "Remote folder was removed by another device — attempting auto-recovery",
                 );
-                if let Err(e) = app.emit(
-                    "hcfs_remote_folder_removed",
-                    serde_json::json!({
-                        "label": label_owned,
-                        "local_path": drive_sync_path.to_string_lossy(),
-                    }),
-                ) {
-                    warn!(error = %e, "Failed to emit hcfs_remote_folder_removed");
+
+                // Extract data from the drive without holding the lock during network I/O
+                let drive_info = {
+                    let guard = sync.drives.lock().await;
+                    guard.get(&label_owned).and_then(|m| {
+                        m.client_config()
+                            .map(|c| (c.clone(), m.config_dir().to_path_buf()))
+                    })
+                };
+
+                let recovered = if let Some((config, config_dir)) = drive_info {
+                    if let (Ok(pool), Ok(acct)) = (
+                        app_state.pool(),
+                        crate::utils::sync::current_account_id(&app_state),
+                    ) {
+                        check_and_recover_remote_folder(
+                            &config,
+                            &config_dir,
+                            &label_owned,
+                            pool,
+                            &acct,
+                        )
+                        .await
+                        .unwrap_or(false)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if recovered {
+                    // Sync state has been wiped and the folder re-registered.
+                    // On the next sync cycle the drive (still unlocked) will see
+                    // an empty synced tree, fetch fresh remote state, and upload
+                    // all local files as new.
+                    info!(label = %label_owned, "Remote folder recovered via error handler — next sync will re-upload");
+                    if let Err(e) = app.emit(
+                        "hcfs_folder_recovered",
+                        serde_json::json!({ "label": label_owned }),
+                    ) {
+                        warn!(error = %e, "Failed to emit hcfs_folder_recovered");
+                    }
                 }
 
-                // Stop retrying this drive — the folder no longer exists.
-                // The user will choose to remove or re-sync via the UI.
-                // We do NOT auto-remove the local sync path; that decision
-                // belongs to the user.
-                {
-                    let mut guard = sync.drives.lock().await;
-                    guard.remove(&label_owned);
-                    info!(label = %label_owned, "Removed drive from registry (remote folder deleted)");
-                }
-
-                // Reset failure counter so the next manually-triggered
-                // sync doesn't inherit stale backoff state.
+                // Reset failure counter so the next sync cycle runs immediately
                 sync.reset_sync_failures();
                 sync.retry_at.store(0, std::sync::atomic::Ordering::Relaxed);
                 if let Ok(mut guard) = sync.last_error.lock() {

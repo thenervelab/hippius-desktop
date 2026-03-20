@@ -42,7 +42,7 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 
 ### Frontend Structure (app/)
 
-- **`app/(pages)/`** — Next.js route groups: files, wallet, stake/unstake, vm, billing, notifications, support, referrals, bridge. Also contains invisible event-listener components mounted in the layout: `SyncEventLogger`, `ConflictEventListener`, `RemoteFolderRemovalListener`, `MigrationChecker`, `SyncFilesHandler`.
+- **`app/(pages)/`** — Next.js route groups: files, wallet, stake/unstake, vm, billing, notifications, support, referrals, bridge. Also contains invisible event-listener components mounted in the layout: `SyncEventLogger`, `ConflictEventListener`, `MigrationChecker`, `SyncFilesHandler`.
 - **`app/lib/wallet-auth-context.tsx`** — Central auth provider (login, session restore, logout, token refresh). Wraps the entire app.
 - **`app/lib/global-atoms/`** — Jotai atoms for global state (polkadot API, sync status, migration)
 - **`app/lib/store/jotaiStore.ts`** — Standalone Jotai store (`appStore`) used outside React (e.g., tray sync)
@@ -56,8 +56,9 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 
 - **`main.rs`** — Entry point. Registers all IPC commands, initializes plugins, sets up single-instance and deep-link handling. `lib.rs` is vestigial — ignore it.
 - **`commands/`** — IPC command handlers organized by domain: `syncing.rs` (file sync), `auth.rs` (mnemonic login), `session.rs` (credential storage), `billing.rs`, `blockchain.rs` (queries, staking, unit conversion), `chart_formatting.rs` (chart data, marketplace credits, storage cost), `migration.rs` (S3→HCFS migration: check, start, cancel, dismiss, `complete_migration_transition` for atomic dismiss+stop+reinit), `vm.rs`, `file_commands.rs`, `oauth.rs`, `local_db.rs` (notifications, contacts, preferences), etc.
-- **`hcfs_drive.rs`** — Core sync engine. Wraps `hcfs_client::Drive` in `HcfsDriveManager`, manages multi-drive registry (`HCFS_DRIVES` HashMap keyed by label), runs background sync loop with file watching.
+- **`hcfs_drive.rs`** — Core sync engine. Wraps `hcfs_client::Drive` in `HcfsDriveManager`, manages multi-drive registry (`HCFS_DRIVES` HashMap keyed by label), runs background sync loop with file watching. Includes **remote folder auto-recovery**: before each sync cycle, `check_and_recover_remote_folder()` verifies the folder exists on the server; if missing (e.g., another device deleted it), it re-registers the folder, wipes `sync_state.json`, and lets the next sync re-upload local files. A fallback in the error handler also triggers recovery if `sync_with_resolutions` returns a folder-not-found error. **Post-upload folder registration**: after any sync cycle that uploads files, `ensure_folder_registered()` is called to guarantee the folder exists in the server's `folder_registry` — this is critical because the server's upload endpoint does NOT check registration, so files can land on the server while the folder remains invisible to `list_remote_folders` on other devices.
 - **`sync_shared.rs`** — Shared sync state: cancellation token, per-drive status, connectivity health, activity ring buffer
+- **`sync_logic.rs`** — Pure logic functions for sync engine decisions (no I/O, fully testable): backoff computation, health-change detection, sync-skip decisions, encrypted-name detection, remote-folder-removal error detection, folder recovery decision (`folder_needs_recovery`), post-upload registration decision (`should_register_after_upload`)
 - **`sync_progress.rs`** — In-memory sync progress tracking (sessions, file progress, tray menu data)
 - **`substrate_client.rs`** — Substrate/Polkadot RPC client for blockchain operations
 - **`api_client.rs`** — HTTP client for Hippius API (billing, VMs, support)

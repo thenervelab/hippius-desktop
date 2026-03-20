@@ -1,6 +1,7 @@
+use hcfs_shared::network::RemoteFolderInfo;
 use tauri_project_lib::sync_logic::{
-    ConnectivityStatus, compute_backoff, is_failed_download_artifact, should_emit_health_change,
-    should_skip_sync_check,
+    ConnectivityStatus, compute_backoff, folder_needs_recovery, is_failed_download_artifact,
+    should_emit_health_change, should_register_after_upload, should_skip_sync_check,
 };
 
 // === compute_backoff ===
@@ -206,4 +207,56 @@ fn artifact_partial_prefix_rejected() {
 #[test]
 fn artifact_mixed_hex_nonhex_rejected() {
     assert_eq!(is_failed_download_artifact("downloaded_a1b2c3zz"), None);
+}
+
+// === folder_needs_recovery ===
+
+fn make_folder(hash: &str) -> RemoteFolderInfo {
+    RemoteFolderInfo {
+        label: "test".to_string(),
+        folder_hash: hash.to_string(),
+        file_count: 0,
+        total_bytes: 0,
+        created_at: 0,
+        updated_at: 0,
+        device_name: String::new(),
+    }
+}
+
+#[test]
+fn recovery_needed_when_folder_missing_from_list() {
+    let folders = vec![make_folder("aaa"), make_folder("bbb")];
+    assert!(folder_needs_recovery(&folders, "ccc"));
+}
+
+#[test]
+fn recovery_not_needed_when_folder_in_list() {
+    let folders = vec![make_folder("aaa"), make_folder("bbb")];
+    assert!(!folder_needs_recovery(&folders, "bbb"));
+}
+
+#[test]
+fn recovery_needed_when_remote_list_empty() {
+    assert!(folder_needs_recovery(&[], "any_hash"));
+}
+
+#[test]
+fn recovery_hash_match_must_be_exact() {
+    let folders = vec![make_folder("abcdef1234567890")];
+    assert!(folder_needs_recovery(&folders, "abcdef123456789"));
+    assert!(folder_needs_recovery(&folders, "abcdef12345678901"));
+    assert!(!folder_needs_recovery(&folders, "abcdef1234567890"));
+}
+
+// === should_register_after_upload ===
+
+#[test]
+fn register_when_files_uploaded() {
+    assert!(should_register_after_upload(1));
+    assert!(should_register_after_upload(42));
+}
+
+#[test]
+fn no_register_when_nothing_uploaded() {
+    assert!(!should_register_after_upload(0));
 }

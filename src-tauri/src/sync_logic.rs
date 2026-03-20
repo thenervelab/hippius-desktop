@@ -4,6 +4,7 @@
 //! They exist so that the core decision logic of the sync loop can be
 //! unit-tested in isolation without needing a running Tauri app.
 
+use hcfs_shared::network::RemoteFolderInfo;
 use serde::Serialize;
 
 /// Server connectivity status used by the health check system.
@@ -130,6 +131,25 @@ pub fn is_remote_folder_removed_error(error: &str) -> bool {
         return true;
     }
     false
+}
+
+/// Check whether a folder with the given hash is present in the remote folder list.
+///
+/// Returns `true` if the folder is **missing** and needs recovery (re-registration
+/// + sync state wipe). This is the core decision in `check_and_recover_remote_folder`.
+pub fn folder_needs_recovery(folders: &[RemoteFolderInfo], target_hash: &str) -> bool {
+    !folders.iter().any(|f| f.folder_hash == target_hash)
+}
+
+/// Decide whether the folder should be re-registered after a sync cycle.
+///
+/// Returns `true` when files were uploaded during the sync. The server's upload
+/// endpoint does **not** check the folder registry, so files can land on the
+/// server while the folder remains invisible to `list_remote_folders` on other
+/// devices. Calling `register_folder` after every upload-bearing sync ensures
+/// the folder entry exists (the call is idempotent thanks to `ON CONFLICT DO UPDATE`).
+pub fn should_register_after_upload(files_uploaded: usize) -> bool {
+    files_uploaded > 0
 }
 
 #[cfg(test)]
@@ -434,5 +454,65 @@ mod tests {
     fn remote_removed_404_alone_not_sufficient() {
         // "404" alone without "not found" could be a generic server error
         assert!(!is_remote_folder_removed_error("Error code 404"));
+    }
+
+    // --- folder_needs_recovery ---
+
+    fn make_folder(hash: &str) -> RemoteFolderInfo {
+        RemoteFolderInfo {
+            label: "test".to_string(),
+            folder_hash: hash.to_string(),
+            file_count: 0,
+            total_bytes: 0,
+            created_at: 0,
+            updated_at: 0,
+            device_name: String::new(),
+        }
+    }
+
+    #[test]
+    fn recovery_needed_when_folder_missing() {
+        let folders = vec![make_folder("aaa"), make_folder("bbb")];
+        assert!(folder_needs_recovery(&folders, "ccc"));
+    }
+
+    #[test]
+    fn recovery_not_needed_when_folder_present() {
+        let folders = vec![make_folder("aaa"), make_folder("bbb")];
+        assert!(!folder_needs_recovery(&folders, "bbb"));
+    }
+
+    #[test]
+    fn recovery_needed_when_list_empty() {
+        let folders: Vec<RemoteFolderInfo> = vec![];
+        assert!(folder_needs_recovery(&folders, "any_hash"));
+    }
+
+    #[test]
+    fn recovery_hash_match_is_exact() {
+        // Partial matches should not count
+        let folders = vec![make_folder("abcdef1234567890")];
+        assert!(folder_needs_recovery(&folders, "abcdef123456789")); // one char short
+        assert!(folder_needs_recovery(&folders, "abcdef12345678901")); // one char extra
+        assert!(!folder_needs_recovery(&folders, "abcdef1234567890")); // exact match
+    }
+
+    #[test]
+    fn recovery_single_folder_present() {
+        let folders = vec![make_folder("only_one")];
+        assert!(!folder_needs_recovery(&folders, "only_one"));
+    }
+
+    // --- should_register_after_upload ---
+
+    #[test]
+    fn register_after_upload_when_files_uploaded() {
+        assert!(should_register_after_upload(1));
+        assert!(should_register_after_upload(100));
+    }
+
+    #[test]
+    fn no_register_when_zero_uploads() {
+        assert!(!should_register_after_upload(0));
     }
 }
