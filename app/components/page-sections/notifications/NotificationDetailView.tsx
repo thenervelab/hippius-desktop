@@ -16,7 +16,7 @@ import {
   getFilePartsFromFileName,
   getFileTypeFromExtension,
 } from "@/lib/utils";
-import { getFileIcon } from "@/lib/utils/fileTypeUtils";
+import { getFileIcon, formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import type { SyncedFileDetail } from "@/lib/hooks/useFilesNotification";
 
@@ -229,14 +229,14 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
                         className="flex items-center gap-3 px-3 py-2.5 bg-white hover:bg-grey-98 transition-colors"
                       >
                         {/* File icon */}
-                        <div className="size-8 flex-shrink-0 rounded-lg bg-grey-95 flex items-center justify-center">
-                          <FileIcon className={cn("size-4", color)} />
-                        </div>
+                        <AbstractIconWrapper className="size-8 flex-shrink-0">
+                          <FileIcon className={cn("size-5 relative", color)} />
+                        </AbstractIconWrapper>
 
                         {/* File name + size */}
                         <div className="flex flex-col justify-center min-w-0 flex-1">
                           <span className="text-sm font-medium text-grey-10 truncate" title={file.fileName}>
-                            {file.fileName}
+                            {formatDisplayName(file.fileName)}
                           </span>
                           {file.totalBytes > 0 && (
                             <span className="text-xs text-grey-60">
