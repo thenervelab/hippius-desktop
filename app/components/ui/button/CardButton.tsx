@@ -193,6 +193,7 @@ const ButtonCard = React.forwardRef<
       <button
         ref={ref}
         className={buttonCardVariants({ variant, size, className, state })}
+        disabled={disabled}
         {...rest}
       >
         <ButtonCardOrLinkInner

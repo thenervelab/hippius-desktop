@@ -33,6 +33,7 @@ interface NotificationItemProps {
   notificationType: string;
   notificationSubType?: string;
   notificationText: string;
+  notificationDescription?: string;
   notificationTime: string | number;
   timestamp?: number;
   buttonText?: string;
@@ -50,6 +51,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
   notificationType,
   notificationSubType,
   notificationText,
+  notificationDescription,
   notificationTime,
   timestamp,
   buttonText,
@@ -148,12 +150,24 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
                 {/* Notification text */}
                 <RevealTextLine rotate reveal={inView} className="delay-300">
                   <p
-                    className="text-sm text-grey-30 leading-5 mb-1 truncate max-w-[300px]"
+                    className="text-sm font-medium text-grey-10 leading-5 mb-0.5 truncate max-w-[300px]"
                     title={notificationText}
                   >
                     {notificationText}
                   </p>
                 </RevealTextLine>
+
+                {/* Description */}
+                {notificationDescription && (
+                  <RevealTextLine rotate reveal={inView} className="delay-350">
+                    <p
+                      className="text-xs text-grey-50 leading-4 mb-1 truncate max-w-[300px]"
+                      title={notificationDescription}
+                    >
+                      {notificationDescription}
+                    </p>
+                  </RevealTextLine>
+                )}
 
                 {/* Time */}
                 <RevealTextLine rotate reveal={inView} className="delay-400">

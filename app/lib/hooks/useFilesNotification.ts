@@ -60,13 +60,14 @@ export function useFilesNotification() {
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
   const areFilesNotificationsEnabled = enabledTypes.includes("Files");
 
-  // Accumulate counts across multiple drives before creating one notification.
+  // Accumulate counts and file details across multiple drives before creating one notification.
   const pendingCountsRef = useRef({
     uploaded: 0,
     downloaded: 0,
     deletedLocally: 0,
     deletedRemotely: 0,
   });
+  const pendingFilesRef = useRef<SyncedFileDetail[]>([]);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -80,35 +81,23 @@ export function useFilesNotification() {
     const flushNotification = async () => {
       if (cancelled || !userAddress) return;
       const counts = { ...pendingCountsRef.current };
-      // Reset accumulator
+      const capturedFiles = [...pendingFilesRef.current];
+      // Reset accumulators
       pendingCountsRef.current = {
         uploaded: 0,
         downloaded: 0,
         deletedLocally: 0,
         deletedRemotely: 0,
       };
+      pendingFilesRef.current = [];
 
       const totalFiles =
         counts.uploaded + counts.downloaded + counts.deletedLocally + counts.deletedRemotely;
       if (totalFiles === 0) return;
 
-      // Capture file details from the sync progress snapshot
-      let fileDetailsJson = "";
-      try {
-        const snapshot = await invoke<SyncSnapshot>("sp_get_snapshot");
-        const completedFiles: SyncedFileDetail[] = snapshot.files
-          .filter((f) => f.status === "completed")
-          .map((f) => ({
-            fileName: f.fileName,
-            totalBytes: f.totalBytes,
-            action: f.action,
-          }));
-        if (completedFiles.length > 0) {
-          fileDetailsJson = JSON.stringify(completedFiles);
-        }
-      } catch (err) {
-        console.warn("[FilesNotification] Failed to get file details from snapshot:", err);
-      }
+      const fileDetailsJson = capturedFiles.length > 0
+        ? JSON.stringify(capturedFiles)
+        : "";
 
       const timestamp = new Date().toISOString();
       await addNotification({
@@ -122,6 +111,25 @@ export function useFilesNotification() {
         notificationReleaseNotes: fileDetailsJson,
       });
       await refreshUnread();
+    };
+
+    /** Capture completed file details from the snapshot immediately (before the session resets). */
+    const captureFileDetails = async () => {
+      try {
+        const snapshot = await invoke<SyncSnapshot>("sp_get_snapshot");
+        const completedFiles: SyncedFileDetail[] = snapshot.files
+          .filter((f) => f.status === "completed")
+          .map((f) => ({
+            fileName: f.fileName,
+            totalBytes: f.totalBytes,
+            action: f.action,
+          }));
+        if (completedFiles.length > 0) {
+          pendingFilesRef.current.push(...completedFiles);
+        }
+      } catch (err) {
+        console.warn("[FilesNotification] Failed to get file details from snapshot:", err);
+      }
     };
 
     (async () => {
@@ -138,6 +146,9 @@ export function useFilesNotification() {
             pendingCountsRef.current.downloaded += o.files_downloaded;
             pendingCountsRef.current.deletedLocally += o.files_deleted_locally;
             pendingCountsRef.current.deletedRemotely += o.files_deleted_remotely;
+
+            // Capture file details NOW, before the session resets
+            captureFileDetails();
 
             // Debounce: wait 2s after last completion event to aggregate across drives
             if (debounceTimerRef.current) {

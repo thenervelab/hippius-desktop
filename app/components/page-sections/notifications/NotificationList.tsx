@@ -27,6 +27,7 @@ const NotificationList: React.FC<NotificationListProps> = ({
           notificationType={notification.type}
           notificationSubType={notification.subType}
           notificationText={notification.title}
+          notificationDescription={notification.description}
           notificationTime={notification.time}
           timestamp={notification.timestamp}
           buttonText={notification.buttonText}

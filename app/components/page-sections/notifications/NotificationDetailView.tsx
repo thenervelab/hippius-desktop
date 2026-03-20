@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import { IconComponent } from "@/app/lib/types";
 import NotificationType from "./NotificationType";
 import { handleButtonLink } from "@/app/lib/utils/links";
-import { MoreVertical } from "lucide-react";
+import { MoreVertical, ArrowUpCircle, ArrowDownCircle, Trash2 } from "lucide-react";
 import TimeAgo from "react-timeago";
 import NotificationContextMenu from "./NotificationContextMenu";
 import RevealTextLine from "@/components/ui/reveal-text-line";
@@ -79,6 +79,20 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
       .then(setCurrentVersion)
       .catch((err: unknown) => console.warn("[NotificationDetailView] Failed to get app version:", err));
   }, []);
+
+  // Group file details by action for summary counts — must be before early return
+  const fileSummary = useMemo(() => {
+    if (!selectedNotification) return null;
+    const releaseNotesText = selectedNotification.releaseNotes?.trim() ?? "";
+    const fileDetails = parseFileDetails(selectedNotification.type, releaseNotesText);
+    if (selectedNotification.type !== "Files" || fileDetails.length === 0) return null;
+    const uploaded = fileDetails.filter((f) => f.action === "upload");
+    const downloaded = fileDetails.filter((f) => f.action === "download");
+    const deleted = fileDetails.filter(
+      (f) => f.action === "local_delete" || f.action === "remote_delete"
+    );
+    return { uploaded, downloaded, deleted };
+  }, [selectedNotification]);
 
   if (!selectedNotification) {
     return <div className=" w-full h-[80.9vh]"></div>;
@@ -171,50 +185,89 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
             </RevealTextLine>
 
             {/* File details for sync notifications */}
-            {isFilesNotification && (
-              <div className="mt-2 mb-2 max-h-[280px] overflow-y-auto pr-2">
-                {fileDetails.map((file, index) => {
-                  const { fileFormat } = getFilePartsFromFileName(file.fileName);
-                  const fileType = getFileTypeFromExtension(fileFormat || null);
-                  const { icon: FileIcon, color } = getFileIcon(fileType ? fileType : undefined, false);
-                  const isDeleted = file.action === "local_delete" || file.action === "remote_delete";
-                  return (
-                    <div key={`${file.fileName}-${index}`} className="mb-3 last:mb-0">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2 min-w-0 flex-1">
-                          <AbstractIconWrapper className="size-8 flex-shrink-0 flex items-center justify-center">
-                            <FileIcon className={cn("size-5 relative", color)} />
-                          </AbstractIconWrapper>
-                          <div className="flex flex-col justify-center min-w-0">
-                            <span className="text-sm font-medium text-grey-10 truncate">
-                              {file.fileName.length > 35
-                                ? `${file.fileName.slice(0, 25)}...${file.fileName.slice(-7)}`
-                                : file.fileName}
-                            </span>
-                            {file.totalBytes > 0 && (
-                              <span className="text-xs text-grey-70 mt-0.5">
-                                {formatBytes(file.totalBytes)}
-                              </span>
-                            )}
-                          </div>
+            {isFilesNotification && fileSummary && (
+              <div className="mt-2 mb-3">
+                {/* Summary counters */}
+                <div className="flex items-center gap-3 mb-3">
+                  {fileSummary.uploaded.length > 0 && (
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 bg-primary-95 border border-primary-80 rounded-full">
+                      <ArrowUpCircle className="size-3.5 text-primary-50" />
+                      <span className="text-xs font-medium text-primary-40">
+                        {fileSummary.uploaded.length} uploaded
+                      </span>
+                    </div>
+                  )}
+                  {fileSummary.downloaded.length > 0 && (
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 bg-success-90 border border-success-70 rounded-full">
+                      <ArrowDownCircle className="size-3.5 text-success-50" />
+                      <span className="text-xs font-medium text-success-40">
+                        {fileSummary.downloaded.length} downloaded
+                      </span>
+                    </div>
+                  )}
+                  {fileSummary.deleted.length > 0 && (
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 bg-error-90 border border-error-70 rounded-full">
+                      <Trash2 className="size-3.5 text-error-50" />
+                      <span className="text-xs font-medium text-error-40">
+                        {fileSummary.deleted.length} deleted
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* File list */}
+                <div className="max-h-[280px] overflow-y-auto rounded-lg border border-grey-80 divide-y divide-grey-90">
+                  {fileDetails.map((file, index) => {
+                    const { fileFormat } = getFilePartsFromFileName(file.fileName);
+                    const fileType = getFileTypeFromExtension(fileFormat || null);
+                    const { icon: FileIcon, color } = getFileIcon(fileType ? fileType : undefined, false);
+                    const isDeleted = file.action === "local_delete" || file.action === "remote_delete";
+                    const isUpload = file.action === "upload";
+                    return (
+                      <div
+                        key={`${file.fileName}-${index}`}
+                        className="flex items-center gap-3 px-3 py-2.5 bg-white hover:bg-grey-98 transition-colors"
+                      >
+                        {/* File icon */}
+                        <div className="size-8 flex-shrink-0 rounded-lg bg-grey-95 flex items-center justify-center">
+                          <FileIcon className={cn("size-4", color)} />
                         </div>
-                        <div className="flex items-center flex-shrink-0 ml-2">
+
+                        {/* File name + size */}
+                        <div className="flex flex-col justify-center min-w-0 flex-1">
+                          <span className="text-sm font-medium text-grey-10 truncate" title={file.fileName}>
+                            {file.fileName}
+                          </span>
+                          {file.totalBytes > 0 && (
+                            <span className="text-xs text-grey-60">
+                              {formatBytes(file.totalBytes)}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Action badge */}
+                        <div className="flex-shrink-0">
                           {isDeleted ? (
-                            <>
-                              <Icons.TickCircle className="w-5 h-5 text-error-50" />
-                              <span className="text-sm ml-1 text-error-50">Deleted</span>
-                            </>
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-error-90 text-error-50">
+                              <Trash2 className="size-3" />
+                              Deleted
+                            </span>
+                          ) : isUpload ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-primary-95 text-primary-50">
+                              <ArrowUpCircle className="size-3" />
+                              Uploaded
+                            </span>
                           ) : (
-                            <>
-                              <Icons.TickCircle className="w-5 h-5 text-success-50" />
-                              <span className="text-sm ml-1 text-success-50">Synced</span>
-                            </>
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-success-90 text-success-50">
+                              <ArrowDownCircle className="size-3" />
+                              Downloaded
+                            </span>
                           )}
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
             )}
 
