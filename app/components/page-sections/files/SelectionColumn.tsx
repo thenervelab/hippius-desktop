@@ -78,7 +78,7 @@ export const SelectionToggle: React.FC = () => {
 
     return (
         <button
-            className="p-1 rounded-md hover:bg-gray-100"
+            className="p-1 rounded-md hover:bg-grey-90"
             onClick={toggleSelectionMode}
             aria-label={isSelectionMode ? "Exit selection mode" : "Enter selection mode"}
         >

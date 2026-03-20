@@ -135,7 +135,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     <div
       onClick={(e: React.MouseEvent) => e.stopPropagation()}
       className={cn(
-        " outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out",
+        "outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out dark:shadow-[0_0_20px_rgba(var(--primary-60),0.15)]",
         isExpanded ? "w-[378px]" : (isUnhealthy || hasFailed) ? "w-[210px]" : "w-[200px]"
       )}
     >
@@ -143,6 +143,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       <div
         className={cn(
           "shadow-menu bg-grey-100 border border-grey-80 cursor-pointer hover:bg-grey-90 transition-all duration-300 ease-in-out",
+          "dark:border-primary-80/60 dark:bg-gradient-to-r dark:from-primary-100 dark:via-grey-100 dark:to-primary-100 dark:hover:from-primary-90/50 dark:hover:to-primary-90/50",
           isExpanded
             ? "rounded-t-[8px] w-[378px]"
             : (isUnhealthy || hasFailed) ? "rounded-[8px] w-[210px]" : "rounded-[8px] w-[200px]"
@@ -167,8 +168,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               cellDim: 20,
             }}
             className={cn(
-              "absolute w-full h-full opacity-50 inset-0 transition-opacity duration-300 pointer-events-none",
-              isExpanded ? "opacity-50" : "opacity-0 sm:opacity-0"
+              "absolute w-full h-full opacity-50 inset-0 transition-opacity duration-300 pointer-events-none dark:opacity-0",
+              isExpanded ? "opacity-50 dark:opacity-[0.08]" : "opacity-0 sm:opacity-0"
             )}
           />
 
@@ -192,7 +193,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   r="22"
                   className={cn(
                     "fill-none stroke-[4]",
-                    isEncryptingPhase ? "stroke-[#fef3c7]" : "stroke-[#e8eeff]"
+                    isEncryptingPhase ? "stroke-warning-100" : "stroke-primary-100"
                   )}
                 />
                 <circle
@@ -333,7 +334,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           opacity: isExpanded ? 1 : 0,
         }}
       >
-        <div className="bg-grey-100 border border-grey-80 rounded-b-[8px] w-[378px] flex flex-col" style={{ maxHeight: `${BODY_MAX_HEIGHT}px` }}>
+        <div className="bg-grey-100 border border-grey-80 dark:border-primary-80/60 dark:border-t-primary-80/20 rounded-b-[8px] w-[378px] flex flex-col" style={{ maxHeight: `${BODY_MAX_HEIGHT}px` }}>
           {/* Status banner */}
           <div className="flex flex-col w-full mt-4 ml-4 gap-2">
             <div

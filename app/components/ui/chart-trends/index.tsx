@@ -83,7 +83,7 @@ export interface ChartTrendsProps {
 // Default y-axis tick label props
 const defaultYTickLabelProps = () => ({
   fontSize: 10,
-  fill: "#6B7280",
+  fill: "rgb(var(--grey-60))",
   textAnchor: "end" as const,
   verticalAnchor: "middle" as const,
   angle: -35,
@@ -199,7 +199,7 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
   const xTickLabelProps = useCallback(
     () => ({
       fontSize: 10,
-      fill: "#6B7280",
+      fill: "rgb(var(--grey-60))",
       textAnchor: "middle" as const,
       dy: "0.5em",
     }),

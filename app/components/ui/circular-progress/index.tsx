@@ -9,7 +9,7 @@ const CircularProgress: React.FC<{
 }> = ({ angle, className, children }) => (
     <div
         style={{
-            backgroundImage: `conic-gradient(#3167DD 0deg, #3167DD ${angle}deg, white ${angle}deg, white 360deg)`,
+            backgroundImage: `conic-gradient(rgb(var(--primary-50)) 0deg, rgb(var(--primary-50)) ${angle}deg, rgb(var(--grey-100)) ${angle}deg, rgb(var(--grey-100)) 360deg)`,
         }}
         className={cn("duration-200 p-1 rounded-full relative", className)}
     >

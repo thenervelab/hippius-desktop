@@ -18,7 +18,7 @@ const SearchBar: React.FC<SearchBarProps> = ({ className }) => {
           className={cn(
             // container
             "flex items-center opacity-0 w-full min-w-[309px] h-[52px] duration-300",
-            "p-2 border border-white rounded-lg bg-white/20",
+            "p-2 border border-white rounded-lg bg-grey-100/20",
             inView && "translate-y-0 opacity-100",
             className
           )}
@@ -31,7 +31,7 @@ const SearchBar: React.FC<SearchBarProps> = ({ className }) => {
           />
 
           {/* “S” button */}
-          <button className="flex items-center justify-center ml-4 px-2 py-2 border border-white rounded bg-white/30 text-base font-normal text-white transition focus:outline-none">
+          <button className="flex items-center justify-center ml-4 px-2 py-2 border border-white rounded bg-grey-100/30 text-base font-normal text-white transition focus:outline-none">
             <Icons.MagnifyGlass className="size-5 text-white" />
           </button>
         </div>

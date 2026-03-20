@@ -48,7 +48,7 @@ const Select: React.FC<RadixSelectProps> = ({
       >
         <RadixSelect.Trigger
           className={cn(
-            "flex justify-center cursor-pointer group items-center gap-2 p-2 h-9 text-sm font-medium font-grotesk border border-grey-80 rounded text-grey-10 bg-grey-100 focus:outline-none focus:ring-1 focus:ring-gray-300 focus:border-gray-300 whitespace-nowrap",
+            "flex justify-center cursor-pointer group items-center gap-2 p-2 h-9 text-sm font-medium font-grotesk border border-grey-80 rounded text-grey-10 bg-grey-100 focus:outline-none focus:ring-1 focus:ring-grey-70 focus:border-grey-70 whitespace-nowrap",
             triggerClassName,
           )}
           aria-label={label}
@@ -68,11 +68,11 @@ const Select: React.FC<RadixSelectProps> = ({
             sideOffset={4}
             avoidCollisions={true}
             className={cn(
-              "mt-1 overflow-hidden rounded-md bg-white shadow-lg border border-grey-80 w-[110px] z-[100]",
+              "mt-1 overflow-hidden rounded-md bg-grey-100 shadow-lg border border-grey-80 w-[110px] z-[100]",
               contentClassName,
             )}
           >
-            <RadixSelect.ScrollUpButton className="flex items-center justify-center text-grey-50 rotate-180 bg-white border-b border-grey-80 py-1">
+            <RadixSelect.ScrollUpButton className="flex items-center justify-center text-grey-50 rotate-180 bg-grey-100 border-b border-grey-80 py-1">
               <Icons.ChevronDown className="h-4 w-4" />
             </RadixSelect.ScrollUpButton>
             <RadixSelect.Viewport className="py-1 max-h-80 overflow-auto min-w-[180px]">
@@ -85,7 +85,7 @@ const Select: React.FC<RadixSelectProps> = ({
                     disabled={opt.disabled}
                     className={cn(
                       "flex items-center p-2 text-sm cursor-pointer text-grey-10 hover:bg-grey-95 focus:bg-grey-95 data-[disabled]:opacity-50 transition-colors duration-150 focus:outline-none select-none data-[highlighted]:bg-grey-95",
-                      isSelected ? "bg-grey-80 font-medium" : "bg-white",
+                      isSelected ? "bg-grey-80 font-medium" : "bg-grey-100",
                     )}
                   >
                     <RadixSelect.ItemText>{opt.label}</RadixSelect.ItemText>
@@ -93,7 +93,7 @@ const Select: React.FC<RadixSelectProps> = ({
                 );
               })}
             </RadixSelect.Viewport>
-            <RadixSelect.ScrollDownButton className="flex items-center justify-center text-grey-50 bg-white border-t border-grey-80 py-1">
+            <RadixSelect.ScrollDownButton className="flex items-center justify-center text-grey-50 bg-grey-100 border-t border-grey-80 py-1">
               <Icons.ChevronDown className="h-4 w-4" />
             </RadixSelect.ScrollDownButton>
           </RadixSelect.Content>

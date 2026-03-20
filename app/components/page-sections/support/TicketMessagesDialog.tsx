@@ -228,7 +228,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
         <Dialog.Overlay className="fixed inset-0  z-[10000]" />
         <Dialog.Content
           className={cn(
-            "fixed right-4 max-h-[500px] bottom-4 h-full bg-white shadow-xl z-[10001] border border-grey-80 rounded",
+            "fixed right-4 max-h-[500px] bottom-4 h-full bg-grey-100 shadow-xl z-[10001] border border-grey-80 rounded",
             "flex flex-col",
             "max-sm:left-4 max-sm:right-4 max-sm:w-auto",
             "sm:w-[400px]"
@@ -313,7 +313,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
                   <div key={message.id}>
                     {/* First message with status and priority header */}
                     {isFirstMessage && ticket ? (
-                      <div className="flex flex-col border border-grey-80 rounded-lg bg-white overflow-hidden justify-end w-fit ml-auto">
+                      <div className="flex flex-col border border-grey-80 rounded-lg bg-grey-100 overflow-hidden justify-end w-fit ml-auto">
                         {/* Status and Priority Row */}
                         <div className="flex items-center gap-2 px-2 py-2 border-b border-grey-80">
                           <StatusBadge textVersion status={ticket.status} />
@@ -360,7 +360,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
                 {attachments.map((file, index) => (
                   <div
                     key={index}
-                    className="flex items-center gap-2 px-2 py-1 bg-white border border-grey-80 rounded text-xs group hover:border-grey-60 transition-colors"
+                    className="flex items-center gap-2 px-2 py-1 bg-grey-100 border border-grey-80 rounded text-xs group hover:border-grey-60 transition-colors"
                   >
                     <span className="text-grey-10 truncate max-w-[150px]">
                       {file.name}

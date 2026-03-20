@@ -20,7 +20,7 @@ const PlaceholderCard = ({
   title: string;
   value: string;
 }) => (
-  <div className="bg-white p-3 rounded-lg border border-grey-80 shadow-sm flex justify-between flex-col">
+  <div className="bg-grey-100 p-3 rounded-lg border border-grey-80 shadow-sm flex justify-between flex-col">
     <div className="flex justify-between items-start">
       <AbstractIconWrapper className="size-10 text-primary-40">
         <Icon className="absolute text-primary-40 size-6" />
@@ -35,7 +35,7 @@ const PlaceholderCard = ({
 
 // Static referral link card
 const StaticReferralLinkCard = () => (
-  <div className="bg-white p-3 rounded-lg border border-grey-80 shadow-sm h-[166px] relative bg-[url('/assets/refferal.png')] bg-repeat-round bg-cover">
+  <div className="bg-grey-100 p-3 rounded-lg border border-grey-80 shadow-sm h-[166px] relative bg-[url('/assets/refferal.png')] bg-repeat-round bg-cover">
     <div className="flex flex-col gap-4">
       <div className="flex justify-between items-center">
         <div className="flex gap-2">
@@ -53,7 +53,7 @@ const StaticReferralLinkCard = () => (
       </div>
       <div className="h-[86px] text-base leading-[22px] text-grey-60 flex flex-col justify-center">
         <span className="mb-2">Your Referral Link</span>
-        <div className="flex items-center justify-between rounded-[8px] p-3 border border-grey-80 bg-white">
+        <div className="flex items-center justify-between rounded-[8px] p-3 border border-grey-80 bg-grey-100">
           <div className="text-grey-60 text-sm font-medium">
             Referral links coming soon
           </div>
@@ -72,7 +72,7 @@ const StaticReferralLinksTable = () => (
       </AbstractIconWrapper>
       <P size="lg">Your Referral Links</P>
     </div>
-    <div className="p-6 text-center text-gray-500 border border-grey-80 rounded-lg">
+    <div className="p-6 text-center text-grey-60 border border-grey-80 rounded-lg">
       No referral links yet
     </div>
   </div>

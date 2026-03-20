@@ -19,7 +19,7 @@ export default function Files() {
             onClick={() => openUrl(FILES_DOCS_URL)}
             aria-label="Files documentation"
             title="Files documentation"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-grey-80 bg-grey-100 text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50"
           >
             <HelpCircle className="size-4" />
           </button>

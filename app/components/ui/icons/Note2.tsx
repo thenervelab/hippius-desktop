@@ -23,7 +23,7 @@ const Note2: IconComponent = (props) => (
     />
     <path
       d="M12.6396 8.5293L17.4896 9.7593"
-      stroke="white"
+      stroke="currentColor"
       strokeWidth="1.5"
       strokeLinecap="round"
       strokeLinejoin="round"

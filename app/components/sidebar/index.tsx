@@ -70,7 +70,7 @@ const Sidebar: React.FC = () => {
           <div
             ref={ref}
             className={cn(
-              "fixed top-0 left-0 bottom-0 bg-white flex flex-col ml-4 my-4 border border-grey-80 rounded transition-all duration-300 ease-in-out z-50",
+              "fixed top-0 left-0 bottom-0 bg-grey-100 flex flex-col ml-4 mb-4 mt-[44px] border border-grey-80 rounded transition-all duration-300 ease-in-out z-50",
               collapsed ? "w-[48px]" : "w-[170px]"
             )}
           >
@@ -97,7 +97,7 @@ const Sidebar: React.FC = () => {
               <RevealTextLine
                 reveal={inView}
                 onClick={toggleSidebar}
-                className="cursor-pointer block p-1.5 border border-gray-80 rounded self-start mx-2 my-4 transition-all duration-300"
+                className="cursor-pointer block p-1.5 border border-grey-80 rounded self-start mx-2 my-4 transition-all duration-300"
               >
                 <Icons.SideBarLeft
                   className={cn(
@@ -128,7 +128,7 @@ const Sidebar: React.FC = () => {
             </div>
           </div> */}
 
-            <div className="flex gap-4 flex-col flex-1 pt-4 border-t border-gray-80 w-full">
+            <div className="flex gap-4 flex-col flex-1 pt-4 border-t border-grey-80 w-full">
               {navItems.map((item) => {
                 // Check if current path matches or starts with the item path (for child routes)
                 const isActive =
@@ -158,7 +158,7 @@ const Sidebar: React.FC = () => {
               })}
             </div>
 
-            <div className="py-3 border-b border-gray-80 w-full">
+            <div className="py-3 border-b border-grey-80 w-full">
               {footerNavItems.map((item) => (
                 <FooterNavItem
                   key={item.label}
@@ -173,7 +173,7 @@ const Sidebar: React.FC = () => {
             <RevealTextLine
               reveal={inView}
               className={cn(
-                "flex w-full text-xs font-digital text-grey-40 transition-all duration-300 border-b border-gray-80",
+                "flex w-full text-xs font-digital text-grey-40 transition-all duration-300 border-b border-grey-80",
                 collapsed ? "justify-center p-2" : "px-4 py-3"
               )}
             >
@@ -192,7 +192,7 @@ const Sidebar: React.FC = () => {
               <div
                 className={cn(
                   "transition-all duration-300 relative group cursor-pointer py-2",
-                  "hover:bg-gray-100 hover:text-primary-40 text-grey-40"
+                  "hover:bg-grey-90 hover:text-primary-40 text-grey-40"
                 )}
                 onClick={() => setOpen(true)}
               >

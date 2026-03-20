@@ -34,7 +34,7 @@ URL: ${window.location.href}
 
     return (
         <div className="flex items-center justify-center min-h-screen bg-grey-100 p-8">
-            <div className="max-w-2xl w-full space-y-6 bg-white rounded-lg shadow-lg p-8">
+            <div className="max-w-2xl w-full space-y-6 bg-grey-100 rounded-lg shadow-lg p-8">
                 <div className="space-y-2">
                     <h2 className="text-2xl font-bold text-error-70">
                         Application Error

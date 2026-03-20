@@ -98,7 +98,7 @@ const SubscriptionPlansWidget: FC<SubscriptionPlansWidgetProps> = ({
             >
               <DropdownMenu.Trigger asChild>
                 <button
-                  className="flex items-center justify-center h-6 w-6 rounded border border-grey-80 bg-white hover:bg-grey-90 transition-colors"
+                  className="flex items-center justify-center h-6 w-6 rounded border border-grey-80 bg-grey-100 hover:bg-grey-90 transition-colors"
                   aria-label="More options"
                 >
                   <MoreVertical className="size-4 text-grey-50" />
@@ -106,7 +106,7 @@ const SubscriptionPlansWidget: FC<SubscriptionPlansWidgetProps> = ({
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.Content
-                  className="min-w-[180px] bg-white rounded shadow-lg p-1 border border-grey-80"
+                  className="min-w-[180px] bg-grey-100 rounded shadow-lg p-1 border border-grey-80"
                   sideOffset={5}
                   align="end"
                 >

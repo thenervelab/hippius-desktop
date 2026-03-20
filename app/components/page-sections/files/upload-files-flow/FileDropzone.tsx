@@ -138,7 +138,7 @@ const FileDropzone: FC<{
       <button
         onClick={handleSelectFiles}
         className={cn(
-          "h-full w-full flex border border-dashed justify-center py-10 px-10 bg-white cursor-pointer hover:bg-grey-90 duration-300 rounded-[8px]",
+          "h-full w-full flex border border-dashed justify-center py-10 px-10 bg-grey-100 cursor-pointer hover:bg-grey-90 duration-300 rounded-[8px]",
           isDragging
             ? "border-primary-50 bg-primary-50/10"
             : "border-grey-80"

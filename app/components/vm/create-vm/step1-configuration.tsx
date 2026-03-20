@@ -74,7 +74,7 @@ const Step1Configuration: React.FC<Step1Props> = ({
           onChange={(e) => setInstanceName(e.target.value)}
           placeholder="Enter name of Instance"
           className="
-            mt-2 w-full bg-white text-grey-60 placeholder-grey-60
+            mt-2 w-full bg-grey-100 text-grey-60 placeholder-grey-60
             border border-grey-80 p-4 rounded-[8px]
             focus:outline-none focus:border-grey-70 text-base font-medium
           "

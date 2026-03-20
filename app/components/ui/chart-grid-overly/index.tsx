@@ -21,7 +21,7 @@ const ChartGridOverlay: React.FC<GridOverlayProps> = ({
     <div className="relative w-full h-full pointer-events-none">
       <div
         className={cn(
-          "absolute inset-0 bg-cover z-[-1] pointer-events-none",
+          "absolute inset-0 bg-cover z-[-1] pointer-events-none dark:invert dark:opacity-[0.06]",
           bgClass
         )}
       />

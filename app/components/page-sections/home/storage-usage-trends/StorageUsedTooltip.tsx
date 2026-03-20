@@ -37,7 +37,7 @@ const StorageUsedTooltip: React.FC<{
 
   return (
     <div>
-      <p className="mb-1 text-[10px] font-medium text-gray-500">
+      <p className="mb-1 text-[10px] font-medium text-grey-60">
         {dateDisplay}
       </p>
 

@@ -136,7 +136,7 @@ const NoEntriesFound: React.FC<NoEntriesFoundProps> = ({
         <div
           className={cn(
             "w-full h-[80vh] p-6 flex flex-col items-center justify-center transition-all duration-200",
-            isDragging && "bg-gray-50 border-2 border-dashed border-primary-50"
+            isDragging && "bg-grey-90 border-2 border-dashed border-primary-50"
           )}
           onDrop={handleDrop}
           onDragOver={handleDragOver}

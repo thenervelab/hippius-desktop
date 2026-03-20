@@ -36,7 +36,7 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
     <th
       className={cn(
         "font-semibold text-sm px-4 border-x first:border-l-transparent last:border-r-transparent border-b py-3.5 text-grey-70 relative",
-        canSort && "pr-8 cursor-pointer hover:bg-gray-50/30",
+        canSort && "pr-8 cursor-pointer hover:bg-grey-90/30",
         sortOrder && canSort && cn("text-primary-50", activeSortClassName),
         className
       )}

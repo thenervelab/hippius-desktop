@@ -48,7 +48,7 @@ const SplashScreen = () => {
   // When update dialog is open, freeze everything and show no UI elements
   if (updateDialogOpen) {
     return (
-      <div className="flex grow flex-col items-center w-full h-full justify-center bg-primary-10 relative overflow-hidden">
+      <div className="flex grow flex-col items-center w-full h-full justify-center bg-[#030712] relative overflow-hidden">
         <div className="absolute block w-full top-0 h-full">
           <AbstractCity animate />
           <div
@@ -97,7 +97,7 @@ const SplashScreen = () => {
   const animationKey = isUpdateCheckPhase ? "update-check" : step;
 
   return (
-    <div className="flex grow flex-col items-center w-full h-full justify-center bg-primary-10 relative overflow-hidden">
+    <div className="flex grow flex-col items-center w-full h-full justify-center bg-[#030712] relative overflow-hidden">
       <div className="absolute block w-full top-0 h-full">
         <AbstractCity animate />
         <div

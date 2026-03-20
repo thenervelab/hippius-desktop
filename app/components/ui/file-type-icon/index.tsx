@@ -46,7 +46,7 @@ const FileTypeIcon: React.FC<FileTypeIconProps> = ({
                 </Link>
             ) : (
                 <div className="flex items-center justify-center">
-                    <Icon className={cn("text-grey-100", iconSizeClass, iconClassName, iconColor)} fill="white" />
+                    <Icon className={cn("text-grey-100", iconSizeClass, iconClassName, iconColor)} fill="rgb(var(--grey-100))" />
                 </div>
             )}
         </div>

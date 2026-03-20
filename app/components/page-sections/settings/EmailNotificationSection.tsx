@@ -120,14 +120,14 @@ const EmailNotificationSection: React.FC = () => {
 
       <Dialog.Root open={open} onOpenChange={handleOpenChange}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-white/60 z-50" />
+          <Dialog.Overlay className="fixed inset-0 bg-grey-100/60 z-50" />
           <Dialog.Content
             className="
               fixed left-1/2 top-1/2 z-50 
               w-full max-w-sm sm:max-w-[428px] 
               max-h-[90vh] overflow-y-auto
               -translate-x-1/2 -translate-y-1/2
-              bg-white rounded-[8px]
+              bg-grey-100 rounded-[8px]
               shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
               p-4 border border-grey-80
             "
@@ -214,7 +214,7 @@ const EmailNotificationSection: React.FC = () => {
                       }
                       className="w-[40px] h-[24px] bg-grey-80 rounded-full relative data-[state=checked]:bg-primary-50 outline-none cursor-pointer border border-grey-80 transition-colors"
                     >
-                      <Switch.Thumb className="block w-[20px] h-[20px] bg-white rounded-full transition-transform duration-100 translate-x-0.5 will-change-transform data-[state=checked]:translate-x-[18px]" />
+                      <Switch.Thumb className="block w-[20px] h-[20px] bg-grey-100 rounded-full transition-transform duration-100 translate-x-0.5 will-change-transform data-[state=checked]:translate-x-[18px]" />
                     </Switch.Root>
                   </div>
 
@@ -288,7 +288,7 @@ const CheckboxItem = ({
     )}
   >
     <Checkbox.Root
-      className="flex h-4 w-4 appearance-none items-center justify-center rounded-[4px] bg-white border border-grey-80 outline-none data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors disabled:cursor-not-allowed"
+      className="flex h-4 w-4 appearance-none items-center justify-center rounded-[4px] bg-grey-100 border border-grey-80 outline-none data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors disabled:cursor-not-allowed"
       checked={checked}
       onCheckedChange={onCheckedChange}
       id={label}

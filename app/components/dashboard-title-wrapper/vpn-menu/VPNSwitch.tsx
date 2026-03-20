@@ -39,7 +39,7 @@ const VPNSwitch = ({
           className={cn(
             "block w-[14px] h-[14px]  rounded-full shadow-[0_2px_4px_0_rgba(0,0,0,0.2)] transition-transform duration-200 ease-in-out translate-x-0.5 will-change-transform",
             checked
-              ? "translate-x-[21px] bg-white"
+              ? "translate-x-[21px] bg-grey-100"
               : "translate-x-[6px] bg-grey-70"
           )}
         />

@@ -238,7 +238,7 @@ const Support: React.FC = () => {
       {/* Access Key Login Overlay */}
       {isAccessKeyLogin ? (
         <div className="flex items-center justify-center min-h-[600px]">
-          <div className="max-w-md w-full px-4 py-6 bg-white rounded-lg shadow-lg border border-grey-80">
+          <div className="max-w-md w-full px-4 py-6 bg-grey-100 rounded-lg shadow-lg border border-grey-80">
             <div className="text-center mb-4 w-[330px] mx-auto">
               <AbstractIconWrapper className="size-12 mx-auto mb-4 flex items-center justify-center">
                 <Lock className="size-7 relative text-primary-50" />
@@ -273,7 +273,7 @@ const Support: React.FC = () => {
                   onClick={() => openUrl(SUPPORT_DOCS_URL)}
                   aria-label="Support documentation"
                   title="Support documentation"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-grey-80 bg-grey-100 text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50"
                 >
                   <HelpCircle className="size-4" />
                 </button>

@@ -17,7 +17,7 @@ const DialogContainer: React.FC<DialogContainerProps> = ({
   return (
     <Dialog.Portal>
       {/* Backdrop */}
-      <Dialog.Overlay className="fixed inset-0 bg-white/60 z-50 data-[state=open]:animate-fade-in-0.3" />
+      <Dialog.Overlay className="fixed inset-0 bg-grey-100/60 z-50 data-[state=open]:animate-fade-in-0.3" />
       {/* Modal Content */}
       <Dialog.Content
         className={cn(

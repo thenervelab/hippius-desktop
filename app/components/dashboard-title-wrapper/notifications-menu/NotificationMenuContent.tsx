@@ -136,7 +136,7 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
             />
             <div className="flex gap-2">
               <button
-                className="px-3 py-2 items-center text-sm rounded-md text-grey-70 hover:bg-gray-100 active:bg-gray-200 active:text-gray-700 focus:bg-gray-200 focus:text-gray-700 leading-5 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-gray-300 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-grey-70"
+                className="px-3 py-2 items-center text-sm rounded-md text-grey-70 hover:bg-grey-90 active:bg-grey-80 active:text-grey-40 focus:bg-grey-80 focus:text-grey-40 leading-5 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-grey-70 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-grey-70"
                 onClick={handleAllRead}
                 disabled={visible.length === 0}
               >

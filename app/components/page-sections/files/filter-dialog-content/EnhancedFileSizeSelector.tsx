@@ -111,7 +111,7 @@ const EnhancedFileSizeSelector: React.FC<EnhancedFileSizeSelectorProps> = ({
                             <Icons.ChevronDown className="ml-2 mt-0.5 size-4 text-grey-40 transition-transform duration-200 group-data-[state=open]:rotate-180" />
                         </button>
                     </Menubar.Trigger>
-                    <Menubar.Content className="mt-1 bg-white border border-grey-80 rounded-lg px-2 py-1 shadow-menu min-w-[220px] z-50">
+                    <Menubar.Content className="mt-1 bg-grey-100 border border-grey-80 rounded-lg px-2 py-1 shadow-menu min-w-[220px] z-50">
                         {selectedSizes.length > 0 && (
                             <>
                                 <Menubar.Item
@@ -179,7 +179,7 @@ const EnhancedFileSizeSelector: React.FC<EnhancedFileSizeSelectorProps> = ({
             <Dialog.Root open={isCustomDialogOpen} onOpenChange={setIsCustomDialogOpen}>
                 <Dialog.Portal>
                     <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50" />
-                    <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 shadow-lg z-50 min-w-[400px]">
+                    <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-grey-100 rounded-lg p-6 shadow-lg z-50 min-w-[400px]">
                         <Dialog.Title className="text-lg font-semibold text-grey-10 mb-4">
                             Filter Custom Size
                         </Dialog.Title>

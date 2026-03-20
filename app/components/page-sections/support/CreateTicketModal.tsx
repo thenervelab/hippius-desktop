@@ -115,14 +115,14 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
     return (
       <Dialog.Root open={open} onOpenChange={(o) => !o && handleClose()}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-white/60 z-50" />
+          <Dialog.Overlay className="fixed inset-0 bg-grey-100/60 z-50" />
           <Dialog.Content
             className="
             fixed left-1/2 top-1/2 z-50 
             w-full max-w-sm sm:max-w-[488px] 
             max-h-[90vh] overflow-y-auto
             -translate-x-1/2 -translate-y-1/2
-            bg-white rounded-[8px]
+            bg-grey-100 rounded-[8px]
             shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
             p-4 border border-grey-80
           "

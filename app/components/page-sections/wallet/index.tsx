@@ -129,7 +129,7 @@ export default function Wallet() {
             )}
           </div>
 
-          <div className="flex flex-col animate-in fade-in duration-300 gap-8 w-full shadow-menu rounded-lg bg-white p-4 border border-grey-80">
+          <div className="flex flex-col animate-in fade-in duration-300 gap-8 w-full shadow-menu rounded-lg bg-grey-100 p-4 border border-grey-80">
             {activeTab === "Transaction History" && (
               <TransactionHistoryTable
                 transactions={transactions}

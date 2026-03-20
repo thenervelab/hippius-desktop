@@ -57,7 +57,7 @@ export function RemoteFoldersSection({
       {({ inView, ref }) => (
         <div
           ref={ref}
-          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
+          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover dark:bg-none"
         >
           <div className="w-full">
             <RevealTextLine
@@ -85,7 +85,7 @@ export function RemoteFoldersSection({
                   {paginatedFolders.map((folder) => (
                     <div
                       key={folder.folderName}
-                      className="p-4 border border-grey-80 rounded-lg bg-white hover:bg-grey-98 transition-colors"
+                      className="p-4 border border-grey-80 rounded-lg bg-grey-100 hover:bg-grey-98 transition-colors"
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex-1 min-w-0">
@@ -146,7 +146,7 @@ export function RemoteFoldersSection({
                   ))}
                 </div>
               ) : (
-                <div className="p-6 border border-dashed border-grey-80 rounded-lg text-center bg-white/60">
+                <div className="p-6 border border-dashed border-grey-80 rounded-lg text-center bg-grey-100/60">
                   <CloudDownload className="size-8 mx-auto mb-2 text-grey-60" />
                   <p className="text-sm text-grey-50 mb-1">
                     No remote folders found

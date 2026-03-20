@@ -32,10 +32,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="scroll-smooth">
+    <html lang="en" className="scroll-smooth" suppressHydrationWarning>
       <body
         className={`${digitalFonts.className} ${geistSans.className} ${geistSans.variable} bg-grey-100 text-grey-10 antialiased font-sans`}
       >
+        {/* Drag region for transparent title bar — sits above all content */}
+        <div data-tauri-drag-region className="fixed top-0 left-0 right-0 h-[28px] z-[99999]" />
+
         <Providers>
           <WalletAuthProvider>
             <UpdateChecker>
@@ -45,7 +48,7 @@ export default function RootLayout({
                   <TrayNavigationListener />
                   <SplashWrapper preventClose={false}>
                     <Suspense fallback={<PageLoader />}>
-                      <div className="flex min-h-screen h-screen">
+                      <div className="flex min-h-screen h-screen pt-[28px]">
                         {children}
                       </div>
                     </Suspense>
@@ -54,6 +57,7 @@ export default function RootLayout({
                   <Toaster
                     position="top-center"
                     className="toaster-auth-aware"
+                    theme="system"
                     toastOptions={{
                       style: { fontFamily: "var(--font-geist-sans)" },
                     }}

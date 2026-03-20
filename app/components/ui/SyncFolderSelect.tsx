@@ -88,7 +88,7 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
         </button>
 
         {open && (
-          <div className="absolute left-0 right-0 top-full mt-1 overflow-hidden rounded-lg bg-white shadow-lg border border-grey-80 z-[100]">
+          <div className="absolute left-0 right-0 top-full mt-1 overflow-hidden rounded-lg bg-grey-100 shadow-lg border border-grey-80 z-[100]">
             <div className="p-1.5 max-h-60 overflow-auto flex flex-col gap-0.5">
               {syncPaths.map((sp) => {
                 const isSelected = sp.label === value;

@@ -26,7 +26,7 @@ const ComingSoon: React.FC<ComingSoonProps> = ({
         danger:
             "bg-red-500/10 backdrop-blur-md text-red-500 border-red-400/60 shadow-md",
         white:
-            "bg-white/95 backdrop-blur-md text-grey-40 border-grey-80/30 shadow-lg",
+            "bg-grey-100/95 backdrop-blur-md text-grey-40 border-grey-80/30 shadow-lg",
         primary:
             "bg-primary-50/90 backdrop-blur-md text-white border-primary-30/50 shadow-lg",
     };

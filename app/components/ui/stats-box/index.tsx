@@ -20,7 +20,7 @@ const StatsBox: React.FC<StatsBoxProps> = ({ items, loading = false }) => {
       {({ inView, ref }) => (
         <div
           ref={ref}
-          className="inline-flex items-center bg-white border-2 border-gray-200 rounded-md px-2 sm:px-4 sm:py-3 py-2 gap-2
+          className="inline-flex items-center bg-grey-100 border-2 border-grey-80 rounded-md px-2 sm:px-4 sm:py-3 py-2 gap-2
      shadow-tooltip"
         >
           {loading
@@ -48,7 +48,7 @@ const StatsBox: React.FC<StatsBoxProps> = ({ items, loading = false }) => {
                 <div
                   className={cn(
                     "flex items-baseline gap-2 font-medium text-xs sm:text-sm lg:text-base",
-                    item.className || "text-gray-900",
+                    item.className || "text-grey-10",
                     idx !== items?.length - 1 &&
                       "border-r-[1.4px] border-grey pr-2"
                   )}

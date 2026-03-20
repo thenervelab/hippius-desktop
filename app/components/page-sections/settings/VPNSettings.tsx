@@ -90,7 +90,7 @@ const VPNSettings: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover">
+      <div className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover dark:bg-none">
         <div className="flex items-center justify-center h-32">
           <span className="text-grey-60">Loading...</span>
         </div>
@@ -104,7 +104,7 @@ const VPNSettings: React.FC = () => {
         <div
           ref={ref}
           className={
-            "flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
+            "flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover dark:bg-none"
           }
         >
           <div className="w-full flex flex-col ">
@@ -142,7 +142,7 @@ const VPNSettings: React.FC = () => {
               >
                 <div className="space-y-4 text-grey-10 w-full flex flex-col">
                   {/* Autoconnect Checkbox */}
-                  <div className="flex items-center justify-between p-4 bg-white border border-grey-80 rounded-lg">
+                  <div className="flex items-center justify-between p-4 bg-grey-100 border border-grey-80 rounded-lg">
                     <div className="flex flex-col">
                       <span className="text-base font-medium text-grey-10">
                         Autoconnect on Startup
@@ -168,7 +168,7 @@ const VPNSettings: React.FC = () => {
                     >
                       <div
                         className={cn(
-                          "flex justify-center items-center w-5 h-5 bg-white rounded-full transition-transform duration-200 shadow-sm",
+                          "flex justify-center items-center w-5 h-5 bg-grey-100 rounded-full transition-transform duration-200 shadow-sm",
                           autoconnectEnabled
                             ? "translate-x-[22px]"
                             : "translate-x-[2px]"

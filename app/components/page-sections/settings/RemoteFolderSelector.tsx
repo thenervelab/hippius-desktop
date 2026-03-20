@@ -187,7 +187,7 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
     <Dialog.Root open={open} onOpenChange={handleClose}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" />
-        <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto z-50">
+        <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-grey-100 rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto z-50">
           <div className="flex items-start justify-between mb-4">
             <div className="flex items-center gap-3">
               <AbstractIconWrapper className="size-10 relative">
@@ -254,7 +254,7 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
                           "w-full p-4 border rounded-lg text-left transition-all",
                           isSelected
                             ? "border-primary-50 bg-primary-98"
-                            : "border-grey-80 bg-white hover:bg-grey-98"
+                            : "border-grey-80 bg-grey-100 hover:bg-grey-98"
                         )}
                         disabled={isSyncing}
                       >
@@ -316,12 +316,12 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
                             Files will be synced to:
                           </span>
                         </div>
-                        <p className="text-xs text-grey-60 break-all font-mono bg-white px-2 py-1.5 rounded border border-grey-90">
+                        <p className="text-xs text-grey-60 break-all font-mono bg-grey-100 px-2 py-1.5 rounded border border-grey-90">
                           {localPath}/{selectedFolder?.folderName}
                         </p>
                       </div>
                       <button
-                        className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-primary-50 bg-white border border-primary-50 rounded hover:bg-primary-50 hover:text-white transition-colors"
+                        className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-primary-50 bg-grey-100 border border-primary-50 rounded hover:bg-primary-50 hover:text-white transition-colors"
                         onClick={handleSelectLocalPath}
                         disabled={isSyncing}
                       >

@@ -18,7 +18,7 @@ const ActiveTabBg: React.FC<ActiveTabBgProps> = ({ mainGroup }) => (
         lineWidth: 1,
         cellDim: 5,
       }}
-      className="absolute w-full h-full top-0 bottom-0 left-0 opacity-20"
+      className="absolute w-full h-full top-0 bottom-0 left-0 opacity-20 dark:opacity-0"
     />
     <div className="absolute w-full h-full">
       {mainGroup && (

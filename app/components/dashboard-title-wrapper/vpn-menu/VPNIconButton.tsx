@@ -44,7 +44,7 @@ const VPNIconButton: React.FC<{
                 "border rounded-[4px] relative flex items-center justify-center h-[36px] min-w-[36px] px-2 transition-colors duration-200",
                 isConnected
                   ? "bg-primary-50 border-primary-50"
-                  : "bg-white border-grey-80"
+                  : "bg-grey-100 border-grey-80"
               )}
             >
               <span

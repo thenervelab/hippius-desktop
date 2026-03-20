@@ -61,7 +61,7 @@ export default function NebulaTest() {
   }, []);
 
   return (
-    <div className="p-6 border rounded-lg shadow-lg bg-white dark:bg-gray-800 text-black dark:text-white max-w-md mx-auto mt-10">
+    <div className="p-6 border rounded-lg shadow-lg bg-grey-100 dark:bg-gray-800 text-black dark:text-white max-w-md mx-auto mt-10">
       <h2 className="text-2xl font-bold mb-6 border-b pb-2">
         Nebula Network Status
       </h2>
@@ -93,16 +93,16 @@ export default function NebulaTest() {
       )}
 
       <div className="mb-6">
-        <div className="text-sm uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold mb-1">
+        <div className="text-sm uppercase tracking-wide text-grey-60 dark:text-grey-60 font-semibold mb-1">
           Nebula IP Address
         </div>
-        <div className="text-xl font-mono bg-gray-100 dark:bg-gray-900 p-3 rounded border dark:border-gray-700">
+        <div className="text-xl font-mono bg-grey-90 dark:bg-gray-900 p-3 rounded border dark:border-gray-700">
           {ip || "Loading..."}
         </div>
       </div>
 
       <div className="mb-6">
-        <h3 className="text-sm uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold mb-2">
+        <h3 className="text-sm uppercase tracking-wide text-grey-60 dark:text-grey-60 font-semibold mb-2">
           Traffic Statistics
         </h3>
         {stats && status?.has_interface ? (
@@ -113,7 +113,7 @@ export default function NebulaTest() {
               </div>
               <div className="text-2xl font-mono text-blue-700 dark:text-blue-300">
                 {(stats.udp_tx_bytes / 1024 / 1024).toFixed(6)}{" "}
-                <span className="text-sm font-sans text-gray-500">MB</span>
+                <span className="text-sm font-sans text-grey-60">MB</span>
               </div>
             </div>
             <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded border border-green-100 dark:border-green-800">
@@ -122,12 +122,12 @@ export default function NebulaTest() {
               </div>
               <div className="text-2xl font-mono text-green-700 dark:text-green-300">
                 {(stats.udp_rx_bytes / 1024 / 1024).toFixed(6)}{" "}
-                <span className="text-sm font-sans text-gray-500">MB</span>
+                <span className="text-sm font-sans text-grey-60">MB</span>
               </div>
             </div>
           </div>
         ) : (
-          <div className="text-gray-500 italic">
+          <div className="text-grey-60 italic">
             {status?.is_running
               ? "Waiting for interface..."
               : "Nebula not running"}
@@ -138,7 +138,7 @@ export default function NebulaTest() {
       <div className="flex gap-3">
         <button
           onClick={fetchIp}
-          className="flex-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-white font-semibold py-2 px-4 rounded transition duration-200"
+          className="flex-1 bg-gray-200 hover:bg-grey-70 dark:bg-gray-700 dark:hover:bg-gray-600 text-grey-30 dark:text-white font-semibold py-2 px-4 rounded transition duration-200"
         >
           Refresh IP
         </button>

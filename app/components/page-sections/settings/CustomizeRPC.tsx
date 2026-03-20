@@ -183,7 +183,7 @@ const CustomizeRPC: React.FC = () => {
         <div
           ref={ref}
           className={
-            "flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
+            "flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover dark:bg-none"
           }
         >
           <div className="w-full flex flex-col ">
@@ -240,7 +240,7 @@ const CustomizeRPC: React.FC = () => {
                       disabled={!editMode}
                       className="px-11 border-grey-80 h-14 text-grey-30 w-full
                     bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none 
-                    hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus bg-white"
+                    hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus bg-grey-100"
                     />
                   </div>
                   {error && (
@@ -293,7 +293,7 @@ const CustomizeRPC: React.FC = () => {
           >
             <Dialog.Portal>
               <Dialog.Overlay className="bg-black/40 fixed inset-0 flex items-center justify-center data-[state=open]:animate-fade-in-0.3 z-[60]" />
-              <Dialog.Content className="fixed top-1/2 left-1/2 w-[90%] max-w-md -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 shadow-xl z-[70] animate-fade-in-0.2">
+              <Dialog.Content className="fixed top-1/2 left-1/2 w-[90%] max-w-md -translate-x-1/2 -translate-y-1/2 bg-grey-100 rounded-lg p-6 shadow-xl z-[70] animate-fade-in-0.2">
                 <div className="flex justify-between items-center mb-5">
                   <Dialog.Title className="text-xl font-semibold text-grey-10 flex items-center gap-2">
                     <ShieldCheck className="text-primary-50 size-6" />

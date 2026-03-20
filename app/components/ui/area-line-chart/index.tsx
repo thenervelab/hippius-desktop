@@ -614,7 +614,7 @@ function AreaLineChart<T extends object>({
                       className: "fill-grey-10 animate-fade-in-0.3",
                       fontSize: 12,
                     }}
-                    axisLineClassName="stroke-[#B4C8F3]"
+                    axisLineClassName="stroke-primary-80"
                     orientation="bottom"
                     strokeWidth={3}
                     {...xAxisProps}
@@ -643,7 +643,7 @@ function AreaLineChart<T extends object>({
                     orientation="left"
                     hideTicks={true}
                     strokeWidth={3}
-                    axisLineClassName="stroke-[#B4C8F3]"
+                    axisLineClassName="stroke-primary-80"
                     rangePadding={{ start: 0, end: 0 }}
                     tickFormat={yAxisProps?.tickFormat}
                     {...yAxisProps}
@@ -744,13 +744,13 @@ function AreaLineChart<T extends object>({
                             cy={y}
                             r={4}
                             fill={glyphColor}
-                            stroke={"#FFFFFF"}
+                            stroke="rgb(var(--grey-100))"
                             strokeWidth={1}
                           />
                         );
                       }}
                       unstyled
-                      className="p-4 absolute bg-white border border-grey-80 rounded-lg text-grey-70 font-medium shadow-tooltip text-xs"
+                      className="p-4 absolute bg-grey-100 border border-grey-80 rounded-lg text-grey-70 font-medium shadow-tooltip text-xs"
                       renderTooltip={({ tooltipData }) => {
                         // Update the nearest datum key
                         nearestDatumKeyRef.current =

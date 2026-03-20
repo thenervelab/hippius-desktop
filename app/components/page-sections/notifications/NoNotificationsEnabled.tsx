@@ -22,7 +22,7 @@ const NoNotificationsEnabled: React.FC<NoNotificationsEnabledProps> = ({
             heightClassName
           )}
         >
-          <AbstractIconWrapper className="size-12 mb-3 bg-gray-100">
+          <AbstractIconWrapper className="size-12 mb-3 bg-grey-90">
             <Icons.Setting className="relative size-6 text-primary-50" />
           </AbstractIconWrapper>
           <h3 className="text-grey-10 font-medium text-base block">

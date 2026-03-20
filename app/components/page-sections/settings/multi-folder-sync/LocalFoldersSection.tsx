@@ -98,10 +98,10 @@ function PathWithTooltip({ path }: { path: string }) {
             side="bottom"
             align="start"
             sideOffset={0}
-            className="z-[9999] max-w-[400px] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+            className="z-[9999] max-w-[400px] bg-grey-100 border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
           >
             {path}
-            <Tooltip.Arrow className="fill-white" width={12} height={6} />
+            <Tooltip.Arrow className="fill-grey-100" width={12} height={6} />
           </Tooltip.Content>
         </Tooltip.Portal>
       </Tooltip.Root>
@@ -132,7 +132,7 @@ export function LocalFoldersSection({
       {({ inView, ref }) => (
         <div
           ref={ref}
-          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
+          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover dark:bg-none"
         >
           <div className="w-full">
             <RevealTextLine
@@ -166,7 +166,7 @@ export function LocalFoldersSection({
                   <Icons.Loader className="size-6 animate-spin text-primary-50" />
                 </div>
               ) : syncFolders.length === 0 ? (
-                <div className="p-6 border border-dashed border-grey-80 rounded-lg text-center bg-white/60">
+                <div className="p-6 border border-dashed border-grey-80 rounded-lg text-center bg-grey-100/60">
                   <Folder className="size-8 mx-auto mb-2 text-grey-60" />
                   <p className="text-sm text-grey-50 mb-1">
                     No folders syncing yet
@@ -180,7 +180,7 @@ export function LocalFoldersSection({
                   {paginatedFolders.map((folder) => (
                     <div
                       key={folder.id}
-                      className="p-4 border border-grey-80 rounded-lg bg-white hover:bg-grey-98 transition-colors"
+                      className="p-4 border border-grey-80 rounded-lg bg-grey-100 hover:bg-grey-98 transition-colors"
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex-1 min-w-0">

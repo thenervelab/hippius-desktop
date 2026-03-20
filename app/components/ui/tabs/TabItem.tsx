@@ -79,10 +79,10 @@ const TabItem: React.FC<TabItemProps> = ({
             side="bottom"
             align="center"
             sideOffset={6}
-            className="z-[9999] max-w-[300px] bg-white border border-grey-80 rounded-lg px-3 py-1.5 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+            className="z-[9999] max-w-[300px] bg-grey-100 border border-grey-80 rounded-lg px-3 py-1.5 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
           >
             {label}
-            <Tooltip.Arrow className="fill-white" width={10} height={5} />
+            <Tooltip.Arrow className="fill-grey-100" width={10} height={5} />
           </Tooltip.Content>
         </Tooltip.Portal>
       </Tooltip.Root>

@@ -68,7 +68,7 @@ export const ApiTokenCard: React.FC = () => {
       {/* Token Display */}
       <div className="space-y-1 w-full mt-4">
         <h3 className="text-sm font-medium text-grey-70">Token</h3>
-        <div className="border border-grey-80 rounded-lg p-3 sm:p-4 font-mono text-xs sm:text-base bg-white">
+        <div className="border border-grey-80 rounded-lg p-3 sm:p-4 font-mono text-xs sm:text-base bg-grey-100">
           <div className="flex items-center justify-between gap-2">
             <div className="text-grey-60 font-medium break-all flex-1">
               {showToken ? token : maskToken(token)}
@@ -136,7 +136,7 @@ export const ApiTokenUsageCard: React.FC = () => {
       {/* Authorization Header */}
       <div className="space-y-1 w-full mt-4">
         <h3 className="text-sm font-medium text-grey-70">Authorization Header</h3>
-        <div className="border border-grey-80 rounded-lg p-3 sm:p-4 font-mono text-xs sm:text-base bg-white">
+        <div className="border border-grey-80 rounded-lg p-3 sm:p-4 font-mono text-xs sm:text-base bg-grey-100">
           <div className="flex items-center justify-between gap-2">
             <div className="text-base text-grey-60 font-medium break-all flex-1">
               Authorization: Token {showHeaderToken ? token : maskToken(token)}
