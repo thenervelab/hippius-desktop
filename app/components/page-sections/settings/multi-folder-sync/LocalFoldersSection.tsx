@@ -4,6 +4,7 @@ import React, { useState, useMemo, useRef, useCallback } from "react";
 import { Icons, RevealTextLine, IconButton } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
+import { middleTruncate, middleTruncatePath } from "@/lib/utils/middleTruncate";
 import SectionHeader from "../SectionHeader";
 import { InView } from "react-intersection-observer";
 import {
@@ -62,13 +63,15 @@ function getStatusText(status: SyncFolder["status"]) {
 function PathWithTooltip({ path }: { path: string }) {
   const textRef = useRef<HTMLParagraphElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
+  const displayPath = middleTruncatePath(path, 30);
+  const isPathTruncated = displayPath !== path;
 
   const checkTruncation = useCallback(() => {
     const el = textRef.current;
     if (el) {
-      setIsTruncated(el.scrollWidth > el.clientWidth);
+      setIsTruncated(el.scrollWidth > el.clientWidth || isPathTruncated);
     }
-  }, []);
+  }, [isPathTruncated]);
 
   if (!isTruncated) {
     return (
@@ -76,8 +79,9 @@ function PathWithTooltip({ path }: { path: string }) {
         ref={textRef}
         onMouseEnter={checkTruncation}
         className="text-sm text-grey-60 truncate mb-1 cursor-default"
+        title={isPathTruncated ? path : undefined}
       >
-        {path}
+        {displayPath}
       </p>
     );
   }
@@ -90,7 +94,7 @@ function PathWithTooltip({ path }: { path: string }) {
             ref={textRef}
             className="text-sm text-grey-60 truncate cursor-default"
           >
-            {path}
+            {displayPath}
           </p>
         </Tooltip.Trigger>
         <Tooltip.Portal>
@@ -186,12 +190,12 @@ export function LocalFoldersSection({
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
                             <Folder className="size-4 text-grey-40 flex-shrink-0" />
-                            <span className="font-medium text-base text-grey-10 truncate">
-                              {folder.folderName}
+                            <span className="font-medium text-base text-grey-10 truncate" title={folder.folderName}>
+                              {middleTruncate(folder.folderName, 30)}
                             </span>
                             <span
                               className={cn(
-                                "text-xs font-medium px-2 py-0.5 rounded border",
+                                "text-xs font-medium px-2 py-0.5 rounded border flex-shrink-0 whitespace-nowrap",
                                 getStatusColor(folder.status)
                               )}
                             >

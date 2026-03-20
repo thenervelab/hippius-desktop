@@ -3,6 +3,7 @@
 import React, { useState, useMemo } from "react";
 import { Icons, RevealTextLine } from "@/components/ui";
 import { formatBytes } from "@/lib/utils/formatBytes";
+import { middleTruncate } from "@/lib/utils/middleTruncate";
 import SectionHeader from "../SectionHeader";
 import { InView } from "react-intersection-observer";
 import {
@@ -91,10 +92,10 @@ export function RemoteFoldersSection({
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
                             <Folder className="size-4 text-primary-50 flex-shrink-0" />
-                            <span className="font-medium text-base text-grey-10 truncate">
-                              {folder.folderName}
+                            <span className="font-medium text-base text-grey-10 truncate" title={folder.folderName}>
+                              {middleTruncate(folder.folderName, 30)}
                             </span>
-                            <span className="text-xs font-medium px-2 py-0.5 rounded border bg-grey-95 text-grey-50 border-grey-80">
+                            <span className="text-xs font-medium px-2 py-0.5 rounded border bg-grey-95 text-grey-50 border-grey-80 flex-shrink-0 whitespace-nowrap">
                               {folder.deviceName}
                             </span>
                           </div>

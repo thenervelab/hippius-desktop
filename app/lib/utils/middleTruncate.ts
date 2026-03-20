@@ -12,3 +12,23 @@ export function middleTruncate(text: string, maxChars: number): string {
   const endLen = available - startLen;
   return text.slice(0, startLen) + ELLIPSIS + text.slice(-endLen);
 }
+
+/**
+ * Middle-truncate only the last segment of a file path.
+ * e.g. "/Users/john/very-long-folder-name-here" → "/Users/john/very-long…name-here"
+ * All parent segments are preserved as-is.
+ */
+export function middleTruncatePath(
+  path: string,
+  maxLastSegmentChars: number,
+): string {
+  const sep = path.includes("/") ? "/" : "\\";
+  const segments = path.split(sep);
+  const lastSegment = segments[segments.length - 1];
+  if (lastSegment.length <= maxLastSegmentChars) return path;
+  segments[segments.length - 1] = middleTruncate(
+    lastSegment,
+    maxLastSegmentChars,
+  );
+  return segments.join(sep);
+}
