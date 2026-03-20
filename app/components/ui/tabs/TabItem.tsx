@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import React, { useRef, useState, useCallback } from "react";
+import React from "react";
 import { cn } from "@/lib/utils";
+import { middleTruncate } from "@/lib/utils/middleTruncate";
 import ActiveTabBg from "./ActiveTabBg";
 import * as Tooltip from "@radix-ui/react-tooltip";
 
@@ -25,15 +26,10 @@ const TabItem: React.FC<TabItemProps> = ({
   isJustifyStart = false,
   showTooltip = true,
 }) => {
-  const labelRef = useRef<HTMLSpanElement>(null);
-  const [isTruncated, setIsTruncated] = useState(false);
-
-  const checkTruncation = useCallback(() => {
-    const el = labelRef.current;
-    if (el) {
-      setIsTruncated(el.scrollWidth > el.clientWidth);
-    }
-  }, []);
+  /** At text-[14px] with px-4 inside max-w-[240px], ~24 chars fit. */
+  const TAB_MAX_CHARS = 24;
+  const displayLabel = middleTruncate(label, TAB_MAX_CHARS);
+  const isTruncated = displayLabel !== label;
 
   const content = (
     <div
@@ -45,7 +41,6 @@ const TabItem: React.FC<TabItemProps> = ({
         isJustifyStart ? "px-2" : "px-4"
       )}
       onClick={onClick}
-      onMouseEnter={showTooltip ? checkTruncation : undefined}
     >
       {isActive && <ActiveTabBg mainGroup={true} />}
       <div
@@ -61,7 +56,7 @@ const TabItem: React.FC<TabItemProps> = ({
               className: "size-[18px]",
             })}
         </span>
-        <span ref={labelRef} className="font-medium text-[14px] truncate">{label}</span>
+        <span className="font-medium text-[14px] whitespace-nowrap">{displayLabel}</span>
       </div>
     </div>
   );
