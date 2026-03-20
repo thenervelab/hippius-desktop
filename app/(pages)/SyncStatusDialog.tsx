@@ -16,7 +16,6 @@ import { formatBytes } from "@/lib/utils/formatBytes";
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
 import { syncEngineHealthAtom, CONNECTIVITY_STATUS_LABELS } from "../lib/store/syncAtoms";
 import { type SyncSnapshot } from "../lib/types/syncSnapshot";
-import { type SyncActionCounts } from "../lib/store/syncAtoms";
 
 const COLLAPSED_HEIGHT = 64;
 const EXPANDED_HEIGHT = 460;
@@ -26,14 +25,12 @@ interface SyncStatusDialogProps {
   snapshot: SyncSnapshot;
   open: boolean;
   onClose?: () => void;
-  actionCounts?: SyncActionCounts;
 }
 
 const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   snapshot,
   open,
   onClose,
-  actionCounts,
 }) => {
   const fileListRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -50,11 +47,6 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     ? null
     : snapshot.overallPercent;
   const totalFiles = snapshot.totalFiles;
-  const hasActiveSync = snapshot.isActive || isRetrying;
-  // True when any file is in an encrypt/decrypt phase (changes colors to yellow)
-  const isEncryptingPhase = snapshot.files.some(
-    (f) => f.status === "encrypting" || f.status === "decrypting"
-  );
 
   // Live countdown for retry timer
   const [retryCountdown, setRetryCountdown] = useState(0);
@@ -122,8 +114,9 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     [toggleExpanded]
   );
 
-  if (!snapshot.files.length && !hasActiveSync && !isCompleted && !isRetrying) return null;
   if (!open) return null;
+  // Nothing to show — no files, not active, not retrying, not completed
+  if (snapshot.totalFiles === 0 && !isInProgress && !isRetrying && !isCompleted) return null;
 
   // Derive counts for the status banner
   const syncedFiles = snapshot.completedFiles;
@@ -190,10 +183,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   cx="24"
                   cy="24"
                   r="22"
-                  className={cn(
-                    "fill-none stroke-[4]",
-                    isEncryptingPhase ? "stroke-[#fef3c7]" : "stroke-[#e8eeff]"
-                  )}
+                  className="fill-none stroke-[4] stroke-[#e8eeff]"
                 />
                 <circle
                   cx="24"
@@ -205,9 +195,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                       ? "stroke-[#ef4444]"
                       : isCompleted
                         ? "stroke-[#4ade80]"
-                        : isEncryptingPhase
-                          ? "stroke-[#f59e0b]"
-                          : "stroke-[#4171e0]"
+                        : "stroke-[#4171e0]"
                   )}
                   strokeLinecap="round"
                   strokeDasharray={isUnhealthy || hasFailed ? "138 138" : isCompleted ? "138 138" : percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
@@ -225,7 +213,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     {isCompleted ? (
                       <Icons.TickCircle className="size-6 relative text-success-50" />
                     ) : (
-                      <Icons.Refresh className={cn("size-6 relative animate-spin", isEncryptingPhase ? "text-warning-50" : "text-primary-50")} />
+                      <Icons.Refresh className="size-6 relative animate-spin text-primary-50" />
                     )}
                   </AbstractIconWrapper>
                 )}
@@ -282,9 +270,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                       : isCompleted
                         ? "Complete"
                         : percentage !== null && percentage < 100
-                          ? `${isEncryptingPhase ? "Encrypting" : "Syncing"} ${percentage}%`
-                          : isEncryptingPhase
-                          ? "Encrypting..."
+                          ? `Syncing ${percentage}%`
                           : "Syncing..."
                 }
               </span>
@@ -298,10 +284,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               )}
             </div>
 
-            {/* Divider to separate actions */}
-
-            {/* Close button - shown when completed or failed and expanded */}
-            {(isCompleted || hasFailed) && isExpanded && onClose && (
+            {/* Close button - shown when completed or failed */}
+            {(isCompleted || hasFailed) && onClose && (
               <>
                 <span className="mx-2 h-5 w-px bg-grey-80" role="separator" />
                 <button
@@ -371,11 +355,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     ? Math.max(totalFiles, completedFiles + snapshot.failedFiles)
                     : totalFiles;
 
-                  // Determine what type of sync is happening based on action counts
-                  const hasUploads = actionCounts?.uploads && actionCounts.uploads > 0;
-                  const hasDownloads = actionCounts?.downloads && actionCounts.downloads > 0;
-                  const hasLocalDeletes = actionCounts?.localDeletes && actionCounts.localDeletes > 0;
-                  const hasRemoteDeletes = actionCounts?.remoteDeletes && actionCounts.remoteDeletes > 0;
+                  // Determine what type of sync is happening based on snapshot action counts
+                  const hasUploads = snapshot.expectedUploads > 0;
+                  const hasDownloads = snapshot.expectedDownloads > 0;
+                  const hasLocalDeletes = snapshot.expectedLocalDeletes > 0;
+                  const hasRemoteDeletes = snapshot.expectedRemoteDeletes > 0;
 
                   // If there are failed files, show appropriate failure message
                   if (snapshot.failedFiles > 0 && !isInProgress) {
@@ -425,7 +409,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     }
                     // Only deletes - show delete message
                     if ((hasLocalDeletes || hasRemoteDeletes) && !hasUploads && !hasDownloads) {
-                      const deleteCount = (actionCounts?.localDeletes || 0) + (actionCounts?.remoteDeletes || 0);
+                      const deleteCount = snapshot.expectedLocalDeletes + snapshot.expectedRemoteDeletes;
                       return `Deleting ${deleteCount} files`;
                     }
                     // Fallback to generic sync message
@@ -460,11 +444,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               <div className="w-full h-1.5 bg-grey-80 rounded-full overflow-hidden">
                 {percentage !== null ? (
                   <div
-                    className={cn("h-full rounded-full transition-all duration-300", isEncryptingPhase ? "bg-warning-50" : "bg-primary-50")}
+                    className="h-full rounded-full transition-all duration-300 bg-primary-50"
                     style={{ width: `${percentage}%` }}
                   />
                 ) : (
-                  <div className={cn("h-full w-1/3 rounded-full animate-pulse", isEncryptingPhase ? "bg-warning-50" : "bg-primary-50")} />
+                  <div className="h-full w-1/3 rounded-full animate-pulse bg-primary-50" />
                 )}
               </div>
               {snapshot.bytesExpected > 0 && (
@@ -483,9 +467,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             {snapshot.files.map((file, index) => {
               const isFileCompleted = file.status === "completed";
               const isFileDeleted = isFileCompleted && (file.action === "local_delete" || file.action === "remote_delete");
-              const isFileInProgress = file.status === "inProgress";
-              const isEncrypting = file.status === "encrypting";
-              const isDecrypting = file.status === "decrypting";
+              const isFileInProgress = file.status === "inProgress" || file.status === "encrypting" || file.status === "decrypting";
               const isFailed = file.status === "error";
               const { fileFormat } = getFilePartsFromFileName(file.fileName);
               const fileType = getFileTypeFromExtension(fileFormat || null);
@@ -536,25 +518,6 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                           <Icons.InfoCircle className="w-5 h-5 text-error-50" />
                           <span className="text-sm ml-1 text-error-50">Failed</span>
                         </>
-                      ) : (isEncrypting || isDecrypting) ? (
-                        <div className="flex flex-col items-end gap-0.5">
-                          <div className="flex items-center gap-2">
-                            <div className="w-[60px] h-1.5 bg-grey-80 rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-warning-50 rounded-full transition-all duration-300"
-                                style={{ width: `${file.progressPercent}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-warning-50 min-w-[32px] text-right">
-                              {isEncrypting ? "Encrypting" : "Decrypting"}
-                            </span>
-                          </div>
-                          {file.totalBytes > 0 && (
-                            <span className="text-[10px] text-grey-50">
-                              {formatBytes(file.bytesEncrypted)} / {formatBytes(file.totalBytes)}
-                            </span>
-                          )}
-                        </div>
                       ) : isFileInProgress ? (
                         <div className="flex flex-col items-end gap-0.5">
                           <div className="flex items-center gap-2">
@@ -570,7 +533,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                           </div>
                           {file.totalBytes > 0 && (
                             <span className="text-[10px] text-grey-50">
-                              {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
+                              {formatBytes(Math.max(file.bytesEncrypted, file.bytesTransferred))} / {formatBytes(file.totalBytes)}
                             </span>
                           )}
                         </div>

@@ -1,107 +1,77 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
-import { useAtomValue } from "jotai";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import SyncStatusDialog from "./SyncStatusDialog";
 import { useSyncSnapshot } from "../lib/hooks/useSyncSnapshot";
-import {
-  isSyncingAtom,
-  syncActionCountsAtom,
-  hasSyncErrorAtom,
-} from "../lib/store/syncAtoms";
+
+/** Milliseconds after completion before auto-hiding the widget. */
+const AUTO_HIDE_DELAY_MS = 8_000;
 
 const SyncStatusHandler: React.FC = () => {
   const snapshot = useSyncSnapshot();
-  const [isSyncOpen, setIsSyncOpen] = useState(false);
-  const [isPermanentlyClosed, setIsPermanentlyClosed] = useState(false);
+  const [isDismissed, setIsDismissed] = useState(false);
+  const autoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const isSyncingFromEvents = useAtomValue(isSyncingAtom);
-  const syncActionCounts = useAtomValue(syncActionCountsAtom);
-  const hasSyncError = useAtomValue(hasSyncErrorAtom);
-
-  // Track the session file count when user dismissed, so we can detect new files
-  const dismissedFileCountRef = useRef<number | null>(null);
-
-  const hasFilesToDisplay = snapshot.files.length > 0;
   const isActive = snapshot.isActive;
+  const isRetrying = !snapshot.isActive && snapshot.retryInSecs > 0;
   const isCompleted =
     !snapshot.isActive &&
+    !isRetrying &&
     (snapshot.completedFiles > 0 || snapshot.failedFiles > 0);
-  const hasFailedFiles = snapshot.failedFiles > 0 || hasSyncError;
-  const hasAnyActivity =
-    isActive || isSyncingFromEvents || hasFilesToDisplay;
+  const hasFailed = snapshot.failedFiles > 0 || isRetrying;
 
+  const shouldShow =
+    isActive ||
+    isCompleted ||
+    isRetrying ||
+    snapshot.files.length > 0;
+
+  // Auto-reopen when new sync activity starts after dismissal
   useEffect(() => {
-    const hasSyncCompleted =
-      isCompleted && snapshot.overallPercent === 100;
+    if (!isDismissed) return;
+    if (isActive && snapshot.totalFiles > 0) {
+      setIsDismissed(false);
+    }
+  }, [isDismissed, isActive, snapshot.totalFiles]);
 
-    // Don't reopen if user explicitly closed — only the hcfs_sync_started
-    // event listener (which checks for totalExpected > 0) can reset this.
-    if (isPermanentlyClosed) {
-      const dismissedCount = dismissedFileCountRef.current;
-      const hasNewFiles =
-        dismissedCount !== null &&
-        snapshot.files.length > dismissedCount;
+  // Auto-hide after successful completion (no errors)
+  useEffect(() => {
+    if (autoHideTimerRef.current) {
+      clearTimeout(autoHideTimerRef.current);
+      autoHideTimerRef.current = null;
+    }
 
-      if (hasNewFiles && hasAnyActivity) {
-        dismissedFileCountRef.current = null;
-        setIsPermanentlyClosed(false);
-        setIsSyncOpen(true);
+    if (isCompleted && !hasFailed) {
+      autoHideTimerRef.current = setTimeout(() => {
+        autoHideTimerRef.current = null;
+        setIsDismissed(true);
+      }, AUTO_HIDE_DELAY_MS);
+    }
+
+    return () => {
+      if (autoHideTimerRef.current) {
+        clearTimeout(autoHideTimerRef.current);
       }
-      return;
-    }
+    };
+  }, [isCompleted, hasFailed]);
 
-    // Show widget when there's activity, files, completed sync, or errors
-    if (
-      hasAnyActivity ||
-      hasFilesToDisplay ||
-      hasSyncCompleted ||
-      hasFailedFiles
-    ) {
-      setIsSyncOpen(true);
-    }
-
-    // Auto-close when no activity, not completed, no errors, no files
-    if (
-      !hasAnyActivity &&
-      !isCompleted &&
-      !hasFailedFiles &&
-      isSyncOpen &&
-      !hasFilesToDisplay
-    ) {
-      setIsSyncOpen(false);
-    }
-  }, [
-    isActive,
-    isCompleted,
-    hasAnyActivity,
-    hasFilesToDisplay,
-    hasFailedFiles,
-    isSyncingFromEvents,
-    isPermanentlyClosed,
-    isSyncOpen,
-    snapshot.overallPercent,
-    snapshot.files.length,
-  ]);
-
-  // Listen for explicit sync stop/start events
+  // Listen for explicit sync stop (user-initiated) to dismiss widget
   useEffect(() => {
     let cancelled = false;
-    let unsubStop: (() => void) | null = null;
-    let unsubStart: (() => void) | null = null;
+    let unsub: (() => void) | null = null;
 
     listen("hcfs_sync_stopped", () => {
       if (!cancelled) {
-        setIsSyncOpen(false);
+        setIsDismissed(true);
       }
     })
       .then((u) => {
         if (cancelled) {
           u();
         } else {
-          unsubStop = u;
+          unsub = u;
         }
       })
       .catch((err) => {
@@ -111,71 +81,25 @@ const SyncStatusHandler: React.FC = () => {
         );
       });
 
-    listen<{
-      uploads?: number;
-      downloads?: number;
-      local_deletes?: number;
-      remote_deletes?: number;
-    }>("hcfs_sync_started", (event) => {
-      if (!cancelled) {
-        const payload = event.payload || {};
-        const totalExpected =
-          (payload.uploads || 0) +
-          (payload.downloads || 0) +
-          (payload.local_deletes || 0) +
-          (payload.remote_deletes || 0);
-
-        if (totalExpected > 0) {
-          dismissedFileCountRef.current = null;
-          setIsPermanentlyClosed(false);
-          setIsSyncOpen(true);
-        }
-      }
-    })
-      .then((u) => {
-        if (cancelled) {
-          u();
-        } else {
-          unsubStart = u;
-        }
-      })
-      .catch((err) => {
-        console.warn(
-          "[SyncStatusHandler] Failed to listen for sync_started:",
-          err
-        );
-      });
-
     return () => {
       cancelled = true;
-      unsubStop?.();
-      unsubStart?.();
+      unsub?.();
     };
   }, []);
 
-  // Handle manual close
-  const handleClose = () => {
-    setIsSyncOpen(false);
-    setIsPermanentlyClosed(true);
-    dismissedFileCountRef.current = snapshot.files.length;
-  };
+  const handleClose = useCallback(() => {
+    setIsDismissed(true);
+  }, []);
 
-  // Hide if permanently closed
-  if (isPermanentlyClosed) {
-    return null;
-  }
-
-  // Hide if nothing to show
-  if (!hasAnyActivity && !isCompleted && !hasFailedFiles) {
+  if (!shouldShow || isDismissed) {
     return null;
   }
 
   return (
     <SyncStatusDialog
       snapshot={snapshot}
-      open={isSyncOpen || hasAnyActivity}
+      open={shouldShow}
       onClose={handleClose}
-      actionCounts={syncActionCounts}
     />
   );
 };

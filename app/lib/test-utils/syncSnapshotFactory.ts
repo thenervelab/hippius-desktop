@@ -68,6 +68,11 @@ export function makeSnapshot(
     failedFiles,
     retryInSecs: 0,
     lastError: null,
+    expectedUploads: 0,
+    expectedDownloads: 0,
+    expectedLocalDeletes: 0,
+    expectedRemoteDeletes: 0,
+    completedAt: null,
     files,
     ...overrides,
   };

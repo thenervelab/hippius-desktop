@@ -151,15 +151,9 @@ describe("SyncStatusDialog", () => {
       <SyncStatusDialog snapshot={snapshot} open={true} />,
     );
 
-    // In collapsed state, the header shows the percentage as status text.
-    // The percentage also appears in the overall progress bar and per-file
-    // bar, so use getAllByText and verify the header one specifically.
-    const percentElements = screen.getAllByText("60%");
-    expect(percentElements.length).toBeGreaterThanOrEqual(1);
-    const headerPercent = percentElements.find(
-      (el) => el.classList.contains("text-sm"),
-    );
-    expect(headerPercent).toBeInTheDocument();
+    // In collapsed state, the header shows "Syncing 60%" as status text.
+    const statusText = screen.getByText("Syncing 60%");
+    expect(statusText).toBeInTheDocument();
   });
 
   it("preserves file order from snapshot", () => {

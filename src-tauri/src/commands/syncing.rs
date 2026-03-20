@@ -1201,12 +1201,30 @@ fn setup_progress_handlers(
                 l0, uploads.len(), downloads.len(), local_deletes.len(), remote_deletes.len()
             );
 
+            // Extract paths and sizes from SyncPlanFile entries
+            let upload_paths: Vec<String> = uploads.iter().map(|f| f.path.clone()).collect();
+            let download_paths: Vec<String> = downloads.iter().map(|f| f.path.clone()).collect();
+            let local_delete_paths: Vec<String> = local_deletes.iter().map(|f| f.path.clone()).collect();
+            let remote_delete_paths: Vec<String> = remote_deletes.iter().map(|f| f.path.clone()).collect();
+
+            // Build file size map for all plan entries so register_files
+            // can set total_bytes upfront (including download sizes from
+            // the fresh remote tree in hcfs-client's memory).
+            let size_map: std::collections::HashMap<String, u64> = uploads
+                .iter()
+                .chain(downloads.iter())
+                .chain(local_deletes.iter())
+                .chain(remote_deletes.iter())
+                .filter(|f| f.size_bytes > 0)
+                .map(|f| (f.path.clone(), f.size_bytes))
+                .collect();
+
             // Merge real file counts into the empty session created before sync started
             let file_list = crate::sync_progress::SessionFileList {
-                upload_files: Some(uploads.iter().map(|s| s.to_string()).collect()),
-                download_files: Some(downloads.iter().map(|s| s.to_string()).collect()),
-                local_delete_files: Some(local_deletes.iter().map(|s| s.to_string()).collect()),
-                remote_delete_files: Some(remote_deletes.iter().map(|s| s.to_string()).collect()),
+                upload_files: Some(upload_paths.clone()),
+                download_files: Some(download_paths.clone()),
+                local_delete_files: Some(local_delete_paths.clone()),
+                remote_delete_files: Some(remote_delete_paths.clone()),
             };
             let _ = crate::sync_progress::merge_into_session(
                 &sync_plan,
@@ -1214,6 +1232,29 @@ fn setup_progress_handlers(
                 local_deletes.len() as u32, remote_deletes.len() as u32,
                 Some(file_list), Some(l0.clone()),
             );
+
+            // Patch file sizes from the plan into the session entries.
+            // This gives accurate byte totals immediately — no need to
+            // wait for each file's first progress callback.
+            if !size_map.is_empty() {
+                let mut progress_state = sync_plan.progress.lock().unwrap_or_else(|p| p.into_inner());
+                if let Some(session) = progress_state.current_session.as_mut() {
+                    let mut patched = 0usize;
+                    for (path, size) in &size_map {
+                        if let Some(file) = session.files.get_mut(path) {
+                            if file.total_bytes == 0 {
+                                file.total_bytes = *size;
+                                patched += 1;
+                            }
+                        }
+                    }
+                    if patched > 0 {
+                        info!(patched, total, label = %l0, "Patched file sizes from sync plan");
+                    }
+                }
+                drop(progress_state);
+                sync_plan.emit_snapshot(true);
+            }
 
             let _ = a0.emit(
                 "hcfs_sync_plan_ready",
@@ -1223,10 +1264,10 @@ fn setup_progress_handlers(
                     "downloads": downloads.len(),
                     "local_deletes": local_deletes.len(),
                     "remote_deletes": remote_deletes.len(),
-                    "upload_files": uploads,
-                    "download_files": downloads,
-                    "local_delete_files": local_deletes,
-                    "remote_delete_files": remote_deletes,
+                    "upload_files": upload_paths,
+                    "download_files": download_paths,
+                    "local_delete_files": local_delete_paths,
+                    "remote_delete_files": remote_delete_paths,
                 }),
             );
         })),

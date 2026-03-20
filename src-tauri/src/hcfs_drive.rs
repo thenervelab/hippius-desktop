@@ -1215,6 +1215,29 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                             "Conflicts skipped during auto-sync, re-staging for review",
                         );
 
+                        // Finalize session for files that DID sync before
+                        // conflicts were skipped — prevents the widget from
+                        // showing "syncing" indefinitely during review mode.
+                        {
+                            let up = o.files_uploaded as u32;
+                            let down = o.files_downloaded as u32;
+                            let expected = {
+                                let state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
+                                state.current_session.as_ref().map(|s| (s.expected_uploads, s.expected_downloads))
+                            };
+                            if let Some((exp_up, exp_down)) = expected {
+                                let has_failures = up < exp_up || down < exp_down;
+                                if has_failures {
+                                    let _ = crate::sync_progress::mark_pending_files_as_failed(
+                                        sync, up, down,
+                                    );
+                                } else {
+                                    let _ = crate::sync_progress::complete_pending_files(sync);
+                                }
+                            }
+                            let _ = crate::sync_progress::complete_session(sync, up, down);
+                        }
+
                         if let Err(e) = app.emit(
                             "hcfs_sync_completed",
                             serde_json::json!({
@@ -1454,6 +1477,29 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 sync.discard_pending_activity_for_label(&label_owned);
             }
 
+            // Finalize the progress session in Rust — the frontend no longer
+            // manages session lifecycle.  Detect failures by comparing actual
+            // upload/download counts against what was expected.
+            {
+                let expected = {
+                    let state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
+                    state.current_session.as_ref().map(|s| (s.expected_uploads, s.expected_downloads))
+                };
+                let up = outcome.files_uploaded as u32;
+                let down = outcome.files_downloaded as u32;
+                if let Some((exp_up, exp_down)) = expected {
+                    let has_failures = up < exp_up || down < exp_down;
+                    if has_failures {
+                        let _ = crate::sync_progress::mark_pending_files_as_failed(
+                            sync, up, down,
+                        );
+                    } else {
+                        let _ = crate::sync_progress::complete_pending_files(sync);
+                    }
+                }
+                let _ = crate::sync_progress::complete_session(sync, up, down);
+            }
+
             if emitted_sync_started {
                 if let Err(e) = app.emit(
                     "hcfs_sync_completed",
@@ -1653,6 +1699,12 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     }
                 }
             }
+
+            // Mark all pending files as failed and finalize session in Rust
+            let _ = crate::sync_progress::mark_all_pending_files_as_failed(
+                sync,
+                err_str.clone(),
+            );
 
             // Always emit sync error to frontend — even if sync_started
             // was never emitted (e.g. early failure during staging).

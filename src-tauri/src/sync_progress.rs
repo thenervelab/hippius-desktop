@@ -164,6 +164,15 @@ pub struct SyncSnapshot {
     pub retry_in_secs: u64,
     /// The error message from the last failed sync cycle, if any.
     pub last_error: Option<String>,
+    /// Expected action counts from the session — drives UI text
+    /// ("Uploading X of Y" vs "Downloading X of Y").
+    pub expected_uploads: u32,
+    pub expected_downloads: u32,
+    pub expected_local_deletes: u32,
+    pub expected_remote_deletes: u32,
+    /// Epoch-ms when the session completed (None if still active or no session).
+    /// Frontend uses this for auto-dismiss timing.
+    pub completed_at: Option<i64>,
     pub files: Vec<FileProgress>,
 }
 
@@ -245,6 +254,8 @@ fn clean_expired(state: &mut SyncProgressState) {
 }
 
 /// Register files from a file list into the session.
+/// For upload files (local paths), reads the file size from the filesystem
+/// so the overall byte total is accurate from the start.
 fn register_files(session: &mut SyncSession, file_list: &SessionFileList, label: &str) {
     let now = now_ms();
 
@@ -259,6 +270,13 @@ fn register_files(session: &mut SyncSession, file_list: &SessionFileList, label:
         if let Some(paths) = paths_opt {
             for path in paths {
                 if !session.files.contains_key(path.as_str()) {
+                    // Try to read file size from the local filesystem.
+                    // Works for uploads (local files) and local deletes;
+                    // returns 0 for downloads (remote identifiers) which
+                    // gets filled in by the first progress callback.
+                    let total_bytes = std::fs::metadata(path)
+                        .map(|m| m.len())
+                        .unwrap_or(0);
                     let file = SyncFile {
                         id: generate_file_id(path),
                         path: path.clone(),
@@ -269,7 +287,7 @@ fn register_files(session: &mut SyncSession, file_list: &SessionFileList, label:
                         progress: 0,
                         bytes_encrypted: 0,
                         bytes_transferred: 0,
-                        total_bytes: 0,
+                        total_bytes,
                         started_at: now,
                         completed_at: None,
                         error: None,
@@ -341,6 +359,11 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
                 failed_files: 0,
                 retry_in_secs: 0,
                 last_error: None,
+                expected_uploads: 0,
+                expected_downloads: 0,
+                expected_local_deletes: 0,
+                expected_remote_deletes: 0,
+                completed_at: None,
                 files: Vec::new(),
             };
         }
@@ -375,31 +398,37 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
         })
         .collect();
 
-    // Sort: known sizes descending, then unknowns (total_bytes == 0) at bottom
-    files.sort_by(|a, b| {
-        let a_known = a.total_bytes > 0;
-        let b_known = b.total_bytes > 0;
-        match (a_known, b_known) {
-            (true, false) => CmpOrdering::Less,
-            (false, true) => CmpOrdering::Greater,
-            _ => b.total_bytes.cmp(&a.total_bytes),
+    // Sort by status group (errors first, then in-progress, pending, completed)
+    // then by size descending within each group.
+    let status_rank = |s: &FileProgressStatus| -> u8 {
+        match s {
+            FileProgressStatus::Error => 0,
+            FileProgressStatus::InProgress
+            | FileProgressStatus::Encrypting
+            | FileProgressStatus::Decrypting => 1,
+            FileProgressStatus::Pending => 2,
+            FileProgressStatus::Completed => 3,
         }
+    };
+    files.sort_by(|a, b| {
+        status_rank(&a.status)
+            .cmp(&status_rank(&b.status))
+            .then(b.total_bytes.cmp(&a.total_bytes))
     });
 
-    // Single pass for stats.
-    // For each file, pick the best progress metric based on its current status:
-    // - Encrypting/Decrypting → use bytes_encrypted (transfer hasn't started)
-    // - Uploading/Downloading/Completed → use bytes_transferred
-    // - Error → do NOT count progress bytes (failed files must not inflate the bar)
+    // Single pass: collect file counts, byte totals, and per-file progress
+    // contributions for the file-count weighted overall percent.
     let mut completed_files: usize = 0;
     let mut failed_files: usize = 0;
     let mut total_bytes_expected: u64 = 0;
     let mut total_progress_bytes: u64 = 0;
+    let mut progress_sum: f64 = 0.0;
 
     for f in &files {
         match f.status {
             FileProgressStatus::Completed => {
                 completed_files += 1;
+                progress_sum += 1.0;
                 if f.total_bytes > 0 {
                     total_bytes_expected += f.total_bytes;
                     total_progress_bytes += f.total_bytes;
@@ -407,34 +436,30 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
             }
             FileProgressStatus::Error => {
                 failed_files += 1;
-                // Failed files count toward expected total but NOT toward
-                // progress bytes — this keeps the progress bar honest.
+                // Error files don't contribute to progress_sum
                 if f.total_bytes > 0 {
                     total_bytes_expected += f.total_bytes;
                 }
             }
             _ => {
+                // In-progress / pending / encrypting / decrypting:
+                // contribute proportionally based on per-file progress.
+                progress_sum += f.progress_percent as f64 / 100.0;
                 if f.total_bytes > 0 {
                     total_bytes_expected += f.total_bytes;
-                    // Per-file best progress: use transfer bytes if available,
-                    // otherwise fall back to encrypt bytes.
-                    let file_progress = if f.bytes_transferred > 0 {
-                        f.bytes_transferred
-                    } else {
-                        f.bytes_encrypted
-                    };
-                    total_progress_bytes += file_progress;
                 }
+                // Only count actual transfer bytes (not encrypt/decrypt)
+                // so the display shows real network progress.
+                total_progress_bytes += f.bytes_transferred;
             }
         }
     }
 
     let total_files = files.len();
 
-    // Progress percentage:
-    // - If all files completed successfully: 100%
-    // - If some failed: cap at the real byte ratio (never claim 100%)
-    // - If all done (mix of completed + failed): show actual success ratio
+    // Byte-weighted progress when total bytes are known (consistent with
+    // the "X MB / Y GB" display).  Falls back to file-count weighted when
+    // file sizes are unavailable.
     let overall_percent = if total_files == 0 {
         0
     } else if failed_files == 0 && completed_files == total_files {
@@ -442,12 +467,8 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
     } else if total_bytes_expected > 0 {
         let pct = (total_progress_bytes as f64 / total_bytes_expected as f64) * 100.0;
         (pct.round() as u32).min(100)
-    } else if completed_files + failed_files == total_files {
-        // All files processed but no byte info — use file count ratio
-        let pct = (completed_files as f64 / total_files as f64) * 100.0;
-        (pct.round() as u32).min(100)
     } else {
-        let pct = (completed_files as f64 / total_files as f64) * 100.0;
+        let pct = (progress_sum / total_files as f64) * 100.0;
         (pct.round() as u32).min(100)
     };
 
@@ -461,6 +482,11 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
         failed_files,
         retry_in_secs: 0,
         last_error: None,
+        expected_uploads: session.expected_uploads,
+        expected_downloads: session.expected_downloads,
+        expected_local_deletes: session.expected_local_deletes,
+        expected_remote_deletes: session.expected_remote_deletes,
+        completed_at: session.completed_at,
         files,
     }
 }
@@ -785,25 +811,19 @@ pub fn update_file_progress(
             if bytes_transferred >= total_bytes && total_bytes > 0 {
                 file.bytes_encrypted = total_bytes;
             }
-            file.status = match action {
-                FileAction::Encrypt => FileStatus::Encrypting,
-                _ => FileStatus::Decrypting,
-            };
-            // Progress during encrypt phase is based on bytes_encrypted.
-            if file.total_bytes > 0 {
-                file.progress = ((file.bytes_encrypted as f64 / file.total_bytes as f64) * 100.0)
-                    .round()
-                    .min(100.0) as u32;
+            // Don't overwrite Completed status — for downloads, the file is
+            // already "done" once the transfer finishes.  Decrypt is local
+            // post-processing and shouldn't reset the completed count.
+            if file.status != FileStatus::Completed {
+                file.status = match action {
+                    FileAction::Encrypt => FileStatus::Encrypting,
+                    _ => FileStatus::Decrypting,
+                };
             }
         }
         _ => {
             // Upload/Download/Delete: update bytes_transferred (monotonic).
             file.bytes_transferred = file.bytes_transferred.max(bytes_transferred);
-            if file.total_bytes > 0 {
-                file.progress = ((file.bytes_transferred as f64 / file.total_bytes as f64) * 100.0)
-                    .round()
-                    .min(100.0) as u32;
-            }
             if file.bytes_transferred >= file.total_bytes && file.total_bytes > 0 {
                 file.status = FileStatus::Completed;
                 file.progress = 100;
@@ -816,6 +836,16 @@ pub fn update_file_progress(
                 };
             }
         }
+    }
+
+    // Progress is based on transfer bytes only — encrypt/decrypt phases
+    // are invisible to the user.  During encryption the file shows 0%
+    // (transfer hasn't started); during decryption it shows ~100%
+    // (download already finished).  No backward drops.
+    if file.status != FileStatus::Completed && file.total_bytes > 0 {
+        file.progress = ((file.bytes_transferred as f64 / file.total_bytes as f64) * 100.0)
+            .round()
+            .min(100.0) as u32;
     }
 
     let result = file.clone();
@@ -1153,7 +1183,6 @@ pub fn get_overall_progress(
         }
     }
 
-    // Byte-weighted progress. Failed files do NOT inflate the bar.
     let overall_percent = if total_files == 0 {
         0u32
     } else if failed_files == 0 && completed_files == total_files {
@@ -1161,12 +1190,11 @@ pub fn get_overall_progress(
     } else if total_bytes_expected > 0 {
         let pct = (total_progress_bytes as f64 / total_bytes_expected as f64) * 100.0;
         (pct.round() as u32).min(100)
-    } else if completed_files + failed_files == total_files {
+    } else if total_files > 0 {
         let pct = (completed_files as f64 / total_files as f64) * 100.0;
         (pct.round() as u32).min(100)
     } else {
-        let pct = (completed_files as f64 / total_files as f64) * 100.0;
-        (pct.round() as u32).min(100)
+        0
     };
 
     Ok(OverallProgress {

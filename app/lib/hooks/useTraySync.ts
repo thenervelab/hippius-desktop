@@ -21,9 +21,6 @@ import {
 
 import {
   lastUpdatedPercentAtom,
-  isSyncingAtom,
-  uploadProgressAtom,
-  downloadProgressAtom,
 } from "@/app/lib/store/syncAtoms";
 import { useAtomValue, useAtom, useSetAtom } from "jotai";
 import { vpnConnectedAtom } from "@/components/dashboard-title-wrapper/vpn-menu/vpnAtoms";
@@ -266,29 +263,19 @@ export function useTrayInit(isAuthenticated: boolean) {
     lastUpdatedPercentAtom,
   );
   const setVpnConnected = useSetAtom(vpnConnectedAtom);
-  
-  // Watch local sync events for immediate feedback
-  const isSyncingFromEvents = useAtomValue(isSyncingAtom);
-  const uploadProgress = useAtomValue(uploadProgressAtom);
-  const downloadProgress = useAtomValue(downloadProgressAtom);
-  
-  
-  // Watch snapshot for overall progress
+
+  // Watch snapshot for overall progress — single source of truth
   const snapshot = useAtomValue(snapshotAtom);
   const hasSyncActivity = snapshot.isActive || snapshot.files.length > 0;
 
-  // Effect to update tray when sync state changes
+  // Effect to update tray when sync state changes — derived entirely from snapshot
   useEffect(() => {
-    // Check if there's active upload or download progress
-    const hasActiveUpload = uploadProgress !== null && uploadProgress.bytes < uploadProgress.total;
-    const hasActiveDownload = downloadProgress !== null && downloadProgress.bytes < downloadProgress.total;
-    
     // Clear any pending clear timer when state changes
     if (syncLabelClearTimer) {
       clearTimeout(syncLabelClearTimer);
       syncLabelClearTimer = null;
     }
-    
+
     // When logged out, force default icon and clear sync label
     if (!isAuthenticated) {
       void setTrayIconSyncing(false, false);
@@ -299,73 +286,48 @@ export function useTrayInit(isAuthenticated: boolean) {
       return;
     }
 
-    // Determine sync state - use BOTH localStorage tracking AND event-based atoms
-    // isSyncingFromEvents is set immediately when hcfs_sync_started fires
-    // hasActiveUpload/hasActiveDownload catch cases where files are still transferring
-    const isCurrentlySyncing = isSyncingFromEvents ||
-      hasActiveUpload ||
-      hasActiveDownload ||
-      snapshot.isActive ||
-      (snapshot.files.filter((f) => f.status === "inProgress").length > 0) || 
-      (snapshot.totalFiles > 0 && snapshot.completedFiles < snapshot.totalFiles && snapshot.failedFiles === 0);
-    
-    // Only consider sync complete if NOT currently syncing
-    const isSyncComplete = !isCurrentlySyncing && 
+    const isCurrentlySyncing = snapshot.isActive;
+    const isSyncComplete = !isCurrentlySyncing &&
       (snapshot.completedFiles > 0 || snapshot.failedFiles > 0);
-    
+
     // Build the tray menu label
     let labelText: string | null = null;
     if (isCurrentlySyncing) {
-      // Use localStorage-based progress percentage - same source as the widget
-      // This ensures tray and widget always show consistent percentages
-      const percent = snapshot.overallPercent;
-      labelText = `⟳ Syncing: ${percent}%`;
+      labelText = `⟳ Syncing: ${snapshot.overallPercent}%`;
     } else if (isSyncComplete) {
-      // Show completed header — detail rows (file count + size) are managed by the watcher
       if (snapshot.failedFiles > 0) {
         labelText = `⚠ Sync Failed`;
       } else {
         labelText = `✓ Sync Complete`;
       }
-    } else if (hasSyncActivity && !isSyncingFromEvents && !hasActiveUpload && !hasActiveDownload) {
-      // Show recent activity status ONLY if not currently syncing or transferring
+    } else if (hasSyncActivity) {
       labelText = `✓ Sync Complete`;
     }
-    
-    // Update tray menu text
+
     void updateTraySyncLabel(labelText);
-    
-    // Determine if there are failures to show the error icon
+
     const hasFailed = snapshot.failedFiles > 0;
-    
-    // Update icon state
+
     if (isCurrentlySyncing) {
       void setTrayIconSyncing(true, false);
     } else if (hasFailed) {
-      // Show syncing (red) icon for failed state
       void setTrayIconSyncing(true, false);
     } else if (isSyncComplete || hasSyncActivity) {
-      // Show green "completed" icon when sync done or when there are recent files
       void setTrayIconSyncing(false, true);
     } else {
-      // Not syncing and no recent files - default icon
       if (lastUpdatedPercent !== null) {
-        // Only reset if we had a previous sync state
         void setTrayIconSyncing(false, false);
         setLastUpdatedPercent(null);
       }
     }
-    
-    // Track state for comparison
+
     if (isCurrentlySyncing && snapshot.totalFiles > 0) {
       setLastUpdatedPercent(0);
     } else if (isSyncComplete || hasSyncActivity) {
       setLastUpdatedPercent(100);
-      // NO auto-clear - the icon stays green while there are recent files (1 hour)
-      // The cleanup happens automatically when files expire from localStorage
     }
-    
-  }, [isAuthenticated, snapshot, hasSyncActivity, lastUpdatedPercent, setLastUpdatedPercent, isSyncingFromEvents, uploadProgress, downloadProgress]);
+
+  }, [isAuthenticated, snapshot, hasSyncActivity, lastUpdatedPercent, setLastUpdatedPercent]);
 
   useEffect(() => {
     if (menuPromise) return;

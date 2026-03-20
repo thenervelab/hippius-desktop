@@ -27,6 +27,13 @@ export interface SyncSnapshot {
   retryInSecs: number;
   /** Error message from the last failed sync cycle. */
   lastError: string | null;
+  /** Expected action counts from the session — drives UI text. */
+  expectedUploads: number;
+  expectedDownloads: number;
+  expectedLocalDeletes: number;
+  expectedRemoteDeletes: number;
+  /** Epoch-ms when the session completed (null if still active). */
+  completedAt: number | null;
   files: FileProgress[];
 }
 
@@ -40,5 +47,10 @@ export const EMPTY_SNAPSHOT: SyncSnapshot = {
   failedFiles: 0,
   retryInSecs: 0,
   lastError: null,
+  expectedUploads: 0,
+  expectedDownloads: 0,
+  expectedLocalDeletes: 0,
+  expectedRemoteDeletes: 0,
+  completedAt: null,
   files: [],
 };
