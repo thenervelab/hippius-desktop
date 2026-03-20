@@ -31,11 +31,14 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
         const paths = await getAllSyncPaths(polkadotAddress || undefined);
         setSyncPaths(paths.filter((sp) => !!sp.path));
 
-        if (paths.length > 0 && !value) {
-          const defaultPath =
-            paths.find((sp) => sp.label === defaultLabel) ?? paths[0];
-          if (defaultPath?.path) {
-            onChange(defaultPath.label, defaultPath.path);
+        if (paths.length > 0) {
+          // If a value is already set (e.g. from the selected tab), resolve its path.
+          // Otherwise fall back to defaultLabel or the first folder.
+          const match = value
+            ? paths.find((sp) => sp.label === value)
+            : (paths.find((sp) => sp.label === defaultLabel) ?? paths[0]);
+          if (match?.path) {
+            onChange(match.label, match.path);
           }
         }
       } catch {
