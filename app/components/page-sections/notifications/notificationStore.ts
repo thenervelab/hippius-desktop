@@ -71,18 +71,18 @@ export const refreshNotificationsAtom = atom(null, async (get, set) => {
   const rows = await listNotifications(userAddress, 100);
 
   const mapped = rows.map((r: any) => {
-    const timestamp = Number(r.notificationCreationTime);
-    const releaseNotes = typeof r.notificationReleaseNotes === "string" ? r.notificationReleaseNotes : "";
+    const timestamp = Number(r.creationTime);
+    const releaseNotes = typeof r.releaseNotes === "string" ? r.releaseNotes : "";
 
     return {
       id: Number(r.id),
       icon: iconMap[r.notificationType] ?? Icons.Document,
       type: r.notificationType,
       subType: r.notificationSubtype || "",
-      title: r.notificationTitleText,
-      description: r.notificationDescription,
-      buttonText: r.notificationLinkText,
-      buttonLink: r.notificationLink,
+      title: r.titleText,
+      description: r.description,
+      buttonText: r.linkText,
+      buttonLink: r.link,
       releaseNotes,
       unread: r.isUnread === true || r.isUnread === 1,
       // Keep original timestamp for TimeAgo component

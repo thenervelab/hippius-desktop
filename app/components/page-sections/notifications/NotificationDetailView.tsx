@@ -11,6 +11,26 @@ import { InView } from "react-intersection-observer";
 import { useRouter } from "next/navigation";
 import BasicMarkdown from "@/components/updater/BasicMarkdown";
 import { getVersion } from "@tauri-apps/api/app";
+import {
+  cn,
+  getFilePartsFromFileName,
+  getFileTypeFromExtension,
+} from "@/lib/utils";
+import { getFileIcon } from "@/lib/utils/fileTypeUtils";
+import { formatBytes } from "@/lib/utils/formatBytes";
+import type { SyncedFileDetail } from "@/lib/hooks/useFilesNotification";
+
+/** Parse file details JSON from releaseNotes for Files-type notifications. */
+export function parseFileDetails(type: string, releaseNotes: string): SyncedFileDetail[] {
+  if (type !== "Files" || !releaseNotes) return [];
+  try {
+    const parsed = JSON.parse(releaseNotes);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // Not JSON — fall through
+  }
+  return [];
+}
 
 interface NotificationDetailViewProps {
   selectedNotification: {
@@ -90,7 +110,13 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
 
   const releaseNotesText = releaseNotes?.trim() ?? "";
   const hasReleaseNotes = releaseNotesText.length > 0;
-  const descriptionText = hasReleaseNotes
+
+  // Parse file details from releaseNotes for Files-type notifications
+  const fileDetails = parseFileDetails(type, releaseNotesText);
+
+  const isFilesNotification = type === "Files" && fileDetails.length > 0;
+  const hasRegularReleaseNotes = hasReleaseNotes && !isFilesNotification;
+  const descriptionText = hasRegularReleaseNotes
     ? `${description}${description.endsWith(".") ? "" : "."} See what's new below.`
     : description;
 
@@ -139,12 +165,60 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
 
             {/* Description */}
             <RevealTextLine rotate reveal={inView} className="delay-400">
-              <p className="text-sm text-grey-30 font-medium leading-5 mb-[7px]">
+              <p className="text-sm text-grey-30 font-medium leading-5 mb-[7px] break-all">
                 {descriptionText}
               </p>
             </RevealTextLine>
 
-            {hasReleaseNotes && (
+            {/* File details for sync notifications */}
+            {isFilesNotification && (
+              <div className="mt-2 mb-2 max-h-[280px] overflow-y-auto pr-2">
+                {fileDetails.map((file, index) => {
+                  const { fileFormat } = getFilePartsFromFileName(file.fileName);
+                  const fileType = getFileTypeFromExtension(fileFormat || null);
+                  const { icon: FileIcon, color } = getFileIcon(fileType ? fileType : undefined, false);
+                  const isDeleted = file.action === "local_delete" || file.action === "remote_delete";
+                  return (
+                    <div key={`${file.fileName}-${index}`} className="mb-3 last:mb-0">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <AbstractIconWrapper className="size-8 flex-shrink-0 flex items-center justify-center">
+                            <FileIcon className={cn("size-5 relative", color)} />
+                          </AbstractIconWrapper>
+                          <div className="flex flex-col justify-center min-w-0">
+                            <span className="text-sm font-medium text-grey-10 truncate">
+                              {file.fileName.length > 35
+                                ? `${file.fileName.slice(0, 25)}...${file.fileName.slice(-7)}`
+                                : file.fileName}
+                            </span>
+                            {file.totalBytes > 0 && (
+                              <span className="text-xs text-grey-70 mt-0.5">
+                                {formatBytes(file.totalBytes)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center flex-shrink-0 ml-2">
+                          {isDeleted ? (
+                            <>
+                              <Icons.TickCircle className="w-5 h-5 text-error-50" />
+                              <span className="text-sm ml-1 text-error-50">Deleted</span>
+                            </>
+                          ) : (
+                            <>
+                              <Icons.TickCircle className="w-5 h-5 text-success-50" />
+                              <span className="text-sm ml-1 text-success-50">Synced</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {hasRegularReleaseNotes && (
               <div className="mt-2 mb-2">
                 <div className="flex items-center gap-2 text-grey-50">
                   <Icons.Note2 className="size-5" />

@@ -17,14 +17,6 @@ export const trayUpdateInProgressAtom = atom<boolean>(false);
 // Tracks the last time the tray was successfully updated
 export const lastTrayUpdateTimeAtom = atom<number>(0);
 
-// Track the overall sync status
-export const syncStatusAtom = atom<{
-  synced_files: number;
-  total_files: number;
-  in_progress: boolean;
-  percent: number;
-} | null>(null);
-
 // Local sync event progress tracking (from Tauri events)
 export interface SyncProgressPayload {
   bytes: number;
