@@ -106,6 +106,32 @@ pub fn is_encrypted_name_stub(name: &str) -> Option<&str> {
     }
 }
 
+/// Check if a sync error indicates the remote folder was removed by another device.
+///
+/// When another device deletes a folder from the server (via `delete_remote_folder`),
+/// subsequent sync attempts will fail because the server no longer has the folder
+/// registered. This function inspects the error string to detect that scenario.
+///
+/// Returns `true` if the error is consistent with a remotely-removed folder.
+pub fn is_remote_folder_removed_error(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    // Server returns 404 when the folder hash is not registered
+    if lower.contains("404") && (lower.contains("not found") || lower.contains("not_found")) {
+        return true;
+    }
+    // Explicit messages from the HCFS server / client library
+    if lower.contains("folder not found")
+        || lower.contains("folder not registered")
+        || lower.contains("folder does not exist")
+        || lower.contains("folder has been deleted")
+        || lower.contains("folder was removed")
+        || lower.contains("no such folder")
+    {
+        return true;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,5 +383,56 @@ mod tests {
     #[test]
     fn encrypted_stub_wrong_prefix_rejected() {
         assert_eq!(is_encrypted_name_stub("files_0123456789abcdef"), None,);
+    }
+
+    // --- is_remote_folder_removed_error ---
+
+    #[test]
+    fn remote_removed_404_not_found() {
+        assert!(is_remote_folder_removed_error("HTTP 404 Not Found"));
+        assert!(is_remote_folder_removed_error(
+            "Server returned 404: resource not_found"
+        ));
+        assert!(is_remote_folder_removed_error(
+            "Request failed with status 404 - not found"
+        ));
+    }
+
+    #[test]
+    fn remote_removed_explicit_messages() {
+        assert!(is_remote_folder_removed_error("folder not found"));
+        assert!(is_remote_folder_removed_error("Folder not registered"));
+        assert!(is_remote_folder_removed_error(
+            "The folder does not exist on the server"
+        ));
+        assert!(is_remote_folder_removed_error("folder has been deleted"));
+        assert!(is_remote_folder_removed_error(
+            "Your folder was removed by another device"
+        ));
+        assert!(is_remote_folder_removed_error("no such folder"));
+    }
+
+    #[test]
+    fn remote_removed_case_insensitive() {
+        assert!(is_remote_folder_removed_error("FOLDER NOT FOUND"));
+        assert!(is_remote_folder_removed_error("Folder Not Registered"));
+    }
+
+    #[test]
+    fn remote_removed_unrelated_errors_rejected() {
+        assert!(!is_remote_folder_removed_error("Connection timeout"));
+        assert!(!is_remote_folder_removed_error("401 Unauthorized"));
+        assert!(!is_remote_folder_removed_error("500 Internal Server Error"));
+        assert!(!is_remote_folder_removed_error(
+            "Sync stalled — no progress for 3 minutes"
+        ));
+        assert!(!is_remote_folder_removed_error("Network offline"));
+        assert!(!is_remote_folder_removed_error(""));
+    }
+
+    #[test]
+    fn remote_removed_404_alone_not_sufficient() {
+        // "404" alone without "not found" could be a generic server error
+        assert!(!is_remote_folder_removed_error("Error code 404"));
     }
 }

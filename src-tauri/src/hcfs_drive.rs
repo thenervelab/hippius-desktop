@@ -955,6 +955,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         Synced {
             outcome: Result<SyncOutcome, String>,
             staged_downloads: Vec<StagedFile>,
+            sync_path: PathBuf,
         },
         ConflictsPending,
         #[allow(dead_code)]
@@ -966,6 +967,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         let mut guard = sync.drives.lock().await;
         match guard.get_mut(label) {
             Some(m) if m.is_unlocked() => {
+                let drive_sync_path = m.sync_path().to_path_buf();
                 debug!(label = label, "Drive is unlocked, syncing directly");
                 m.log_sync_diagnostics(label);
 
@@ -1078,6 +1080,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     _ => SyncResult::Synced {
                         outcome,
                         staged_downloads: Vec::new(),
+                        sync_path: drive_sync_path,
                     },
                 }
             }
@@ -1163,6 +1166,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         SyncResult::Synced {
             outcome: Ok(outcome),
             staged_downloads,
+            ..
         } => {
             sync.reset_sync_failures();
             sync.retry_at.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -1320,7 +1324,9 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             }
         }
         SyncResult::Synced {
-            outcome: Err(e), ..
+            outcome: Err(e),
+            sync_path: drive_sync_path,
+            ..
         } => {
             let failures = sync.record_sync_failure();
             sync.discard_pending_activity_for_label(&label_owned);
@@ -1331,6 +1337,46 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 error = %err_str,
                 "Sync failed",
             );
+
+            // Detect remote folder removal — another device deleted
+            // this folder from the server.  Notify the user so they can
+            // decide whether to remove the local copy or re-sync.
+            if crate::sync_logic::is_remote_folder_removed_error(&err_str) {
+                warn!(
+                    label = %label_owned,
+                    local_path = %drive_sync_path.display(),
+                    "Remote folder was removed by another device",
+                );
+                if let Err(e) = app.emit(
+                    "hcfs_remote_folder_removed",
+                    serde_json::json!({
+                        "label": label_owned,
+                        "local_path": drive_sync_path.to_string_lossy(),
+                    }),
+                ) {
+                    warn!(error = %e, "Failed to emit hcfs_remote_folder_removed");
+                }
+
+                // Stop retrying this drive — the folder no longer exists.
+                // The user will choose to remove or re-sync via the UI.
+                // We do NOT auto-remove the local sync path; that decision
+                // belongs to the user.
+                {
+                    let mut guard = sync.drives.lock().await;
+                    guard.remove(&label_owned);
+                    info!(label = %label_owned, "Removed drive from registry (remote folder deleted)");
+                }
+
+                // Reset failure counter so the next manually-triggered
+                // sync doesn't inherit stale backoff state.
+                sync.reset_sync_failures();
+                sync.retry_at.store(0, std::sync::atomic::Ordering::Relaxed);
+                if let Ok(mut guard) = sync.last_error.lock() {
+                    *guard = None;
+                }
+
+                return true;
+            }
 
             // Compute when the next retry will happen (exponential backoff)
             let backoff_secs = crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);

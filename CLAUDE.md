@@ -42,7 +42,7 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 
 ### Frontend Structure (app/)
 
-- **`app/(pages)/`** — Next.js route groups: files, wallet, stake/unstake, vm, billing, notifications, support, referrals, bridge
+- **`app/(pages)/`** — Next.js route groups: files, wallet, stake/unstake, vm, billing, notifications, support, referrals, bridge. Also contains invisible event-listener components mounted in the layout: `SyncEventLogger`, `ConflictEventListener`, `RemoteFolderRemovalListener`, `MigrationChecker`, `SyncFilesHandler`.
 - **`app/lib/wallet-auth-context.tsx`** — Central auth provider (login, session restore, logout, token refresh). Wraps the entire app.
 - **`app/lib/global-atoms/`** — Jotai atoms for global state (polkadot API, sync status, migration)
 - **`app/lib/store/jotaiStore.ts`** — Standalone Jotai store (`appStore`) used outside React (e.g., tray sync)
