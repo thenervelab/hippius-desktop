@@ -23,7 +23,7 @@ const SidebarDialog: React.FC<SidebarDialogProps> = ({
       {/* Fade backdrop */}
       <Dialog.Overlay
         forceMount
-        className="fixed inset-0 z-40 bg-grey-100/80 
+        className="fixed inset-0 z-40 bg-white/80 
                    data-[state=open]:animate-fade-in-0.2 data-[state=closed]:animate-fade-out-0.2"
       />
 

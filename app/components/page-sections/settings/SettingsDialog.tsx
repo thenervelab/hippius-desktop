@@ -45,7 +45,7 @@ const SettingsWidthDialog: React.FC<SettingsWidthDialogProps> = ({
         {/* Fade backdrop */}
         <Dialog.Overlay
           forceMount
-          className="fixed inset-0 z-40 bg-grey-100/80 pointer-events-none
+          className="fixed inset-0 z-40 bg-white/80 pointer-events-none
                    data-[state=open]:animate-fade-in-0.2 data-[state=closed]:animate-fade-out-0.2"
         />
 
@@ -63,7 +63,7 @@ const SettingsWidthDialog: React.FC<SettingsWidthDialogProps> = ({
             <Dialog.Title className="text-2xl text-grey-10  font-medium">
               {heading}
             </Dialog.Title>
-            <Dialog.Close className="border-[0.7px] border-grey-80 flex justify-center items-center size-10 hover:bg-grey-90 transition-colors focus:outline-none focus:ring-1 focus:ring-primary-50">
+            <Dialog.Close className=" border-[0.7px] border-grey-80 flex justify-center items-center size-10 hover:bg-grey-90 transition-colors">
               <X className="size-4 text-grey-10" />
             </Dialog.Close>
           </div>

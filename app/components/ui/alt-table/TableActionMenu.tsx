@@ -58,7 +58,7 @@ const TableActionMenu = memo(function TableActionMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        className="bg-grey-100 border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)]
+        className="bg-white border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)]
          rounded-2 overflow-hidden p-0 min-w-[150px]"
       >
         {/* Dropdown title */}

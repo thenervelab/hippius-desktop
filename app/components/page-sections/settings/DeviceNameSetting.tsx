@@ -77,7 +77,7 @@ export default function DeviceNameSetting() {
       {({ inView, ref }) => (
         <div
           ref={ref}
-          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover dark:bg-none"
+          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
         >
           <div className="w-full flex flex-col">
             <div className="w-full">
@@ -129,7 +129,7 @@ export default function DeviceNameSetting() {
                       maxLength={64}
                       className="px-11 border-grey-80 h-14 text-grey-30 w-full
                         bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none
-                        hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus bg-grey-100"
+                        hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus bg-white"
                     />
                   </div>
                 </div>

@@ -34,7 +34,7 @@ const IconButton: React.FC<IconButtonProps> = ({
       onClick={onClick}
       className={cn(
         outerPadding,
-        "shadow-outer-action-button bg-primary-50 text-white border border-primary-40 rounded hover:bg-primary-40 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed dark:shadow-none dark:border-primary-50",
+        "shadow-outer-action-button bg-primary-50 text-white border border-primary-40 rounded hover:bg-primary-40 transition  font-medium disabled:opacity-50  disabled:cursor-not-allowed",
         fontSizeClass,
         className
       )}
@@ -42,7 +42,7 @@ const IconButton: React.FC<IconButtonProps> = ({
     >
       <div
         className={cn(
-          "flex items-center gap-2 border rounded border-primary-40 shadow-inner-action-button dark:border-primary-50/30 dark:shadow-none",
+          "flex items-center gap-2 border rounded border-primary-40 shadow-inner-action-button",
           innerPadding,
           innerClassName
         )}

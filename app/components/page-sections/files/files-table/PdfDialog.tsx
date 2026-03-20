@@ -25,7 +25,7 @@ export const PdfDialogTrigger: React.FC<{
     >
       <span className="flex-1 min-w-0">{children}</span>
       {/* Eye icon on hover */}
-      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-grey-100 right-4">
+      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-white right-4">
         <Icons.Eye className="size-5 text-primary-60 [&>path]:stroke-[3px]" />
       </div>
     </button>
@@ -167,7 +167,7 @@ const PdfDialog: React.FC<{
                         onClick={() => {
                           handleFileDownload(file, polkadotAddress ?? "");
                         }}
-                        className="flex duration-300 text-sm font-medium gap-x-2 items-center bg-grey-100 whitespace-nowrap rounded border border-grey-80 p-2"
+                        className="flex duration-300 text-sm font-medium gap-x-2 items-center bg-white whitespace-nowrap rounded border border-grey-80 p-2"
                       >
                         <Icons.DocumentDownload className="size-4 min-w-4" />
                         <span className="max-sm:hidden text-grey-10 text-sm">
@@ -187,7 +187,7 @@ const PdfDialog: React.FC<{
                 {prevFile && (
                   <button
                     onClick={handlePrev}
-                    className="absolute left-5 top-1/2 -translate-y-1/2 z-10 border border-grey-80 bg-grey-100/80 hover:bg-grey-100 rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
+                    className="absolute left-5 top-1/2 -translate-y-1/2 z-10 border border-grey-80 bg-white/80 hover:bg-white rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
                     aria-label="Previous PDF"
                   >
                     <Icons.ArrowLeft2 className="size-6 text-grey-50" />
@@ -197,7 +197,7 @@ const PdfDialog: React.FC<{
                 {nextFile && (
                   <button
                     onClick={handleNext}
-                    className="absolute right-5 top-1/2 -translate-y-1/2 z-10 border border-grey-80 bg-grey-100/80 hover:bg-grey-100 rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
+                    className="absolute right-5 top-1/2 -translate-y-1/2 z-10 border border-grey-80 bg-white/80 hover:bg-white rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
                     aria-label="Next PDF"
                   >
                     <Icons.ArrowRight2 className="size-6 text-grey-50" />
@@ -223,7 +223,7 @@ const PdfDialog: React.FC<{
                     >
                       <AlertCircle className="size-12 mx-auto mb-3 text-red-400" />
                       <p className="text-lg font-medium mb-2">Failed to load PDF</p>
-                      <p className="text-sm text-grey-60 mb-6 text-center">
+                      <p className="text-sm text-gray-300 mb-6 text-center">
                         The file could not be displayed. Try downloading it instead.
                       </p>
                       <button

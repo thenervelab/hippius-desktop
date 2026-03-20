@@ -212,7 +212,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
               <Skeleton className="!h-[26px] !w-[150px]" />
             ) : instanceData ? (
               <ImageCell
-                iconClass="bg-grey-90 p-[5px] size-[26px]"
+                iconClass="bg-[#F7F7F7] p-[5px] size-[26px]"
                 value={parseImageName(instanceData.image)}
               />
             ) : null}
@@ -239,7 +239,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
               <Skeleton className="!h-[25px] !w-[150px]" />
             ) : instanceData ? (
               <StatusCell
-                className="p-2 bg-grey-90 w-min"
+                className="p-2 bg-[#F7F7F7] w-min"
                 value={instanceData.status}
               />
             ) : null}
@@ -255,23 +255,23 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
           <div className="grid grid-cols-2 gap-2 ">
             {isLoading ? (
               <>
-                <div className="bg-grey-90 p-2 rounded">
+                <div className="bg-[#F7F7F7] p-2 rounded">
                   <div className="text-grey-50 font-medium text-base">
                     Model
                   </div>
                   <Skeleton className="!h-[20px] !w-[80px] mt-2" />
                 </div>
-                <div className="bg-grey-90 p-2 rounded">
+                <div className="bg-[#F7F7F7] p-2 rounded">
                   <div className="text-grey-50 font-medium text-base">RAM</div>
                   <Skeleton className="!h-[20px] !w-[80px] mt-2" />
                 </div>
-                <div className="bg-grey-90 p-2 rounded">
+                <div className="bg-[#F7F7F7] p-2 rounded">
                   <div className="text-grey-50 font-medium text-base">
                     Processor
                   </div>
                   <Skeleton className="!h-[20px] !w-[80px] mt-2" />
                 </div>
-                <div className="bg-grey-90 p-2 rounded">
+                <div className="bg-[#F7F7F7] p-2 rounded">
                   <div className="text-grey-50 font-medium text-base">
                     Storage
                   </div>

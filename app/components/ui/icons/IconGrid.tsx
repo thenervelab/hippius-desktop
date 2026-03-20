@@ -11,21 +11,21 @@ export const IconGrid: IconComponent = (props) => (
       <rect
         width="40"
         height="40"
-        fill="transparent"
-        stroke="rgb(var(--primary-80))"
+        fill="white"
+        stroke="#B4C8F3"
         strokeWidth="0.4"
       />
-      <path d="M0 0L40 40" stroke="rgb(var(--primary-80))" strokeWidth="0.4" />
-      <path d="M0 40L40 2.06624e-06" stroke="rgb(var(--primary-80))" strokeWidth="0.4" />
-      <path d="M20 0V40" stroke="rgb(var(--primary-80))" strokeWidth="0.4" />
-      <path d="M0 20H40" stroke="rgb(var(--primary-80))" strokeWidth="0.4" />
+      <path d="M0 0L40 40" stroke="#B4C8F3" strokeWidth="0.4" />
+      <path d="M0 40L40 2.06624e-06" stroke="#B4C8F3" strokeWidth="0.4" />
+      <path d="M20 0V40" stroke="#B4C8F3" strokeWidth="0.4" />
+      <path d="M0 20H40" stroke="#B4C8F3" strokeWidth="0.4" />
       <rect
         x="2.5"
         y="7.5"
         width="35"
         height="25"
         rx="1"
-        stroke="rgb(var(--primary-80))"
+        stroke="#B4C8F3"
         strokeWidth="0.4"
       />
       <rect
@@ -34,7 +34,7 @@ export const IconGrid: IconComponent = (props) => (
         width="30"
         height="30"
         rx="1"
-        stroke="rgb(var(--primary-80))"
+        stroke="#B4C8F3"
         strokeWidth="0.4"
       />
       <rect
@@ -44,11 +44,11 @@ export const IconGrid: IconComponent = (props) => (
         height="25"
         rx="1"
         transform="rotate(-90 7.5 37.5)"
-        stroke="rgb(var(--primary-80))"
+        stroke="#B4C8F3"
         strokeWidth="0.4"
       />
-      <circle cx="20" cy="20" r="17.5" stroke="rgb(var(--primary-80))" strokeWidth="0.4" />
-      <circle cx="20" cy="20" r="7.5" stroke="rgb(var(--primary-80))" strokeWidth="0.4" />
+      <circle cx="20" cy="20" r="17.5" stroke="#B4C8F3" strokeWidth="0.4" />
+      <circle cx="20" cy="20" r="7.5" stroke="#B4C8F3" strokeWidth="0.4" />
     </g>
     <defs>
       <clipPath id="clip0_18404_77381">

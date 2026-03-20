@@ -31,7 +31,7 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({
                         sideOffset={8}
                         className="
                             z-[9999] max-w-[260px]
-                            bg-grey-100 border border-grey-80 rounded-[8px]
+                            bg-white border border-grey-80 rounded-[8px]
                             px-2 py-2 text-[10px] font-medium text-grey-40 shadow-lg
                             whitespace-normal break-words
                             animate-in fade-in-0 zoom-in-95
@@ -39,7 +39,7 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({
                         "
                     >
                         {children}
-                        <Tooltip.Arrow className="fill-grey-100" width={14} height={7} />
+                        <Tooltip.Arrow className="fill-white" width={14} height={7} />
                     </Tooltip.Content>
                 </Tooltip.Portal>
             </Tooltip.Root>

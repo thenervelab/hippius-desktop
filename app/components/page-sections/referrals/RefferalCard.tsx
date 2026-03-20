@@ -13,7 +13,7 @@ export default function ReferralCard({
   value
 }: DetailsCardProps) {
   return (
-    <div className="bg-grey-100 p-3 rounded-lg border border-grey-80 shadow-sm flex justify-between flex-col">
+    <div className="bg-white p-3 rounded-lg border border-grey-80 shadow-sm flex justify-between flex-col">
       <div className="flex justify-between items-start">
         <AbstractIconWrapper className="size-10 text-primary-40">
           <Icon className="absolute text-primary-40 size-6" />

@@ -32,9 +32,9 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
   hideMenu = false,
 }) => {
   return (
-    <div className="bg-grey-100 border border-grey-80 rounded-lg overflow-hidden flex flex-col gap-4 p-0">
+    <div className="bg-white border border-grey-80 rounded-lg overflow-hidden flex flex-col gap-4 p-0">
       {/* Header */}
-      <div className="bg-grey-100 border-b border-grey-80 flex gap-2 items-center pl-4 pr-3 py-2.5">
+      <div className="bg-white border-b border-grey-80 flex gap-2 items-center pl-4 pr-3 py-2.5">
         <Icons.Computing className="size-5 text-primary-50" />
         <p className="flex-1 font-medium leading-6 text-lg text-grey-10 tracking-tight">
           {template.name}

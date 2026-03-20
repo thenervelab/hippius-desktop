@@ -99,7 +99,7 @@ const NavItem: React.FC<NavItemProps> = ({
           <span
             className={cn(
               "text-sm font-medium whitespace-nowrap overflow-hidden transition-opacity duration-300",
-              comingSoon && "text-grey-60"
+              comingSoon && "text-gray-400"
             )}
           >
             {label}
@@ -152,8 +152,8 @@ const NavItem: React.FC<NavItemProps> = ({
               className={cn(
                 "transition-all duration-300 relative group w-full text-left",
                 {
-                  "bg-primary-100 text-primary-40": active,
-                  "hover:bg-grey-90 hover:text-primary-40 text-grey-40 [&[data-state=open]]:bg-grey-90 [&[data-state=open]]:text-primary-40":
+                  "bg-blue-50 text-primary-40": active,
+                  "hover:bg-gray-100 hover:text-primary-40 text-grey-40 [&[data-state=open]]:bg-gray-100 [&[data-state=open]]:text-primary-40":
                     !active
                 },
                 className
@@ -164,7 +164,7 @@ const NavItem: React.FC<NavItemProps> = ({
               {/* </Link> */}
             </NavigationMenu.Trigger>
 
-            <NavigationMenu.Content className="absolute left-full top-0 z-[999] bg-grey-100 rounded shadow-tooltip border border-grey-80">
+            <NavigationMenu.Content className="absolute left-full top-0 z-[999] bg-white rounded shadow-tooltip border border-grey-80">
               <SubMenuList
                 items={subMenuItems}
                 inView={inView}
@@ -186,10 +186,10 @@ const NavItem: React.FC<NavItemProps> = ({
         className={cn(
           "transition-all duration-300 relative group w-full text-left",
           {
-            "bg-primary-100 text-primary-40": active,
-            "hover:bg-grey-90 hover:text-primary-40 text-grey-40":
+            "bg-blue-50 text-primary-40": active,
+            "hover:bg-gray-100 hover:text-primary-40 text-grey-40":
               !active && label !== "Logout",
-            "hover:bg-grey-90 hover:text-red-600 text-error-50":
+            "hover:bg-gray-100 hover:text-red-600 text-error-50":
               label === "Logout"
           },
           className
@@ -207,10 +207,10 @@ const NavItem: React.FC<NavItemProps> = ({
       className={cn(
         "transition-all duration-300 relative group",
         {
-          "bg-primary-100 text-primary-40": active,
-          "hover:bg-grey-90 hover:text-primary-40 text-grey-40":
+          "bg-blue-50 text-primary-40": active,
+          "hover:bg-gray-100 hover:text-primary-40 text-grey-40":
             !active && label !== "Logout",
-          "hover:bg-grey-90 hover:text-red-600 text-error-50":
+          "hover:bg-gray-100 hover:text-red-600 text-error-50":
             label === "Logout"
         },
         className

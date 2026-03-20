@@ -34,7 +34,7 @@ export default function Billing() {
             onClick={() => openUrl(BILLING_DOCS_URL)}
             aria-label="Billing documentation"
             title="Billing documentation"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-grey-80 bg-grey-100 text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50"
           >
             <HelpCircle className="size-4" />
           </button>
@@ -64,7 +64,7 @@ export default function Billing() {
               />
             </div>
 
-            <div className="flex flex-col animate-in fade-in duration-300 gap-8 w-full shadow-menu rounded-lg bg-grey-100 p-4 border border-grey-80">
+            <div className="flex flex-col animate-in fade-in duration-300 gap-8 w-full shadow-menu rounded-lg bg-white p-4 border border-grey-80">
               {activeTab === "Billing History" && <BillingnHistoryTable />}
             </div>
           </div>

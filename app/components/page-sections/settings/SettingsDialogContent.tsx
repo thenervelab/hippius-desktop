@@ -15,8 +15,6 @@ import EmailNotificationSection from "./EmailNotificationSection";
 import VPNSettings from "./VPNSettings";
 import RecoveryPhraseSettings from "./RecoveryPhraseSettings";
 import DeviceNameSetting from "./DeviceNameSetting";
-import AppearanceSettings from "./AppearanceSettings";
-import { Palette } from "lucide-react";
 
 const SettingsDialogContent: React.FC = () => {
   const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
@@ -53,10 +51,6 @@ const SettingsDialogContent: React.FC = () => {
       tabName: "VPN Settings",
       icon: <Icons.ShieldSecurity className="size-4" />,
     },
-    {
-      tabName: "Appearance",
-      icon: <Palette className="size-4" />,
-    },
   ];
 
   return (
@@ -83,7 +77,7 @@ const SettingsDialogContent: React.FC = () => {
             >
             {activeTab === "Notifications" && (
               <div className="flex flex-col gap-4 w-full">
-                <div className="shadow-menu rounded-lg bg-grey-100 p-4 w-full">
+                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                   <RevealTextLine
                     rotate
                     reveal={inView}
@@ -93,7 +87,7 @@ const SettingsDialogContent: React.FC = () => {
                     <NotificationSettings />
                   </RevealTextLine>
                 </div>
-                <div className="shadow-menu rounded-lg bg-grey-100 p-4 w-full">
+                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                   <RevealTextLine
                     rotate
                     reveal={inView}
@@ -107,14 +101,14 @@ const SettingsDialogContent: React.FC = () => {
             )}
 
             {activeTab === "Recovery Phrase" && (
-              <div className="shadow-menu rounded-lg bg-grey-100 p-4 w-full">
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                 <RecoveryPhraseSettings />
               </div>
             )}
 
             {activeTab === "Sync & Storage" && (
               <div className="flex flex-col gap-4 w-full">
-                <div className="shadow-menu rounded-lg bg-grey-100 p-4 w-full">
+                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                   <RevealTextLine
                     rotate
                     reveal={inView}
@@ -136,7 +130,7 @@ const SettingsDialogContent: React.FC = () => {
             )}
             {activeTab === "API Token" && (
               <div className="flex flex-col gap-4 w-full">
-                <div className="shadow-menu rounded-lg bg-grey-100 p-4 w-full">
+                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                   <RevealTextLine
                     rotate
                     reveal={inView}
@@ -146,7 +140,7 @@ const SettingsDialogContent: React.FC = () => {
                     <ApiTokenCard />
                   </RevealTextLine>
                 </div>
-                <div className="shadow-menu rounded-lg bg-grey-100 p-4 w-full">
+                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                   <RevealTextLine
                     rotate
                     reveal={inView}
@@ -160,7 +154,7 @@ const SettingsDialogContent: React.FC = () => {
             )}
 
             {activeTab === "Customize RPC" && (
-              <div className="shadow-menu rounded-lg bg-grey-100 p-4 w-full">
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                 <RevealTextLine
                   rotate
                   reveal={inView}
@@ -173,7 +167,7 @@ const SettingsDialogContent: React.FC = () => {
             )}
 
             {activeTab === "VPN Settings" && (
-              <div className="shadow-menu rounded-lg bg-grey-100 p-4 w-full">
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                 <RevealTextLine
                   rotate
                   reveal={inView}
@@ -184,8 +178,6 @@ const SettingsDialogContent: React.FC = () => {
                 </RevealTextLine>
               </div>
             )}
-
-            {activeTab === "Appearance" && <AppearanceSettings />}
           </div>
         )}
       </InView>

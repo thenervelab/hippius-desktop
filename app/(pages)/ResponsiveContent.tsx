@@ -23,7 +23,7 @@ export default function ResponsiveContent({
         )}
       >
         {/* Sticky toolbar — always visible at the top */}
-        <div className="sticky top-0 z-30 bg-grey-100 px-4 pt-4 pb-2">
+        <div className="sticky top-0 z-30 bg-white px-4 pt-4 pb-2">
           <div className="justify-between flex relative">
             <HeaderText />
             <div className="flex -mt-2 gap-2 items-center justify-center">

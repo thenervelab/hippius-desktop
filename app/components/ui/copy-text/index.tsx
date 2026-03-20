@@ -51,7 +51,7 @@ const CopyText: React.FC<CopyCellProps> = ({
       <button
         onClick={handleCopy}
         className={cn(
-          "ml-2 p-1 hover:text-grey-40 transition-colors",
+          "ml-2 p-1 hover:text-gray-700 transition-colors",
           buttonClass
         )}
         title={title}

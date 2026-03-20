@@ -105,7 +105,7 @@ export function FileSizeSelector({
             value={inputValue}
             onChange={handleInputChange}
             placeholder="0"
-            className="w-[180px] h-12 font-medium font-grotesk pl-3 pr-16 py-3 text-base text-grey-60 placeholder-grey-70 border border-grey-80 rounded-xl focus:outline-none focus:ring-1 focus:ring-grey-70 focus:border-grey-70 hover:border-grey-70 transition-colors"
+            className="w-[180px] h-12 font-medium font-grotesk pl-3 pr-16 py-3 text-base text-grey-60 placeholder-grey-70 border border-grey-80 rounded-xl focus:outline-none focus:ring-1 focus:ring-gray-300 focus:border-gray-300 hover:border-grey-70 transition-colors"
           />
           <div className="absolute right-0 top-1/2  h-full">
             <Menubar.Root>
@@ -115,7 +115,7 @@ export function FileSizeSelector({
                     <span>{selectedUnit}</span>
                   </button>
                 </Menubar.Trigger>
-                <Menubar.Content className="mt-1 bg-grey-100 border border-grey-80 rounded-lg p-1 shadow-menu min-w-[80px] z-50">
+                <Menubar.Content className="mt-1 bg-white border border-grey-80 rounded-lg p-1 shadow-menu min-w-[80px] z-50">
                   <UnitMenuItem
                     unit="KB"
                     onClick={() => handleUnitChange("KB")}

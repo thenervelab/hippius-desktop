@@ -33,13 +33,13 @@ const buttonCardVariants = ({
   switch (variant) {
     case "primary":
       variantClasses = cn(
-        "relative overflow-hidden bg-primary-50 hover:bg-primary-40 text-white border border-primary-40 rounded shadow-outer-buttonCard dark:shadow-none dark:border-primary-50",
+        "relative overflow-hidden bg-primary-50 hover:bg-primary-40 text-white border border-primary-40 rounded shadow-outer-buttonCard",
         classes.primary
       );
       break;
     case "error":
       variantClasses = cn(
-        "relative overflow-hidden bg-error-50 hover:bg-error-40 text-white border border-error-40 rounded shadow-outer-buttonCard dark:shadow-none dark:border-error-50",
+        "relative overflow-hidden bg-error-50 hover:bg-error-40 text-white border border-error-40 rounded shadow-outer-buttonCard",
         classes.error
       );
       break;
@@ -52,7 +52,7 @@ const buttonCardVariants = ({
       break;
     case "dialog":
       variantClasses = cn(
-        "relative overflow-hidden bg-primary-50 hover:bg-primary-40 text-white border border-primary-40 rounded shadow-outer-action-button dark:shadow-none dark:border-primary-50",
+        "relative overflow-hidden bg-primary-50 hover:bg-primary-40 text-white border border-primary-40 rounded shadow-outer-action-button",
         classes.primary
       );
       break;
@@ -113,13 +113,13 @@ const ButtonCardOrLinkInner: React.FC<{
     return (
       <>
         {variant === "primary" && (
-          <div className="absolute border rounded border-primary-40 left-0.5 right-0.5 top-0.5 bottom-0.5 shadow-inner-buttonCard dark:border-primary-50/30 dark:shadow-none" />
+          <div className="absolute border rounded border-primary-40 left-0.5 right-0.5 top-0.5 bottom-0.5 shadow-inner-buttonCard" />
         )}
         {variant === "dialog" && (
-          <div className="absolute border rounded border-primary-40 left-[5px] right-[5px] top-[5px] bottom-[5px] shadow-inner-action-button dark:border-primary-50/30 dark:shadow-none" />
+          <div className="absolute border rounded border-primary-40 left-[5px] right-[5px] top-[5px] bottom-[5px] shadow-inner-action-button" />
         )}
         {variant === "error" && (
-          <div className="absolute border rounded border-error-70/80 left-[5px] right-[5px] top-[5px] bottom-[5px] shadow-inner-buttonCard shadow-md dark:border-error-50/30 dark:shadow-none" />
+          <div className="absolute border rounded border-error-70/80 left-[5px] right-[5px] top-[5px] bottom-[5px] shadow-inner-buttonCard shadow-md" />
         )}
 
         {appendToStart && icon && (

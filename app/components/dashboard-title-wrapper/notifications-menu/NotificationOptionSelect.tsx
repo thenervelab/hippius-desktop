@@ -41,7 +41,7 @@ const NotificationOptionSelect: React.FC<NotificationOptionSelectProps> = ({
           <Menubar.Content
             align="start"
             sideOffset={8}
-            className="min-w-[160px] bg-grey-100 shadow-menu rounded-lg border border-grey-80 z-50 overflow-hidden"
+            className="min-w-[160px] bg-white shadow-menu rounded-lg border border-grey-80 z-50 overflow-hidden"
           >
             {options.map((opt) => (
               <Menubar.Item

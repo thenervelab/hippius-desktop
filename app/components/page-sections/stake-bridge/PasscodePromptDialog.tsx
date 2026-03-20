@@ -61,8 +61,8 @@ export default function PasscodePromptDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="bg-grey-100/70 fixed px-4 z-10 top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
-          <Dialog.Content className="relative p-4 border shadow-dialog bg-grey-100 flex flex-col max-w-[428px] max-h-[75vh] h-auto overflow-y-auto custom-scrollbar-thin border-grey-80 bg-background-1 rounded sm:rounded-[8px] overflow-hidden w-full data-[state=open]:animate-scale-in-95-0.2">
+        <Dialog.Overlay className="bg-white/70 fixed px-4 z-10 top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
+          <Dialog.Content className="relative p-4 border shadow-dialog bg-white flex flex-col max-w-[428px] max-h-[75vh] h-auto overflow-y-auto custom-scrollbar-thin border-grey-80 bg-background-1 rounded sm:rounded-[8px] overflow-hidden w-full data-[state=open]:animate-scale-in-95-0.2">
             <Graphsheet
               majorCell={{
                 lineColor: [246, 248, 254, 1.0],

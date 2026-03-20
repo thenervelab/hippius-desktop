@@ -160,9 +160,9 @@ export default function OAuthCallbackPage() {
 
     if (error) {
         return (
-            <div className="fixed inset-0 w-screen h-screen flex items-center justify-center bg-grey-100 z-50">
+            <div className="fixed inset-0 w-screen h-screen flex items-center justify-center bg-white z-50">
                 <div className="w-full max-w-md mx-auto px-4">
-                    <div className="bg-grey-100 rounded-xl shadow-lg p-8 border border-grey-90">
+                    <div className="bg-white rounded-xl shadow-lg p-8 border border-grey-90">
                         <div className="flex flex-col items-center text-center">
                             <div className="size-16 rounded-full bg-error-95 flex items-center justify-center mb-4">
                                 <AlertCircle className="size-8 text-error-50" />
@@ -191,9 +191,9 @@ export default function OAuthCallbackPage() {
     }
 
     return (
-        <div className="fixed inset-0 w-screen h-screen flex items-center justify-center bg-grey-100 z-50">
+        <div className="fixed inset-0 w-screen h-screen flex items-center justify-center bg-white z-50">
             <div className="w-full max-w-md mx-auto px-4">
-                <div className="bg-grey-100 rounded-xl shadow-lg p-8 border border-grey-90">
+                <div className="bg-white rounded-xl shadow-lg p-8 border border-grey-90">
                     <div className="flex flex-col items-center text-center">
                         <div className="size-16 rounded-full bg-primary-95 flex items-center justify-center mb-4">
                             <Loader2 className="size-8 text-primary-50 animate-spin" />

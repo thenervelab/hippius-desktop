@@ -47,7 +47,7 @@ const VideoPlayerError: React.FC<VideoPlayerErrorProps> = ({
         <AlertCircle className="size-12 mx-auto mb-3 text-red-400" />
         <p className="text-lg font-medium">{message}</p>
         {isLocalFile && (
-          <p className="text-sm text-grey-60 mt-2">
+          <p className="text-sm text-gray-300 mt-2">
             This file is on your computer. Open it with your system player instead.
           </p>
         )}

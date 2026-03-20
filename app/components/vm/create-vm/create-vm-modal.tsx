@@ -451,7 +451,7 @@ const CreateVMModal: React.FC<Props> = ({
         onOpenChange={(o) => !o && !isCreatingVM && handleClose()}
       >
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-grey-100/60 z-50" />
+          <Dialog.Overlay className="fixed inset-0 bg-white/60 z-50" />
           <Dialog.Content asChild>
             <div
               className="
@@ -469,7 +469,7 @@ const CreateVMModal: React.FC<Props> = ({
                 className="
                 w-full
                 max-h-[90vh]
-                bg-grey-100 rounded-[8px]
+                bg-white rounded-[8px]
                 shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
                 border border-grey-80
                 overflow-hidden flex flex-col min-h-0

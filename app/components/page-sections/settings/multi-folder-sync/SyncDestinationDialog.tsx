@@ -93,12 +93,12 @@ export function SyncDestinationDialog({
               <div className="p-3 border border-grey-80 rounded-lg bg-grey-98">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs text-grey-60 break-all font-mono bg-grey-100 px-2 py-1.5 rounded border border-grey-90">
+                    <p className="text-xs text-grey-60 break-all font-mono bg-white px-2 py-1.5 rounded border border-grey-90">
                       {syncLocalPath}/{folder?.folderName}
                     </p>
                   </div>
                   <button
-                    className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-primary-50 bg-grey-100 border border-primary-50 rounded hover:bg-primary-50 hover:text-white transition-colors"
+                    className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-primary-50 bg-white border border-primary-50 rounded hover:bg-primary-50 hover:text-white transition-colors"
                     onClick={onSelectDestination}
                     disabled={isSyncing}
                   >

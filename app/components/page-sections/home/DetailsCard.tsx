@@ -56,7 +56,7 @@ export default function DetailsCard({
   };
 
   return (
-    <div className="bg-grey-100 p-3 rounded-lg border border-grey-80 shadow-sm">
+    <div className="bg-white p-3 rounded-lg border border-grey-80 shadow-sm">
       <div className="flex justify-between items-center">
         <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
           <Icon className="absolute text-primary-40 size-4 sm:size-5" />

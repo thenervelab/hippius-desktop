@@ -185,7 +185,7 @@ export default function CheckForUpdateDialog({
   return (
     <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-grey-100/60 z-50" />
+        <Dialog.Overlay className="fixed inset-0 bg-white/60 z-50" />
         <Dialog.Content
           className="
             fixed left-1/2 top-1/2 z-50 
@@ -198,12 +198,12 @@ export default function CheckForUpdateDialog({
           </Dialog.Title>
 
           <div
-            className="bg-grey-100 rounded-[8px]
+            className="bg-white rounded-[8px]
                        shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
                        border border-grey-80 mx-6 h-full relative max-md:overflow-y-scroll"
           >
             <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[8px] sm:hidden" />
-            <Dialog.Close className="max-md:hidden absolute top-4 right-4 border-[0.7px] border-grey-80 flex justify-center items-center size-10 hover:bg-grey-90 transition-colors focus:outline-none focus:ring-1 focus:ring-primary-50">
+            <Dialog.Close className="max-md:hidden absolute top-4 right-4 border-[0.7px] border-grey-80 flex justify-center items-center size-10 hover:bg-grey-90 transition-colors">
               <X className="size-4 text-grey-10" />
             </Dialog.Close>
 

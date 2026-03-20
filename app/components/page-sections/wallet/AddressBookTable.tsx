@@ -189,7 +189,7 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
         </Table>
 
         {isDeleting && (
-          <div className="absolute inset-0 bg-grey-100/50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-white/50 flex items-center justify-center">
             <Loader2 className="size-6 animate-spin text-grey-50" />
           </div>
         )}

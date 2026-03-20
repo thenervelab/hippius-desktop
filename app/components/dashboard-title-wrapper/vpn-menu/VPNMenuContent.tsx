@@ -75,7 +75,7 @@ const VPNMenuContent = () => {
         <div>
           <div
             ref={ref}
-            className="w-full bg-grey-100 rounded-lg overflow-hidden flex flex-col"
+            className="w-full bg-white rounded-lg overflow-hidden flex flex-col"
           >
             {/* Header / Visual Area */}
             <div className="relative h-[184px] bg-primary-100 m-4 mb-0 rounded-lg overflow-hidden shrink-0">
@@ -139,7 +139,7 @@ const VPNMenuContent = () => {
               </div>
 
               {/* Status Bar */}
-              <div className="flex items-center justify-between px-2 py-1.5 bg-grey-100 border border-grey-80 rounded-[4px]">
+              <div className="flex items-center justify-between px-2 py-1.5 bg-white border border-grey-80 rounded-[4px]">
                 <RevealTextLine reveal={inView} delay={400}>
                   <span className="font-medium text-base leading-[22px] text-grey-50 tracking-[-0.32px]">
                     {isConnected ? "Your VPN is On" : "Your VPN is Off"}

@@ -125,7 +125,7 @@ const AddressSelect: React.FC<AddressSelectProps> = ({
             sideOffset={8}
             onEscapeKeyDown={() => handleOpenChange(false)}
             onInteractOutside={() => handleOpenChange(false)}
-            className="w-[var(--radix-menubar-trigger-width)] max-h-[300px] overflow-y-auto bg-grey-100 shadow-menu rounded-lg border border-grey-80 z-50 py-2 flex flex-col gap-1"
+            className="w-[var(--radix-menubar-trigger-width)] max-h-[300px] overflow-y-auto bg-white shadow-menu rounded-lg border border-grey-80 z-50 py-2 flex flex-col gap-1"
             hidden={!isOpen}
           >
             {filteredAddresses.length > 0 &&

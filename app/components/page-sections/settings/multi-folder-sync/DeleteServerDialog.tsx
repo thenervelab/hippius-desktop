@@ -72,7 +72,7 @@ export function DeleteServerDialog({
               value={confirmInput}
               onChange={(e) => onConfirmInputChange(e.target.value)}
               disabled={isDeletingServer}
-              className="border-grey-80 h-12 text-grey-30 w-full bg-grey-100 py-3 font-medium text-base rounded-lg"
+              className="border-grey-80 h-12 text-grey-30 w-full bg-white py-3 font-medium text-base rounded-lg"
             />
             {confirmInput.length > 0 && confirmInput !== folderName && (
               <p className="text-xs text-error-50">

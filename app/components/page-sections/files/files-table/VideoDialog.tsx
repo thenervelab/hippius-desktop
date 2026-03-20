@@ -23,7 +23,7 @@ export const VideoDialogTrigger: React.FC<{
     >
       <span className="flex-1 min-w-0">{children}</span>
       {/* Play icon on hover */}
-      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-grey-100 right-4">
+      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-white right-4">
         <Icons.PlayCircle className="size-5 text-primary-60 [&>path]:stroke-[4px]" />
       </div>
     </button>
@@ -164,7 +164,7 @@ const VideoDialog: React.FC<{
                             onClick={() => {
                               handleFileDownload(file, polkadotAddress ?? "");
                             }}
-                            className="flex duration-300 text-sm font-medium gap-x-2 items-center bg-grey-100 whitespace-nowrap rounded border border-grey-80 p-2"
+                            className="flex duration-300 text-sm font-medium gap-x-2 items-center bg-white whitespace-nowrap rounded border border-grey-80 p-2"
                           >
                             <Icons.DocumentDownload className="size-4 min-w-4" />
                             <span className="max-sm:hidden text-grey-10 text-sm">
@@ -184,7 +184,7 @@ const VideoDialog: React.FC<{
                     {prevFile && (
                       <button
                         onClick={handlePrev}
-                        className="absolute left-5 top-1/2 -translate-y-1/2 z-10 border border-grey-80 bg-grey-100/80 hover:bg-grey-100 rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
+                        className="absolute left-5 top-1/2 -translate-y-1/2 z-10 border border-grey-80 bg-white/80 hover:bg-white rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
                         aria-label="Previous video"
                       >
                         <Icons.ArrowLeft2 className="size-6 text-grey-50" />
@@ -194,7 +194,7 @@ const VideoDialog: React.FC<{
                     {nextFile && (
                       <button
                         onClick={handleNext}
-                        className="absolute right-5 top-1/2 -translate-y-1/2 z-10 border border-grey-80 bg-grey-100/80 hover:bg-grey-100 rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
+                        className="absolute right-5 top-1/2 -translate-y-1/2 z-10 border border-grey-80 bg-white/80 hover:bg-white rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
                         aria-label="Next video"
                       >
                         <Icons.ArrowRight2 className="size-6 text-grey-50" />

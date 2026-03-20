@@ -13,14 +13,14 @@ const Terminal: IconComponent = (props) => (
     />
     <path
       d="M6.1676 7.75C6.9026 8.1175 7.5326 8.6725 7.9901 9.3625C8.2526 9.7525 8.2526 10.255 7.9901 10.645C7.5326 11.3275 6.9026 11.8825 6.1676 12.25"
-      stroke="currentColor"
+      stroke="white"
       strokeWidth="1.1"
       strokeLinecap="round"
       strokeLinejoin="round"
     />
     <path
       d="M10.7501 12.25H13.7501"
-      stroke="currentColor"
+      stroke="white"
       strokeWidth="1.1"
       strokeLinecap="round"
       strokeLinejoin="round"

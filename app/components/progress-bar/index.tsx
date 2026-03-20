@@ -5,14 +5,6 @@ export const ProgressBar = ({
   value = 0,
   segments = 5,
   stuckTimeout = 1000,
-  fillClass = "bg-primary-50",
-  pulseClass = "pulse-blue",
-}: {
-  value?: number;
-  segments?: number;
-  stuckTimeout?: number;
-  fillClass?: string;
-  pulseClass?: string;
 }) => {
   const segPercent = 100 / segments;
   const [isStuck, setIsStuck] = useState(false);
@@ -45,13 +37,12 @@ export const ProgressBar = ({
         return (
           <div
             key={idx}
-            className="flex-1 border border-grey-80 bg-grey-90 h-full relative overflow-hidden"
+            className="flex-1 border border-[#E3E3E3] bg-[#F4F4F4] h-full relative overflow-hidden"
           >
             <div
               className={cn(
-                "absolute left-0 top-0 h-full w-full origin-right transition-transform duration-300 ease-out",
-                fillClass,
-                isStuck && pulseClass
+                "absolute left-0 top-0 h-full w-full origin-right bg-[#3167DD] transition-transform duration-300 ease-out",
+                isStuck && "pulse-blue"
               )}
               style={{
                 transform: `translateX(${fill * 100 - 100}%)`,

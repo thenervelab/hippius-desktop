@@ -42,9 +42,7 @@
         "height": 1000,
         "visible": true,
         "center": true,
-        "resizable": true,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true
+        "resizable": true
       }
     ],
     "withGlobalTauri": true,

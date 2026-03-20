@@ -29,7 +29,7 @@ export default function VPNMenu({ className = "delay-500" }: Props) {
           <Menubar.Content
             align="center"
             sideOffset={5}
-            className="w-[400px] bg-grey-100 shadow-menu rounded-lg border border-grey-80 -translate-x-2 z-50"
+            className="w-[400px] bg-white shadow-menu rounded-lg border border-grey-80 -translate-x-2 z-50"
           >
             <Menubar.Arrow
               className="fill-grey-100  stroke stroke-grey-80 translate-y-[-1px] z-[-1]"

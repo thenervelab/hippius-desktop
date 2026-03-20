@@ -75,7 +75,7 @@ const SubMenuItem: React.FC<Props> = ({
         <span
           className={cn(
             "text-sm font-medium whitespace-nowrap overflow-hidden transition-opacity duration-300",
-            comingSoon && "text-grey-60"
+            comingSoon && "text-gray-400"
           )}
         >
           {label}
@@ -106,8 +106,8 @@ const SubMenuItem: React.FC<Props> = ({
     <Link
       href={path}
       className={cn("transition-all duration-300 relative group", {
-        "bg-primary-100 text-primary-40": visiblyActive,
-        "hover:bg-grey-90 hover:text-primary-40": !visiblyActive || isViewingRecentFiles,
+        "bg-blue-50 text-primary-40": visiblyActive,
+        "hover:bg-gray-100 hover:text-primary-40": !visiblyActive || isViewingRecentFiles,
         "text-grey-40": !visiblyActive,
       })}
       onClick={handleClick}

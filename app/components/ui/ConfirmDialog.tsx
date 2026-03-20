@@ -125,7 +125,7 @@ const AlertModeDialog: React.FC<AlertModeProps> = ({
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="fixed inset-0 z-[9999] bg-black/50 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <AlertDialog.Content
-          className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[9999] bg-grey-100 rounded-lg shadow-xl p-6 w-full max-w-md focus:outline-none"
+          className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[9999] bg-white rounded-lg shadow-xl p-6 w-full max-w-md focus:outline-none"
         >
           <div className="flex items-start gap-4">
             <div

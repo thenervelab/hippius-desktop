@@ -43,7 +43,7 @@ const TicketMessage: React.FC<TicketMessageProps> = ({
     <div
       className={cn(
         "flex flex-col gap-1.5 w-[264px]",
-        !isFirstMessage && "bg-grey-100 border border-grey-80 rounded-lg p-2"
+        !isFirstMessage && "bg-white border border-grey-80 rounded-lg p-2"
       )}
     >
       {/* Message Body */}

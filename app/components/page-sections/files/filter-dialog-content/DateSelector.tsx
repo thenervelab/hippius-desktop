@@ -152,7 +152,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
             <Icons.CalendarNew className="ml-2 mt-0.5 size-4 text-primary-10" />
           </button>
         </Menubar.Trigger>
-        <Menubar.Content className="mt-1 bg-grey-100 border border-grey-80 rounded-lg p-4 shadow-menu min-w-[320px] max-w-[360px] z-50" align="start" sideOffset={4}>
+        <Menubar.Content className="mt-1 bg-white border border-grey-80 rounded-lg p-4 shadow-menu min-w-[320px] max-w-[360px] z-50" align="start" sideOffset={4}>
           {/* Calendar Header */}
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">

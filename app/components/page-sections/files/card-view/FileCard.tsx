@@ -276,13 +276,13 @@ const FileCard: React.FC<FileCardProps> = ({
         />
       )}
 
-      <div className="p-2 flex items-center justify-between relative bg-grey-100 bg-opacity-80 border-b border-grey-80 h-10 w-full">
+      <div className="p-2 flex items-center justify-between relative bg-white bg-opacity-80 border-b border-grey-80 h-10 w-full">
         {file.isFolder ? (
           <div className="flex items-center">
             {/* Selection checkbox - inline with filename */}
             {isSelectionMode && (
               <Checkbox.Root
-                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-grey-100 data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors mr-2"
+                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-white data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors mr-2"
                 checked={isFileSelected(file)}
                 onCheckedChange={() => toggleFileSelection(file)}
                 onClick={(e) => e.stopPropagation()}
@@ -318,7 +318,7 @@ const FileCard: React.FC<FileCardProps> = ({
             {/* Selection checkbox - inline with filename */}
             {isSelectionMode && (
               <Checkbox.Root
-                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-grey-100 data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors mr-2"
+                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-white data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors mr-2"
                 checked={isFileSelected(file)}
                 onCheckedChange={() => toggleFileSelection(file)}
                 onClick={(e) => e.stopPropagation()}
@@ -364,7 +364,7 @@ const FileCard: React.FC<FileCardProps> = ({
             {shouldLoadThumbnail && isLoadingThumbnail ? (
               <div className="flex flex-col items-center justify-center space-y-2">
                 <Loader2 className="h-8 w-8 animate-spin text-primary-50" />
-                <span className="text-xs text-grey-60">
+                <span className="text-xs text-gray-500">
                   Loading preview...
                 </span>
               </div>

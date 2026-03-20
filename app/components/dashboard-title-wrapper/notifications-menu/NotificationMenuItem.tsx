@@ -128,7 +128,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
           <div
             ref={ref}
             className={cn(
-              "flex items-start gap-2 p-3 hover:bg-grey-90 hover:rounded rounded-lg mb-3 bg-grey-100 group cursor-pointer w-full transition duration-200 relative",
+              "flex items-start gap-2 p-3 hover:bg-grey-90 hover:rounded rounded-lg mb-3 bg-white group cursor-pointer w-full transition duration-200 relative",
               selected && "border border-primary-70 bg-primary-100",
               isArchiving && "opacity-0 translate-y-1 scale-[0.98]",
             )}

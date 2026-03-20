@@ -94,7 +94,7 @@ export default function FileContextMenu({
       style={menuStyle}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="bg-grey-100 border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] rounded-md overflow-hidden p-0 min-w-[180px]">
+      <div className="bg-white border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] rounded-md overflow-hidden p-0 min-w-[180px]">
         {/* Menu items */}
         <div className="flex flex-col">
           {file.isFolder && (<Link

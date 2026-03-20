@@ -65,7 +65,7 @@ const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
 
           {/* QR Code */}
           <div className="w-full flex justify-center mb-4">
-            <div className="border border-grey-80 rounded-lg p-4 bg-grey-100 w-full flex items-center justify-center flex-col gap-[22px]">
+            <div className="border border-grey-80 rounded-lg p-4 bg-white w-full flex items-center justify-center flex-col gap-[22px]">
               <div className="w-[194px] h-[194px] flex items-center justify-center">
                 <QRCode
                   value={fullAddress}

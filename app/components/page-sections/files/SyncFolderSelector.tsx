@@ -330,7 +330,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
           onClick={apply}
         >
           {balanceLoading ? (
-            <ThreeDotLoader dotClassName="bg-grey-100" />
+            <ThreeDotLoader dotClassName="bg-white" />
           ) : (
             <span className="text-lg leading-6 font-medium">
               {IS_SYNC_PAUSED ? "Sync Paused" : loading ? "Setting up..." : "Sync Folder"}

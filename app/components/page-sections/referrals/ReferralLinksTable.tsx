@@ -276,10 +276,10 @@ export default function ReferralLinksTable() {
       <TableWrapper className="overflow-x-hidden">
         {loading ? (
           <div className="p-8 flex justify-center">
-            <Loader2 className="animate-spin text-grey-60 size-8" />
+            <Loader2 className="animate-spin text-gray-500 size-8" />
           </div>
         ) : table.getRowModel().rows.length === 0 ? (
-          <div className="p-6 text-center text-grey-60">
+          <div className="p-6 text-center text-gray-500">
             No referral links yet
           </div>
         ) : (

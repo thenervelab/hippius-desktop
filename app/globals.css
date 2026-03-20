@@ -2,11 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Override default browser focus outline to follow accent color */
-:focus-visible {
-  outline-color: rgb(var(--primary-50));
-}
-
 :root {
   /* Primary Shades */
   --primary-100: 233 239 251;
@@ -67,266 +62,6 @@
   --warning-30: 148 86 5;
   --warning-20: 121 57 2;
   --warning-10: 46 18 5;
-
-  /* Semantic surface colors */
-  --surface-white: 255, 255, 255;
-  --surface-overlay: 0, 0, 0;
-  --scrollbar-thumb: 247, 245, 245;
-  --scrollbar-border: #d2d2d2;
-  --scrollbar-thin: #e3e3e3;
-}
-
-/* ── Dark mode ────────────────────────────────────────────────── */
-.dark {
-  /* Grey scale inverts — mirrors light-mode contrast ratios on dark bg */
-  --grey-100: 20 20 20;
-  --grey-90: 30 30 30;
-  --grey-80: 45 45 45;
-  --grey-70: 110 110 110;
-  --grey-60: 140 140 140;
-  --grey-50: 163 163 163;
-  --grey-40: 190 190 190;
-  --grey-30: 210 210 210;
-  --grey-20: 230 230 230;
-  --grey-10: 240 240 240;
-
-  /* Primary adjusted for dark readability — richer, deeper blues */
-  --primary-100: 12 18 35;
-  --primary-90: 16 28 58;
-  --primary-80: 22 42 88;
-  --primary-70: 32 65 140;
-  --primary-60: 45 90 190;
-  --primary-50: 49 103 221;
-  --primary-40: 38 85 200;
-  --primary-30: 120 170 248;
-  --primary-20: 170 200 252;
-  --primary-10: 215 230 255;
-
-  /* Success for dark */
-  --success-100: 10 30 20;
-  --success-90: 15 45 30;
-  --success-80: 20 60 40;
-  --success-70: 30 100 65;
-  --success-60: 50 160 100;
-  --success-50: 70 200 130;
-  --success-40: 90 220 150;
-  --success-30: 130 235 175;
-  --success-20: 180 245 210;
-  --success-10: 220 252 235;
-
-  /* Error for dark */
-  --error-100: 40 15 15;
-  --error-90: 60 20 18;
-  --error-80: 100 30 25;
-  --error-70: 160 50 40;
-  --error-60: 220 75 60;
-  --error-50: 245 95 80;
-  --error-40: 250 130 120;
-  --error-30: 252 170 160;
-  --error-20: 253 210 205;
-  --error-10: 255 235 233;
-
-  /* Warning for dark */
-  --warning-100: 40 25 5;
-  --warning-90: 60 35 5;
-  --warning-80: 100 60 10;
-  --warning-70: 160 100 20;
-  --warning-60: 220 150 40;
-  --warning-50: 245 180 60;
-  --warning-40: 250 200 90;
-  --warning-30: 252 220 140;
-  --warning-20: 253 235 180;
-  --warning-10: 255 245 220;
-
-  --surface-white: 20, 20, 20;
-  --surface-overlay: 255, 255, 255;
-  --scrollbar-thumb: 50, 50, 50;
-  --scrollbar-border: #555;
-  --scrollbar-thin: #444;
-}
-
-/* ── Accent color presets ─────────────────────────────────────── */
-
-/* Purple */
-[data-accent="purple"] {
-  --primary-100: 243 237 254;
-  --primary-90: 228 215 252;
-  --primary-80: 205 185 248;
-  --primary-70: 172 145 240;
-  --primary-60: 139 105 232;
-  --primary-50: 109 70 220;
-  --primary-40: 85 50 190;
-  --primary-30: 65 35 150;
-  --primary-20: 45 20 110;
-  --primary-10: 15 5 30;
-}
-.dark[data-accent="purple"] {
-  --primary-100: 25 15 40;
-  --primary-90: 35 22 65;
-  --primary-80: 50 35 100;
-  --primary-70: 75 55 150;
-  --primary-60: 110 85 200;
-  --primary-50: 140 115 230;
-  --primary-40: 170 145 240;
-  --primary-30: 200 180 248;
-  --primary-20: 225 215 252;
-  --primary-10: 240 235 255;
-}
-
-/* Teal */
-[data-accent="teal"] {
-  --primary-100: 230 250 248;
-  --primary-90: 200 242 238;
-  --primary-80: 160 228 222;
-  --primary-70: 110 210 200;
-  --primary-60: 60 190 178;
-  --primary-50: 20 170 158;
-  --primary-40: 10 140 130;
-  --primary-30: 5 110 100;
-  --primary-20: 2 80 72;
-  --primary-10: 0 20 18;
-}
-.dark[data-accent="teal"] {
-  --primary-100: 10 25 24;
-  --primary-90: 15 40 38;
-  --primary-80: 20 65 60;
-  --primary-70: 30 100 92;
-  --primary-60: 50 150 140;
-  --primary-50: 70 185 172;
-  --primary-40: 110 210 200;
-  --primary-30: 155 228 220;
-  --primary-20: 200 242 238;
-  --primary-10: 230 250 248;
-}
-
-/* Green */
-[data-accent="green"] {
-  --primary-100: 235 251 240;
-  --primary-90: 210 245 220;
-  --primary-80: 170 232 188;
-  --primary-70: 120 215 148;
-  --primary-60: 70 195 108;
-  --primary-50: 30 172 75;
-  --primary-40: 20 142 60;
-  --primary-30: 12 112 45;
-  --primary-20: 5 82 30;
-  --primary-10: 2 25 10;
-}
-.dark[data-accent="green"] {
-  --primary-100: 10 28 15;
-  --primary-90: 15 45 25;
-  --primary-80: 22 72 40;
-  --primary-70: 35 110 60;
-  --primary-60: 55 160 90;
-  --primary-50: 75 195 115;
-  --primary-40: 120 215 148;
-  --primary-30: 165 232 185;
-  --primary-20: 210 245 220;
-  --primary-10: 235 251 240;
-}
-
-/* Orange */
-[data-accent="orange"] {
-  --primary-100: 255 243 230;
-  --primary-90: 255 228 200;
-  --primary-80: 252 200 150;
-  --primary-70: 248 168 95;
-  --primary-60: 245 138 50;
-  --primary-50: 235 110 15;
-  --primary-40: 200 90 10;
-  --primary-30: 160 70 5;
-  --primary-20: 115 48 2;
-  --primary-10: 35 15 0;
-}
-.dark[data-accent="orange"] {
-  --primary-100: 35 18 5;
-  --primary-90: 55 28 8;
-  --primary-80: 90 45 12;
-  --primary-70: 140 70 18;
-  --primary-60: 200 100 30;
-  --primary-50: 235 130 50;
-  --primary-40: 245 160 85;
-  --primary-30: 250 195 140;
-  --primary-20: 252 225 195;
-  --primary-10: 255 242 228;
-}
-
-/* Red */
-[data-accent="red"] {
-  --primary-100: 255 240 240;
-  --primary-90: 252 218 215;
-  --primary-80: 248 180 175;
-  --primary-70: 242 138 130;
-  --primary-60: 235 95 85;
-  --primary-50: 225 55 40;
-  --primary-40: 190 40 28;
-  --primary-30: 150 28 18;
-  --primary-20: 105 18 10;
-  --primary-10: 30 5 3;
-}
-.dark[data-accent="red"] {
-  --primary-100: 35 12 10;
-  --primary-90: 55 18 15;
-  --primary-80: 90 28 22;
-  --primary-70: 140 45 35;
-  --primary-60: 200 70 58;
-  --primary-50: 235 100 85;
-  --primary-40: 245 140 128;
-  --primary-30: 250 180 172;
-  --primary-20: 252 218 214;
-  --primary-10: 255 240 238;
-}
-
-/* Pink */
-[data-accent="pink"] {
-  --primary-100: 253 237 246;
-  --primary-90: 250 215 235;
-  --primary-80: 245 180 218;
-  --primary-70: 238 135 195;
-  --primary-60: 230 90 170;
-  --primary-50: 220 50 145;
-  --primary-40: 185 35 120;
-  --primary-30: 145 22 92;
-  --primary-20: 100 12 62;
-  --primary-10: 30 3 18;
-}
-.dark[data-accent="pink"] {
-  --primary-100: 35 10 22;
-  --primary-90: 55 15 35;
-  --primary-80: 90 25 58;
-  --primary-70: 140 40 90;
-  --primary-60: 200 65 140;
-  --primary-50: 230 100 168;
-  --primary-40: 240 140 195;
-  --primary-30: 248 180 220;
-  --primary-20: 252 218 238;
-  --primary-10: 254 240 248;
-}
-
-/* Indigo */
-[data-accent="indigo"] {
-  --primary-100: 237 238 254;
-  --primary-90: 218 220 252;
-  --primary-80: 185 190 248;
-  --primary-70: 140 148 240;
-  --primary-60: 100 110 232;
-  --primary-50: 65 75 220;
-  --primary-40: 48 55 190;
-  --primary-30: 35 40 150;
-  --primary-20: 22 25 110;
-  --primary-10: 8 8 30;
-}
-.dark[data-accent="indigo"] {
-  --primary-100: 15 15 40;
-  --primary-90: 22 24 65;
-  --primary-80: 35 38 100;
-  --primary-70: 55 60 150;
-  --primary-60: 85 95 200;
-  --primary-50: 115 125 230;
-  --primary-40: 150 158 242;
-  --primary-30: 190 195 250;
-  --primary-20: 222 224 253;
-  --primary-10: 240 240 255;
 }
 
 @keyframes fadeIn {
@@ -421,10 +156,10 @@
   }
 
   &::-webkit-scrollbar-thumb {
-    background: rgb(var(--scrollbar-thumb));
+    background: rgb(247, 245, 245);
     border-radius: 20px;
     cursor: pointer;
-    border: 1px solid var(--scrollbar-border);
+    border: 1px solid #d2d2d2;
 
     @media (max-width: 719px) {
       display: none;
@@ -448,7 +183,7 @@
   }
 
   &::-webkit-scrollbar-thumb {
-    background: var(--scrollbar-thin);
+    background: #e3e3e3;
     border-radius: 40px;
     cursor: pointer;
     /* 
@@ -475,9 +210,9 @@
   transform-origin: center;
   background: conic-gradient(
     from 180deg at 50% 50%,
-    rgb(var(--primary-50)) 0deg,
-    rgb(var(--primary-80)) 180deg,
-    rgb(var(--primary-100)) 360deg
+    rgba(49, 103, 221, 1) 0deg,
+    rgba(180, 200, 243, 1) 180deg,
+    rgba(233, 239, 251, 1) 360deg
   );
 }
 
@@ -499,10 +234,10 @@
 @keyframes pulseBlue {
   0%,
   100% {
-    background-color: rgb(var(--primary-50));
+    background-color: #3167dd;
   }
   50% {
-    background-color: rgb(var(--primary-60));
+    background-color: #5c8eef;
   }
 }
 .pulse-blue {
@@ -533,15 +268,6 @@ input[type="password"]::-ms-clear {
 
 .toaster-auth-aware > * {
   pointer-events: auto; /* only individual toasts capture clicks */
-}
-
-/* ── Transparent title bar drag region ─────────────────────── */
-.titlebar-drag-region {
-  -webkit-app-region: drag;
-}
-
-.titlebar-no-drag {
-  -webkit-app-region: no-drag;
 }
 
 html.body-scroll-locked,

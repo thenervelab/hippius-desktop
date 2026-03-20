@@ -7,7 +7,6 @@ import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { buildFolderPath } from "@/app/utils/folderPathUtils";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
 import SyncFolderBadge from "@/components/ui/SyncFolderBadge";
-import SyncProgressBadge from "./SyncProgressBadge";
 
 type NameCellProps = {
   rawName: string;
@@ -24,6 +23,18 @@ type NameCellProps = {
   syncStatus?: "synced" | "pending" | "unknown";
   label?: string;
   showFolderBadge?: boolean;
+};
+
+const SyncStatusBadge: FC<{ status?: "synced" | "pending" | "unknown" }> = ({ status }) => {
+  if (status !== "pending") return null;
+  return (
+    <span
+      className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-warning-95 text-warning-40 border border-warning-80 flex-shrink-0"
+      title="Not yet uploaded — will sync automatically"
+    >
+      Pending upload
+    </span>
+  );
 };
 
 const NameCell: FC<NameCellProps> = ({
@@ -99,12 +110,7 @@ const NameCell: FC<NameCellProps> = ({
               isPreviewable && "group-hover:text-primary-50 group-hover:underline"
             )}
           />
-          <SyncProgressBadge
-            fileName={rawName}
-            source={source}
-            syncStatus={syncStatus}
-            className="ml-1.5"
-          />
+          <SyncStatusBadge status={syncStatus} />
           {showFolderBadge && label && (
             <SyncFolderBadge label={label} className="ml-1.5" />
           )}
