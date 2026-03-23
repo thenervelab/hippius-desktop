@@ -1045,6 +1045,12 @@ pub fn mark_all_pending_files_as_failed(
                 file.status = FileStatus::Error;
                 file.error = Some(error_message.clone());
                 file.completed_at = Some(now);
+                // Reset transfer progress so that when this file is retried,
+                // the progress bar starts from 0 instead of continuing from
+                // the stale value (update_file_progress uses max() which
+                // would otherwise prevent progress from going backwards).
+                file.bytes_transferred = 0;
+                file.progress = 0;
             }
         }
     }
@@ -1081,6 +1087,8 @@ pub fn mark_file_error(
             file.status = FileStatus::Error;
             file.error = Some(error);
             file.completed_at = Some(now);
+            file.bytes_transferred = 0;
+            file.progress = 0;
         }
     }
 
