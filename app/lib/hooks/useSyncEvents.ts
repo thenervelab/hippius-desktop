@@ -69,12 +69,17 @@ export function useSyncEvents() {
               e.payload.files_deleted_locally +
               e.payload.files_deleted_remotely;
 
+            // Always dispatch so file listings refresh metadata (arion
+            // hashes, sync status, timestamps) even when no files were
+            // transferred — the first sync after login typically has
+            // zero transfers but populates server-side metadata.
+            window.dispatchEvent(
+              new CustomEvent("sync_files_completed_changed", {
+                detail: { filesCompleted: totalCompleted },
+              })
+            );
+
             if (totalCompleted > 0) {
-              window.dispatchEvent(
-                new CustomEvent("sync_files_completed_changed", {
-                  detail: { filesCompleted: totalCompleted },
-                })
-              );
               queryClient.invalidateQueries({
                 queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY],
               });

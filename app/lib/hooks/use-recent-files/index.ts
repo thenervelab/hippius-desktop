@@ -89,37 +89,32 @@ const useRecentFiles = () => {
           }
         }
 
-        // Fetch arion hashes, CIDs, and server timestamps from list_sync_folder
+        // Fetch arion hashes, CIDs, and server timestamps from sync state.
+        // Uses get_synced_file_metadata which returns a flat list of ALL
+        // synced files (including subfolders) without reading the filesystem.
         const arionHashMap = new Map<string, string>();
         const arionCidMap = new Map<string, string>();
         const uploadedAtMap = new Map<string, number>();
         const updatedAtMap = new Map<string, number>();
-        for (const { path: syncPath, label } of syncPaths) {
-          if (!syncPath) continue;
-          try {
-            const entries = await invoke<{ name: string; arion_hash: string; arion_cid: string; uploaded_at: number; updated_at: number }[]>("list_sync_folder", {
-              syncPath,
-              subfolder: null,
-              label,
-            });
-            for (const entry of entries) {
-              const key = `${entry.name}::${label}`;
-              if (entry.arion_hash) {
-                arionHashMap.set(key, entry.arion_hash);
-              }
-              if (entry.arion_cid) {
-                arionCidMap.set(key, entry.arion_cid);
-              }
-              if (entry.uploaded_at) {
-                uploadedAtMap.set(key, entry.uploaded_at);
-              }
-              if (entry.updated_at) {
-                updatedAtMap.set(key, entry.updated_at);
-              }
+        try {
+          const metadata = await invoke<{ file_name: string; label: string; arion_hash: string; arion_cid: string; uploaded_at: number; updated_at: number }[]>("get_synced_file_metadata");
+          for (const entry of metadata) {
+            const key = `${entry.file_name}::${entry.label}`;
+            if (entry.arion_hash) {
+              arionHashMap.set(key, entry.arion_hash);
             }
-          } catch {
-            // Ignore - supplementary data
+            if (entry.arion_cid) {
+              arionCidMap.set(key, entry.arion_cid);
+            }
+            if (entry.uploaded_at) {
+              uploadedAtMap.set(key, entry.uploaded_at);
+            }
+            if (entry.updated_at) {
+              updatedAtMap.set(key, entry.updated_at);
+            }
           }
+        } catch {
+          // Ignore - supplementary data
         }
 
         // Collect names of files that have been deleted — these should

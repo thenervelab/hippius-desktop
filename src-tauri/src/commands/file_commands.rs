@@ -267,6 +267,84 @@ async fn synced_paths_for_label(
     }
 }
 
+/// Sync metadata for a single file, returned by `get_synced_file_metadata`.
+#[derive(Serialize)]
+pub struct SyncedFileMetadata {
+    /// File name (basename only, e.g. "photo.jpg")
+    pub file_name: String,
+    /// Relative path from sync root (e.g. "subfolder/photo.jpg")
+    pub relative_path: String,
+    /// Drive label this file belongs to
+    pub label: String,
+    /// Hex-encoded BLAKE3 path hash
+    pub arion_hash: String,
+    /// Arion CID from storage backend (empty if not available)
+    pub arion_cid: String,
+    /// Unix timestamp when file was first uploaded (0 if unknown)
+    pub uploaded_at: i64,
+    /// Unix timestamp when file was last updated (0 if unknown)
+    pub updated_at: i64,
+}
+
+/// Return sync metadata (arion hashes, CIDs, timestamps) for all synced
+/// files across all drives. Used by the recent-files view to look up
+/// arion hashes without needing to list every subfolder from disk.
+#[tauri::command]
+pub async fn get_synced_file_metadata(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<Vec<SyncedFileMetadata>, String> {
+    let sync = &state.sync;
+    let mut result = Vec::new();
+
+    // Collect labels + cached paths in one pass
+    let label_maps: Vec<(String, HashMap<String, SyncedFileInfo>)> = {
+        match sync.drives.try_lock() {
+            Ok(guard) => {
+                let mut out = Vec::new();
+                for (label, manager) in guard.iter() {
+                    if let Ok(st) = manager.load_sync_state() {
+                        let paths = build_synced_paths_from_state(&st);
+                        sync.update_synced_paths_cache(label, paths.clone());
+                        out.push((label.clone(), paths));
+                    }
+                }
+                out
+            }
+            Err(_) => {
+                // Lock held by sync — use cached data
+                if let Ok(cache) = sync.synced_paths_cache.lock() {
+                    cache
+                        .iter()
+                        .map(|(l, m)| (l.clone(), m.clone()))
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+    };
+
+    for (label, paths) in label_maps {
+        for (rel_path, info) in &paths {
+            let file_name = std::path::Path::new(rel_path)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| rel_path.clone());
+            result.push(SyncedFileMetadata {
+                file_name,
+                relative_path: rel_path.clone(),
+                label: label.clone(),
+                arion_hash: info.path_hash_hex.clone(),
+                arion_cid: info.arion_cid.clone(),
+                uploaded_at: info.uploaded_at,
+                updated_at: info.updated_at,
+            });
+        }
+    }
+
+    Ok(result)
+}
+
 /// Recursively compute total size and file count within a directory.
 /// Hidden files (starting with '.') are excluded.
 async fn dir_stats_recursive(path: &Path) -> (u64, u64) {

@@ -68,8 +68,8 @@ use commands::chart_formatting::{
     transform_marketplace_credits,
 };
 use commands::file_commands::{
-    add_file, add_folder, allow_asset_scope, export_file, list_sync_folder, remove_file,
-    resolve_file_path,
+    add_file, add_folder, allow_asset_scope, export_file, get_synced_file_metadata,
+    list_sync_folder, remove_file, resolve_file_path,
 };
 use commands::local_db::{
     add_contact, add_notification, clear_all_notifications, credit_already_notified,
@@ -187,6 +187,7 @@ fn main() {
             add_folder,
             remove_file,
             list_sync_folder,
+            get_synced_file_metadata,
             export_file,
             resolve_file_path,
             allow_asset_scope,
