@@ -404,10 +404,10 @@ impl HcfsDriveManager {
 
         let mut index = HashMap::new();
         for (file_id, path) in &state.path_index {
-            let real_name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| path.to_string_lossy().to_string());
+            // Use the full relative path (e.g. "subdir/photo.jpg") so
+            // activity items and recent-files can resolve the correct
+            // on-disk location within the sync folder.
+            let real_name = path.to_string_lossy().to_string();
             // Insert full hex for collision-free lookup
             let full_hex = hex::encode(file_id);
             index.insert(full_hex, real_name.clone());
@@ -1397,12 +1397,10 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         let new_items: Vec<_> = staged_downloads
                             .iter()
                             .map(|f| {
-                                let file_name = std::path::Path::new(&f.path)
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().to_string())
-                                    .unwrap_or_else(|| f.path.clone());
+                                // Use the full relative path (e.g. "subdir/photo.jpg")
+                                // so recent-files can resolve correct on-disk location.
                                 SyncActivityItem {
-                                    file_name,
+                                    file_name: f.path.clone(),
                                     action: "downloaded".to_string(),
                                     timestamp: now,
                                     size_bytes: 0,

@@ -140,11 +140,17 @@ const useRecentFiles = () => {
         // Format SyncActivityItem[] to FormattedUserFile[]
         const formattedFiles = nonDeletedItems.map(
           (item): FormattedUserFile => {
-            // Resolve the local file path from the sync folder for this label
+            // file_name is now the relative path from the sync root
+            // (e.g. "bucket/photo.jpg" for migration, or "photo.jpg"
+            // for files at the root). Use it for source path and
+            // extract the basename for display.
             const syncFolderPath = labelToPath.get(item.label);
             const source = syncFolderPath && item.file_name
               ? `${syncFolderPath}/${item.file_name}`
               : "";
+            const displayName = item.file_name
+              ? item.file_name.split("/").pop() || item.file_name
+              : "Unknown";
 
             const key = `${item.file_name}::${item.label}`;
             const activityMs = item.timestamp ? item.timestamp * 1000 : Date.now();
@@ -157,7 +163,7 @@ const useRecentFiles = () => {
             const lastChargedAtMs = updatedAtSec ? updatedAtSec * 1000 : (uploadedAtSec ? uploadedAtSec * 1000 : activityMs);
 
             return {
-              name: item.file_name || "Unknown",
+              name: displayName,
               actualFileName: item.file_name,
               size: item.size_bytes,
               createdAt: createdAtMs,
@@ -177,12 +183,12 @@ const useRecentFiles = () => {
           }
         );
 
-        // Remove duplicates based on name
+        // Remove duplicates based on relative path (actualFileName)
         const uniqueFiles = formattedFiles.filter(
           (file, index, self) =>
             index ===
             self.findIndex(
-              (f) => f.name === file.name && f.label === file.label
+              (f) => f.actualFileName === file.actualFileName && f.label === file.label
             )
         );
 

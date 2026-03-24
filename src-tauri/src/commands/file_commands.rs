@@ -326,12 +326,10 @@ pub async fn get_synced_file_metadata(
 
     for (label, paths) in label_maps {
         for (rel_path, info) in &paths {
-            let file_name = std::path::Path::new(rel_path)
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_else(|| rel_path.clone());
+            // Use the full relative path so lookups match activity items
+            // that also use relative paths (e.g. "bucket/photo.jpg").
             result.push(SyncedFileMetadata {
-                file_name,
+                file_name: rel_path.clone(),
                 relative_path: rel_path.clone(),
                 label: label.clone(),
                 arion_hash: info.path_hash_hex.clone(),

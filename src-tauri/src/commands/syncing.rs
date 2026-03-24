@@ -1301,10 +1301,9 @@ fn setup_progress_handlers(
             );
             if b == t && t > 0 {
                 if let Some(path_str) = p {
-                    let file_name = Path::new(path_str)
-                        .file_name()
-                        .map(|f| f.to_string_lossy().to_string())
-                        .unwrap_or_else(|| path_str.to_string());
+                    // Use the full relative path (e.g. "bucket/photo.jpg")
+                    // so recent-files can resolve the correct on-disk location.
+                    let file_name = path_str.to_string();
                     info!("Upload complete [{}]: {} ({} bytes)", l1, file_name, t);
                     sync_for_upload.add_pending_activity(SyncActivityItem {
                         file_name,
