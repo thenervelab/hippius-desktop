@@ -533,6 +533,10 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                           </div>
                           {file.totalBytes > 0 && (
                             <span className="text-[10px] text-grey-50">
+                              {file.resumedFromBytes
+                                ? `Resumed from ${formatBytes(file.resumedFromBytes)} \u2014 `
+                                : ""
+                              }
                               {formatBytes(Math.max(file.bytesEncrypted, file.bytesTransferred))} / {formatBytes(file.totalBytes)}
                             </span>
                           )}

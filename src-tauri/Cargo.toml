@@ -87,8 +87,8 @@ alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "0f1839b" }
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "0f1839b" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "a423580" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "a423580" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
@@ -123,7 +123,6 @@ reqwest = { version = "0.13.1", default-features = false, features = [
     "json",
     "rustls",
 ] }
-rand = "0.10.0"
 tempfile = "3"
 uuid = { version = "1", features = ["v4"] }
 axum = "0.8"

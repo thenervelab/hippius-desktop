@@ -1281,10 +1281,17 @@ fn setup_progress_handlers(
                     .unwrap_or_else(|| path_str.to_string());
                 if let Ok(mut set) = upload_started_cb.lock() {
                     if set.insert(path_str.to_string()) {
-                        info!(
-                            "Upload started [{}]: {} ({} bytes)",
-                            l1, file_name, t
-                        );
+                        if b > 0 {
+                            info!(
+                                "Upload resuming [{}]: {} from {} bytes ({} total)",
+                                l1, file_name, b, t
+                            );
+                        } else {
+                            info!(
+                                "Upload started [{}]: {} ({} bytes)",
+                                l1, file_name, t
+                            );
+                        }
                     }
                 }
                 // Track per-file progress for the sync progress UI
@@ -1328,10 +1335,17 @@ fn setup_progress_handlers(
                     .unwrap_or_else(|| path_str.to_string());
                 if let Ok(mut set) = download_started_cb.lock() {
                     if set.insert(path_str.to_string()) {
-                        info!(
-                            "Download started [{}]: {} ({} bytes)",
-                            l2, file_name, t
-                        );
+                        if b > 0 {
+                            info!(
+                                "Download resuming [{}]: {} from {} bytes ({} total)",
+                                l2, file_name, b, t
+                            );
+                        } else {
+                            info!(
+                                "Download started [{}]: {} ({} bytes)",
+                                l2, file_name, t
+                            );
+                        }
                     }
                 }
                 // Track per-file progress for the sync progress UI

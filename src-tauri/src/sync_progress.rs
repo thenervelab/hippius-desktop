@@ -58,6 +58,7 @@ pub struct SyncFile {
     pub bytes_encrypted: u64,
     pub bytes_transferred: u64,
     pub total_bytes: u64,
+    pub resumed_from_bytes: Option<u64>,
     pub started_at: i64,
     pub completed_at: Option<i64>,
     pub error: Option<String>,
@@ -144,6 +145,7 @@ pub struct FileProgress {
     pub bytes_encrypted: u64,
     pub bytes_transferred: u64,
     pub total_bytes: u64,
+    pub resumed_from_bytes: Option<u64>,
     pub error: Option<String>,
 }
 
@@ -288,6 +290,7 @@ fn register_files(session: &mut SyncSession, file_list: &SessionFileList, label:
                         bytes_encrypted: 0,
                         bytes_transferred: 0,
                         total_bytes,
+                        resumed_from_bytes: None,
                         started_at: now,
                         completed_at: None,
                         error: None,
@@ -393,6 +396,7 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
                 bytes_encrypted: f.bytes_encrypted,
                 bytes_transferred: f.bytes_transferred,
                 total_bytes: f.total_bytes,
+                resumed_from_bytes: f.resumed_from_bytes,
                 error: f.error.clone(),
             }
         })
@@ -791,6 +795,7 @@ pub fn update_file_progress(
             bytes_encrypted: 0,
             bytes_transferred: 0,
             total_bytes,
+            resumed_from_bytes: None,
             started_at: now,
             completed_at: None,
             error: None,
@@ -803,6 +808,18 @@ pub fn update_file_progress(
 
     // Update action so the UI knows the current phase.
     file.action = action.clone();
+
+    // Detect resumed transfers: if the first upload/download progress
+    // callback reports bytes > 0, the transfer is resuming from a
+    // previous interruption (hcfs-client resumes from disk chunks or
+    // HTTP Range offset).
+    if file.resumed_from_bytes.is_none()
+        && file.bytes_transferred == 0
+        && bytes_transferred > 0
+        && matches!(action, FileAction::Upload | FileAction::Download)
+    {
+        file.resumed_from_bytes = Some(bytes_transferred);
+    }
 
     match action {
         FileAction::Encrypt | FileAction::Decrypt => {
@@ -1441,6 +1458,7 @@ mod tests {
             bytes_encrypted: 0,
             bytes_transferred,
             total_bytes,
+            resumed_from_bytes: None,
             started_at: now_ms(),
             completed_at: if status == FileStatus::Completed {
                 Some(now_ms())
@@ -1588,7 +1606,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_100_when_all_completed_or_failed() {
+    fn snapshot_with_completed_and_failed() {
         let state = state_with_files(vec![
             make_file(
                 "/a.txt",
@@ -1600,7 +1618,10 @@ mod tests {
             make_file("/b.txt", 2000, FileAction::Upload, FileStatus::Error, 500),
         ]);
         let snapshot = build_snapshot(&state);
-        assert_eq!(snapshot.overall_percent, 100);
+        // Byte-weighted: 1000 completed / 3000 expected = 33%.
+        // Failed files count toward expected bytes but NOT progress,
+        // so percent reflects the reality that not everything synced.
+        assert_eq!(snapshot.overall_percent, 33);
         assert_eq!(snapshot.completed_files, 1);
         assert_eq!(snapshot.failed_files, 1);
     }
@@ -2470,5 +2491,239 @@ mod tests {
             5000,
             "total_bytes must not change after initial set"
         );
+    }
+
+    // ── Resume detection ──────────────────────────────────────────────
+
+    #[test]
+    fn resumed_download_detected() {
+        reset_state();
+        let eng = test_sync();
+
+        let file_list = SessionFileList {
+            upload_files: None,
+            download_files: Some(vec!["/photo.jpg".to_string()]),
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        start_session(eng, 0, 1, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // First callback: resume from 50MB of 200MB
+        let result = update_file_progress(
+            eng,
+            "/photo.jpg".to_string(),
+            50_000_000,
+            200_000_000,
+            FileAction::Download,
+            Some("d1".to_string()),
+        )
+        .unwrap()
+        .expect("file should exist");
+
+        assert_eq!(result.resumed_from_bytes, Some(50_000_000));
+        assert_eq!(result.bytes_transferred, 50_000_000);
+    }
+
+    #[test]
+    fn resumed_upload_detected() {
+        reset_state();
+        let eng = test_sync();
+
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/backup.zip".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        start_session(eng, 1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // First upload callback skips already-uploaded chunks (24MB of 100MB)
+        let result = update_file_progress(
+            eng,
+            "/backup.zip".to_string(),
+            24_000_000,
+            100_000_000,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap()
+        .expect("file should exist");
+
+        assert_eq!(result.resumed_from_bytes, Some(24_000_000));
+        assert_eq!(result.bytes_transferred, 24_000_000);
+    }
+
+    #[test]
+    fn fresh_download_not_marked_as_resumed() {
+        reset_state();
+        let eng = test_sync();
+
+        let file_list = SessionFileList {
+            upload_files: None,
+            download_files: Some(vec!["/new_file.txt".to_string()]),
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        start_session(eng, 0, 1, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // First callback starts from 0
+        let result = update_file_progress(
+            eng,
+            "/new_file.txt".to_string(),
+            0,
+            500_000,
+            FileAction::Download,
+            Some("d1".to_string()),
+        )
+        .unwrap()
+        .expect("file should exist");
+
+        assert_eq!(result.resumed_from_bytes, None);
+    }
+
+    #[test]
+    fn resumed_from_bytes_set_only_once() {
+        reset_state();
+        let eng = test_sync();
+
+        let file_list = SessionFileList {
+            upload_files: None,
+            download_files: Some(vec!["/large.bin".to_string()]),
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        start_session(eng, 0, 1, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // First callback at resume offset
+        update_file_progress(
+            eng,
+            "/large.bin".to_string(),
+            100_000,
+            1_000_000,
+            FileAction::Download,
+            Some("d1".to_string()),
+        )
+        .unwrap();
+
+        // Second callback at higher offset — resumed_from_bytes must not change
+        let result = update_file_progress(
+            eng,
+            "/large.bin".to_string(),
+            500_000,
+            1_000_000,
+            FileAction::Download,
+            Some("d1".to_string()),
+        )
+        .unwrap()
+        .expect("file should exist");
+
+        assert_eq!(
+            result.resumed_from_bytes,
+            Some(100_000),
+            "resumed_from_bytes must not change after initial set"
+        );
+    }
+
+    #[test]
+    fn skipped_encrypt_phase_upload_completes() {
+        reset_state();
+        let eng = test_sync();
+
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/cached.pdf".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        start_session(eng, 1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // No encrypt callbacks — upload starts directly (cache hit)
+        update_file_progress(
+            eng,
+            "/cached.pdf".to_string(),
+            500,
+            1000,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap();
+
+        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let file = state
+            .current_session
+            .as_ref()
+            .unwrap()
+            .files
+            .get("/cached.pdf")
+            .unwrap();
+
+        assert_eq!(file.status, FileStatus::Uploading);
+        assert_eq!(file.bytes_encrypted, 0, "no encrypt callbacks fired");
+        assert_eq!(file.bytes_transferred, 500);
+        assert_eq!(file.progress, 50);
+        drop(state);
+
+        // Complete the upload
+        let result = update_file_progress(
+            eng,
+            "/cached.pdf".to_string(),
+            1000,
+            1000,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap()
+        .expect("file should exist");
+
+        assert_eq!(result.status, FileStatus::Completed);
+        assert_eq!(result.progress, 100);
+    }
+
+    #[test]
+    fn encrypt_action_does_not_trigger_resume_detection() {
+        reset_state();
+        let eng = test_sync();
+
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/doc.pdf".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        start_session(eng, 1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // Encrypt callback with bytes > 0 should NOT set resumed_from_bytes
+        let result = update_file_progress(
+            eng,
+            "/doc.pdf".to_string(),
+            500_000,
+            1_000_000,
+            FileAction::Encrypt,
+            Some("d1".to_string()),
+        )
+        .unwrap()
+        .expect("file should exist");
+
+        assert_eq!(
+            result.resumed_from_bytes, None,
+            "encrypt progress must not trigger resume detection"
+        );
+    }
+
+    #[test]
+    fn resumed_from_bytes_in_snapshot() {
+        let mut file = make_file(
+            "/resumed.bin",
+            1_000_000,
+            FileAction::Download,
+            FileStatus::Downloading,
+            500_000,
+        );
+        file.resumed_from_bytes = Some(200_000);
+        let state = state_with_files(vec![file]);
+
+        let snapshot = build_snapshot(&state);
+        assert_eq!(snapshot.files.len(), 1);
+        assert_eq!(snapshot.files[0].resumed_from_bytes, Some(200_000));
     }
 }

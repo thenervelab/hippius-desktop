@@ -11,6 +11,7 @@ export interface FileProgress {
   bytesEncrypted: number;
   bytesTransferred: number;
   totalBytes: number;
+  resumedFromBytes?: number;
   error?: string;
 }
 
