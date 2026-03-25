@@ -34,6 +34,13 @@ interface SyncOutcome {
   conflicts_skipped: number;
 }
 
+interface TransferProgress {
+  label: string;
+  bytes: number;
+  total: number;
+  path: string | null;
+}
+
 export function useSyncEvents() {
   const queryClient = useAtomValue(queryClientAtom);
   const setSyncEngineHealthAtom = useSetAtom(syncEngineHealthAtom);
@@ -42,6 +49,21 @@ export function useSyncEvents() {
   useEffect(() => {
     let cancelled = false;
     const unsubs: (() => void)[] = [];
+
+    // Debounced recent-files refresh: when individual files finish
+    // uploading/downloading, schedule a refresh after 2 s of quiet.
+    let fileCompletionTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRecentFilesRefresh = () => {
+      if (fileCompletionTimer) clearTimeout(fileCompletionTimer);
+      fileCompletionTimer = setTimeout(() => {
+        fileCompletionTimer = null;
+        window.dispatchEvent(
+          new CustomEvent("sync_files_completed_changed", {
+            detail: { filesCompleted: 1 },
+          })
+        );
+      }, 2000);
+    };
 
     // Query current health state on mount (backend may already be running)
     invoke<SyncEngineHealthState>("get_sync_engine_health")
@@ -69,6 +91,13 @@ export function useSyncEvents() {
               e.payload.files_deleted_locally +
               e.payload.files_deleted_remotely;
 
+            // Cancel the debounced per-file refresh — the full sync
+            // completion below supersedes it.
+            if (fileCompletionTimer) {
+              clearTimeout(fileCompletionTimer);
+              fileCompletionTimer = null;
+            }
+
             // Always dispatch so file listings refresh metadata (arion
             // hashes, sync status, timestamps) even when no files were
             // transferred — the first sync after login typically has
@@ -83,6 +112,17 @@ export function useSyncEvents() {
               queryClient.invalidateQueries({
                 queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY],
               });
+            }
+          }),
+          // Refresh recent files when individual files finish syncing
+          listen<TransferProgress>("hcfs_upload_progress", (e) => {
+            if (e.payload.bytes >= e.payload.total && e.payload.total > 0) {
+              scheduleRecentFilesRefresh();
+            }
+          }),
+          listen<TransferProgress>("hcfs_download_progress", (e) => {
+            if (e.payload.bytes >= e.payload.total && e.payload.total > 0) {
+              scheduleRecentFilesRefresh();
             }
           }),
           // Connectivity health updates
@@ -118,6 +158,7 @@ export function useSyncEvents() {
 
     return () => {
       cancelled = true;
+      if (fileCompletionTimer) clearTimeout(fileCompletionTimer);
       unsubs.forEach((u) => u());
     };
   }, [setSyncEngineHealthAtom, setIsSyncConfiguredAtom, queryClient]);

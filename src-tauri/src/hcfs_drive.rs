@@ -657,11 +657,18 @@ pub async fn start_sync_loop(app: AppHandle) {
 
     info!("Starting sync loop");
 
-    // Abort the previous sync loop if one is still running
+    // Abort the previous sync loop if one is still running.
+    // IMPORTANT: clear is_syncing for all drives first — aborting the task
+    // kills in-flight sync_with_resolutions calls, bypassing the cleanup
+    // that normally sets is_syncing = false. Without this reset, aborted
+    // drives would be permanently stuck as "in progress" and never sync
+    // again in the new loop.
     {
         let mut handle_guard = sync.loop_handle.lock().await;
         if let Some(prev) = handle_guard.take() {
-            info!("Aborting previous sync loop task");
+            info!("Aborting previous sync loop task — clearing is_syncing for all drives");
+            sync.clear_all_syncing();
+            sync.reset_sync_counter();
             prev.abort();
         }
     }

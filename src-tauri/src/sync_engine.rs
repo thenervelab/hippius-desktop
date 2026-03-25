@@ -315,6 +315,19 @@ impl SyncEngine {
         f(state);
     }
 
+    /// Reset `is_syncing` to false for every drive without clearing other
+    /// state (last_sync_time, recent_activity). Called when the sync loop
+    /// is aborted so that the replacement loop can pick up all drives.
+    pub fn clear_all_syncing(&self) {
+        let mut states = self.states.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in clear_all_syncing");
+            p.into_inner()
+        });
+        for state in states.values_mut() {
+            state.is_syncing = false;
+        }
+    }
+
     pub fn reset_all_states(&self) {
         let mut states = self.states.lock().unwrap_or_else(|p| {
             warn!("Poisoned mutex recovered in reset_all_states");
@@ -437,26 +450,42 @@ impl SyncEngine {
         limit: Option<usize>,
         label: Option<String>,
     ) -> Vec<SyncActivityItem> {
+        let max = limit.unwrap_or(50);
+
+        // Committed activity from previous sync cycles
         let states = self.states.lock().unwrap_or_else(|p| {
             warn!("Poisoned mutex recovered in get_sync_activity");
             p.into_inner()
         });
-        let max = limit.unwrap_or(50);
 
-        if let Some(lbl) = label {
+        let mut all: Vec<SyncActivityItem> = if let Some(ref lbl) = label {
             states
-                .get(&lbl)
-                .map(|s| s.recent_activity.iter().take(max).cloned().collect())
+                .get(lbl)
+                .map(|s| s.recent_activity.iter().cloned().collect())
                 .unwrap_or_default()
         } else {
-            let mut all: Vec<SyncActivityItem> = states
+            states
                 .values()
                 .flat_map(|s| s.recent_activity.iter().cloned())
-                .collect();
-            all.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-            all.truncate(max);
-            all
+                .collect()
+        };
+        drop(states);
+
+        // Include pending activity (files completed during the current
+        // sync cycle that haven't been committed yet). This lets the
+        // frontend show recently synced files before the cycle ends.
+        if let Ok(pending) = self.pending_activity.lock() {
+            for item in pending.iter() {
+                let dominated = label.as_ref().is_some_and(|l| l != &item.label);
+                if !dominated {
+                    all.push(item.clone());
+                }
+            }
         }
+
+        all.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        all.truncate(max);
+        all
     }
 
     // ── App Handle (for snapshot emission) ──────────────────────────────
