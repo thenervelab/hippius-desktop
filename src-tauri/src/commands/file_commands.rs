@@ -233,6 +233,12 @@ pub(crate) fn build_synced_paths_from_state(
                 .remote_arion_hashes
                 .get(hash)
                 .cloned()
+                .or_else(|| {
+                    state
+                        .remote_chunk_hashes
+                        .get(hash)
+                        .and_then(|c| c.first().cloned())
+                })
                 .unwrap_or_default();
             let timestamps = state.remote_timestamps.get(hash);
             paths.insert(

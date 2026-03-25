@@ -238,6 +238,11 @@ fn main() {
             commands::syncing::get_hcfs_config,
             commands::syncing::update_hcfs_server_url,
             commands::syncing::update_sync_bearer_token,
+            // Selective sync (exclusion patterns)
+            commands::selective_sync::list_exclude_patterns,
+            commands::selective_sync::add_exclude_pattern,
+            commands::selective_sync::remove_exclude_pattern,
+            commands::selective_sync::is_file_excluded,
             // Stage & conflict resolution
             commands::syncing::stage_changes,
             commands::syncing::sync_with_conflict_resolutions,

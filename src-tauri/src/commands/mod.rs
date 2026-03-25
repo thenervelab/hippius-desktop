@@ -15,6 +15,7 @@ pub mod ssh_keys;
 pub mod substrate_tx;
 pub mod support;
 pub mod sync_status;
+pub mod selective_sync;
 pub mod syncing;
 pub mod vm;
 pub mod vpn_enabled;

@@ -106,6 +106,40 @@ impl HcfsDriveManager {
         &self.config_dir
     }
 
+    // ── Exclusion pattern delegates ─────────────────────────────────────
+
+    /// List all active exclusion patterns for this drive.
+    pub fn list_exclude_patterns(&self) -> Vec<String> {
+        self.drive.list_exclude_patterns()
+    }
+
+    /// Add an exclusion pattern. Returns `true` if added, `false` if
+    /// already present.
+    pub fn add_exclude_pattern(
+        &self,
+        pattern: &str,
+    ) -> Result<bool, String> {
+        self.drive
+            .add_exclude_pattern(pattern)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Remove an exclusion pattern. Returns `true` if removed, `false` if
+    /// not found.
+    pub fn remove_exclude_pattern(
+        &self,
+        pattern: &str,
+    ) -> Result<bool, String> {
+        self.drive
+            .remove_exclude_pattern(pattern)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Check whether a relative path is excluded by the current rules.
+    pub fn is_excluded(&self, path: &Path, is_dir: bool) -> bool {
+        self.drive.is_excluded(path, is_dir)
+    }
+
     pub fn client_config(&self) -> Option<&HcfsClientConfig> {
         self.client_config.as_ref()
     }

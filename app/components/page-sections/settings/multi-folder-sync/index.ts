@@ -1,3 +1,4 @@
+export { ExclusionPatterns } from "./ExclusionPatterns";
 export { LocalFoldersSection } from "./LocalFoldersSection";
 export { RemoteFoldersSection } from "./RemoteFoldersSection";
 export { RemoveFolderDialog } from "./RemoveFolderDialog";

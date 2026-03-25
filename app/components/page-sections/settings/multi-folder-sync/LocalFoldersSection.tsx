@@ -20,6 +20,7 @@ import {
   HardDrive,
 } from "lucide-react";
 import TableActionMenu, { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
+import { ExclusionPatterns } from "./ExclusionPatterns";
 import { Button } from "@/components/ui/button";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import type { SyncFolder } from "@/app/lib/types/sync-folder";
@@ -283,6 +284,7 @@ export function LocalFoldersSection({
                           </Button>
                         </TableActionMenu>
                       </div>
+                      <ExclusionPatterns label={folder.folderName} />
                     </div>
                   ))}
                 </div>
