@@ -1228,6 +1228,7 @@ fn setup_progress_handlers(
     let l4 = label.to_string();
     let l5 = label.to_string();
     let l6 = label.to_string();
+    let l7 = label.to_string();
 
     // Clone Arc<SyncEngine> for each callback that needs engine access
     let sync_plan = sync.clone();
@@ -1237,6 +1238,7 @@ fn setup_progress_handlers(
     let sync_decrypt = sync.clone();
     let sync_scan = sync.clone();
     let sync_fetch = sync.clone();
+    let sync_file_synced = sync.clone();
 
     // Track first progress event per file for info-level "file started" logs
     let upload_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
@@ -1485,6 +1487,26 @@ fn setup_progress_handlers(
                 sync_events::FETCH_PROGRESS,
                 sync_events::FetchProgressPayload { label: l6.clone(), fetched: f, total: t },
             );
+        })),
+        on_file_synced: Some(Arc::new(move |rel_path: &str, path_hash_hex: &str, arion_cid: &str, action: &str| {
+            debug!(
+                "File synced [{}]: {} ({}) cid={}",
+                l7, rel_path, action, arion_cid
+            );
+            // Update the synced-paths cache incrementally so the frontend
+            // can show arion hashes for files that completed during sync,
+            // without waiting for the full cycle to finish.
+            if !rel_path.is_empty() {
+                let info = crate::commands::file_commands::SyncedFileInfo::new(
+                    path_hash_hex.to_string(),
+                    arion_cid.to_string(),
+                );
+                sync_file_synced.upsert_synced_path(
+                    &l7,
+                    rel_path.to_string(),
+                    info,
+                );
+            }
         })),
     });
 }

@@ -5,6 +5,7 @@ import {
   useState,
   useRef,
   useEffect,
+  useMemo,
   memo,
 } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
@@ -99,6 +100,18 @@ const FilesContent: FC<FilesContentProps> = ({
   } = sharedState;
 
   const selectedFileType = selectedFile ? getFileType(selectedFile) : null;
+
+  // Look up the latest version of the file details from live query data.
+  // The captured snapshot in fileDetailsFile may have stale arion hashes
+  // if it was opened before sync completed.
+  const liveFileDetailsFile = useMemo(() => {
+    if (!fileDetailsFile) return null;
+    return filteredData.find(
+      (f) =>
+        f.actualFileName === fileDetailsFile.actualFileName &&
+        f.label === fileDetailsFile.label
+    ) ?? fileDetailsFile;
+  }, [fileDetailsFile, filteredData]);
 
   // Tauri native drag-and-drop via global event listeners
   useEffect(() => {
@@ -434,7 +447,7 @@ const FilesContent: FC<FilesContentProps> = ({
         open={isFileDetailsOpen}
         onOpenChange={setIsFileDetailsOpen}
       >
-        <SidebarDialogContent file={fileDetailsFile ?? undefined} />
+        <SidebarDialogContent file={liveFileDetailsFile ?? undefined} />
       </SidebarDialog>
 
 

@@ -187,6 +187,18 @@ const FilesTable: FC<FilesTableProps> = memo(
       useState<FormattedUserFile | null>(null);
     const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
 
+    // Look up the latest version of the file details from live query data.
+    // The captured snapshot may have stale arion hashes if it was opened
+    // before sync completed.
+    const liveLocalFileDetailsFile = useMemo(() => {
+      if (!localFileDetailsFile) return null;
+      return allFiles.find(
+        (f) =>
+          f.actualFileName === localFileDetailsFile.actualFileName &&
+          f.label === localFileDetailsFile.label
+      ) ?? localFileDetailsFile;
+    }, [localFileDetailsFile, allFiles]);
+
     const { setSelectedFile, handleShowFileDetails, handleContextMenu } =
       sharedState || {};
 
@@ -958,15 +970,15 @@ const FilesTable: FC<FilesTableProps> = memo(
       if (sharedState || !localIsFileDetailsOpen) return null;
       return (
         <SidebarDialog
-          heading={`${localFileDetailsFile?.isFolder ? "Folder" : "File"
+          heading={`${liveLocalFileDetailsFile?.isFolder ? "Folder" : "File"
             } Details`}
           open={localIsFileDetailsOpen}
           onOpenChange={setLocalIsFileDetailsOpen}
         >
-          <FileDetailsDialogContent file={localFileDetailsFile ?? undefined} />
+          <FileDetailsDialogContent file={liveLocalFileDetailsFile ?? undefined} />
         </SidebarDialog>
       );
-    }, [sharedState, localIsFileDetailsOpen, localFileDetailsFile]);
+    }, [sharedState, localIsFileDetailsOpen, liveLocalFileDetailsFile]);
 
     return (
       <div className="flex flex-col gap-y-8 relative">

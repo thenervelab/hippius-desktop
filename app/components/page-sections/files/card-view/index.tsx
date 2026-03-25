@@ -1,4 +1,4 @@
-import React, { FC, useState, useEffect, useCallback, memo } from "react";
+import React, { FC, useState, useEffect, useCallback, memo, useMemo } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Button } from "@/components/ui/button";
 import {
@@ -77,6 +77,18 @@ const CardView: FC<CardViewProps> = ({
     useState<FormattedUserFile | null>(null);
   const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
   const [openMenuIndex, setOpenMenuIndex] = useState<number | null>(null);
+
+  // Look up the latest version of the file details from live query data.
+  // The captured snapshot may have stale arion hashes if it was opened
+  // before sync completed.
+  const liveLocalFileDetailsFile = useMemo(() => {
+    if (!localFileDetailsFile) return null;
+    return files.find(
+      (f) =>
+        f.actualFileName === localFileDetailsFile.actualFileName &&
+        f.label === localFileDetailsFile.label
+    ) ?? localFileDetailsFile;
+  }, [localFileDetailsFile, files]);
 
   const {
     setSelectedFile,
@@ -363,11 +375,11 @@ const CardView: FC<CardViewProps> = ({
 
       {!sharedState && localIsFileDetailsOpen && (
         <SidebarDialog
-          heading={`${localFileDetailsFile?.isFolder ? "Folder" : "File"} Details`}
+          heading={`${liveLocalFileDetailsFile?.isFolder ? "Folder" : "File"} Details`}
           open={localIsFileDetailsOpen}
           onOpenChange={setLocalIsFileDetailsOpen}
         >
-          <FileDetailsDialogContent file={localFileDetailsFile ?? undefined} />
+          <FileDetailsDialogContent file={liveLocalFileDetailsFile ?? undefined} />
         </SidebarDialog>
       )}
     </div>
