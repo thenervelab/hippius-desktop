@@ -834,7 +834,9 @@ async fn stop_migration_drive(app: &AppHandle) {
 
     let remaining = {
         let mut guard = sync.drives.lock().await;
-        guard.remove("migration");
+        if let Some(slot) = guard.remove("migration") {
+            slot.cancel_token.cancel();
+        }
         guard.len()
     };
 

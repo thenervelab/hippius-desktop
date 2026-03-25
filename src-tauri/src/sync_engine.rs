@@ -16,12 +16,25 @@ use crate::sync_shared::{HcfsSyncState, SyncActivityItem, SyncEngineHealth};
 
 use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+
+/// Per-drive state stored in the drives registry.
+///
+/// The `manager` is behind its own `TokioMutex` so syncing one drive does not
+/// block access to other drives. The `cancel_token` is replaced at the start
+/// of each sync cycle; calling `.cancel()` on it aborts the in-progress sync
+/// for this drive without touching the drives map lock.
+pub struct DriveSlot {
+    pub manager: Arc<TokioMutex<HcfsDriveManager>>,
+    pub cancel_token: CancellationToken,
+}
 
 /// Maximum number of recent activity items to keep per drive.
 const MAX_ACTIVITY: usize = 100;
@@ -45,6 +58,37 @@ impl Drop for TokenRefreshGuard {
     }
 }
 
+/// RAII guard that sets `review_mode` to true on creation. On drop, resets
+/// `review_mode` and clears `review_entered_at` — unless `commit()` was
+/// called (meaning the review was successfully entered and should stay active).
+pub struct ReviewModeGuard {
+    sync: Arc<SyncEngine>,
+    committed: bool,
+}
+
+impl ReviewModeGuard {
+    pub fn new(sync: Arc<SyncEngine>) -> Self {
+        sync.review_mode.store(true, Ordering::Release);
+        Self {
+            sync,
+            committed: false,
+        }
+    }
+
+    pub fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for ReviewModeGuard {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.sync.review_mode.store(false, Ordering::Release);
+            self.sync.clear_review_entered();
+        }
+    }
+}
+
 // Manual Debug impl because several fields (Mutex internals, JoinHandle, AppHandle)
 // don't implement Debug. We only need the derive for Tauri's `manage()`.
 impl std::fmt::Debug for SyncEngine {
@@ -55,12 +99,14 @@ impl std::fmt::Debug for SyncEngine {
 
 pub struct SyncEngine {
     // ── Drive Registry (async-only access) ──────────────────────────────
-    pub drives: TokioMutex<HashMap<String, HcfsDriveManager>>,
+    pub drives: TokioMutex<HashMap<String, DriveSlot>>,
     pub loop_handle: TokioMutex<Option<JoinHandle<()>>>,
 
     // ── Atomic Flags (lock-free, any context) ───────────────────────────
     pub cancel_token: AtomicBool,
-    pub sync_in_progress: AtomicBool,
+    /// Counter of drives currently syncing. File watcher suppresses events
+    /// when > 0. Replaces the old `AtomicBool` to support concurrent syncs.
+    pub syncs_in_progress: AtomicU32,
     pub changes_pending: AtomicBool,
     pub review_mode: AtomicBool,
     pub review_entered_at: AtomicI64,
@@ -96,7 +142,7 @@ impl SyncEngine {
             drives: TokioMutex::new(HashMap::new()),
             loop_handle: TokioMutex::new(None),
             cancel_token: AtomicBool::new(false),
-            sync_in_progress: AtomicBool::new(false),
+            syncs_in_progress: AtomicU32::new(0),
             changes_pending: AtomicBool::new(false),
             review_mode: AtomicBool::new(false),
             review_entered_at: AtomicI64::new(0),
@@ -133,6 +179,28 @@ impl SyncEngine {
 
     pub fn is_cancelled(&self) -> bool {
         self.cancel_token.load(Ordering::SeqCst)
+    }
+
+    // ── Sync-In-Progress Counter ────────────────────────────────────────
+
+    /// Increment when a drive starts syncing.
+    pub fn begin_sync(&self) {
+        self.syncs_in_progress.fetch_add(1, Ordering::Release);
+    }
+
+    /// Decrement when a drive finishes syncing.
+    pub fn end_sync(&self) {
+        self.syncs_in_progress.fetch_sub(1, Ordering::Release);
+    }
+
+    /// True when at least one drive is actively syncing.
+    pub fn is_any_sync_in_progress(&self) -> bool {
+        self.syncs_in_progress.load(Ordering::Acquire) > 0
+    }
+
+    /// Reset counter to zero (used during full stop).
+    pub fn reset_sync_counter(&self) {
+        self.syncs_in_progress.store(0, Ordering::Release);
     }
 
     // ── Stall Detection ────────────────────────────────────────────────
@@ -202,6 +270,15 @@ impl SyncEngine {
 
     pub fn get_sync_failures(&self) -> i64 {
         self.consecutive_failures.load(Ordering::SeqCst)
+    }
+
+    /// Clear all failure-related state after a successful sync.
+    pub fn clear_failure_state(&self) {
+        self.reset_sync_failures();
+        self.retry_at.store(0, Ordering::Relaxed);
+        if let Ok(mut guard) = self.last_error.lock() {
+            *guard = None;
+        }
     }
 
     // ── Health ──────────────────────────────────────────────────────────

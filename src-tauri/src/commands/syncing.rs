@@ -13,11 +13,15 @@
 use tracing::{debug, error, info, warn};
 
 use crate::hcfs_drive::{HcfsDriveManager, StagedChanges, start_sync_loop};
+use crate::sync_engine::{DriveSlot, ReviewModeGuard};
+use crate::sync_events;
 use crate::sync_shared::SyncActivityItem;
 use crate::utils::account_key::account_key;
 use crate::utils::auth_tokens::get_api_token;
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::sync::SyncProgress;
+use tokio::sync::Mutex as TokioMutex;
+use tokio_util::sync::CancellationToken;
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqlitePool;
 use std::collections::HashMap;
@@ -115,8 +119,15 @@ pub(crate) async fn update_sync_bearer_token_internal(
         .map_err(|e| format!("Failed to persist auth token: {e}"))?;
 
     // 2. Update all live drives in-memory
-    let mut guard = app_state.sync.drives.lock().await;
-    for (label, manager) in guard.iter_mut() {
+    let drive_arcs: Vec<(String, std::sync::Arc<TokioMutex<HcfsDriveManager>>)> = {
+        let guard = app_state.sync.drives.lock().await;
+        guard
+            .iter()
+            .map(|(k, slot)| (k.clone(), slot.manager.clone()))
+            .collect()
+    };
+    for (label, drive_arc) in drive_arcs {
+        let mut manager = drive_arc.lock().await;
         if let Err(e) = manager.update_bearer_token(bearer_token.to_string()) {
             error!("Failed to update bearer token for drive '{}': {}", label, e);
         } else {
@@ -566,13 +577,15 @@ async fn initialize_sync_inner(
     // 0. Stop only the drive with the matching label if it exists
     {
         let mut drives_guard = sync.drives.lock().await;
-        if drives_guard.remove(&label).is_some() {
+        if let Some(old_slot) = drives_guard.remove(&label) {
+            // Cancel any in-progress sync for this drive
+            old_slot.cancel_token.cancel();
             debug!("Dropped previous drive instance for label '{}'", label);
         }
         sync.discard_pending_activity_for_label(&label);
         sync.remove_state(&label);
     }
-    sync.sync_in_progress.store(false, Ordering::Release);
+    sync.reset_sync_counter();
     sync.review_mode.store(false, Ordering::Release);
     sync.clear_review_entered();
 
@@ -926,7 +939,13 @@ async fn initialize_sync_inner(
     // 12. Store the manager in the drives registry
     {
         let mut guard = sync.drives.lock().await;
-        guard.insert(label.clone(), manager);
+        guard.insert(
+            label.clone(),
+            DriveSlot {
+                manager: std::sync::Arc::new(TokioMutex::new(manager)),
+                cancel_token: CancellationToken::new(),
+            },
+        );
     }
 
     // 13. Start (or restart) the background sync loop to pick up the new drive
@@ -1000,8 +1019,15 @@ pub async fn stop_sync(app: AppHandle) -> Result<(), String> {
         }
     }
 
-    let mut guard = sync.drives.lock().await;
-    guard.clear();
+    {
+        let mut guard = sync.drives.lock().await;
+        // Cancel all in-progress syncs before clearing
+        for slot in guard.values() {
+            slot.cancel_token.cancel();
+        }
+        guard.clear();
+    }
+    sync.reset_sync_counter();
     sync.review_mode.store(false, Ordering::Release);
     sync.clear_review_entered();
     sync.reset_all_states();
@@ -1010,7 +1036,7 @@ pub async fn stop_sync(app: AppHandle) -> Result<(), String> {
     sync.discard_all_pending_activity();
 
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
-    let _ = app.emit("hcfs_sync_stopped", ());
+    let _ = app.emit(sync_events::SYNC_STOPPED, ());
 
     Ok(())
 }
@@ -1026,7 +1052,9 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
 
     let remaining = {
         let mut guard = sync.drives.lock().await;
-        guard.remove(&label);
+        if let Some(slot) = guard.remove(&label) {
+            slot.cancel_token.cancel();
+        }
         guard.len()
     };
 
@@ -1060,7 +1088,7 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
         }
         sync.review_mode.store(false, Ordering::Release);
         sync.clear_review_entered();
-        let _ = app.emit("hcfs_sync_stopped", ());
+        let _ = app.emit(sync_events::SYNC_STOPPED, ());
     } else {
         // Restart sync loop to update watchers (removed drive's path)
         sync.clear_cancel();
@@ -1113,11 +1141,11 @@ pub async fn reset_sync_data(
 
     // Emit event so frontend knows to show setup UI
     let _ = app.emit(
-        "hcfs_sync_reset",
-        serde_json::json!({
-            "account_id": account_id,
-            "message": "Sync data has been reset. Please set up sync again."
-        }),
+        sync_events::SYNC_RESET,
+        sync_events::SyncResetPayload {
+            account_id: account_id.to_string(),
+            message: "Sync data has been reset. Please set up sync again.".to_string(),
+        },
     );
 
     info!("Reset complete for account: {}", account_id);
@@ -1257,18 +1285,18 @@ fn setup_progress_handlers(
             }
 
             let _ = a0.emit(
-                "hcfs_sync_plan_ready",
-                serde_json::json!({
-                    "label": l0,
-                    "uploads": uploads.len(),
-                    "downloads": downloads.len(),
-                    "local_deletes": local_deletes.len(),
-                    "remote_deletes": remote_deletes.len(),
-                    "upload_files": upload_paths,
-                    "download_files": download_paths,
-                    "local_delete_files": local_delete_paths,
-                    "remote_delete_files": remote_delete_paths,
-                }),
+                sync_events::SYNC_PLAN_READY,
+                sync_events::SyncPlanReadyPayload {
+                    label: l0.clone(),
+                    uploads: uploads.len(),
+                    downloads: downloads.len(),
+                    local_deletes: local_deletes.len(),
+                    remote_deletes: remote_deletes.len(),
+                    upload_files: upload_paths,
+                    download_files: download_paths,
+                    local_delete_files: local_delete_paths,
+                    remote_delete_files: remote_delete_paths,
+                },
             );
         })),
         on_upload_progress: Some(Arc::new(move |b, t, p| {
@@ -1303,8 +1331,8 @@ fn setup_progress_handlers(
             }
             debug!("Upload [{}]: {}/{} bytes, path: {:?}", l1, b, t, p);
             let _ = a1.emit(
-                "hcfs_upload_progress",
-                serde_json::json!({"label": l1, "bytes": b, "total": t, "path": p}),
+                sync_events::UPLOAD_PROGRESS,
+                sync_events::TransferProgressPayload { label: l1.clone(), bytes: b, total: t, path: p.map(String::from) },
             );
             if b == t && t > 0 {
                 if let Some(path_str) = p {
@@ -1357,8 +1385,8 @@ fn setup_progress_handlers(
             }
             debug!("Download [{}]: {}/{} bytes, path: {:?}", l2, b, t, p);
             let _ = a2.emit(
-                "hcfs_download_progress",
-                serde_json::json!({"label": l2, "bytes": b, "total": t, "path": p}),
+                sync_events::DOWNLOAD_PROGRESS,
+                sync_events::TransferProgressPayload { label: l2.clone(), bytes: b, total: t, path: p.map(String::from) },
             );
             // Record download completion with the encrypted name. The real
             // file name is resolved later in trigger_sync_for_drive using
@@ -1417,16 +1445,16 @@ fn setup_progress_handlers(
             sync_scan.touch_progress_time();
             info!("Scan [{}]: {} files scanned, current: {:?}", l5, n, p);
             let _ = a5.emit(
-                "hcfs_scan_progress",
-                serde_json::json!({"label": l5, "scanned": n, "path": p}),
+                sync_events::SCAN_PROGRESS,
+                sync_events::ScanProgressPayload { label: l5.clone(), scanned: n, path: p.map(|p| p.to_string()) },
             );
         })),
         on_fetch_state_progress: Some(Arc::new(move |f, t| {
             sync_fetch.touch_progress_time();
             info!("Fetch state [{}]: {}/{} entries", l6, f, t);
             let _ = a6.emit(
-                "hcfs_fetch_progress",
-                serde_json::json!({"label": l6, "fetched": f, "total": t}),
+                sync_events::FETCH_PROGRESS,
+                sync_events::FetchProgressPayload { label: l6.clone(), fetched: f, total: t },
             );
         })),
     });
@@ -1458,11 +1486,19 @@ pub async fn get_mnemonic_for_account(
         "Master mnemonic not found at {:?}, falling back to per-folder mnemonic",
         master_path
     );
-    let guard = app_state.sync.drives.lock().await;
-    let first_drive = guard.values().next();
-    match first_drive {
-        Some(m) if m.is_initialized() => m.export_mnemonic(&drive_password),
-        Some(_) => Err("Drive is not initialized".to_string()),
+    let first_arc = {
+        let guard = app_state.sync.drives.lock().await;
+        guard.values().next().map(|slot| slot.manager.clone())
+    };
+    match first_arc {
+        Some(arc) => {
+            let m = arc.lock().await;
+            if m.is_initialized() {
+                m.export_mnemonic(&drive_password)
+            } else {
+                Err("Drive is not initialized".to_string())
+            }
+        }
         None => {
             // No active drive — try reading DB for any sync path
             let owner = account_key(account_id);
@@ -1561,32 +1597,27 @@ pub async fn stage_changes(app: tauri::AppHandle) -> Result<StagedChanges, Strin
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    // Pause auto-sync so the review is stable
-    sync.review_mode.store(true, Ordering::Release);
+    // RAII guard: sets review_mode=true now, resets on drop unless commit()ed.
+    let review_guard = ReviewModeGuard::new(sync.clone());
 
-    let guard = sync.drives.lock().await;
     // For V1, stage the first available drive
-    let first_drive = guard.values().next();
-    match first_drive {
-        Some(m) if m.is_unlocked() => match m.stage_with_paths().await {
-            Ok(changes) => Ok(changes),
-            Err(e) => {
-                sync.review_mode.store(false, Ordering::Release);
-                sync.clear_review_entered();
-                Err(e)
-            }
-        },
-        Some(_) => {
-            sync.review_mode.store(false, Ordering::Release);
-            sync.clear_review_entered();
-            Err("Drive is not unlocked".to_string())
-        }
-        None => {
-            sync.review_mode.store(false, Ordering::Release);
-            sync.clear_review_entered();
-            Err("Drive not initialized".to_string())
-        }
+    let first_arc = {
+        let guard = sync.drives.lock().await;
+        guard.values().next().map(|slot| slot.manager.clone())
+    };
+    let arc = first_arc.ok_or_else(|| "Drive not initialized".to_string())?;
+
+    let m = arc
+        .try_lock()
+        .map_err(|_| "Sync is in progress, please wait".to_string())?;
+
+    if !m.is_unlocked() {
+        return Err("Drive is not unlocked".to_string());
     }
+
+    let changes = m.stage_with_paths().await?;
+    review_guard.commit();
+    Ok(changes)
 }
 
 /// Sync with user-provided conflict resolutions, then resume auto-sync.
@@ -1615,7 +1646,7 @@ pub async fn sync_with_conflict_resolutions(
     }
 
     // For V1, use the first drive's label
-    let label = {
+    let label: String = {
         let guard = sync.drives.lock().await;
         guard
             .keys()
@@ -1629,16 +1660,26 @@ pub async fn sync_with_conflict_resolutions(
         s.is_syncing = true;
     });
 
-    let _ = app.emit("hcfs_sync_started", serde_json::json!({"label": label}));
+    let _ = app.emit(sync_events::SYNC_STARTED, sync_events::LabelPayload { label: label.clone() });
 
     // Suppress file watcher during sync to prevent feedback loops
-    sync.sync_in_progress.store(true, Ordering::Release);
+    sync.begin_sync();
 
     let result = {
-        let mut guard = sync.drives.lock().await;
-        match guard.get_mut(&label) {
-            Some(m) if m.is_unlocked() => Some(m.sync_with_resolutions(resolutions).await),
-            _ => None,
+        let drive_arc = {
+            let guard = sync.drives.lock().await;
+            guard.get(&label).map(|slot| slot.manager.clone())
+        };
+        match drive_arc {
+            Some(arc) => {
+                let mut m = arc.lock().await;
+                if m.is_unlocked() {
+                    Some(m.sync_with_resolutions(resolutions).await)
+                } else {
+                    None
+                }
+            }
+            None => None,
         }
     };
 
@@ -1647,9 +1688,7 @@ pub async fn sync_with_conflict_resolutions(
         let sync_for_delay = sync.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            sync_for_delay
-                .sync_in_progress
-                .store(false, Ordering::Release);
+            sync_for_delay.end_sync();
         });
     }
 
@@ -1675,33 +1714,25 @@ pub async fn sync_with_conflict_resolutions(
                 outcome.conflicts_skipped,
             );
             let _ = app.emit(
-                "hcfs_sync_completed",
-                serde_json::json!({
-                    "label": label,
-                    "files_uploaded": outcome.files_uploaded,
-                    "files_downloaded": outcome.files_downloaded,
-                    "files_deleted_locally": outcome.files_deleted_locally,
-                    "files_deleted_remotely": outcome.files_deleted_remotely,
-                    "conflicts_resolved": outcome.conflicts_resolved,
-                    "conflicts_skipped": outcome.conflicts_skipped,
-                }),
+                sync_events::SYNC_COMPLETED,
+                sync_events::SyncCompletedPayload::from_outcome(&label, &outcome),
             );
             Ok(())
         }
         Some(Err(e)) => {
             let _ = app.emit(
-                "hcfs_sync_error",
-                serde_json::json!({"label": label, "error": e}),
+                sync_events::SYNC_ERROR,
+                sync_events::SyncErrorPayload { label: label.clone(), error: e.clone(), retry_in_secs: 0, consecutive_failures: 0 },
             );
             Err(e)
         }
         None => {
-            let msg = "Drive not initialized or not unlocked";
+            let msg = "Drive not initialized or not unlocked".to_string();
             let _ = app.emit(
-                "hcfs_sync_error",
-                serde_json::json!({"label": label, "error": msg}),
+                sync_events::SYNC_ERROR,
+                sync_events::SyncErrorPayload { label: label.clone(), error: msg.clone(), retry_in_secs: 0, consecutive_failures: 0 },
             );
-            Err(msg.to_string())
+            Err(msg)
         }
     }
 }
@@ -2142,7 +2173,7 @@ pub async fn delete_remote_folder(
     let was_local = {
         let guard = state.sync.drives.lock().await;
         guard.contains_key(&label)
-    };
+    }; // map lock released
 
     if was_local {
         if let Err(e) = stop_drive(app, label.clone()).await {

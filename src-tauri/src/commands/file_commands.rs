@@ -250,20 +250,25 @@ async fn synced_paths_for_label(
     sync: &crate::sync_engine::SyncEngine,
     label: &str,
 ) -> Option<HashMap<String, SyncedFileInfo>> {
-    // Use try_lock to avoid blocking file listing while sync holds the lock.
-    match sync.drives.try_lock() {
-        Ok(guard) => {
-            let manager = guard.get(label)?;
+    // Get the per-drive Arc from the map (brief outer lock).
+    let drive_arc = {
+        match sync.drives.try_lock() {
+            Ok(guard) => guard.get(label).map(|slot| slot.manager.clone()),
+            Err(_) => return sync.get_cached_synced_paths(label),
+        }
+    };
+    let Some(arc) = drive_arc else {
+        return sync.get_cached_synced_paths(label);
+    };
+    // Try to lock the per-drive mutex; fall back to cache if syncing.
+    match arc.try_lock() {
+        Ok(manager) => {
             let state = manager.load_sync_state().ok()?;
             let paths = build_synced_paths_from_state(&state);
-            // Refresh the cache so future fallback reads are up-to-date.
             sync.update_synced_paths_cache(label, paths.clone());
             Some(paths)
         }
-        Err(_) => {
-            // Lock unavailable (sync in progress) — fall back to cache.
-            sync.get_cached_synced_paths(label)
-        }
+        Err(_) => sync.get_cached_synced_paths(label),
     }
 }
 
@@ -298,28 +303,36 @@ pub async fn get_synced_file_metadata(
 
     // Collect labels + cached paths in one pass
     let label_maps: Vec<(String, HashMap<String, SyncedFileInfo>)> = {
-        match sync.drives.try_lock() {
-            Ok(guard) => {
-                let mut out = Vec::new();
-                for (label, manager) in guard.iter() {
+        let drive_arcs: Vec<(String, std::sync::Arc<tokio::sync::Mutex<crate::hcfs_drive::HcfsDriveManager>>)> = {
+            match sync.drives.try_lock() {
+                Ok(guard) => guard
+                    .iter()
+                    .map(|(k, slot)| (k.clone(), slot.manager.clone()))
+                    .collect(),
+                Err(_) => Vec::new(),
+            }
+        };
+        if !drive_arcs.is_empty() {
+            let mut out = Vec::new();
+            for (label, arc) in &drive_arcs {
+                if let Ok(manager) = arc.try_lock() {
                     if let Ok(st) = manager.load_sync_state() {
                         let paths = build_synced_paths_from_state(&st);
                         sync.update_synced_paths_cache(label, paths.clone());
                         out.push((label.clone(), paths));
                     }
                 }
-                out
             }
-            Err(_) => {
-                // Lock held by sync — use cached data
-                if let Ok(cache) = sync.synced_paths_cache.lock() {
-                    cache
-                        .iter()
-                        .map(|(l, m)| (l.clone(), m.clone()))
-                        .collect()
-                } else {
-                    Vec::new()
-                }
+            out
+        } else {
+            // All locks held by sync — use cached data
+            if let Ok(cache) = sync.synced_paths_cache.lock() {
+                cache
+                    .iter()
+                    .map(|(l, m)| (l.clone(), m.clone()))
+                    .collect()
+            } else {
+                Vec::new()
             }
         }
     };

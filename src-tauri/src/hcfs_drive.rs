@@ -11,6 +11,7 @@
 //! 2. `start_sync_loop` spawns a tokio task that watches for file changes and syncs periodically
 //! 3. `stop_sync` cancels the loop, aborts the task, and drops all drives
 
+use crate::sync_events;
 use crate::sync_shared::{ConnectivityStatus, SyncActivityItem, SyncEngineHealth};
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::drive::Drive;
@@ -24,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 // --- Serializable types for staged changes ---
@@ -252,24 +254,46 @@ impl HcfsDriveManager {
         resolutions: HashMap<String, String>,
     ) -> Result<SyncOutcome, String> {
         self.drive
-            .sync_with_resolver(SyncMode::NonInteractive, |conflict| {
-                let file_id_hex = match conflict {
-                    SyncConflict::Plan(c) => hex::encode(c.file_id),
-                    SyncConflict::Upload(c) => hex::encode(c.file_id),
-                };
-
-                resolutions
-                    .get(&file_id_hex)
-                    .map(|r| match r.as_str() {
-                        "keep_local" => SyncConflictResolution::KeepLocal,
-                        "accept_remote" => SyncConflictResolution::AcceptRemote,
-                        "keep_both" => SyncConflictResolution::KeepBoth,
-                        _ => SyncConflictResolution::Skip,
-                    })
-                    .unwrap_or(SyncConflictResolution::Skip)
-            })
+            .sync_with_resolver(SyncMode::NonInteractive, Self::build_resolver(&resolutions))
             .await
             .map_err(|e| e.to_string())
+    }
+
+    /// Like [`sync_with_resolutions`] but accepts a [`CancellationToken`] that
+    /// aborts the sync between file operations when cancelled.
+    pub async fn sync_with_resolutions_cancellable(
+        &mut self,
+        resolutions: HashMap<String, String>,
+        cancel_token: CancellationToken,
+    ) -> Result<SyncOutcome, String> {
+        self.drive
+            .sync_with_resolver_cancellable(
+                SyncMode::NonInteractive,
+                Self::build_resolver(&resolutions),
+                cancel_token,
+            )
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    fn build_resolver(
+        resolutions: &HashMap<String, String>,
+    ) -> impl Fn(&SyncConflict) -> SyncConflictResolution + '_ {
+        |conflict| {
+            let file_id_hex = match conflict {
+                SyncConflict::Plan(c) => hex::encode(c.file_id),
+                SyncConflict::Upload(c) => hex::encode(c.file_id),
+            };
+            resolutions
+                .get(&file_id_hex)
+                .map(|r| match r.as_str() {
+                    "keep_local" => SyncConflictResolution::KeepLocal,
+                    "accept_remote" => SyncConflictResolution::AcceptRemote,
+                    "keep_both" => SyncConflictResolution::KeepBoth,
+                    _ => SyncConflictResolution::Skip,
+                })
+                .unwrap_or(SyncConflictResolution::Skip)
+        }
     }
 
     /// Decrypt and return the Drive's actual BIP-39 mnemonic.
@@ -438,9 +462,18 @@ async fn check_server_health(app: &AppHandle) -> ConnectivityStatus {
 
     let server_url: Option<String> = {
         let guard = sync.drives.lock().await;
-        guard
-            .values()
-            .find_map(|m| m.client_config.as_ref().map(|c| c.base_url.clone()))
+        // Briefly lock each per-drive mutex to read config.
+        // Uses try_lock to avoid blocking if a drive is syncing.
+        let mut url = None;
+        for slot in guard.values() {
+            if let Ok(m) = slot.manager.try_lock() {
+                if let Some(c) = m.client_config() {
+                    url = Some(c.base_url.clone());
+                    break;
+                }
+            }
+        }
+        url
     };
 
     let Some(server_url) = server_url else {
@@ -597,8 +630,8 @@ fn emit_health_event(sync: &crate::sync_engine::SyncEngine, app: &AppHandle) {
         failures = health.consecutive_failures,
         "Emitting connectivity change",
     );
-    if let Err(e) = app.emit("hcfs_connectivity_changed", &health) {
-        warn!(error = %e, "Failed to emit hcfs_connectivity_changed");
+    if let Err(e) = app.emit(sync_events::CONNECTIVITY_CHANGED, &health) {
+        warn!(error = %e, "Failed to emit connectivity_changed");
     }
 }
 
@@ -636,10 +669,13 @@ pub async fn start_sync_loop(app: AppHandle) {
     // Collect all sync paths from registered drives
     let drive_paths: Vec<(String, PathBuf)> = {
         let guard = sync.drives.lock().await;
-        guard
-            .iter()
-            .map(|(label, m)| (label.clone(), m.sync_path().to_path_buf()))
-            .collect()
+        let mut paths = Vec::new();
+        for (label, slot) in guard.iter() {
+            if let Ok(m) = slot.manager.try_lock() {
+                paths.push((label.clone(), m.sync_path().to_path_buf()));
+            }
+        }
+        paths
     };
 
     if drive_paths.is_empty() {
@@ -675,7 +711,7 @@ pub async fn start_sync_loop(app: AppHandle) {
                     return;
                 }
 
-                if sync_for_watcher.sync_in_progress.load(Ordering::Acquire) {
+                if sync_for_watcher.is_any_sync_in_progress() {
                     sync_for_watcher
                         .changes_pending
                         .store(true, Ordering::Release);
@@ -764,8 +800,10 @@ pub async fn start_sync_loop(app: AppHandle) {
         // Clean up any stale temp files from previous runs
         {
             let guard = sync_task.drives.lock().await;
-            for manager in guard.values() {
-                manager.cleanup_temp();
+            for slot in guard.values() {
+                if let Ok(manager) = slot.manager.try_lock() {
+                    manager.cleanup_temp();
+                }
             }
         }
 
@@ -873,9 +911,22 @@ pub async fn trigger_sync(app: &AppHandle) -> bool {
         let guard = sync.drives.lock().await;
         guard.keys().cloned().collect()
     };
+
+    // Sync all drives concurrently — each drive has its own per-drive lock
+    // so they don't block each other.
+    let handles: Vec<_> = labels
+        .into_iter()
+        .map(|label| {
+            let app = app.clone();
+            tokio::spawn(async move { trigger_sync_for_drive(&app, &label).await })
+        })
+        .collect();
+
     let mut any_ran = false;
-    for label in labels {
-        any_ran |= trigger_sync_for_drive(app, &label).await;
+    for handle in handles {
+        if let Ok(ran) = handle.await {
+            any_ran |= ran;
+        }
     }
     any_ran
 }
@@ -1029,10 +1080,10 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 sync.clear_review_entered();
                 // Notify frontend that review mode was auto-cleared
                 if let Err(e) = app.emit(
-                    "hcfs_review_mode_timeout",
-                    serde_json::json!({ "label": label }),
+                    sync_events::REVIEW_MODE_TIMEOUT,
+                    sync_events::LabelPayload { label: label.to_string() },
                 ) {
-                    warn!(error = %e, "Failed to emit hcfs_review_mode_timeout");
+                    warn!(error = %e, "Failed to emit review_mode_timeout");
                 }
             } else {
                 debug!(label = label, "Review mode active, skipping auto-sync");
@@ -1065,7 +1116,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
     }
 
     // Suppress file watcher events during sync to prevent feedback loops
-    sync.sync_in_progress.store(true, Ordering::Release);
+    sync.begin_sync();
 
     info!(label = label, "Starting sync cycle");
 
@@ -1080,11 +1131,17 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
     // network I/O to avoid blocking other drive operations.
     {
         let drive_info = {
-            let guard = sync.drives.lock().await;
-            guard.get(label).and_then(|m| {
+            let drive_arc = {
+                let guard = sync.drives.lock().await;
+                guard.get(label).map(|slot| slot.manager.clone())
+            };
+            if let Some(arc) = drive_arc {
+                let m = arc.lock().await;
                 m.client_config().map(|c| (c.clone(), m.config_dir().to_path_buf()))
-            })
-        }; // drives lock dropped here
+            } else {
+                None
+            }
+        };
 
         if let Some((config, config_dir)) = drive_info
             && let (Ok(pool), Ok(acct)) = (
@@ -1105,10 +1162,10 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                             "Remote folder recovered — sync will re-upload local files",
                         );
                         if let Err(e) = app.emit(
-                            "hcfs_folder_recovered",
-                            serde_json::json!({ "label": label }),
+                            sync_events::FOLDER_RECOVERED,
+                            sync_events::LabelPayload { label: label.to_string() },
                         ) {
-                            warn!(error = %e, "Failed to emit hcfs_folder_recovered");
+                            warn!(error = %e, "Failed to emit folder_recovered");
                         }
                     }
                     Ok(false) => {} // folder exists, no recovery needed
@@ -1138,167 +1195,169 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         NotAvailable,
     }
 
-    let result = {
+    // Get the per-drive Arc and a fresh cancel token (microsecond outer lock).
+    let (drive_arc, cancel_token) = {
         let mut guard = sync.drives.lock().await;
         match guard.get_mut(label) {
-            Some(m) if m.is_unlocked() => {
-                let drive_sync_path = m.sync_path().to_path_buf();
-                debug!(label = label, "Drive is unlocked, syncing directly");
-                m.log_sync_diagnostics(label);
-
-                // Emit sync_started with zero counts — real counts arrive
-                // via the on_sync_plan_ready callback once the live sync
-                // fetches fresh remote state.
-                let empty: Vec<String> = Vec::new();
-                if let Err(e) = app.emit(
-                    "hcfs_sync_started",
-                    serde_json::json!({
-                        "label": label,
-                        "uploads": 0, "downloads": 0,
-                        "local_deletes": 0, "remote_deletes": 0,
-                        "upload_files": empty,
-                        "download_files": empty,
-                        "local_delete_files": empty,
-                        "remote_delete_files": empty,
-                    }),
-                ) {
-                    warn!(error = %e, "Failed to emit hcfs_sync_started");
-                }
-                emitted_sync_started = true;
-
-                // Create empty session — the plan_ready callback will
-                // merge real counts once the sync engine has a plan.
-                let _ = crate::sync_progress::merge_into_session(
-                    sync,
-                    0,
-                    0,
-                    0,
-                    0,
-                    None,
-                    Some(label.to_string()),
-                );
-
-                // Run sync with stall detection.  Every 10 s we check
-                // whether any progress callback has fired in the last
-                // 3 minutes (and whether cancellation was requested).
-                info!(label = label, "sync_with_resolutions starting");
-                sync.reset_progress_time();
-                let outcome = {
-                    let sync_future = m.sync_with_resolutions(HashMap::new());
-                    tokio::pin!(sync_future);
-                    loop {
-                        tokio::select! {
-                            result = &mut sync_future => break result,
-                            _ = tokio::time::sleep(Duration::from_secs(10)) => {
-                                if sync.is_progress_stalled() {
-                                    error!(label = label, "Sync stalled — no progress for 3 minutes");
-                                    break Err("Sync stalled — no progress for 3 minutes".to_string());
-                                }
-                                if sync.is_cancelled() {
-                                    break Err("Sync cancelled".to_string());
-                                }
-                            }
-                        }
-                    }
-                };
-                info!(
-                    label = label,
-                    success = outcome.is_ok(),
-                    "sync_with_resolutions returned",
-                );
-
-                match &outcome {
-                    Ok(o) if o.conflicts_skipped > 0 => {
-                        info!(
-                            conflicts_skipped = o.conflicts_skipped,
-                            label = label,
-                            "Conflicts skipped during auto-sync, re-staging for review",
-                        );
-
-                        // Finalize session for files that DID sync before
-                        // conflicts were skipped — prevents the widget from
-                        // showing "syncing" indefinitely during review mode.
-                        {
-                            let up = o.files_uploaded as u32;
-                            let down = o.files_downloaded as u32;
-                            let expected = {
-                                let state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
-                                state.current_session.as_ref().map(|s| (s.expected_uploads, s.expected_downloads))
-                            };
-                            if let Some((exp_up, exp_down)) = expected {
-                                let has_failures = up < exp_up || down < exp_down;
-                                if has_failures {
-                                    let _ = crate::sync_progress::mark_pending_files_as_failed(
-                                        sync, up, down,
-                                    );
-                                } else {
-                                    let _ = crate::sync_progress::complete_pending_files(sync);
-                                }
-                            }
-                            let _ = crate::sync_progress::complete_session(sync, up, down);
-                        }
-
-                        if let Err(e) = app.emit(
-                            "hcfs_sync_completed",
-                            serde_json::json!({
-                                "label": label,
-                                "files_uploaded": o.files_uploaded,
-                                "files_downloaded": o.files_downloaded,
-                                "files_deleted_locally": o.files_deleted_locally,
-                                "files_deleted_remotely": o.files_deleted_remotely,
-                                "conflicts_resolved": o.conflicts_resolved,
-                                "conflicts_skipped": o.conflicts_skipped,
-                            }),
-                        ) {
-                            warn!(error = %e, "Failed to emit hcfs_sync_completed");
-                        }
-
-                        // Re-stage AFTER sync to present real conflicts
-                        // for user review (the pre-sync stage is skipped).
-                        match m.stage_with_paths().await {
-                            Ok(restaged) if !restaged.conflicts.is_empty() => {
-                                sync.review_mode.store(true, Ordering::Release);
-                                sync.set_review_entered();
-                                if let Err(e) = app.emit(
-                                    "hcfs_conflicts_pending",
-                                    serde_json::json!({
-                                        "label": label,
-                                        "staged": restaged,
-                                    }),
-                                ) {
-                                    warn!(error = %e, "Failed to emit hcfs_conflicts_pending");
-                                }
-                            }
-                            _ => {
-                                info!(label = label, "Re-stage after sync found no conflicts",);
-                            }
-                        }
-                        SyncResult::ConflictsPending
-                    }
-                    _ => SyncResult::Synced {
-                        outcome,
-                        staged_downloads: Vec::new(),
-                        sync_path: drive_sync_path,
-                    },
-                }
-            }
-            Some(_) => {
-                warn!(label = label, "Drive exists but is not unlocked");
-                SyncResult::NotAvailable
+            Some(slot) => {
+                // Fresh token for this sync cycle (old one may be stale)
+                let new_token = CancellationToken::new();
+                slot.cancel_token = new_token.clone();
+                (slot.manager.clone(), new_token)
             }
             None => {
                 warn!(label = label, "Drive not found in registry");
-                SyncResult::NotAvailable
+                sync.end_sync();
+                sync.update_state(label, |s| s.is_syncing = false);
+                return false;
             }
         }
-    };
+    }; // outer map lock released
+
+    // Lock the per-drive mutex.  Only blocks THIS drive, not others.
+    let result = {
+        let mut m = drive_arc.lock().await;
+        if !m.is_unlocked() {
+            warn!(label = label, "Drive exists but is not unlocked");
+            SyncResult::NotAvailable
+        } else {
+            let drive_sync_path = m.sync_path().to_path_buf();
+            debug!(label = label, "Drive is unlocked, syncing directly");
+            m.log_sync_diagnostics(label);
+
+            // Emit sync_started with zero counts — real counts arrive
+            // via the on_sync_plan_ready callback once the live sync
+            // fetches fresh remote state.
+            if let Err(e) = app.emit(
+                sync_events::SYNC_STARTED,
+                sync_events::SyncStartedPayload::empty(label),
+            ) {
+                warn!(error = %e, "Failed to emit sync_started");
+            }
+            emitted_sync_started = true;
+
+            // Create empty session — the plan_ready callback will
+            // merge real counts once the sync engine has a plan.
+            let _ = crate::sync_progress::merge_into_session(
+                sync,
+                0,
+                0,
+                0,
+                0,
+                None,
+                Some(label.to_string()),
+            );
+
+            // Run sync with cancellation token.  Stall detection runs as
+            // a parallel task that cancels the token if no progress is made
+            // for 3 minutes.
+            info!(label = label, "sync_with_resolutions starting");
+            sync.reset_progress_time();
+
+            let stall_token = cancel_token.clone();
+            let stall_sync = sync.clone();
+            let stall_label = label.to_string();
+            let stall_handle = tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    if stall_sync.is_progress_stalled() {
+                        error!(label = %stall_label, "Sync stalled — no progress for 3 minutes");
+                        stall_token.cancel();
+                        break;
+                    }
+                    if stall_sync.is_cancelled() {
+                        stall_token.cancel();
+                        break;
+                    }
+                }
+            });
+
+            let outcome = m
+                .sync_with_resolutions_cancellable(HashMap::new(), cancel_token)
+                .await;
+            stall_handle.abort();
+
+            info!(
+                label = label,
+                success = outcome.is_ok(),
+                "sync_with_resolutions returned",
+            );
+
+            match &outcome {
+                Ok(o) if o.conflicts_skipped > 0 => {
+                    info!(
+                        conflicts_skipped = o.conflicts_skipped,
+                        label = label,
+                        "Conflicts skipped during auto-sync, re-staging for review",
+                    );
+
+                    // Finalize session for files that DID sync before
+                    // conflicts were skipped — prevents the widget from
+                    // showing "syncing" indefinitely during review mode.
+                    {
+                        let up = o.files_uploaded as u32;
+                        let down = o.files_downloaded as u32;
+                        let expected = {
+                            let state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
+                            state.current_session.as_ref().map(|s| (s.expected_uploads, s.expected_downloads))
+                        };
+                        if let Some((exp_up, exp_down)) = expected {
+                            let has_failures = up < exp_up || down < exp_down;
+                            if has_failures {
+                                let _ = crate::sync_progress::mark_pending_files_as_failed(
+                                    sync, up, down,
+                                );
+                            } else {
+                                let _ = crate::sync_progress::complete_pending_files(sync);
+                            }
+                        }
+                        let _ = crate::sync_progress::complete_session(sync, up, down);
+                    }
+
+                    if let Err(e) = app.emit(
+                        sync_events::SYNC_COMPLETED,
+                        sync_events::SyncCompletedPayload::from_outcome(label, o),
+                    ) {
+                        warn!(error = %e, "Failed to emit sync_completed");
+                    }
+
+                    // Re-stage AFTER sync to present real conflicts
+                    // for user review (the pre-sync stage is skipped).
+                    match m.stage_with_paths().await {
+                        Ok(restaged) if !restaged.conflicts.is_empty() => {
+                            sync.review_mode.store(true, Ordering::Release);
+                            sync.set_review_entered();
+                            if let Err(e) = app.emit(
+                                sync_events::CONFLICTS_PENDING,
+                                sync_events::ConflictsPendingPayload {
+                                    label: label.to_string(),
+                                    staged: restaged,
+                                },
+                            ) {
+                                warn!(error = %e, "Failed to emit conflicts_pending");
+                            }
+                        }
+                        _ => {
+                            info!(label = label, "Re-stage after sync found no conflicts",);
+                        }
+                    }
+                    SyncResult::ConflictsPending
+                }
+                _ => SyncResult::Synced {
+                    outcome,
+                    staged_downloads: Vec::new(),
+                    sync_path: drive_sync_path,
+                },
+            }
+        }
+    }; // per-drive lock released
 
     // Wait for the OS to flush trailing filesystem events generated by sync
     // (e.g. sync_state.json writes, downloaded files). The drain in
     // start_sync_loop happens AFTER this returns, so awaiting inline ensures
     // the drain captures all trailing events instead of racing with them.
     tokio::time::sleep(Duration::from_millis(200)).await;
-    sync.sync_in_progress.store(false, Ordering::Release);
+    sync.end_sync();
 
     sync.update_state(label, |s| {
         s.is_syncing = false;
@@ -1312,50 +1371,43 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
     // different device encrypted with a different key, and deleting
     // would destroy their data.
     {
-        let guard = sync.drives.lock().await;
-        if let Some(m) = guard.get(label) {
-            m.log_sync_diagnostics(label);
-            let failed_ids = m.cleanup_failed_downloads();
-            if !failed_ids.is_empty() {
-                info!(
-                    count = failed_ids.len(),
-                    label = label,
-                    "Cleaned up local download artifact(s) (remote files preserved)",
-                );
-                // Remove pending activity entries for cleaned-up files so
-                // they don't appear in recent activity.
-                let mut pending = sync
-                    .pending_activity
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner());
-                let before = pending.len();
-                pending.retain(|item| {
-                    if item.label != label || item.action != "downloaded" {
-                        return true;
-                    }
-                    !failed_ids.iter().any(|id| item.file_name.contains(id))
-                });
-                let removed = before - pending.len();
-                if removed > 0 {
-                    info!(
-                        removed,
-                        label = label,
-                        "Removed pending activity for failed downloads",
-                    );
+        let m = drive_arc.lock().await;
+        m.log_sync_diagnostics(label);
+        let failed_ids = m.cleanup_failed_downloads();
+        if !failed_ids.is_empty() {
+            info!(
+                count = failed_ids.len(),
+                label = label,
+                "Cleaned up local download artifact(s) (remote files preserved)",
+            );
+            // Remove pending activity entries for cleaned-up files so
+            // they don't appear in recent activity.
+            let mut pending = sync
+                .pending_activity
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            let before = pending.len();
+            pending.retain(|item| {
+                if item.label != label || item.action != "downloaded" {
+                    return true;
                 }
+                !failed_ids.iter().any(|id| item.file_name.contains(id))
+            });
+            let removed = before - pending.len();
+            if removed > 0 {
+                info!(
+                    removed,
+                    label = label,
+                    "Removed pending activity for failed downloads",
+                );
             }
         }
-    }
 
-    // Refresh the synced-paths cache so the file browser shows accurate
-    // sync status even when the drives lock is held by the next cycle.
-    {
-        let guard = sync.drives.lock().await;
-        if let Some(m) = guard.get(label) {
-            if let Ok(state) = m.load_sync_state() {
-                let paths = crate::commands::file_commands::build_synced_paths_from_state(&state);
-                sync.update_synced_paths_cache(label, paths);
-            }
+        // Refresh the synced-paths cache so the file browser shows accurate
+        // sync status even when the per-drive lock is held by the next cycle.
+        if let Ok(state) = m.load_sync_state() {
+            let paths = crate::commands::file_commands::build_synced_paths_from_state(&state);
+            sync.update_synced_paths_cache(label, paths);
         }
     }
 
@@ -1366,11 +1418,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             staged_downloads,
             ..
         } => {
-            sync.reset_sync_failures();
-            sync.retry_at.store(0, std::sync::atomic::Ordering::Relaxed);
-            if let Ok(mut guard) = sync.last_error.lock() {
-                *guard = None;
-            }
+            sync.clear_failure_state();
             info!(
                 label = %label_owned,
                 uploaded = outcome.files_uploaded,
@@ -1422,10 +1470,8 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         // Staging missed these downloads (stale remote cache).
                         // Resolve encrypted names via the path_index.
                         let path_index = {
-                            let guard = sync.drives.lock().await;
-                            guard
-                                .get(&label_owned)
-                                .and_then(|m| m.build_path_index().ok())
+                            let m = drive_arc.lock().await;
+                            m.build_path_index().ok()
                         };
 
                         let mut pending = sync
@@ -1500,18 +1546,10 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
 
             if emitted_sync_started {
                 if let Err(e) = app.emit(
-                    "hcfs_sync_completed",
-                    serde_json::json!({
-                        "label": label_owned,
-                        "files_uploaded": outcome.files_uploaded,
-                        "files_downloaded": outcome.files_downloaded,
-                        "files_deleted_locally": outcome.files_deleted_locally,
-                        "files_deleted_remotely": outcome.files_deleted_remotely,
-                        "conflicts_resolved": outcome.conflicts_resolved,
-                        "conflicts_skipped": outcome.conflicts_skipped,
-                    }),
+                    sync_events::SYNC_COMPLETED,
+                    sync_events::SyncCompletedPayload::from_outcome(&label_owned, &outcome),
                 ) {
-                    warn!(error = %e, "Failed to emit hcfs_sync_completed");
+                    warn!(error = %e, "Failed to emit sync_completed");
                 }
             }
 
@@ -1522,11 +1560,8 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             // This call is idempotent (server uses ON CONFLICT DO UPDATE).
             if crate::sync_logic::should_register_after_upload(outcome.files_uploaded) {
                 let maybe_config_and_pool = {
-                    let guard = sync.drives.lock().await;
-                    guard
-                        .get(&label_owned)
-                        .and_then(|m| m.client_config().cloned())
-                        .zip(app_state.pool().ok())
+                    let m = drive_arc.lock().await;
+                    m.client_config().cloned().zip(app_state.pool().ok())
                 };
                 if let Some((config, pool)) = maybe_config_and_pool {
                     if let Err(e) =
@@ -1596,11 +1631,9 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
 
                 // Extract data from the drive without holding the lock during network I/O
                 let drive_info = {
-                    let guard = sync.drives.lock().await;
-                    guard.get(&label_owned).and_then(|m| {
-                        m.client_config()
-                            .map(|c| (c.clone(), m.config_dir().to_path_buf()))
-                    })
+                    let m = drive_arc.lock().await;
+                    m.client_config()
+                        .map(|c| (c.clone(), m.config_dir().to_path_buf()))
                 };
 
                 let recovered = if let Some((config, config_dir)) = drive_info {
@@ -1631,10 +1664,10 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     // all local files as new.
                     info!(label = %label_owned, "Remote folder recovered via error handler — next sync will re-upload");
                     if let Err(e) = app.emit(
-                        "hcfs_folder_recovered",
-                        serde_json::json!({ "label": label_owned }),
+                        sync_events::FOLDER_RECOVERED,
+                        sync_events::LabelPayload { label: label_owned.clone() },
                     ) {
-                        warn!(error = %e, "Failed to emit hcfs_folder_recovered");
+                        warn!(error = %e, "Failed to emit folder_recovered");
                     }
                 }
 
@@ -1667,10 +1700,10 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             if err_str.contains("401") || err_str.contains("Unauthorized") {
                 warn!(label = %label_owned, "Auth token expired, attempting automatic refresh");
                 if let Err(e) = app.emit(
-                    "hcfs_auth_token_expired",
-                    serde_json::json!({"label": label_owned}),
+                    sync_events::AUTH_TOKEN_EXPIRED,
+                    sync_events::LabelPayload { label: label_owned.clone() },
                 ) {
-                    warn!(error = %e, "Failed to emit hcfs_auth_token_expired");
+                    warn!(error = %e, "Failed to emit auth_token_expired");
                 }
 
                 // Try to refresh the token automatically using the stored mnemonic.
@@ -1707,44 +1740,32 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             // Always emit sync error to frontend — even if sync_started
             // was never emitted (e.g. early failure during staging).
             if let Err(e) = app.emit(
-                "hcfs_sync_error",
-                serde_json::json!({
-                    "label": label_owned,
-                    "error": err_str,
-                    "retry_in_secs": backoff_secs,
-                    "consecutive_failures": failures,
-                }),
+                sync_events::SYNC_ERROR,
+                sync_events::SyncErrorPayload {
+                    label: label_owned.clone(),
+                    error: err_str,
+                    retry_in_secs: backoff_secs,
+                    consecutive_failures: failures,
+                },
             ) {
-                warn!(error = %e, "Failed to emit hcfs_sync_error");
+                warn!(error = %e, "Failed to emit sync_error");
             }
 
             // Emit snapshot with retry state so UI updates immediately
             sync.emit_snapshot(true);
         }
         SyncResult::NoChanges => {
-            sync.reset_sync_failures();
-            sync.retry_at.store(0, std::sync::atomic::Ordering::Relaxed);
-            if let Ok(mut guard) = sync.last_error.lock() {
-                *guard = None;
-            }
+            sync.clear_failure_state();
             sync.discard_pending_activity_for_label(&label_owned);
         }
         SyncResult::ConflictsPending => {
             sync.discard_pending_activity_for_label(&label_owned);
             if emitted_sync_started {
                 if let Err(e) = app.emit(
-                    "hcfs_sync_completed",
-                    serde_json::json!({
-                        "label": label_owned,
-                        "files_uploaded": 0,
-                        "files_downloaded": 0,
-                        "files_deleted_locally": 0,
-                        "files_deleted_remotely": 0,
-                        "conflicts_resolved": 0,
-                        "conflicts_skipped": 0,
-                    }),
+                    sync_events::SYNC_COMPLETED,
+                    sync_events::SyncCompletedPayload::zeros(&label_owned),
                 ) {
-                    warn!(error = %e, "Failed to emit hcfs_sync_completed");
+                    warn!(error = %e, "Failed to emit sync_completed");
                 }
             }
         }

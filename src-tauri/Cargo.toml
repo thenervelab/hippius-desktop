@@ -43,6 +43,7 @@ tokio = { version = "1.49.0", features = [
     "signal",
 ] }
 futures = "0.3"
+tokio-util = "0.7"
 dirs = "6.0.0"
 flate2 = "1.1.2"
 tar = "0.4.44"
@@ -87,8 +88,8 @@ alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "4e58c5a" }
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "4e58c5a" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "b7693ae" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "b7693ae" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
