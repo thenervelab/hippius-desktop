@@ -695,9 +695,14 @@ pub async fn start_sync_loop(app: AppHandle) {
             info!("Sync loop already running — hot-added drives, triggering sync");
             drop(handle_guard);
 
-            // Trigger immediate sync — existing in-progress syncs are not
-            // interrupted; the new drive starts its own concurrent sync.
-            trigger_sync(&app).await;
+            // Spawn sync in the background so the caller (restore_remote_folders)
+            // returns immediately to the frontend. trigger_sync awaits all drive
+            // sync cycles, which can take minutes for large downloads — blocking
+            // here would freeze the UI modal.
+            let app_for_sync = app.clone();
+            tokio::spawn(async move {
+                trigger_sync(&app_for_sync).await;
+            });
             return;
         }
     }
