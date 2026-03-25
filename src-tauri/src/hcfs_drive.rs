@@ -1387,18 +1387,20 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     {
                         let up = o.files_uploaded as u32;
                         let down = o.files_downloaded as u32;
-                        let expected = {
+                        let label_expected = {
                             let state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
-                            state.current_session.as_ref().map(|s| (s.expected_uploads, s.expected_downloads))
+                            state.current_session.as_ref().map(|s| {
+                                crate::sync_progress::count_expected_for_label(s, label)
+                            })
                         };
-                        if let Some((exp_up, exp_down)) = expected {
+                        if let Some((exp_up, exp_down)) = label_expected {
                             let has_failures = up < exp_up || down < exp_down;
                             if has_failures {
                                 let _ = crate::sync_progress::mark_pending_files_as_failed(
-                                    sync, up, down,
+                                    sync, up, down, label,
                                 );
                             } else {
-                                let _ = crate::sync_progress::complete_pending_files(sync);
+                                let _ = crate::sync_progress::complete_pending_files(sync, label);
                             }
                         }
                         // Only complete the session when this is the LAST drive
@@ -1619,22 +1621,28 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
 
             // Finalize the progress session in Rust — the frontend no longer
             // manages session lifecycle.  Detect failures by comparing actual
-            // upload/download counts against what was expected.
+            // upload/download counts against what was expected FOR THIS DRIVE.
+            // Using per-label counts prevents drive A from marking drive B's
+            // still-in-progress files as failed.
             {
-                let expected = {
+                let label_expected = {
                     let state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
-                    state.current_session.as_ref().map(|s| (s.expected_uploads, s.expected_downloads))
+                    state.current_session.as_ref().map(|s| {
+                        crate::sync_progress::count_expected_for_label(s, &label_owned)
+                    })
                 };
                 let up = outcome.files_uploaded as u32;
                 let down = outcome.files_downloaded as u32;
-                if let Some((exp_up, exp_down)) = expected {
+                if let Some((exp_up, exp_down)) = label_expected {
                     let has_failures = up < exp_up || down < exp_down;
                     if has_failures {
                         let _ = crate::sync_progress::mark_pending_files_as_failed(
-                            sync, up, down,
+                            sync, up, down, &label_owned,
                         );
                     } else {
-                        let _ = crate::sync_progress::complete_pending_files(sync);
+                        let _ = crate::sync_progress::complete_pending_files(
+                            sync, &label_owned,
+                        );
                     }
                 }
                 // Only complete the session when this is the LAST drive

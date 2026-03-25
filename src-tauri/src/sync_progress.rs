@@ -497,6 +497,25 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
 
 // ── Inner Functions (business logic, callable from Rust and tests) ─────
 
+/// Count the expected uploads and downloads for a specific drive label.
+///
+/// Used by `hcfs_drive.rs` to compare a single drive's actual sync counts
+/// against only that drive's expected files, rather than the merged session
+/// total across all drives.
+pub fn count_expected_for_label(session: &SyncSession, label: &str) -> (u32, u32) {
+    let uploads = session
+        .files
+        .values()
+        .filter(|f| f.label == label && f.action == FileAction::Upload)
+        .count() as u32;
+    let downloads = session
+        .files
+        .values()
+        .filter(|f| f.label == label && f.action == FileAction::Download)
+        .count() as u32;
+    (uploads, downloads)
+}
+
 /// Start a new sync session, moving any existing completed files to recent.
 pub fn start_session(
     sync: &crate::sync_engine::SyncEngine,
@@ -893,7 +912,10 @@ pub fn sp_update_file_progress(
 }
 
 /// Force-complete all pending files. Stalled files (0 bytes) become errors.
-pub fn complete_pending_files(sync: &crate::sync_engine::SyncEngine) -> Result<(), String> {
+pub fn complete_pending_files(
+    sync: &crate::sync_engine::SyncEngine,
+    label: &str,
+) -> Result<(), String> {
     let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
         warn!("Poisoned mutex recovered in complete_pending_files");
         poisoned.into_inner()
@@ -903,6 +925,9 @@ pub fn complete_pending_files(sync: &crate::sync_engine::SyncEngine) -> Result<(
 
     if let Some(session) = state.current_session.as_mut() {
         for file in session.files.values_mut() {
+            if file.label != label {
+                continue;
+            }
             if file.status == FileStatus::Pending
                 || file.status == FileStatus::Uploading
                 || file.status == FileStatus::Downloading
@@ -939,8 +964,9 @@ pub fn complete_pending_files(sync: &crate::sync_engine::SyncEngine) -> Result<(
 #[tauri::command]
 pub fn sp_complete_pending_files(
     state: tauri::State<'_, crate::app_state::AppState>,
+    label: Option<String>,
 ) -> Result<(), String> {
-    complete_pending_files(&state.sync)
+    complete_pending_files(&state.sync, label.as_deref().unwrap_or("default"))
 }
 
 /// Mark excess pending files as failed based on actual vs expected counts.
@@ -948,6 +974,7 @@ pub fn mark_pending_files_as_failed(
     sync: &crate::sync_engine::SyncEngine,
     actual_uploads: u32,
     actual_downloads: u32,
+    label: &str,
 ) -> Result<(), String> {
     let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
         warn!("Poisoned mutex recovered in mark_pending_files_as_failed");
@@ -957,14 +984,26 @@ pub fn mark_pending_files_as_failed(
     let now = now_ms();
 
     if let Some(session) = state.current_session.as_mut() {
+        // Count expected uploads/downloads for THIS drive only
+        let label_expected_uploads = session
+            .files
+            .values()
+            .filter(|f| f.label == label && f.action == FileAction::Upload)
+            .count() as u32;
+        let label_expected_downloads = session
+            .files
+            .values()
+            .filter(|f| f.label == label && f.action == FileAction::Download)
+            .count() as u32;
+
         // If we have more pending than actual, mark the excess as failed
-        let excess_uploads = if actual_uploads < session.expected_uploads {
-            session.expected_uploads - actual_uploads
+        let excess_uploads = if actual_uploads < label_expected_uploads {
+            label_expected_uploads - actual_uploads
         } else {
             0
         };
-        let excess_downloads = if actual_downloads < session.expected_downloads {
-            session.expected_downloads - actual_downloads
+        let excess_downloads = if actual_downloads < label_expected_downloads {
+            label_expected_downloads - actual_downloads
         } else {
             0
         };
@@ -976,6 +1015,9 @@ pub fn mark_pending_files_as_failed(
         let keys: Vec<String> = session.files.keys().cloned().collect();
         for key in keys {
             if let Some(file) = session.files.get_mut(&key) {
+                if file.label != label {
+                    continue;
+                }
                 if file.action == FileAction::Upload
                     && (file.status == FileStatus::Pending
                         || file.status == FileStatus::Uploading
@@ -1000,9 +1042,12 @@ pub fn mark_pending_files_as_failed(
             }
         }
 
-        // Also complete remaining pending uploads/downloads that weren't marked failed
-        // (these are the ones that actually succeeded)
+        // Also complete remaining pending uploads/downloads for THIS drive
+        // that weren't marked failed (these are the ones that actually succeeded)
         for file in session.files.values_mut() {
+            if file.label != label {
+                continue;
+            }
             if (file.action == FileAction::Upload
                 && (file.status == FileStatus::Pending
                     || file.status == FileStatus::Uploading
@@ -1034,8 +1079,14 @@ pub fn sp_mark_pending_files_as_failed(
     state: tauri::State<'_, crate::app_state::AppState>,
     actual_uploads: u32,
     actual_downloads: u32,
+    label: Option<String>,
 ) -> Result<(), String> {
-    mark_pending_files_as_failed(&state.sync, actual_uploads, actual_downloads)
+    mark_pending_files_as_failed(
+        &state.sync,
+        actual_uploads,
+        actual_downloads,
+        label.as_deref().unwrap_or("default"),
+    )
 }
 
 /// Mark every pending/in-progress file as failed with the given error message.
@@ -2029,7 +2080,7 @@ mod tests {
         .unwrap();
 
         // Force-complete all pending files
-        complete_pending_files(eng).unwrap();
+        complete_pending_files(eng, "d1").unwrap();
 
         let progress = get_overall_progress(eng).unwrap();
         assert_eq!(progress.completed_files, 2);
@@ -2082,7 +2133,7 @@ mod tests {
         // with bytes_transferred == 0.
 
         // Force-complete all pending files
-        complete_pending_files(eng).unwrap();
+        complete_pending_files(eng, "d1").unwrap();
 
         let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
         let session = state.current_session.as_ref().unwrap();
@@ -2725,5 +2776,158 @@ mod tests {
         let snapshot = build_snapshot(&state);
         assert_eq!(snapshot.files.len(), 1);
         assert_eq!(snapshot.files[0].resumed_from_bytes, Some(200_000));
+    }
+
+    #[test]
+    fn multi_drive_first_completing_drive_does_not_mark_other_drive_files_as_failed() {
+        reset_state();
+        let eng = test_sync();
+
+        // Drive A: 3 downloads
+        let drive_a_files = SessionFileList {
+            upload_files: None,
+            download_files: Some(vec![
+                "file_a1.mp3".to_string(),
+                "file_a2.mp3".to_string(),
+                "file_a3.json".to_string(),
+            ]),
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        merge_into_session(eng, 0, 3, 0, 0, Some(drive_a_files), Some("drive-a".to_string()))
+            .unwrap();
+
+        // Drive B: 4 downloads
+        let drive_b_files = SessionFileList {
+            upload_files: None,
+            download_files: Some(vec![
+                "file_b1.mp3".to_string(),
+                "file_b2.zip".to_string(),
+                "file_b3.dmg".to_string(),
+                "file_b4.mp3".to_string(),
+            ]),
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        merge_into_session(eng, 0, 4, 0, 0, Some(drive_b_files), Some("drive-b".to_string()))
+            .unwrap();
+
+        // Verify merged session has 7 files total
+        {
+            let state = eng.progress.lock().unwrap();
+            let session = state.current_session.as_ref().unwrap();
+            assert_eq!(session.files.len(), 7);
+            assert_eq!(session.expected_downloads, 7);
+        }
+
+        // Simulate drive-a files having received progress data (non-zero bytes)
+        // so complete_pending_files marks them Completed instead of Error (stalled).
+        {
+            let mut state = eng.progress.lock().unwrap();
+            let session = state.current_session.as_mut().unwrap();
+            for file in session.files.values_mut() {
+                if file.label == "drive-a" {
+                    file.bytes_transferred = 1000;
+                    file.total_bytes = 1000;
+                }
+            }
+        }
+
+        // Drive A completes all 3 of its downloads
+        complete_pending_files(eng, "drive-a").unwrap();
+
+        // Drive B's files should still be pending (not marked as failed/completed)
+        {
+            let state = eng.progress.lock().unwrap();
+            let session = state.current_session.as_ref().unwrap();
+
+            // Drive A files: all completed
+            let drive_a_completed = session
+                .files
+                .values()
+                .filter(|f| f.label == "drive-a" && f.status == FileStatus::Completed)
+                .count();
+            assert_eq!(drive_a_completed, 3, "All drive-a files should be completed");
+
+            // Drive B files: all still pending (untouched)
+            let drive_b_pending = session
+                .files
+                .values()
+                .filter(|f| f.label == "drive-b" && f.status == FileStatus::Pending)
+                .count();
+            assert_eq!(
+                drive_b_pending, 4,
+                "Drive-b files should remain pending, not be marked as failed"
+            );
+
+            // Session should still be active
+            assert!(session.is_active, "Session should still be active");
+        }
+    }
+
+    #[test]
+    fn multi_drive_mark_failures_scoped_to_label() {
+        reset_state();
+        let eng = test_sync();
+
+        // Drive A: 2 downloads
+        let drive_a_files = SessionFileList {
+            upload_files: None,
+            download_files: Some(vec![
+                "file_a1.mp3".to_string(),
+                "file_a2.mp3".to_string(),
+            ]),
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        merge_into_session(eng, 0, 2, 0, 0, Some(drive_a_files), Some("drive-a".to_string()))
+            .unwrap();
+
+        // Drive B: 3 downloads
+        let drive_b_files = SessionFileList {
+            upload_files: None,
+            download_files: Some(vec![
+                "file_b1.mp3".to_string(),
+                "file_b2.zip".to_string(),
+                "file_b3.dmg".to_string(),
+            ]),
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        merge_into_session(eng, 0, 3, 0, 0, Some(drive_b_files), Some("drive-b".to_string()))
+            .unwrap();
+
+        // Drive A: only 1 out of 2 downloaded (1 failed)
+        mark_pending_files_as_failed(eng, 0, 1, "drive-a").unwrap();
+
+        {
+            let state = eng.progress.lock().unwrap();
+            let session = state.current_session.as_ref().unwrap();
+
+            // Drive A: 1 failed, 1 completed
+            let drive_a_errors = session
+                .files
+                .values()
+                .filter(|f| f.label == "drive-a" && f.status == FileStatus::Error)
+                .count();
+            let drive_a_completed = session
+                .files
+                .values()
+                .filter(|f| f.label == "drive-a" && f.status == FileStatus::Completed)
+                .count();
+            assert_eq!(drive_a_errors, 1, "Drive-a should have 1 failed file");
+            assert_eq!(drive_a_completed, 1, "Drive-a should have 1 completed file");
+
+            // Drive B: all 3 still pending (untouched)
+            let drive_b_pending = session
+                .files
+                .values()
+                .filter(|f| f.label == "drive-b" && f.status == FileStatus::Pending)
+                .count();
+            assert_eq!(
+                drive_b_pending, 3,
+                "Drive-b files should remain pending when drive-a has failures"
+            );
+        }
     }
 }
