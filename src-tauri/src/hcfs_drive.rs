@@ -14,7 +14,7 @@
 use crate::sync_events;
 use crate::sync_shared::{ConnectivityStatus, SyncActivityItem, SyncEngineHealth};
 use hcfs_client::client::HcfsClientConfig;
-use hcfs_client::drive::Drive;
+use hcfs_client::drive::{Drive, ExcludeRules};
 use hcfs_client::sync::{
     SyncConflict, SyncConflictResolution, SyncConflictType, SyncMode, SyncOutcome, SyncProgress,
 };
@@ -144,19 +144,10 @@ impl HcfsDriveManager {
     /// plan may miss conflicts that only become visible with fresh remote data (TOCTOU gap).
     /// The caller must handle this; see `trigger_sync()` for the re-staging fallback.
     ///
-    /// `stage()` does not expose the resulting `SyncState`, so we call `load_sync_state()`
-    /// + `scan_local_files()` again to access `path_index` for FileId → path resolution.
-    ///
     /// This method is `async` for API consistency with the rest of `HcfsDriveManager`,
     /// though the underlying `drive.stage()` is synchronous.
     pub async fn stage_with_paths(&self) -> Result<StagedChanges, String> {
-        let plan = self.drive.stage().map_err(|e| e.to_string())?;
-
-        // Load state separately for path_index (see doc comment above)
-        let mut state = self.drive.load_sync_state().map_err(|e| e.to_string())?;
-        self.drive
-            .scan_local_files(&mut state)
-            .map_err(|e| e.to_string())?;
+        let (plan, state) = self.drive.stage().map_err(|e| e.to_string())?;
 
         // Diagnostic: log the staging plan summary and any conflicts
         debug!(
@@ -423,7 +414,7 @@ impl HcfsDriveManager {
     pub fn build_path_index(&self) -> Result<HashMap<String, String>, String> {
         let mut state = self.drive.load_sync_state().map_err(|e| e.to_string())?;
         self.drive
-            .scan_local_files(&mut state)
+            .scan_local_files(&mut state, &ExcludeRules::load(self.config_dir()))
             .map_err(|e| e.to_string())?;
 
         let mut index = HashMap::new();
