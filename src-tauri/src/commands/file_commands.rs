@@ -201,12 +201,24 @@ pub async fn remove_file(
 /// and server-side timestamps.
 #[derive(Clone)]
 pub(crate) struct SyncedFileInfo {
-    path_hash_hex: String,
-    arion_cid: String,
+    pub(crate) path_hash_hex: String,
+    pub(crate) arion_cid: String,
     /// Unix timestamp when file was first uploaded (0 if unknown)
-    uploaded_at: i64,
+    pub(crate) uploaded_at: i64,
     /// Unix timestamp when file was last updated (0 if unknown)
-    updated_at: i64,
+    pub(crate) updated_at: i64,
+}
+
+impl SyncedFileInfo {
+    /// Create a new entry with just the hash and CID (timestamps unknown).
+    pub(crate) fn new(path_hash_hex: String, arion_cid: String) -> Self {
+        Self {
+            path_hash_hex,
+            arion_cid,
+            uploaded_at: 0,
+            updated_at: 0,
+        }
+    }
 }
 
 /// Build a map of relative paths → sync info from a loaded `SyncState`.
@@ -321,6 +333,10 @@ pub async fn get_synced_file_metadata(
                         sync.update_synced_paths_cache(label, paths.clone());
                         out.push((label.clone(), paths));
                     }
+                } else if let Some(cached) = sync.get_cached_synced_paths(label) {
+                    // Drive is syncing — fall back to cached snapshot so
+                    // arion hashes remain visible while downloads are active.
+                    out.push((label.clone(), cached));
                 }
             }
             out
