@@ -1376,7 +1376,13 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                                 let _ = crate::sync_progress::complete_pending_files(sync);
                             }
                         }
-                        let _ = crate::sync_progress::complete_session(sync, up, down);
+                        // Only complete the session when this is the LAST drive
+                        // syncing. The progress system uses a single shared session;
+                        // completing it while other drives are still downloading
+                        // hides the sync widget prematurely.
+                        if !sync.other_syncs_in_progress() {
+                            let _ = crate::sync_progress::complete_session(sync, up, down);
+                        }
                     }
 
                     if let Err(e) = app.emit(
@@ -1606,7 +1612,13 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         let _ = crate::sync_progress::complete_pending_files(sync);
                     }
                 }
-                let _ = crate::sync_progress::complete_session(sync, up, down);
+                // Only complete the session when this is the LAST drive
+                // syncing. The progress system uses a single shared session;
+                // completing it while other drives are still downloading
+                // hides the sync widget prematurely.
+                if !sync.other_syncs_in_progress() {
+                    let _ = crate::sync_progress::complete_session(sync, up, down);
+                }
             }
 
             if emitted_sync_started {

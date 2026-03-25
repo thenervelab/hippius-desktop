@@ -202,6 +202,13 @@ impl SyncEngine {
         self.syncs_in_progress.load(Ordering::Acquire) > 0
     }
 
+    /// True when OTHER drives (besides the caller) are still syncing.
+    /// Used to defer session completion until the last drive finishes,
+    /// preventing the sync widget from disappearing prematurely.
+    pub fn other_syncs_in_progress(&self) -> bool {
+        self.syncs_in_progress.load(Ordering::Acquire) > 1
+    }
+
     /// Reset counter to zero (used during full stop).
     pub fn reset_sync_counter(&self) {
         self.syncs_in_progress.store(0, Ordering::Release);
@@ -590,6 +597,23 @@ impl SyncEngine {
     ) -> Option<HashMap<String, crate::commands::file_commands::SyncedFileInfo>> {
         let cache = self.synced_paths_cache.lock().ok()?;
         cache.get(label).cloned()
+    }
+
+    /// Insert or update a single file entry in the synced-paths cache.
+    /// Called from the `on_file_synced` progress callback to make arion
+    /// hashes available to the frontend before the full sync cycle ends.
+    pub fn upsert_synced_path(
+        &self,
+        label: &str,
+        rel_path: String,
+        info: crate::commands::file_commands::SyncedFileInfo,
+    ) {
+        if let Ok(mut cache) = self.synced_paths_cache.lock() {
+            cache
+                .entry(label.to_string())
+                .or_default()
+                .insert(rel_path, info);
+        }
     }
 }
 
