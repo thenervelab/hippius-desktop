@@ -21,6 +21,7 @@ import { GET_USER_IPFS_FILES_QUERY_KEY } from "@/app/lib/hooks/use-user-files";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
 import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { getLastBrowseDirectory, saveLastBrowseDirectory } from "@/lib/utils/userPreferencesDb";
 
 type Props = {
     open: boolean;
@@ -51,10 +52,7 @@ export default function FolderUploadDialog({
 
     const handleSelectFolder = async () => {
         try {
-            const defaultPath = selectedSyncPath ?? await (async () => {
-                const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
-                return getSyncFolderDefaultPath(polkadotAddress ?? undefined);
-            })();
+            const defaultPath = await getLastBrowseDirectory();
             const selectedFolder = await openSelection({
                 directory: true,
                 multiple: false,
@@ -64,6 +62,8 @@ export default function FolderUploadDialog({
             if (selectedFolder && typeof selectedFolder === "string") {
                 setFolderPath(selectedFolder.trim());
                 setFolderError(null);
+                // Remember this directory for next time
+                saveLastBrowseDirectory(selectedFolder.trim());
             }
         } catch (error) {
             console.error("Error selecting folder:", error);

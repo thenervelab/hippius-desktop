@@ -275,8 +275,13 @@ export default function MultiFolderSyncManager() {
 
   const handleSelectSyncDestination = async () => {
     try {
-      const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
-      const defaultPath = await getSyncFolderDefaultPath();
+      let defaultPath: string | undefined;
+      try {
+        const { homeDir } = await import("@tauri-apps/api/path");
+        defaultPath = await homeDir();
+      } catch {
+        // Fall back to OS default if homeDir is unavailable
+      }
       const path = await openDialog({
         directory: true,
         multiple: false,

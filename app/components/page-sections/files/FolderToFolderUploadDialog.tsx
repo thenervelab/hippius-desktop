@@ -18,6 +18,7 @@ import { useAtomValue } from "jotai";
 import { queryClientAtom } from "jotai-tanstack-query";
 import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
 import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { getLastBrowseDirectory, saveLastBrowseDirectory } from "@/lib/utils/userPreferencesDb";
 
 type Props = {
     open: boolean;
@@ -50,22 +51,7 @@ export default function FolderToFolderUploadDialog({
 
     const handleSelectFolder = async () => {
         try {
-            // Open the file browser at the target sync folder (including subfolder)
-            let defaultPath: string | undefined;
-            try {
-                const baseSyncPath = syncBasePath || (await getPrivateSyncPath(polkadotAddress ?? undefined))?.path;
-                if (baseSyncPath) {
-                    const subfolder = getFullPath(mainFolderActualName, subFolderPath);
-                    if (subfolder) {
-                        const { join } = await import("@tauri-apps/api/path");
-                        defaultPath = await join(baseSyncPath, subfolder);
-                    } else {
-                        defaultPath = baseSyncPath;
-                    }
-                }
-            } catch {
-                // Fall back to no default path
-            }
+            const defaultPath = await getLastBrowseDirectory();
             const selectedFolder = await openSelection({
                 directory: true,
                 multiple: false,
@@ -75,6 +61,8 @@ export default function FolderToFolderUploadDialog({
             if (selectedFolder && typeof selectedFolder === "string") {
                 setFolderPath(selectedFolder.trim());
                 setFolderError(null);
+                // Remember this directory for next time
+                saveLastBrowseDirectory(selectedFolder.trim());
             }
         } catch (error) {
             console.error("Error selecting folder:", error);

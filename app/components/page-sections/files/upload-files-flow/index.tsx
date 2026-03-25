@@ -69,9 +69,6 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
   );
   const [selectedSyncPath, setSelectedSyncPath] = useState<string | null>(null);
 
-  // Folder-mode: resolve the full path (syncRoot + subfolder) for the file browser
-  const [folderBrowsePath, setFolderBrowsePath] = useState<string | null>(null);
-
   // Root-mode hooks
   const queryClient = useAtomValue(queryClientAtom);
   const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
@@ -94,27 +91,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
 
   // Folder-mode hooks
   const { polkadotAddress } = useWalletAuth();
-
-  // Resolve folder browse path once on mount (folder mode only)
-  const subfolder = isFolder ? props.subfolder : undefined;
   const syncBasePath = isFolder ? props.syncBasePath : undefined;
-  useEffect(() => {
-    if (!isFolder) return;
-    (async () => {
-      try {
-        const basePath = syncBasePath || (await getPrivateSyncPath(polkadotAddress ?? undefined))?.path;
-        if (!basePath) return;
-        if (subfolder) {
-          const { join } = await import("@tauri-apps/api/path");
-          setFolderBrowsePath(await join(basePath, subfolder));
-        } else {
-          setFolderBrowsePath(basePath);
-        }
-      } catch {
-        // Fall back to no default path
-      }
-    })();
-  }, [isFolder, polkadotAddress, subfolder, syncBasePath]);
 
   // ── Shared: populate file list from initial values ─────────────────────────
 
@@ -387,7 +364,6 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
     <div className="w-full">
       <FileDropzone
         setFiles={handleFiles}
-        defaultBrowsePath={isFolder ? folderBrowsePath : selectedSyncPath}
       />
 
       {/* Sync folder selector — root mode only, shown when 2+ folders */}
