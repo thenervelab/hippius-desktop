@@ -650,41 +650,57 @@ const HEARTBEAT_SECS: u64 = 30;
 /// Debounce interval: wait 5 seconds after local changes before syncing
 const DEBOUNCE_SECS: u64 = 5;
 
-/// Start background sync loop that iterates through all registered drives.
+/// Start or join the background sync loop.
+///
+/// If no loop is running, creates a file watcher for all registered drives,
+/// stores it in `SyncEngine::watcher`, and spawns the sync loop task.
+///
+/// If a loop IS already running, adds any new drive paths to the existing
+/// file watcher and triggers an immediate sync for all drives (already-syncing
+/// drives will be skipped by `trigger_sync_for_drive`). This is the key
+/// multi-folder behaviour: adding a second folder NEVER interrupts downloads
+/// in progress for the first folder.
 pub async fn start_sync_loop(app: AppHandle) {
     use tauri::Manager;
     let sync = app.state::<crate::app_state::AppState>().sync.clone();
 
-    info!("Starting sync loop");
-
-    // Abort the previous sync loop if one is still running.
-    // IMPORTANT: clear is_syncing for all drives first — aborting the task
-    // kills in-flight sync_with_resolutions calls, bypassing the cleanup
-    // that normally sets is_syncing = false. Without this reset, aborted
-    // drives would be permanently stuck as "in progress" and never sync
-    // again in the new loop.
+    // ── If a loop is already running, just hot-add new drives ────────
     {
-        let mut handle_guard = sync.loop_handle.lock().await;
-        if let Some(prev) = handle_guard.take() {
-            info!("Aborting previous sync loop task — clearing is_syncing for all drives");
-            sync.clear_all_syncing();
-            sync.reset_sync_counter();
-            prev.abort();
+        let handle_guard = sync.loop_handle.lock().await;
+        if handle_guard.is_some() {
+            drop(handle_guard);
+
+            // Add all current drive paths to the existing watcher.
+            // `watch()` on an already-watched path is idempotent (updates mode).
+            let drive_paths = collect_drive_paths(&sync).await;
+            {
+                let mut watcher_guard = sync.watcher.lock().unwrap_or_else(|p| {
+                    warn!("Poisoned watcher mutex recovered");
+                    p.into_inner()
+                });
+                if let Some(w) = watcher_guard.as_mut() {
+                    for (label, path) in &drive_paths {
+                        match w.watch(path, RecursiveMode::Recursive) {
+                            Ok(()) => info!(label = %label, path = ?path, "Watching new drive"),
+                            Err(e) => error!(label = %label, path = ?path, error = %e, "Failed to watch new drive path"),
+                        }
+                    }
+                }
+            }
+
+            // Trigger immediate sync — existing in-progress syncs are not
+            // interrupted; the new drive starts its own concurrent sync.
+            info!("Sync loop already running — hot-added drives, triggering sync");
+            trigger_sync(&app).await;
+            return;
         }
     }
 
-    // Collect all sync paths from registered drives
-    let drive_paths: Vec<(String, PathBuf)> = {
-        let guard = sync.drives.lock().await;
-        let mut paths = Vec::new();
-        for (label, slot) in guard.iter() {
-            if let Ok(m) = slot.manager.try_lock() {
-                paths.push((label.clone(), m.sync_path().to_path_buf()));
-            }
-        }
-        paths
-    };
+    info!("Starting sync loop");
 
+    // ── No loop running — start fresh ────────────────────────────────
+
+    let drive_paths = collect_drive_paths(&sync).await;
     if drive_paths.is_empty() {
         info!("No drives registered, sync loop not started");
         return;
@@ -704,9 +720,6 @@ pub async fn start_sync_loop(app: AppHandle) {
     let mut watcher: RecommendedWatcher = match notify::recommended_watcher(
         move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
-                // Filter out internal metadata files that the sync engine writes.
-                // These would otherwise create a feedback loop: sync writes state →
-                // watcher fires → triggers another sync → writes state → ...
                 let dominated_by_internal = event.paths.iter().all(|p| {
                     let path_str = p.to_string_lossy();
                     path_str.contains("/.hcfs/")
@@ -730,21 +743,17 @@ pub async fn start_sync_loop(app: AppHandle) {
         Ok(w) => w,
         Err(e) => {
             error!(error = %e, "Failed to create file watcher, sync loop will run without file watching");
-            // Fall back to heartbeat-only sync loop without a watcher
             let sync_fallback = sync.clone();
             let handle = tokio::spawn(async move {
-                // Initial sync on startup
                 info!("Running initial sync (no file watcher)");
                 check_server_health(&app).await;
                 trigger_sync(&app).await;
 
                 let mut interval = tokio::time::interval(Duration::from_secs(HEARTBEAT_SECS));
                 loop {
-                    // Apply exponential backoff on consecutive failures
                     let failures = sync_fallback.get_sync_failures();
                     let backoff_secs = crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);
                     if failures > 0 {
-                        // Override interval for backoff
                         tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                     } else {
                         interval.tick().await;
@@ -756,7 +765,6 @@ pub async fn start_sync_loop(app: AppHandle) {
                     if should_skip_sync(&sync_fallback, &health_status) {
                         warn!(status = ?health_status, "Skipping sync due to connectivity");
                     } else {
-                        // Proactive token refresh
                         {
                             let app_state = app.state::<crate::app_state::AppState>();
                             if let (Ok(pool), Ok(acct)) = (
@@ -796,13 +804,22 @@ pub async fn start_sync_loop(app: AppHandle) {
     // Watch all drive paths
     for (label, path) in &drive_paths {
         if let Err(e) = watcher.watch(path, RecursiveMode::Recursive) {
-            error!(path = ?path, label = %label, error = %e, "Failed to watch path, continuing with heartbeat-only sync");
+            error!(path = ?path, label = %label, error = %e, "Failed to watch path");
         }
+    }
+
+    // Store watcher in SyncEngine so new drives can be hot-added
+    {
+        let mut watcher_guard = sync.watcher.lock().unwrap_or_else(|p| {
+            warn!("Poisoned watcher mutex recovered");
+            p.into_inner()
+        });
+        *watcher_guard = Some(watcher);
     }
 
     let sync_task = sync.clone();
     let handle = tokio::spawn(async move {
-        let _watcher = watcher; // keep alive
+        // Watcher is kept alive in SyncEngine::watcher (not in this task)
 
         // Clean up any stale temp files from previous runs
         {
@@ -834,15 +851,11 @@ pub async fn start_sync_loop(app: AppHandle) {
                     has_changes = true;
                 }
                 _ = debounce.tick() => {
-                    // Exponential backoff: after consecutive failures, extend the
-                    // heartbeat interval to avoid hammering the server.
-                    // 0 failures -> 30s, 1 -> 60s, 2 -> 120s, capped at 5 min.
                     let failures = sync_task.get_sync_failures();
                     let backoff_secs =
                         crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);
                     let heartbeat_due = last_sync.elapsed() >= Duration::from_secs(backoff_secs);
                     if has_changes || heartbeat_due {
-                        // Run health check on heartbeat ticks
                         if heartbeat_due {
                             let health_status = check_server_health(&app).await;
                             if should_skip_sync(&sync_task, &health_status) {
@@ -852,8 +865,6 @@ pub async fn start_sync_loop(app: AppHandle) {
                             }
                         }
 
-                        // Proactively refresh the auth token if it's expiring
-                        // within the next hour, so the sync doesn't hit a 401.
                         if heartbeat_due {
                             let app_state = app.state::<crate::app_state::AppState>();
                             if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state)) {
@@ -872,30 +883,27 @@ pub async fn start_sync_loop(app: AppHandle) {
                             }
                         }
 
-                        // Only clear has_changes if sync actually ran (not skipped)
                         let sync_ran = trigger_sync(&app).await;
                         if sync_ran {
                             has_changes = false;
                             last_sync = Instant::now();
-
-                            // Drain any watcher events that arrived during sync.
-                            // Sync writes internal files (sync_state.json, etc.)
-                            // which trigger the watcher after sync_in_progress
-                            // is cleared. Without this drain, the next debounce
-                            // tick would run a pointless "No changes" cycle.
                             while rx.try_recv().is_ok() {}
-
-                            // If real user changes arrived during sync, schedule
-                            // an immediate re-sync on the next loop iteration.
                             if sync_task.changes_pending.swap(false, Ordering::AcqRel) {
                                 has_changes = true;
                             }
                         }
-                        // If sync was skipped (already in progress), keep has_changes = true
-                        // so we retry on next debounce tick
                     }
                 }
             }
+        }
+
+        // Loop exited — clear the watcher
+        {
+            let mut watcher_guard = sync_task.watcher.lock().unwrap_or_else(|p| {
+                warn!("Poisoned watcher mutex recovered in sync loop exit");
+                p.into_inner()
+            });
+            *watcher_guard = None;
         }
         info!("Sync loop exited");
     });
@@ -905,6 +913,20 @@ pub async fn start_sync_loop(app: AppHandle) {
         let mut handle_guard = sync.loop_handle.lock().await;
         *handle_guard = Some(handle);
     }
+}
+
+/// Collect (label, path) pairs from all registered drives.
+async fn collect_drive_paths(
+    sync: &crate::sync_engine::SyncEngine,
+) -> Vec<(String, PathBuf)> {
+    let guard = sync.drives.lock().await;
+    let mut paths = Vec::new();
+    for (label, slot) in guard.iter() {
+        if let Ok(m) = slot.manager.try_lock() {
+            paths.push((label.clone(), m.sync_path().to_path_buf()));
+        }
+    }
+    paths
 }
 
 /// Execute one sync cycle for ALL registered drives in round-robin.

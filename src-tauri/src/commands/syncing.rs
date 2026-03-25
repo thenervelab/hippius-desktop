@@ -1019,6 +1019,15 @@ pub async fn stop_sync(app: AppHandle) -> Result<(), String> {
         }
     }
 
+    // Clear the file watcher
+    {
+        let mut watcher_guard = sync.watcher.lock().unwrap_or_else(|p| {
+            warn!("Poisoned watcher mutex recovered in stop_sync");
+            p.into_inner()
+        });
+        *watcher_guard = None;
+    }
+
     {
         let mut guard = sync.drives.lock().await;
         // Cancel all in-progress syncs before clearing
@@ -1086,14 +1095,21 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
         if let Some(prev) = handle_guard.take() {
             prev.abort();
         }
+        // Clear the watcher since the loop is done
+        {
+            let mut watcher_guard = sync.watcher.lock().unwrap_or_else(|p| {
+                warn!("Poisoned watcher mutex recovered in stop_drive");
+                p.into_inner()
+            });
+            *watcher_guard = None;
+        }
         sync.review_mode.store(false, Ordering::Release);
         sync.clear_review_entered();
         let _ = app.emit(sync_events::SYNC_STOPPED, ());
-    } else {
-        // Restart sync loop to update watchers (removed drive's path)
-        sync.clear_cancel();
-        start_sync_loop(app.clone()).await;
     }
+    // When drives remain, the loop keeps running. The removed drive's
+    // watcher path is harmless — trigger_sync reads drives dynamically
+    // and won't find the removed label.
 
     info!("Stopped drive '{}', {} drives remaining", label, remaining);
     Ok(())

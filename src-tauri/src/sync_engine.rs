@@ -134,6 +134,9 @@ pub struct SyncEngine {
     // ── Synced Paths Cache (fallback when drives lock unavailable) ────
     pub synced_paths_cache:
         StdMutex<HashMap<String, HashMap<String, crate::commands::file_commands::SyncedFileInfo>>>,
+
+    // ── File Watcher (shared so new drives can be added dynamically) ──
+    pub watcher: StdMutex<Option<notify::RecommendedWatcher>>,
 }
 
 impl SyncEngine {
@@ -164,6 +167,7 @@ impl SyncEngine {
             last_emit_time: StdMutex::new(Instant::now()),
             session_counter: AtomicU64::new(0),
             synced_paths_cache: StdMutex::new(HashMap::new()),
+            watcher: StdMutex::new(None),
         }
     }
 
@@ -313,19 +317,6 @@ impl SyncEngine {
         });
         let state = states.entry(label.to_string()).or_default();
         f(state);
-    }
-
-    /// Reset `is_syncing` to false for every drive without clearing other
-    /// state (last_sync_time, recent_activity). Called when the sync loop
-    /// is aborted so that the replacement loop can pick up all drives.
-    pub fn clear_all_syncing(&self) {
-        let mut states = self.states.lock().unwrap_or_else(|p| {
-            warn!("Poisoned mutex recovered in clear_all_syncing");
-            p.into_inner()
-        });
-        for state in states.values_mut() {
-            state.is_syncing = false;
-        }
     }
 
     pub fn reset_all_states(&self) {
@@ -836,34 +827,4 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    #[test]
-    fn clear_all_syncing_resets_is_syncing_preserves_other_state() {
-        let eng = SyncEngine::new();
-        eng.update_state("docs", |s| {
-            s.is_syncing = true;
-            s.last_sync_time = Some(1000);
-            s.add_activity(activity("a.txt", "uploaded", "docs", 1));
-        });
-        eng.update_state("photos", |s| {
-            s.is_syncing = true;
-            s.last_sync_time = Some(2000);
-        });
-        eng.update_state("music", |s| {
-            s.is_syncing = false;
-            s.last_sync_time = Some(3000);
-        });
-
-        eng.clear_all_syncing();
-
-        let states = eng.states.lock().unwrap();
-        // is_syncing cleared for all drives
-        assert!(!states.get("docs").unwrap().is_syncing);
-        assert!(!states.get("photos").unwrap().is_syncing);
-        assert!(!states.get("music").unwrap().is_syncing);
-        // Other state preserved
-        assert_eq!(states.get("docs").unwrap().last_sync_time, Some(1000));
-        assert_eq!(states.get("photos").unwrap().last_sync_time, Some(2000));
-        assert_eq!(states.get("music").unwrap().last_sync_time, Some(3000));
-        assert_eq!(states.get("docs").unwrap().recent_activity.len(), 1);
-    }
 }
