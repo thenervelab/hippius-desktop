@@ -10,6 +10,7 @@
 //! It also contains `setup_progress_handlers()` which registers callbacks on the
 //! Drive that emit Tauri events for upload/download/encrypt/decrypt progress.
 
+use notify::Watcher;
 use tracing::{debug, error, info, warn};
 
 use crate::hcfs_drive::{HcfsDriveManager, StagedChanges, start_sync_loop};
@@ -1059,13 +1060,28 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    let remaining = {
+    let (remaining, removed_path) = {
         let mut guard = sync.drives.lock().await;
+        let path = guard.get(&label).and_then(|slot| {
+            slot.manager.try_lock().ok().map(|m| m.sync_path().to_path_buf())
+        });
         if let Some(slot) = guard.remove(&label) {
             slot.cancel_token.cancel();
         }
-        guard.len()
+        (guard.len(), path)
     };
+
+    // Unwatch the removed drive's path to avoid spurious watcher events
+    // that would wake the sync loop for a drive that no longer exists.
+    if let Some(path) = &removed_path {
+        let mut watcher_guard = sync.watcher.lock().unwrap_or_else(|p| {
+            warn!("Poisoned watcher mutex recovered in stop_drive unwatch");
+            p.into_inner()
+        });
+        if let Some(w) = watcher_guard.as_mut() {
+            let _ = w.unwatch(path);
+        }
+    }
 
     sync.remove_state(&label);
     sync.discard_pending_activity_for_label(&label);
@@ -1107,9 +1123,6 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
         sync.clear_review_entered();
         let _ = app.emit(sync_events::SYNC_STOPPED, ());
     }
-    // When drives remain, the loop keeps running. The removed drive's
-    // watcher path is harmless — trigger_sync reads drives dynamically
-    // and won't find the removed label.
 
     info!("Stopped drive '{}', {} drives remaining", label, remaining);
     Ok(())

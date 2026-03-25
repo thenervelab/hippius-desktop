@@ -665,11 +665,14 @@ pub async fn start_sync_loop(app: AppHandle) {
     let sync = app.state::<crate::app_state::AppState>().sync.clone();
 
     // ── If a loop is already running, just hot-add new drives ────────
+    //
+    // Hold loop_handle for the entire hot-add to prevent concurrent calls
+    // from racing (TOCTOU). The work below is fast (no network I/O), so
+    // holding the lock is safe. trigger_sync is called after dropping the
+    // lock since it may take a while.
     {
         let handle_guard = sync.loop_handle.lock().await;
         if handle_guard.is_some() {
-            drop(handle_guard);
-
             // Add all current drive paths to the existing watcher.
             // `watch()` on an already-watched path is idempotent (updates mode).
             let drive_paths = collect_drive_paths(&sync).await;
@@ -685,12 +688,15 @@ pub async fn start_sync_loop(app: AppHandle) {
                             Err(e) => error!(label = %label, path = ?path, error = %e, "Failed to watch new drive path"),
                         }
                     }
+                } else {
+                    warn!("No file watcher available — new drives will sync on heartbeat only");
                 }
             }
+            info!("Sync loop already running — hot-added drives, triggering sync");
+            drop(handle_guard);
 
             // Trigger immediate sync — existing in-progress syncs are not
             // interrupted; the new drive starts its own concurrent sync.
-            info!("Sync loop already running — hot-added drives, triggering sync");
             trigger_sync(&app).await;
             return;
         }
@@ -720,6 +726,9 @@ pub async fn start_sync_loop(app: AppHandle) {
     let mut watcher: RecommendedWatcher = match notify::recommended_watcher(
         move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
+                // Filter out internal metadata files that the sync engine writes.
+                // These would otherwise create a feedback loop: sync writes state →
+                // watcher fires → triggers another sync → writes state → ...
                 let dominated_by_internal = event.paths.iter().all(|p| {
                     let path_str = p.to_string_lossy();
                     path_str.contains("/.hcfs/")
@@ -851,11 +860,15 @@ pub async fn start_sync_loop(app: AppHandle) {
                     has_changes = true;
                 }
                 _ = debounce.tick() => {
+                    // Exponential backoff: after consecutive failures, extend the
+                    // heartbeat interval to avoid hammering the server.
+                    // 0 failures -> 30s, 1 -> 60s, 2 -> 120s, capped at 5 min.
                     let failures = sync_task.get_sync_failures();
                     let backoff_secs =
                         crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);
                     let heartbeat_due = last_sync.elapsed() >= Duration::from_secs(backoff_secs);
                     if has_changes || heartbeat_due {
+                        // Run health check on heartbeat ticks
                         if heartbeat_due {
                             let health_status = check_server_health(&app).await;
                             if should_skip_sync(&sync_task, &health_status) {
@@ -865,6 +878,8 @@ pub async fn start_sync_loop(app: AppHandle) {
                             }
                         }
 
+                        // Proactively refresh the auth token if it's expiring
+                        // within the next hour, so the sync doesn't hit a 401.
                         if heartbeat_due {
                             let app_state = app.state::<crate::app_state::AppState>();
                             if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state)) {
@@ -883,15 +898,27 @@ pub async fn start_sync_loop(app: AppHandle) {
                             }
                         }
 
+                        // Only clear has_changes if sync actually ran (not skipped)
                         let sync_ran = trigger_sync(&app).await;
                         if sync_ran {
                             has_changes = false;
                             last_sync = Instant::now();
+
+                            // Drain any watcher events that arrived during sync.
+                            // Sync writes internal files (sync_state.json, etc.)
+                            // which trigger the watcher after sync_in_progress
+                            // is cleared. Without this drain, the next debounce
+                            // tick would run a pointless "No changes" cycle.
                             while rx.try_recv().is_ok() {}
+
+                            // If real user changes arrived during sync, schedule
+                            // an immediate re-sync on the next loop iteration.
                             if sync_task.changes_pending.swap(false, Ordering::AcqRel) {
                                 has_changes = true;
                             }
                         }
+                        // If sync was skipped (already in progress), keep has_changes = true
+                        // so we retry on next debounce tick
                     }
                 }
             }
@@ -916,6 +943,10 @@ pub async fn start_sync_loop(app: AppHandle) {
 }
 
 /// Collect (label, path) pairs from all registered drives.
+///
+/// Uses `try_lock` on each drive manager — drives currently mid-sync will
+/// be skipped. This is fine for watcher registration since those drives
+/// were already watched when first registered.
 async fn collect_drive_paths(
     sync: &crate::sync_engine::SyncEngine,
 ) -> Vec<(String, PathBuf)> {
