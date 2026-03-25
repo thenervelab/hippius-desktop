@@ -5,15 +5,14 @@ const Zip: IconComponent = (props) => (
     xmlns="http://www.w3.org/2000/svg"
     {...props}
     viewBox="0 0 20 20"
-    id="file"
+    fill="none"
   >
-    <g id="Page-1" fill="none" fillRule="evenodd" stroke="none" strokeWidth="1">
+    <g fill="none" fillRule="evenodd" stroke="none" strokeWidth="1">
       <g
-        id="Dribbble-Light-Preview"
-        fill="#fff"
+        fill="currentColor"
         transform="translate(-100 -1279)"
       >
-        <g id="icons" transform="translate(56 160)">
+        <g transform="translate(56 160)">
           <path
             id="file_zip-[#1760]"
             d="M45.002 1129c.552 0 .997-.343.997-.895v-6c0-.552.456-1.105 1.008-1.105h8.988v4.105c0 1.104.903 1.895 2.007 1.895h3.99v1.105c0 

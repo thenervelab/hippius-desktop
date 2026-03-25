@@ -4,7 +4,7 @@ import * as TableModule from "@/components/ui/alt-table";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
-import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
+import { getFileTypeFromExtension, getFileTypeDisplayLabel } from "@/lib/utils/getTileTypeFromExtension";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getFileIcon } from "@/app/lib/utils/fileTypeUtils";
 import { cn } from "@/app/lib/utils";
@@ -79,9 +79,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
               <Icon className={cn("size-5", color)} />
               {file.isFolder
                 ? "Folder"
-                : fileType
-                  ? fileType.charAt(0).toUpperCase() + fileType.slice(1)
-                  : ""}
+                : getFileTypeDisplayLabel(fileType)}
             </div>
 
           </div>

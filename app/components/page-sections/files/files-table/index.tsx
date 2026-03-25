@@ -32,7 +32,7 @@ import NameCell from "./NameCell";
 import SelectionActionBar from "../SelectionActionBar";
 import { SelectionColumn, SelectionHeaderColumn } from "../SelectionColumn";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
-import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
+import { getFileTypeFromExtension, getFileTypeDisplayLabel } from "@/lib/utils/getTileTypeFromExtension";
 import { VideoDialogTrigger } from "./VideoDialog";
 import { ImageDialogTrigger } from "./ImageDialog";
 import { PdfDialogTrigger } from "./PdfDialog";
@@ -598,9 +598,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               const fileType = getFileTypeFromExtension(fileFormat || null);
               return row.isFolder
                 ? "Folder"
-                : fileType
-                  ? fileType.charAt(0).toUpperCase() + fileType.slice(1)
-                  : "Document";
+                : getFileTypeDisplayLabel(fileType);
             },
             {
               header: "FILE TYPE",

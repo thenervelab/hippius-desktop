@@ -14,8 +14,11 @@ import {
   SVG,
   Terminal,
   Folder2,
-  UnknownFile,
+  File,
+  Zip,
+  Note,
   CentralizedDataBase,
+  DocumentText,
 } from "@/components/ui/icons";
 import { FileTypes } from "@/lib/types/fileTypes";
 
@@ -26,26 +29,25 @@ const fileTypes: Array<{
   color: string;
 }> = [
     { type: "folder", label: "Folder", icon: Folder2, color: "text-primary-40" },
+    { type: "image", label: "Image", icon: Image, color: "text-[#ea4335]" },
     { type: "video", label: "Video", icon: Video, color: "text-[#ea4335]" },
+    { type: "audio", label: "Audio", icon: Note, color: "text-[#9b59b6]" },
+    { type: "PDF", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
+    { type: "doc", label: "Document", icon: Document, color: "text-[#4285F4]" },
+    { type: "XLS", label: "Spreadsheet", icon: Sheet, color: "text-[#34a853]" },
+    { type: "PPT", label: "Presentation", icon: Presentation, color: "text-[#fbbc04]" },
+    { type: "archive", label: "Archive", icon: Zip, color: "text-[#f39c12]" },
+    { type: "disk_image", label: "Disk Image", icon: File, color: "text-primary-70 fill-primary-60" },
+    { type: "code", label: "Code", icon: Terminal, color: "text-[#4285F4]" },
+    { type: "markdown", label: "Markdown", icon: DocumentText, color: "text-[#4285F4]" },
+    { type: "sql", label: "Database", icon: CentralizedDataBase, color: "text-[#4285F4]" },
+    { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
     {
       type: "document",
-      label: "Unknown",
-      icon: UnknownFile,
+      label: "Other",
+      icon: File,
       color: "text-primary-70 fill-primary-60",
     },
-    { type: "image", label: "Picture", icon: Image, color: "text-[#ea4335]" },
-    { type: "code", label: "JSON File", icon: Terminal, color: "text-[#4285F4]" },
-    { type: "sql", label: "SQL", icon: CentralizedDataBase, color: "text-[#4285F4]" },
-    { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
-    { type: "XLS", label: "XLS", icon: Sheet, color: "text-[#34a853]" },
-    { type: "PDF", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
-    {
-      type: "PPT",
-      label: "PPT",
-      icon: Presentation,
-      color: "text-[#fbbc04]",
-    },
-    { type: "doc", label: "Doc", icon: Document, color: "text-[#4285F4]" },
   ];
 
 interface FileTypeSelectorProps {
