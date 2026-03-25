@@ -13,6 +13,7 @@ import {
   ServerCrash,
   Clock,
   HardDrive,
+  FolderSearch,
 } from "lucide-react";
 import TableActionMenu, { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ interface RemoteFoldersSectionProps {
   isLoading: boolean;
   onSyncFolder: (folder: RemoteFolder) => void;
   onDeleteFromServer: (folderName: string) => void;
+  onBrowseFolder: (folder: RemoteFolder) => void;
 }
 
 function formatDate(timestamp: number) {
@@ -43,6 +45,7 @@ export function RemoteFoldersSection({
   isLoading,
   onSyncFolder,
   onDeleteFromServer,
+  onBrowseFolder,
 }: RemoteFoldersSectionProps) {
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -125,6 +128,11 @@ export function RemoteFoldersSection({
                         <TableActionMenu
                           dropdownTitle=""
                           items={[
+                            {
+                              icon: <FolderSearch className="size-4" />,
+                              itemTitle: "Browse Contents",
+                              onItemClick: () => onBrowseFolder(folder),
+                            },
                             {
                               icon: <CloudDownload className="size-4" />,
                               itemTitle: "Sync to This Device",

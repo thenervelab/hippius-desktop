@@ -10,6 +10,7 @@ import { InView } from "react-intersection-observer";
 import {
   Folder,
   FolderOpen,
+  FolderSearch,
   Plus,
   MoreVertical,
   Trash2,
@@ -20,7 +21,6 @@ import {
   HardDrive,
 } from "lucide-react";
 import TableActionMenu, { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
-import { ExclusionPatterns } from "./ExclusionPatterns";
 import { Button } from "@/components/ui/button";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import type { SyncFolder } from "@/app/lib/types/sync-folder";
@@ -37,6 +37,7 @@ interface LocalFoldersSectionProps {
   onResumeFolder: (folder: SyncFolder) => void;
   onRemoveFolder: (folder: SyncFolder) => void;
   onDeleteFromServer: (folderName: string, folderId: string) => void;
+  onBrowseFolder: (folder: SyncFolder) => void;
 }
 
 function getStatusColor(status: SyncFolder["status"]) {
@@ -122,6 +123,7 @@ export function LocalFoldersSection({
   onResumeFolder,
   onRemoveFolder,
   onDeleteFromServer,
+  onBrowseFolder,
 }: LocalFoldersSectionProps) {
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -247,6 +249,11 @@ export function LocalFoldersSection({
                           dropdownTitle=""
                           items={[
                             {
+                              icon: <FolderSearch className="size-4" />,
+                              itemTitle: "Browse Contents",
+                              onItemClick: () => onBrowseFolder(folder),
+                            },
+                            {
                               icon: folder.status === "syncing"
                                 ? <PauseCircle className="size-4" />
                                 : <PlayCircle className="size-4" />,
@@ -284,7 +291,6 @@ export function LocalFoldersSection({
                           </Button>
                         </TableActionMenu>
                       </div>
-                      <ExclusionPatterns label={folder.folderName} />
                     </div>
                   ))}
                 </div>

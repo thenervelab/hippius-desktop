@@ -20,12 +20,12 @@ type NameCellProps = {
   isFolder?: boolean;
   source?: string;
   mainReqHash?: string;
-  syncStatus?: "synced" | "pending" | "unknown";
+  syncStatus?: "synced" | "pending" | "unknown" | "excluded";
   label?: string;
   showFolderBadge?: boolean;
 };
 
-const SyncStatusBadge: FC<{ status?: "synced" | "pending" | "unknown" }> = ({ status }) => {
+const SyncStatusBadge: FC<{ status?: "synced" | "pending" | "unknown" | "excluded" }> = ({ status }) => {
   if (status !== "pending") return null;
   return (
     <span

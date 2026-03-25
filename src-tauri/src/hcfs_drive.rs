@@ -1457,6 +1457,15 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
     tokio::time::sleep(Duration::from_millis(200)).await;
     sync.end_sync();
 
+    // If the drive was removed while we were syncing (user clicked Remove),
+    // skip all post-sync work — especially ensure_folder_registered which
+    // would re-register a folder the user just deleted.
+    if !sync.drives.lock().await.contains_key(label) {
+        warn!(label = label, "Drive removed during sync, skipping post-sync work");
+        sync.discard_pending_activity_for_label(label);
+        return false;
+    }
+
     sync.update_state(label, |s| {
         s.is_syncing = false;
         s.last_sync_time = Some(chrono::Utc::now().timestamp());

@@ -86,6 +86,7 @@ use commands::local_db::{
 };
 use commands::notifications::{get_notification_settings, update_notification_settings};
 use commands::oauth::{complete_oauth_flow, start_oauth_flow};
+use commands::remote_browse::{download_remote_file, list_remote_folder_files};
 use commands::session::{
     clear_auth_session, clear_wallet, get_auth_session, get_auth_token, get_last_auth_session,
     get_wallet, has_wallet, is_token_valid, save_api_token_command, save_auth_session, save_wallet,
@@ -255,6 +256,9 @@ fn main() {
             list_remote_folders,
             restore_remote_folders,
             delete_remote_folder,
+            // Remote folder browsing & one-off download
+            list_remote_folder_files,
+            download_remote_file,
             // Device settings
             get_device_name,
             set_device_name,

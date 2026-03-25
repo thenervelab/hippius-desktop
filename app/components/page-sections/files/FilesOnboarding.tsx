@@ -26,6 +26,7 @@ import {
   PauseSyncDialog,
   SyncDestinationDialog,
   DeleteServerDialog,
+  RemoteFolderBrowser,
 } from "@/components/page-sections/settings/multi-folder-sync";
 import {
   syncEngineStatusAtom,
@@ -74,6 +75,14 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
   const [syncLocalPath, setSyncLocalPath] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
   const [pendingAction, setPendingAction] = useState<"sync" | null>(null);
+
+  // Browse remote folder dialog state
+  const [browseDialog, setBrowseDialog] = useState<{
+    open: boolean;
+    folder: RemoteFolder | null;
+    isLocal: boolean;
+  }>({ open: false, folder: null, isLocal: false });
+  const [pendingExclusions, setPendingExclusions] = useState<string[]>([]);
 
   // Delete from server dialog state
   const [deleteDialog, setDeleteDialog] = useState<{
@@ -228,6 +237,20 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
     setSyncLocalPath("");
   };
 
+  const handleBrowseFolder = (folder: RemoteFolder, isLocal = false) => {
+    setBrowseDialog({ open: true, folder, isLocal });
+  };
+
+  const handleSyncSelectedFromBrowse = (
+    folder: RemoteFolder,
+    excludedPaths: string[]
+  ) => {
+    setPendingExclusions(excludedPaths);
+    setBrowseDialog({ open: false, folder: null, isLocal: false });
+    setSyncDialog({ open: true, folder });
+    setSyncLocalPath("");
+  };
+
   const handleSelectSyncDestination = async () => {
     try {
       const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
@@ -269,6 +292,19 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
       localStorage.removeItem(SYNC_STOPPED_STORAGE_KEY);
       appStore.set(syncEngineStatusAtom, "active");
       appStore.set(isSyncConfiguredAtom, true);
+
+      // Apply any pending exclusion patterns from the browse dialog
+      if (pendingExclusions.length > 0) {
+        for (const path of pendingExclusions) {
+          await invoke("add_exclude_pattern", {
+            label: folder.folderName,
+            pattern: path,
+          }).catch((err: unknown) =>
+            console.warn("Failed to add exclusion pattern:", err)
+          );
+        }
+        setPendingExclusions([]);
+      }
 
       toast.success(`Started syncing ${folder.folderName}`);
       setSyncDialog({ open: false, folder: null });
@@ -393,6 +429,13 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
             })
           }
           onDeleteFromServer={openDeleteServerDialog}
+          onBrowseFolder={(folder) => handleBrowseFolder({
+            folderName: folder.folderName,
+            deviceName: folder.deviceName ?? "This Device",
+            lastModified: folder.lastModified ?? 0,
+            fileCount: folder.fileCount ?? 0,
+            totalBytes: folder.totalBytes ?? 0,
+          }, true)}
         />
 
         {/* ──────── Sync from Other Devices (shared component) ──────── */}
@@ -403,6 +446,7 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
           onDeleteFromServer={(folderName) =>
             openDeleteServerDialog(folderName)
           }
+          onBrowseFolder={handleBrowseFolder}
         />
 
       </div>
@@ -468,6 +512,17 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
         }}
         onConfirm={handleDeleteFromServer}
       />
+
+      {browseDialog.folder && (
+        <RemoteFolderBrowser
+          open={browseDialog.open}
+          onClose={() => setBrowseDialog({ open: false, folder: null, isLocal: false })}
+          folder={browseDialog.folder}
+          accountId={polkadotAddress ?? ""}
+          onSyncSelected={handleSyncSelectedFromBrowse}
+          isLocal={browseDialog.isLocal}
+        />
+      )}
     </>
   );
 };

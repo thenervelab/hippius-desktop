@@ -436,6 +436,26 @@ pub async fn list_sync_folder(
         None => None,
     };
 
+    // Load exclusion patterns so excluded files aren't shown as "pending"
+    let excluded_patterns: Vec<String> = match label {
+        Some(ref l) => {
+            let drive_arc = {
+                let guard = state.sync.drives.lock().await;
+                guard.get(l).map(|slot| slot.manager.clone())
+            };
+            if let Some(arc) = drive_arc {
+                if let Ok(m) = arc.try_lock() {
+                    m.list_exclude_patterns()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        }
+        None => Vec::new(),
+    };
+
     let mut entries = Vec::new();
     let mut dir = tokio::fs::read_dir(&target)
         .await
@@ -479,7 +499,11 @@ pub async fn list_sync_folder(
         };
 
         // Folders don't have server-side entries — their children do
-        let (sync_status, info) = if is_folder {
+        let is_excluded = !excluded_patterns.is_empty()
+            && excluded_patterns.iter().any(|p| p == &relative_path);
+        let (sync_status, info) = if is_excluded {
+            ("excluded", None)
+        } else if is_folder {
             ("synced", None)
         } else {
             match &synced_set {

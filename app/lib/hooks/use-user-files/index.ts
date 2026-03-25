@@ -42,7 +42,7 @@ export type FormattedUserFile = {
   parentFolderId?: string;
   parentFolderName?: string;
   mainReqHash: string;
-  syncStatus?: "synced" | "pending" | "unknown";
+  syncStatus?: "synced" | "pending" | "unknown" | "excluded";
   label?: string;
   fileCount?: number;
 };
@@ -52,7 +52,7 @@ type FileEntry = {
   is_folder: boolean;
   size: number;
   modified: number | null;
-  sync_status: "synced" | "pending" | "unknown";
+  sync_status: "synced" | "pending" | "unknown" | "excluded";
   arion_hash: string;
   arion_cid: string;
   file_count: number;
@@ -141,7 +141,7 @@ export const useUserFiles = () => {
               BigInt(0)
             );
 
-            for (const entry of entries) {
+            for (const entry of entries.filter(e => e.sync_status !== "excluded")) {
               const localModifiedMs = (entry.modified ?? 0) * 1000;
               // Prefer server-side upload timestamp over local modified time
               const uploadedAtMs = entry.uploaded_at ? entry.uploaded_at * 1000 : 0;

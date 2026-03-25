@@ -10,6 +10,7 @@ pub mod local_db;
 pub mod migration;
 pub mod notifications;
 pub mod oauth;
+pub mod remote_browse;
 pub mod session;
 pub mod ssh_keys;
 pub mod substrate_tx;

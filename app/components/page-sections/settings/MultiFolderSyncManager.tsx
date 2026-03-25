@@ -36,6 +36,7 @@ import {
   PauseSyncDialog,
   SyncDestinationDialog,
   DeleteServerDialog,
+  RemoteFolderBrowser,
 } from "./multi-folder-sync";
 
 export default function MultiFolderSyncManager() {
@@ -79,6 +80,15 @@ export default function MultiFolderSyncManager() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
   const [pendingAction, setPendingAction] = useState<"sync" | null>(null);
+
+  // Browse remote folder dialog state
+  const [browseDialog, setBrowseDialog] = useState<{
+    open: boolean;
+    folder: RemoteFolder | null;
+    isLocal: boolean;
+  }>({ open: false, folder: null, isLocal: false });
+  // Exclusion paths from browse → sync flow
+  const [pendingExclusions, setPendingExclusions] = useState<string[]>([]);
 
   /** Check remaining sync folders; if none left, reset onboarding state. */
   const checkAndResetIfNoFolders = useCallback(async () => {
@@ -305,6 +315,19 @@ export default function MultiFolderSyncManager() {
       appStore.set(syncEngineStatusAtom, "active");
       appStore.set(isSyncConfiguredAtom, true);
 
+      // Apply any pending exclusion patterns from the browse dialog
+      if (pendingExclusions.length > 0) {
+        for (const path of pendingExclusions) {
+          await invoke("add_exclude_pattern", {
+            label: folder.folderName,
+            pattern: path,
+          }).catch((err: unknown) =>
+            console.warn("Failed to add exclusion pattern:", err)
+          );
+        }
+        setPendingExclusions([]);
+      }
+
       toast.success(`Started syncing ${folder.folderName}`);
       setSyncDialog({ open: false, folder: null });
       setSyncLocalPath("");
@@ -375,6 +398,23 @@ export default function MultiFolderSyncManager() {
     }
   };
 
+  // ── Browse remote folder ─────────────────────────────────────────────
+
+  const handleBrowseFolder = (folder: RemoteFolder, isLocal = false) => {
+    setBrowseDialog({ open: true, folder, isLocal });
+  };
+
+  const handleSyncSelectedFromBrowse = (
+    folder: RemoteFolder,
+    excludedPaths: string[]
+  ) => {
+    setPendingExclusions(excludedPaths);
+    setBrowseDialog({ open: false, folder: null, isLocal: false });
+    // Open the sync destination dialog for this folder
+    setSyncDialog({ open: true, folder });
+    setSyncLocalPath("");
+  };
+
   // ── Typed-name server delete ──────────────────────────────────────────
 
   const openDeleteServerDialog = (folderName: string, folderId?: string) => {
@@ -433,6 +473,13 @@ export default function MultiFolderSyncManager() {
               })
             }
             onDeleteFromServer={openDeleteServerDialog}
+            onBrowseFolder={(folder) => handleBrowseFolder({
+              folderName: folder.folderName,
+              deviceName: folder.deviceName ?? "This Device",
+              lastModified: folder.lastModified ?? 0,
+              fileCount: folder.fileCount ?? 0,
+              totalBytes: folder.totalBytes ?? 0,
+            }, true)}
           />
         </div>
 
@@ -444,6 +491,7 @@ export default function MultiFolderSyncManager() {
             onDeleteFromServer={(folderName) =>
               openDeleteServerDialog(folderName)
             }
+            onBrowseFolder={handleBrowseFolder}
           />
         </div>
       </div>
@@ -509,6 +557,17 @@ export default function MultiFolderSyncManager() {
         onComplete={handleHcfsSetupComplete}
         loading={isSyncing}
       />
+
+      {browseDialog.folder && (
+        <RemoteFolderBrowser
+          open={browseDialog.open}
+          onClose={() => setBrowseDialog({ open: false, folder: null, isLocal: false })}
+          folder={browseDialog.folder}
+          accountId={polkadotAddress ?? ""}
+          onSyncSelected={handleSyncSelectedFromBrowse}
+          isLocal={browseDialog.isLocal}
+        />
+      )}
     </>
   );
 }
