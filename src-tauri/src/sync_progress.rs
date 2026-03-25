@@ -11,7 +11,6 @@
 //! - A `#[tauri::command]` wrapper (e.g. `sp_start_session`) that extracts the
 //!   `SyncEngine` from `tauri::State<AppState>` and delegates to the inner fn.
 
-use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use tracing::warn;
