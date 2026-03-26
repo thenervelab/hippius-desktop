@@ -12,11 +12,14 @@ import VideoPlayerError from "./VideoPlayerError";
 // Check if running in Tauri
 const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
 
+// Platform detection for codec-support decisions.
+const isLinux = typeof navigator !== "undefined" && /linux/i.test(navigator.platform);
+const isMacOS = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
+
 // Tauri on macOS uses WKWebView (Safari's engine) which does NOT support
 // MKV (Matroska) or 3GP containers, nor HEVC/x265 codec without hardware
-// decoder.  We use `isTauri` as the reliable signal — Tauri's WKWebView UA
-// does NOT include "Safari", so user-agent sniffing fails here.
-const isUnsupportedEngine = isTauri; // WKWebView on macOS
+// decoder.  Windows uses WebView2 (Chromium) which handles these fine.
+const isUnsupportedEngine = isTauri && isMacOS;
 
 // Container formats that WKWebView / Safari fundamentally cannot play
 const UNSUPPORTED_FORMATS = ["mkv", "3gp"];
@@ -216,6 +219,20 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const srcProp: import("@vidstack/react").MediaSrc = mimeType
     ? { src: videoUrl, type: mimeType as import("@vidstack/react").VideoMimeType }
     : videoUrl;
+
+  // On Linux, skip the media player entirely and show the fallback UI.
+  // WebKitGTK lacks codecs for most video formats.
+  if (isTauri && isLinux) {
+    return (
+      <div className="relative w-full h-full bg-black">
+        <VideoPlayerError
+          message="Video playback is not supported in the built-in player on Linux."
+          file={file}
+          handleFileDownload={handleFileDownload}
+        />
+      </div>
+    );
+  }
 
   return (
     <div
