@@ -139,7 +139,7 @@ pub struct SyncEngine {
     pub watcher: StdMutex<Option<notify::RecommendedWatcher>>,
 
     /// Rename hints captured by the file watcher.
-    /// Drained at the start of each sync cycle and passed to hcfs-client.
+    /// Drained per-drive at the start of each sync cycle.
     pub rename_hints: StdMutex<Vec<crate::sync_logic::RenameHint>>,
 }
 
@@ -624,9 +624,8 @@ impl SyncEngine {
     // ── Rename Hints ────────────────────────────────────────────────────
 
     /// Push a rename hint captured by the file watcher.
-    /// Called from the watcher callback (non-async context).
-    /// Drops the hint silently if the buffer is at capacity (10 000)
-    /// to prevent unbounded memory growth under bulk-rename workloads.
+    /// Drops the hint if the buffer is at capacity (10 000) to prevent
+    /// unbounded memory growth under bulk-rename workloads.
     pub fn push_rename_hint(&self, hint: crate::sync_logic::RenameHint) {
         const MAX_RENAME_HINTS: usize = 10_000;
         let mut guard = self.rename_hints.lock().unwrap_or_else(|p| {
@@ -639,13 +638,30 @@ impl SyncEngine {
         guard.push(hint);
     }
 
-    /// Drain all accumulated rename hints. Called before each sync cycle.
-    pub fn drain_rename_hints(&self) -> Vec<crate::sync_logic::RenameHint> {
+    /// Drain rename hints whose paths fall under `sync_root`.
+    /// Hints for other drives remain in the buffer. This prevents
+    /// concurrent drives from stealing each other's hints.
+    pub fn drain_rename_hints_for_root(
+        &self,
+        sync_root: &std::path::Path,
+    ) -> Vec<crate::sync_logic::RenameHint> {
         let mut guard = self.rename_hints.lock().unwrap_or_else(|p| {
             warn!("Poisoned rename_hints mutex recovered in drain");
             p.into_inner()
         });
-        std::mem::take(&mut *guard)
+        let mut matched = Vec::new();
+        let mut remaining = Vec::new();
+        for hint in guard.drain(..) {
+            if hint.old_path.starts_with(sync_root)
+                || hint.new_path.starts_with(sync_root)
+            {
+                matched.push(hint);
+            } else {
+                remaining.push(hint);
+            }
+        }
+        *guard = remaining;
+        matched
     }
 }
 
@@ -884,37 +900,67 @@ mod tests {
     }
 
     #[test]
-    fn push_and_drain_rename_hints() {
+    fn push_and_drain_rename_hints_by_root() {
         let engine = SyncEngine::new();
         let now = std::time::Instant::now();
 
         engine.push_rename_hint(crate::sync_logic::RenameHint {
-            old_path: std::path::PathBuf::from("/sync/old.txt"),
-            new_path: std::path::PathBuf::from("/sync/new.txt"),
+            old_path: std::path::PathBuf::from("/drive_a/old.txt"),
+            new_path: std::path::PathBuf::from("/drive_a/new.txt"),
             captured_at: now,
         });
         engine.push_rename_hint(crate::sync_logic::RenameHint {
-            old_path: std::path::PathBuf::from("/sync/a.txt"),
-            new_path: std::path::PathBuf::from("/sync/b.txt"),
+            old_path: std::path::PathBuf::from("/drive_b/old.txt"),
+            new_path: std::path::PathBuf::from("/drive_b/new.txt"),
             captured_at: now,
         });
 
-        let drained = engine.drain_rename_hints();
-        assert_eq!(drained.len(), 2);
-        assert_eq!(
-            drained[0].old_path,
-            std::path::PathBuf::from("/sync/old.txt")
+        // Drain only drive_a hints
+        let a_hints = engine.drain_rename_hints_for_root(
+            std::path::Path::new("/drive_a"),
         );
+        assert_eq!(a_hints.len(), 1);
+        assert_eq!(a_hints[0].old_path, std::path::PathBuf::from("/drive_a/old.txt"));
 
-        // Second drain is empty
-        let drained2 = engine.drain_rename_hints();
-        assert!(drained2.is_empty());
+        // drive_b hint is still in the buffer
+        let b_hints = engine.drain_rename_hints_for_root(
+            std::path::Path::new("/drive_b"),
+        );
+        assert_eq!(b_hints.len(), 1);
+        assert_eq!(b_hints[0].old_path, std::path::PathBuf::from("/drive_b/old.txt"));
+
+        // Buffer is now empty
+        let empty = engine.drain_rename_hints_for_root(
+            std::path::Path::new("/drive_a"),
+        );
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn rename_hints_capped_at_10000() {
+        let engine = SyncEngine::new();
+        let now = std::time::Instant::now();
+
+        for i in 0..10_001 {
+            engine.push_rename_hint(crate::sync_logic::RenameHint {
+                old_path: std::path::PathBuf::from(format!("/sync/old_{i}.txt")),
+                new_path: std::path::PathBuf::from(format!("/sync/new_{i}.txt")),
+                captured_at: now,
+            });
+        }
+
+        let drained = engine.drain_rename_hints_for_root(
+            std::path::Path::new("/sync"),
+        );
+        assert_eq!(drained.len(), 10_000);
     }
 
     #[test]
     fn drain_rename_hints_empty_by_default() {
         let engine = SyncEngine::new();
-        let drained = engine.drain_rename_hints();
+        let drained = engine.drain_rename_hints_for_root(
+            std::path::Path::new("/sync"),
+        );
         assert!(drained.is_empty());
     }
 }

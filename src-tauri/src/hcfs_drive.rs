@@ -759,6 +759,8 @@ pub async fn start_sync_loop(app: AppHandle) {
         move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
                 // Filter out internal metadata files that the sync engine writes.
+                // These would otherwise create a feedback loop: sync writes state →
+                // watcher fires → triggers another sync → writes state → ...
                 let dominated_by_internal = event.paths.iter().all(|p| {
                     let path_str = p.to_string_lossy();
                     path_str.contains("/.hcfs/")
@@ -770,9 +772,8 @@ pub async fn start_sync_loop(app: AppHandle) {
                     return;
                 }
 
-                // Capture rename events as hints for efficient rename detection.
-                // The pure pairing logic in sync_logic::process_rename_event
-                // matches From/To events within a 100ms window.
+                // Capture rename events as hints for efficient rename
+                // detection. Pairs From/To events within a 100ms window.
                 use notify::event::{ModifyKind, RenameMode};
                 if let notify::EventKind::Modify(ModifyKind::Name(mode)) = &event.kind {
                     let now = std::time::Instant::now();
@@ -1364,10 +1365,6 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         }
     }; // outer map lock released
 
-    // Drain rename hints before acquiring the per-drive lock.
-    // Resolved to relative paths inside the lock section below.
-    let raw_rename_hints = sync.drain_rename_hints();
-
     // Lock the per-drive mutex.  Only blocks THIS drive, not others.
     let result = {
         let mut m = drive_arc.lock().await;
@@ -1380,9 +1377,10 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             m.log_sync_diagnostics(label);
 
             // ── Resolve rename hints to relative paths ──────────────
-            // Uses the synced-paths cache to detect directory renames
-            // (avoids TOCTOU race from checking the filesystem).
-            if !raw_rename_hints.is_empty() {
+            // Drains only hints belonging to THIS drive's root, leaving
+            // other drives' hints in the buffer for their sync cycles.
+            let raw_hints = sync.drain_rename_hints_for_root(&drive_sync_path);
+            if !raw_hints.is_empty() {
                 let known_from_cache: Vec<std::path::PathBuf> = sync
                     .get_cached_synced_paths(label)
                     .map_or_else(Vec::new, |cache| {
@@ -1390,19 +1388,20 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     });
 
                 let mut file_hints = Vec::new();
-                for hint in &raw_rename_hints {
-                    let rel = crate::sync_logic::hint_to_relative_pair(
+                for hint in &raw_hints {
+                    let Some(rel_hint) = crate::sync_logic::hint_to_relative_pair(
                         hint,
                         &drive_sync_path,
-                    );
-                    let Some(rel_hint) = rel else { continue };
+                    ) else {
+                        continue;
+                    };
 
-                    // Detect directory renames via cache: if any cached
-                    // path starts with the old relative prefix, it's a
-                    // directory rename — expand into per-file hints.
-                    let has_children = known_from_cache
-                        .iter()
-                        .any(|p| p.starts_with(&rel_hint.old_relative_path));
+                    // Detect directory renames via cache: if any OTHER
+                    // cached path starts with the old prefix, expand.
+                    let has_children = known_from_cache.iter().any(|p| {
+                        p.starts_with(&rel_hint.old_relative_path)
+                            && *p != rel_hint.old_relative_path
+                    });
 
                     if has_children {
                         let expanded = crate::sync_logic::expand_directory_hint(
@@ -1424,7 +1423,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 }
                 info!(
                     label = label,
-                    raw_count = raw_rename_hints.len(),
+                    raw_count = raw_hints.len(),
                     resolved_count = file_hints.len(),
                     "Rename hints resolved for sync cycle",
                 );
