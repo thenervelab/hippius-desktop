@@ -18,9 +18,17 @@ import { syncEngineHealthAtom, CONNECTIVITY_STATUS_LABELS } from "../lib/store/s
 import { type SyncSnapshot } from "../lib/types/syncSnapshot";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
 
-const COLLAPSED_HEIGHT = 64;
-const EXPANDED_HEIGHT = 460;
-const BODY_MAX_HEIGHT = EXPANDED_HEIGHT - COLLAPSED_HEIGHT;
+// Use rem so the widget scales with the fluid root font-size
+// (clamp(13px, 1.1vw, 16px) set in globals.css).
+const COLLAPSED_HEIGHT_REM = 4;      // 64px at 16px base
+const EXPANDED_HEIGHT_REM = 28.75;   // 460px at 16px base
+const BODY_MAX_HEIGHT_REM = EXPANDED_HEIGHT_REM - COLLAPSED_HEIGHT_REM;
+
+// Collapsed widths (rem) — vary by state so the pill fits its content
+const W_COLLAPSED_DONE = "13.75rem";   // 210px — "Complete" / "Failed"
+const W_COLLAPSED_WIDE = "15rem";       // 240px — "Syncing 98%"
+const W_COLLAPSED_NARROW = "13.75rem";  // 220px — "Syncing..." / single-digit %
+const W_EXPANDED = "23.625rem";         // 378px
 
 /** Format seconds into a human-readable ETA string. */
 function formatEta(totalSeconds: number): string {
@@ -229,19 +237,18 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   return (
     <div
       onClick={(e: React.MouseEvent) => e.stopPropagation()}
-      className={cn(
-        " outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out",
-        isExpanded ? "w-[378px]" : isCompleted || hasFailed ? "w-[210px]" : percentage !== null && percentage >= 10 ? "w-[240px]" : "w-[220px]"
-      )}
+      className="outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out"
+      style={{ width: isExpanded ? W_EXPANDED : isCompleted || hasFailed ? W_COLLAPSED_DONE : percentage !== null && percentage >= 10 ? W_COLLAPSED_WIDE : W_COLLAPSED_NARROW }}
     >
       {/* Header */}
       <div
         className={cn(
           "shadow-menu bg-grey-100 border border-grey-80 cursor-pointer hover:bg-grey-90 transition-all duration-300 ease-in-out",
           isExpanded
-            ? "rounded-t-[8px] w-[378px]"
-            : `rounded-[8px] ${isCompleted || hasFailed ? "w-[210px]" : percentage !== null && percentage >= 10 ? "w-[240px]" : "w-[220px]"}`
+            ? "rounded-t-[8px]"
+            : "rounded-[8px]"
         )}
+        style={{ width: isExpanded ? W_EXPANDED : isCompleted || hasFailed ? W_COLLAPSED_DONE : percentage !== null && percentage >= 10 ? W_COLLAPSED_WIDE : W_COLLAPSED_NARROW }}
         onClick={handleHeaderClick}
       >
         <div
@@ -415,11 +422,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       <div
         className="overflow-hidden transition-[max-height,opacity] duration-300 ease-in-out"
         style={{
-          maxHeight: isExpanded ? `${BODY_MAX_HEIGHT}px` : "0px",
+          maxHeight: isExpanded ? `${BODY_MAX_HEIGHT_REM}rem` : "0px",
           opacity: isExpanded ? 1 : 0,
         }}
       >
-        <div className="bg-grey-100 border border-grey-80 rounded-b-[8px] w-[378px] flex flex-col" style={{ maxHeight: `${BODY_MAX_HEIGHT}px` }}>
+        <div className="bg-grey-100 border border-grey-80 rounded-b-[8px] flex flex-col" style={{ width: W_EXPANDED, maxHeight: `${BODY_MAX_HEIGHT_REM}rem` }}>
           {/* Status banner */}
           <div className="flex flex-col w-full mt-4 ml-4 gap-2">
             <div className="flex items-center gap-2 flex-wrap">
@@ -562,14 +569,14 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               </div>
               <div className="flex items-center justify-between mt-1">
                 {snapshot.bytesExpected > 0 ? (
-                  <span className="text-[10px] text-grey-50">
+                  <span className="text-[0.625rem] text-grey-50">
                     {formatBytes(snapshot.progressBytes)} / {formatBytes(snapshot.bytesExpected)}
                   </span>
                 ) : (
                   <span />
                 )}
                 {etaSeconds !== null && etaSeconds > 0 && (
-                  <span className="text-[10px] text-grey-50">
+                  <span className="text-[0.625rem] text-grey-50">
                     ~{formatEta(etaSeconds)} remaining
                   </span>
                 )}
@@ -641,18 +648,18 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                           ) : (
                             <>
                               <div className="flex items-center gap-2">
-                                <div className="w-[60px] h-1.5 bg-grey-80 rounded-full overflow-hidden">
+                                <div className="w-[3.75rem] h-1.5 bg-grey-80 rounded-full overflow-hidden">
                                   <div
                                     className="h-full bg-primary-50 rounded-full transition-[width] duration-700 ease-out"
                                     style={{ width: `${file.progressPercent}%` }}
                                   />
                                 </div>
-                                <span className="text-xs text-primary-50 min-w-[32px] text-right">
+                                <span className="text-xs text-primary-50 min-w-[2rem] text-right">
                                   {file.progressPercent}%
                                 </span>
                               </div>
                               {file.totalBytes > 0 && (
-                                <span className="text-[10px] text-grey-50">
+                                <span className="text-[0.625rem] text-grey-50">
                                   {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
                                   {isSingleFile && etaSeconds !== null && etaSeconds > 0
                                     ? ` · ~${formatEta(etaSeconds)}`
@@ -669,10 +676,10 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                         </>
                       ) : (
                         <div className="flex items-center gap-2">
-                          <div className="w-[60px] h-1.5 bg-grey-80 rounded-full overflow-hidden">
+                          <div className="w-[3.75rem] h-1.5 bg-grey-80 rounded-full overflow-hidden">
                             <div className="h-full bg-grey-60 rounded-full" style={{ width: "0%" }} />
                           </div>
-                          <span className="text-xs text-grey-50 min-w-[32px] text-right">0%</span>
+                          <span className="text-xs text-grey-50 min-w-[2rem] text-right">0%</span>
                         </div>
                       )}
                     </div>
