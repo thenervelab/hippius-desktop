@@ -753,12 +753,13 @@ pub async fn start_sync_loop(app: AppHandle) {
     // If sync is active, sets changes_pending for real user changes only.
     let tx_clone = tx.clone();
     let sync_for_watcher = sync.clone();
+    let pending_rename: std::sync::Arc<std::sync::Mutex<Option<crate::sync_logic::PendingRenameFrom>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let pending_for_watcher = pending_rename.clone();
     let mut watcher: RecommendedWatcher = match notify::recommended_watcher(
         move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
                 // Filter out internal metadata files that the sync engine writes.
-                // These would otherwise create a feedback loop: sync writes state →
-                // watcher fires → triggers another sync → writes state → ...
                 let dominated_by_internal = event.paths.iter().all(|p| {
                     let path_str = p.to_string_lossy();
                     path_str.contains("/.hcfs/")
@@ -768,6 +769,66 @@ pub async fn start_sync_loop(app: AppHandle) {
                 });
                 if dominated_by_internal {
                     return;
+                }
+
+                // Capture rename events as hints for efficient rename detection.
+                // The pure pairing logic in sync_logic::process_rename_event
+                // matches From/To events within a 100ms window.
+                use notify::event::{ModifyKind, RenameMode};
+                if let notify::EventKind::Modify(ModifyKind::Name(mode)) = &event.kind {
+                    let now = std::time::Instant::now();
+                    let mut pending_guard = pending_for_watcher
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner());
+                    let mut local_hints = Vec::new();
+
+                    match mode {
+                        RenameMode::From => {
+                            if let Some(path) = event.paths.first() {
+                                crate::sync_logic::process_rename_event(
+                                    crate::sync_logic::RenameEventKind::From,
+                                    path,
+                                    now,
+                                    &mut pending_guard,
+                                    &mut local_hints,
+                                );
+                            }
+                        }
+                        RenameMode::To => {
+                            if let Some(path) = event.paths.first() {
+                                crate::sync_logic::process_rename_event(
+                                    crate::sync_logic::RenameEventKind::To,
+                                    path,
+                                    now,
+                                    &mut pending_guard,
+                                    &mut local_hints,
+                                );
+                            }
+                        }
+                        RenameMode::Both => {
+                            if event.paths.len() >= 2 {
+                                crate::sync_logic::process_rename_event(
+                                    crate::sync_logic::RenameEventKind::Both {
+                                        from: event.paths[0].clone(),
+                                    },
+                                    &event.paths[1],
+                                    now,
+                                    &mut pending_guard,
+                                    &mut local_hints,
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    for hint in local_hints {
+                        tracing::debug!(
+                            old = %hint.old_path.display(),
+                            new = %hint.new_path.display(),
+                            "Rename hint captured",
+                        );
+                        sync_for_watcher.push_rename_hint(hint);
+                    }
                 }
 
                 if sync_for_watcher.is_any_sync_in_progress() {
