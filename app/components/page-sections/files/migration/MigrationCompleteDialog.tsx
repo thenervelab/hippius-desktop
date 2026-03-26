@@ -4,6 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import React from "react";
 import DialogContainer from "@/components/ui/DialogContainer";
 import { CardButton, Graphsheet, Icons } from "@/components/ui";
+import { useRouter } from "next/navigation";
 
 export interface MigrationCompleteDialogProps {
   open: boolean;
@@ -25,6 +26,7 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
   const effectiveFailedCount = Math.max(failedCount, failedFiles.length);
   const isFullSuccess = effectiveFailedCount === 0;
   const isPartialSuccess = successCount > 0 && effectiveFailedCount > 0;
+  const router = useRouter();
 
   return (
     <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
@@ -121,7 +123,12 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
           <CardButton
             variant="primary"
             className="w-full h-12 text-base font-medium"
-            onClick={onClose}
+            onClick={() => {
+              onClose();
+              if (isFullSuccess) {
+                router.push("/files");
+              }
+            }}
           >
             {isFullSuccess ? "Go to My Files" : "Close"}
           </CardButton>
