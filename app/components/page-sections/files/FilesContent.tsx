@@ -49,7 +49,6 @@ interface FilesContentProps {
   setCurrentPage: (page: number) => void;
   isSyncPathEmpty?: boolean;
   onSyncPathConfigured?: () => void;
-  showFolderBadge?: boolean;
 }
 
 const FilesContent: FC<FilesContentProps> = ({
@@ -69,7 +68,6 @@ const FilesContent: FC<FilesContentProps> = ({
   setCurrentPage,
   isSyncPathEmpty = false,
   onSyncPathConfigured,
-  showFolderBadge = false,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
@@ -280,7 +278,7 @@ const FilesContent: FC<FilesContentProps> = ({
           currentPage={currentPage}
           totalPages={totalPages}
           setCurrentPage={setCurrentPage}
-          showFolderBadge={showFolderBadge}
+
         />
       );
     } else {
@@ -295,7 +293,7 @@ const FilesContent: FC<FilesContentProps> = ({
           currentPage={currentPage}
           totalPages={totalPages}
           setCurrentPage={setCurrentPage}
-          showFolderBadge={showFolderBadge}
+
         />
       );
     }

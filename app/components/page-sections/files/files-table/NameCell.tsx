@@ -6,8 +6,6 @@ import { cn } from "@/lib/utils";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { buildFolderPath } from "@/app/utils/folderPathUtils";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
-import SyncFolderBadge from "@/components/ui/SyncFolderBadge";
-
 type NameCellProps = {
   rawName: string;
   actualName?: string;
@@ -21,8 +19,6 @@ type NameCellProps = {
   source?: string;
   mainReqHash?: string;
   syncStatus?: "synced" | "pending" | "unknown" | "excluded";
-  label?: string;
-  showFolderBadge?: boolean;
 };
 
 const SyncStatusBadge: FC<{ status?: "synced" | "pending" | "unknown" | "excluded" }> = ({ status }) => {
@@ -48,8 +44,6 @@ const NameCell: FC<NameCellProps> = ({
   source,
   mainReqHash,
   syncStatus,
-  label,
-  showFolderBadge = false,
 }) => {
   const { icon: Icon, color } = getFileIcon(fileType, isFolder);
   const { getParam } = useUrlParams();
@@ -95,9 +89,6 @@ const NameCell: FC<NameCellProps> = ({
               name={rawName}
               className="text-grey-20 hover:text-primary-40 hover:underline transition"
             />
-            {showFolderBadge && label && (
-              <SyncFolderBadge label={label} className="ml-1.5" />
-            )}
           </div>
         </Link>
       ) : (
@@ -111,9 +102,6 @@ const NameCell: FC<NameCellProps> = ({
             )}
           />
           <SyncStatusBadge status={syncStatus} />
-          {showFolderBadge && label && (
-            <SyncFolderBadge label={label} className="ml-1.5" />
-          )}
         </div>
       )}
     </div>

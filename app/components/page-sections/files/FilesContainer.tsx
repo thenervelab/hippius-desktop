@@ -736,12 +736,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       regularFilesData?.files.filter((f) => f.type?.toLowerCase() === "private")
         .length || 0;
 
-    // Show folder badge when viewing "All" tab with multiple folders,
-    // or always on recent files when multiple folders exist
-    const showFolderBadge = isRecentFiles
-      ? syncFolderLabels.length >= 2
-      : selectedFolderTab === null && syncFolderLabels.length >= 2;
-
     content = (
       <FileSelectionProvider>
         <div className="w-full relative mt-6">
@@ -820,7 +814,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             onSyncPathConfigured={
               isRecentFiles ? handleNavigateToSettings : handleStartSyncing
             }
-            showFolderBadge={showFolderBadge}
           />
         </div>
       </FileSelectionProvider>

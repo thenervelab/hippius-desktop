@@ -89,12 +89,18 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
           {file.createdAt === 0 ? "—" : <FormattedTimestamp timestamp={file.createdAt} />}
         </DetailRow>
 
-        <DetailRow label="File Size" lastChild={!!file.isFolder}>
+        <DetailRow label="File Size" lastChild={!!file.isFolder && !file.label}>
           <div className="flex items-center gap-2">
             <Icons.File className="size-4 text-grey-70" />
             <span>{fileSize}</span>
           </div>
         </DetailRow>
+
+        {file.label && (
+          <DetailRow label="Sync Folder" lastChild={!!file.isFolder}>
+            <span>{file.label}</span>
+          </DetailRow>
+        )}
 
         {!file.isFolder && (
           <DetailRow label="Arion Hash" lastChild>
