@@ -82,6 +82,7 @@ const MigrationChecker: React.FC = () => {
           phase={migration.phase}
           uploadedCount={migration.uploadedCount}
           currentUploadFile={migration.currentUploadFile}
+          totalSize={migration.totalSize}
         />
       )}
       {migration.currentStep === "complete" && (

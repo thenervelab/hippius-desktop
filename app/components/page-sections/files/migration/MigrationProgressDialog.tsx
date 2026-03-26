@@ -24,6 +24,7 @@ export interface MigrationProgressDialogProps {
     phase?: "downloading" | "syncing";
     uploadedCount?: number;
     currentUploadFile?: string;
+    totalSize?: number;
 }
 
 const formatBytes = (bytes: number): string => {
@@ -47,6 +48,7 @@ const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
     phase = "downloading",
     uploadedCount = 0,
     currentUploadFile = "",
+    totalSize = 0,
 }) => {
     const completedCount = files.filter((f) => f.status === "completed").length;
     const failedCount = files.filter((f) => f.status === "failed").length;
@@ -129,9 +131,14 @@ const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
                         <ProgressBar value={overallProgress} className="h-2" />
                         <div className="flex justify-between items-center mt-2 text-xs text-grey-50">
                             <span>{Math.round(overallProgress)}% complete</span>
-                            {failedCount > 0 && (
-                                <span className="text-error-50">{failedCount} failed</span>
-                            )}
+                            <div className="flex items-center gap-2">
+                                {failedCount > 0 && (
+                                    <span className="text-error-50">{failedCount} failed</span>
+                                )}
+                                {totalSize > 0 && (
+                                    <span>Total: {formatBytes(totalSize)}</span>
+                                )}
+                            </div>
                         </div>
                     </div>
 
