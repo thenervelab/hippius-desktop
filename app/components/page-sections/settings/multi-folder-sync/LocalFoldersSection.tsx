@@ -47,7 +47,7 @@ function getStatusColor(status: SyncFolder["status"]) {
     case "paused":
       return "bg-grey-95 text-grey-50 border-grey-80";
     case "error":
-      return "bg-error-95 text-error-50 border-error-80";
+      return "bg-error-100 text-error-50 border-error-80";
   }
 }
 

@@ -184,7 +184,7 @@ export function HcfsSetupDialog({
           )}
 
           {/* Important Notice */}
-          <div className="bg-primary-95 border border-primary-80 rounded-lg p-3 text-xs text-primary-40 text-left mt-2">
+          <div className="bg-error-100 border border-error-70 rounded-lg p-3 text-xs text-error-50 text-left mt-2">
             <strong>Important:</strong> Your password cannot be recovered. If
             you forget it, you will need your recovery phrase to restore access
             to your files.

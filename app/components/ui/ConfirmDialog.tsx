@@ -99,7 +99,7 @@ const AlertModeDialog: React.FC<AlertModeProps> = ({
   const variantStyles = {
     danger: {
       iconColor: "text-error-50",
-      bgColor: "bg-error-95",
+      bgColor: "bg-error-100",
       confirmBtn:
         "bg-error-50 hover:bg-error-40 text-white border-error-40",
     },

@@ -467,7 +467,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             {snapshot.files.map((file, index) => {
               const isFileCompleted = file.status === "completed";
               const isFileDeleted = isFileCompleted && (file.action === "local_delete" || file.action === "remote_delete");
-              const isFileInProgress = file.status === "inProgress" || file.status === "encrypting" || file.status === "decrypting";
+              const isEncryptingOrDecrypting = file.status === "encrypting" || file.status === "decrypting";
+              const isFileInProgress = file.status === "inProgress" || isEncryptingOrDecrypting;
               const isFailed = file.status === "error";
               const { fileFormat } = getFilePartsFromFileName(file.fileName);
               const fileType = getFileTypeFromExtension(fileFormat || null);
@@ -485,17 +486,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                         <Icon className={cn("size-5 relative", color)} />
                       </AbstractIconWrapper>
                       <div className="flex flex-col justify-center min-w-0">
-                        <div className="flex items-center gap-1 justify-center">
-                          <div className="text-sm font-medium text-grey-10 truncate flex items-center gap-2">
-                            <span>
-                              {file.fileName.length > 25
-                                ? `${file.fileName.slice(0, 18)}...${file.fileName.slice(-5)}`
-                                : file.fileName}
-                            </span>
-                          </div>
+                        <div className="text-sm font-medium text-grey-10 truncate" title={file.fileName}>
+                          {file.fileName}
                         </div>
                         {file.totalBytes > 0 && (
-                          <div className="text-xs text-grey-70 mt-1">
+                          <div className="text-xs text-grey-70 mt-0.5">
                             {formatBytes(file.totalBytes)}
                           </div>
                         )}
@@ -520,25 +515,29 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                         </>
                       ) : isFileInProgress ? (
                         <div className="flex flex-col items-end gap-0.5">
-                          <div className="flex items-center gap-2">
-                            <div className="w-[60px] h-1.5 bg-grey-80 rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-primary-50 rounded-full transition-all duration-300"
-                                style={{ width: `${file.progressPercent}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-primary-50 min-w-[32px] text-right">
-                              {file.progressPercent}%
+                          {isEncryptingOrDecrypting ? (
+                            <span className="text-xs text-primary-50">
+                              {file.status === "encrypting" ? "Encrypting..." : "Decrypting..."}
                             </span>
-                          </div>
-                          {file.totalBytes > 0 && (
-                            <span className="text-[10px] text-grey-50">
-                              {file.resumedFromBytes
-                                ? `Resumed from ${formatBytes(file.resumedFromBytes)} \u2014 `
-                                : ""
-                              }
-                              {formatBytes(Math.max(file.bytesEncrypted, file.bytesTransferred))} / {formatBytes(file.totalBytes)}
-                            </span>
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-2">
+                                <div className="w-[60px] h-1.5 bg-grey-80 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-primary-50 rounded-full transition-all duration-300"
+                                    style={{ width: `${file.progressPercent}%` }}
+                                  />
+                                </div>
+                                <span className="text-xs text-primary-50 min-w-[32px] text-right">
+                                  {file.progressPercent}%
+                                </span>
+                              </div>
+                              {file.totalBytes > 0 && (
+                                <span className="text-[10px] text-grey-50">
+                                  {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
+                                </span>
+                              )}
+                            </>
                           )}
                         </div>
                       ) : file.status === "pending" ? (

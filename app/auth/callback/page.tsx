@@ -164,7 +164,7 @@ export default function OAuthCallbackPage() {
                 <div className="w-full max-w-md mx-auto px-4">
                     <div className="bg-white rounded-xl shadow-lg p-8 border border-grey-90">
                         <div className="flex flex-col items-center text-center">
-                            <div className="size-16 rounded-full bg-error-95 flex items-center justify-center mb-4">
+                            <div className="size-16 rounded-full bg-error-100 flex items-center justify-center mb-4">
                                 <AlertCircle className="size-8 text-error-50" />
                             </div>
                             <h1 className="text-2xl font-semibold text-grey-10 mb-2">

@@ -23,10 +23,9 @@ const SyncStatusHandler: React.FC = () => {
   const hasFailed = snapshot.failedFiles > 0 || isRetrying;
 
   const shouldShow =
-    isActive ||
+    (isActive && snapshot.totalFiles > 0) ||
     isCompleted ||
-    isRetrying ||
-    snapshot.files.length > 0;
+    isRetrying;
 
   // Auto-reopen when new sync activity starts after dismissal
   useEffect(() => {
