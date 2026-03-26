@@ -231,7 +231,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       onClick={(e: React.MouseEvent) => e.stopPropagation()}
       className={cn(
         " outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out",
-        isExpanded ? "w-[378px]" : isCompleted ? "w-[210px]" : "w-[240px]"
+        isExpanded ? "w-[378px]" : isCompleted || hasFailed ? "w-[210px]" : percentage !== null && percentage >= 10 ? "w-[240px]" : "w-[220px]"
       )}
     >
       {/* Header */}
@@ -240,7 +240,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           "shadow-menu bg-grey-100 border border-grey-80 cursor-pointer hover:bg-grey-90 transition-all duration-300 ease-in-out",
           isExpanded
             ? "rounded-t-[8px] w-[378px]"
-            : `rounded-[8px] ${isCompleted ? "w-[210px]" : "w-[240px]"}`
+            : `rounded-[8px] ${isCompleted || hasFailed ? "w-[210px]" : percentage !== null && percentage >= 10 ? "w-[240px]" : "w-[220px]"}`
         )}
         onClick={handleHeaderClick}
       >
@@ -598,12 +598,12 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   data-file-item
                   data-testid="file-item"
                 >
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <AbstractIconWrapper className="size-8 flex-shrink-0 flex items-center justify-center">
                         <Icon className={cn("size-5 relative", color)} />
                       </AbstractIconWrapper>
-                      <div className="flex flex-col justify-center min-w-0">
+                      <div className="flex flex-col justify-center min-w-0 flex-1">
                         <MiddleTruncatedName
                           name={file.fileName}
                           className="text-sm font-medium text-grey-10"
@@ -616,7 +616,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center flex-shrink-0">
+                    <div className="flex items-center flex-shrink-0 ml-2">
                       {isFileDeleted ? (
                         <>
                           <Icons.TickCircle className="w-5 h-5 text-error-50" />

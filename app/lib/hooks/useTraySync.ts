@@ -972,10 +972,13 @@ function startSyncActivityWatcher() {
         latchedComplete = true;
         latchedSnapshot = progress;
       }
-      // Unlatch when a new session starts (different startedAt from latched).
-      // This handles fast operations where the watcher never sees totalFiles > 0
-      // before the session completes.
-      if (isActive && latchedComplete && progress.startedAt !== latchedSnapshot?.startedAt) {
+      // Unlatch when a new MEANINGFUL session starts (different startedAt AND
+      // has actual files). The totalFiles > 0 guard prevents sync-loop probes
+      // (which briefly create an empty active session) from wiping the latch.
+      // Fast operations that complete before the watcher catches them active
+      // are handled by the latch-update condition above (updates latchedSnapshot
+      // directly when a new completed session is detected).
+      if (isActive && progress.totalFiles > 0 && latchedComplete && progress.startedAt !== latchedSnapshot?.startedAt) {
         latchedComplete = false;
         latchedSnapshot = null;
       }
@@ -1071,7 +1074,8 @@ function startSyncActivityWatcher() {
           } else if (deletedInSession > 0 && nonDeleteSynced > 0) {
             progressText = `${nonDeleteSynced} synced · ${deletedInSession} deleted`;
           } else {
-            progressText = `${effectiveSnapshot.completedFiles} ${effectiveSnapshot.completedFiles === 1 ? 'file' : 'files'} synced`;
+            const totalFiles = effectiveSnapshot.completedFiles + effectiveSnapshot.failedFiles;
+            progressText = `${effectiveSnapshot.completedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} synced`;
           }
           if (effectiveSnapshot.bytesExpected > 0) {
             sizeText = formatBytes(effectiveSnapshot.bytesExpected);
