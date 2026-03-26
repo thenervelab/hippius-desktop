@@ -818,7 +818,19 @@ pub async fn start_sync_loop(app: AppHandle) {
                                 );
                             }
                         }
-                        _ => {}
+                        // macOS FSEvents sends RenameMode::Any — two
+                        // events in sequence (old path, then new path).
+                        _ => {
+                            if let Some(path) = event.paths.first() {
+                                crate::sync_logic::process_rename_event(
+                                    crate::sync_logic::RenameEventKind::Any,
+                                    path,
+                                    now,
+                                    &mut pending_guard,
+                                    &mut local_hints,
+                                );
+                            }
+                        }
                     }
 
                     for hint in local_hints {

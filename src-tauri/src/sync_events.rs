@@ -23,6 +23,7 @@ pub const FOLDER_RECOVERED: &str = "hcfs_folder_recovered";
 pub const REVIEW_MODE_TIMEOUT: &str = "hcfs_review_mode_timeout";
 pub const CONFLICTS_PENDING: &str = "hcfs_conflicts_pending";
 pub const AUTH_TOKEN_EXPIRED: &str = "hcfs_auth_token_expired";
+pub const ACTIVITY_UPDATED: &str = "hcfs_activity_updated";
 
 // ── Event Payloads ───────────────────────────────────────────────────
 

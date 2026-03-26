@@ -141,6 +141,11 @@ pub struct SyncEngine {
     /// Rename hints captured by the file watcher.
     /// Drained per-drive at the start of each sync cycle.
     pub rename_hints: StdMutex<Vec<crate::sync_logic::RenameHint>>,
+
+    /// Maps drive label → sync folder root path.
+    /// Populated when drives are registered, used by
+    /// `apply_rename_to_activity` to convert absolute paths to relative.
+    pub label_roots: StdMutex<HashMap<String, std::path::PathBuf>>,
 }
 
 impl SyncEngine {
@@ -173,6 +178,7 @@ impl SyncEngine {
             synced_paths_cache: StdMutex::new(HashMap::new()),
             watcher: StdMutex::new(None),
             rename_hints: StdMutex::new(Vec::new()),
+            label_roots: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -626,8 +632,16 @@ impl SyncEngine {
     /// Push a rename hint captured by the file watcher.
     /// Drops the hint if the buffer is at capacity (10 000) to prevent
     /// unbounded memory growth under bulk-rename workloads.
+    ///
+    /// Also updates existing activity items so the recent-files list
+    /// reflects the new filename immediately (without waiting for a
+    /// full sync cycle).
     pub fn push_rename_hint(&self, hint: crate::sync_logic::RenameHint) {
         const MAX_RENAME_HINTS: usize = 10_000;
+
+        // Update activity items before storing the hint
+        self.apply_rename_to_activity(&hint);
+
         let mut guard = self.rename_hints.lock().unwrap_or_else(|p| {
             warn!("Poisoned rename_hints mutex recovered");
             p.into_inner()
@@ -662,6 +676,160 @@ impl SyncEngine {
         }
         *guard = remaining;
         matched
+    }
+
+    // ── Label Roots (for rename → activity mapping) ──────────────────
+
+    /// Register the sync folder root for a drive label.
+    pub fn register_label_root(
+        &self,
+        label: String,
+        root: std::path::PathBuf,
+    ) {
+        let mut guard = self.label_roots.lock().unwrap_or_else(|p| {
+            warn!("Poisoned label_roots mutex recovered");
+            p.into_inner()
+        });
+        guard.insert(label, root);
+    }
+
+    /// Remove a label root (when a drive is stopped).
+    pub fn unregister_label_root(&self, label: &str) {
+        let mut guard = self.label_roots.lock().unwrap_or_else(|p| {
+            warn!("Poisoned label_roots mutex recovered");
+            p.into_inner()
+        });
+        guard.remove(label);
+    }
+
+    /// Clear all label roots (on full stop).
+    pub fn clear_label_roots(&self) {
+        let mut guard = self.label_roots.lock().unwrap_or_else(|p| {
+            warn!("Poisoned label_roots mutex recovered");
+            p.into_inner()
+        });
+        guard.clear();
+    }
+
+    /// Update file_name in committed and pending activity items when
+    /// a file is renamed on disk. Emits `hcfs_activity_updated` so
+    /// the frontend can refresh the recent-files list.
+    fn apply_rename_to_activity(
+        &self,
+        hint: &crate::sync_logic::RenameHint,
+    ) {
+        // Find the label and relative paths for this rename hint
+        let label_roots = self.label_roots.lock().unwrap_or_else(|p| {
+            warn!("Poisoned label_roots mutex in apply_rename");
+            p.into_inner()
+        });
+
+        let mut matched_label = None;
+        let mut old_relative = None;
+        let mut new_relative = None;
+
+        for (label, root) in label_roots.iter() {
+            if hint.old_path.starts_with(root) {
+                if let Ok(old_rel) = hint.old_path.strip_prefix(root) {
+                    let new_rel = if hint.new_path.starts_with(root) {
+                        hint.new_path.strip_prefix(root).ok()
+                    } else {
+                        None
+                    };
+                    if let Some(nr) = new_rel {
+                        matched_label = Some(label.clone());
+                        old_relative =
+                            Some(old_rel.to_string_lossy().to_string());
+                        new_relative =
+                            Some(nr.to_string_lossy().to_string());
+                        break;
+                    }
+                }
+            }
+        }
+        drop(label_roots);
+
+        let (label, old_rel, new_rel) =
+            match (matched_label, old_relative, new_relative) {
+                (Some(l), Some(o), Some(n)) => (l, o, n),
+                _ => return,
+            };
+
+        let mut updated = false;
+
+        // Update committed activity (per-drive state)
+        {
+            let mut states = self.states.lock().unwrap_or_else(|p| {
+                warn!("Poisoned states mutex in apply_rename");
+                p.into_inner()
+            });
+            if let Some(state) = states.get_mut(&label) {
+                for item in &mut state.recent_activity {
+                    if item.file_name == old_rel {
+                        info!(
+                            old = %old_rel,
+                            new = %new_rel,
+                            label = %label,
+                            "Renamed file in committed activity",
+                        );
+                        item.file_name.clone_from(&new_rel);
+                        updated = true;
+                    }
+                }
+            }
+        }
+
+        // Update pending activity (current sync cycle)
+        {
+            let mut pending =
+                self.pending_activity.lock().unwrap_or_else(|p| {
+                    warn!("Poisoned pending mutex in apply_rename");
+                    p.into_inner()
+                });
+            for item in pending.iter_mut() {
+                if item.file_name == old_rel && item.label == label {
+                    info!(
+                        old = %old_rel,
+                        new = %new_rel,
+                        label = %label,
+                        "Renamed file in pending activity",
+                    );
+                    item.file_name.clone_from(&new_rel);
+                    updated = true;
+                }
+            }
+        }
+
+        // Also update the synced_paths_cache so get_synced_file_metadata
+        // returns the new name before the next sync cycle
+        {
+            let mut cache =
+                self.synced_paths_cache.lock().unwrap_or_else(|p| {
+                    warn!("Poisoned synced_paths_cache in apply_rename");
+                    p.into_inner()
+                });
+            if let Some(drive_cache) = cache.get_mut(&label) {
+                if let Some(info) = drive_cache.remove(&old_rel) {
+                    drive_cache.insert(new_rel.clone(), info);
+                    updated = true;
+                }
+            }
+        }
+
+        if updated {
+            // Emit event so frontend refreshes recent files
+            let app = self
+                .app_handle
+                .lock()
+                .ok()
+                .and_then(|g| g.clone());
+            if let Some(app) = app {
+                let _ = app.emit(
+                    crate::sync_events::ACTIVITY_UPDATED,
+                    (),
+                );
+            }
+        }
     }
 }
 
@@ -962,5 +1130,121 @@ mod tests {
             std::path::Path::new("/sync"),
         );
         assert!(drained.is_empty());
+    }
+
+    #[test]
+    fn rename_updates_committed_activity() {
+        let eng = SyncEngine::new();
+        eng.register_label_root(
+            "docs".to_string(),
+            std::path::PathBuf::from("/sync/docs"),
+        );
+        eng.update_state("docs", |s| {
+            s.add_activity(activity("report.txt", "uploaded", "docs", 100));
+        });
+
+        eng.push_rename_hint(crate::sync_logic::RenameHint {
+            old_path: std::path::PathBuf::from("/sync/docs/report.txt"),
+            new_path: std::path::PathBuf::from("/sync/docs/report_v2.txt"),
+            captured_at: std::time::Instant::now(),
+        });
+
+        let result = eng.get_sync_activity(None, Some("docs".to_string()));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].file_name, "report_v2.txt");
+    }
+
+    #[test]
+    fn rename_updates_pending_activity() {
+        let eng = SyncEngine::new();
+        eng.register_label_root(
+            "docs".to_string(),
+            std::path::PathBuf::from("/sync/docs"),
+        );
+        eng.add_pending_activity(activity("draft.md", "uploaded", "docs", 50));
+
+        eng.push_rename_hint(crate::sync_logic::RenameHint {
+            old_path: std::path::PathBuf::from("/sync/docs/draft.md"),
+            new_path: std::path::PathBuf::from("/sync/docs/final.md"),
+            captured_at: std::time::Instant::now(),
+        });
+
+        let result = eng.get_sync_activity(None, Some("docs".to_string()));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].file_name, "final.md");
+    }
+
+    #[test]
+    fn rename_without_label_root_is_no_op() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| {
+            s.add_activity(activity("report.txt", "uploaded", "docs", 100));
+        });
+
+        // No label root registered — rename should not change anything
+        eng.push_rename_hint(crate::sync_logic::RenameHint {
+            old_path: std::path::PathBuf::from("/sync/docs/report.txt"),
+            new_path: std::path::PathBuf::from("/sync/docs/report_v2.txt"),
+            captured_at: std::time::Instant::now(),
+        });
+
+        let result = eng.get_sync_activity(None, Some("docs".to_string()));
+        assert_eq!(result[0].file_name, "report.txt");
+    }
+
+    #[test]
+    fn rename_only_affects_matching_label() {
+        let eng = SyncEngine::new();
+        eng.register_label_root(
+            "docs".to_string(),
+            std::path::PathBuf::from("/sync/docs"),
+        );
+        eng.register_label_root(
+            "photos".to_string(),
+            std::path::PathBuf::from("/sync/photos"),
+        );
+        eng.update_state("docs", |s| {
+            s.add_activity(activity("file.txt", "uploaded", "docs", 10));
+        });
+        eng.update_state("photos", |s| {
+            s.add_activity(activity("file.txt", "uploaded", "photos", 20));
+        });
+
+        eng.push_rename_hint(crate::sync_logic::RenameHint {
+            old_path: std::path::PathBuf::from("/sync/docs/file.txt"),
+            new_path: std::path::PathBuf::from("/sync/docs/renamed.txt"),
+            captured_at: std::time::Instant::now(),
+        });
+
+        let docs = eng.get_sync_activity(None, Some("docs".to_string()));
+        assert_eq!(docs[0].file_name, "renamed.txt");
+        let photos = eng.get_sync_activity(None, Some("photos".to_string()));
+        assert_eq!(photos[0].file_name, "file.txt");
+    }
+
+    #[test]
+    fn rename_in_subfolder_uses_relative_path() {
+        let eng = SyncEngine::new();
+        eng.register_label_root(
+            "docs".to_string(),
+            std::path::PathBuf::from("/sync/docs"),
+        );
+        eng.update_state("docs", |s| {
+            s.add_activity(activity(
+                "sub/deep/file.txt",
+                "uploaded",
+                "docs",
+                100,
+            ));
+        });
+
+        eng.push_rename_hint(crate::sync_logic::RenameHint {
+            old_path: std::path::PathBuf::from("/sync/docs/sub/deep/file.txt"),
+            new_path: std::path::PathBuf::from("/sync/docs/sub/deep/renamed.txt"),
+            captured_at: std::time::Instant::now(),
+        });
+
+        let result = eng.get_sync_activity(None, Some("docs".to_string()));
+        assert_eq!(result[0].file_name, "sub/deep/renamed.txt");
     }
 }

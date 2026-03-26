@@ -939,6 +939,8 @@ async fn initialize_sync_inner(
 
     // 12. Store the manager in the drives registry
     {
+        let sync_root = PathBuf::from(&sync_path);
+        sync.register_label_root(label.clone(), sync_root);
         let mut guard = sync.drives.lock().await;
         guard.insert(
             label.clone(),
@@ -1044,6 +1046,7 @@ pub async fn stop_sync(app: AppHandle) -> Result<(), String> {
     sync.reset_health();
     sync.reset_sync_failures();
     sync.discard_all_pending_activity();
+    sync.clear_label_roots();
 
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
     let _ = app.emit(sync_events::SYNC_STOPPED, ());
@@ -1070,6 +1073,7 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
         }
         (guard.len(), path)
     };
+    sync.unregister_label_root(&label);
 
     // Unwatch the removed drive's path to avoid spurious watcher events
     // that would wake the sync loop for a drive that no longer exists.

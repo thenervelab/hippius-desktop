@@ -125,6 +125,16 @@ export function useSyncEvents() {
               scheduleRecentFilesRefresh();
             }
           }),
+          // Activity updated (e.g. file renamed on disk) — dispatch
+          // immediately so recent files reflect the new name without
+          // the 2-second debounce used for upload/download completion.
+          listen("hcfs_activity_updated", () => {
+            window.dispatchEvent(
+              new CustomEvent("sync_files_completed_changed", {
+                detail: { filesCompleted: 0 },
+              })
+            );
+          }),
           // Connectivity health updates
           listen<SyncEngineHealthState>(
             "hcfs_connectivity_changed",

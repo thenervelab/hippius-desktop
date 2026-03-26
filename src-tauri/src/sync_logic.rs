@@ -180,6 +180,10 @@ pub enum RenameEventKind {
     From,
     To,
     Both { from: PathBuf },
+    /// macOS FSEvents emits `RenameMode::Any` — two events in
+    /// sequence, first for old path then for new path. We treat
+    /// the first as `From` and the second as `To`.
+    Any,
 }
 
 /// A rename hint converted to paths relative to the sync root.
@@ -225,6 +229,31 @@ pub fn process_rename_event(
                 new_path: path.to_path_buf(),
                 captured_at: now,
             });
+        }
+        RenameEventKind::Any => {
+            // macOS FSEvents: two `Any` events arrive in sequence.
+            // First one → store as pending (old path).
+            // Second one → pair with pending (new path).
+            if let Some(from) = pending.take() {
+                if now.duration_since(from.captured_at) <= RENAME_PAIR_WINDOW {
+                    hints.push(RenameHint {
+                        old_path: from.path,
+                        new_path: path.to_path_buf(),
+                        captured_at: now,
+                    });
+                } else {
+                    // Window expired — treat this as a new "from"
+                    *pending = Some(PendingRenameFrom {
+                        path: path.to_path_buf(),
+                        captured_at: now,
+                    });
+                }
+            } else {
+                *pending = Some(PendingRenameFrom {
+                    path: path.to_path_buf(),
+                    captured_at: now,
+                });
+            }
         }
     }
 }
@@ -813,5 +842,78 @@ mod rename_hint_tests {
 
         let result = hint_to_relative_pair(&hint, &sync_root);
         assert!(result.is_none());
+    }
+
+    // --- RenameEventKind::Any (macOS FSEvents) ---
+
+    #[test]
+    fn any_pair_produces_hint() {
+        let mut pending: Option<PendingRenameFrom> = None;
+        let mut hints: Vec<RenameHint> = Vec::new();
+        let now = Instant::now();
+
+        // First Any → stored as pending
+        process_rename_event(
+            RenameEventKind::Any,
+            &PathBuf::from("/sync/old.txt"),
+            now,
+            &mut pending,
+            &mut hints,
+        );
+        assert!(pending.is_some());
+        assert!(hints.is_empty());
+
+        // Second Any → paired with pending
+        process_rename_event(
+            RenameEventKind::Any,
+            &PathBuf::from("/sync/new.txt"),
+            now,
+            &mut pending,
+            &mut hints,
+        );
+        assert!(pending.is_none());
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].old_path, PathBuf::from("/sync/old.txt"));
+        assert_eq!(hints[0].new_path, PathBuf::from("/sync/new.txt"));
+    }
+
+    #[test]
+    fn any_stale_pending_becomes_new_from() {
+        let old_time = Instant::now() - Duration::from_millis(200);
+        let mut pending: Option<PendingRenameFrom> = Some(PendingRenameFrom {
+            path: PathBuf::from("/sync/stale.txt"),
+            captured_at: old_time,
+        });
+        let mut hints: Vec<RenameHint> = Vec::new();
+
+        // Stale pending → window expired → treat as new "from"
+        process_rename_event(
+            RenameEventKind::Any,
+            &PathBuf::from("/sync/fresh.txt"),
+            Instant::now(),
+            &mut pending,
+            &mut hints,
+        );
+        assert!(hints.is_empty());
+        assert_eq!(
+            pending.as_ref().expect("should have pending").path,
+            PathBuf::from("/sync/fresh.txt"),
+        );
+    }
+
+    #[test]
+    fn any_single_event_only_stores_pending() {
+        let mut pending: Option<PendingRenameFrom> = None;
+        let mut hints: Vec<RenameHint> = Vec::new();
+
+        process_rename_event(
+            RenameEventKind::Any,
+            &PathBuf::from("/sync/only.txt"),
+            Instant::now(),
+            &mut pending,
+            &mut hints,
+        );
+        assert!(pending.is_some());
+        assert!(hints.is_empty());
     }
 }
