@@ -27,7 +27,7 @@ const BODY_MAX_HEIGHT_REM = EXPANDED_HEIGHT_REM - COLLAPSED_HEIGHT_REM;
 // Collapsed widths (rem) — vary by state so the pill fits its content
 const W_COLLAPSED_DONE = "13.75rem";   // 210px — "Complete" / "Failed"
 const W_COLLAPSED_WIDE = "15rem";       // 240px — "Syncing 98%"
-const W_COLLAPSED_NARROW = "13.75rem";  // 220px — "Syncing..." / single-digit %
+const W_COLLAPSED_NARROW = "14rem";  // 220px — "Syncing..." / single-digit %
 const W_EXPANDED = "23.625rem";         // 378px
 
 /** Format seconds into a human-readable ETA string. */
