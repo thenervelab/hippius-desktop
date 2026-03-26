@@ -4,6 +4,9 @@
 //! They exist so that the core decision logic of the sync loop can be
 //! unit-tested in isolation without needing a running Tauri app.
 
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
 use hcfs_shared::network::RemoteFolderInfo;
 use serde::Serialize;
 
@@ -150,6 +153,121 @@ pub fn folder_needs_recovery(folders: &[RemoteFolderInfo], target_hash: &str) ->
 /// the folder entry exists (the call is idempotent thanks to `ON CONFLICT DO UPDATE`).
 pub fn should_register_after_upload(files_uploaded: usize) -> bool {
     files_uploaded > 0
+}
+
+/// Maximum time gap between a `RenameFrom` and `RenameTo` event to consider
+/// them as a paired rename operation.
+const RENAME_PAIR_WINDOW: Duration = Duration::from_millis(100);
+
+/// A captured rename hint from the OS file watcher.
+#[derive(Debug, Clone)]
+pub struct RenameHint {
+    pub old_path: PathBuf,
+    pub new_path: PathBuf,
+    pub captured_at: Instant,
+}
+
+/// Intermediate state: a `RenameFrom` event waiting for its `RenameTo` pair.
+#[derive(Debug)]
+pub struct PendingRenameFrom {
+    pub path: PathBuf,
+    pub captured_at: Instant,
+}
+
+/// Classified rename event kind from the `notify` crate.
+#[derive(Debug)]
+pub enum RenameEventKind {
+    From,
+    To,
+    Both { from: PathBuf },
+}
+
+/// A rename hint converted to paths relative to the sync root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelativeRenameHint {
+    pub old_relative_path: PathBuf,
+    pub new_relative_path: PathBuf,
+}
+
+/// Process a single rename-related event from the file watcher.
+///
+/// Maintains `pending` state across calls to pair From/To events.
+/// Completed pairs are pushed to `hints`.
+pub fn process_rename_event(
+    kind: RenameEventKind,
+    path: &Path,
+    now: Instant,
+    pending: &mut Option<PendingRenameFrom>,
+    hints: &mut Vec<RenameHint>,
+) {
+    match kind {
+        RenameEventKind::From => {
+            *pending = Some(PendingRenameFrom {
+                path: path.to_path_buf(),
+                captured_at: now,
+            });
+        }
+        RenameEventKind::To => {
+            let Some(from) = pending.take() else {
+                return;
+            };
+            if now.duration_since(from.captured_at) <= RENAME_PAIR_WINDOW {
+                hints.push(RenameHint {
+                    old_path: from.path,
+                    new_path: path.to_path_buf(),
+                    captured_at: now,
+                });
+            }
+        }
+        RenameEventKind::Both { from } => {
+            hints.push(RenameHint {
+                old_path: from,
+                new_path: path.to_path_buf(),
+                captured_at: now,
+            });
+        }
+    }
+}
+
+/// Convert an absolute-path hint to relative paths within a sync root.
+///
+/// Returns `None` if either path is outside the sync root.
+pub fn hint_to_relative_pair(
+    hint: &RenameHint,
+    sync_root: &Path,
+) -> Option<RelativeRenameHint> {
+    let old_rel = hint.old_path.strip_prefix(sync_root).ok()?;
+    let new_rel = hint.new_path.strip_prefix(sync_root).ok()?;
+    Some(RelativeRenameHint {
+        old_relative_path: old_rel.to_path_buf(),
+        new_relative_path: new_rel.to_path_buf(),
+    })
+}
+
+/// Expand a directory-level rename hint into per-file hints.
+pub fn expand_directory_hint(
+    hint: &RenameHint,
+    sync_root: &Path,
+    known_relative_paths: &[PathBuf],
+) -> Vec<RelativeRenameHint> {
+    let Some(old_prefix) = hint.old_path.strip_prefix(sync_root).ok() else {
+        return Vec::new();
+    };
+    let Some(new_prefix) = hint.new_path.strip_prefix(sync_root).ok() else {
+        return Vec::new();
+    };
+
+    let mut expanded = Vec::new();
+    for rel_path in known_relative_paths {
+        let Some(suffix) = rel_path.strip_prefix(old_prefix).ok() else {
+            continue;
+        };
+        expanded.push(RelativeRenameHint {
+            old_relative_path: rel_path.clone(),
+            new_relative_path: new_prefix.join(suffix),
+        });
+    }
+    expanded
 }
 
 #[cfg(test)]
@@ -514,5 +632,186 @@ mod tests {
     #[test]
     fn no_register_when_zero_uploads() {
         assert!(!should_register_after_upload(0));
+    }
+}
+
+#[cfg(test)]
+mod rename_hint_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::Instant;
+
+    #[test]
+    fn pair_rename_from_then_to_within_window() {
+        let mut pending: Option<PendingRenameFrom> = None;
+        let mut hints: Vec<RenameHint> = Vec::new();
+        let now = Instant::now();
+
+        process_rename_event(
+            RenameEventKind::From,
+            &PathBuf::from("/sync/old.txt"),
+            now,
+            &mut pending,
+            &mut hints,
+        );
+        assert!(pending.is_some());
+        assert!(hints.is_empty());
+
+        process_rename_event(
+            RenameEventKind::To,
+            &PathBuf::from("/sync/new.txt"),
+            now,
+            &mut pending,
+            &mut hints,
+        );
+        assert!(pending.is_none());
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].old_path, PathBuf::from("/sync/old.txt"));
+        assert_eq!(hints[0].new_path, PathBuf::from("/sync/new.txt"));
+    }
+
+    #[test]
+    fn stale_pending_discarded_on_new_from() {
+        let old_time = Instant::now() - Duration::from_millis(200);
+        let mut pending: Option<PendingRenameFrom> = Some(PendingRenameFrom {
+            path: PathBuf::from("/sync/stale.txt"),
+            captured_at: old_time,
+        });
+        let mut hints: Vec<RenameHint> = Vec::new();
+
+        process_rename_event(
+            RenameEventKind::From,
+            &PathBuf::from("/sync/real_old.txt"),
+            Instant::now(),
+            &mut pending,
+            &mut hints,
+        );
+        assert!(hints.is_empty());
+        assert_eq!(
+            pending.as_ref().expect("should have pending").path,
+            PathBuf::from("/sync/real_old.txt")
+        );
+    }
+
+    #[test]
+    fn to_without_from_ignored() {
+        let mut pending: Option<PendingRenameFrom> = None;
+        let mut hints: Vec<RenameHint> = Vec::new();
+
+        process_rename_event(
+            RenameEventKind::To,
+            &PathBuf::from("/sync/new.txt"),
+            Instant::now(),
+            &mut pending,
+            &mut hints,
+        );
+        assert!(pending.is_none());
+        assert!(hints.is_empty());
+    }
+
+    #[test]
+    fn stale_from_not_paired_with_late_to() {
+        let old_time = Instant::now() - Duration::from_millis(200);
+        let mut pending: Option<PendingRenameFrom> = Some(PendingRenameFrom {
+            path: PathBuf::from("/sync/old.txt"),
+            captured_at: old_time,
+        });
+        let mut hints: Vec<RenameHint> = Vec::new();
+
+        process_rename_event(
+            RenameEventKind::To,
+            &PathBuf::from("/sync/new.txt"),
+            Instant::now(),
+            &mut pending,
+            &mut hints,
+        );
+        assert!(pending.is_none());
+        assert!(hints.is_empty());
+    }
+
+    #[test]
+    fn both_event_produces_hint_directly() {
+        let mut pending: Option<PendingRenameFrom> = None;
+        let mut hints: Vec<RenameHint> = Vec::new();
+
+        process_rename_event(
+            RenameEventKind::Both {
+                from: PathBuf::from("/sync/old.txt"),
+            },
+            &PathBuf::from("/sync/new.txt"),
+            Instant::now(),
+            &mut pending,
+            &mut hints,
+        );
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].old_path, PathBuf::from("/sync/old.txt"));
+        assert_eq!(hints[0].new_path, PathBuf::from("/sync/new.txt"));
+    }
+
+    #[test]
+    fn expand_directory_hint_produces_per_file_hints() {
+        let hint = RenameHint {
+            old_path: PathBuf::from("/sync/projects"),
+            new_path: PathBuf::from("/sync/work"),
+            captured_at: Instant::now(),
+        };
+        let sync_root = PathBuf::from("/sync");
+
+        let known_paths = vec![
+            PathBuf::from("projects/a.txt"),
+            PathBuf::from("projects/sub/b.txt"),
+            PathBuf::from("other/c.txt"),
+        ];
+
+        let expanded = expand_directory_hint(&hint, &sync_root, &known_paths);
+        assert_eq!(expanded.len(), 2);
+        assert_eq!(
+            expanded[0].old_relative_path,
+            PathBuf::from("projects/a.txt")
+        );
+        assert_eq!(
+            expanded[0].new_relative_path,
+            PathBuf::from("work/a.txt")
+        );
+        assert_eq!(
+            expanded[1].old_relative_path,
+            PathBuf::from("projects/sub/b.txt")
+        );
+        assert_eq!(
+            expanded[1].new_relative_path,
+            PathBuf::from("work/sub/b.txt")
+        );
+    }
+
+    #[test]
+    fn convert_file_hint_to_relative() {
+        let hint = RenameHint {
+            old_path: PathBuf::from("/sync/old.txt"),
+            new_path: PathBuf::from("/sync/new.txt"),
+            captured_at: Instant::now(),
+        };
+        let sync_root = PathBuf::from("/sync");
+
+        let result = hint_to_relative_pair(&hint, &sync_root);
+        assert_eq!(
+            result,
+            Some(RelativeRenameHint {
+                old_relative_path: PathBuf::from("old.txt"),
+                new_relative_path: PathBuf::from("new.txt"),
+            })
+        );
+    }
+
+    #[test]
+    fn hint_outside_sync_root_returns_none() {
+        let hint = RenameHint {
+            old_path: PathBuf::from("/other/old.txt"),
+            new_path: PathBuf::from("/sync/new.txt"),
+            captured_at: Instant::now(),
+        };
+        let sync_root = PathBuf::from("/sync");
+
+        let result = hint_to_relative_pair(&hint, &sync_root);
+        assert!(result.is_none());
     }
 }
