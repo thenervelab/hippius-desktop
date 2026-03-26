@@ -125,22 +125,25 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         }
     }
 
-    // Migration: change UNIQUE constraint from (owner, type) to (owner, label)
-    // SQLite doesn't support ALTER TABLE DROP CONSTRAINT, so we recreate the table.
+    // Migration: ensure the table has UNIQUE(owner, label).
+    // Old schemas may have UNIQUE(owner, type) inline, or a separate unique index
+    // on (owner, type) from the main branch migration. Either way, if the DDL
+    // doesn't contain UNIQUE(owner, label), we recreate the table.
+    // SQLite doesn't support ALTER TABLE DROP CONSTRAINT, so we recreate.
     // Wrapped in a transaction so the table is never left in a broken state.
     {
         let table_sql =
             sqlx::query("SELECT sql FROM sqlite_master WHERE type='table' AND name='sync_paths'")
                 .fetch_optional(pool)
                 .await?;
-        let needs_migration = table_sql
+        let has_correct_constraint = table_sql
             .as_ref()
             .and_then(|row| row.try_get::<String, _>("sql").ok())
-            .map(|sql| sql.contains("UNIQUE(owner, type)") || sql.contains("UNIQUE (owner, type)"))
+            .map(|sql| sql.contains("UNIQUE(owner, label)") || sql.contains("UNIQUE (owner, label)"))
             .unwrap_or(false);
 
-        if needs_migration {
-            info!("Migrating sync_paths: UNIQUE(owner, type) -> UNIQUE(owner, label)");
+        if !has_correct_constraint {
+            info!("Migrating sync_paths to add UNIQUE(owner, label) constraint");
             // Clean up any leftover temp table from a previous failed attempt
             sqlx::query("DROP TABLE IF EXISTS sync_paths_new")
                 .execute(pool)
@@ -187,6 +190,8 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
             tx.commit().await?;
             info!("sync_paths constraint migration completed");
+        } else {
+            debug!("sync_paths already has UNIQUE(owner, label), skipping migration");
         }
     }
 
