@@ -3,9 +3,11 @@
 @tailwind utilities;
 
 /* Fluid root font-size: scales text proportionally with window width.
-   At 900px (minWidth) → 13px, at ~1455px+ → 16px (browser default). */
+   At 900px (minWidth) → 13px, at ~1455px+ → 16px (browser default).
+   --zoom-factor (set by JS) lets Cmd/Ctrl +/- scale everything further. */
 html {
-  font-size: clamp(13px, 1.1vw, 16px);
+  --zoom-factor: 1;
+  font-size: calc(clamp(13px, 1.1vw, 16px) * var(--zoom-factor));
 }
 
 :root {
