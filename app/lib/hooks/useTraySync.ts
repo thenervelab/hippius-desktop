@@ -1013,9 +1013,9 @@ function startSyncActivityWatcher() {
 
       // Update the header label and icon to reflect the watcher's view.
       // This is the SINGLE source of truth for tray icon/label state.
-      if (isActive && !latchedComplete) {
+      if (isActive && !latchedComplete && progress.totalFiles > 0) {
         const percent = progress.overallPercent;
-        if (progress.totalFiles > 0 && percent === 0 && progress.completedFiles === 0 && progress.progressBytes === 0) {
+        if (percent === 0 && progress.completedFiles === 0 && progress.progressBytes === 0) {
           await updateTraySyncLabel(`⟳ Preparing sync…`);
         } else {
           await updateTraySyncLabel(`⟳ Syncing: ${percent}%`);

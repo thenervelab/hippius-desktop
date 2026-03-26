@@ -17,6 +17,7 @@ import {
 
 } from "@tanstack/react-table";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { useSyncSnapshot } from "@/lib/hooks/useSyncSnapshot";
 import * as TableModule from "@/components/ui/alt-table";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
@@ -159,6 +160,29 @@ const FilesTable: FC<FilesTableProps> = memo(
     // Update refs on every render BEFORE columns are created
     currentPageRef.current = currentPage;
     filesRef.current = files;
+
+    // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads
+    const snapshot = useSyncSnapshot();
+    const enrichedAllFiles = useMemo(() => {
+      if (!snapshot.isActive && snapshot.files.length === 0) return allFiles;
+      // Build a lookup from fileName → action for active/pending files
+      const actionByName = new Map<string, "upload" | "download">();
+      for (const f of snapshot.files) {
+        if (f.status !== "completed" && (f.action === "upload" || f.action === "download")) {
+          actionByName.set(f.fileName, f.action);
+        }
+      }
+      if (actionByName.size === 0) return allFiles;
+
+      return allFiles.map((file) => {
+        const actualName = file.actualFileName || file.name;
+        const action = actionByName.get(actualName);
+        if (!action) return file;
+        const liveSyncStatus: FormattedUserFile["syncStatus"] =
+          action === "download" ? "downloading" : "uploading";
+        return { ...file, syncStatus: liveSyncStatus };
+      });
+    }, [allFiles, snapshot.isActive, snapshot.files]);
 
     const { polkadotAddress } = useWalletAuth();
     const [sorting, setSorting] = useState<SortingState>([]);
@@ -805,7 +829,7 @@ const FilesTable: FC<FilesTableProps> = memo(
     const tableConfig = useMemo(
       () => ({
         columns,
-        data: allFiles || [],
+        data: enrichedAllFiles || [],
         state: {
           sorting,
         },
@@ -824,15 +848,15 @@ const FilesTable: FC<FilesTableProps> = memo(
         getRowId: (row: FormattedUserFile, index: number) => row.arionHash ? `${row.arionHash}-${index}` : `${row.actualFileName || row.name}-${index}`,
 
       }),
-      [columns, allFiles, sorting, handleSortingChange]
+      [columns, enrichedAllFiles, sorting, handleSortingChange]
     );
 
     const table = useReactTable(tableConfig);
 
     // Get sorted rows and manually paginate them.
-    // Include allFiles in deps so rows recompute when the data source changes
+    // Include enrichedAllFiles in deps so rows recompute when the data source changes
     // (e.g. folder tab switch). useReactTable returns a stable reference, so
-    // without allFiles this memo would stay stale.
+    // without enrichedAllFiles this memo would stay stale.
     const paginatedRows = useMemo(() => {
       const sortedRows = table.getRowModel().rows;
       const pageSize = 12; // Use the same page size as the paginated data
@@ -840,7 +864,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       const end = start + pageSize;
       return sortedRows.slice(start, end);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [table, currentPage, allFiles]);
+    }, [table, currentPage, enrichedAllFiles]);
 
     const headerRows = useMemo(
       () =>

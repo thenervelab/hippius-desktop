@@ -231,7 +231,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       onClick={(e: React.MouseEvent) => e.stopPropagation()}
       className={cn(
         " outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out",
-        isExpanded ? "w-[378px]" : "w-[220px]"
+        isExpanded ? "w-[378px]" : "w-[210px]"
       )}
     >
       {/* Header */}
@@ -240,7 +240,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           "shadow-menu bg-grey-100 border border-grey-80 cursor-pointer hover:bg-grey-90 transition-all duration-300 ease-in-out",
           isExpanded
             ? "rounded-t-[8px] w-[378px]"
-            : "rounded-[8px] w-[220px]"
+            : "rounded-[8px] w-[210px]"
         )}
         onClick={handleHeaderClick}
       >

@@ -42,7 +42,7 @@ export type FormattedUserFile = {
   parentFolderId?: string;
   parentFolderName?: string;
   mainReqHash: string;
-  syncStatus?: "synced" | "pending" | "unknown" | "excluded";
+  syncStatus?: "synced" | "pending" | "uploading" | "downloading" | "unknown" | "excluded";
   label?: string;
   fileCount?: number;
 };
