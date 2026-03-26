@@ -9,6 +9,7 @@ export default {
   theme: {
     extend: {
       screens: {
+        compact: "900px",
         desktop: "1310px",
       },
       maxWidth: {

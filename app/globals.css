@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Fluid root font-size: scales text proportionally with window width.
+   At 900px (minWidth) → 13px, at ~1455px+ → 16px (browser default). */
+html {
+  font-size: clamp(13px, 1.1vw, 16px);
+}
+
 :root {
   /* Primary Shades */
   --primary-100: 233 239 251;

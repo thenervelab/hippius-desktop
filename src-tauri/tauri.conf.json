@@ -40,6 +40,8 @@
         "title": "Hippius",
         "width": 1320,
         "height": 1000,
+        "minWidth": 900,
+        "minHeight": 650,
         "visible": true,
         "center": true,
         "resizable": true

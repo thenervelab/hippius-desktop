@@ -17,13 +17,47 @@ import FooterNavItem from "./FooterNavItems";
 import SettingsWidthDialog from "@/components/page-sections/settings/SettingsDialog";
 import SettingsDialogContent from "@/components/page-sections/settings/SettingsDialogContent";
 import CheckForUpdateDialog from "../updater/CheckForUpdateDialog";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
+
+const AUTO_COLLAPSE_WIDTH = 1000;
 
 const Sidebar: React.FC = () => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useAtom(sidebarCollapsedAtom);
+  // Track whether we auto-collapsed so we can auto-expand when the window widens
+  const autoCollapsedRef = useRef(false);
+  const collapsedRef = useRef(collapsed);
+  collapsedRef.current = collapsed;
+
+  // Auto-collapse sidebar when window is narrow, auto-expand when it widens
+  useEffect(() => {
+    let wasNarrow = window.innerWidth < AUTO_COLLAPSE_WIDTH;
+
+    const handleResize = () => {
+      const isNarrow = window.innerWidth < AUTO_COLLAPSE_WIDTH;
+      if (isNarrow && !wasNarrow && !collapsedRef.current) {
+        // Window just became narrow — auto-collapse
+        setCollapsed(true);
+        autoCollapsedRef.current = true;
+      } else if (!isNarrow && wasNarrow && autoCollapsedRef.current) {
+        // Window just became wide again — restore if we auto-collapsed
+        setCollapsed(false);
+        autoCollapsedRef.current = false;
+      }
+      wasNarrow = isNarrow;
+    };
+
+    // Collapse on mount if already narrow
+    if (wasNarrow && !collapsedRef.current) {
+      setCollapsed(true);
+      autoCollapsedRef.current = true;
+    }
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [setCollapsed]);
   const [settingsDialogOpen, setSettingsDialogOpen] = useAtom(
     settingsDialogOpenAtom
   );
