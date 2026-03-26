@@ -111,6 +111,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   // Track byte rate over recent samples to estimate remaining time.
   const rateSamplesRef = useRef<RateSample[]>([]);
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
+  const [speedBytesPerSec, setSpeedBytesPerSec] = useState<number | null>(null);
 
   useEffect(() => {
     if (!isInProgress || snapshot.bytesExpected === 0 || snapshot.progressBytes === 0) {
@@ -118,6 +119,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       if (!isInProgress) {
         rateSamplesRef.current = [];
         setEtaSeconds(null);
+        setSpeedBytesPerSec(null);
       }
       return;
     }
@@ -151,6 +153,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     }
 
     const rate = bytesTransferred / elapsed; // bytes per second
+    setSpeedBytesPerSec(rate);
     const remaining = snapshot.bytesExpected - snapshot.progressBytes;
     const eta = remaining / rate;
 
@@ -568,13 +571,18 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                 )}
               </div>
               <div className="flex items-center justify-between mt-1">
-                {snapshot.bytesExpected > 0 ? (
-                  <span className="text-[0.625rem] text-grey-50">
-                    {formatBytes(snapshot.progressBytes)} / {formatBytes(snapshot.bytesExpected)}
-                  </span>
-                ) : (
-                  <span />
-                )}
+                <div className="flex items-center gap-2">
+                  {snapshot.bytesExpected > 0 && (
+                    <span className="text-[0.625rem] text-grey-50">
+                      {formatBytes(snapshot.progressBytes)} / {formatBytes(snapshot.bytesExpected)}
+                    </span>
+                  )}
+                  {speedBytesPerSec !== null && speedBytesPerSec > 0 && (
+                    <span className="text-[0.625rem] text-grey-50">
+                      · {formatBytes(Math.round(speedBytesPerSec))}/s
+                    </span>
+                  )}
+                </div>
                 {etaSeconds !== null && etaSeconds > 0 && (
                   <span className="text-[0.625rem] text-grey-50">
                     ~{formatEta(etaSeconds)} remaining
@@ -605,6 +613,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   data-file-item
                   data-testid="file-item"
                 >
+                  {/* Row 1: icon + name + status/progress */}
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <AbstractIconWrapper className="size-8 flex-shrink-0 flex items-center justify-center">
@@ -640,35 +649,23 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                           <span className="text-sm ml-1 text-error-50">Failed</span>
                         </>
                       ) : isFileInProgress ? (
-                        <div className="flex flex-col items-end gap-0.5">
-                          {isEncryptingOrDecrypting ? (
-                            <span className="text-xs text-primary-50">
-                              {file.status === "encrypting" ? "Encrypting..." : "Decrypting..."}
+                        isEncryptingOrDecrypting ? (
+                          <span className="text-xs text-primary-50">
+                            {file.status === "encrypting" ? "Encrypting..." : "Decrypting..."}
+                          </span>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <div className="w-[3.75rem] h-1.5 bg-grey-80 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-primary-50 rounded-full transition-[width] duration-700 ease-out"
+                                style={{ width: `${file.progressPercent}%` }}
+                              />
+                            </div>
+                            <span className="text-xs text-primary-50 min-w-[2rem] text-right">
+                              {file.progressPercent}%
                             </span>
-                          ) : (
-                            <>
-                              <div className="flex items-center gap-2">
-                                <div className="w-[3.75rem] h-1.5 bg-grey-80 rounded-full overflow-hidden">
-                                  <div
-                                    className="h-full bg-primary-50 rounded-full transition-[width] duration-700 ease-out"
-                                    style={{ width: `${file.progressPercent}%` }}
-                                  />
-                                </div>
-                                <span className="text-xs text-primary-50 min-w-[2rem] text-right">
-                                  {file.progressPercent}%
-                                </span>
-                              </div>
-                              {file.totalBytes > 0 && (
-                                <span className="text-[0.625rem] text-grey-50">
-                                  {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
-                                  {isSingleFile && etaSeconds !== null && etaSeconds > 0
-                                    ? ` · ~${formatEta(etaSeconds)}`
-                                    : ""}
-                                </span>
-                              )}
-                            </>
-                          )}
-                        </div>
+                          </div>
+                        )
                       ) : file.status === "pending" ? (
                         <>
                           <Icons.InfoCircle className="w-5 h-5 text-warning-50" />
@@ -684,6 +681,19 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                       )}
                     </div>
                   </div>
+
+                  {/* Row 2: transfer detail (bytes · speed · ETA) — full width below */}
+                  {isFileInProgress && !isEncryptingOrDecrypting && file.totalBytes > 0 && (
+                    <div className="text-[0.625rem] text-grey-50 mt-1 text-right">
+                      {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
+                      {isSingleFile && speedBytesPerSec !== null && speedBytesPerSec > 0
+                        ? ` · ${formatBytes(Math.round(speedBytesPerSec))}/s`
+                        : ""}
+                      {isSingleFile && etaSeconds !== null && etaSeconds > 0
+                        ? ` · ~${formatEta(etaSeconds)}`
+                        : ""}
+                    </div>
+                  )}
                 </div>
               );
             })}
