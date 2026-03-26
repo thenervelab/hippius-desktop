@@ -137,6 +137,10 @@ pub struct SyncEngine {
 
     // ── File Watcher (shared so new drives can be added dynamically) ──
     pub watcher: StdMutex<Option<notify::RecommendedWatcher>>,
+
+    /// Rename hints captured by the file watcher.
+    /// Drained at the start of each sync cycle and passed to hcfs-client.
+    pub rename_hints: StdMutex<Vec<crate::sync_logic::RenameHint>>,
 }
 
 impl SyncEngine {
@@ -168,6 +172,7 @@ impl SyncEngine {
             session_counter: AtomicU64::new(0),
             synced_paths_cache: StdMutex::new(HashMap::new()),
             watcher: StdMutex::new(None),
+            rename_hints: StdMutex::new(Vec::new()),
         }
     }
 
@@ -615,6 +620,27 @@ impl SyncEngine {
                 .insert(rel_path, info);
         }
     }
+
+    // ── Rename Hints ────────────────────────────────────────────────────
+
+    /// Push a rename hint captured by the file watcher.
+    /// Called from the watcher callback (non-async context).
+    pub fn push_rename_hint(&self, hint: crate::sync_logic::RenameHint) {
+        let mut guard = self.rename_hints.lock().unwrap_or_else(|p| {
+            warn!("Poisoned rename_hints mutex recovered");
+            p.into_inner()
+        });
+        guard.push(hint);
+    }
+
+    /// Drain all accumulated rename hints. Called before each sync cycle.
+    pub fn drain_rename_hints(&self) -> Vec<crate::sync_logic::RenameHint> {
+        let mut guard = self.rename_hints.lock().unwrap_or_else(|p| {
+            warn!("Poisoned rename_hints mutex recovered in drain");
+            p.into_inner()
+        });
+        std::mem::take(&mut *guard)
+    }
 }
 
 #[cfg(test)]
@@ -851,4 +877,38 @@ mod tests {
         assert!(result.is_empty());
     }
 
+    #[test]
+    fn push_and_drain_rename_hints() {
+        let engine = SyncEngine::new();
+        let now = std::time::Instant::now();
+
+        engine.push_rename_hint(crate::sync_logic::RenameHint {
+            old_path: std::path::PathBuf::from("/sync/old.txt"),
+            new_path: std::path::PathBuf::from("/sync/new.txt"),
+            captured_at: now,
+        });
+        engine.push_rename_hint(crate::sync_logic::RenameHint {
+            old_path: std::path::PathBuf::from("/sync/a.txt"),
+            new_path: std::path::PathBuf::from("/sync/b.txt"),
+            captured_at: now,
+        });
+
+        let drained = engine.drain_rename_hints();
+        assert_eq!(drained.len(), 2);
+        assert_eq!(
+            drained[0].old_path,
+            std::path::PathBuf::from("/sync/old.txt")
+        );
+
+        // Second drain is empty
+        let drained2 = engine.drain_rename_hints();
+        assert!(drained2.is_empty());
+    }
+
+    #[test]
+    fn drain_rename_hints_empty_by_default() {
+        let engine = SyncEngine::new();
+        let drained = engine.drain_rename_hints();
+        assert!(drained.is_empty());
+    }
 }
