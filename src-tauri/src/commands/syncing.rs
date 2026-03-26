@@ -1249,15 +1249,15 @@ fn setup_progress_handlers(
     let download_started_cb = Arc::clone(&download_started);
 
     manager.set_progress(SyncProgress {
-        on_sync_plan_ready: Some(Arc::new(move |uploads, downloads, local_deletes, remote_deletes| {
+        on_sync_plan_ready: Some(Arc::new(move |uploads, downloads, local_deletes, remote_deletes, renames| {
             sync_plan.touch_progress_time();
-            let total = uploads.len() + downloads.len() + local_deletes.len() + remote_deletes.len();
+            let total = uploads.len() + downloads.len() + local_deletes.len() + remote_deletes.len() + renames.len();
             if total == 0 {
                 return;
             }
             info!(
-                "Sync plan ready [{}]: {} uploads, {} downloads, {} local_deletes, {} remote_deletes",
-                l0, uploads.len(), downloads.len(), local_deletes.len(), remote_deletes.len()
+                "Sync plan ready [{}]: {} uploads, {} downloads, {} local_deletes, {} remote_deletes, {} renames",
+                l0, uploads.len(), downloads.len(), local_deletes.len(), remote_deletes.len(), renames.len()
             );
 
             // Extract paths and sizes from SyncPlanFile entries
