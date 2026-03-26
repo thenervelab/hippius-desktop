@@ -589,7 +589,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                 <div className="truncate text-grey-50">—</div>
               ) : (
                 <div className="truncate">
-                  <FormattedTimestamp timestamp={createdAt} />
+                  <FormattedTimestamp timestamp={createdAt} className="text-grey-20" />
                 </div>
               );
             },
@@ -610,7 +610,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                 const value = getValue();
                 return (
                   <div className="flex flex-col">
-                    <div className="text-grey-70 text-base font-medium truncate">
+                    <div className="text-grey-20 text-base font-medium truncate">
                       {value}
                     </div>
                   </div>
