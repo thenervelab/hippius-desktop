@@ -116,6 +116,15 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
                     {/* Action Buttons */}
                     <div className="flex gap-4 mb-6">
                         <CardButton
+                            className="w-full"
+                            variant="secondary"
+                            onClick={handleCancel}
+                            disabled={isLoading}
+                        >
+                            Cancel
+                        </CardButton>
+
+                        <CardButton
                             className="text-base w-full"
                             variant="error"
                             onClick={handleConfirm}
@@ -123,15 +132,6 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
                             loading={isLoading}
                         >
                             {isLoading ? 'Deleting...' : `Delete ${isMultiple ? 'Files' : 'File'}`}
-                        </CardButton>
-
-                        <CardButton
-                            className="w-full"
-                            variant="secondary"
-                            onClick={handleCancel}
-                            disabled={isLoading}
-                        >
-                            Cancel
                         </CardButton>
                     </div>
                 </div>
