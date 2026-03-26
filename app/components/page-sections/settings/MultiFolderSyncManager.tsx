@@ -79,7 +79,7 @@ export default function MultiFolderSyncManager() {
   const [syncLocalPath, setSyncLocalPath] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
-  const [pendingAction, setPendingAction] = useState<"sync" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"sync" | "browse" | null>(null);
 
   // Browse remote folder dialog state
   const [browseDialog, setBrowseDialog] = useState<{
@@ -395,6 +395,8 @@ export default function MultiFolderSyncManager() {
       setShowHcfsSetup(false);
       if (pendingAction === "sync") {
         await doRestore();
+      } else if (pendingAction === "browse" && browseDialog.folder) {
+        setBrowseDialog((prev) => ({ ...prev, open: true }));
       }
       setPendingAction(null);
     } catch (err) {
@@ -405,7 +407,25 @@ export default function MultiFolderSyncManager() {
 
   // ── Browse remote folder ─────────────────────────────────────────────
 
-  const handleBrowseFolder = (folder: RemoteFolder, isLocal = false) => {
+  const handleBrowseFolder = async (folder: RemoteFolder, isLocal = false) => {
+    // Browsing requires the HCFS encryption key (derived from the drive password).
+    // If HCFS config isn't set up yet, prompt the user first.
+    if (!isLocal && polkadotAddress) {
+      try {
+        const config = await getHcfsConfig(polkadotAddress);
+        if (!config.has_password) {
+          setBrowseDialog({ open: false, folder, isLocal });
+          setPendingAction("browse");
+          setShowHcfsSetup(true);
+          return;
+        }
+      } catch {
+        setBrowseDialog({ open: false, folder, isLocal });
+        setPendingAction("browse");
+        setShowHcfsSetup(true);
+        return;
+      }
+    }
     setBrowseDialog({ open: true, folder, isLocal });
   };
 

@@ -74,7 +74,7 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
   }>({ open: false, folder: null });
   const [syncLocalPath, setSyncLocalPath] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
-  const [pendingAction, setPendingAction] = useState<"sync" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"sync" | "browse" | null>(null);
 
   // Browse remote folder dialog state
   const [browseDialog, setBrowseDialog] = useState<{
@@ -237,7 +237,23 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
     setSyncLocalPath("");
   };
 
-  const handleBrowseFolder = (folder: RemoteFolder, isLocal = false) => {
+  const handleBrowseFolder = async (folder: RemoteFolder, isLocal = false) => {
+    if (!isLocal && polkadotAddress) {
+      try {
+        const config = await getHcfsConfig(polkadotAddress);
+        if (!config.has_password) {
+          setBrowseDialog({ open: false, folder, isLocal });
+          setPendingAction("browse");
+          setShowHcfsSetup(true);
+          return;
+        }
+      } catch {
+        setBrowseDialog({ open: false, folder, isLocal });
+        setPendingAction("browse");
+        setShowHcfsSetup(true);
+        return;
+      }
+    }
     setBrowseDialog({ open: true, folder, isLocal });
   };
 
@@ -374,6 +390,8 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
       setShowHcfsSetup(false);
       if (pendingAction === "sync") {
         await doRestore();
+      } else if (pendingAction === "browse" && browseDialog.folder) {
+        setBrowseDialog((prev) => ({ ...prev, open: true }));
       }
       setPendingAction(null);
     } catch (err) {
