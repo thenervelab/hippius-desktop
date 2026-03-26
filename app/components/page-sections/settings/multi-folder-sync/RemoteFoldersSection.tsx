@@ -4,6 +4,7 @@ import React, { useState, useMemo } from "react";
 import { Icons, RevealTextLine } from "@/components/ui";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { middleTruncate } from "@/lib/utils/middleTruncate";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import SectionHeader from "../SectionHeader";
 import { InView } from "react-intersection-observer";
 import {
@@ -95,9 +96,27 @@ export function RemoteFoldersSection({
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
                             <Folder className="size-4 text-primary-50 flex-shrink-0" />
-                            <span className="font-medium text-base text-grey-10 truncate" title={folder.folderName}>
-                              {middleTruncate(folder.folderName, 30)}
-                            </span>
+                            <Tooltip.Provider delayDuration={200}>
+                              <Tooltip.Root>
+                                <Tooltip.Trigger asChild>
+                                  <span className="font-medium text-base text-grey-10 truncate cursor-default">
+                                    {middleTruncate(folder.folderName, 30)}
+                                  </span>
+                                </Tooltip.Trigger>
+                                {middleTruncate(folder.folderName, 30) !== folder.folderName && (
+                                  <Tooltip.Portal>
+                                    <Tooltip.Content
+                                      side="bottom"
+                                      className="z-[9999] max-w-[400px] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+                                      sideOffset={4}
+                                    >
+                                      {folder.folderName}
+                                      <Tooltip.Arrow className="fill-white" width={12} height={6} />
+                                    </Tooltip.Content>
+                                  </Tooltip.Portal>
+                                )}
+                              </Tooltip.Root>
+                            </Tooltip.Provider>
                             <span className="text-xs font-medium px-2 py-0.5 rounded border bg-grey-95 text-grey-50 border-grey-80 flex-shrink-0 whitespace-nowrap">
                               {folder.deviceName}
                             </span>

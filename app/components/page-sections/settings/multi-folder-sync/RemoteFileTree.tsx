@@ -13,6 +13,7 @@ import { formatBytes } from "@/lib/utils/formatBytes";
 import TableActionMenu, {
   ActionItem,
 } from "@/components/ui/alt-table/TableActionMenu";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import { Button } from "@/components/ui/button";
 import cn from "@/lib/utils/cn";
 
@@ -253,13 +254,26 @@ function TreeRow({
           <File className="size-4 text-grey-50 flex-shrink-0" />
         )}
 
-        <span
-          className="text-sm text-grey-20 truncate flex-1 min-w-0"
-          title={node.name}
-        >
-          {node.name}
-          {node.isFolder && "/"}
-        </span>
+        <Tooltip.Provider delayDuration={200}>
+          <Tooltip.Root>
+            <Tooltip.Trigger asChild>
+              <span className="text-sm text-grey-20 truncate flex-1 min-w-0 cursor-default">
+                {node.name}
+                {node.isFolder && "/"}
+              </span>
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content
+                side="bottom"
+                className="z-[9999] max-w-[400px] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+                sideOffset={4}
+              >
+                {node.name}
+                <Tooltip.Arrow className="fill-white" width={12} height={6} />
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
+        </Tooltip.Provider>
 
         <span className="text-xs text-grey-60 flex-shrink-0 tabular-nums">
           {node.isFolder

@@ -50,10 +50,10 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
         }
 
         setSelectedFiles(prevSelected => {
-            const isSelected = prevSelected.some(f => f.actualFileName === file.actualFileName);
+            const isSelected = prevSelected.some(f => f.actualFileName === file.actualFileName && f.label === file.label);
 
             if (isSelected) {
-                return prevSelected.filter(f => f.actualFileName !== file.actualFileName);
+                return prevSelected.filter(f => !(f.actualFileName === file.actualFileName && f.label === file.label));
             } else {
                 return [...prevSelected, file];
             }
@@ -61,7 +61,7 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
     }, []);
 
     const isFileSelected = useCallback((file: FormattedUserFile) => {
-        return selectedFiles.some(f => f.actualFileName === file.actualFileName);
+        return selectedFiles.some(f => f.actualFileName === file.actualFileName && f.label === file.label);
     }, [selectedFiles]);
 
     const clearSelection = useCallback(() => {
@@ -95,11 +95,11 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
         const deletableFiles = files.filter(file => file.isAssigned);
 
         setSelectedFiles(prevSelected => {
-            // Create a set of already selected file names for efficient lookup
-            const selectedFileNames = new Set(prevSelected.map(f => f.actualFileName));
+            // Create a set of already selected file keys (name + label) for efficient lookup
+            const selectedFileKeys = new Set(prevSelected.map(f => `${f.actualFileName}::${f.label ?? ''}`));
 
             // Add only files that aren't already selected
-            const newFiles = deletableFiles.filter(file => !selectedFileNames.has(file.actualFileName));
+            const newFiles = deletableFiles.filter(file => !selectedFileKeys.has(`${file.actualFileName}::${file.label ?? ''}`));
 
             return [...prevSelected, ...newFiles];
         });
@@ -107,11 +107,11 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
 
     const removeFilesFromSelection = useCallback((files: FormattedUserFile[]) => {
         setSelectedFiles(prevSelected => {
-            // Create a set of file names to remove for efficient lookup
-            const fileNamesToRemove = new Set(files.map(f => f.actualFileName));
+            // Create a set of file keys (name + label) to remove for efficient lookup
+            const fileKeysToRemove = new Set(files.map(f => `${f.actualFileName}::${f.label ?? ''}`));
 
             // Keep only files that are not in the removal list
-            return prevSelected.filter(file => !fileNamesToRemove.has(file.actualFileName));
+            return prevSelected.filter(file => !fileKeysToRemove.has(`${file.actualFileName}::${file.label ?? ''}`));
         });
     }, []);
 

@@ -15,18 +15,18 @@ export default function ResponsiveContent({
   const [collapsed] = useAtom(sidebarCollapsedAtom);
 
   return (
-    <div className="grid w-full">
+    <div className="grid w-full overflow-hidden">
       <main
         className={cn(
-          "flex flex-col h-screen transition-all duration-300 ease-in-out",
+          "flex flex-col h-screen transition-all duration-300 ease-in-out overflow-hidden",
           collapsed ? "ml-[60px]" : "ml-[186px]"
         )}
       >
         {/* Sticky toolbar — always visible at the top */}
         <div className="sticky top-0 z-30 bg-white px-4 pt-4 pb-2">
-          <div className="justify-between flex relative">
+          <div className="justify-between flex relative gap-6 min-w-0">
             <HeaderText />
-            <div className="flex -mt-2 gap-2 items-center justify-center">
+            <div className="flex -mt-2 gap-2 items-center justify-center shrink-0">
               <BlockChainStats />
               <ProfileCard />
             </div>

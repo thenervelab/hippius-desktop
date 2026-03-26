@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useEffect, FC } from "react";
+import { useRef, useEffect, useState, FC } from "react";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import { cn } from "@/lib/utils";
 
 interface MiddleTruncatedNameProps {
@@ -88,50 +89,67 @@ const MiddleTruncatedName: FC<MiddleTruncatedNameProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLSpanElement>(null);
-  // Cache the resolved font so we don't call getComputedStyle on every frame
   const fontRef = useRef<string>("");
+  const isTruncatedRef = useRef(false);
+  // Force a single re-render after first measurement to enable/disable tooltip
+  const [, setTick] = useState(0);
 
   useEffect(() => {
     const container = containerRef.current;
     const textEl = textRef.current;
     if (!container || !textEl) return;
 
-    // Resolve font once (it won't change during the lifetime of this element)
     fontRef.current = resolveFont(container);
 
-    /** Synchronously update the DOM text — no setState, no re-render */
     const update = () => {
       const w = container.clientWidth;
       if (w <= 0) return;
       const truncated = middleTruncate(name, w, fontRef.current);
-      // Only touch the DOM if the value actually changed
+      const wasTruncated = truncated !== name;
       if (textEl.textContent !== truncated) {
         textEl.textContent = truncated;
       }
+      if (isTruncatedRef.current !== wasTruncated) {
+        isTruncatedRef.current = wasTruncated;
+        setTick((t) => t + 1);
+      }
     };
 
-    // Initial paint
     update();
 
-    const ro = new ResizeObserver(() => {
-      // ResizeObserver already fires at the right time in the rendering
-      // pipeline — just update synchronously, no RAF needed
-      update();
-    });
+    const ro = new ResizeObserver(() => update());
     ro.observe(container);
 
     return () => ro.disconnect();
   }, [name]);
 
   return (
-    <div
-      ref={containerRef}
-      className={cn("flex-1 min-w-0 overflow-hidden text-left", className)}
-    >
-      <span ref={textRef} className="whitespace-nowrap block" title={name}>
-        {name}
-      </span>
-    </div>
+    <Tooltip.Provider delayDuration={200}>
+      <Tooltip.Root>
+        <Tooltip.Trigger asChild>
+          <div
+            ref={containerRef}
+            className={cn("flex-1 min-w-0 overflow-hidden text-left", className)}
+          >
+            <span ref={textRef} className="whitespace-nowrap block">
+              {name}
+            </span>
+          </div>
+        </Tooltip.Trigger>
+        {isTruncatedRef.current && (
+          <Tooltip.Portal>
+            <Tooltip.Content
+              side="bottom"
+              className="z-50 bg-white border border-grey-80 rounded-[8px] px-3 py-2 text-sm font-medium text-grey-40 shadow-lg max-w-[400px] w-max whitespace-normal break-all transition-opacity duration-200 data-[state=closed]:opacity-0 data-[state=open]:opacity-100"
+              sideOffset={4}
+            >
+              {name}
+              <Tooltip.Arrow className="fill-white" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        )}
+      </Tooltip.Root>
+    </Tooltip.Provider>
   );
 };
 

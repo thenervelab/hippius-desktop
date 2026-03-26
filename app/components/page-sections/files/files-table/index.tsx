@@ -897,13 +897,13 @@ const FilesTable: FC<FilesTableProps> = memo(
                 isSelectionMode && rowData.isAssigned && "cursor-pointer",
                 isSelectionMode &&
                 selectedFiles.some(
-                  (f) => f.actualFileName === rowData.actualFileName
+                  (f) => f.actualFileName === rowData.actualFileName && f.label === rowData.label
                 ) &&
                 rowData.isAssigned &&
                 "bg-primary-60/10",
                 isSelectionMode &&
                 !selectedFiles.some(
-                  (f) => f.actualFileName === rowData.actualFileName
+                  (f) => f.actualFileName === rowData.actualFileName && f.label === rowData.label
                 ) &&
                 rowData.isAssigned &&
                 "hover:bg-primary-60/8",

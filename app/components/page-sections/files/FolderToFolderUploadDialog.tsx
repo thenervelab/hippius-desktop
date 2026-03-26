@@ -133,16 +133,16 @@ export default function FolderToFolderUploadDialog({
             <Dialog.Portal>
                 <Dialog.Overlay className="bg-white/70 fixed p-4 z-30 top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
                     <Dialog.Content className="border shadow-dialog bg-white flex flex-col max-w-[428px] border-grey-80 bg-background-1 rounded-[8px] overflow-hidden w-full relative data-[state=open]:animate-scale-in-95-0.2">
-                        <Dialog.Title className="hidden">Add Folder to {parentFolderName}</Dialog.Title>
+                        <Dialog.Title className="hidden">Add Folder</Dialog.Title>
 
-                        <div className="flex p-4 items-center text-grey-10 relative">
-                            <div className="lg:text-xl flex w-full items-center gap-2 2xl:text-2xl font-medium relative">
-                                <span className="capitalize">Add Folder to {parentFolderName}</span>
+                        <div className="flex p-4 items-center text-grey-10 relative gap-2">
+                            <div className="lg:text-xl flex min-w-0 flex-1 items-center gap-2 2xl:text-2xl font-medium relative">
+                                <span className="capitalize">Add Folder</span>
                                 <PrivacyBadge variant="folder" />
                             </div>
                             <button
                                 type="button"
-                                className="ml-auto"
+                                className="shrink-0"
                                 onClick={handleClose}
                             >
                                 <Icons.CloseCircle

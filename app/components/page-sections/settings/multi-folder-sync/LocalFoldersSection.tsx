@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useRef, useCallback } from "react";
+import React, { useState, useMemo } from "react";
 import { Icons, RevealTextLine, IconButton } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
@@ -63,41 +63,22 @@ function getStatusText(status: SyncFolder["status"]) {
 }
 
 function PathWithTooltip({ path }: { path: string }) {
-  const textRef = useRef<HTMLParagraphElement>(null);
-  const [isTruncated, setIsTruncated] = useState(false);
   const displayPath = middleTruncatePath(path, 30);
   const isPathTruncated = displayPath !== path;
 
-  const checkTruncation = useCallback(() => {
-    const el = textRef.current;
-    if (el) {
-      setIsTruncated(el.scrollWidth > el.clientWidth || isPathTruncated);
-    }
-  }, [isPathTruncated]);
+  const textContent = (
+    <p className="text-sm text-grey-60 truncate mb-1 cursor-default">
+      {displayPath}
+    </p>
+  );
 
-  if (!isTruncated) {
-    return (
-      <p
-        ref={textRef}
-        onMouseEnter={checkTruncation}
-        className="text-sm text-grey-60 truncate mb-1 cursor-default"
-        title={isPathTruncated ? path : undefined}
-      >
-        {displayPath}
-      </p>
-    );
-  }
+  if (!isPathTruncated) return textContent;
 
   return (
     <Tooltip.Provider delayDuration={200}>
       <Tooltip.Root>
         <Tooltip.Trigger asChild>
-          <p
-            ref={textRef}
-            className="text-sm text-grey-60 truncate cursor-default"
-          >
-            {displayPath}
-          </p>
+          {textContent}
         </Tooltip.Trigger>
         <Tooltip.Portal>
           <Tooltip.Content
@@ -193,9 +174,27 @@ export function LocalFoldersSection({
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
                             <Folder className="size-4 text-grey-40 flex-shrink-0" />
-                            <span className="font-medium text-base text-grey-10 truncate" title={folder.folderName}>
-                              {middleTruncate(folder.folderName, 30)}
-                            </span>
+                            <Tooltip.Provider delayDuration={200}>
+                              <Tooltip.Root>
+                                <Tooltip.Trigger asChild>
+                                  <span className="font-medium text-base text-grey-10 truncate cursor-default">
+                                    {middleTruncate(folder.folderName, 30)}
+                                  </span>
+                                </Tooltip.Trigger>
+                                {middleTruncate(folder.folderName, 30) !== folder.folderName && (
+                                  <Tooltip.Portal>
+                                    <Tooltip.Content
+                                      side="bottom"
+                                      className="z-[9999] max-w-[400px] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+                                      sideOffset={4}
+                                    >
+                                      {folder.folderName}
+                                      <Tooltip.Arrow className="fill-white" width={12} height={6} />
+                                    </Tooltip.Content>
+                                  </Tooltip.Portal>
+                                )}
+                              </Tooltip.Root>
+                            </Tooltip.Provider>
                             <span
                               className={cn(
                                 "text-xs font-medium px-2 py-0.5 rounded border flex-shrink-0 whitespace-nowrap",

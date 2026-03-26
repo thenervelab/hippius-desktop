@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { middleTruncate } from "@/lib/utils/middleTruncate";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import type { RemoteFolder } from "@/app/lib/types/sync-folder";
 import { restoreRemoteFolders } from "@/app/lib/utils/restoreUtils";
 import { getHcfsConfig, saveHcfsConfig } from "@/app/lib/utils/hcfsConfigUtils";
@@ -268,9 +269,27 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1">
                               <Folder className="size-4 text-grey-40 flex-shrink-0" />
-                              <span className="font-medium text-base text-grey-10 truncate" title={folder.folderName}>
-                                {middleTruncate(folder.folderName, 30)}
-                              </span>
+                              <Tooltip.Provider delayDuration={200}>
+                                <Tooltip.Root>
+                                  <Tooltip.Trigger asChild>
+                                    <span className="font-medium text-base text-grey-10 truncate cursor-default">
+                                      {middleTruncate(folder.folderName, 30)}
+                                    </span>
+                                  </Tooltip.Trigger>
+                                  {middleTruncate(folder.folderName, 30) !== folder.folderName && (
+                                    <Tooltip.Portal>
+                                      <Tooltip.Content
+                                        side="bottom"
+                                        className="z-[9999] max-w-[400px] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+                                        sideOffset={4}
+                                      >
+                                        {folder.folderName}
+                                        <Tooltip.Arrow className="fill-white" width={12} height={6} />
+                                      </Tooltip.Content>
+                                    </Tooltip.Portal>
+                                  )}
+                                </Tooltip.Root>
+                              </Tooltip.Provider>
                             </div>
                             <div className="flex items-center gap-4 text-xs text-grey-60">
                               <span className="flex items-center gap-1">
