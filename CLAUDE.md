@@ -75,6 +75,8 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 
 **hcfs-client dependency**: The sync engine delegates to `hcfs-client` (from the `hippius-arion` repo, pinned to a git rev in Cargo.toml). Drive API: `new()`, `init()`, `unlock()`, `sync_async(SyncMode)`, `stage()`, `set_config()`, `set_progress_handlers()`. All file encryption is handled by hcfs-client via BIP-39 mnemonic.
 
+**Rename detection**: The file watcher captures OS rename events (From/To pairs from the `notify` crate) and stores them as `RenameHint` structs in `SyncEngine.rename_hints`. Before each sync cycle, `trigger_sync_for_drive` drains the hints, converts them to relative paths, and expands directory-level hints into per-file hints. The pure pairing/expansion logic lives in `sync_logic.rs` (fully tested). When hcfs-client gains rename support (thenervelab/hcfs#52), the hints will be passed through to avoid redundant delete+re-upload cycles for renamed files. Until then, hints are logged and consumed without effect.
+
 **SQLite**: Database pool lives in `AppState` as a `OnceLock<SqlitePool>`. Schema is maintained via `ensure_table_schema()` in `builder_blocks/setup.rs` (not migration files). Access pattern: `state.pool()?` (from command handlers) or `app.state::<AppState>().pool()?` (from background tasks).
 
 **Logging**: All Rust code uses `tracing` macros (`info!`, `debug!`, `warn!`, `error!`) — never `println!`/`eprintln!`. The subscriber is initialized in `main.rs` with module-path targets. Set `RUST_LOG=debug` for verbose output.
