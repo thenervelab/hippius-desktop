@@ -102,9 +102,10 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
                       setOpen(false);
                     }}
                     className={cn(
-                      "flex items-center px-3 py-2.5 text-sm cursor-pointer text-grey-10 transition-colors duration-150 select-none rounded-md hover:bg-grey-90",
+                      "flex items-center px-3 py-2.5 text-sm cursor-pointer text-grey-10 transition-colors duration-150 select-none rounded-md hover:bg-grey-90 truncate",
                       isSelected ? "bg-grey-80 font-medium" : "",
                     )}
+                    title={sp.label}
                   >
                     {sp.label}
                   </div>

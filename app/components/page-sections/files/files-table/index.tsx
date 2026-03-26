@@ -271,7 +271,6 @@ const FilesTable: FC<FilesTableProps> = memo(
           deleteFiles(undefined, {
             onSuccess: () => {
               setFilesToDelete([]);
-              setCurrentPage(Math.max(1, totalPages));
             },
             onError: () => {
               setFilesToDelete([]);
@@ -279,7 +278,7 @@ const FilesTable: FC<FilesTableProps> = memo(
           });
         }, 100);
       },
-      [deleteFiles, setCurrentPage, totalPages]
+      [deleteFiles]
     );
     const createTableItems = useCallback(
       (

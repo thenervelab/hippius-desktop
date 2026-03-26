@@ -6,6 +6,11 @@ import { cn } from "@/lib/utils";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { buildFolderPath } from "@/app/utils/folderPathUtils";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
+import * as Tooltip from "@radix-ui/react-tooltip";
+import { ArrowUpFromLine, ArrowDownToLine } from "lucide-react";
+
+type SyncStatusType = "synced" | "pending" | "uploading" | "downloading" | "unknown" | "excluded";
+
 type NameCellProps = {
   rawName: string;
   actualName?: string;
@@ -18,19 +23,59 @@ type NameCellProps = {
   isFolder?: boolean;
   source?: string;
   mainReqHash?: string;
-  syncStatus?: "synced" | "pending" | "unknown" | "excluded";
+  syncStatus?: SyncStatusType;
 };
 
-const SyncStatusBadge: FC<{ status?: "synced" | "pending" | "unknown" | "excluded" }> = ({ status }) => {
-  if (status !== "pending") return null;
-  return (
-    <span
-      className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-warning-95 text-warning-40 border border-warning-80 flex-shrink-0"
-      title="Not yet uploaded — will sync automatically"
-    >
-      Pending upload
-    </span>
-  );
+const SyncStatusIcon: FC<{ status?: SyncStatusType }> = ({ status }) => {
+  if (status === "pending" || status === "uploading") {
+    const label = status === "uploading" ? "Uploading" : "Pending upload";
+    return (
+      <Tooltip.Provider delayDuration={200}>
+        <Tooltip.Root>
+          <Tooltip.Trigger asChild>
+            <ArrowUpFromLine
+              className={cn(
+                "ml-1.5 size-3.5 flex-shrink-0",
+                status === "uploading" ? "text-primary-50 animate-pulse" : "text-warning-40"
+              )}
+            />
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content
+              side="top"
+              className="z-50 bg-white border border-grey-80 rounded-[8px] px-3 py-2 text-xs font-medium text-grey-40 shadow-lg"
+              sideOffset={4}
+            >
+              {label}
+              <Tooltip.Arrow className="fill-white" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+      </Tooltip.Provider>
+    );
+  }
+  if (status === "downloading") {
+    return (
+      <Tooltip.Provider delayDuration={200}>
+        <Tooltip.Root>
+          <Tooltip.Trigger asChild>
+            <ArrowDownToLine className="ml-1.5 size-3.5 flex-shrink-0 text-primary-50 animate-pulse" />
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content
+              side="top"
+              className="z-50 bg-white border border-grey-80 rounded-[8px] px-3 py-2 text-xs font-medium text-grey-40 shadow-lg"
+              sideOffset={4}
+            >
+              Downloading
+              <Tooltip.Arrow className="fill-white" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+      </Tooltip.Provider>
+    );
+  }
+  return null;
 };
 
 const NameCell: FC<NameCellProps> = ({
@@ -100,8 +145,8 @@ const NameCell: FC<NameCellProps> = ({
               "text-grey-20",
               isPreviewable && "group-hover:text-primary-50 group-hover:underline"
             )}
+            suffix={<SyncStatusIcon status={syncStatus} />}
           />
-          <SyncStatusBadge status={syncStatus} />
         </div>
       )}
     </div>

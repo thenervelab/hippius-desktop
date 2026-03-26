@@ -22,10 +22,8 @@ import {
 import {
   lastUpdatedPercentAtom,
 } from "@/app/lib/store/syncAtoms";
-import { useAtomValue, useAtom, useSetAtom } from "jotai";
+import { useAtom, useSetAtom } from "jotai";
 import { vpnConnectedAtom } from "@/components/dashboard-title-wrapper/vpn-menu/vpnAtoms";
-// API_CONFIG removed - credits now fetched via invoke
-import { snapshotAtom } from "./useSyncSnapshot";
 import type { SyncSnapshot } from "../types/syncSnapshot";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 
@@ -64,6 +62,10 @@ const syncRowItems = new Map<string, MenuItem>(); // legacy rows (cleaned up on 
 let syncProgressItem: MenuItem | null = null; // "X of Y files synced" row
 let syncSizeItem: MenuItem | null = null; // "208 MB / 1 GB" row
 let syncDeleteItem: MenuItem | null = null; // "X files deleted" row
+
+/* ─ Latching state — keeps completed info visible after backend resets snapshot */
+let latchedComplete = false;
+let latchedSnapshot: SyncSnapshot | null = null;
 
 /* ─ Backend payload types ─────────────────────────────────────── */
 
@@ -254,8 +256,6 @@ async function checkUserCredits(): Promise<{
 }
 
 /* ─ Public: create tray once ──────────────────────────────────── */
-// Track timer for clearing sync label after completion
-let syncLabelClearTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function useTrayInit(isAuthenticated: boolean) {
   // Use atom to watch for sync percentage changes
@@ -264,18 +264,11 @@ export function useTrayInit(isAuthenticated: boolean) {
   );
   const setVpnConnected = useSetAtom(vpnConnectedAtom);
 
-  // Watch snapshot for overall progress — single source of truth
-  const snapshot = useAtomValue(snapshotAtom);
-  const hasSyncActivity = snapshot.isActive || snapshot.files.length > 0;
-
-  // Effect to update tray when sync state changes — derived entirely from snapshot
+  // Effect to update tray when sync state changes — derived entirely from snapshot.
+  // Icon and label management is handled exclusively by the startSyncActivityWatcher
+  // (which has latching logic to prevent flickering on backend snapshot resets).
+  // This effect only handles logout cleanup.
   useEffect(() => {
-    // Clear any pending clear timer when state changes
-    if (syncLabelClearTimer) {
-      clearTimeout(syncLabelClearTimer);
-      syncLabelClearTimer = null;
-    }
-
     // When logged out, force default icon and clear sync label
     if (!isAuthenticated) {
       void setTrayIconSyncing(false, false);
@@ -285,49 +278,7 @@ export function useTrayInit(isAuthenticated: boolean) {
       }
       return;
     }
-
-    const isCurrentlySyncing = snapshot.isActive;
-    const isSyncComplete = !isCurrentlySyncing &&
-      (snapshot.completedFiles > 0 || snapshot.failedFiles > 0);
-
-    // Build the tray menu label
-    let labelText: string | null = null;
-    if (isCurrentlySyncing) {
-      labelText = `⟳ Syncing: ${snapshot.overallPercent}%`;
-    } else if (isSyncComplete) {
-      if (snapshot.failedFiles > 0) {
-        labelText = `⚠ Sync Failed`;
-      } else {
-        labelText = `✓ Sync Complete`;
-      }
-    } else if (hasSyncActivity) {
-      labelText = `✓ Sync Complete`;
-    }
-
-    void updateTraySyncLabel(labelText);
-
-    const hasFailed = snapshot.failedFiles > 0;
-
-    if (isCurrentlySyncing) {
-      void setTrayIconSyncing(true, false);
-    } else if (hasFailed) {
-      void setTrayIconSyncing(true, false);
-    } else if (isSyncComplete || hasSyncActivity) {
-      void setTrayIconSyncing(false, true);
-    } else {
-      if (lastUpdatedPercent !== null) {
-        void setTrayIconSyncing(false, false);
-        setLastUpdatedPercent(null);
-      }
-    }
-
-    if (isCurrentlySyncing && snapshot.totalFiles > 0) {
-      setLastUpdatedPercent(0);
-    } else if (isSyncComplete || hasSyncActivity) {
-      setLastUpdatedPercent(100);
-    }
-
-  }, [isAuthenticated, snapshot, hasSyncActivity, lastUpdatedPercent, setLastUpdatedPercent]);
+  }, [isAuthenticated, lastUpdatedPercent, setLastUpdatedPercent]);
 
   useEffect(() => {
     if (menuPromise) return;
@@ -1014,13 +965,36 @@ function startSyncActivityWatcher() {
         (f) => f.action === "local_delete" || f.action === "remote_delete"
       ).length;
 
+      // Latch: when we first detect completion, capture it so a subsequent
+      // snapshot reset (new empty cycle) doesn't hide the tray rows.
+      if (isCompleted && !latchedComplete) {
+        latchedComplete = true;
+        latchedSnapshot = progress;
+      }
+      // Unlatch when a new meaningful sync starts
+      if (isActive && progress.totalFiles > 0 && latchedComplete) {
+        latchedComplete = false;
+        latchedSnapshot = null;
+      }
+
+      // Use latched state if backend has reset the snapshot
+      const effectiveCompleted = isCompleted || (latchedComplete && !isActive);
+      const effectiveSnapshot = effectiveCompleted && !isCompleted && latchedSnapshot
+        ? latchedSnapshot
+        : progress;
+      const effectiveDeleteCount = effectiveCompleted && !isCompleted && latchedSnapshot
+        ? latchedSnapshot.files.filter(
+            (f) => f.action === "local_delete" || f.action === "remote_delete"
+          ).length
+        : recentDeleteCount;
+
       // Build signature to avoid redundant updates
-      const signature = `${isActive}:${isCompleted}:${hasFailed}:${progress.completedFiles}/${progress.totalFiles}:${progress.failedFiles}:${progress.overallPercent}:${progress.progressBytes}:del${recentDeleteCount}`;
+      const signature = `${isActive}:${effectiveCompleted}:${hasFailed}:${effectiveSnapshot.completedFiles}/${effectiveSnapshot.totalFiles}:${effectiveSnapshot.failedFiles}:${effectiveSnapshot.overallPercent}:${effectiveSnapshot.progressBytes}:del${effectiveDeleteCount}`;
       if (signature === lastSyncSummarySignature) return;
       lastSyncSummarySignature = signature;
 
-      if (!isActive && !isCompleted && recentDeleteCount === 0) {
-        // No sync activity and no recent deletes — remove summary rows if they exist
+      if (!isActive && !effectiveCompleted && effectiveDeleteCount === 0) {
+        // No sync activity and no recent deletes — remove summary rows and reset icon
         if (syncProgressItem) {
           try { await menu.remove(syncProgressItem); } catch { /* already removed */ }
           syncProgressItem = null;
@@ -1033,28 +1007,35 @@ function startSyncActivityWatcher() {
           try { await menu.remove(syncDeleteItem); } catch { /* already removed */ }
           syncDeleteItem = null;
         }
+        await setTrayIconSyncing(false, false);
         return;
       }
 
-      // Update the header label to reflect the watcher's view
-      if (isActive) {
+      // Update the header label and icon to reflect the watcher's view.
+      // This is the SINGLE source of truth for tray icon/label state.
+      if (isActive && !latchedComplete) {
         const percent = progress.overallPercent;
         if (progress.totalFiles > 0 && percent === 0 && progress.completedFiles === 0 && progress.progressBytes === 0) {
           await updateTraySyncLabel(`⟳ Preparing sync…`);
         } else {
           await updateTraySyncLabel(`⟳ Syncing: ${percent}%`);
         }
-      } else if (hasFailed) {
+        await setTrayIconSyncing(true, false);
+      } else if (effectiveCompleted && hasFailed) {
         await updateTraySyncLabel(`⚠ Sync Failed`);
+        // Use default icon for failed state (not syncing, not completed)
+        await setTrayIconSyncing(false, false);
+      } else if (effectiveCompleted) {
+        await updateTraySyncLabel(`✓ Sync Complete`);
+        await setTrayIconSyncing(false, true);
       }
-      // Completed without failures is already handled by the useEffect
 
       // Build progress + size rows only when there's an active or completed sync session
-      if (isActive || isCompleted) {
+      if (isActive || effectiveCompleted) {
         let progressText: string;
         let sizeText: string | null = null;
 
-        if (isActive) {
+        if (isActive && !latchedComplete) {
           // In-progress: show current progress
           if (progress.totalFiles > 0 && progress.overallPercent === 0 && progress.completedFiles === 0 && progress.progressBytes === 0) {
             progressText = `${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} pending`;
@@ -1066,19 +1047,31 @@ function startSyncActivityWatcher() {
           if (progress.bytesExpected > 0) {
             sizeText = `${formatBytes(progress.progressBytes)} / ${formatBytes(progress.bytesExpected)}`;
           }
-        } else if (hasFailed) {
+        } else if (effectiveCompleted && (effectiveSnapshot.failedFiles > 0)) {
           // Failed: show failure counts
-          const totalFiles = progress.completedFiles + progress.failedFiles;
-          progressText = `${progress.failedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} failed`;
-          if (progress.bytesExpected > 0) {
-            sizeText = `${formatBytes(progress.progressBytes)} / ${formatBytes(progress.bytesExpected)}`;
+          const totalFiles = effectiveSnapshot.completedFiles + effectiveSnapshot.failedFiles;
+          progressText = `${effectiveSnapshot.failedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} failed`;
+          if (effectiveSnapshot.bytesExpected > 0) {
+            sizeText = `${formatBytes(effectiveSnapshot.progressBytes)} / ${formatBytes(effectiveSnapshot.bytesExpected)}`;
           }
         } else {
           // Completed successfully: show final counts
-          const totalFiles = progress.completedFiles + progress.failedFiles;
-          progressText = `${progress.completedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} synced`;
-          if (progress.bytesExpected > 0) {
-            sizeText = `${formatBytes(progress.bytesExpected)} / ${formatBytes(progress.bytesExpected)}`;
+          const syncedFiles = effectiveSnapshot.completedFiles;
+          const deletedInSession = effectiveSnapshot.files.filter(
+            (f) => (f.action === "local_delete" || f.action === "remote_delete") && f.status === "completed"
+          ).length;
+          const nonDeleteSynced = syncedFiles - deletedInSession;
+
+          if (deletedInSession > 0 && nonDeleteSynced <= 0) {
+            progressText = `${deletedInSession} ${deletedInSession === 1 ? 'file' : 'files'} deleted`;
+          } else if (deletedInSession > 0 && nonDeleteSynced > 0) {
+            progressText = `${nonDeleteSynced} synced · ${deletedInSession} deleted`;
+          } else {
+            const totalFiles = effectiveSnapshot.completedFiles + effectiveSnapshot.failedFiles;
+            progressText = `${effectiveSnapshot.completedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} synced`;
+          }
+          if (effectiveSnapshot.bytesExpected > 0) {
+            sizeText = `${formatBytes(effectiveSnapshot.bytesExpected)} / ${formatBytes(effectiveSnapshot.bytesExpected)}`;
           }
         }
 
@@ -1131,9 +1124,14 @@ function startSyncActivityWatcher() {
         }
       }
 
-      // Show delete summary row if there are recent deletions
-      if (recentDeleteCount > 0) {
-        const deleteText = `${recentDeleteCount} ${recentDeleteCount === 1 ? 'file' : 'files'} deleted`;
+      // Show delete summary row only if there are recent deletions that
+      // aren't already reflected in the progress row. When all completed
+      // files are deletes (or a mix), the progressText already says
+      // "3 files deleted" or "2 synced · 1 deleted", so a separate row
+      // would be duplicate.
+      const deletesAlreadyInProgress = effectiveCompleted && !hasFailed;
+      if (effectiveDeleteCount > 0 && !deletesAlreadyInProgress) {
+        const deleteText = `${effectiveDeleteCount} ${effectiveDeleteCount === 1 ? 'file' : 'files'} deleted`;
 
         // Find insert position: after size row, or after progress row, or after sync header
         const itemsForDelete = await menu.items();
@@ -1164,7 +1162,7 @@ function startSyncActivityWatcher() {
 
         // If there's no active sync or completed sync but we have deletes,
         // ensure the sync header and icon reflect the delete activity
-        if (!isActive && !isCompleted) {
+        if (!isActive && !effectiveCompleted) {
           await updateTraySyncLabel(`✓ Sync Complete`);
           await setTrayIconSyncing(false, true);
         }

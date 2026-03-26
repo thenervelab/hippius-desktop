@@ -54,6 +54,12 @@ vi.mock("@/components/ui/info-tooltip", () => ({
   ),
 }));
 
+vi.mock("@/components/ui/MiddleTruncatedName", () => ({
+  default: ({ name, className, suffix }: { name: string; className?: string; suffix?: React.ReactNode }) => (
+    <span data-testid="middle-truncated-name" className={className} title={name}>{name}{suffix}</span>
+  ),
+}));
+
 // Mock fileTypeUtils to avoid deep icon imports
 const StubIcon = ({ className }: { className?: string }) => (
   <span data-testid="file-icon" className={className} />

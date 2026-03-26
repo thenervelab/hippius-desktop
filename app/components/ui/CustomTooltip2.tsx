@@ -28,7 +28,7 @@ const CustomTooltip2: React.FC<InfoTooltipProps> = ({
           <div className={`inline-block ${className}`}>
             {children}
             {showInfo && (
-              <Icons.InfoCircle
+              <Icons.QuestionCircle
                 className={`size-${iconSize} ${iconColor} cursor-pointer`}
               />
             )}

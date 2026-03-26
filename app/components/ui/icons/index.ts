@@ -188,3 +188,4 @@ export { default as Debian } from "./Debian";
 export { default as Fedora } from "./Fedora";
 export { default as CentOS } from "./CentOS";
 export { default as SplashHippiusLogo } from "./SplashHippiusLogo";
+export { default as QuestionCircle } from "./QuestionCircle";

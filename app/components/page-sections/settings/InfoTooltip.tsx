@@ -23,7 +23,7 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({
       <Tooltip.Root delayDuration={200}>
         <Tooltip.Trigger asChild>
           <div className={`inline-block ${className}`}>
-            <Icons.InfoCircle
+            <Icons.QuestionCircle
               className={`size-${iconSize} ${iconColor} cursor-pointer`}
             />
           </div>

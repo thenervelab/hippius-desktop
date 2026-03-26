@@ -16,10 +16,32 @@ import { formatBytes } from "@/lib/utils/formatBytes";
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
 import { syncEngineHealthAtom, CONNECTIVITY_STATUS_LABELS } from "../lib/store/syncAtoms";
 import { type SyncSnapshot } from "../lib/types/syncSnapshot";
+import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
 
 const COLLAPSED_HEIGHT = 64;
 const EXPANDED_HEIGHT = 460;
 const BODY_MAX_HEIGHT = EXPANDED_HEIGHT - COLLAPSED_HEIGHT;
+
+/** Format seconds into a human-readable ETA string. */
+function formatEta(totalSeconds: number): string {
+  if (totalSeconds < 5) return "a few seconds";
+  if (totalSeconds < 60) return `${Math.round(totalSeconds)}s`;
+  const m = Math.floor(totalSeconds / 60);
+  const s = Math.round(totalSeconds % 60);
+  if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+}
+
+/** ETA sample for rate calculation */
+interface RateSample {
+  time: number;   // Date.now()
+  bytes: number;  // progressBytes at that time
+}
+
+/** Number of samples to keep for moving average */
+const RATE_WINDOW = 10;
 
 interface SyncStatusDialogProps {
   snapshot: SyncSnapshot;
@@ -43,10 +65,90 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   const isRetrying = !snapshot.isActive && snapshot.retryInSecs > 0;
   const isCompleted = !snapshot.isActive && !isRetrying && (snapshot.completedFiles > 0 || snapshot.failedFiles > 0);
   const hasFailed = (snapshot.failedFiles > 0 && isCompleted) || isRetrying;
-  const percentage = isInProgress && snapshot.totalFiles > 0 && snapshot.overallPercent === 0 && snapshot.bytesExpected === 0
+  const totalFiles = snapshot.totalFiles;
+  const isSingleFile = totalFiles === 1;
+
+  // ── Smoothed progress ──────────────────────────────────────────
+  // Interpolate between snapshot.overallPercent values so the bar
+  // doesn't jump when a file finishes. CSS transition handles the
+  // visual smoothing; this ensures percentage never goes backwards.
+  const rawPercent = isInProgress && snapshot.totalFiles > 0 && snapshot.overallPercent === 0 && snapshot.bytesExpected === 0
     ? null
     : snapshot.overallPercent;
-  const totalFiles = snapshot.totalFiles;
+  const [smoothedPercent, setSmoothedPercent] = useState<number | null>(rawPercent);
+  const prevSessionRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    // Reset smoothed progress when a new session starts
+    if (snapshot.startedAt !== prevSessionRef.current) {
+      prevSessionRef.current = snapshot.startedAt;
+      setSmoothedPercent(rawPercent);
+      return;
+    }
+    if (rawPercent === null) {
+      setSmoothedPercent(null);
+      return;
+    }
+    // Only move forward (never decrease), unless completed
+    setSmoothedPercent((prev) => {
+      if (prev === null) return rawPercent;
+      if (rawPercent >= 100) return 100;
+      return Math.max(prev, rawPercent);
+    });
+  }, [rawPercent, snapshot.startedAt]);
+
+  const percentage = smoothedPercent;
+
+  // ── ETA Calculation ────────────────────────────────────────────
+  // Track byte rate over recent samples to estimate remaining time.
+  const rateSamplesRef = useRef<RateSample[]>([]);
+  const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!isInProgress || snapshot.bytesExpected === 0 || snapshot.progressBytes === 0) {
+      // Reset when not actively transferring
+      if (!isInProgress) {
+        rateSamplesRef.current = [];
+        setEtaSeconds(null);
+      }
+      return;
+    }
+
+    const now = Date.now();
+    const samples = rateSamplesRef.current;
+    const lastSample = samples.length > 0 ? samples[samples.length - 1] : null;
+
+    // Only add a new sample if bytes actually changed
+    if (!lastSample || snapshot.progressBytes !== lastSample.bytes) {
+      samples.push({ time: now, bytes: snapshot.progressBytes });
+      // Keep only the last RATE_WINDOW samples
+      if (samples.length > RATE_WINDOW) {
+        samples.splice(0, samples.length - RATE_WINDOW);
+      }
+    }
+
+    // Need at least 2 samples to compute a rate
+    if (samples.length < 2) {
+      setEtaSeconds(null);
+      return;
+    }
+
+    const oldest = samples[0];
+    const newest = samples[samples.length - 1];
+    const elapsed = (newest.time - oldest.time) / 1000; // seconds
+    const bytesTransferred = newest.bytes - oldest.bytes;
+
+    if (elapsed <= 0 || bytesTransferred <= 0) {
+      return; // keep previous ETA, don't clear it
+    }
+
+    const rate = bytesTransferred / elapsed; // bytes per second
+    const remaining = snapshot.bytesExpected - snapshot.progressBytes;
+    const eta = remaining / rate;
+
+    // Clamp ETA to reasonable bounds (max 24h)
+    setEtaSeconds(Math.min(eta, 86400));
+  }, [isInProgress, snapshot.progressBytes, snapshot.bytesExpected]);
 
   // Live countdown for retry timer
   const [retryCountdown, setRetryCountdown] = useState(0);
@@ -129,7 +231,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       onClick={(e: React.MouseEvent) => e.stopPropagation()}
       className={cn(
         " outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out",
-        isExpanded ? "w-[378px]" : (isCompleted || hasFailed) ? "w-[260px]" : (isUnhealthy) ? "w-[210px]" : "w-[200px]"
+        isExpanded ? "w-[378px]" : "w-[220px]"
       )}
     >
       {/* Header */}
@@ -138,7 +240,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           "shadow-menu bg-grey-100 border border-grey-80 cursor-pointer hover:bg-grey-90 transition-all duration-300 ease-in-out",
           isExpanded
             ? "rounded-t-[8px] w-[378px]"
-            : (isCompleted || hasFailed) ? "rounded-[8px] w-[260px]" : (isUnhealthy) ? "rounded-[8px] w-[210px]" : "rounded-[8px] w-[200px]"
+            : "rounded-[8px] w-[220px]"
         )}
         onClick={handleHeaderClick}
       >
@@ -284,8 +386,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               )}
             </div>
 
-            {/* Close button - shown when completed or failed */}
-            {(isCompleted || hasFailed) && onClose && (
+            {/* Close button - always available */}
+            {onClose && (
               <>
                 <span className="mx-2 h-5 w-px bg-grey-80" role="separator" />
                 <button
@@ -320,108 +422,115 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
         <div className="bg-grey-100 border border-grey-80 rounded-b-[8px] w-[378px] flex flex-col" style={{ maxHeight: `${BODY_MAX_HEIGHT}px` }}>
           {/* Status banner */}
           <div className="flex flex-col w-full mt-4 ml-4 gap-2">
-            <div
-              className={cn(
-                "w-fit px-2 py-0.5 border rounded",
-                isRetrying || snapshot.failedFiles > 0
-                  ? "bg-error-100/40 border-error-80"
-                  : isCompleted
-                    ? "bg-success-100/40 border-success-80"
-                    : "bg-primary-100/40 border-primary-80"
-              )}
-            >
-              <div
-                className={cn(
-                  "text-sm",
-                  isRetrying || snapshot.failedFiles > 0
-                    ? "text-error-40"
-                    : isCompleted
-                      ? "text-success-40"
-                      : "text-primary-40"
-                )}
-              >
-                {(() => {
-                  // Retry state — show countdown
-                  if (isRetrying) {
-                    return retryCountdown > 0
-                      ? `Sync failed \u2014 retrying in ${retryCountdown}s`
-                      : "Retrying sync...";
+            <div className="flex items-center gap-2 flex-wrap">
+              {(() => {
+                // Retry state — show countdown
+                if (isRetrying) {
+                  return (
+                    <div className={cn("w-fit px-2 py-0.5 border rounded", "bg-error-100/40 border-error-80")}>
+                      <div className="text-sm text-error-40">
+                        {retryCountdown > 0
+                          ? `Sync failed \u2014 retrying in ${retryCountdown}s`
+                          : "Retrying sync..."}
+                      </div>
+                    </div>
+                  );
+                }
+
+                // Total completed = synced (uploaded) + deleted
+                const completedFiles = syncedFiles + deletedFiles;
+                // Calculate actual total including failed files
+                const actualTotal = snapshot.failedFiles > 0
+                  ? Math.max(totalFiles, completedFiles + snapshot.failedFiles)
+                  : totalFiles;
+
+                // Determine what type of sync is happening based on snapshot action counts
+                const hasUploads = snapshot.expectedUploads > 0;
+                const hasDownloads = snapshot.expectedDownloads > 0;
+                const hasLocalDeletes = snapshot.expectedLocalDeletes > 0;
+                const hasRemoteDeletes = snapshot.expectedRemoteDeletes > 0;
+                const nonDeleteSynced = syncedFiles - deletedFiles;
+
+                // If there are failed files, show appropriate failure message
+                if (snapshot.failedFiles > 0 && !isInProgress) {
+                  let failMsg: string;
+                  if (hasDownloads && !hasUploads) {
+                    failMsg = `${snapshot.failedFiles} of ${actualTotal} files failed to download`;
+                  } else if (hasUploads && !hasDownloads) {
+                    failMsg = `${snapshot.failedFiles} of ${actualTotal} files failed to upload`;
+                  } else {
+                    failMsg = `${snapshot.failedFiles} of ${actualTotal} files failed to sync`;
                   }
+                  return (
+                    <div className="w-fit px-2 py-0.5 border rounded bg-error-100/40 border-error-80">
+                      <div className="text-sm text-error-40">{failMsg}</div>
+                    </div>
+                  );
+                }
+                
+                // When completed successfully
+                if (isCompleted) {
+                  const badges: React.ReactNode[] = [];
 
-                  // Total completed = synced (uploaded) + deleted
-                  const completedFiles = syncedFiles + deletedFiles;
-                  // Calculate actual total including failed files
-                  const actualTotal = snapshot.failedFiles > 0
-                    ? Math.max(totalFiles, completedFiles + snapshot.failedFiles)
-                    : totalFiles;
-
-                  // Determine what type of sync is happening based on snapshot action counts
-                  const hasUploads = snapshot.expectedUploads > 0;
-                  const hasDownloads = snapshot.expectedDownloads > 0;
-                  const hasLocalDeletes = snapshot.expectedLocalDeletes > 0;
-                  const hasRemoteDeletes = snapshot.expectedRemoteDeletes > 0;
-
-                  // If there are failed files, show appropriate failure message
-                  if (snapshot.failedFiles > 0 && !isInProgress) {
+                  // Synced badge (non-delete completions)
+                  if (nonDeleteSynced > 0) {
+                    let syncText: string;
                     if (hasDownloads && !hasUploads) {
-                      return `${snapshot.failedFiles} of ${actualTotal} files failed to download`;
+                      syncText = `${nonDeleteSynced} ${nonDeleteSynced === 1 ? "file" : "files"} downloaded`;
+                    } else {
+                      syncText = `${nonDeleteSynced} ${nonDeleteSynced === 1 ? "file" : "files"} synced`;
                     }
-                    if (hasUploads && !hasDownloads) {
-                      return `${snapshot.failedFiles} of ${actualTotal} files failed to upload`;
-                    }
-                    return `${snapshot.failedFiles} of ${actualTotal} files failed to sync`;
+                    badges.push(
+                      <div key="synced" className="w-fit px-2 py-0.5 border rounded bg-success-100/40 border-success-80">
+                        <div className="text-sm text-success-40">{syncText}</div>
+                      </div>
+                    );
                   }
-                  
-                  // When completed successfully
-                  if (isCompleted) {
-                    // Only deletes, no uploads/downloads
-                    if (deletedFiles > 0 && syncedFiles === 0) {
-                      return `${deletedFiles} ${deletedFiles === 1 ? "file" : "files"} deleted`;
-                    }
-                    // Mixed: synced + deleted
-                    if (deletedFiles > 0 && syncedFiles > 0) {
-                      return `${syncedFiles} synced, ${deletedFiles} deleted`;
-                    }
-                    if (actualTotal > 0) {
-                      if (hasDownloads && !hasUploads) {
-                        return `${syncedFiles} of ${actualTotal} files downloaded`;
-                      }
-                      return `${syncedFiles} of ${actualTotal} files synced`;
-                    } else if (syncedFiles > 0) {
-                      return `${syncedFiles} files synced`;
-                    }
-                    return "Sync complete";
+
+                  // Deleted badge
+                  if (deletedFiles > 0) {
+                    badges.push(
+                      <div key="deleted" className="w-fit px-2 py-0.5 border rounded bg-error-100/40 border-error-80">
+                        <div className="text-sm text-error-40">{`${deletedFiles} ${deletedFiles === 1 ? "file" : "files"} deleted`}</div>
+                      </div>
+                    );
                   }
-                  
-                  // During sync, show appropriate message based on action type
-                  if (isInProgress || actualTotal > 0) {
-                    // Only downloads (no uploads) - show download message
-                    if (hasDownloads && !hasUploads) {
-                      return `${completedFiles} of ${actualTotal} files downloaded`;
-                    }
-                    // Only uploads (no downloads) - show upload/sync message
-                    if (hasUploads && !hasDownloads) {
-                      return `${completedFiles} of ${actualTotal} files synced`;
-                    }
-                    // Both uploads and downloads - show generic sync message
-                    if (hasUploads && hasDownloads) {
-                      return `${completedFiles} of ${actualTotal} files synced`;
-                    }
-                    // Only deletes - show delete message
-                    if ((hasLocalDeletes || hasRemoteDeletes) && !hasUploads && !hasDownloads) {
-                      const deleteCount = snapshot.expectedLocalDeletes + snapshot.expectedRemoteDeletes;
-                      return `Deleting ${deleteCount} files`;
-                    }
-                    // Fallback to generic sync message
-                    return `${completedFiles} of ${actualTotal} files synced`;
+
+                  // Fallback if no synced or deleted
+                  if (badges.length === 0) {
+                    badges.push(
+                      <div key="complete" className="w-fit px-2 py-0.5 border rounded bg-success-100/40 border-success-80">
+                        <div className="text-sm text-success-40">Sync complete</div>
+                      </div>
+                    );
                   }
-                  
-                  if (completedFiles > 0) {
-                    return `${completedFiles} files synced`;
+
+                  return <>{badges}</>;
+                }
+                
+                // During sync
+                let inProgressText: string;
+                if (isInProgress || actualTotal > 0) {
+                  if (hasDownloads && !hasUploads) {
+                    inProgressText = `${completedFiles} of ${actualTotal} files downloaded`;
+                  } else if ((hasLocalDeletes || hasRemoteDeletes) && !hasUploads && !hasDownloads) {
+                    const deleteCount = snapshot.expectedLocalDeletes + snapshot.expectedRemoteDeletes;
+                    inProgressText = `Deleting ${deleteCount} files`;
+                  } else {
+                    inProgressText = `${completedFiles} of ${actualTotal} files synced`;
                   }
-                  return "Starting sync...";
-                })()}
-              </div>
+                } else if (completedFiles > 0) {
+                  inProgressText = `${completedFiles} files synced`;
+                } else {
+                  inProgressText = "Starting sync...";
+                }
+
+                return (
+                  <div className="w-fit px-2 py-0.5 border rounded bg-primary-100/40 border-primary-80">
+                    <div className="text-sm text-primary-40">{inProgressText}</div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Error detail — shown when retrying or when lastError is present */}
@@ -432,30 +541,49 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             )}
           </div>
 
-          {/* Overall sync progress bar */}
-          {!isCompleted && isInProgress && (
+          {/* Overall sync progress bar — shown for multi-file syncs */}
+          {!isSingleFile && (isInProgress || isCompleted) && (
             <div className="px-4 pt-3">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-xs text-grey-40">Overall progress</span>
                 <span className="text-xs text-grey-40">
-                  {percentage !== null ? `${percentage}%` : "Preparing..."}
+                  {isCompleted
+                    ? "100%"
+                    : percentage !== null ? `${percentage}%` : "Preparing..."}
                 </span>
               </div>
               <div className="w-full h-1.5 bg-grey-80 rounded-full overflow-hidden">
-                {percentage !== null ? (
+                {isCompleted ? (
                   <div
-                    className="h-full rounded-full transition-all duration-300 bg-primary-50"
+                    className={cn(
+                      "h-full rounded-full transition-[width] duration-700 ease-out",
+                      hasFailed ? "bg-error-50" : "bg-success-50"
+                    )}
+                    style={{ width: "100%" }}
+                  />
+                ) : percentage !== null ? (
+                  <div
+                    className="h-full rounded-full bg-primary-50 transition-[width] duration-700 ease-out"
                     style={{ width: `${percentage}%` }}
                   />
                 ) : (
                   <div className="h-full w-1/3 rounded-full animate-pulse bg-primary-50" />
                 )}
               </div>
-              {snapshot.bytesExpected > 0 && (
-                <div className="text-[10px] text-grey-50 mt-1">
-                  {formatBytes(snapshot.progressBytes)} / {formatBytes(snapshot.bytesExpected)}
-                </div>
-              )}
+              <div className="flex items-center justify-between mt-1">
+                {!isCompleted && snapshot.bytesExpected > 0 ? (
+                  <span className="text-[10px] text-grey-50">
+                    {formatBytes(snapshot.progressBytes)} / {formatBytes(snapshot.bytesExpected)}
+                  </span>
+                ) : (
+                  <span />
+                )}
+                {!isCompleted && etaSeconds !== null && etaSeconds > 0 && (
+                  <span className="text-[10px] text-grey-50">
+                    ~{formatEta(etaSeconds)} remaining
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
@@ -486,9 +614,10 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                         <Icon className={cn("size-5 relative", color)} />
                       </AbstractIconWrapper>
                       <div className="flex flex-col justify-center min-w-0">
-                        <div className="text-sm font-medium text-grey-10 truncate" title={file.fileName}>
-                          {file.fileName}
-                        </div>
+                        <MiddleTruncatedName
+                          name={file.fileName}
+                          className="text-sm font-medium text-grey-10"
+                        />
                         {file.totalBytes > 0 && (
                           <div className="text-xs text-grey-70 mt-0.5">
                             {formatBytes(file.totalBytes)}
@@ -524,7 +653,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                               <div className="flex items-center gap-2">
                                 <div className="w-[60px] h-1.5 bg-grey-80 rounded-full overflow-hidden">
                                   <div
-                                    className="h-full bg-primary-50 rounded-full transition-all duration-300"
+                                    className="h-full bg-primary-50 rounded-full transition-[width] duration-700 ease-out"
                                     style={{ width: `${file.progressPercent}%` }}
                                   />
                                 </div>
@@ -535,6 +664,9 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                               {file.totalBytes > 0 && (
                                 <span className="text-[10px] text-grey-50">
                                   {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
+                                  {isSingleFile && etaSeconds !== null && etaSeconds > 0
+                                    ? ` · ~${formatEta(etaSeconds)}`
+                                    : ""}
                                 </span>
                               )}
                             </>

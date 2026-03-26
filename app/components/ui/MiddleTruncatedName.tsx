@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useState, FC } from "react";
+import { useRef, useEffect, useState, FC, ReactNode } from "react";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { cn } from "@/lib/utils";
 
@@ -8,6 +8,10 @@ interface MiddleTruncatedNameProps {
   /** The full, untruncated filename */
   name: string;
   className?: string;
+  /** Optional inline content rendered immediately after the name (e.g. a status icon).
+   *  Its width is subtracted from the available space before truncation is computed,
+   *  so the icon always stays visible next to the text. */
+  suffix?: ReactNode;
 }
 
 /* ------------------------------------------------------------------ */
@@ -86,9 +90,11 @@ function middleTruncate(
 const MiddleTruncatedName: FC<MiddleTruncatedNameProps> = ({
   name,
   className,
+  suffix,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLSpanElement>(null);
+  const suffixRef = useRef<HTMLSpanElement>(null);
   const fontRef = useRef<string>("");
   const isTruncatedRef = useRef(false);
   // Force a single re-render after first measurement to enable/disable tooltip
@@ -104,7 +110,10 @@ const MiddleTruncatedName: FC<MiddleTruncatedNameProps> = ({
     const update = () => {
       const w = container.clientWidth;
       if (w <= 0) return;
-      const truncated = middleTruncate(name, w, fontRef.current);
+      // Reserve space for the suffix (icon) so truncation doesn't overlap it
+      const suffixW = suffixRef.current?.offsetWidth ?? 0;
+      const available = w - suffixW;
+      const truncated = middleTruncate(name, available, fontRef.current);
       const wasTruncated = truncated !== name;
       if (textEl.textContent !== truncated) {
         textEl.textContent = truncated;
@@ -131,8 +140,13 @@ const MiddleTruncatedName: FC<MiddleTruncatedNameProps> = ({
             ref={containerRef}
             className={cn("flex-1 min-w-0 overflow-hidden text-left", className)}
           >
-            <span ref={textRef} className="whitespace-nowrap block">
-              {name}
+            <span className="whitespace-nowrap inline-flex items-center">
+              <span ref={textRef}>{name}</span>
+              {suffix && (
+                <span ref={suffixRef} className="inline-flex flex-shrink-0">
+                  {suffix}
+                </span>
+              )}
             </span>
           </div>
         </Tooltip.Trigger>

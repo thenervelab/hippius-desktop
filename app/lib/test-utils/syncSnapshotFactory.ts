@@ -72,6 +72,7 @@ export function makeSnapshot(
     expectedDownloads: 0,
     expectedLocalDeletes: 0,
     expectedRemoteDeletes: 0,
+    startedAt: null,
     completedAt: null,
     files,
     ...overrides,

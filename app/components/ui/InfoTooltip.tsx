@@ -23,7 +23,7 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({
             type="button"
             className={`inline-flex items-center justify-center outline-none ${className}`}
           >
-            <Icons.InfoCircle
+            <Icons.QuestionCircle
               className={`size-${iconSize} ${iconColor} cursor-pointer`}
             />
           </button>

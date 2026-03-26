@@ -33,6 +33,8 @@ export interface SyncSnapshot {
   expectedDownloads: number;
   expectedLocalDeletes: number;
   expectedRemoteDeletes: number;
+  /** Epoch-ms when the sync session started (null if no session). */
+  startedAt: number | null;
   /** Epoch-ms when the session completed (null if still active). */
   completedAt: number | null;
   files: FileProgress[];
@@ -52,6 +54,7 @@ export const EMPTY_SNAPSHOT: SyncSnapshot = {
   expectedDownloads: 0,
   expectedLocalDeletes: 0,
   expectedRemoteDeletes: 0,
+  startedAt: null,
   completedAt: null,
   files: [],
 };

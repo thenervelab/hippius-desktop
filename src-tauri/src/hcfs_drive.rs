@@ -1537,7 +1537,9 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 "Sync completed",
             );
 
-            if outcome.files_uploaded > 0 || outcome.files_downloaded > 0 {
+            if outcome.files_uploaded > 0 || outcome.files_downloaded > 0
+                || outcome.files_deleted_locally > 0 || outcome.files_deleted_remotely > 0
+            {
                 // Download progress callbacks record entries with encrypted
                 // names (e.g. "file_a7339456c25845c2"). Replace them with
                 // real file names before committing.
@@ -1618,6 +1620,45 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                                 }
                             }
                         }
+                    }
+                }
+
+                // Create pending activity entries for deleted files.
+                // hcfs-client has no delete progress callback, so we
+                // derive delete file names from the progress session.
+                if outcome.files_deleted_locally > 0 || outcome.files_deleted_remotely > 0 {
+                    let now = chrono::Utc::now().timestamp();
+                    let delete_items: Vec<SyncActivityItem> = {
+                        let state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
+                        state
+                            .current_session
+                            .as_ref()
+                            .map(|session| {
+                                session
+                                    .files
+                                    .values()
+                                    .filter(|f| {
+                                        f.label == label_owned
+                                            && (f.action == crate::sync_progress::FileAction::LocalDelete
+                                                || f.action == crate::sync_progress::FileAction::RemoteDelete)
+                                    })
+                                    .map(|f| SyncActivityItem {
+                                        file_name: f.file_name.clone(),
+                                        action: "deleted".to_string(),
+                                        timestamp: now,
+                                        size_bytes: 0,
+                                        label: label_owned.clone(),
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    };
+                    if !delete_items.is_empty() {
+                        let mut pending = sync
+                            .pending_activity
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner());
+                        pending.extend(delete_items);
                     }
                 }
 

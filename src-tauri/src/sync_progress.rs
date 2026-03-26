@@ -171,6 +171,8 @@ pub struct SyncSnapshot {
     pub expected_downloads: u32,
     pub expected_local_deletes: u32,
     pub expected_remote_deletes: u32,
+    /// Epoch-ms when the session started.
+    pub started_at: Option<i64>,
     /// Epoch-ms when the session completed (None if still active or no session).
     /// Frontend uses this for auto-dismiss timing.
     pub completed_at: Option<i64>,
@@ -365,6 +367,7 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
                 expected_downloads: 0,
                 expected_local_deletes: 0,
                 expected_remote_deletes: 0,
+                started_at: None,
                 completed_at: None,
                 files: Vec::new(),
             };
@@ -489,6 +492,7 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
         expected_downloads: session.expected_downloads,
         expected_local_deletes: session.expected_local_deletes,
         expected_remote_deletes: session.expected_remote_deletes,
+        started_at: Some(session.started_at),
         completed_at: session.completed_at,
         files,
     }
@@ -697,6 +701,14 @@ pub fn complete_session(
                         || f.status == FileStatus::Decrypting)
             })
             .count() as u32;
+        let pending_deletes = session
+            .files
+            .values()
+            .filter(|f| {
+                (f.action == FileAction::LocalDelete || f.action == FileAction::RemoteDelete)
+                    && (f.status == FileStatus::Pending || f.status == FileStatus::Deleting)
+            })
+            .count() as u32;
 
         // If actual counts exceed expected, complete all pending files
         if files_uploaded >= session.expected_uploads
@@ -708,6 +720,7 @@ pub fn complete_session(
                     || file.status == FileStatus::Downloading
                     || file.status == FileStatus::Encrypting
                     || file.status == FileStatus::Decrypting
+                    || file.status == FileStatus::Deleting
                 {
                     file.status = FileStatus::Completed;
                     file.progress = 100;
@@ -721,8 +734,8 @@ pub fn complete_session(
             }
         }
 
-        // If no more pending work, finalize
-        if pending_uploads == 0 && pending_downloads == 0
+        // If no more pending work (including deletes), finalize
+        if (pending_uploads == 0 && pending_downloads == 0 && pending_deletes == 0)
             || (files_uploaded >= session.expected_uploads
                 && files_downloaded >= session.expected_downloads)
         {
@@ -910,7 +923,8 @@ pub fn sp_update_file_progress(
     )
 }
 
-/// Force-complete all pending files. Stalled files (0 bytes) become errors.
+/// Force-complete all pending files. Stalled files (0 bytes) become errors,
+/// except delete actions which never transfer bytes.
 pub fn complete_pending_files(
     sync: &crate::sync_engine::SyncEngine,
     label: &str,
@@ -934,10 +948,14 @@ pub fn complete_pending_files(
                 || file.status == FileStatus::Decrypting
                 || file.status == FileStatus::Deleting
             {
+                let is_delete = file.action == FileAction::LocalDelete
+                    || file.action == FileAction::RemoteDelete;
+
                 // Files that never received any progress data (0 bytes
                 // encrypted or transferred) are stalled — mark them as
                 // errors so the UI doesn't show them stuck at 0% forever.
-                if file.bytes_transferred == 0 && file.bytes_encrypted == 0 {
+                // Delete actions never transfer bytes, so 0 is expected.
+                if !is_delete && file.bytes_transferred == 0 && file.bytes_encrypted == 0 {
                     file.status = FileStatus::Error;
                     file.error = Some("Transfer stalled – no data received".to_string());
                     file.completed_at = Some(now);
@@ -1042,20 +1060,26 @@ pub fn mark_pending_files_as_failed(
         }
 
         // Also complete remaining pending uploads/downloads for THIS drive
-        // that weren't marked failed (these are the ones that actually succeeded)
+        // that weren't marked failed (these are the ones that actually succeeded).
+        // Delete actions are always completed — they don't have partial progress.
         for file in session.files.values_mut() {
             if file.label != label {
                 continue;
             }
-            if (file.action == FileAction::Upload
+            let is_pending_transfer = (file.action == FileAction::Upload
                 && (file.status == FileStatus::Pending
                     || file.status == FileStatus::Uploading
                     || file.status == FileStatus::Encrypting))
                 || (file.action == FileAction::Download
                     && (file.status == FileStatus::Pending
                         || file.status == FileStatus::Downloading
-                        || file.status == FileStatus::Decrypting))
-            {
+                        || file.status == FileStatus::Decrypting));
+            let is_pending_delete = (file.action == FileAction::LocalDelete
+                || file.action == FileAction::RemoteDelete)
+                && (file.status == FileStatus::Pending
+                    || file.status == FileStatus::Deleting);
+
+            if is_pending_transfer || is_pending_delete {
                 file.status = FileStatus::Completed;
                 file.progress = 100;
                 file.completed_at = Some(now);
@@ -2928,5 +2952,158 @@ mod tests {
                 "Drive-b files should remain pending when drive-a has failures"
             );
         }
+    }
+
+    // ── Delete action handling tests ────────────────────────────────
+
+    #[test]
+    fn complete_pending_marks_delete_files_as_completed() {
+        reset_state();
+        let eng = test_sync();
+
+        // Register a session with only delete files (0 uploads, 0 downloads)
+        let file_list = SessionFileList {
+            upload_files: None,
+            download_files: None,
+            local_delete_files: Some(vec!["/local_del.txt".to_string()]),
+            remote_delete_files: Some(vec!["/remote_del.txt".to_string()]),
+        };
+        start_session(eng, 0, 0, 1, 1, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // Delete files never receive progress callbacks, so bytes stay 0.
+        // complete_pending_files should still mark them Completed (not Error).
+        complete_pending_files(eng, "d1").unwrap();
+
+        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let session = state.current_session.as_ref().unwrap();
+
+        let local_del = session.files.get("/local_del.txt").unwrap();
+        assert_eq!(
+            local_del.status,
+            FileStatus::Completed,
+            "LocalDelete with 0 bytes should be Completed, not Error"
+        );
+
+        let remote_del = session.files.get("/remote_del.txt").unwrap();
+        assert_eq!(
+            remote_del.status,
+            FileStatus::Completed,
+            "RemoteDelete with 0 bytes should be Completed, not Error"
+        );
+    }
+
+    #[test]
+    fn complete_session_finalizes_delete_only_cycle() {
+        reset_state();
+        let eng = test_sync();
+
+        // Delete-only session: 0 uploads, 0 downloads, 2 deletes
+        let file_list = SessionFileList {
+            upload_files: None,
+            download_files: None,
+            local_delete_files: Some(vec!["/del1.txt".to_string()]),
+            remote_delete_files: Some(vec!["/del2.txt".to_string()]),
+        };
+        start_session(eng, 0, 0, 1, 1, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // Mark deletes as completed (simulating complete_pending_files)
+        {
+            let mut state = eng.progress.lock().unwrap();
+            let session = state.current_session.as_mut().unwrap();
+            for file in session.files.values_mut() {
+                file.status = FileStatus::Completed;
+                file.completed_at = Some(now_ms());
+            }
+        }
+
+        // complete_session with 0 uploads, 0 downloads
+        complete_session(eng, 0, 0).unwrap();
+
+        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let session = state.current_session.as_ref().unwrap();
+        assert!(
+            !session.is_active,
+            "Session should be finalized (inactive) after delete-only cycle"
+        );
+        assert!(
+            session.completed_at.is_some(),
+            "Session should have completed_at set"
+        );
+    }
+
+    #[test]
+    fn mark_pending_files_as_failed_completes_delete_files() {
+        reset_state();
+        let eng = test_sync();
+
+        // Mixed session: 1 upload + 1 local delete
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/upload.txt".to_string()]),
+            download_files: None,
+            local_delete_files: Some(vec!["/del.txt".to_string()]),
+            remote_delete_files: None,
+        };
+        start_session(eng, 1, 0, 1, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // Upload fails (0 actual vs 1 expected)
+        mark_pending_files_as_failed(eng, 0, 0, "d1").unwrap();
+
+        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let session = state.current_session.as_ref().unwrap();
+
+        // Upload should be marked as failed
+        let upload = session.files.get("/upload.txt").unwrap();
+        assert_eq!(upload.status, FileStatus::Error);
+
+        // Delete should be marked as Completed (not left Pending)
+        let del = session.files.get("/del.txt").unwrap();
+        assert_eq!(
+            del.status,
+            FileStatus::Completed,
+            "Delete file should be Completed even when uploads fail"
+        );
+    }
+
+    #[test]
+    fn mixed_upload_and_delete_session_completes() {
+        reset_state();
+        let eng = test_sync();
+
+        // Session with uploads and deletes
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/upload.txt".to_string()]),
+            download_files: None,
+            local_delete_files: Some(vec!["/del.txt".to_string()]),
+            remote_delete_files: None,
+        };
+        start_session(eng, 1, 0, 1, 0, Some(file_list), Some("d1".to_string())).unwrap();
+
+        // Simulate upload progress
+        update_file_progress(
+            eng,
+            "/upload.txt".to_string(),
+            1000,
+            1000,
+            FileAction::Upload,
+            Some("d1".to_string()),
+        )
+        .unwrap();
+
+        // complete_pending_files marks remaining (delete) as completed
+        complete_pending_files(eng, "d1").unwrap();
+
+        // complete_session should finalize
+        complete_session(eng, 1, 0).unwrap();
+
+        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let session = state.current_session.as_ref().unwrap();
+
+        assert!(!session.is_active, "Session should be finalized");
+
+        let del = session.files.get("/del.txt").unwrap();
+        assert_eq!(del.status, FileStatus::Completed);
+
+        let upload = session.files.get("/upload.txt").unwrap();
+        assert_eq!(upload.status, FileStatus::Completed);
     }
 }
