@@ -5,10 +5,12 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension, getFileTypeDisplayLabel } from "@/lib/utils/getTileTypeFromExtension";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 import { getFileIcon } from "@/app/lib/utils/fileTypeUtils";
 import { cn } from "@/app/lib/utils";
 import * as Tooltip from "@radix-ui/react-tooltip";
+import { FolderOpen } from "lucide-react";
 
 interface DetailRowProps {
   label: string;
@@ -87,7 +89,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
         </DetailRow>
 
         <DetailRow label="Date Uploaded">
-          {file.createdAt === 0 ? "—" : <FormattedTimestamp timestamp={file.createdAt} />}
+          {file.createdAt === 0 ? "—" : <FormattedTimestamp timestamp={file.createdAt} className="text-grey-20" />}
         </DetailRow>
 
         <DetailRow label="File Size" lastChild={!!file.isFolder && !file.label}>
@@ -100,6 +102,35 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
         {file.label && (
           <DetailRow label="Sync Folder" lastChild={!!file.isFolder}>
             <span>{file.label}</span>
+            <div
+              className="mt-1 p-0 h-auto text-primary-50 text-sm flex items-center gap-1 hover:underline cursor-pointer w-fit"
+              onClick={async () => {
+                try {
+                  let filePath = file.source;
+                  if (!filePath && file.label) {
+                    const fileName = file.actualFileName || file.name;
+                    filePath = await invoke<string>("resolve_file_path", {
+                      accountId: "",
+                      label: file.label,
+                      fileName,
+                    });
+                  }
+                  if (filePath) {
+                    // Derive the sync folder path by stripping the relative file portion
+                    const relativeName = file.actualFileName || file.name;
+                    const syncFolderPath = filePath.endsWith(relativeName)
+                      ? filePath.slice(0, filePath.length - relativeName.length - 1)
+                      : filePath;
+                    await revealItemInDir(syncFolderPath);
+                  }
+                } catch (error) {
+                  console.error("Failed to reveal in Finder:", error);
+                }
+              }}
+            >
+              <FolderOpen className="size-4" />
+              <span>Reveal in Finder</span>
+            </div>
           </DetailRow>
         )}
 

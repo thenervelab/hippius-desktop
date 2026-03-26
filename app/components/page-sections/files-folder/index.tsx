@@ -172,6 +172,7 @@ export default function FolderView({
             parentFolderId: folderCid,
             parentFolderName: folderName,
             mainReqHash: "",
+            label: syncFolderLabel || undefined,
           };
         });
 
