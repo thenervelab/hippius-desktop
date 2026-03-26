@@ -231,7 +231,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       onClick={(e: React.MouseEvent) => e.stopPropagation()}
       className={cn(
         " outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out",
-        isExpanded ? "w-[378px]" : "w-[210px]"
+        isExpanded ? "w-[378px]" : isCompleted ? "w-[210px]" : "w-[240px]"
       )}
     >
       {/* Header */}
@@ -240,7 +240,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           "shadow-menu bg-grey-100 border border-grey-80 cursor-pointer hover:bg-grey-90 transition-all duration-300 ease-in-out",
           isExpanded
             ? "rounded-t-[8px] w-[378px]"
-            : "rounded-[8px] w-[210px]"
+            : `rounded-[8px] ${isCompleted ? "w-[210px]" : "w-[240px]"}`
         )}
         onClick={handleHeaderClick}
       >
@@ -541,27 +541,17 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             )}
           </div>
 
-          {/* Overall sync progress bar — shown for multi-file syncs */}
-          {!isSingleFile && (isInProgress || isCompleted) && (
+          {/* Overall sync progress bar — shown for multi-file syncs while in progress */}
+          {!isSingleFile && isInProgress && !isCompleted && (
             <div className="px-4 pt-3">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-xs text-grey-40">Overall progress</span>
                 <span className="text-xs text-grey-40">
-                  {isCompleted
-                    ? "100%"
-                    : percentage !== null ? `${percentage}%` : "Preparing..."}
+                  {percentage !== null ? `${percentage}%` : "Preparing..."}
                 </span>
               </div>
               <div className="w-full h-1.5 bg-grey-80 rounded-full overflow-hidden">
-                {isCompleted ? (
-                  <div
-                    className={cn(
-                      "h-full rounded-full transition-[width] duration-700 ease-out",
-                      hasFailed ? "bg-error-50" : "bg-success-50"
-                    )}
-                    style={{ width: "100%" }}
-                  />
-                ) : percentage !== null ? (
+                {percentage !== null ? (
                   <div
                     className="h-full rounded-full bg-primary-50 transition-[width] duration-700 ease-out"
                     style={{ width: `${percentage}%` }}
@@ -571,14 +561,14 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                 )}
               </div>
               <div className="flex items-center justify-between mt-1">
-                {!isCompleted && snapshot.bytesExpected > 0 ? (
+                {snapshot.bytesExpected > 0 ? (
                   <span className="text-[10px] text-grey-50">
                     {formatBytes(snapshot.progressBytes)} / {formatBytes(snapshot.bytesExpected)}
                   </span>
                 ) : (
                   <span />
                 )}
-                {!isCompleted && etaSeconds !== null && etaSeconds > 0 && (
+                {etaSeconds !== null && etaSeconds > 0 && (
                   <span className="text-[10px] text-grey-50">
                     ~{formatEta(etaSeconds)} remaining
                   </span>

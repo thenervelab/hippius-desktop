@@ -965,14 +965,17 @@ function startSyncActivityWatcher() {
         (f) => f.action === "local_delete" || f.action === "remote_delete"
       ).length;
 
-      // Latch: when we first detect completion, capture it so a subsequent
+      // Latch: when we detect completion, capture the snapshot so a subsequent
       // snapshot reset (new empty cycle) doesn't hide the tray rows.
-      if (isCompleted && !latchedComplete) {
+      // Also update the latch when a NEW session completes (different startedAt).
+      if (isCompleted && (!latchedComplete || progress.startedAt !== latchedSnapshot?.startedAt)) {
         latchedComplete = true;
         latchedSnapshot = progress;
       }
-      // Unlatch when a new meaningful sync starts
-      if (isActive && progress.totalFiles > 0 && latchedComplete) {
+      // Unlatch when a new session starts (different startedAt from latched).
+      // This handles fast operations where the watcher never sees totalFiles > 0
+      // before the session completes.
+      if (isActive && latchedComplete && progress.startedAt !== latchedSnapshot?.startedAt) {
         latchedComplete = false;
         latchedSnapshot = null;
       }
@@ -988,8 +991,9 @@ function startSyncActivityWatcher() {
           ).length
         : recentDeleteCount;
 
-      // Build signature to avoid redundant updates
-      const signature = `${isActive}:${effectiveCompleted}:${hasFailed}:${effectiveSnapshot.completedFiles}/${effectiveSnapshot.totalFiles}:${effectiveSnapshot.failedFiles}:${effectiveSnapshot.overallPercent}:${effectiveSnapshot.progressBytes}:del${effectiveDeleteCount}`;
+      // Build signature to avoid redundant updates.
+      // Include startedAt so different sessions with identical metrics still trigger updates.
+      const signature = `${isActive}:${effectiveCompleted}:${hasFailed}:${effectiveSnapshot.completedFiles}/${effectiveSnapshot.totalFiles}:${effectiveSnapshot.failedFiles}:${effectiveSnapshot.overallPercent}:${effectiveSnapshot.progressBytes}:del${effectiveDeleteCount}:sa${effectiveSnapshot.startedAt}`;
       if (signature === lastSyncSummarySignature) return;
       lastSyncSummarySignature = signature;
 
@@ -1067,11 +1071,10 @@ function startSyncActivityWatcher() {
           } else if (deletedInSession > 0 && nonDeleteSynced > 0) {
             progressText = `${nonDeleteSynced} synced · ${deletedInSession} deleted`;
           } else {
-            const totalFiles = effectiveSnapshot.completedFiles + effectiveSnapshot.failedFiles;
-            progressText = `${effectiveSnapshot.completedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} synced`;
+            progressText = `${effectiveSnapshot.completedFiles} ${effectiveSnapshot.completedFiles === 1 ? 'file' : 'files'} synced`;
           }
           if (effectiveSnapshot.bytesExpected > 0) {
-            sizeText = `${formatBytes(effectiveSnapshot.bytesExpected)} / ${formatBytes(effectiveSnapshot.bytesExpected)}`;
+            sizeText = formatBytes(effectiveSnapshot.bytesExpected);
           }
         }
 
