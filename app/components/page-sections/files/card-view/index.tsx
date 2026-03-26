@@ -180,7 +180,7 @@ const CardView: FC<CardViewProps> = ({
 
               return (
                 <div
-                  key={file.arionHash || `${file.actualFileName || file.name}-${index}`}
+                  key={`${file.arionHash || file.actualFileName || file.name}-${file.label || ''}-${index}`}
                   className="card-container relative"
                   onContextMenu={(e) => localHandleContextMenu(e, file)}
                 >

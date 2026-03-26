@@ -17,7 +17,7 @@ const SyncFolderBadge: FC<SyncFolderBadgeProps> = ({ label, className }) => {
     <span
       className={cn(
         "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0 align-middle",
-        "bg-primary-95 text-primary-40 border border-primary-80",
+        "bg-primary-100 text-primary-40 border border-primary-80",
         className
       )}
       title={label}

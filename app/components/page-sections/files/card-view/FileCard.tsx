@@ -278,11 +278,11 @@ const FileCard: React.FC<FileCardProps> = ({
 
       <div className="p-2 flex items-center justify-between relative bg-white bg-opacity-80 border-b border-grey-80 h-10 w-full">
         {file.isFolder ? (
-          <div className="flex items-center">
+          <div className="flex items-center min-w-0 flex-1">
             {/* Selection checkbox - inline with filename */}
             {isSelectionMode && (
               <Checkbox.Root
-                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-white data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors mr-2"
+                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-white data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors mr-2 flex-shrink-0"
                 checked={isFileSelected(file)}
                 onCheckedChange={() => toggleFileSelection(file)}
                 onClick={(e) => e.stopPropagation()}
@@ -292,7 +292,7 @@ const FileCard: React.FC<FileCardProps> = ({
                 </Checkbox.Indicator>
               </Checkbox.Root>
             )}
-            <Icon className={cn("size-5 mr-1", color)} />
+            <Icon className={cn("size-5 mr-1 flex-shrink-0", color)} />
             {isSelectionMode ? (
               <span
                 className={cn(
@@ -314,11 +314,11 @@ const FileCard: React.FC<FileCardProps> = ({
             )}
           </div>
         ) : (
-          <div className="flex items-center">
+          <div className="flex items-center min-w-0 flex-1">
             {/* Selection checkbox - inline with filename */}
             {isSelectionMode && (
               <Checkbox.Root
-                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-white data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors mr-2"
+                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-white data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors mr-2 flex-shrink-0"
                 checked={isFileSelected(file)}
                 onCheckedChange={() => toggleFileSelection(file)}
                 onClick={(e) => e.stopPropagation()}
@@ -328,14 +328,11 @@ const FileCard: React.FC<FileCardProps> = ({
                 </Checkbox.Indicator>
               </Checkbox.Root>
             )}
-            <Icon className={cn("size-5 mr-1", color)} />
+            <Icon className={cn("size-5 mr-1 flex-shrink-0", color)} />
             <span className="text-sm text-grey-20 truncate">{displayName}</span>
-            {showFolderBadge && file.label && (
-              <SyncFolderBadge label={file.label} className="ml-1" />
-            )}
           </div>
         )}
-        <div className="max-w-[20px] pr-8">{actionMenu}</div>
+        <div className="flex-shrink-0 ml-1">{actionMenu}</div>
       </div>
 
       <div
@@ -397,6 +394,11 @@ const FileCard: React.FC<FileCardProps> = ({
           </div>
         )}
       </div>
+      {showFolderBadge && file.label && (
+        <div className="absolute bottom-2 right-2 z-10">
+          <SyncFolderBadge label={file.label} />
+        </div>
+      )}
     </div >
   );
 };
