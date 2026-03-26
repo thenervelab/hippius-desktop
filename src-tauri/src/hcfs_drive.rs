@@ -753,9 +753,8 @@ pub async fn start_sync_loop(app: AppHandle) {
     // If sync is active, sets changes_pending for real user changes only.
     let tx_clone = tx.clone();
     let sync_for_watcher = sync.clone();
-    let pending_rename: std::sync::Arc<std::sync::Mutex<Option<crate::sync_logic::PendingRenameFrom>>> =
+    let pending_for_watcher: std::sync::Arc<std::sync::Mutex<Option<crate::sync_logic::PendingRenameFrom>>> =
         std::sync::Arc::new(std::sync::Mutex::new(None));
-    let pending_for_watcher = pending_rename.clone();
     let mut watcher: RecommendedWatcher = match notify::recommended_watcher(
         move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
@@ -1365,81 +1364,9 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         }
     }; // outer map lock released
 
-    // ── Drain rename hints for this drive ────────────────────────────
-    // Convert absolute watcher hints to relative paths scoped to this
-    // drive's sync_path. Directory-level hints are expanded into per-file
-    // hints using known paths from the synced-paths cache.
-    let relative_hints: Vec<crate::sync_logic::RelativeRenameHint> = {
-        let raw_hints = sync.drain_rename_hints();
-        if raw_hints.is_empty() {
-            Vec::new()
-        } else {
-            // We need the sync_path to convert absolute -> relative.
-            // Use try_lock to avoid blocking (the drive may be in use).
-            let sync_path = drive_arc
-                .try_lock()
-                .ok()
-                .map(|m| m.sync_path().to_path_buf());
-
-            match sync_path {
-                Some(root) => {
-                    let mut file_hints = Vec::new();
-                    for hint in &raw_hints {
-                        // Check if this is a directory rename by looking
-                        // at the new_path (old_path may no longer exist).
-                        if hint.new_path.is_dir() {
-                            let known_from_cache: Vec<std::path::PathBuf> = sync
-                                .get_cached_synced_paths(label)
-                                .map_or_else(Vec::new, |cache| {
-                                    cache.keys().map(std::path::PathBuf::from).collect()
-                                });
-                            let expanded = crate::sync_logic::expand_directory_hint(
-                                hint,
-                                &root,
-                                &known_from_cache,
-                            );
-                            info!(
-                                label = label,
-                                dir_old = %hint.old_path.display(),
-                                dir_new = %hint.new_path.display(),
-                                expanded_count = expanded.len(),
-                                "Expanded directory rename hint",
-                            );
-                            file_hints.extend(expanded);
-                        } else if let Some(rel) =
-                            crate::sync_logic::hint_to_relative_pair(hint, &root)
-                        {
-                            file_hints.push(rel);
-                        }
-                    }
-                    info!(
-                        label = label,
-                        raw_count = raw_hints.len(),
-                        resolved_count = file_hints.len(),
-                        "Rename hints drained for sync cycle",
-                    );
-                    file_hints
-                }
-                None => {
-                    debug!(
-                        label = label,
-                        count = raw_hints.len(),
-                        "Could not resolve drive path for rename hints, re-queuing",
-                    );
-                    // Put hints back so they're not lost
-                    for hint in raw_hints {
-                        sync.push_rename_hint(hint);
-                    }
-                    Vec::new()
-                }
-            }
-        }
-    };
-
-    // TODO(thenervelab/hcfs#52): Pass `relative_hints` to hcfs-client
-    // once sync_with_resolutions accepts PathRenameHint.
-    // For now, hints are logged above and consumed.
-    let _ = &relative_hints;
+    // Drain rename hints before acquiring the per-drive lock.
+    // Resolved to relative paths inside the lock section below.
+    let raw_rename_hints = sync.drain_rename_hints();
 
     // Lock the per-drive mutex.  Only blocks THIS drive, not others.
     let result = {
@@ -1451,6 +1378,60 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             let drive_sync_path = m.sync_path().to_path_buf();
             debug!(label = label, "Drive is unlocked, syncing directly");
             m.log_sync_diagnostics(label);
+
+            // ── Resolve rename hints to relative paths ──────────────
+            // Uses the synced-paths cache to detect directory renames
+            // (avoids TOCTOU race from checking the filesystem).
+            if !raw_rename_hints.is_empty() {
+                let known_from_cache: Vec<std::path::PathBuf> = sync
+                    .get_cached_synced_paths(label)
+                    .map_or_else(Vec::new, |cache| {
+                        cache.keys().map(std::path::PathBuf::from).collect()
+                    });
+
+                let mut file_hints = Vec::new();
+                for hint in &raw_rename_hints {
+                    let rel = crate::sync_logic::hint_to_relative_pair(
+                        hint,
+                        &drive_sync_path,
+                    );
+                    let Some(rel_hint) = rel else { continue };
+
+                    // Detect directory renames via cache: if any cached
+                    // path starts with the old relative prefix, it's a
+                    // directory rename — expand into per-file hints.
+                    let has_children = known_from_cache
+                        .iter()
+                        .any(|p| p.starts_with(&rel_hint.old_relative_path));
+
+                    if has_children {
+                        let expanded = crate::sync_logic::expand_directory_hint(
+                            hint,
+                            &drive_sync_path,
+                            &known_from_cache,
+                        );
+                        info!(
+                            label = label,
+                            dir_old = %hint.old_path.display(),
+                            dir_new = %hint.new_path.display(),
+                            expanded_count = expanded.len(),
+                            "Expanded directory rename hint",
+                        );
+                        file_hints.extend(expanded);
+                    } else {
+                        file_hints.push(rel_hint);
+                    }
+                }
+                info!(
+                    label = label,
+                    raw_count = raw_rename_hints.len(),
+                    resolved_count = file_hints.len(),
+                    "Rename hints resolved for sync cycle",
+                );
+                // TODO(thenervelab/hcfs#52): Pass `file_hints` to
+                // hcfs-client once it accepts PathRenameHint.
+                let _ = file_hints;
+            }
 
             // Emit sync_started with zero counts — real counts arrive
             // via the on_sync_plan_ready callback once the live sync

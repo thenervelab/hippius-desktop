@@ -625,11 +625,17 @@ impl SyncEngine {
 
     /// Push a rename hint captured by the file watcher.
     /// Called from the watcher callback (non-async context).
+    /// Drops the hint silently if the buffer is at capacity (10 000)
+    /// to prevent unbounded memory growth under bulk-rename workloads.
     pub fn push_rename_hint(&self, hint: crate::sync_logic::RenameHint) {
+        const MAX_RENAME_HINTS: usize = 10_000;
         let mut guard = self.rename_hints.lock().unwrap_or_else(|p| {
             warn!("Poisoned rename_hints mutex recovered");
             p.into_inner()
         });
+        if guard.len() >= MAX_RENAME_HINTS {
+            return;
+        }
         guard.push(hint);
     }
 
