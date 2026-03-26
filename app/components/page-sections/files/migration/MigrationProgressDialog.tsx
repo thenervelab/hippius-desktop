@@ -3,7 +3,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import React from "react";
 import DialogContainer from "@/components/ui/DialogContainer";
-import { Graphsheet, Icons, ProgressBar } from "@/components/ui";
+import { CardButton, Graphsheet, Icons, ProgressBar } from "@/components/ui";
 
 export interface MigrationFile {
     arionHash: string;
@@ -37,8 +37,6 @@ const formatBytes = (bytes: number): string => {
 
 const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
     open,
-    // onCancel — kept in interface for callers but button was removed from UI
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     onCancel,
     files,
     currentFileIndex,
@@ -189,6 +187,17 @@ const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
                             ))}
                         </div>
                     </div>
+
+                    {/* Cancel Button */}
+                    {!isCancelling && (
+                        <CardButton
+                            variant="secondary"
+                            className="w-full h-10 text-sm font-medium border border-grey-80"
+                            onClick={onCancel}
+                        >
+                            Cancel Migration
+                        </CardButton>
+                    )}
 
                 </div>
             </DialogContainer>

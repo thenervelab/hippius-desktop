@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import MigrationProgressDialog, {
   MigrationFile,
@@ -37,6 +37,16 @@ vi.mock("@/components/ui", () => ({
   },
   ProgressBar: ({ value }: { value: number; className?: string }) => (
     <div data-testid="progress-bar" data-value={value} />
+  ),
+  CardButton: ({ children, onClick, className }: {
+    children: React.ReactNode;
+    onClick?: () => void;
+    className?: string;
+    variant?: string;
+  }) => (
+    <button data-testid="card-button" onClick={onClick} className={className}>
+      {children}
+    </button>
   ),
 }));
 
@@ -164,5 +174,31 @@ describe("MigrationProgressDialog", () => {
     );
 
     expect(screen.getByText("43% complete")).toBeInTheDocument();
+  });
+
+  it("shows cancel button that calls onCancel", () => {
+    const onCancel = vi.fn();
+    render(
+      <MigrationProgressDialog
+        {...defaultProps}
+        onCancel={onCancel}
+      />,
+    );
+
+    const cancelButton = screen.getByText("Cancel Migration");
+    expect(cancelButton).toBeInTheDocument();
+    fireEvent.click(cancelButton);
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("hides cancel button while cancelling", () => {
+    render(
+      <MigrationProgressDialog
+        {...defaultProps}
+        isCancelling={true}
+      />,
+    );
+
+    expect(screen.queryByText("Cancel Migration")).not.toBeInTheDocument();
   });
 });
