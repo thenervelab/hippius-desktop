@@ -37,7 +37,6 @@ export default function FolderToFolderUploadDialog({
     onClose,
     onSuccess,
     onRefresh,
-    parentFolderName,
     mainFolderActualName,
     subFolderPath,
     syncBasePath,
