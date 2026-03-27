@@ -97,14 +97,24 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     : snapshot.overallPercent;
   const [smoothedPercent, setSmoothedPercent] = useState<number | null>(rawPercent);
   const prevSessionRef = useRef<number | null>(null);
+  const prevTotalFilesRef = useRef<number>(snapshot.totalFiles);
 
   useEffect(() => {
     // Reset smoothed progress when a new session starts
     if (snapshot.startedAt !== prevSessionRef.current) {
       prevSessionRef.current = snapshot.startedAt;
+      prevTotalFilesRef.current = snapshot.totalFiles;
       setSmoothedPercent(rawPercent);
       return;
     }
+    // When new files are added mid-session (deferred completion),
+    // allow the percentage to adjust downward to reflect the extra work.
+    if (snapshot.totalFiles > prevTotalFilesRef.current) {
+      prevTotalFilesRef.current = snapshot.totalFiles;
+      setSmoothedPercent(rawPercent);
+      return;
+    }
+    prevTotalFilesRef.current = snapshot.totalFiles;
     if (rawPercent === null) {
       setSmoothedPercent(null);
       return;
@@ -115,7 +125,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       if (rawPercent >= 100) return 100;
       return Math.max(prev, rawPercent);
     });
-  }, [rawPercent, snapshot.startedAt]);
+  }, [rawPercent, snapshot.startedAt, snapshot.totalFiles]);
 
   const percentage = smoothedPercent;
 

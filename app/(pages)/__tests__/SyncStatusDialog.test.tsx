@@ -198,4 +198,61 @@ describe("SyncStatusDialog", () => {
     expect(fileItems[1]).toHaveTextContent("beta.txt");
     expect(fileItems[2]).toHaveTextContent("gamma.txt");
   });
+
+  it("adjusts percentage down when new files are added mid-session", () => {
+    // Simulate deferred completion: first 4 files complete (100%),
+    // then a 5th file is merged into the same session (87%).
+    // With deferred completion the session stays active.
+    const completedFiles = [
+      makeFileProgress("a.txt", { status: "completed", progressPercent: 100, bytesTransferred: 1000, totalBytes: 1000 }),
+      makeFileProgress("b.txt", { status: "completed", progressPercent: 100, bytesTransferred: 1000, totalBytes: 1000 }),
+      makeFileProgress("c.txt", { status: "completed", progressPercent: 100, bytesTransferred: 1000, totalBytes: 1000 }),
+      makeFileProgress("d.txt", { status: "completed", progressPercent: 100, bytesTransferred: 1000, totalBytes: 1000 }),
+    ];
+    const sessionTime = Date.now();
+    // Session stays active due to deferred completion; overallPercent = 100
+    const snapshot1 = makeSnapshot(completedFiles, {
+      startedAt: sessionTime,
+      isActive: true,
+      overallPercent: 100,
+    });
+
+    const store = createStore();
+    store.set(syncEngineHealthAtom, {
+      status: "connected",
+      last_check_time: Date.now(),
+      last_successful_check: Date.now(),
+      consecutive_failures: 0,
+      server_version: null,
+      error_message: null,
+    });
+
+    const { rerender } = render(
+      <Provider store={store}>
+        <SyncStatusDialog snapshot={snapshot1} open={true} />
+      </Provider>,
+    );
+
+    // Should show "Syncing..." for 100% (status text shows "Syncing..." when at 100%)
+    expect(screen.getByText("Syncing...")).toBeInTheDocument();
+
+    // Now add a 5th file (deferred completion merged it in)
+    const mergedFiles = [
+      ...completedFiles,
+      makeFileProgress("e.txt", { status: "decrypting", progressPercent: 0, bytesTransferred: 0, totalBytes: 1000 }),
+    ];
+    // overallPercent = 4000/5000 = 80%
+    const snapshot2 = makeSnapshot(mergedFiles, { startedAt: sessionTime });
+
+    rerender(
+      <Provider store={store}>
+        <SyncStatusDialog snapshot={snapshot2} open={true} />
+      </Provider>,
+    );
+
+    // After new file added, percentage should adjust to ~80% (4000/5000),
+    // NOT stay locked at 100%.
+    const percentText = screen.getByText("Syncing 80%");
+    expect(percentText).toBeInTheDocument();
+  });
 });
