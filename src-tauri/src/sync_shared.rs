@@ -42,6 +42,13 @@ pub struct HcfsSyncState {
     pub is_syncing: bool,
     pub last_sync_time: Option<i64>,
     pub recent_activity: VecDeque<SyncActivityItem>,
+    /// Per-drive review mode: true when conflicts are pending user review.
+    /// Only blocks THIS drive's auto-sync, not other drives.
+    #[serde(skip)]
+    pub in_review: bool,
+    /// Epoch-millis when review mode was entered (0 = not in review).
+    #[serde(skip)]
+    pub review_entered_at: i64,
 }
 
 #[derive(Clone, Serialize)]

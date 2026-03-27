@@ -849,9 +849,7 @@ async fn stop_migration_drive(app: &AppHandle) {
         if let Some(prev) = handle_guard.take() {
             prev.abort();
         }
-        sync.review_mode
-            .store(false, std::sync::atomic::Ordering::Release);
-        sync.clear_review_entered();
+        sync.clear_all_reviews();
         let _ = app.emit("hcfs_sync_stopped", ());
     } else {
         sync.clear_cancel();

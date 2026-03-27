@@ -1230,27 +1230,35 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             return false;
         }
 
-        if sync.review_mode.load(Ordering::Acquire) {
-            // Auto-exit review mode after 5 minutes to prevent indefinite stall
-            const REVIEW_TIMEOUT_SECS: i64 = 300;
-            if sync.is_review_timed_out(REVIEW_TIMEOUT_SECS) {
-                warn!(
-                    timeout_secs = REVIEW_TIMEOUT_SECS,
-                    label = label,
-                    "Review mode timed out, auto-skipping conflicts and resuming sync"
-                );
-                sync.review_mode.store(false, Ordering::Release);
-                sync.clear_review_entered();
-                // Notify frontend that review mode was auto-cleared
-                if let Err(e) = app.emit(
-                    sync_events::REVIEW_MODE_TIMEOUT,
-                    sync_events::LabelPayload { label: label.to_string() },
-                ) {
-                    warn!(error = %e, "Failed to emit review_mode_timeout");
+        // Check per-drive review mode (only blocks THIS drive, not others)
+        if let Some(s) = states.get(label) {
+            if s.in_review {
+                const REVIEW_TIMEOUT_SECS: i64 = 300;
+                let timed_out = s.review_entered_at > 0 && {
+                    let now = chrono::Utc::now().timestamp_millis();
+                    (now - s.review_entered_at) > REVIEW_TIMEOUT_SECS * 1000
+                };
+                if timed_out {
+                    warn!(
+                        timeout_secs = REVIEW_TIMEOUT_SECS,
+                        label = label,
+                        "Review mode timed out, auto-skipping conflicts and resuming sync"
+                    );
+                    // Clear in-place (we hold the lock)
+                    if let Some(s) = states.get_mut(label) {
+                        s.in_review = false;
+                        s.review_entered_at = 0;
+                    }
+                    if let Err(e) = app.emit(
+                        sync_events::REVIEW_MODE_TIMEOUT,
+                        sync_events::LabelPayload { label: label.to_string() },
+                    ) {
+                        warn!(error = %e, "Failed to emit review_mode_timeout");
+                    }
+                } else {
+                    debug!(label = label, "Review mode active, skipping auto-sync");
+                    return false;
                 }
-            } else {
-                debug!(label = label, "Review mode active, skipping auto-sync");
-                return false;
             }
         }
 
@@ -1557,8 +1565,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     // for user review (the pre-sync stage is skipped).
                     match m.stage_with_paths().await {
                         Ok(restaged) if !restaged.conflicts.is_empty() => {
-                            sync.review_mode.store(true, Ordering::Release);
-                            sync.set_review_entered();
+                            sync.set_drive_review(label);
                             if let Err(e) = app.emit(
                                 sync_events::CONFLICTS_PENDING,
                                 sync_events::ConflictsPendingPayload {
@@ -1841,10 +1848,9 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                             );
                         }
                     }
-                    // Only complete the session when this is the LAST drive
-                    // syncing. The progress system uses a single shared session;
-                    // completing it while other drives are still downloading
-                    // hides the sync widget prematurely.
+                    // Only complete the session when no other drives are still
+                    // syncing. Note: end_sync() already decremented the counter
+                    // above, so we check `> 0` (any remaining) not `> 1`.
                     //
                     // Defer completion when new files were added during the sync
                     // cycle (changes_pending == true). This keeps the session
@@ -1852,7 +1858,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     // merge_into_session, giving users continuous progress
                     // ("6/10 synced") instead of a jarring reset ("0/4 syncing").
                     let has_pending_changes = sync.changes_pending.load(Ordering::Acquire);
-                    if !sync.other_syncs_in_progress()
+                    if !sync.is_any_sync_in_progress()
                         && !crate::sync_logic::should_defer_completion(has_pending_changes)
                     {
                         let _ = crate::sync_progress::complete_session(sync, up, down);

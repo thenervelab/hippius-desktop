@@ -58,19 +58,21 @@ impl Drop for TokenRefreshGuard {
     }
 }
 
-/// RAII guard that sets `review_mode` to true on creation. On drop, resets
-/// `review_mode` and clears `review_entered_at` — unless `commit()` was
-/// called (meaning the review was successfully entered and should stay active).
+/// RAII guard that enters review mode for a specific drive on creation.
+/// On drop, exits review mode — unless `commit()` was called (meaning
+/// the review was successfully entered and should stay active).
 pub struct ReviewModeGuard {
     sync: Arc<SyncEngine>,
+    label: String,
     committed: bool,
 }
 
 impl ReviewModeGuard {
-    pub fn new(sync: Arc<SyncEngine>) -> Self {
-        sync.review_mode.store(true, Ordering::Release);
+    pub fn new(sync: Arc<SyncEngine>, label: String) -> Self {
+        sync.set_drive_review(&label);
         Self {
             sync,
+            label,
             committed: false,
         }
     }
@@ -83,8 +85,7 @@ impl ReviewModeGuard {
 impl Drop for ReviewModeGuard {
     fn drop(&mut self) {
         if !self.committed {
-            self.sync.review_mode.store(false, Ordering::Release);
-            self.sync.clear_review_entered();
+            self.sync.clear_drive_review(&self.label);
         }
     }
 }
@@ -108,8 +109,6 @@ pub struct SyncEngine {
     /// when > 0. Replaces the old `AtomicBool` to support concurrent syncs.
     pub syncs_in_progress: AtomicU32,
     pub changes_pending: AtomicBool,
-    pub review_mode: AtomicBool,
-    pub review_entered_at: AtomicI64,
     pub token_refreshing: AtomicBool,
     pub consecutive_failures: AtomicI64,
     pub emit_scheduled: AtomicBool,
@@ -156,8 +155,6 @@ impl SyncEngine {
             cancel_token: AtomicBool::new(false),
             syncs_in_progress: AtomicU32::new(0),
             changes_pending: AtomicBool::new(false),
-            review_mode: AtomicBool::new(false),
-            review_entered_at: AtomicI64::new(0),
             token_refreshing: AtomicBool::new(false),
             consecutive_failures: AtomicI64::new(0),
             emit_scheduled: AtomicBool::new(false),
@@ -250,24 +247,33 @@ impl SyncEngine {
         (chrono::Utc::now().timestamp() - last) > 180
     }
 
-    // ── Review Mode ─────────────────────────────────────────────────────
+    // ── Review Mode (per-drive) ────────────────────────────────────────
 
-    pub fn set_review_entered(&self) {
+    /// Enter review mode for a specific drive.
+    pub fn set_drive_review(&self, label: &str) {
         let now = chrono::Utc::now().timestamp_millis();
-        self.review_entered_at.store(now, Ordering::Release);
+        let mut states = self.states.lock().unwrap_or_else(|p| p.into_inner());
+        let s = states.entry(label.to_string()).or_default();
+        s.in_review = true;
+        s.review_entered_at = now;
     }
 
-    pub fn clear_review_entered(&self) {
-        self.review_entered_at.store(0, Ordering::Release);
-    }
-
-    pub fn is_review_timed_out(&self, timeout_secs: i64) -> bool {
-        let entered = self.review_entered_at.load(Ordering::Acquire);
-        if entered == 0 {
-            return false;
+    /// Exit review mode for a specific drive.
+    pub fn clear_drive_review(&self, label: &str) {
+        let mut states = self.states.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(s) = states.get_mut(label) {
+            s.in_review = false;
+            s.review_entered_at = 0;
         }
-        let now = chrono::Utc::now().timestamp_millis();
-        (now - entered) > timeout_secs * 1000
+    }
+
+    /// Exit review mode for ALL drives (used during full stop/reset).
+    pub fn clear_all_reviews(&self) {
+        let mut states = self.states.lock().unwrap_or_else(|p| p.into_inner());
+        for s in states.values_mut() {
+            s.in_review = false;
+            s.review_entered_at = 0;
+        }
     }
 
     // ── Token Refresh ───────────────────────────────────────────────────

@@ -871,10 +871,21 @@ pub fn update_file_progress(
             // already "done" once the transfer finishes.  Decrypt is local
             // post-processing and shouldn't reset the completed count.
             if file.status != FileStatus::Completed {
-                file.status = match action {
-                    FileAction::Encrypt => FileStatus::Encrypting,
-                    _ => FileStatus::Decrypting,
-                };
+                if action == FileAction::Encrypt
+                    && bytes_transferred >= total_bytes
+                    && total_bytes > 0
+                {
+                    // Encryption done → next phase is upload. Transition
+                    // immediately so the widget shows "Uploading 0%" even
+                    // when chunked-upload progress callbacks are delayed.
+                    file.status = FileStatus::Uploading;
+                    file.action = FileAction::Upload;
+                } else {
+                    file.status = match action {
+                        FileAction::Encrypt => FileStatus::Encrypting,
+                        _ => FileStatus::Decrypting,
+                    };
+                }
             }
         }
         _ => {

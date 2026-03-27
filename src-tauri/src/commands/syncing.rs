@@ -30,7 +30,6 @@ use std::error::Error as _;
 use std::io::{Cursor, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter};
 
 #[derive(serde::Serialize, Clone)]
@@ -587,8 +586,6 @@ async fn initialize_sync_inner(
         sync.remove_state(&label);
     }
     sync.reset_sync_counter();
-    sync.review_mode.store(false, Ordering::Release);
-    sync.clear_review_entered();
 
     // Clear any previous progress session so a stale deferred-completion
     // session (is_active = true) from a prior sync doesn't interfere with
@@ -1069,8 +1066,7 @@ pub async fn stop_sync(app: AppHandle) -> Result<(), String> {
         guard.clear();
     }
     sync.reset_sync_counter();
-    sync.review_mode.store(false, Ordering::Release);
-    sync.clear_review_entered();
+    sync.clear_all_reviews();
     sync.reset_all_states();
     sync.reset_health();
     sync.reset_sync_failures();
@@ -1152,8 +1148,7 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
             });
             *watcher_guard = None;
         }
-        sync.review_mode.store(false, Ordering::Release);
-        sync.clear_review_entered();
+        sync.clear_all_reviews();
         let _ = app.emit(sync_events::SYNC_STOPPED, ());
     }
 
@@ -1681,17 +1676,19 @@ pub async fn stage_changes(app: tauri::AppHandle) -> Result<StagedChanges, Strin
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    // RAII guard: sets review_mode=true now, resets on drop unless commit()ed.
-    let review_guard = ReviewModeGuard::new(sync.clone());
-
     // For V1, stage the first available drive
-    let first_arc = {
+    let (label, first_arc) = {
         let guard = sync.drives.lock().await;
-        guard.values().next().map(|slot| slot.manager.clone())
+        match guard.iter().next() {
+            Some((k, slot)) => (k.clone(), slot.manager.clone()),
+            None => return Err("Drive not initialized".to_string()),
+        }
     };
-    let arc = first_arc.ok_or_else(|| "Drive not initialized".to_string())?;
 
-    let m = arc
+    // RAII guard: sets review_mode for this drive, resets on drop unless commit()ed.
+    let review_guard = ReviewModeGuard::new(sync.clone(), label);
+
+    let m = first_arc
         .try_lock()
         .map_err(|_| "Sync is in progress, please wait".to_string())?;
 
@@ -1776,9 +1773,8 @@ pub async fn sync_with_conflict_resolutions(
         });
     }
 
-    // Resume auto-sync
-    sync.review_mode.store(false, Ordering::Release);
-    sync.clear_review_entered();
+    // Resume auto-sync for this drive
+    sync.clear_drive_review(&label);
 
     // Update shared state
     sync.update_state(&label, |s| {
@@ -1828,8 +1824,7 @@ pub async fn cancel_review(app: tauri::AppHandle) -> Result<(), String> {
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    sync.review_mode.store(false, Ordering::Release);
-    sync.clear_review_entered();
+    sync.clear_all_reviews();
     info!("Review cancelled, auto-sync resumed");
     Ok(())
 }
