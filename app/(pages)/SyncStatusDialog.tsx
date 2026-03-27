@@ -28,7 +28,7 @@ const BODY_MAX_HEIGHT_REM = EXPANDED_HEIGHT_REM - COLLAPSED_HEIGHT_REM;
 const W_COLLAPSED_DONE = "13.75rem";   // 210px — "Complete" / "Failed"
 const W_COLLAPSED_WIDE = "15rem";       // 240px — "Syncing 98%"
 const W_COLLAPSED_NARROW = "14rem";  // 220px — "Syncing..." / single-digit %
-const W_EXPANDED = "23.625rem";         // 378px
+const W_EXPANDED = "26rem";             // 416px
 
 /** Format seconds into a human-readable ETA string. */
 function formatEta(totalSeconds: number): string {
@@ -78,6 +78,16 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   const hasFailed = (snapshot.failedFiles > 0 && isCompleted) || isRetrying;
   const totalFiles = snapshot.totalFiles;
   const isSingleFile = totalFiles === 1;
+
+  // Detect files still being processed even though the session may be
+  // marked as complete (e.g. encryption finishes after sync loop returns).
+  const hasActiveFiles = snapshot.files.some(
+    (f) => f.status !== "completed" && f.status !== "error"
+  );
+  // For display purposes, treat the widget as "in progress" when files
+  // are still actively processing, even if the session is marked complete.
+  const effectiveInProgress = isInProgress || hasActiveFiles;
+  const effectiveCompleted = isCompleted && !hasActiveFiles;
 
   // ── Smoothed progress ──────────────────────────────────────────
   // Interpolate between snapshot.overallPercent values so the bar
@@ -244,7 +254,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     <div
       onClick={(e: React.MouseEvent) => e.stopPropagation()}
       className="outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out"
-      style={{ width: isExpanded ? W_EXPANDED : isCompleted || hasFailed ? W_COLLAPSED_DONE : percentage !== null && percentage >= 10 ? W_COLLAPSED_WIDE : W_COLLAPSED_NARROW }}
+      style={{ width: isExpanded ? W_EXPANDED : effectiveCompleted || hasFailed ? W_COLLAPSED_DONE : percentage !== null && percentage >= 10 ? W_COLLAPSED_WIDE : W_COLLAPSED_NARROW }}
     >
       {/* Header */}
       <div
@@ -254,7 +264,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             ? "rounded-t-[8px]"
             : "rounded-[8px]"
         )}
-        style={{ width: isExpanded ? W_EXPANDED : isCompleted || hasFailed ? W_COLLAPSED_DONE : percentage !== null && percentage >= 10 ? W_COLLAPSED_WIDE : W_COLLAPSED_NARROW }}
+        style={{ width: isExpanded ? W_EXPANDED : effectiveCompleted || hasFailed ? W_COLLAPSED_DONE : percentage !== null && percentage >= 10 ? W_COLLAPSED_WIDE : W_COLLAPSED_NARROW }}
         onClick={handleHeaderClick}
       >
         <div
@@ -308,12 +318,12 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     "fill-none stroke-[4]",
                     isUnhealthy || hasFailed
                       ? "stroke-[#ef4444]"
-                      : isCompleted
+                      : effectiveCompleted
                         ? "stroke-[#4ade80]"
                         : "stroke-[#4171e0]"
                   )}
                   strokeLinecap="round"
-                  strokeDasharray={isUnhealthy || hasFailed ? "138 138" : isCompleted ? "138 138" : percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
+                  strokeDasharray={isUnhealthy || hasFailed ? "138 138" : effectiveCompleted ? "138 138" : percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
                 />
               </svg>
 
@@ -325,7 +335,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   </AbstractIconWrapper>
                 ) : (
                   <AbstractIconWrapper className="size-10 flex items-center justify-center rounded-[50%]">
-                    {isCompleted ? (
+                    {effectiveCompleted ? (
                       <Icons.TickCircle className="size-6 relative text-success-50" />
                     ) : (
                       <Icons.Refresh className="size-6 relative animate-spin text-primary-50" />
@@ -351,7 +361,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     ? "Sync Failed"
                     : hasFailed
                       ? "Sync Failed"
-                      : isCompleted
+                      : effectiveCompleted
                         ? "Sync Complete"
                         : "File Sync"}
               </span>
@@ -360,7 +370,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   ? `Sync failed. Retrying ${retryCountdown > 0 ? `in ${retryCountdown}s` : "now"}...`
                   : hasFailed
                     ? "Some files failed to sync. Please try again."
-                    : isCompleted
+                    : effectiveCompleted
                       ? "All files have been successfully synced to the network."
                       : "Your files are being synced to the Hippius network. This process may take a few minutes."}
               </InfoTooltip>
@@ -382,7 +392,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     ? retryCountdown > 0 ? `Retry ${retryCountdown}s` : "Retrying..."
                     : hasFailed
                       ? "Failed"
-                      : isCompleted
+                      : effectiveCompleted
                         ? "Complete"
                         : percentage !== null && percentage < 100
                           ? `Syncing ${percentage}%`
@@ -482,7 +492,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                 }
                 
                 // When completed successfully
-                if (isCompleted) {
+                if (effectiveCompleted) {
                   const badges: React.ReactNode[] = [];
 
                   // Combined badge: when both synced and deleted, show total as "synced";
@@ -537,7 +547,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                 
                 // During sync
                 let inProgressText: string;
-                if (isInProgress || actualTotal > 0) {
+                if (effectiveInProgress || actualTotal > 0) {
                   if (hasDownloads && !hasUploads) {
                     inProgressText = `${completedFiles} of ${actualTotal} files downloaded`;
                   } else if ((hasLocalDeletes || hasRemoteDeletes) && !hasUploads && !hasDownloads) {
@@ -569,7 +579,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           </div>
 
           {/* Overall sync progress bar — shown for multi-file syncs while in progress */}
-          {!isSingleFile && isInProgress && !isCompleted && (
+          {!isSingleFile && effectiveInProgress && !effectiveCompleted && (
             <div className="px-4 pt-3">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-xs text-grey-40">Overall progress</span>
@@ -703,7 +713,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                       {/* Row 2: transfer details or file size */}
                       {file.totalBytes > 0 && (
                         isFileInProgress && !isEncryptingOrDecrypting ? (
-                          <div className="flex items-center justify-between">
+                          <div className="flex items-center justify-between -mt-0.5">
                             <span className="text-[0.625rem] text-grey-50">
                               {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
                             </span>
@@ -717,7 +727,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                             )}
                           </div>
                         ) : (
-                          <div>
+                          <div className="-mt-0.5">
                             <span className="text-[0.625rem] text-grey-50">
                               {formatBytes(file.totalBytes)}
                             </span>
