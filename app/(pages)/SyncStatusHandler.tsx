@@ -129,11 +129,6 @@ const SyncStatusHandler: React.FC = () => {
     listen("hcfs_sync_started", () => {
       if (!cancelled && !shouldShowRef.current) {
         setIsPreparing(true);
-        // Clear dismissal so the widget appears for the new sync.
-        // Without this, a dismissed widget stays hidden during the
-        // preparing phase (isDismissed blocks rendering even though
-        // shouldShow is true via isPreparing).
-        setIsDismissed(false);
       }
     })
       .then((u) => { if (cancelled) u(); else unsubs.push(u); })
