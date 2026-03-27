@@ -248,6 +248,18 @@ html {
     background-color: #5c8eef;
   }
 }
+
+@keyframes dotPulse {
+  0% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
 .pulse-blue {
   animation: pulseBlue 1s infinite;
 }

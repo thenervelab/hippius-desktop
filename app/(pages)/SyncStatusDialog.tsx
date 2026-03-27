@@ -630,87 +630,102 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   data-file-item
                   data-testid="file-item"
                 >
-                  {/* Row 1: icon + name + status/progress */}
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <AbstractIconWrapper className="size-8 flex-shrink-0 flex items-center justify-center">
-                        <Icon className={cn("size-5 relative", color)} />
-                      </AbstractIconWrapper>
-                      <MiddleTruncatedName
-                        name={file.fileName}
-                        className="text-sm font-medium text-grey-10"
-                      />
-                    </div>
+                  <div className="flex gap-2">
+                    {/* Icon — spans both rows, vertically centered */}
+                    <AbstractIconWrapper className="size-8 flex-shrink-0 flex items-center justify-center self-center">
+                      <Icon className={cn("size-5 relative", color)} />
+                    </AbstractIconWrapper>
 
-                    <div className="flex items-center flex-shrink-0 ml-2">
-                      {isFileDeleted ? (
-                        <>
-                          <Icons.TickCircle className="w-5 h-5 text-success-50" />
-                          <span className="text-sm ml-1 text-success-50">Deleted</span>
-                        </>
-                      ) : isFileCompleted ? (
-                        <>
-                          <Icons.TickCircle className="w-5 h-5 text-success-50" />
-                          <span className="text-sm ml-1 text-success-50">Synced</span>
-                        </>
-                      ) : isFailed ? (
-                        <>
-                          <Icons.InfoCircle className="w-5 h-5 text-error-50" />
-                          <span className="text-sm ml-1 text-error-50">Failed</span>
-                        </>
-                      ) : isFileInProgress ? (
-                        isEncryptingOrDecrypting ? (
-                          <span className="text-xs text-primary-50">
-                            {file.status === "encrypting" ? "Encrypting..." : "Decrypting..."}
-                          </span>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <div className="w-[3.75rem] h-1.5 bg-grey-80 rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-primary-50 rounded-full transition-[width] duration-700 ease-out"
-                                style={{ width: `${file.progressPercent}%` }}
-                              />
+                    {/* Right side: Row 1 + Row 2 stacked */}
+                    <div className="flex-1 min-w-0">
+                      {/* Row 1: name + status/progress */}
+                      <div className="flex items-center justify-between gap-3">
+                        <MiddleTruncatedName
+                          name={file.fileName}
+                          className="text-sm font-medium text-grey-10"
+                        />
+
+                        <div className="flex items-center flex-shrink-0 ml-2">
+                          {isFileDeleted ? (
+                            <>
+                              <Icons.TickCircle className="w-5 h-5 text-success-50" />
+                              <span className="text-sm ml-1 text-success-50">Deleted</span>
+                            </>
+                          ) : isFileCompleted ? (
+                            <>
+                              <Icons.TickCircle className="w-5 h-5 text-success-50" />
+                              <span className="text-sm ml-1 text-success-50">Synced</span>
+                            </>
+                          ) : isFailed ? (
+                            <>
+                              <Icons.InfoCircle className="w-5 h-5 text-error-50" />
+                              <span className="text-sm ml-1 text-error-50">Failed</span>
+                            </>
+                          ) : isFileInProgress ? (
+                            isEncryptingOrDecrypting ? (
+                              <span className="text-xs text-primary-50">
+                                <span>{file.status === "encrypting" ? "Encrypting" : "Decrypting"}</span>
+                                <span className="inline-flex w-[0.875rem]">
+                                  <span className="animate-[dotPulse_1.4s_ease-in-out_infinite]">.</span>
+                                  <span className="animate-[dotPulse_1.4s_0.2s_ease-in-out_infinite]">.</span>
+                                  <span className="animate-[dotPulse_1.4s_0.4s_ease-in-out_infinite]">.</span>
+                                </span>
+                              </span>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <div className="w-[3.75rem] h-1.5 bg-grey-80 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-primary-50 rounded-full transition-[width] duration-700 ease-out"
+                                    style={{ width: `${file.progressPercent}%` }}
+                                  />
+                                </div>
+                                <span className="text-xs text-primary-50 min-w-[2rem] text-right">
+                                  {file.progressPercent}%
+                                </span>
+                              </div>
+                            )
+                          ) : file.status === "pending" ? (
+                            <>
+                              <Icons.InfoCircle className="w-5 h-5 text-warning-50" />
+                              <span className="text-sm ml-1 text-warning-50">Pending</span>
+                            </>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <div className="w-[3.75rem] h-1.5 bg-grey-80 rounded-full overflow-hidden">
+                                <div className="h-full bg-grey-60 rounded-full" style={{ width: "0%" }} />
+                              </div>
+                              <span className="text-xs text-grey-50 min-w-[2rem] text-right">0%</span>
                             </div>
-                            <span className="text-xs text-primary-50 min-w-[2rem] text-right">
-                              {file.progressPercent}%
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Row 2: transfer details or file size */}
+                      {file.totalBytes > 0 && (
+                        isFileInProgress && !isEncryptingOrDecrypting ? (
+                          <div className="flex items-center justify-between">
+                            <span className="text-[0.625rem] text-grey-50">
+                              {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
+                            </span>
+                            {isSingleFile && speedBytesPerSec !== null && speedBytesPerSec > 0 && (
+                              <span className="text-[0.625rem] text-grey-50">
+                                {formatBytes(Math.round(speedBytesPerSec))}/s
+                                {etaSeconds !== null && etaSeconds > 0
+                                  ? ` · ~${formatEta(etaSeconds)}`
+                                  : ""}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <div>
+                            <span className="text-[0.625rem] text-grey-50">
+                              {formatBytes(file.totalBytes)}
                             </span>
                           </div>
                         )
-                      ) : file.status === "pending" ? (
-                        <>
-                          <Icons.InfoCircle className="w-5 h-5 text-warning-50" />
-                          <span className="text-sm ml-1 text-warning-50">Pending</span>
-                        </>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <div className="w-[3.75rem] h-1.5 bg-grey-80 rounded-full overflow-hidden">
-                            <div className="h-full bg-grey-60 rounded-full" style={{ width: "0%" }} />
-                          </div>
-                          <span className="text-xs text-grey-50 min-w-[2rem] text-right">0%</span>
-                        </div>
                       )}
                     </div>
                   </div>
-
-                  {/* Row 2: file size + transfer detail */}
-                  {file.totalBytes > 0 && (
-                    <div className="flex items-center justify-between pl-10">
-                      <span className="text-[0.625rem] text-grey-50">
-                        {formatBytes(file.totalBytes)}
-                      </span>
-                      {isFileInProgress && !isEncryptingOrDecrypting && (
-                        <span className="text-[0.625rem] text-grey-50">
-                          {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
-                          {isSingleFile && speedBytesPerSec !== null && speedBytesPerSec > 0
-                            ? ` · ${formatBytes(Math.round(speedBytesPerSec))}/s`
-                            : ""}
-                          {isSingleFile && etaSeconds !== null && etaSeconds > 0
-                            ? ` · ~${formatEta(etaSeconds)}`
-                            : ""}
-                        </span>
-                      )}
-                    </div>
-                  )}
                 </div>
               );
             })}
