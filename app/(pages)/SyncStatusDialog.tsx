@@ -612,13 +612,13 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                       {formatBytes(snapshot.progressBytes)} / {formatBytes(snapshot.bytesExpected)}
                     </span>
                   )}
-                  {speedBytesPerSec !== null && speedBytesPerSec > 0 && (
+                  {effectiveInProgress && speedBytesPerSec !== null && speedBytesPerSec > 0 && (
                     <span className="text-[0.625rem] text-grey-50">
                       · {formatBytes(Math.round(speedBytesPerSec))}/s
                     </span>
                   )}
                 </div>
-                {etaSeconds !== null && etaSeconds > 0 && (
+                {effectiveInProgress && etaSeconds !== null && etaSeconds > 0 && (
                   <span className="text-[0.625rem] text-grey-50">
                     ~{formatEta(etaSeconds)} remaining
                   </span>
@@ -725,7 +725,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                             <span className="text-[0.625rem] text-grey-50">
                               {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
                             </span>
-                            {isSingleFile && speedBytesPerSec !== null && speedBytesPerSec > 0 && (
+                            {isSingleFile && effectiveInProgress && speedBytesPerSec !== null && speedBytesPerSec > 0 && (
                               <span className="text-[0.625rem] text-grey-50">
                                 {formatBytes(Math.round(speedBytesPerSec))}/s
                                 {etaSeconds !== null && etaSeconds > 0

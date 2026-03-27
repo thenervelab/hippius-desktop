@@ -129,6 +129,7 @@ const SyncStatusHandler: React.FC = () => {
     listen("hcfs_sync_started", () => {
       if (!cancelled && !shouldShowRef.current) {
         setIsPreparing(true);
+        setIsDismissed(false);
       }
     })
       .then((u) => { if (cancelled) u(); else unsubs.push(u); })
