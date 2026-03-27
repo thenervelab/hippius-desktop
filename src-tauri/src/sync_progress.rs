@@ -1509,7 +1509,12 @@ pub fn sp_get_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::OnceLock;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// Serializes tests that share the global `SyncEngine` instance.
+    /// Each test holds this guard for its entire duration, preventing
+    /// parallel tests from racing on the shared progress state.
+    static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     /// Test-only shared `SyncEngine` instance. Not used in production code.
     /// Tests share a single engine because the Rust test runner may run tests
@@ -1520,12 +1525,15 @@ mod tests {
     }
 
     /// Helper: reset shared engine state before each test.
-    fn reset_state() {
+    /// Returns a guard that serializes access — hold it for the test's lifetime.
+    fn reset_state() -> MutexGuard<'static, ()> {
+        let guard = TEST_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
         let eng = test_sync();
         let mut state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
         state.current_session = None;
         state.recent_files.clear();
         state.last_updated = now_ms();
+        guard
     }
 
     /// Create a SyncFile for testing with common defaults.
@@ -1801,7 +1809,7 @@ mod tests {
 
     #[test]
     fn complete_session_keeps_inactive_session() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Start a session with 1 upload
@@ -1849,7 +1857,7 @@ mod tests {
 
     #[test]
     fn start_session_replaces_completed_session() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Create and complete a session
@@ -1891,7 +1899,7 @@ mod tests {
 
     #[test]
     fn completed_session_still_reports_files_in_snapshot() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         let file_list = SessionFileList {
@@ -1927,7 +1935,7 @@ mod tests {
 
     #[test]
     fn remove_files_for_label_only_removes_matching() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         let file_list = SessionFileList {
@@ -1983,7 +1991,7 @@ mod tests {
 
     #[test]
     fn label_propagates_to_sync_file() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         let file_list = SessionFileList {
@@ -2002,7 +2010,7 @@ mod tests {
 
     #[test]
     fn label_propagates_to_recent_file() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         let file_list = SessionFileList {
@@ -2034,7 +2042,7 @@ mod tests {
 
     #[test]
     fn overall_progress_counts_encrypted_downloads() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Start session with 1 upload and 1 download
@@ -2069,7 +2077,7 @@ mod tests {
 
     #[test]
     fn snapshot_includes_encrypted_downloads_with_display_name() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         let file_list = SessionFileList {
@@ -2087,7 +2095,7 @@ mod tests {
 
     #[test]
     fn overall_percent_reaches_100_after_force_complete() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Register 2 files, both with progress data
@@ -2132,7 +2140,7 @@ mod tests {
 
     #[test]
     fn complete_pending_marks_stalled_files_as_error() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Register 3 files: one completes, one has partial progress,
@@ -2266,7 +2274,7 @@ mod tests {
 
     #[test]
     fn overall_percent_reflects_actual_byte_ratio() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Start with 1 file at 80% progress
@@ -2323,7 +2331,7 @@ mod tests {
 
     #[test]
     fn overall_percent_reaches_100_when_all_finished() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // 3 files: all completed → must be exactly 100, not 99
@@ -2357,7 +2365,7 @@ mod tests {
 
     #[test]
     fn overall_percent_100_when_all_known_bytes_transferred() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // 2 files: both in-progress at 100% bytes but not marked Completed
@@ -2391,7 +2399,7 @@ mod tests {
     /// Out-of-order upload callbacks must not regress bytes_transferred.
     #[test]
     fn upload_progress_is_monotonic() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         let file_list = SessionFileList {
@@ -2451,7 +2459,7 @@ mod tests {
     /// bytes_transferred tracks upload phase independently.
     #[test]
     fn encrypt_then_upload_no_regression() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         let file_list = SessionFileList {
@@ -2483,10 +2491,19 @@ mod tests {
                 "encrypt must not touch bytes_transferred"
             );
             assert_eq!(r.bytes_encrypted, bytes);
-            assert!(
-                matches!(r.status, FileStatus::Encrypting),
-                "status should be Encrypting during encrypt phase"
-            );
+            if *pct == 100 {
+                // When encryption completes, the file transitions to Uploading
+                // so the widget shows "Uploading 0%" immediately.
+                assert!(
+                    matches!(r.status, FileStatus::Uploading),
+                    "status should transition to Uploading when encryption completes"
+                );
+            } else {
+                assert!(
+                    matches!(r.status, FileStatus::Encrypting),
+                    "status should be Encrypting during encrypt phase"
+                );
+            }
         }
 
         // Upload phase starts: bytes_transferred climbs, bytes_encrypted stays at total
@@ -2526,7 +2543,7 @@ mod tests {
     /// total_bytes is set once from the first callback and never changes.
     #[test]
     fn total_bytes_set_once() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         let file_list = SessionFileList {
@@ -2590,7 +2607,7 @@ mod tests {
 
     #[test]
     fn resumed_download_detected() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         let file_list = SessionFileList {
@@ -2619,7 +2636,7 @@ mod tests {
 
     #[test]
     fn resumed_upload_detected() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         let file_list = SessionFileList {
@@ -2648,7 +2665,7 @@ mod tests {
 
     #[test]
     fn fresh_download_not_marked_as_resumed() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         let file_list = SessionFileList {
@@ -2676,7 +2693,7 @@ mod tests {
 
     #[test]
     fn resumed_from_bytes_set_only_once() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         let file_list = SessionFileList {
@@ -2719,7 +2736,7 @@ mod tests {
 
     #[test]
     fn skipped_encrypt_phase_upload_completes() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         let file_list = SessionFileList {
@@ -2774,7 +2791,7 @@ mod tests {
 
     #[test]
     fn encrypt_action_does_not_trigger_resume_detection() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         let file_list = SessionFileList {
@@ -2822,7 +2839,7 @@ mod tests {
 
     #[test]
     fn multi_drive_first_completing_drive_does_not_mark_other_drive_files_as_failed() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Drive A: 3 downloads
@@ -2909,7 +2926,7 @@ mod tests {
 
     #[test]
     fn multi_drive_mark_failures_scoped_to_label() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Drive A: 2 downloads
@@ -2977,7 +2994,7 @@ mod tests {
 
     #[test]
     fn complete_pending_marks_delete_files_as_completed() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Register a session with only delete files (0 uploads, 0 downloads)
@@ -3013,7 +3030,7 @@ mod tests {
 
     #[test]
     fn complete_session_finalizes_delete_only_cycle() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Delete-only session: 0 uploads, 0 downloads, 2 deletes
@@ -3052,7 +3069,7 @@ mod tests {
 
     #[test]
     fn mark_pending_files_as_failed_completes_delete_files() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Mixed session: 1 upload + 1 local delete
@@ -3085,7 +3102,7 @@ mod tests {
 
     #[test]
     fn mixed_upload_and_delete_session_completes() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Session with uploads and deletes
@@ -3128,7 +3145,7 @@ mod tests {
 
     #[test]
     fn complete_session_skips_already_inactive_session() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Create a real session and complete it (simulates a previous sync cycle)
@@ -3180,7 +3197,7 @@ mod tests {
     /// even if it fires, it should be harmless.
     #[test]
     fn mark_pending_noop_on_inactive_session_with_completed_files() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Create and complete a real session
@@ -3231,7 +3248,7 @@ mod tests {
 
     #[test]
     fn complete_session_preserves_real_session() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Create a session with real files
@@ -3273,7 +3290,7 @@ mod tests {
     /// The snapshot should show 10 total files, 6 completed, 4 pending.
     #[test]
     fn deferred_completion_merges_new_files_into_active_session() {
-        reset_state();
+        let _guard = reset_state();
         let eng = test_sync();
 
         // Cycle 1: 6 files planned

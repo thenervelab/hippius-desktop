@@ -128,14 +128,30 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 
   // ── ETA Calculation ────────────────────────────────────────────
   // Track byte rate over recent samples to estimate remaining time.
+  // Uses combined encrypt + transfer bytes so ETA shows during both
+  // encryption and upload/download phases.
   const rateSamplesRef = useRef<RateSample[]>([]);
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
   const [speedBytesPerSec, setSpeedBytesPerSec] = useState<number | null>(null);
 
+  // Compute combined progress across all phases (encrypt + transfer)
+  // so rate calculation works during encryption, not just upload.
+  const combinedProgressBytes = snapshot.files.reduce(
+    (sum, f) => sum + f.bytesEncrypted + f.bytesTransferred, 0
+  );
+  // Expected total work: uploads/downloads go through 2 phases
+  // (encrypt+upload or download+decrypt), deletes are single-phase.
+  const combinedBytesExpected = snapshot.files.reduce(
+    (sum, f) => {
+      const isTransfer = f.action === "upload" || f.action === "download";
+      return sum + f.totalBytes * (isTransfer ? 2 : 1);
+    }, 0
+  );
+
   useEffect(() => {
-    if (!isInProgress || snapshot.bytesExpected === 0 || snapshot.progressBytes === 0) {
+    if (!effectiveInProgress || combinedBytesExpected === 0 || combinedProgressBytes === 0) {
       // Reset when not actively transferring
-      if (!isInProgress) {
+      if (!effectiveInProgress) {
         rateSamplesRef.current = [];
         setEtaSeconds(null);
         setSpeedBytesPerSec(null);
@@ -148,8 +164,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     const lastSample = samples.length > 0 ? samples[samples.length - 1] : null;
 
     // Only add a new sample if bytes actually changed
-    if (!lastSample || snapshot.progressBytes !== lastSample.bytes) {
-      samples.push({ time: now, bytes: snapshot.progressBytes });
+    if (!lastSample || combinedProgressBytes !== lastSample.bytes) {
+      samples.push({ time: now, bytes: combinedProgressBytes });
       // Keep only the last RATE_WINDOW samples
       if (samples.length > RATE_WINDOW) {
         samples.splice(0, samples.length - RATE_WINDOW);
@@ -165,20 +181,20 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     const oldest = samples[0];
     const newest = samples[samples.length - 1];
     const elapsed = (newest.time - oldest.time) / 1000; // seconds
-    const bytesTransferred = newest.bytes - oldest.bytes;
+    const bytesProcessed = newest.bytes - oldest.bytes;
 
-    if (elapsed <= 0 || bytesTransferred <= 0) {
+    if (elapsed <= 0 || bytesProcessed <= 0) {
       return; // keep previous ETA, don't clear it
     }
 
-    const rate = bytesTransferred / elapsed; // bytes per second
+    const rate = bytesProcessed / elapsed; // bytes per second
     setSpeedBytesPerSec(rate);
-    const remaining = snapshot.bytesExpected - snapshot.progressBytes;
+    const remaining = combinedBytesExpected - combinedProgressBytes;
     const eta = remaining / rate;
 
     // Clamp ETA to reasonable bounds (max 24h)
     setEtaSeconds(Math.min(eta, 86400));
-  }, [isInProgress, snapshot.progressBytes, snapshot.bytesExpected]);
+  }, [effectiveInProgress, combinedProgressBytes, combinedBytesExpected]);
 
   // Live countdown for retry timer
   const [retryCountdown, setRetryCountdown] = useState(0);
@@ -728,6 +744,17 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                                 {etaSeconds !== null && etaSeconds > 0
                                   ? ` · ~${formatEta(etaSeconds)}`
                                   : ""}
+                              </span>
+                            )}
+                          </div>
+                        ) : isEncryptingOrDecrypting ? (
+                          <div className="flex items-center justify-between -mt-0.5">
+                            <span className="text-[0.625rem] text-grey-50">
+                              {formatBytes(file.totalBytes)}
+                            </span>
+                            {isSingleFile && effectiveInProgress && etaSeconds !== null && etaSeconds > 0 && (
+                              <span className="text-[0.625rem] text-grey-50">
+                                ~{formatEta(etaSeconds)} remaining
                               </span>
                             )}
                           </div>

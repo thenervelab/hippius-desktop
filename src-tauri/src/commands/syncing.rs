@@ -585,16 +585,25 @@ async fn initialize_sync_inner(
         sync.discard_pending_activity_for_label(&label);
         sync.remove_state(&label);
     }
-    sync.reset_sync_counter();
 
-    // Clear any previous progress session so a stale deferred-completion
-    // session (is_active = true) from a prior sync doesn't interfere with
-    // the new folder's session.  Without this, merge_into_session would
-    // append the new folder's files into the old session, producing mixed
-    // progress data from different folders.
+    // Remove only this label's files from the current session (if any)
+    // so a stale deferred-completion session doesn't interfere.
+    // We must NOT clear the entire session or reset the sync counter —
+    // other drives may be actively syncing with their files in progress.
     {
         let mut state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
-        state.current_session = None;
+        if let Some(session) = state.current_session.as_mut() {
+            let before = session.files.len();
+            session.files.retain(|_path, file| file.label != label);
+            let removed = before - session.files.len();
+            if removed > 0 {
+                info!(
+                    label = %label,
+                    removed,
+                    "Removed stale files for re-initializing label",
+                );
+            }
+        }
     }
     sync.emit_snapshot(true);
 
