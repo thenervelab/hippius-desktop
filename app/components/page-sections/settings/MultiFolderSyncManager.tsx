@@ -19,7 +19,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   getHcfsConfig,
   saveHcfsConfig,
-  initializeSync,
 } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
 import {
@@ -136,9 +135,18 @@ export default function MultiFolderSyncManager() {
             syncPath.path.split(/[\\/]/).filter(Boolean).pop() ||
             syncPath.label;
           const label = syncPath.label || `sync-folder-${index}`;
-          const isActive = await invoke<boolean>("is_drive_active", {
-            label,
-          }).catch(() => true);
+
+          // Use the persisted is_paused flag (survives restarts).
+          // Fall back to runtime is_drive_active check.
+          let status: "syncing" | "paused" = "syncing";
+          if (syncPath.isPaused) {
+            status = "paused";
+          } else {
+            const isActive = await invoke<boolean>("is_drive_active", {
+              label,
+            }).catch(() => true);
+            if (!isActive) status = "paused";
+          }
 
           const remoteInfo = remoteByLabel.get(label);
 
@@ -147,7 +155,7 @@ export default function MultiFolderSyncManager() {
             folderName,
             localPath: syncPath.path,
             isLocal: true,
-            status: isActive ? ("syncing" as const) : ("paused" as const),
+            status,
             fileCount: remoteInfo?.file_count,
             totalBytes: remoteInfo?.total_bytes,
             lastModified: remoteInfo
@@ -228,7 +236,7 @@ export default function MultiFolderSyncManager() {
 
     setIsPausing(true);
     try {
-      await invoke("stop_drive", { label: folder.id });
+      await invoke("pause_drive", { label: folder.id });
       toast.success(`Sync paused for "${folder.folderName}"`);
       setSyncFolders((prev) =>
         prev.map((f) =>
@@ -248,7 +256,7 @@ export default function MultiFolderSyncManager() {
     if (!polkadotAddress) return;
     try {
       const mnemonic = (await getMnemonic()) ?? undefined;
-      await initializeSync(polkadotAddress, folder.id, mnemonic);
+      await invoke("resume_drive", { label: folder.id, mnemonic });
 
       localStorage.removeItem(SYNC_STOPPED_STORAGE_KEY);
       appStore.set(syncEngineStatusAtom, "active");

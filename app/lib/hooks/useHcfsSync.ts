@@ -229,8 +229,15 @@ export async function tryAutoInitSync(
       return false;
     }
 
-    // Initialize sync for each configured path (skip "migration" — it has its own init flow)
-    const regularPaths = syncPaths.filter((sp) => sp.label !== "migration");
+    // Initialize sync for each configured path
+    // Skip "migration" (has its own init flow) and paused folders
+    const regularPaths = syncPaths
+      .filter((sp) => sp.label !== "migration")
+      .filter((sp) => !sp.isPaused);
+    const pausedCount = syncPaths.filter((sp) => sp.isPaused).length;
+    if (pausedCount > 0) {
+      console.log(`[AutoSync] Skipping ${pausedCount} paused sync path(s)`);
+    }
     console.log(`[AutoSync] Auto-initializing ${regularPaths.length} sync path(s)...`);
     let anyInitialized = false;
     for (const sp of regularPaths) {

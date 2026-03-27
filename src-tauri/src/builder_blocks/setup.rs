@@ -103,6 +103,7 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             type TEXT NOT NULL,
             label TEXT NOT NULL DEFAULT 'default',
             timestamp INTEGER NOT NULL,
+            is_paused INTEGER NOT NULL DEFAULT 0,
             UNIQUE(owner, label)
         )",
     )
@@ -122,6 +123,24 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             sqlx::query("ALTER TABLE sync_paths ADD COLUMN label TEXT NOT NULL DEFAULT 'default'")
                 .execute(pool)
                 .await?;
+        }
+    }
+
+    // Migration: add is_paused column if missing (existing databases)
+    {
+        let columns_info = sqlx::query("PRAGMA table_info(sync_paths)")
+            .fetch_all(pool)
+            .await?;
+        let has_is_paused = columns_info
+            .iter()
+            .any(|row| row.get::<String, _>("name") == "is_paused");
+        if !has_is_paused {
+            info!("Adding is_paused column to sync_paths");
+            sqlx::query(
+                "ALTER TABLE sync_paths ADD COLUMN is_paused INTEGER NOT NULL DEFAULT 0",
+            )
+            .execute(pool)
+            .await?;
         }
     }
 
@@ -160,6 +179,7 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                     type TEXT NOT NULL,
                     label TEXT NOT NULL DEFAULT 'default',
                     timestamp INTEGER NOT NULL,
+                    is_paused INTEGER NOT NULL DEFAULT 0,
                     UNIQUE(owner, label)
                 )",
             )

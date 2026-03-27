@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 export interface SyncPathResult {
     path: string;
     label: string;
+    isPaused?: boolean;
 }
 
 export async function getPrivateSyncPath(accountId?: string): Promise<SyncPathResult | null> {

@@ -33,8 +33,8 @@ use crate::commands::sync_status::{
 use crate::commands::syncing::{
     delete_remote_folder, get_device_name, get_drive_mnemonic, get_remote_storage_stats,
     initialize_sync, is_drive_active, list_remote_folders, persist_master_mnemonic,
-    reset_sync_data, restore_remote_folders, set_device_name, stop_drive, stop_sync,
-    trigger_sync_now,
+    pause_drive, reset_sync_data, restore_remote_folders, resume_drive, set_device_name,
+    stop_drive, stop_sync, trigger_sync_now,
 };
 use crate::sync_progress::{
     sp_clear_all_data, sp_complete_pending_files, sp_complete_session, sp_get_overall_progress,
@@ -177,6 +177,8 @@ fn main() {
             initialize_sync,
             stop_sync,
             stop_drive,
+            pause_drive,
+            resume_drive,
             reset_sync_data,
             trigger_sync_now,
             is_drive_active,

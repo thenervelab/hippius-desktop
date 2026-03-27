@@ -72,6 +72,7 @@ pub struct SyncPathResult {
     pub path: String,
     pub is_public: bool,
     pub label: String,
+    pub is_paused: bool,
 }
 
 /// Reject a new sync path if it overlaps (is a parent or child of) any existing sync path.
@@ -357,6 +358,7 @@ pub async fn get_sync_path_internal(
                 path,
                 is_public,
                 label,
+                is_paused: false,
             })
         } else {
             Err(format!(
@@ -382,6 +384,7 @@ pub async fn get_sync_path(
                 path: "".to_string(),
                 is_public: params.is_public,
                 label: "default".to_string(),
+                is_paused: false,
             });
         }
     };
@@ -404,7 +407,7 @@ pub async fn get_all_sync_paths(
     let owner = account_key(&account_id);
 
     let pool = state.pool()?;
-    let rows = sqlx::query("SELECT path, type, label FROM sync_paths WHERE owner = ?")
+    let rows = sqlx::query("SELECT path, type, label, is_paused FROM sync_paths WHERE owner = ?")
         .bind(&owner)
         .fetch_all(pool)
         .await
@@ -414,12 +417,14 @@ pub async fn get_all_sync_paths(
         .iter()
         .map(|row| {
             let path_type: String = row.get("type");
+            let paused_int: i32 = row.try_get("is_paused").unwrap_or(0);
             SyncPathResult {
                 path: row.get("path"),
                 is_public: path_type == "public",
                 label: row
                     .try_get("label")
                     .unwrap_or_else(|_| "default".to_string()),
+                is_paused: paused_int != 0,
             }
         })
         .collect();
@@ -437,6 +442,27 @@ pub async fn get_all_sync_paths(
     }
 
     Ok(results)
+}
+
+/// Set the `is_paused` flag for a sync path in the DB.
+pub(crate) async fn set_sync_path_paused(
+    pool: &SqlitePool,
+    account_id: &str,
+    label: &str,
+    paused: bool,
+) -> Result<(), String> {
+    let owner = account_key(account_id);
+    let val: i32 = if paused { 1 } else { 0 };
+
+    sqlx::query("UPDATE sync_paths SET is_paused = ? WHERE owner = ? AND label = ?")
+        .bind(val)
+        .bind(&owner)
+        .bind(label)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update is_paused: {e}"))?;
+
+    Ok(())
 }
 
 /// Delete a sync path row from the DB without stopping the drive.

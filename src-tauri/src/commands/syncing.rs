@@ -1156,6 +1156,110 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Pause a sync folder: stop the drive in-memory and mark it as paused in the DB.
+/// Unlike `stop_drive`, the DB row is preserved so the folder reappears on restart
+/// (but won't auto-sync until resumed).
+#[tauri::command]
+pub async fn pause_drive(app: AppHandle, label: String) -> Result<(), String> {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let sync = &app_state.sync;
+
+    // Stop the drive in-memory (cancel, remove from map, unwatch)
+    let (remaining, removed_path) = {
+        let mut guard = sync.drives.lock().await;
+        let path = guard.get(&label).and_then(|slot| {
+            slot.manager
+                .try_lock()
+                .ok()
+                .map(|m| m.sync_path().to_path_buf())
+        });
+        if let Some(slot) = guard.remove(&label) {
+            slot.cancel_token.cancel();
+        }
+        (guard.len(), path)
+    };
+    sync.unregister_label_root(&label);
+
+    if let Some(path) = &removed_path {
+        let mut watcher_guard = sync
+            .watcher
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some(w) = watcher_guard.as_mut() {
+            let _ = w.unwatch(path);
+        }
+    }
+
+    sync.remove_state(&label);
+    sync.discard_pending_activity_for_label(&label);
+    let _ = crate::sync_progress::remove_files_for_label(sync, label.clone());
+
+    // Mark as paused in DB (keep the row, unlike stop_drive which deletes it)
+    if let (Ok(pool), Ok(acct)) = (
+        app_state.pool(),
+        crate::utils::sync::current_account_id(&app_state),
+    ) {
+        if let Err(e) =
+            crate::commands::substrate_tx::set_sync_path_paused(
+                pool, &acct, &label, true,
+            )
+            .await
+        {
+            warn!("Failed to mark '{}' as paused in DB: {e}", label);
+        }
+    }
+
+    if remaining == 0 {
+        sync.request_cancel();
+        let mut handle_guard = sync.loop_handle.lock().await;
+        if let Some(prev) = handle_guard.take() {
+            prev.abort();
+        }
+        {
+            let mut watcher_guard = sync
+                .watcher
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *watcher_guard = None;
+        }
+        sync.clear_all_reviews();
+        let _ = app.emit(sync_events::SYNC_STOPPED, ());
+    }
+
+    info!("Paused drive '{}', {} drives remaining", label, remaining);
+    Ok(())
+}
+
+/// Resume a paused sync folder: clear the paused flag and re-initialize.
+#[tauri::command]
+pub async fn resume_drive(
+    app: AppHandle,
+    label: String,
+    mnemonic: Option<String>,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+
+    let account_id = crate::utils::sync::current_account_id(&app_state)?;
+    let pool = app_state.pool()?;
+
+    // Clear the paused flag first
+    crate::commands::substrate_tx::set_sync_path_paused(
+        pool, &account_id, &label, false,
+    )
+    .await?;
+
+    // Re-initialize the drive
+    initialize_sync_inner(
+        app.clone(), account_id, label.clone(), mnemonic, true,
+    )
+    .await?;
+
+    info!("Resumed drive '{}'", label);
+    Ok(())
+}
+
 /// Reset sync data for an account, clearing all local sync state.
 /// This allows starting fresh without corrupted or stale sync data.
 ///
