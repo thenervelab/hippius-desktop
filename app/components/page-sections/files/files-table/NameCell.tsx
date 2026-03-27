@@ -127,12 +127,13 @@ const NameCell: FC<NameCellProps> = ({
   return (
     <div className={cn("w-full min-w-0", className)} draggable={false}>
       {isFolder ? (
-        <Link href={folderUrl} prefetch={false} draggable={false}>
+        <Link href={folderUrl} prefetch={false} draggable={false} className="cursor-pointer">
           <div className="flex items-center min-w-0">
             <Icon className={cn("size-5 mr-2 flex-shrink-0", color)} />
             <MiddleTruncatedName
               name={rawName}
-              className="text-grey-20 hover:text-primary-40 hover:underline transition"
+              className="text-grey-20 transition"
+              textClassName="hover:text-primary-40 hover:underline"
             />
           </div>
         </Link>
@@ -141,9 +142,9 @@ const NameCell: FC<NameCellProps> = ({
           <Icon className={cn("size-5 mr-2 flex-shrink-0", color)} />
           <MiddleTruncatedName
             name={rawName}
-            className={cn(
-              "text-grey-20",
-              isPreviewable && "group-hover:text-primary-50 group-hover:underline"
+            className="text-grey-20"
+            textClassName={cn(
+              isPreviewable && "group-hover:text-primary-50 group-hover:underline cursor-pointer"
             )}
             suffix={<SyncStatusIcon status={syncStatus} />}
           />

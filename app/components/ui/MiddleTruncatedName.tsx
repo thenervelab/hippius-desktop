@@ -8,6 +8,10 @@ interface MiddleTruncatedNameProps {
   /** The full, untruncated filename */
   name: string;
   className?: string;
+  /** Classes applied directly to the inner text span (e.g. hover styles
+   *  like underline/color that must target the text element itself rather
+   *  than a flex wrapper). */
+  textClassName?: string;
   /** Optional inline content rendered immediately after the name (e.g. a status icon).
    *  Its width is subtracted from the available space before truncation is computed,
    *  so the icon always stays visible next to the text. */
@@ -90,6 +94,7 @@ function middleTruncate(
 const MiddleTruncatedName: FC<MiddleTruncatedNameProps> = ({
   name,
   className,
+  textClassName,
   suffix,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -141,7 +146,7 @@ const MiddleTruncatedName: FC<MiddleTruncatedNameProps> = ({
         >
           <span className="whitespace-nowrap inline-flex items-center">
             <Tooltip.Trigger asChild>
-              <span ref={textRef} className="cursor-default">{name}</span>
+              <span ref={textRef} className={textClassName}>{name}</span>
             </Tooltip.Trigger>
             {suffix && (
               <span ref={suffixRef} className="inline-flex flex-shrink-0">
