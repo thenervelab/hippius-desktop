@@ -18,6 +18,9 @@ const SyncStatusHandler: React.FC = () => {
   // Bridge the gap between sync_started and on_sync_plan_ready —
   // during this window no session exists yet so isActive is false.
   const [isPreparing, setIsPreparing] = useState(false);
+  // Track whether the widget is already visible so we can suppress
+  // redundant isPreparing toggles during no-op heartbeat cycles.
+  const shouldShowRef = useRef(false);
 
   const isActive = snapshot.isActive;
   const isRetrying = !snapshot.isActive && snapshot.retryInSecs > 0;
@@ -62,6 +65,12 @@ const SyncStatusHandler: React.FC = () => {
     isRetrying ||
     latchedComplete ||
     isPreparing;
+
+  // Keep the ref in sync so event listeners can check visibility
+  // without triggering re-renders.
+  useEffect(() => {
+    shouldShowRef.current = shouldShow;
+  }, [shouldShow]);
 
   // Use the latched snapshot for rendering when in latched state,
   // otherwise use the live snapshot. Only switch to the live snapshot
@@ -109,9 +118,15 @@ const SyncStatusHandler: React.FC = () => {
     let cancelled = false;
     const unsubs: (() => void)[] = [];
 
-    // sync_started: show widget in "Preparing" state before files are known
+    // sync_started: show widget in "Preparing" state before files are known.
+    // Only set isPreparing when the widget is NOT already visible — this
+    // prevents redundant re-render cycles during no-op heartbeat cycles
+    // (~30s) that would cause flicker via transition-all animations.
+    // When the widget is already showing (e.g. latched completed state),
+    // isPreparing is unnecessary since the snapshot update from
+    // on_sync_plan_ready will transition the display naturally.
     listen("hcfs_sync_started", () => {
-      if (!cancelled) {
+      if (!cancelled && !shouldShowRef.current) {
         setIsPreparing(true);
       }
     })

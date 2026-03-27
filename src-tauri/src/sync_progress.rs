@@ -3160,6 +3160,64 @@ mod tests {
         assert!(session.files.contains_key("/doc.txt"), "Files should be preserved");
     }
 
+    /// Verify that running mark_pending_files_as_failed against an inactive
+    /// session with already-completed files produces no state changes. This
+    /// scenario occurs on every no-op heartbeat cycle: the old completed
+    /// session is still present, count_expected_for_label returns stale
+    /// counts, and has_failures is incorrectly true. The guard in
+    /// hcfs_drive.rs (should_finalize_session) prevents this call, but
+    /// even if it fires, it should be harmless.
+    #[test]
+    fn mark_pending_noop_on_inactive_session_with_completed_files() {
+        reset_state();
+        let eng = test_sync();
+
+        // Create and complete a real session
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/photo.jpg".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        merge_into_session(eng, 1, 0, 0, 0, Some(file_list), Some("cam".to_string())).unwrap();
+        update_file_progress(
+            eng,
+            "/photo.jpg".to_string(),
+            1000,
+            1000,
+            FileAction::Upload,
+            Some("cam".to_string()),
+        )
+        .unwrap();
+        complete_session(eng, 1, 0).unwrap();
+
+        // Session is now inactive with 1 completed file
+        {
+            let state = eng.progress.lock().unwrap();
+            let session = state.current_session.as_ref().unwrap();
+            assert!(!session.is_active);
+            let f = session.files.get("/photo.jpg").unwrap();
+            assert_eq!(f.status, FileStatus::Completed);
+        }
+
+        // Simulate no-op cycle: mark_pending_files_as_failed(0, 0, label)
+        // Should not change any file status (all are already Completed)
+        mark_pending_files_as_failed(eng, 0, 0, "cam").unwrap();
+
+        let state = eng.progress.lock().unwrap();
+        let session = state.current_session.as_ref().unwrap();
+        let f = session.files.get("/photo.jpg").unwrap();
+        assert_eq!(
+            f.status,
+            FileStatus::Completed,
+            "Completed file must remain Completed after no-op mark_pending_files_as_failed"
+        );
+        assert!(
+            f.error.is_none(),
+            "No error should be set on already-completed file"
+        );
+    }
+
     #[test]
     fn complete_session_preserves_real_session() {
         reset_state();

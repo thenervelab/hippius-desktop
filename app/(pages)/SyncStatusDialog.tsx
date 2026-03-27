@@ -24,11 +24,10 @@ const COLLAPSED_HEIGHT_REM = 4;      // 64px at 16px base
 const EXPANDED_HEIGHT_REM = 28.75;   // 460px at 16px base
 const BODY_MAX_HEIGHT_REM = EXPANDED_HEIGHT_REM - COLLAPSED_HEIGHT_REM;
 
-// Collapsed widths (rem) — vary by state so the pill fits its content
-const W_COLLAPSED_DONE = "13.75rem";   // 210px — "Complete" / "Failed"
-const W_COLLAPSED_WIDE = "15rem";       // 240px — "Syncing 98%"
-const W_COLLAPSED_NARROW = "14rem";  // 220px — "Syncing..." / single-digit %
-const W_EXPANDED = "26rem";             // 416px
+// Collapsed widths (rem) — two states to avoid width jumps during progress
+const W_COLLAPSED_DONE = "13.75rem";    // 210px — "Complete" / "Failed"
+const W_COLLAPSED_ACTIVE = "15.5rem";  // 248px — "Syncing..." / "Syncing 98%" / "Retry 30s"
+const W_EXPANDED = "26rem";            // 416px
 
 /** Format seconds into a human-readable ETA string. */
 function formatEta(totalSeconds: number): string {
@@ -253,23 +252,22 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   return (
     <div
       onClick={(e: React.MouseEvent) => e.stopPropagation()}
-      className="outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out"
-      style={{ width: isExpanded ? W_EXPANDED : effectiveCompleted || hasFailed ? W_COLLAPSED_DONE : percentage !== null && percentage >= 10 ? W_COLLAPSED_WIDE : W_COLLAPSED_NARROW }}
+      className="outline-none shadow-menu rounded-[8px] overflow-hidden transition-[width] duration-300 ease-in-out"
+      style={{ width: isExpanded ? W_EXPANDED : effectiveCompleted || hasFailed ? W_COLLAPSED_DONE : W_COLLAPSED_ACTIVE }}
     >
       {/* Header */}
       <div
         className={cn(
-          "shadow-menu bg-grey-100 border border-grey-80 cursor-pointer hover:bg-grey-90 transition-all duration-300 ease-in-out",
+          "shadow-menu bg-grey-100 border border-grey-80 cursor-pointer hover:bg-grey-90 transition-[border-radius] duration-300 ease-in-out",
           isExpanded
             ? "rounded-t-[8px]"
             : "rounded-[8px]"
         )}
-        style={{ width: isExpanded ? W_EXPANDED : effectiveCompleted || hasFailed ? W_COLLAPSED_DONE : percentage !== null && percentage >= 10 ? W_COLLAPSED_WIDE : W_COLLAPSED_NARROW }}
         onClick={handleHeaderClick}
       >
         <div
           className={cn(
-            "relative flex items-center gap-3 justify-between transition-all duration-300 ease-in-out",
+            "relative flex items-center gap-3 justify-between transition-[padding] duration-300 ease-in-out",
             isExpanded ? "p-4" : "p-2"
           )}
         >
@@ -293,7 +291,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           <div className="flex items-center">
             <div
               className={cn(
-                "relative transition-all duration-300",
+                "relative transition-[opacity,width] duration-300",
                 isExpanded
                   ? "opacity-0 absolute w-0 overflow-hidden"
                   : "opacity-100 relative size-12"
@@ -348,7 +346,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             {/* Title - only visible when expanded */}
             <h2
               className={cn(
-                "flex items-center transition-all duration-300",
+                "flex items-center transition-[opacity,transform] duration-300",
                 isExpanded
                   ? "opacity-100 translate-x-0"
                   : "opacity-0 -translate-x-4 absolute"
@@ -379,7 +377,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 
           <div
             className={cn(
-              "flex items-center whitespace-nowrap transition-all duration-300 ease-in-out",
+              "flex items-center whitespace-nowrap transition-[opacity] duration-300 ease-in-out",
               isExpanded ? "opacity-100" : "opacity-0 sm:opacity-100"
             )}
           >

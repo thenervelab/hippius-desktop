@@ -1798,33 +1798,46 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             // upload/download counts against what was expected FOR THIS DRIVE.
             // Using per-label counts prevents drive A from marking drive B's
             // still-in-progress files as failed.
+            //
+            // Guard: only finalize when the current session is active. No-op
+            // cycles (on_sync_plan_ready returned total=0) leave the previous
+            // completed session sitting around; running mark_pending_files_as_failed
+            // or complete_pending_files against it would emit spurious snapshots
+            // that cause UI flicker (even though nothing actually changes).
             {
-                let label_expected = {
+                let session_is_active = {
                     let state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
-                    state.current_session.as_ref().map(|s| {
-                        crate::sync_progress::count_expected_for_label(s, &label_owned)
-                    })
+                    state.current_session.as_ref().map_or(false, |s| s.is_active)
                 };
-                let up = outcome.files_uploaded as u32;
-                let down = outcome.files_downloaded as u32;
-                if let Some((exp_up, exp_down)) = label_expected {
-                    let has_failures = up < exp_up || down < exp_down;
-                    if has_failures {
-                        let _ = crate::sync_progress::mark_pending_files_as_failed(
-                            sync, up, down, &label_owned,
-                        );
-                    } else {
-                        let _ = crate::sync_progress::complete_pending_files(
-                            sync, &label_owned,
-                        );
+
+                if crate::sync_logic::should_finalize_session(session_is_active) {
+                    let label_expected = {
+                        let state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
+                        state.current_session.as_ref().map(|s| {
+                            crate::sync_progress::count_expected_for_label(s, &label_owned)
+                        })
+                    };
+                    let up = outcome.files_uploaded as u32;
+                    let down = outcome.files_downloaded as u32;
+                    if let Some((exp_up, exp_down)) = label_expected {
+                        let has_failures = up < exp_up || down < exp_down;
+                        if has_failures {
+                            let _ = crate::sync_progress::mark_pending_files_as_failed(
+                                sync, up, down, &label_owned,
+                            );
+                        } else {
+                            let _ = crate::sync_progress::complete_pending_files(
+                                sync, &label_owned,
+                            );
+                        }
                     }
-                }
-                // Only complete the session when this is the LAST drive
-                // syncing. The progress system uses a single shared session;
-                // completing it while other drives are still downloading
-                // hides the sync widget prematurely.
-                if !sync.other_syncs_in_progress() {
-                    let _ = crate::sync_progress::complete_session(sync, up, down);
+                    // Only complete the session when this is the LAST drive
+                    // syncing. The progress system uses a single shared session;
+                    // completing it while other drives are still downloading
+                    // hides the sync widget prematurely.
+                    if !sync.other_syncs_in_progress() {
+                        let _ = crate::sync_progress::complete_session(sync, up, down);
+                    }
                 }
             }
 

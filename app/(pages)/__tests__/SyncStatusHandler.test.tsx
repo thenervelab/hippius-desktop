@@ -22,16 +22,19 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 // Mock SyncStatusDialog to inspect props
 const mockOnClose = vi.fn();
+let lastIsPreparing = false;
 vi.mock("../SyncStatusDialog", () => ({
-  default: ({ snapshot, open, onClose }: {
+  default: ({ snapshot, open, onClose, isPreparing }: {
     snapshot: SyncSnapshot;
     open: boolean;
     onClose: () => void;
+    isPreparing?: boolean;
   }) => {
     // Store onClose so tests can call it
     mockOnClose.mockImplementation(onClose);
+    lastIsPreparing = !!isPreparing;
     return open ? (
-      <div data-testid="sync-widget" data-started-at={snapshot.startedAt}>
+      <div data-testid="sync-widget" data-started-at={snapshot.startedAt} data-is-preparing={isPreparing ? "true" : "false"}>
         Widget visible
       </div>
     ) : null;
@@ -187,5 +190,67 @@ describe("SyncStatusHandler – auto-reopen after dismiss", () => {
     act(() => { store.set(snapshotAtom, EMPTY_SNAPSHOT); });
 
     expect(queryByTestId("sync-widget")).not.toBeInTheDocument();
+  });
+});
+
+describe("SyncStatusHandler – isPreparing suppression during heartbeats", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listenHandlers.clear();
+    lastIsPreparing = false;
+  });
+
+  it("suppresses isPreparing when widget is already visible (latched complete)", async () => {
+    // Start with a completed sync (widget visible via latchedComplete)
+    const snap = completedDeleteSnapshot(1000);
+    const store = createTestStore([[snapshotAtom, snap]]);
+
+    const { queryByTestId } = render(
+      <Provider store={store}><SyncStatusHandler /></Provider>,
+    );
+
+    // Widget should be visible
+    expect(queryByTestId("sync-widget")).toBeInTheDocument();
+
+    // Wait for listen handlers to be registered
+    await vi.waitFor(() => {
+      expect(listenHandlers.has("hcfs_sync_started")).toBe(true);
+    });
+
+    // Simulate heartbeat: sync_started fires
+    act(() => {
+      listenHandlers.get("hcfs_sync_started")?.({ payload: {} });
+    });
+
+    // Widget should still be visible but isPreparing should NOT be set
+    // because the widget was already showing via latchedComplete
+    expect(queryByTestId("sync-widget")).toBeInTheDocument();
+    expect(lastIsPreparing).toBe(false);
+  });
+
+  it("sets isPreparing when widget is hidden and sync starts", async () => {
+    // Start with empty snapshot (widget hidden)
+    const store = createTestStore([[snapshotAtom, EMPTY_SNAPSHOT]]);
+
+    const { queryByTestId } = render(
+      <Provider store={store}><SyncStatusHandler /></Provider>,
+    );
+
+    // Widget should NOT be visible
+    expect(queryByTestId("sync-widget")).not.toBeInTheDocument();
+
+    // Wait for listen handlers to be registered
+    await vi.waitFor(() => {
+      expect(listenHandlers.has("hcfs_sync_started")).toBe(true);
+    });
+
+    // Simulate sync starting
+    act(() => {
+      listenHandlers.get("hcfs_sync_started")?.({ payload: {} });
+    });
+
+    // Widget should now be visible with isPreparing=true
+    expect(queryByTestId("sync-widget")).toBeInTheDocument();
+    expect(lastIsPreparing).toBe(true);
   });
 });

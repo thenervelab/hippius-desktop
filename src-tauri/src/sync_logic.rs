@@ -144,6 +144,20 @@ pub fn folder_needs_recovery(folders: &[RemoteFolderInfo], target_hash: &str) ->
     !folders.iter().any(|f| f.folder_hash == target_hash)
 }
 
+/// Decide whether the post-sync finalization (mark pending files as
+/// failed/completed + complete session) should run.
+///
+/// Returns `true` when the current session is active — meaning
+/// `on_sync_plan_ready` was called during this or a concurrent sync cycle
+/// and registered files. Returns `false` when the session is inactive
+/// (left over from a previous completed cycle). Running finalization
+/// against an inactive session would compare stale expected counts with
+/// a zero outcome, incorrectly flag files as failed, and emit spurious
+/// snapshot events that cause UI flicker.
+pub fn should_finalize_session(session_is_active: bool) -> bool {
+    session_is_active
+}
+
 /// Decide whether the folder should be re-registered after a sync cycle.
 ///
 /// Returns `true` when files were uploaded during the sync. The server's upload
@@ -661,6 +675,21 @@ mod tests {
     #[test]
     fn no_register_when_zero_uploads() {
         assert!(!should_register_after_upload(0));
+    }
+
+    // --- should_finalize_session ---
+
+    #[test]
+    fn finalize_when_session_is_active() {
+        assert!(should_finalize_session(true));
+    }
+
+    #[test]
+    fn skip_finalize_when_session_is_inactive() {
+        // No-op cycles leave the previous completed session inactive.
+        // Running finalization against it would compare stale file counts
+        // with a zero outcome, emitting a spurious snapshot that flickers.
+        assert!(!should_finalize_session(false));
     }
 }
 
