@@ -180,7 +180,7 @@ export async function tryAutoInitSync(
     }
 
     // Get all configured sync paths
-    let syncPaths: { path: string; label: string }[] = [];
+    let syncPaths: { path: string; label: string; isPaused?: boolean }[] = [];
     try {
       syncPaths = await getAllSyncPaths(accountId);
     } catch {
