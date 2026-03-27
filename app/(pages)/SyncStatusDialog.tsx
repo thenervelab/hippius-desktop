@@ -54,15 +54,12 @@ interface SyncStatusDialogProps {
   snapshot: SyncSnapshot;
   open: boolean;
   onClose?: () => void;
-  /** When true the sync loop has started but no session exists yet. */
-  isPreparing?: boolean;
 }
 
 const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   snapshot,
   open,
   onClose,
-  isPreparing = false,
 }) => {
   const fileListRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -250,8 +247,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   );
 
   if (!open) return null;
-  // Nothing to show — no files, not active, not retrying, not completed, not preparing
-  if (snapshot.totalFiles === 0 && !isInProgress && !isRetrying && !isCompleted && !isPreparing) return null;
+  // Nothing to show — no files, not active, not retrying, not completed
+  if (snapshot.totalFiles === 0 && !isInProgress && !isRetrying && !isCompleted) return null;
 
   // Derive counts for the status banner
   const syncedFiles = snapshot.completedFiles;
@@ -560,7 +557,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     inProgressText = `${completedFiles} of ${actualTotal} files downloaded`;
                   } else if ((hasLocalDeletes || hasRemoteDeletes) && !hasUploads && !hasDownloads) {
                     const deleteCount = snapshot.expectedLocalDeletes + snapshot.expectedRemoteDeletes;
-                    inProgressText = `Deleting ${deleteCount} files`;
+                    inProgressText = `Deleting ${deleteCount} ${deleteCount === 1 ? 'file' : 'files'}`;
                   } else {
                     inProgressText = `${completedFiles} of ${actualTotal} files synced`;
                   }

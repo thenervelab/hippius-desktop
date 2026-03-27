@@ -15,11 +15,8 @@ const SyncStatusHandler: React.FC = () => {
   // the backend starts a new empty sync cycle and resets the snapshot.
   const [latchedComplete, setLatchedComplete] = useState(false);
   const latchedSnapshotRef = useRef(snapshot);
-  // Bridge the gap between sync_started and on_sync_plan_ready —
-  // during this window no session exists yet so isActive is false.
-  const [isPreparing, setIsPreparing] = useState(false);
-  // Track whether the widget is already visible so we can suppress
-  // redundant isPreparing toggles during no-op heartbeat cycles.
+  // Track whether the widget is currently rendered so event listeners
+  // can check visibility without triggering re-renders.
   const shouldShowRef = useRef(false);
 
   const isActive = snapshot.isActive;
@@ -52,19 +49,14 @@ const SyncStatusHandler: React.FC = () => {
     }
   }, [isCompleted, isActive, snapshot.totalFiles, snapshot.startedAt, latchedComplete, snapshot]);
 
-  // Clear preparing flag once the snapshot has an active session
-  useEffect(() => {
-    if (isPreparing && isActive) {
-      setIsPreparing(false);
-    }
-  }, [isPreparing, isActive]);
-
+  // Only show when there's real content — active session with files,
+  // completed/failed results, retrying, or latched completed state.
+  // Never show for empty heartbeat cycles (totalFiles=0, not completed).
   const shouldShow =
-    isActive ||
+    (isActive && snapshot.totalFiles > 0) ||
     isCompleted ||
     isRetrying ||
-    latchedComplete ||
-    isPreparing;
+    latchedComplete;
 
   // Keep the ref in sync so event listeners can check visibility
   // without triggering re-renders. Track actual rendering state
@@ -119,47 +111,11 @@ const SyncStatusHandler: React.FC = () => {
     let cancelled = false;
     const unsubs: (() => void)[] = [];
 
-    // sync_started: show widget in "Preparing" state before files are known.
-    // Only set isPreparing when the widget is NOT already visible — this
-    // prevents redundant re-render cycles during no-op heartbeat cycles
-    // (~30s) that would cause flicker via transition-all animations.
-    // When the widget is already showing (e.g. latched completed state),
-    // isPreparing is unnecessary since the snapshot update from
-    // on_sync_plan_ready will transition the display naturally.
-    listen("hcfs_sync_started", () => {
-      if (!cancelled && !shouldShowRef.current) {
-        setIsPreparing(true);
-        setIsDismissed(false);
-      }
-    })
-      .then((u) => { if (cancelled) u(); else unsubs.push(u); })
-      .catch(() => {});
-
-    // sync_completed: clear preparing (handles no-op cycles)
-    listen("hcfs_sync_completed", () => {
-      if (!cancelled) {
-        setIsPreparing(false);
-      }
-    })
-      .then((u) => { if (cancelled) u(); else unsubs.push(u); })
-      .catch(() => {});
-
-    // sync_error: clear preparing so the widget doesn't stay stuck
-    // in "Preparing sync..." when sync fails before a session is created
-    listen("hcfs_sync_error", () => {
-      if (!cancelled) {
-        setIsPreparing(false);
-      }
-    })
-      .then((u) => { if (cancelled) u(); else unsubs.push(u); })
-      .catch(() => {});
-
     // sync_stopped (user-initiated): dismiss widget entirely
     listen("hcfs_sync_stopped", () => {
       if (!cancelled) {
         setIsDismissed(true);
         setLatchedComplete(false);
-        setIsPreparing(false);
         dismissedTotalRef.current = 0;
       }
     })
@@ -182,7 +138,6 @@ const SyncStatusHandler: React.FC = () => {
     dismissedStartedAtRef.current = snapshot.startedAt;
     setIsDismissed(true);
     setLatchedComplete(false);
-    setIsPreparing(false);
   }, [snapshot.totalFiles, snapshot.startedAt]);
 
   if (!shouldShow || isDismissed) {
@@ -194,7 +149,6 @@ const SyncStatusHandler: React.FC = () => {
       snapshot={displaySnapshot}
       open={shouldShow}
       onClose={handleClose}
-      isPreparing={isPreparing && !isActive}
     />
   );
 };

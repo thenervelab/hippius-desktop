@@ -1139,12 +1139,11 @@ function startSyncActivityWatcher() {
       }
 
       // Show delete summary row only if there are recent deletions that
-      // aren't already reflected in the progress row. When all completed
-      // files are deletes (or a mix), the progressText already says
-      // "3 files deleted" or "2 synced · 1 deleted", so a separate row
-      // would be duplicate.
-      const deletesAlreadyInProgress = effectiveCompleted && !hasFailed;
-      if (effectiveDeleteCount > 0 && !deletesAlreadyInProgress) {
+      // aren't already reflected in the progress row. During active sync,
+      // the progress text already uses the right label ("deleted" vs "synced").
+      // On completion, the progress text handles mixed/delete-only cases.
+      const deletesInProgressText = (effectiveCompleted && !hasFailed) || (isActive && !latchedComplete);
+      if (effectiveDeleteCount > 0 && !deletesInProgressText) {
         const deleteText = `${effectiveDeleteCount} ${effectiveDeleteCount === 1 ? 'file' : 'files'} deleted`;
 
         // Find insert position: after size row, or after progress row, or after sync header
