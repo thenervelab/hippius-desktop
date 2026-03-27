@@ -127,6 +127,16 @@ const SyncStatusHandler: React.FC = () => {
       .then((u) => { if (cancelled) u(); else unsubs.push(u); })
       .catch(() => {});
 
+    // sync_error: clear preparing so the widget doesn't stay stuck
+    // in "Preparing sync..." when sync fails before a session is created
+    listen("hcfs_sync_error", () => {
+      if (!cancelled) {
+        setIsPreparing(false);
+      }
+    })
+      .then((u) => { if (cancelled) u(); else unsubs.push(u); })
+      .catch(() => {});
+
     // sync_stopped (user-initiated): dismiss widget entirely
     listen("hcfs_sync_stopped", () => {
       if (!cancelled) {
