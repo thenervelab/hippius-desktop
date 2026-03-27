@@ -1455,17 +1455,12 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             }
             emitted_sync_started = true;
 
-            // Create empty session — the plan_ready callback will
-            // merge real counts once the sync engine has a plan.
-            let _ = crate::sync_progress::merge_into_session(
-                sync,
-                0,
-                0,
-                0,
-                0,
-                None,
-                Some(label.to_string()),
-            );
+            // NOTE: we intentionally do NOT create an empty session here.
+            // The on_sync_plan_ready callback will create the session with
+            // real file counts when the sync engine has a plan.  Pre-creating
+            // an empty session (totalFiles=0) would replace the previous
+            // completed session and emit a snapshot, causing the widget/tray
+            // to flicker between "Sync Complete" and an empty active state.
 
             // Run sync with cancellation token.  Stall detection runs as
             // a parallel task that cancels the token if no progress is made

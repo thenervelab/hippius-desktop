@@ -937,7 +937,25 @@ async fn initialize_sync_inner(
         }
     }
 
-    // 12. Store the manager in the drives registry
+    // 12. Pre-populate the synced-paths cache BEFORE storing the drive in the
+    //     registry.  This ensures the file browser shows correct sync status
+    //     even if the first sync cycle locks the drive before the frontend
+    //     queries `list_sync_folder`.  Without this, the cache would be empty
+    //     and `synced_paths_for_label` would fall back to `None` (= "unknown")
+    //     or, after a recovery re-init, `Some(empty_map)` (= "pending").
+    if let Ok(state) = manager.load_sync_state() {
+        let paths = crate::commands::file_commands::build_synced_paths_from_state(&state);
+        if !paths.is_empty() {
+            info!(
+                label = %label,
+                synced_count = paths.len(),
+                "Pre-populated synced-paths cache at drive registration",
+            );
+        }
+        sync.update_synced_paths_cache(&label, paths);
+    }
+
+    // 13. Store the manager in the drives registry
     {
         let sync_root = PathBuf::from(&sync_path);
         sync.register_label_root(label.clone(), sync_root);
@@ -951,7 +969,7 @@ async fn initialize_sync_inner(
         );
     }
 
-    // 13. Start (or restart) the background sync loop to pick up the new drive
+    // 14. Start (or restart) the background sync loop to pick up the new drive
     if start_loop {
         start_sync_loop(app.clone()).await;
     }

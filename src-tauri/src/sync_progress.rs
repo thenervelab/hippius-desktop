@@ -680,6 +680,14 @@ pub fn complete_session(
     let now = now_ms();
 
     if let Some(session) = state.current_session.as_mut() {
+        // Skip if the session is already inactive (e.g. no-op cycle where
+        // on_sync_plan_ready returned total == 0, so no session was ever
+        // created — the previous completed session is still here).  Don't
+        // re-finalize or emit a snapshot, which would cause UI flicker.
+        if !session.is_active {
+            return Ok(());
+        }
+
         // Check if there's still pending work
         let pending_uploads = session
             .files
@@ -3105,5 +3113,85 @@ mod tests {
 
         let upload = session.files.get("/upload.txt").unwrap();
         assert_eq!(upload.status, FileStatus::Completed);
+    }
+
+    #[test]
+    fn complete_session_skips_already_inactive_session() {
+        reset_state();
+        let eng = test_sync();
+
+        // Create a real session and complete it (simulates a previous sync cycle)
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/doc.txt".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        merge_into_session(eng, 1, 0, 0, 0, Some(file_list), Some("drive1".to_string())).unwrap();
+        update_file_progress(
+            eng,
+            "/doc.txt".to_string(),
+            500,
+            500,
+            FileAction::Upload,
+            Some("drive1".to_string()),
+        )
+        .unwrap();
+        complete_session(eng, 1, 0).unwrap();
+
+        // Capture the completed session's timestamp
+        let completed_at = {
+            let state = eng.progress.lock().unwrap();
+            let session = state.current_session.as_ref().expect("Should exist");
+            assert!(!session.is_active, "Session should be inactive after completion");
+            session.completed_at
+        };
+
+        // Now simulate the next no-op sync cycle calling complete_session
+        // again (on_sync_plan_ready returned total=0, so no new session was
+        // created — the old completed session is still here).
+        complete_session(eng, 0, 0).unwrap();
+
+        // The session should be unchanged — no re-finalization, same timestamp
+        let state = eng.progress.lock().unwrap();
+        let session = state.current_session.as_ref().expect("Session should still exist");
+        assert!(!session.is_active, "Should remain inactive");
+        assert_eq!(session.completed_at, completed_at, "completed_at should be unchanged");
+        assert!(session.files.contains_key("/doc.txt"), "Files should be preserved");
+    }
+
+    #[test]
+    fn complete_session_preserves_real_session() {
+        reset_state();
+        let eng = test_sync();
+
+        // Create a session with real files
+        let file_list = SessionFileList {
+            upload_files: Some(vec!["/video.mkv".to_string()]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        merge_into_session(eng, 1, 0, 0, 0, Some(file_list), Some("drive1".to_string())).unwrap();
+
+        // Simulate upload completing
+        update_file_progress(
+            eng,
+            "/video.mkv".to_string(),
+            1000,
+            1000,
+            FileAction::Upload,
+            Some("drive1".to_string()),
+        )
+        .unwrap();
+
+        // Complete session
+        complete_session(eng, 1, 0).unwrap();
+
+        // Session SHOULD be kept (has real files) — NOT discarded
+        let state = eng.progress.lock().unwrap();
+        let session = state.current_session.as_ref().expect("Real session should be kept");
+        assert!(!session.is_active);
+        assert!(session.files.contains_key("/video.mkv"));
     }
 }

@@ -135,21 +135,21 @@ const MiddleTruncatedName: FC<MiddleTruncatedNameProps> = ({
   return (
     <Tooltip.Provider delayDuration={200}>
       <Tooltip.Root>
-        <Tooltip.Trigger asChild>
-          <div
-            ref={containerRef}
-            className={cn("flex-1 min-w-0 overflow-hidden text-left", className)}
-          >
-            <span className="whitespace-nowrap inline-flex items-center">
-              <span ref={textRef}>{name}</span>
-              {suffix && (
-                <span ref={suffixRef} className="inline-flex flex-shrink-0">
-                  {suffix}
-                </span>
-              )}
-            </span>
-          </div>
-        </Tooltip.Trigger>
+        <div
+          ref={containerRef}
+          className={cn("flex-1 min-w-0 overflow-hidden text-left", className)}
+        >
+          <span className="whitespace-nowrap inline-flex items-center">
+            <Tooltip.Trigger asChild>
+              <span ref={textRef} className="cursor-default">{name}</span>
+            </Tooltip.Trigger>
+            {suffix && (
+              <span ref={suffixRef} className="inline-flex flex-shrink-0">
+                {suffix}
+              </span>
+            )}
+          </span>
+        </div>
         {isTruncatedRef.current && (
           <Tooltip.Portal>
             <Tooltip.Content

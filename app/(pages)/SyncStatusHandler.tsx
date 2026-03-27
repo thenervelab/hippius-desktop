@@ -31,15 +31,16 @@ const SyncStatusHandler: React.FC = () => {
       setLatchedComplete(true);
       latchedSnapshotRef.current = snapshot;
     }
-    // Unlatch when a NEW session becomes active. Compare startedAt to
-    // detect a genuinely new session — the sync loop creates an empty
-    // session (totalFiles=0) before on_sync_plan_ready registers files,
-    // so checking totalFiles > 0 alone would miss the transition.
+    // Unlatch when a NEW session becomes active AND has real files.
+    // The sync loop creates empty sessions (totalFiles=0) between real
+    // sync cycles — unlatching for those would flash the widget away
+    // before the next no-op cycle completes with 0 files (hiding it).
     if (
       isActive &&
       latchedComplete &&
       snapshot.startedAt !== null &&
-      snapshot.startedAt !== latchedSnapshotRef.current.startedAt
+      snapshot.startedAt !== latchedSnapshotRef.current.startedAt &&
+      snapshot.totalFiles > 0
     ) {
       setLatchedComplete(false);
     }
@@ -52,15 +53,18 @@ const SyncStatusHandler: React.FC = () => {
     latchedComplete;
 
   // Use the latched snapshot for rendering when in latched state,
-  // otherwise use the live snapshot. If a different session is active
-  // (even with 0 files initially), always show the live snapshot.
-  const isNewSessionActive =
+  // otherwise use the live snapshot. Only switch to the live snapshot
+  // when a genuinely new session has real files — empty sessions
+  // (totalFiles=0, created before on_sync_plan_ready) should NOT
+  // override the latched display, since they'd cause a brief flicker.
+  const isNewSessionWithFiles =
     isActive &&
     snapshot.startedAt !== null &&
-    snapshot.startedAt !== latchedSnapshotRef.current.startedAt;
+    snapshot.startedAt !== latchedSnapshotRef.current.startedAt &&
+    snapshot.totalFiles > 0;
 
   const displaySnapshot =
-    latchedComplete && !isCompleted && !isNewSessionActive
+    latchedComplete && !isCompleted && !isNewSessionWithFiles
       ? latchedSnapshotRef.current
       : snapshot;
 
@@ -77,8 +81,8 @@ const SyncStatusHandler: React.FC = () => {
       snapshot.startedAt !== null &&
       snapshot.startedAt !== dismissedStartedAtRef.current;
 
-    // Re-open during active state if this is a new session
-    if (isActive && isNewSession) {
+    // Re-open during active state if this is a new session with real files
+    if (isActive && isNewSession && snapshot.totalFiles > 0) {
       setIsDismissed(false);
       setLatchedComplete(false);
     }

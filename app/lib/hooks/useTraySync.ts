@@ -972,19 +972,22 @@ function startSyncActivityWatcher() {
         latchedComplete = true;
         latchedSnapshot = progress;
       }
-      // Unlatch when a NEW session becomes active (different startedAt).
-      // Comparing startedAt is sufficient — the sync loop always creates a
-      // fresh session (even an empty one with totalFiles=0 before
-      // on_sync_plan_ready merges the real files). The previous guard of
-      // totalFiles > 0 caused the tray to stay latched on "✓ Sync Complete"
-      // during the brief empty-session window.
-      if (isActive && latchedComplete && progress.startedAt !== null && progress.startedAt !== latchedSnapshot?.startedAt) {
+      // Unlatch when a NEW session becomes active AND has real files.
+      // The sync loop creates empty sessions (totalFiles=0) between real
+      // sync cycles — unlatching for those would flash the tray state
+      // before the next no-op cycle completes with 0 files.
+      if (isActive && latchedComplete && progress.startedAt !== null && progress.startedAt !== latchedSnapshot?.startedAt && progress.totalFiles > 0) {
         latchedComplete = false;
         latchedSnapshot = null;
       }
 
       // Use latched state if backend has reset the snapshot
-      const effectiveCompleted = isCompleted || (latchedComplete && !isActive);
+      // Don't switch away from latched snapshot for empty active sessions
+      // (totalFiles=0, before on_sync_plan_ready) — they'd cause a brief
+      // flicker in the tray between "Sync Complete" and an empty state.
+      const isNewSessionWithFiles = isActive && progress.startedAt !== null
+        && progress.startedAt !== latchedSnapshot?.startedAt && progress.totalFiles > 0;
+      const effectiveCompleted = isCompleted || (latchedComplete && !isNewSessionWithFiles);
       const effectiveSnapshot = effectiveCompleted && !isCompleted && latchedSnapshot
         ? latchedSnapshot
         : progress;

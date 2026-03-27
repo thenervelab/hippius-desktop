@@ -482,8 +482,24 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                 if (isCompleted) {
                   const badges: React.ReactNode[] = [];
 
-                  // Synced badge (non-delete completions)
-                  if (nonDeleteSynced > 0) {
+                  // Combined badge: when both synced and deleted, show total as "synced";
+                  // when only deletions, show "deleted"
+                  if (nonDeleteSynced > 0 && deletedFiles > 0) {
+                    // Mixed: combine into a single "synced" badge
+                    const total = nonDeleteSynced + deletedFiles;
+                    let syncText: string;
+                    if (hasDownloads && !hasUploads) {
+                      syncText = `${total} ${total === 1 ? "file" : "files"} downloaded`;
+                    } else {
+                      syncText = `${total} ${total === 1 ? "file" : "files"} synced`;
+                    }
+                    badges.push(
+                      <div key="synced" className="w-fit px-2 py-0.5 border rounded bg-success-100/40 border-success-80">
+                        <div className="text-sm text-success-40">{syncText}</div>
+                      </div>
+                    );
+                  } else if (nonDeleteSynced > 0) {
+                    // Only uploads/downloads, no deletes
                     let syncText: string;
                     if (hasDownloads && !hasUploads) {
                       syncText = `${nonDeleteSynced} ${nonDeleteSynced === 1 ? "file" : "files"} downloaded`;
@@ -495,13 +511,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                         <div className="text-sm text-success-40">{syncText}</div>
                       </div>
                     );
-                  }
-
-                  // Deleted badge
-                  if (deletedFiles > 0) {
+                  } else if (deletedFiles > 0) {
+                    // Only deletions
                     badges.push(
-                      <div key="deleted" className="w-fit px-2 py-0.5 border rounded bg-error-100/40 border-error-80">
-                        <div className="text-sm text-error-40">{`${deletedFiles} ${deletedFiles === 1 ? "file" : "files"} deleted`}</div>
+                      <div key="deleted" className="w-fit px-2 py-0.5 border rounded bg-success-100/40 border-success-80">
+                        <div className="text-sm text-success-40">{`${deletedFiles} ${deletedFiles === 1 ? "file" : "files"} deleted`}</div>
                       </div>
                     );
                   }
@@ -628,8 +642,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     <div className="flex items-center flex-shrink-0 ml-2">
                       {isFileDeleted ? (
                         <>
-                          <Icons.TickCircle className="w-5 h-5 text-error-50" />
-                          <span className="text-sm ml-1 text-error-50">Deleted</span>
+                          <Icons.TickCircle className="w-5 h-5 text-success-50" />
+                          <span className="text-sm ml-1 text-success-50">Deleted</span>
                         </>
                       ) : isFileCompleted ? (
                         <>
