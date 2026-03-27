@@ -15,6 +15,9 @@ const SyncStatusHandler: React.FC = () => {
   // the backend starts a new empty sync cycle and resets the snapshot.
   const [latchedComplete, setLatchedComplete] = useState(false);
   const latchedSnapshotRef = useRef(snapshot);
+  // Bridge the gap between sync_started and on_sync_plan_ready —
+  // during this window no session exists yet so isActive is false.
+  const [isPreparing, setIsPreparing] = useState(false);
 
   const isActive = snapshot.isActive;
   const isRetrying = !snapshot.isActive && snapshot.retryInSecs > 0;
@@ -46,11 +49,19 @@ const SyncStatusHandler: React.FC = () => {
     }
   }, [isCompleted, isActive, snapshot.totalFiles, snapshot.startedAt, latchedComplete, snapshot]);
 
+  // Clear preparing flag once the snapshot has an active session
+  useEffect(() => {
+    if (isPreparing && isActive) {
+      setIsPreparing(false);
+    }
+  }, [isPreparing, isActive]);
+
   const shouldShow =
     isActive ||
     isCompleted ||
     isRetrying ||
-    latchedComplete;
+    latchedComplete ||
+    isPreparing;
 
   // Use the latched snapshot for rendering when in latched state,
   // otherwise use the live snapshot. Only switch to the live snapshot
@@ -93,25 +104,39 @@ const SyncStatusHandler: React.FC = () => {
     }
   }, [isDismissed, isActive, isCompleted, snapshot.totalFiles, snapshot.startedAt]);
 
-  // Listen for explicit sync stop (user-initiated) to dismiss widget
+  // Listen for sync lifecycle events
   useEffect(() => {
     let cancelled = false;
-    let unsub: (() => void) | null = null;
+    const unsubs: (() => void)[] = [];
 
+    // sync_started: show widget in "Preparing" state before files are known
+    listen("hcfs_sync_started", () => {
+      if (!cancelled) {
+        setIsPreparing(true);
+      }
+    })
+      .then((u) => { if (cancelled) u(); else unsubs.push(u); })
+      .catch(() => {});
+
+    // sync_completed: clear preparing (handles no-op cycles)
+    listen("hcfs_sync_completed", () => {
+      if (!cancelled) {
+        setIsPreparing(false);
+      }
+    })
+      .then((u) => { if (cancelled) u(); else unsubs.push(u); })
+      .catch(() => {});
+
+    // sync_stopped (user-initiated): dismiss widget entirely
     listen("hcfs_sync_stopped", () => {
       if (!cancelled) {
         setIsDismissed(true);
         setLatchedComplete(false);
+        setIsPreparing(false);
         dismissedTotalRef.current = 0;
       }
     })
-      .then((u) => {
-        if (cancelled) {
-          u();
-        } else {
-          unsub = u;
-        }
-      })
+      .then((u) => { if (cancelled) u(); else unsubs.push(u); })
       .catch((err) => {
         console.warn(
           "[SyncStatusHandler] Failed to listen for sync_stopped:",
@@ -121,7 +146,7 @@ const SyncStatusHandler: React.FC = () => {
 
     return () => {
       cancelled = true;
-      unsub?.();
+      unsubs.forEach((u) => u());
     };
   }, []);
 
@@ -130,6 +155,7 @@ const SyncStatusHandler: React.FC = () => {
     dismissedStartedAtRef.current = snapshot.startedAt;
     setIsDismissed(true);
     setLatchedComplete(false);
+    setIsPreparing(false);
   }, [snapshot.totalFiles, snapshot.startedAt]);
 
   if (!shouldShow || isDismissed) {
@@ -141,6 +167,7 @@ const SyncStatusHandler: React.FC = () => {
       snapshot={displaySnapshot}
       open={shouldShow}
       onClose={handleClose}
+      isPreparing={isPreparing && !isActive}
     />
   );
 };

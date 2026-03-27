@@ -55,12 +55,15 @@ interface SyncStatusDialogProps {
   snapshot: SyncSnapshot;
   open: boolean;
   onClose?: () => void;
+  /** When true the sync loop has started but no session exists yet. */
+  isPreparing?: boolean;
 }
 
 const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   snapshot,
   open,
   onClose,
+  isPreparing = false,
 }) => {
   const fileListRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -228,8 +231,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   );
 
   if (!open) return null;
-  // Nothing to show — no files, not active, not retrying, not completed
-  if (snapshot.totalFiles === 0 && !isInProgress && !isRetrying && !isCompleted) return null;
+  // Nothing to show — no files, not active, not retrying, not completed, not preparing
+  if (snapshot.totalFiles === 0 && !isInProgress && !isRetrying && !isCompleted && !isPreparing) return null;
 
   // Derive counts for the status banner
   const syncedFiles = snapshot.completedFiles;
@@ -546,7 +549,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                 } else if (completedFiles > 0) {
                   inProgressText = `${completedFiles} files synced`;
                 } else {
-                  inProgressText = "Starting sync...";
+                  inProgressText = "Preparing sync...";
                 }
 
                 return (
