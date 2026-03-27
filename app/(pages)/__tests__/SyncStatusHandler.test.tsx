@@ -253,4 +253,35 @@ describe("SyncStatusHandler – isPreparing suppression during heartbeats", () =
     expect(queryByTestId("sync-widget")).toBeInTheDocument();
     expect(lastIsPreparing).toBe(true);
   });
+
+  it("clears isDismissed when sync starts on a hidden/dismissed widget", async () => {
+    // Start with a completed sync
+    const snap = completedDeleteSnapshot(1000);
+    const store = createTestStore([[snapshotAtom, snap]]);
+
+    const { queryByTestId } = render(
+      <Provider store={store}><SyncStatusHandler /></Provider>,
+    );
+
+    // Widget visible
+    expect(queryByTestId("sync-widget")).toBeInTheDocument();
+
+    // User dismisses
+    act(() => { mockOnClose(); });
+    expect(queryByTestId("sync-widget")).not.toBeInTheDocument();
+
+    // Wait for listen handlers and shouldShowRef to update
+    await vi.waitFor(() => {
+      expect(listenHandlers.has("hcfs_sync_started")).toBe(true);
+    });
+
+    // New sync starts (e.g. user added a new folder)
+    act(() => {
+      listenHandlers.get("hcfs_sync_started")?.({ payload: {} });
+    });
+
+    // Widget should reopen in preparing state — isDismissed cleared
+    expect(queryByTestId("sync-widget")).toBeInTheDocument();
+    expect(lastIsPreparing).toBe(true);
+  });
 });

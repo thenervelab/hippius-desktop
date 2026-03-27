@@ -590,6 +590,17 @@ async fn initialize_sync_inner(
     sync.review_mode.store(false, Ordering::Release);
     sync.clear_review_entered();
 
+    // Clear any previous progress session so a stale deferred-completion
+    // session (is_active = true) from a prior sync doesn't interfere with
+    // the new folder's session.  Without this, merge_into_session would
+    // append the new folder's files into the old session, producing mixed
+    // progress data from different folders.
+    {
+        let mut state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
+        state.current_session = None;
+    }
+    sync.emit_snapshot(true);
+
     // 1. Read sync path for the given label from database
     let sync_path = get_sync_path_for_label(pool, &account_id, &label).await?;
     debug!("Sync path: {}, label: {}", sync_path, label);

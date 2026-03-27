@@ -67,10 +67,11 @@ const SyncStatusHandler: React.FC = () => {
     isPreparing;
 
   // Keep the ref in sync so event listeners can check visibility
-  // without triggering re-renders.
+  // without triggering re-renders. Track actual rendering state
+  // (not just shouldShow) so dismissed widgets are seen as hidden.
   useEffect(() => {
-    shouldShowRef.current = shouldShow;
-  }, [shouldShow]);
+    shouldShowRef.current = shouldShow && !isDismissed;
+  }, [shouldShow, isDismissed]);
 
   // Use the latched snapshot for rendering when in latched state,
   // otherwise use the live snapshot. Only switch to the live snapshot
@@ -128,6 +129,11 @@ const SyncStatusHandler: React.FC = () => {
     listen("hcfs_sync_started", () => {
       if (!cancelled && !shouldShowRef.current) {
         setIsPreparing(true);
+        // Clear dismissal so the widget appears for the new sync.
+        // Without this, a dismissed widget stays hidden during the
+        // preparing phase (isDismissed blocks rendering even though
+        // shouldShow is true via isPreparing).
+        setIsDismissed(false);
       }
     })
       .then((u) => { if (cancelled) u(); else unsubs.push(u); })
