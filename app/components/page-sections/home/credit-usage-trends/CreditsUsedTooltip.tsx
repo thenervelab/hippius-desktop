@@ -41,7 +41,7 @@ const CreditUsedTooltip: React.FC<{
       </p>
 
       <div className="font-medium text-[10px] text-grey-10">
-        <span className="mr-1">Credits:</span>
+        <span className="mr-1">Credits Used:</span>
         <span>{formattedBalance}</span>
       </div>
     </div>

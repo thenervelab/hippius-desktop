@@ -619,17 +619,10 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                       <AbstractIconWrapper className="size-8 flex-shrink-0 flex items-center justify-center">
                         <Icon className={cn("size-5 relative", color)} />
                       </AbstractIconWrapper>
-                      <div className="flex flex-col justify-center min-w-0 flex-1">
-                        <MiddleTruncatedName
-                          name={file.fileName}
-                          className="text-sm font-medium text-grey-10"
-                        />
-                        {file.totalBytes > 0 && (
-                          <div className="text-xs text-grey-70 mt-0.5">
-                            {formatBytes(file.totalBytes)}
-                          </div>
-                        )}
-                      </div>
+                      <MiddleTruncatedName
+                        name={file.fileName}
+                        className="text-sm font-medium text-grey-10"
+                      />
                     </div>
 
                     <div className="flex items-center flex-shrink-0 ml-2">
@@ -682,16 +675,23 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     </div>
                   </div>
 
-                  {/* Row 2: transfer detail (bytes · speed · ETA) — full width below */}
-                  {isFileInProgress && !isEncryptingOrDecrypting && file.totalBytes > 0 && (
-                    <div className="text-[0.625rem] text-grey-50 mt-1 text-right">
-                      {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
-                      {isSingleFile && speedBytesPerSec !== null && speedBytesPerSec > 0
-                        ? ` · ${formatBytes(Math.round(speedBytesPerSec))}/s`
-                        : ""}
-                      {isSingleFile && etaSeconds !== null && etaSeconds > 0
-                        ? ` · ~${formatEta(etaSeconds)}`
-                        : ""}
+                  {/* Row 2: file size + transfer detail */}
+                  {file.totalBytes > 0 && (
+                    <div className="flex items-center justify-between pl-10">
+                      <span className="text-[0.625rem] text-grey-50">
+                        {formatBytes(file.totalBytes)}
+                      </span>
+                      {isFileInProgress && !isEncryptingOrDecrypting && (
+                        <span className="text-[0.625rem] text-grey-50">
+                          {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
+                          {isSingleFile && speedBytesPerSec !== null && speedBytesPerSec > 0
+                            ? ` · ${formatBytes(Math.round(speedBytesPerSec))}/s`
+                            : ""}
+                          {isSingleFile && etaSeconds !== null && etaSeconds > 0
+                            ? ` · ~${formatEta(etaSeconds)}`
+                            : ""}
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>

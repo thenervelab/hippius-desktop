@@ -972,13 +972,13 @@ function startSyncActivityWatcher() {
         latchedComplete = true;
         latchedSnapshot = progress;
       }
-      // Unlatch when a new MEANINGFUL session starts (different startedAt AND
-      // has actual files). The totalFiles > 0 guard prevents sync-loop probes
-      // (which briefly create an empty active session) from wiping the latch.
-      // Fast operations that complete before the watcher catches them active
-      // are handled by the latch-update condition above (updates latchedSnapshot
-      // directly when a new completed session is detected).
-      if (isActive && progress.totalFiles > 0 && latchedComplete && progress.startedAt !== latchedSnapshot?.startedAt) {
+      // Unlatch when a NEW session becomes active (different startedAt).
+      // Comparing startedAt is sufficient — the sync loop always creates a
+      // fresh session (even an empty one with totalFiles=0 before
+      // on_sync_plan_ready merges the real files). The previous guard of
+      // totalFiles > 0 caused the tray to stay latched on "✓ Sync Complete"
+      // during the brief empty-session window.
+      if (isActive && latchedComplete && progress.startedAt !== null && progress.startedAt !== latchedSnapshot?.startedAt) {
         latchedComplete = false;
         latchedSnapshot = null;
       }
@@ -1020,12 +1020,16 @@ function startSyncActivityWatcher() {
 
       // Update the header label and icon to reflect the watcher's view.
       // This is the SINGLE source of truth for tray icon/label state.
-      if (isActive && !latchedComplete && progress.totalFiles > 0) {
-        const percent = progress.overallPercent;
-        if (percent === 0 && progress.completedFiles === 0 && progress.progressBytes === 0) {
-          await updateTraySyncLabel(`⟳ Preparing sync…`);
+      if (isActive && !latchedComplete) {
+        if (progress.totalFiles > 0) {
+          const percent = progress.overallPercent;
+          if (percent === 0 && progress.completedFiles === 0 && progress.progressBytes === 0) {
+            await updateTraySyncLabel(`⟳ Preparing sync…`);
+          } else {
+            await updateTraySyncLabel(`⟳ Syncing: ${percent}%`);
+          }
         } else {
-          await updateTraySyncLabel(`⟳ Syncing: ${percent}%`);
+          await updateTraySyncLabel(`⟳ Preparing sync…`);
         }
         await setTrayIconSyncing(true, false);
       } else if (effectiveCompleted && hasFailed) {

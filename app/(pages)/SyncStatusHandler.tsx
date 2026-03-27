@@ -25,27 +25,42 @@ const SyncStatusHandler: React.FC = () => {
 
   // Latch: when we first detect completion, capture it so a subsequent
   // snapshot reset (new empty cycle) doesn't hide the widget.
+  // Unlatch when a new session starts (different startedAt while active).
   useEffect(() => {
     if (isCompleted && !latchedComplete) {
       setLatchedComplete(true);
       latchedSnapshotRef.current = snapshot;
     }
-    // Unlatch when a new meaningful sync starts (active with real files)
-    if (isActive && snapshot.totalFiles > 0 && latchedComplete) {
+    // Unlatch when a NEW session becomes active. Compare startedAt to
+    // detect a genuinely new session — the sync loop creates an empty
+    // session (totalFiles=0) before on_sync_plan_ready registers files,
+    // so checking totalFiles > 0 alone would miss the transition.
+    if (
+      isActive &&
+      latchedComplete &&
+      snapshot.startedAt !== null &&
+      snapshot.startedAt !== latchedSnapshotRef.current.startedAt
+    ) {
       setLatchedComplete(false);
     }
-  }, [isCompleted, isActive, snapshot.totalFiles, latchedComplete, snapshot]);
+  }, [isCompleted, isActive, snapshot.totalFiles, snapshot.startedAt, latchedComplete, snapshot]);
 
   const shouldShow =
-    (isActive && snapshot.totalFiles > 0) ||
+    isActive ||
     isCompleted ||
     isRetrying ||
     latchedComplete;
 
   // Use the latched snapshot for rendering when in latched state,
-  // otherwise use the live snapshot.
+  // otherwise use the live snapshot. If a different session is active
+  // (even with 0 files initially), always show the live snapshot.
+  const isNewSessionActive =
+    isActive &&
+    snapshot.startedAt !== null &&
+    snapshot.startedAt !== latchedSnapshotRef.current.startedAt;
+
   const displaySnapshot =
-    latchedComplete && !isCompleted && !(isActive && snapshot.totalFiles > 0)
+    latchedComplete && !isCompleted && !isNewSessionActive
       ? latchedSnapshotRef.current
       : snapshot;
 
@@ -62,13 +77,10 @@ const SyncStatusHandler: React.FC = () => {
       snapshot.startedAt !== null &&
       snapshot.startedAt !== dismissedStartedAtRef.current;
 
-    // Re-open during active state if session or file count changed
-    if (isActive && snapshot.totalFiles > 0) {
-      const isDifferentTotal = snapshot.totalFiles !== dismissedTotalRef.current;
-      if (isNewSession || isDifferentTotal) {
-        setIsDismissed(false);
-        setLatchedComplete(false);
-      }
+    // Re-open during active state if this is a new session
+    if (isActive && isNewSession) {
+      setIsDismissed(false);
+      setLatchedComplete(false);
     }
 
     // Re-open for a completed session we haven't seen yet (fast ops like deletes)
