@@ -3252,4 +3252,123 @@ mod tests {
         assert!(!session.is_active);
         assert!(session.files.contains_key("/video.mkv"));
     }
+
+    // --- Deferred completion: mid-sync file addition ---
+
+    /// Simulates the deferred-completion flow: 6 files sync in cycle 1,
+    /// 4 more files are added during the sync (changes_pending = true),
+    /// cycle 1 defers `complete_session`, and cycle 2's `merge_into_session`
+    /// adds the 4 new files into the still-active session.
+    /// The snapshot should show 10 total files, 6 completed, 4 pending.
+    #[test]
+    fn deferred_completion_merges_new_files_into_active_session() {
+        reset_state();
+        let eng = test_sync();
+
+        // Cycle 1: 6 files planned
+        let cycle1_files = SessionFileList {
+            upload_files: Some(vec![
+                "a.txt".into(),
+                "b.txt".into(),
+                "c.txt".into(),
+            ]),
+            download_files: Some(vec![
+                "d.txt".into(),
+                "e.txt".into(),
+                "f.txt".into(),
+            ]),
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        merge_into_session(eng, 3, 3, 0, 0, Some(cycle1_files), Some("drive1".to_string()))
+            .unwrap();
+
+        // Simulate progress on each file so complete_pending_files marks
+        // them as Completed (files with 0 bytes are marked as stalled/Error).
+        for path in &["a.txt", "b.txt", "c.txt"] {
+            update_file_progress(
+                eng,
+                path.to_string(),
+                100,
+                100,
+                FileAction::Upload,
+                Some("drive1".to_string()),
+            )
+            .unwrap();
+        }
+        for path in &["d.txt", "e.txt", "f.txt"] {
+            update_file_progress(
+                eng,
+                path.to_string(),
+                100,
+                100,
+                FileAction::Download,
+                Some("drive1".to_string()),
+            )
+            .unwrap();
+        }
+
+        // Simulate cycle 1 completing: all 6 files finished
+        complete_pending_files(eng, "drive1").unwrap();
+
+        // At this point, complete_session would normally run, but we DEFER
+        // it because changes_pending == true. Session stays active.
+        // (We simply don't call complete_session here.)
+
+        // Verify session is still active with 6 completed files
+        {
+            let state = eng.progress.lock().unwrap();
+            let session = state.current_session.as_ref().unwrap();
+            assert!(session.is_active, "Session should still be active (deferred)");
+            assert_eq!(session.files.len(), 6, "Should have 6 files from cycle 1");
+            assert!(
+                session
+                    .files
+                    .values()
+                    .all(|f| f.status == FileStatus::Completed),
+                "All cycle 1 files should be completed"
+            );
+        }
+
+        // Cycle 2: 4 new files planned, merged into the still-active session
+        let cycle2_files = SessionFileList {
+            upload_files: Some(vec![
+                "g.txt".into(),
+                "h.txt".into(),
+                "i.txt".into(),
+                "j.txt".into(),
+            ]),
+            download_files: None,
+            local_delete_files: None,
+            remote_delete_files: None,
+        };
+        merge_into_session(eng, 4, 0, 0, 0, Some(cycle2_files), Some("drive1".to_string()))
+            .unwrap();
+
+        // Verify merged session has 10 files: 6 completed + 4 pending
+        let state = eng.progress.lock().unwrap();
+        let session = state.current_session.as_ref().unwrap();
+        assert!(session.is_active, "Session should remain active");
+        assert_eq!(session.files.len(), 10, "Should have 10 files total");
+
+        let completed_count = session
+            .files
+            .values()
+            .filter(|f| f.status == FileStatus::Completed)
+            .count();
+        let pending_count = session
+            .files
+            .values()
+            .filter(|f| f.status == FileStatus::Pending)
+            .count();
+        assert_eq!(completed_count, 6, "6 files from cycle 1 should be completed");
+        assert_eq!(pending_count, 4, "4 files from cycle 2 should be pending");
+
+        // Verify snapshot shows correct progress
+        let snapshot = build_snapshot(&state);
+        assert!(snapshot.is_active, "Snapshot should show active sync");
+        assert_eq!(snapshot.total_files, 10, "Snapshot total should be 10");
+        assert_eq!(snapshot.completed_files, 6, "Snapshot completed should be 6");
+        assert_eq!(snapshot.failed_files, 0, "No failures");
+    }
 }

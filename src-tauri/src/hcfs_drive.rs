@@ -1531,8 +1531,18 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         // syncing. The progress system uses a single shared session;
                         // completing it while other drives are still downloading
                         // hides the sync widget prematurely.
-                        if !sync.other_syncs_in_progress() {
+                        // Also defer completion when new files are pending, so the
+                        // follow-up cycle can merge into the same session.
+                        let has_pending = sync.changes_pending.load(Ordering::Acquire);
+                        if !sync.other_syncs_in_progress()
+                            && !crate::sync_logic::should_defer_completion(has_pending)
+                        {
                             let _ = crate::sync_progress::complete_session(sync, up, down);
+                        } else if has_pending {
+                            info!(
+                                label = %label,
+                                "Deferring session completion — new files pending from watcher",
+                            );
                         }
                     }
 
@@ -1835,8 +1845,22 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     // syncing. The progress system uses a single shared session;
                     // completing it while other drives are still downloading
                     // hides the sync widget prematurely.
-                    if !sync.other_syncs_in_progress() {
+                    //
+                    // Defer completion when new files were added during the sync
+                    // cycle (changes_pending == true). This keeps the session
+                    // active so the follow-up cycle's on_sync_plan_ready can
+                    // merge_into_session, giving users continuous progress
+                    // ("6/10 synced") instead of a jarring reset ("0/4 syncing").
+                    let has_pending_changes = sync.changes_pending.load(Ordering::Acquire);
+                    if !sync.other_syncs_in_progress()
+                        && !crate::sync_logic::should_defer_completion(has_pending_changes)
+                    {
                         let _ = crate::sync_progress::complete_session(sync, up, down);
+                    } else if has_pending_changes {
+                        info!(
+                            label = %label_owned,
+                            "Deferring session completion — new files pending from watcher",
+                        );
                     }
                 }
             }

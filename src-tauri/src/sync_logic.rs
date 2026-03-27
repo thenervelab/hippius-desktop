@@ -158,6 +158,23 @@ pub fn should_finalize_session(session_is_active: bool) -> bool {
     session_is_active
 }
 
+/// Decide whether to defer session completion when new changes are pending.
+///
+/// When the file watcher detects new files added during an active sync cycle,
+/// it sets `changes_pending = true`. If we complete the session now, the
+/// follow-up cycle would create a **new** session for just the new files,
+/// losing the context of already-completed files from the widget.
+///
+/// By deferring completion, the next cycle's `on_sync_plan_ready` calls
+/// `merge_into_session`, appending the new files to the still-active session.
+/// Users see continuous progress (e.g. "6/10 synced → 10/10 synced") instead
+/// of a jarring reset ("6/6 synced → 0/4 syncing").
+///
+/// Returns `true` when completion should be deferred (changes are pending).
+pub fn should_defer_completion(changes_pending: bool) -> bool {
+    changes_pending
+}
+
 /// Decide whether the folder should be re-registered after a sync cycle.
 ///
 /// Returns `true` when files were uploaded during the sync. The server's upload
@@ -690,6 +707,23 @@ mod tests {
         // Running finalization against it would compare stale file counts
         // with a zero outcome, emitting a spurious snapshot that flickers.
         assert!(!should_finalize_session(false));
+    }
+
+    // --- should_defer_completion ---
+
+    #[test]
+    fn defer_completion_when_changes_pending() {
+        // When the file watcher has flagged new changes during the current
+        // sync cycle, we defer session completion so the follow-up cycle
+        // can merge the new files into the still-active session.
+        assert!(should_defer_completion(true));
+    }
+
+    #[test]
+    fn no_defer_when_no_pending_changes() {
+        // When no new files were added during the sync, complete the
+        // session normally.
+        assert!(!should_defer_completion(false));
     }
 }
 
