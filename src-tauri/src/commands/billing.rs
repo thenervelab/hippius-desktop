@@ -224,16 +224,33 @@ pub async fn get_add_credit_events(
 #[tauri::command]
 pub async fn get_files_size(
     account_id: String,
-    limit: Option<i64>,
+    days_ago: Option<i64>,
 ) -> Result<serde_json::Value, String> {
     let indexer = IndexerClient::from_env().map_err(|e| e.to_string())?;
-    let limit_str = limit.unwrap_or(30).to_string();
+    let days_str = days_ago.unwrap_or(30).to_string();
     let params = vec![
         ("account_id", account_id.as_str()),
-        ("limit", limit_str.as_str()),
+        ("days_ago", days_str.as_str()),
     ];
     indexer
-        .get::<serde_json::Value>("/ipfs/user-total-files-size", &params)
+        .get::<serde_json::Value>("/user-total-file-size", &params)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_files_count(
+    account_id: String,
+    days_ago: Option<i64>,
+) -> Result<serde_json::Value, String> {
+    let indexer = IndexerClient::from_env().map_err(|e| e.to_string())?;
+    let days_str = days_ago.unwrap_or(30).to_string();
+    let params = vec![
+        ("account_id", account_id.as_str()),
+        ("days_ago", days_str.as_str()),
+    ];
+    indexer
+        .get::<serde_json::Value>("/user-total-files-count", &params)
         .await
         .map_err(|e| e.to_string())
 }

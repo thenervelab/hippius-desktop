@@ -47,8 +47,7 @@ export interface FileChartData {
 }
 
 export interface UseFilesParams {
-  page?: number;
-  limit?: number;
+  daysAgo?: number;
 }
 function toChartFormat(file: FileEvent): FileChartData {
   return {
@@ -74,15 +73,14 @@ export default function useFiles(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<FileChartData[], Error> {
-  const page = params?.page || 1;
-  const limit = params?.limit || 100000;
+  const daysAgo = params?.daysAgo || 30;
 
   return useInvokeQuery<FilesResponse, FileChartData[]>({
     command: "get_files_size",
-    queryKey: (addr) => ["files", addr, page, limit],
+    queryKey: (addr) => ["files", addr, daysAgo],
     params: (polkadotAddress) => ({
       accountId: polkadotAddress,
-      limit,
+      daysAgo,
     }),
     options: {
       select: (data) => {

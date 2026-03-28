@@ -8,6 +8,7 @@ import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
 import { invoke } from "@tauri-apps/api/core";
 import { Account } from "@/lib/types";
 import { useRemoteStorageStats } from "@/app/lib/hooks/api/useRemoteStorageStats";
+import useFilesCount from "@/app/lib/hooks/api/useFilesCount";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { toast } from "sonner";
@@ -31,6 +32,11 @@ export default function DetailList() {
     data: remoteStats,
     isLoading: isRemoteStatsLoading,
   } = useRemoteStorageStats();
+
+  const {
+    data: fileCount,
+    isLoading: isFileCountLoading,
+  } = useFilesCount();
 
   // Fetch marketplace credits for Total Credits Used (all-time)
   const { data: marketplaceCredits, isLoading: isLoadingMarketplaceCredits } =
@@ -130,8 +136,8 @@ export default function DetailList() {
   };
 
   const getTotalFiles = () => {
-    if (isRemoteStatsLoading) return "Loading...";
-    return remoteStats?.totalFiles ?? 0;
+    if (isFileCountLoading) return "Loading...";
+    return fileCount ?? 0;
   };
 
   // Calculate all-time Total Credits Used from marketplace credits
@@ -173,7 +179,7 @@ export default function DetailList() {
       title: "Total Files",
       value: getTotalFiles(),
       showRefresh: false,
-      isLoading: isRemoteStatsLoading,
+      isLoading: isFileCountLoading,
       info: "Total number of files stored on the Hippius network.",
     },
     {

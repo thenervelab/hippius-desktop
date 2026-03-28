@@ -31,7 +31,7 @@ use crate::commands::sync_status::{
     app_close, get_sync_activity, get_sync_engine_health, get_sync_status,
 };
 use crate::commands::syncing::{
-    delete_remote_folder, get_device_name, get_drive_mnemonic, get_remote_storage_stats,
+    delete_remote_folder, get_device_name, get_drive_mnemonic,
     initialize_sync, is_drive_active, list_remote_folders, persist_master_mnemonic,
     pause_drive, reset_sync_data, restore_remote_folders, resume_drive, set_device_name,
     stop_drive, stop_sync, trigger_sync_now,
@@ -56,7 +56,8 @@ use commands::auth::{
 use commands::billing::{
     create_subscription, get_active_subscription, get_add_credit_events, get_balance_transfers,
     get_billing_transactions, get_customer_portal_url, get_deposit_address, get_file_nodes,
-    get_files_size, get_indexer_credits, get_marketplace_credits, get_node_locations,
+    get_files_count, get_files_size, get_indexer_credits, get_marketplace_credits,
+    get_node_locations,
     get_subscription_plans, get_system_balance_history, get_user_credits_balance,
 };
 use commands::blockchain::{
@@ -252,8 +253,6 @@ fn main() {
             commands::syncing::cancel_review,
             // Encrypted backup
             commands::syncing::create_encrypted_backup,
-            // Remote storage stats (all files)
-            get_remote_storage_stats,
             // Remote folder discovery
             list_remote_folders,
             restore_remote_folders,
@@ -316,6 +315,7 @@ fn main() {
             get_balance_transfers,
             get_add_credit_events,
             get_files_size,
+            get_files_count,
             get_file_nodes,
             get_node_locations,
             get_deposit_address,
