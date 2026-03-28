@@ -58,9 +58,22 @@ const VPNMenuContent = () => {
           backendMessage = "An unknown error occurred";
         }
       }
-      toast.error("Failed to toggle VPN", {
-        description: backendMessage,
-      });
+
+      const isCancelled =
+        backendMessage.includes("User cancelled") ||
+        backendMessage.includes("user canceled");
+
+      if (isCancelled) {
+        toast.info("Permission Required", {
+          description:
+            "Administrator access is needed to create secure VPN connections. " +
+            "Toggle the VPN again to retry.",
+        });
+      } else {
+        toast.error("Failed to toggle VPN", {
+          description: backendMessage,
+        });
+      }
       console.error("Failed to toggle VPN status:", error);
       // Revert on error
       setIsConnected(!checked);

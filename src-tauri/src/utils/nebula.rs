@@ -535,30 +535,7 @@ pub async fn install_nebula(
                     .map_err(|e| e.to_string())?;
             }
 
-            // Grant permissions to the binary (required for TUN/TAP device creation)
-            let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
-            info!("Checking and granting permissions...");
-
-            match check_permissions(&binary_path).await {
-                Ok(has_perms) => {
-                    if !has_perms {
-                        info!("Binary needs permissions, requesting elevated access...");
-                        if let Err(e) = grant_permissions(&binary_path).await {
-                            warn!(
-                                "Failed to grant permissions: {}. You may need to run the app with elevated privileges or grant permissions manually.",
-                                e
-                            );
-                        } else {
-                            info!("Permissions granted successfully");
-                        }
-                    } else {
-                        debug!("Binary already has required permissions");
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to check permissions: {}", e);
-                }
-            }
+            debug!("Binary installed with user permissions (0o755). Elevated permissions will be requested when VPN is enabled.");
 
             // Update database to mark binary as installed
             if let Err(e) = sqlx::query(
@@ -633,20 +610,12 @@ pub async fn verify_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), Strin
         return Ok(());
     }
 
-    // Check and grant permissions if needed
-    info!("Verifying binary permissions...");
+    // Log permission status but don't escalate at startup.
+    // Elevated permissions are requested when the user enables VPN.
     match check_permissions(&binary_path).await {
         Ok(has_perms) => {
             if !has_perms {
-                info!("Binary needs permissions, requesting elevated access...");
-                if let Err(e) = grant_permissions(&binary_path).await {
-                    warn!(
-                        "Failed to grant permissions: {}. Nebula may fail to start.",
-                        e
-                    );
-                } else {
-                    info!("Permissions granted successfully");
-                }
+                info!("Binary lacks elevated permissions. Will be requested when VPN is enabled.");
             } else {
                 debug!("Binary has required permissions");
             }
@@ -671,6 +640,41 @@ pub async fn verify_nebula(
     _app: AppHandle,
 ) -> Result<(), String> {
     verify_nebula_internal(state.pool()?).await
+}
+
+/// Ensure the Nebula binary has elevated permissions required for VPN.
+/// Called by the frontend before enabling the VPN. Returns Ok if
+/// permissions are already present or were successfully granted.
+/// Returns Err if the user cancels the authorization dialog.
+#[tauri::command]
+pub async fn ensure_vpn_permissions() -> Result<(), String> {
+    let binary_path =
+        get_nebula_binary_path().map_err(|e| e.to_string())?;
+
+    if !binary_path.exists() {
+        return Err(
+            "Nebula binary not found. Please restart the app \
+             to install it."
+                .to_string(),
+        );
+    }
+
+    let has_perms = check_permissions(&binary_path)
+        .await
+        .map_err(|e| format!("Failed to check permissions: {e}"))?;
+
+    if has_perms {
+        debug!("Binary already has elevated permissions");
+        return Ok(());
+    }
+
+    info!("Requesting elevated permissions for VPN...");
+    grant_permissions(&binary_path)
+        .await
+        .map_err(|e| format!("{e}"))?;
+
+    info!("VPN permissions granted successfully");
+    Ok(())
 }
 
 async fn get_api_auth_header(pool: &sqlx::SqlitePool) -> Result<(String, String)> {
@@ -1227,7 +1231,7 @@ async fn remove_existing_binaries(nebula_dir: &Path) {
     }
 }
 
-async fn check_permissions(binary_path: &Path) -> Result<bool> {
+pub async fn check_permissions(binary_path: &Path) -> Result<bool> {
     #[cfg(target_os = "linux")]
     {
         // Check for cap_net_admin using getcap
@@ -1267,7 +1271,7 @@ async fn check_permissions(binary_path: &Path) -> Result<bool> {
 }
 
 /// Grant required permissions to the binary
-async fn grant_permissions(binary_path: &Path) -> Result<()> {
+pub async fn grant_permissions(binary_path: &Path) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         debug!("Requesting cap_net_admin via pkexec...");
@@ -2000,4 +2004,63 @@ pub async fn get_nebula_binary_installed_status(
     // 2. Certificate is expired
     // 3. Certificate is not active
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nebula_binary_path_is_deterministic() {
+        let path1 = get_nebula_binary_path().unwrap();
+        let path2 = get_nebula_binary_path().unwrap();
+        assert_eq!(path1, path2);
+    }
+
+    #[test]
+    fn nebula_binary_path_ends_with_nebula() {
+        let path = get_nebula_binary_path().unwrap();
+        let file_name = path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            file_name == "nebula" || file_name == "nebula.exe",
+            "Expected 'nebula' or 'nebula.exe', got '{file_name}'"
+        );
+    }
+
+    #[test]
+    fn nebula_dir_is_under_hippius() {
+        let dir = get_nebula_dir().unwrap();
+        let dir_str = dir.to_string_lossy().to_string();
+        assert!(
+            dir_str.contains(".hippius"),
+            "Expected path to contain '.hippius', got '{dir_str}'"
+        );
+    }
+
+    #[test]
+    fn nebula_config_dir_includes_account_id() {
+        let dir = get_nebula_config_dir("test_account_123").unwrap();
+        let dir_str = dir.to_string_lossy().to_string();
+        assert!(
+            dir_str.contains("test_account_123"),
+            "Expected path to contain account ID, got '{dir_str}'"
+        );
+    }
+
+    #[test]
+    fn asset_name_is_valid_for_current_platform() {
+        let name = get_asset_name().unwrap();
+        assert!(
+            name.starts_with("nebula-"),
+            "Expected asset name to start with 'nebula-', got '{name}'"
+        );
+        assert!(
+            name.ends_with(".zip") || name.ends_with(".tar.gz"),
+            "Expected .zip or .tar.gz, got '{name}'"
+        );
+    }
 }

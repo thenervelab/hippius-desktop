@@ -74,24 +74,13 @@ export const PHASE_CONTENT_BASE: Record<string, AppSetupPhaseContent> = {
 };
 
 /**
- * Get phase content with conditional messages based on installation state
- * @param isAlreadyInstalled - Whether tools are already installed
+ * Get phase content with appropriate messages
  * @returns Phase content with appropriate messages
  */
-export function getPhaseContent(
-  isAlreadyInstalled: boolean | null
-): Record<string, AppSetupPhaseContent> {
+export function getPhaseContent(): Record<string, AppSetupPhaseContent> {
   const content = { ...PHASE_CONTENT_BASE };
 
-  // Update the installing_nebula message based on installation state
-  if (isAlreadyInstalled) {
-    // Tools already installed - show simpler verification message
-    content.installing_nebula.subStatus = "Installing Hippius Mesh Tools...";
-  } else {
-    // Tools not installed - show password requirement message
-    content.installing_nebula.subStatus =
-      "Installing Hippius Mesh Tools. Enter your password to continue...";
-  }
+  content.installing_nebula.subStatus = "Installing Hippius Mesh Tools...";
 
   return content;
 }

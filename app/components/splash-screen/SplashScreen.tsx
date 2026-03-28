@@ -34,10 +34,9 @@ const SplashScreen = () => {
   });
   const nebulaInstalled = useAtomValue(nebulaInstalledAtom);
 
-  // Get dynamic phase content based on installation state
   const phaseContent = useMemo(() => {
-    return getPhaseContent(nebulaInstalled);
-  }, [nebulaInstalled]);
+    return getPhaseContent();
+  }, []);
 
   // Show progress bar during setup phases (both fresh install and when already installed)
   // Only hide progress bar when status is still unknown (null) or explicitly disabled

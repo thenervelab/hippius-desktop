@@ -226,6 +226,7 @@ fn main() {
             utils::nebula::download_nebula,
             utils::nebula::install_nebula,
             utils::nebula::verify_nebula,
+            utils::nebula::ensure_vpn_permissions,
             utils::nebula::finish_setup,
             utils::nebula::start_nebula,
             // Indexer

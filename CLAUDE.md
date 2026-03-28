@@ -65,7 +65,7 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 - **`auth_state.rs`** — In-memory auth state (encrypted mnemonic, passcode)
 - **`builder_blocks/setup.rs`** — App setup: SQLite database init with schema migration, deep-link registration, tray icon setup
 - **`constants/substrate.rs`** — WSS endpoint and chain constants
-- **`utils/nebula/`** — Nebula VPN management (download, install, start, certificate handling)
+- **`utils/nebula/`** — Nebula VPN management (download, install, start, certificate handling). **Permission escalation** (macOS osascript / Linux pkexec) for the Nebula binary is requested ONLY when the user enables the VPN via `toggle_vpn_status`, never during app startup or splash screen. The `ensure_vpn_permissions` IPC command is available for frontend pre-checking. The only exception is `remove_existing_binaries` during updates, which may prompt if old binaries are root-owned.
 
 ### Key Patterns
 

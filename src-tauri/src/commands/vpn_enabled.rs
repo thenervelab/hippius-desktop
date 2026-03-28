@@ -51,8 +51,25 @@ pub async fn toggle_vpn_status(
     // Toggle the status
     let new_status = !current.is_enabled;
 
-    // If enabling, check and update certificate first
+    // If enabling, ensure permissions and certificate before starting
     if new_status {
+        // Ensure binary has elevated permissions (setuid on macOS,
+        // cap_net_admin on Linux) required to create TUN/TAP devices
+        info!("Checking VPN binary permissions before enabling...");
+        let binary_path = crate::utils::nebula::get_nebula_binary_path()
+            .map_err(|e| e.to_string())?;
+
+        let has_perms = crate::utils::nebula::check_permissions(&binary_path)
+            .await
+            .map_err(|e| format!("Failed to check permissions: {e}"))?;
+
+        if !has_perms {
+            info!("Requesting elevated permissions for VPN...");
+            crate::utils::nebula::grant_permissions(&binary_path)
+                .await
+                .map_err(|e| format!("{e}"))?;
+        }
+
         info!("Checking certificate status before enabling...");
         if let Err(e) = crate::utils::nebula::check_and_update_certificate(pool).await {
             error!("Certificate check failed: {}", e);
