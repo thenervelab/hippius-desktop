@@ -49,10 +49,10 @@ export default function ConflictsBanner() {
 
   return (
     <>
-      <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-amber-50 border-b border-amber-200">
+      <div className="flex items-center justify-between gap-3 px-4 py-2 mt-2 rounded-lg border border-warning-50/30 bg-warning-50/5">
         <div className="flex items-center gap-2 min-w-0">
-          <Icons.OctagonAlert className="size-4 text-amber-600 shrink-0" />
-          <span className="text-sm text-amber-800">
+          <Icons.OctagonAlert className="size-4 text-warning-50 shrink-0" />
+          <span className="text-sm text-grey-10">
             {conflictCount} file conflict{conflictCount !== 1 ? "s" : ""}{" "}
             detected during sync.
           </span>
@@ -60,16 +60,16 @@ export default function ConflictsBanner() {
         <div className="flex items-center gap-2 shrink-0">
           <button
             onClick={() => setDialogOpen(true)}
-            className="px-3 py-1 text-xs font-medium rounded bg-amber-600 text-white hover:bg-amber-700 transition-colors"
+            className="px-3 py-1.5 text-xs font-medium rounded bg-primary-50 text-white hover:bg-primary-40 shadow-outer-action-button transition-colors"
           >
             Review &amp; Resolve
           </button>
           <button
             onClick={handleDismiss}
-            className="p-0.5 rounded hover:bg-amber-100 transition-colors"
+            className="p-1 rounded hover:bg-grey-90 transition-colors"
             title="Dismiss and resume auto-sync"
           >
-            <Icons.Close className="size-4 text-amber-600" />
+            <Icons.CloseCircle className="size-4 text-grey-40" />
           </button>
         </div>
       </div>

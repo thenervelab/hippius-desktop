@@ -1565,19 +1565,27 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     // for user review (the pre-sync stage is skipped).
                     match m.stage_with_paths().await {
                         Ok(restaged) if !restaged.conflicts.is_empty() => {
-                            sync.set_drive_review(label);
-                            if let Err(e) = app.emit(
-                                sync_events::CONFLICTS_PENDING,
-                                sync_events::ConflictsPendingPayload {
-                                    label: label.to_string(),
-                                    staged: restaged,
-                                },
-                            ) {
-                                warn!(error = %e, "Failed to emit conflicts_pending");
+                            // set_drive_review returns false if a cooldown
+                            // is active (user recently resolved/dismissed).
+                            if sync.set_drive_review(label) {
+                                if let Err(e) = app.emit(
+                                    sync_events::CONFLICTS_PENDING,
+                                    sync_events::ConflictsPendingPayload {
+                                        label: label.to_string(),
+                                        staged: restaged,
+                                    },
+                                ) {
+                                    warn!(error = %e, "Failed to emit conflicts_pending");
+                                }
+                            } else {
+                                info!(
+                                    label = label,
+                                    "Conflicts found but review cooldown active, skipping banner",
+                                );
                             }
                         }
                         _ => {
-                            info!(label = label, "Re-stage after sync found no conflicts",);
+                            info!(label = label, "Re-stage after sync found no conflicts");
                         }
                     }
                     SyncResult::ConflictsPending
@@ -2087,7 +2095,15 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         }
         SyncResult::ConflictsPending => {
             sync.discard_pending_activity_for_label(&label_owned);
-            if emitted_sync_started {
+            // Only emit SYNC_COMPLETED when review mode is NOT active.
+            // When re-staging found real conflicts, set_drive_review was
+            // called and CONFLICTS_PENDING was emitted — a SYNC_COMPLETED
+            // here would clear pendingConflictsAtom before the user sees
+            // the conflict banner.  When re-staging found no conflicts
+            // (e.g. permanent decryption failures that increment
+            // conflicts_skipped but aren't user-resolvable), review mode
+            // is not set and the widget needs SYNC_COMPLETED to transition.
+            if emitted_sync_started && !sync.is_drive_in_review(&label_owned) {
                 if let Err(e) = app.emit(
                     sync_events::SYNC_COMPLETED,
                     sync_events::SyncCompletedPayload::zeros(&label_owned),

@@ -141,7 +141,7 @@ const StagedChangesDialog: FC<StagedChangesDialogProps> = ({
                 title="Upload"
                 icon="upload"
                 files={stagedChanges.uploads}
-                color="text-green-600"
+                color="text-success-50"
               />
 
               {/* Downloads */}
@@ -149,7 +149,7 @@ const StagedChangesDialog: FC<StagedChangesDialogProps> = ({
                 title="Download"
                 icon="download"
                 files={stagedChanges.downloads}
-                color="text-blue-600"
+                color="text-primary-50"
               />
 
               {/* Local Deletes */}
@@ -157,7 +157,7 @@ const StagedChangesDialog: FC<StagedChangesDialogProps> = ({
                 title="Delete Locally"
                 icon="delete"
                 files={stagedChanges.local_deletes}
-                color="text-red-500"
+                color="text-error-50"
               />
 
               {/* Remote Deletes */}
@@ -165,7 +165,7 @@ const StagedChangesDialog: FC<StagedChangesDialogProps> = ({
                 title="Delete from Server"
                 icon="delete"
                 files={stagedChanges.remote_deletes}
-                color="text-orange-500"
+                color="text-error-50/70"
               />
 
               {/* Conflicts */}
@@ -173,7 +173,7 @@ const StagedChangesDialog: FC<StagedChangesDialogProps> = ({
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-1.5">
-                      <Icons.OctagonAlert className="size-4 text-yellow-600" />
+                      <Icons.OctagonAlert className="size-4 text-warning-50" />
                       <h3 className="text-sm font-medium text-grey-10">
                         Conflicts ({stagedChanges.conflicts.length})
                       </h3>
@@ -245,7 +245,7 @@ const StagedChangesDialog: FC<StagedChangesDialogProps> = ({
                   totalOperations === 0 ||
                   (hasConflicts && !allConflictsResolved)
                   ? "bg-primary-50/50 cursor-not-allowed"
-                  : "bg-primary-50 hover:bg-primary-40"
+                  : "bg-primary-50 hover:bg-primary-40 shadow-outer-action-button"
               )}
             >
               {isSyncing ? (
@@ -319,7 +319,7 @@ function ConflictRow({
   onResolutionChange: (r: ConflictResolution) => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 px-2 py-2 rounded bg-yellow-50/30 border border-yellow-200/50">
+    <div className="flex items-center justify-between gap-3 px-2 py-2 rounded bg-warning-50/5 border border-warning-50/20">
       <div className="min-w-0 flex-1">
         <p className="text-sm text-grey-10 truncate">{conflict.path}</p>
         <p className="text-xs text-grey-40">
@@ -333,7 +333,7 @@ function ConflictRow({
         }
         className={cn(
           "text-xs px-2 py-1 rounded border bg-grey-100 text-grey-10 focus:outline-none focus:ring-1 focus:ring-primary-50",
-          resolution ? "border-primary-50" : "border-yellow-400"
+          resolution ? "border-primary-50" : "border-warning-50/50"
         )}
       >
         <option value="" disabled>

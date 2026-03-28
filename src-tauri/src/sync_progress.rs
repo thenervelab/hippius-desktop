@@ -514,7 +514,10 @@ pub fn count_expected_for_label(session: &SyncSession, label: &str) -> (u32, u32
     let downloads = session
         .files
         .values()
-        .filter(|f| f.label == label && f.action == FileAction::Download)
+        .filter(|f| {
+            f.label == label
+                && matches!(f.action, FileAction::Download | FileAction::Decrypt)
+        })
         .count() as u32;
     (uploads, downloads)
 }
@@ -820,9 +823,27 @@ pub fn update_file_progress(
     };
 
     let lbl = label.unwrap_or_else(|| "default".to_string());
+
+    // hcfs-client progress callbacks sometimes report just the filename
+    // (e.g. "Air.dmg") while the sync plan registered the full relative
+    // path (e.g. "subdir/Air.dmg").  Resolve the mismatch by looking up
+    // an existing entry whose path ends with the callback path, so we
+    // update the original entry instead of creating a duplicate.
+    let resolved_key = if !session.files.contains_key(&path) {
+        let suffix = format!("/{}", path);
+        session
+            .files
+            .keys()
+            .find(|k| k.ends_with(&suffix))
+            .cloned()
+            .unwrap_or(path.clone())
+    } else {
+        path.clone()
+    };
+
     let file = session
         .files
-        .entry(path.clone())
+        .entry(resolved_key.clone())
         .or_insert_with(|| SyncFile {
             id: generate_file_id(&path),
             path: path.clone(),
@@ -1064,7 +1085,7 @@ pub fn mark_pending_files_as_failed(
                     file.error = Some("Upload did not complete".to_string());
                     file.completed_at = Some(now);
                     failed_uploads += 1;
-                } else if file.action == FileAction::Download
+                } else if matches!(file.action, FileAction::Download | FileAction::Decrypt)
                     && (file.status == FileStatus::Pending
                         || file.status == FileStatus::Downloading
                         || file.status == FileStatus::Decrypting)

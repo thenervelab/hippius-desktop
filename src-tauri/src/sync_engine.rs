@@ -249,30 +249,48 @@ impl SyncEngine {
 
     // ── Review Mode (per-drive) ────────────────────────────────────────
 
-    /// Enter review mode for a specific drive.
-    pub fn set_drive_review(&self, label: &str) {
+    /// Enter review mode for a specific drive (only if not in cooldown).
+    /// Returns true if review mode was entered, false if cooldown is active.
+    pub fn set_drive_review(&self, label: &str) -> bool {
         let now = chrono::Utc::now().timestamp_millis();
         let mut states = self.states.lock().unwrap_or_else(|p| p.into_inner());
         let s = states.entry(label.to_string()).or_default();
+        if s.review_cooldown_until > now {
+            return false;
+        }
         s.in_review = true;
         s.review_entered_at = now;
+        true
     }
 
-    /// Exit review mode for a specific drive.
+    /// Check if a specific drive is in review mode.
+    pub fn is_drive_in_review(&self, label: &str) -> bool {
+        let states = self.states.lock().unwrap_or_else(|p| p.into_inner());
+        states.get(label).map_or(false, |s| s.in_review)
+    }
+
+    /// Exit review mode for a specific drive and start a 60-second cooldown
+    /// that prevents the same conflict from immediately re-triggering the banner.
     pub fn clear_drive_review(&self, label: &str) {
+        let cooldown_ms = 60_000; // 60 seconds
+        let now = chrono::Utc::now().timestamp_millis();
         let mut states = self.states.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(s) = states.get_mut(label) {
             s.in_review = false;
             s.review_entered_at = 0;
+            s.review_cooldown_until = now + cooldown_ms;
         }
     }
 
-    /// Exit review mode for ALL drives (used during full stop/reset).
+    /// Exit review mode for ALL drives with cooldown (used during full stop/reset).
     pub fn clear_all_reviews(&self) {
+        let cooldown_ms = 60_000;
+        let now = chrono::Utc::now().timestamp_millis();
         let mut states = self.states.lock().unwrap_or_else(|p| p.into_inner());
         for s in states.values_mut() {
             s.in_review = false;
             s.review_entered_at = 0;
+            s.review_cooldown_until = now + cooldown_ms;
         }
     }
 

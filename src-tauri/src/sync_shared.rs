@@ -49,6 +49,11 @@ pub struct HcfsSyncState {
     /// Epoch-millis when review mode was entered (0 = not in review).
     #[serde(skip)]
     pub review_entered_at: i64,
+    /// Epoch-millis until which review mode should not be re-entered.
+    /// Set after user resolves or dismisses conflicts to prevent the
+    /// same conflict from immediately re-triggering the banner.
+    #[serde(skip)]
+    pub review_cooldown_until: i64,
 }
 
 #[derive(Clone, Serialize)]
