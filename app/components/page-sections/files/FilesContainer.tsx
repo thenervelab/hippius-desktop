@@ -17,6 +17,9 @@ import {
 } from "@/lib/utils/syncPathUtils";
 import SyncFolderTabs from "./SyncFolderTabs";
 import { formatBytesFromBigInt } from "@/lib/utils";
+import { useRemoteStorageStats } from "@/app/lib/hooks/api/useRemoteStorageStats";
+import useFilesCount from "@/app/lib/hooks/api/useFilesCount";
+import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { FileTypes } from "@/lib/types/fileTypes";
 import {
   filterFiles,
@@ -53,6 +56,10 @@ import { toast } from "sonner";
 
 const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
+
+  // Indexer-based stats (same source as Home page for consistency)
+  const { data: remoteStorageStats } = useRemoteStorageStats();
+  const { data: remoteFileCount } = useFilesCount();
 
   // Regular files hook
   const {
@@ -339,12 +346,11 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     [filterState.fileTypes, filterState.fileSizes, updateFilters]
   );
 
-  // Format storage size — scoped to selected folder tab
+  // Format storage size — indexer stats at top level, local stats for folder tabs
   const formattedStorageSize = useMemo(() => {
     if (isRecentFiles) return "";
 
-    if (!regularFilesData) return "0 B";
-
+    // Folder-scoped view: use local computed size for that folder
     if (selectedFolderTab) {
       const tabSize = allFilteredData.reduce(
         (sum, f) => sum + BigInt(f.size ?? 0),
@@ -353,11 +359,13 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       return formatBytesFromBigInt(tabSize);
     }
 
-    if (regularFilesData.privateStorageSize !== undefined) {
-      return formatBytesFromBigInt(regularFilesData.privateStorageSize);
+    // Top-level "All" view: use indexer stats (same source as Home page)
+    if (remoteStorageStats?.totalBytes) {
+      return formatBytes(remoteStorageStats.totalBytes, 2);
     }
+
     return "0 B";
-  }, [regularFilesData, isRecentFiles, selectedFolderTab, allFilteredData]);
+  }, [isRecentFiles, selectedFolderTab, allFilteredData, remoteStorageStats]);
 
   // Handle search input change
   const handleSearchChange = useCallback((value: string) => {
@@ -587,8 +595,17 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     }
   }, [error]);
 
-  // Get displayed file count (count files directly + files inside folders recursively)
+  // Get displayed file count — indexer stats at top level, local count for folder tabs/filters
   const displayedFileCount = useMemo(() => {
+    // If search/filters active or folder tab selected, use local count
+    const useLocalCount = selectedFolderTab
+      || searchTerm
+      || activeFilters.length > 0;
+
+    if (!useLocalCount && remoteFileCount !== undefined) {
+      return remoteFileCount;
+    }
+
     const source = searchTerm || activeFilters.length > 0
       ? filteredData
       : allFilteredData;
@@ -605,6 +622,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     allFilteredData,
     searchTerm,
     activeFilters.length,
+    selectedFolderTab,
+    remoteFileCount,
   ]);
 
   // Handle file drop events
