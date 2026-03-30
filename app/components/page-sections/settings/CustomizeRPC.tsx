@@ -194,7 +194,7 @@ const CustomizeRPC: React.FC = () => {
                 parentClassName="w-full"
                 className="delay-300 w-full"
               >
-                <div className="w-full flex justify-between gap-4">
+                <div className="w-full flex flex-wrap justify-between gap-4 items-start">
                   <SectionHeader
                     Icon={Icons.Box}
                     title="RPC Setting"
@@ -204,7 +204,7 @@ const CustomizeRPC: React.FC = () => {
                   />
                   {!editMode && (
                     <IconButton
-                      className="w-[9.125rem] h-[2.625rem]"
+                      className="shrink-0 h-[2.625rem]"
                       icon={Edit}
                       text={"Update RPC"}
                       onClick={toggleEditMode}

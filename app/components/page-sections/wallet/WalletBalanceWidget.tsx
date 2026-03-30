@@ -63,11 +63,11 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
     <>
       <div className={cn("w-full", className)}>
         {/* <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between h-[19.375rem]"> */}
-        <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between h-[19.375rem] min-w-[25rem]">
+        <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between min-h-[19.375rem]">
           <div className="flex flex-col w-full items-start">
             <div className="flex gap-4 items-center">
-              <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
-                <WalletAdd className="absolute text-primary-40 size-4 sm:size-5" />
+              <AbstractIconWrapper className="size-8 @sm:size-10 text-primary-40">
+                <WalletAdd className="absolute text-primary-40 size-4 @sm:size-5" />
               </AbstractIconWrapper>
               <span className="text-base font-medium text-grey-60">
                 Native Balance

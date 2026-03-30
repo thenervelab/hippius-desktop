@@ -99,12 +99,12 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   return (
     <>
       {!isRecentFiles && (
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap min-w-0">
           <StorageStateList
             storageUsed={formattedStorageSize}
             numberOfFiles={allFilteredDataLength || 0}
           />
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <SearchInput
               className="h-9"
               value={searchTerm}

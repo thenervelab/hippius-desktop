@@ -21,8 +21,8 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
   info = "",
   learnMoreUrl,
 }) => {
-  const wrapperSize = iconSize === "small" ? "size-8" : "size-8 sm:size-10";
-  const iconSizeClass = iconSize === "small" ? "size-4" : "size-5 sm:size-6";
+  const wrapperSize = iconSize === "small" ? "size-8" : "size-10";
+  const iconSizeClass = iconSize === "small" ? "size-4" : "size-6";
 
   return (
     <div className="flex items-center gap-2">

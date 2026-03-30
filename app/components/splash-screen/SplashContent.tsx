@@ -18,7 +18,7 @@ export const MIN_PHASE_DURATION = 1500;
 
 // Separate content for update check phase (shown at 0%, not part of progress)
 export const UPDATE_CHECK_CONTENT: AppSetupPhaseContent = {
-  icon: <Icons.CentralizedDataBase className="h-[8.75rem] w-[14.375rem]" />,
+  icon: <Icons.CentralizedDataBase className="h-[min(140px,20vh)] w-[min(230px,32vh)]" />,
   status: "Checking for Updates",
   subStatus: "Please wait while we check for new version...",
   command: "check_updates",
@@ -30,7 +30,7 @@ export const UPDATE_CHECK_CONTENT: AppSetupPhaseContent = {
 // commandTriggerPercent: when to execute backend command (50 = execute at midpoint)
 export const PHASE_CONTENT_BASE: Record<string, AppSetupPhaseContent> = {
   checking_binary: {
-    icon: <Icons.CheckingIPFS className="h-[8.75rem] w-[14.375rem]" />,
+    icon: <Icons.CheckingIPFS className="h-[min(140px,20vh)] w-[min(230px,32vh)]" />,
     status: "Checking Tools",
     subStatus: "Verifying tools for Hippius Mesh...",
     command: "check_nebula_requirements",
@@ -38,7 +38,7 @@ export const PHASE_CONTENT_BASE: Record<string, AppSetupPhaseContent> = {
     commandTriggerPercent: 50, // Execute at 10% (50% through the 0-20% range)
   },
   downloading_nebula: {
-    icon: <Icons.DownloadingIPFS className="h-[12.5rem] w-[8.125rem]" />,
+    icon: <Icons.DownloadingIPFS className="h-[min(200px,28vh)] w-[min(130px,19vh)]" />,
     status: "Downloading Tools",
     subStatus: "Fetching tools for Hippius Mesh...",
     command: "download_nebula",
@@ -46,7 +46,7 @@ export const PHASE_CONTENT_BASE: Record<string, AppSetupPhaseContent> = {
     commandTriggerPercent: 50, // Execute at 30% (50% through the 20-40% range)
   },
   installing_nebula: {
-    icon: <Icons.InitializeRepo className="h-[11.25rem] w-[11.25rem]" />,
+    icon: <Icons.InitializeRepo className="h-[min(180px,26vh)] w-[min(180px,26vh)]" />,
     status: "Installing Tools",
     subStatus: "", // Will be set dynamically based on installation state
     command: "install_nebula",
@@ -55,7 +55,7 @@ export const PHASE_CONTENT_BASE: Record<string, AppSetupPhaseContent> = {
   },
   verifying_installation: {
     icon: (
-      <Icons.ConfiguringCORS className="h-[8.125rem] w-[9.0625rem] animate-spin-fast" />
+      <Icons.ConfiguringCORS className="h-[min(130px,19vh)] w-[min(145px,21vh)] animate-spin-fast" />
     ),
     status: "Verifying Tools",
     subStatus: "Confirming tools for Hippius Mesh...",
@@ -64,7 +64,7 @@ export const PHASE_CONTENT_BASE: Record<string, AppSetupPhaseContent> = {
     commandTriggerPercent: 50, // Execute at 70% (50% through the 60-80% range)
   },
   ready: {
-    icon: <Icons.SyncData className="h-[10.625rem] w-[12.125rem]" />,
+    icon: <Icons.SyncData className="h-[min(170px,24vh)] w-[min(194px,27vh)]" />,
     status: "Launching App 🚀",
     subStatus: "Preparing your decentralized experience...",
     command: "finish_setup",

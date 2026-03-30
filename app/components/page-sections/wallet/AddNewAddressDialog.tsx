@@ -97,8 +97,8 @@ const AddNewAddressDialog: React.FC<AddNewAddressDialogProps> = ({
           {/* Desktop Header */}
           <div className="hidden md:flex flex-col items-center justify-center pb-4 pt-4 gap-2">
             <div className="flex items-center mb-2 p-2">
-              <AbstractIconWrapper className="size-8 sm:size-10">
-                <Icons.DocumentText className="absolute size-4 sm:size-6 text-primary-50" />
+              <AbstractIconWrapper className="size-8 @sm:size-10">
+                <Icons.DocumentText className="absolute size-4 @sm:size-6 text-primary-50" />
               </AbstractIconWrapper>
             </div>
             <span className="text-center text-2xl text-grey-10 font-medium">

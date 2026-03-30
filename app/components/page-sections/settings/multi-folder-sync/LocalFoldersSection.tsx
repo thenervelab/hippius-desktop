@@ -129,7 +129,7 @@ export function LocalFoldersSection({
               parentClassName="w-full"
               className="delay-300 w-full"
             >
-              <div className="w-full flex justify-between gap-4">
+              <div className="w-full flex flex-wrap justify-between gap-4 items-start">
                 <SectionHeader
                   Icon={Icons.Folder}
                   title="Local Sync Folders"
@@ -138,7 +138,7 @@ export function LocalFoldersSection({
                   learnMoreUrl="https://docs.hippius.com/use/desktop/settings#multi-folder-sync"
                 />
                 <IconButton
-                  className="w-[9.125rem] h-[2.625rem]"
+                  className="shrink-0 h-[2.625rem]"
                   icon={Plus}
                   text="Add Folder"
                   onClick={onAddFolder}
@@ -164,7 +164,7 @@ export function LocalFoldersSection({
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 @xl:grid-cols-2 gap-2 w-full">
+                <div className="grid grid-cols-1 @[56rem]:grid-cols-2 gap-2 w-full">
                   {paginatedFolders.map((folder) => (
                     <div
                       key={folder.id}
@@ -208,10 +208,10 @@ export function LocalFoldersSection({
                           {(folder.fileCount !== undefined ||
                             folder.totalBytes !== undefined ||
                             folder.lastModified) && (
-                            <div className="flex items-center gap-3 text-xs text-grey-60 mt-1">
+                            <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap text-xs text-grey-60 mt-1">
                               {folder.fileCount !== undefined &&
                                 folder.fileCount > 0 && (
-                                <span className="flex items-center gap-1">
+                                <span className="flex items-center gap-1 whitespace-nowrap">
                                   <Icons.File2 className="size-3" />
                                   {folder.fileCount}{" "}
                                   {folder.fileCount === 1 ? "file" : "files"}
@@ -219,14 +219,14 @@ export function LocalFoldersSection({
                               )}
                               {folder.totalBytes !== undefined &&
                                 folder.totalBytes > 0 && (
-                                <span className="flex items-center gap-1">
+                                <span className="flex items-center gap-1 whitespace-nowrap">
                                   <HardDrive className="size-3" />
                                   {formatBytes(folder.totalBytes)}
                                 </span>
                               )}
                               {folder.lastModified !== undefined &&
                                 folder.lastModified > 0 && (
-                                <span className="flex items-center gap-1">
+                                <span className="flex items-center gap-1 whitespace-nowrap">
                                   <Clock className="size-3" />
                                   {new Date(folder.lastModified).toLocaleDateString(
                                     "en-US",

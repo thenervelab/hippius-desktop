@@ -207,7 +207,7 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
     <>
       <TableWrapper className="mt-5">
         {isError ? (
-          <div className="p-6 w-full h-[21.875rem] flex items-center justify-center">
+          <div className="p-6 w-full min-h-[21.875rem] flex items-center justify-center">
             <div className="flex flex-col animate-fade-in-0.5 items-center opacity-0">
               <AbstractIconWrapper className="size-10 rounded-2xl flex items-center justify-center bg-grey-40/20 mb-2">
                 <AlertCircle className="absolute size-6 text-red-400" />
@@ -245,7 +245,7 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
             </TBody>
           </Table>
         ) : !data || data.length === 0 ? (
-          <div className="w-full h-[21.875rem] flex items-center justify-center p-6">
+          <div className="w-full min-h-[21.875rem] flex items-center justify-center p-6">
             <div className="flex flex-col animate-fade-in-0.5 items-center opacity-0">
               <AbstractIconWrapper className="size-10 rounded-2xl flex items-center justify-center bg-grey-40/20 mb-2">
                 <Ticket className="absolute size-6" />

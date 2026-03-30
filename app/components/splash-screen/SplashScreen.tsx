@@ -138,7 +138,7 @@ const SplashScreen = () => {
               href="/"
             >
               <RevealTextLine rotate reveal={inView}>
-                <Icons.HippiusLogoLoader className="h-[6.25rem] w-[6.25rem]" />
+                <Icons.HippiusLogoLoader className="h-[min(100px,14vh)] w-[min(100px,14vh)]" />
               </RevealTextLine>
               <RevealTextLine reveal={inView} className="delay-300">
                 <span className="text-[2rem] font-medium leading-[2.5rem]">
@@ -160,7 +160,7 @@ const SplashScreen = () => {
       {showProgress && !showProgressBar && (
         <AnimatedProgressIcon
           status={progressData?.status}
-          icon={<Icons.SplashHippiusLogo className="h-[4.5625rem] w-[4.625rem]" />}
+          icon={<Icons.SplashHippiusLogo className="h-[min(73px,11vh)] w-[min(74px,11vh)]" />}
           step={isUpdateCheckPhase ? -1 : step}
           showProgressBar={showProgressBar}
         />
@@ -173,8 +173,8 @@ const SplashScreen = () => {
             <div
               ref={ref}
               className="flex flex-col text-lg items-center absolute z-20
-            justify-center gap-y-2 duration-300"
-              style={{ top: showProgressBar ? "72%" : "56%" }}
+            justify-center gap-y-1 duration-300"
+              style={{ bottom: showProgressBar ? "12%" : "30%" }}
             >
               {showProgressBar && (
                 <RevealTextLine rotate reveal={inView}>
@@ -205,7 +205,7 @@ const SplashScreen = () => {
                     exit={{ opacity: 0, y: -30 }}
                     transition={{ duration: 0.3 }}
                   >
-                    <span className="text-sm font-medium text-white">
+                    <span className="text-[0.875rem] font-medium text-white">
                       {progressData?.subStatus}
                     </span>
                   </motion.div>

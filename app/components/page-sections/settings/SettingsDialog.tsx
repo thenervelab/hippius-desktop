@@ -4,6 +4,8 @@ import { cn } from "@/lib/utils";
 import * as Dialog from "@radix-ui/react-dialog";
 import React, { useEffect } from "react";
 import { X } from "lucide-react";
+import { useAtomValue } from "jotai";
+import { settingsSidebarCollapsedAtom } from "@/app/components/sidebar/sideBarAtoms";
 
 interface SettingsWidthDialogProps {
   children: React.ReactNode;
@@ -20,6 +22,7 @@ const SettingsWidthDialog: React.FC<SettingsWidthDialogProps> = ({
   open,
   onOpenChange
 }) => {
+  const settingsCollapsed = useAtomValue(settingsSidebarCollapsedAtom);
   useEffect(() => {
     const className = "body-scroll-locked";
     const root = document.documentElement;
@@ -59,7 +62,10 @@ const SettingsWidthDialog: React.FC<SettingsWidthDialogProps> = ({
           )}
         >
           {/* Header */}
-          <div className="flex items-center justify-between py-1.5  ml-[13.9375rem] mt-2 mr-8 ">
+          <div className={cn(
+            "flex items-center justify-between py-1.5 mt-2 mr-8 transition-[margin] duration-300",
+            settingsCollapsed ? "ml-[5.9375rem]" : "ml-[13.9375rem]"
+          )}>
             <Dialog.Title className="text-2xl text-grey-10  font-medium">
               {heading}
             </Dialog.Title>

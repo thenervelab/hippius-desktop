@@ -7,7 +7,7 @@ import CreditUsedTooltip from "./CreditsUsedTooltip";
 const config: ChartTrendsConfig = {
   invokeCommand: "format_credits_chart",
   title: "Credit Usage",
-  icon: <Icons.Tag2 className="relative size-4 sm:size-5 text-primary-50" />,
+  icon: <Icons.Tag2 className="relative size-4 @sm:size-5 text-primary-50" />,
   emptyText: "No Credits Data Available",
   lineColor: "#2563eb",
   dataKey: "balance",

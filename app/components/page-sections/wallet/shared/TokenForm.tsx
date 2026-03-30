@@ -94,7 +94,7 @@ const TokenForm: FC<TokenFormProps> = ({
     }, [amount, availableAmount]);
 
     return (
-        <div className={cn("w-[29rem] mx-auto", className)}>
+        <div className={cn("w-full max-w-[29rem] mx-auto", className)}>
             <div className="bg-white border border-grey-80 rounded-lg p-4">
                 {/* Header */}
                 <div className="text-center mb-6">
@@ -181,8 +181,8 @@ const TokenForm: FC<TokenFormProps> = ({
                             <div className="flex justify-center mb-4">
                                 <div className="flex items-center w-full gap-4">
                                     <div className="h-0.5 flex-1 bg-gradient-to-l from-[#3167DD] to-transparent"></div>
-                                    <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
-                                        <Icons.ArrowDown className="absolute text-primary-40 size-4 sm:size-5" />
+                                    <AbstractIconWrapper className="size-8 @sm:size-10 text-primary-40">
+                                        <Icons.ArrowDown className="absolute text-primary-40 size-4 @sm:size-5" />
                                     </AbstractIconWrapper>
                                     <div className="h-0.5 flex-1 bg-gradient-to-r from-[#3167DD] to-transparent"></div>
                                 </div>

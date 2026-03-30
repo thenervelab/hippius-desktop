@@ -87,7 +87,7 @@ export default function DeviceNameSetting() {
                 parentClassName="w-full"
                 className="delay-300 w-full"
               >
-                <div className="w-full flex justify-between gap-4">
+                <div className="w-full flex flex-wrap justify-between gap-4 items-start">
                   <SectionHeader
                     Icon={Monitor}
                     title="Device Name"
@@ -95,7 +95,7 @@ export default function DeviceNameSetting() {
                   />
                   {!isEditing && (
                     <IconButton
-                      className="w-[9.125rem] h-[2.625rem]"
+                      className="shrink-0 h-[2.625rem]"
                       icon={Edit}
                       text="Edit Name"
                       onClick={toggleEditMode}

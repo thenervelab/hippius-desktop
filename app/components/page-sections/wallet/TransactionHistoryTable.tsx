@@ -109,7 +109,7 @@ const TransactionHistoryTable: React.FC<TransactionHistoryTableProps> = ({
           />
         ),
         meta: {
-          cellClassName: "@lg:max-w-[25rem] @lg:min-w-[25rem] @lg:w-[25rem]",
+          cellClassName: "@lg:max-w-[25rem] @lg:w-[25rem]",
         },
       }),
 
@@ -125,7 +125,7 @@ const TransactionHistoryTable: React.FC<TransactionHistoryTableProps> = ({
           />
         ),
         meta: {
-          cellClassName: "@lg:max-w-[25rem] @lg:min-w-[25rem] @lg:w-[25rem]",
+          cellClassName: "@lg:max-w-[25rem] @lg:w-[25rem]",
         },
       }),
 
@@ -192,13 +192,13 @@ const TransactionHistoryTable: React.FC<TransactionHistoryTableProps> = ({
         </Table>
 
         {isPending && (
-          <div className="w-full h-[21.875rem] flex items-center justify-center p-6 animate-fade-in-0.3 opacity-0">
+          <div className="w-full min-h-[21.875rem] flex items-center justify-center p-6 animate-fade-in-0.3 opacity-0">
             <Loader2 className="size-6 animate-spin text-grey-50" />
           </div>
         )}
 
         {transactions && !transactions.length && (
-          <div className="w-full h-[21.875rem] flex items-center justify-center p-6">
+          <div className="w-full min-h-[21.875rem] flex items-center justify-center p-6">
             <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
               <AbstractIconWrapper className="size-10 rounded-2xl bg-grey-40/20 mb-2">
                 <Dollar className="absolute size-6" />

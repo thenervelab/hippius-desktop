@@ -42,7 +42,7 @@ const SyncFolderTabs: FC<SyncFolderTabsProps> = ({
           activeTab={activeTab}
           onTabChange={handleTabChange}
           gap="gap-1"
-          width="w-auto sm:min-w-[6.25rem] max-w-[15rem]"
+          width="w-auto @sm:min-w-[6.25rem] max-w-[15rem]"
           className="flex-wrap"
         />
       </div>

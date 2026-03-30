@@ -131,7 +131,7 @@ const StakeBridge = () => {
                         tabs={tabs}
                         activeTab={activeTab}
                         onTabChange={setActiveTab}
-                        width="min-w-[8.75rem]"
+                        width="min-w-0"
                         gap="gap-1"
                     />
                 </div>

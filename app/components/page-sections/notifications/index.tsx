@@ -202,7 +202,7 @@ const Notifications = () => {
   return (
     <DashboardTitleWrapper mainText="Notifications">
       {/* controls */}
-      <div className="mt-6 flex justify-end gap-4">
+      <div className="mt-6 flex justify-end gap-4 flex-wrap">
         {tabs.length > 0 && (
           <>
             <TabList

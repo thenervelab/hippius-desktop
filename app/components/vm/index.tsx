@@ -243,7 +243,7 @@ const VirtualMachines: FC = () => {
                   <Icons.Driver2 className="size-6 relative text-primary-50" />
                 )}
               </AbstractIconWrapper>
-              <p className="font-medium text-base @md:text-lg @xl:text-xl text-nowrap">
+              <p className="font-medium text-base @md:text-lg @xl:text-xl">
                 {getHeaderTitle()}
               </p>
               <button

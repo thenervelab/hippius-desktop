@@ -1,11 +1,11 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { Icons, RevealTextLine } from "@/components/ui";
 import TabList, { TabOption } from "@/components/ui/tabs/TabList";
 import { InView } from "react-intersection-observer";
 import MultiFolderSyncManager from "./MultiFolderSyncManager";
 import NotificationSettings from "./NotificationSettings";
 import { useAtom } from "jotai";
-import { activeSettingsTabAtom } from "@/app/components/sidebar/sideBarAtoms";
+import { activeSettingsTabAtom, settingsSidebarCollapsedAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { useSetAtom } from "jotai";
 import { refreshEnabledTypesAtom } from "@/components/page-sections/notifications/notificationStore";
 import CustomizeRPC from "./CustomizeRPC";
@@ -16,9 +16,44 @@ import VPNSettings from "./VPNSettings";
 import RecoveryPhraseSettings from "./RecoveryPhraseSettings";
 import DeviceNameSetting from "./DeviceNameSetting";
 
+const SETTINGS_COLLAPSE_WIDTH = 900;
+
+/** Effective viewport width accounting for zoom */
+function getEffectiveWidth(): number {
+  const stored = localStorage.getItem("hippius-zoom-level");
+  const zoom = stored ? parseInt(stored, 10) : 100;
+  return window.innerWidth / (zoom / 100);
+}
+
 const SettingsDialogContent: React.FC = () => {
   const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
+  const setSettingsCollapsed = useSetAtom(settingsSidebarCollapsedAtom);
+  const [iconOnly, setIconOnly] = useState(() => getEffectiveWidth() < SETTINGS_COLLAPSE_WIDTH);
+  const iconOnlyRef = useRef(iconOnly);
+  iconOnlyRef.current = iconOnly;
+
+  // Sync collapse state with atom for SettingsDialog header margin
+  useEffect(() => {
+    setSettingsCollapsed(iconOnly);
+  }, [iconOnly, setSettingsCollapsed]);
+
+  // Auto-collapse settings sidebar when effective viewport is narrow
+  useEffect(() => {
+    const handleChange = () => {
+      const shouldCollapse = getEffectiveWidth() < SETTINGS_COLLAPSE_WIDTH;
+      if (shouldCollapse !== iconOnlyRef.current) {
+        setIconOnly(shouldCollapse);
+      }
+    };
+
+    window.addEventListener("resize", handleChange);
+    window.addEventListener("zoom-changed", handleChange);
+    return () => {
+      window.removeEventListener("resize", handleChange);
+      window.removeEventListener("zoom-changed", handleChange);
+    };
+  }, []);
   // Refresh notification types when the settings dialog shows the notifications tab
   useEffect(() => {
     if (activeTab === "Notifications") {
@@ -64,10 +99,11 @@ const SettingsDialogContent: React.FC = () => {
           width="min-w-[10.5rem]"
           isJustifyStart
           showTooltip={false}
+          iconOnly={iconOnly}
         />
       </div>
 
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0 @container">
         <InView triggerOnce>
           {({ inView, ref }) => (
             <div

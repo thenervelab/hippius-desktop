@@ -95,7 +95,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   }, [selectedNotification]);
 
   if (!selectedNotification) {
-    return <div className=" w-full h-[80.9vh]"></div>;
+    return <div className="w-full" style={{ height: 'calc(100vh - 12rem)' }}></div>;
   }
 
   const {
@@ -159,7 +159,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
       {({ inView, ref }) => (
         <div
           ref={ref}
-          className="w-full flex gap-3 border border-grey-80 rounded p-4 h-[80.9vh]"
+          className="w-full flex gap-3 border border-grey-80 rounded p-4" style={{ height: 'calc(100vh - 12rem)' }}
         >
           <AbstractIconWrapper className="min-w-[2rem] size-8 text-primary-40">
             <Icon className="absolute text-primary-40 size-5" />

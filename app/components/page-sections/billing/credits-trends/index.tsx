@@ -7,7 +7,7 @@ import { WalletAdd } from "@/app/components/ui/icons";
 const config: ChartTrendsConfig = {
   invokeCommand: "format_balance_chart",
   title: "Credits Overview",
-  icon: <WalletAdd className="absolute text-primary-40 size-4 sm:size-5" />,
+  icon: <WalletAdd className="absolute text-primary-40 size-4 @sm:size-5" />,
   emptyText: "No Credits Data Available",
   lineColor: "#2563eb",
   dataKey: "credit",

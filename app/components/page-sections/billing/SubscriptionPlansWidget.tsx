@@ -84,8 +84,8 @@ const SubscriptionPlansWidget: FC<SubscriptionPlansWidgetProps> = ({
       <div className="flex flex-col w-full items-start">
         <div className="flex w-full gap-4 items-center justify-between">
           <div className="flex gap-4 items-center">
-            <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
-              <Wallet className="absolute text-primary-40 size-4 sm:size-5" />
+            <AbstractIconWrapper className="size-8 @sm:size-10 text-primary-40">
+              <Wallet className="absolute text-primary-40 size-4 @sm:size-5" />
             </AbstractIconWrapper>
             <span className="text-base font-medium text-grey-60">
               Your Subscription
@@ -169,8 +169,8 @@ const SubscriptionPlansWidget: FC<SubscriptionPlansWidgetProps> = ({
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center pt-7">
-              <AbstractIconWrapper className="size-8 sm:size-10">
-                <TagRight className="absolute size-4 sm:size-6 text-primary-50" />
+              <AbstractIconWrapper className="size-8 @sm:size-10">
+                <TagRight className="absolute size-4 @sm:size-6 text-primary-50" />
               </AbstractIconWrapper>
               <Typography.P
                 size={"xxs"}

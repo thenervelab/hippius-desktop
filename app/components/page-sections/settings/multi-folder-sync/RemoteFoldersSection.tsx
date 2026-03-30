@@ -86,7 +86,7 @@ export function RemoteFoldersSection({
                   <Icons.Loader className="size-6 animate-spin text-primary-50" />
                 </div>
               ) : remoteFolders.length > 0 ? (
-                <div className="grid grid-cols-1 @xl:grid-cols-2 gap-2 w-full">
+                <div className="grid grid-cols-1 @[56rem]:grid-cols-2 gap-2 w-full">
                   {paginatedFolders.map((folder) => (
                     <div
                       key={folder.folderName}
@@ -121,22 +121,22 @@ export function RemoteFoldersSection({
                               {folder.deviceName}
                             </span>
                           </div>
-                          <div className="flex items-center gap-3 text-xs text-grey-60 mt-1">
+                          <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap text-xs text-grey-60 mt-1">
                             {folder.fileCount > 0 && (
-                              <span className="flex items-center gap-1">
+                              <span className="flex items-center gap-1 whitespace-nowrap">
                                 <Icons.File2 className="size-3" />
                                 {folder.fileCount}{" "}
                                 {folder.fileCount === 1 ? "file" : "files"}
                               </span>
                             )}
                             {folder.totalBytes > 0 && (
-                              <span className="flex items-center gap-1">
+                              <span className="flex items-center gap-1 whitespace-nowrap">
                                 <HardDrive className="size-3" />
                                 {formatBytes(folder.totalBytes)}
                               </span>
                             )}
                             {folder.lastModified > 0 && (
-                              <span className="flex items-center gap-1">
+                              <span className="flex items-center gap-1 whitespace-nowrap">
                                 <Clock className="size-3" />
                                 {formatDate(folder.lastModified)}
                               </span>

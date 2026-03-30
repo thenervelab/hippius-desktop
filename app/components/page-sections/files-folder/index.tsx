@@ -374,7 +374,7 @@ export default function FolderView({
   return (
     <FileSelectionProvider>
       <div className="w-full relative mt-6">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-y-3">
           <div className="flex items-center gap-2">
             <button
               className="flex gap-2 font-semibold text-lg items-center"
@@ -385,7 +385,7 @@ export default function FolderView({
             </button>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 flex-wrap">
             <RefreshButton onClick={handleRefresh} refetching={isRefreshing} />
 
             <div className="">

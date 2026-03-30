@@ -24,7 +24,7 @@ const ReferralLinkCard: React.FC = () => {
   }, [fullLink]);
 
   return (
-    <div className="bg-white p-3 rounded-lg border border-grey-80 shadow-sm h-[10.375rem] relative bg-[url('/assets/refferal.png')] bg-repeat-round bg-cover">
+    <div className="bg-white p-3 rounded-lg border border-grey-80 shadow-sm min-h-[10.375rem] relative bg-[url('/assets/refferal.png')] bg-repeat-round bg-cover">
       <div className="flex flex-col gap-4">
         <div className="flex justify-between items-center">
           <div className="flex gap-2">
@@ -46,7 +46,7 @@ const ReferralLinkCard: React.FC = () => {
             )}
           </button>
         </div>
-        <div className="h-[5.375rem] text-base leading-[1.375rem] text-grey-60 flex flex-col justify-center">
+        <div className="min-h-[5.375rem] text-base leading-[1.375rem] text-grey-60 flex flex-col justify-center">
           <span className="mb-2">Your Referral Link</span>
           <div className="flex items-center justify-between rounded-[0.5rem] p-3 border border-grey-80 bg-white">
             <div

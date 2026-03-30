@@ -239,7 +239,7 @@ const Support: React.FC = () => {
       {isAccessKeyLogin ? (
         <div className="flex items-center justify-center min-h-[37.5rem]">
           <div className="max-w-md w-full px-4 py-6 bg-white rounded-lg shadow-lg border border-grey-80">
-            <div className="text-center mb-4 w-[20.625rem] mx-auto">
+            <div className="text-center mb-4 max-w-[20.625rem] w-full mx-auto">
               <AbstractIconWrapper className="size-12 mx-auto mb-4 flex items-center justify-center">
                 <Lock className="size-7 relative text-primary-50" />
               </AbstractIconWrapper>
@@ -329,7 +329,7 @@ const Support: React.FC = () => {
             open={isCloseModalOpen}
             title="Close Ticket"
             description={
-              <div className="w-[20.25rem] text-center mx-auto">
+              <div className="max-w-[20.25rem] w-full text-center mx-auto">
                 Are you sure you want to close ticket{" "}
                 <strong>{ticketToClose?.subject}</strong>? This action is
                 permanent

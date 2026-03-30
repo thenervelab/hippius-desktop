@@ -8,7 +8,7 @@ import { formatBytes } from "@/app/lib/utils/formatBytes";
 const config: ChartTrendsConfig = {
   invokeCommand: "format_storage_chart",
   title: "Storage Usage",
-  icon: <Icons.Chart className="relative size-4 sm:size-5 text-primary-50" />,
+  icon: <Icons.Chart className="relative size-4 @sm:size-5 text-primary-50" />,
   emptyText: "No Storage Usage Data Available",
   lineColor: "#3B82F6",
   dataKey: "balance",
