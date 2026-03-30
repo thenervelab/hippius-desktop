@@ -460,7 +460,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   <>
                     {isSelectionMode ? (
                       <NameCell
-                        className="px-4 py-[1.375rem]"
+                        className="px-2.5 py-3"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
                         arionHash={info.row.original.arionHash}
@@ -499,7 +499,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   <>
                     {isSelectionMode ? (
                       <NameCell
-                        className="px-4 py-[1.375rem]"
+                        className="px-2.5 py-3"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
                         arionHash={info.row.original.arionHash}
@@ -537,7 +537,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   <>
                     {isSelectionMode ? (
                       <NameCell
-                        className="px-4 py-[1.375rem]"
+                        className="px-2.5 py-3"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
                         arionHash={info.row.original.arionHash}
@@ -573,7 +573,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               }
               return (
                 <NameCell
-                  className="px-4 py-[1.375rem]"
+                  className="px-2.5 py-3"
                   rawName={info.getValue()}
                   actualName={info.row.original.actualFileName}
                   arionHash={info.row.original.arionHash}
@@ -596,7 +596,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               if (cell.row.original.tempData) return "...";
               if (value === undefined || value === 0) return "Unknown";
               return (
-                <div className="text-grey-20 text-base font-medium truncate">
+                <div className="text-grey-20 text-sm font-medium truncate">
                   {formatBytesFromBigInt(BigInt(value))}
                 </div>
               );
@@ -612,7 +612,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                 <div className="truncate text-grey-50">—</div>
               ) : (
                 <div className="truncate">
-                  <FormattedTimestamp timestamp={createdAt} className="text-grey-20" />
+                  <FormattedTimestamp timestamp={createdAt} className="text-grey-20 text-sm" />
                 </div>
               );
             },
@@ -633,7 +633,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                 const value = getValue();
                 return (
                   <div className="flex flex-col">
-                    <div className="text-grey-20 text-base font-medium truncate">
+                    <div className="text-grey-20 text-sm font-medium truncate">
                       {value}
                     </div>
                   </div>

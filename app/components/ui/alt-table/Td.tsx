@@ -21,7 +21,7 @@ export function Td<TData, TValue>(props: TdProps<TData, TValue>) {
   return (
     <td
       className={cn(
-        "font-medium px-4 py-3.5 border-x border-grey-80 text-grey-60 last:border-r-0 first:border-l-0 overflow-hidden",
+        "font-medium px-2.5 py-3 border-x border-grey-80 text-grey-60 text-sm last:border-r-0 first:border-l-0 overflow-hidden",
         "",
         cell.column.id === "actions" && "w-10 p-0",
         className,

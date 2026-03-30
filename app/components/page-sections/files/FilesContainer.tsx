@@ -757,7 +757,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
 
     content = (
       <FileSelectionProvider>
-        <div className="w-full relative mt-6">
+        <div className="w-full relative mt-4">
           {/* Sync Paused Alert */}
           {IS_SYNC_PAUSED && !isRecentFiles && (
             <div className="mb-4">

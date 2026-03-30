@@ -25,13 +25,13 @@ export const SkeletonTableRow: React.FC<SkeletonTableRowProps> = ({
         <tr
           key={`skeleton-row-${rowIndex}`}
           className={cn(
-            "bg-grey-100 text-left text-base font-grotesk h-12 animate-fade-in-0.3",
+            "bg-grey-100 text-left text-sm font-grotesk h-10 animate-fade-in-0.3",
             rowClassName
           )}
         >
           {Array.from({ length: columns }).map((_, colIndex) => {
             // Base cell styling
-            let tdClasses = `px-4 py-[0.8125rem] border-b border-grey-80 align-middle h-12 ${cellClassName}`;
+            let tdClasses = `px-2.5 py-3 border-b border-grey-80 align-middle h-10 ${cellClassName}`;
 
             // Add vertical borders if enabled
             if (showBorders && colIndex !== columns - 1) {

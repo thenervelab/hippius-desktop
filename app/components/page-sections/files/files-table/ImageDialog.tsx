@@ -20,7 +20,7 @@ export const ImageDialogTrigger: React.FC<{
   return (
     <button
       onClick={onClick}
-      className="px-4 py-[1.375rem] relative group overflow-hidden flex items-center w-full"
+      className="px-2.5 py-3 relative group overflow-hidden flex items-center w-full"
     >
       <span className="flex-1 min-w-0">{children}</span>
       {/* Eye icon on hover */}
