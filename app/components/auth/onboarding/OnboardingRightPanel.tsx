@@ -101,7 +101,7 @@ const OnboardingRightPanel = ({
                               <div className="flex items-center gap-2">
                                 <Icons.ArrowRight className="text-primary-90 size-5" />
 
-                                <span className="text-grey-50 font-medium text-base leadin-[22px]">
+                                <span className="text-grey-50 font-medium text-base leadin-[1.375rem]">
                                   {point}
                                 </span>
                               </div>
@@ -114,7 +114,7 @@ const OnboardingRightPanel = ({
               </div>
             </div>
 
-            <div className="flex gap-20 self-end h-[50px] w-full">
+            <div className="flex gap-20 self-end h-[3.125rem] w-full">
               {!isFirstPanel && (
                 <CardButton
                   className="w-full"

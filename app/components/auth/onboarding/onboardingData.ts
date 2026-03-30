@@ -13,7 +13,7 @@ export const ONBOARDING_SCREENS = [
       "Clean, modern, and easy to use interface",
     ],
     imagePath: "/assets/onboarding/home.png",
-    imageMarginBottom: "mb-[75px]",
+    imageMarginBottom: "mb-[4.6875rem]",
     imageClassName: "pl-4",
   },
   {
@@ -29,7 +29,7 @@ export const ONBOARDING_SCREENS = [
       "Custom device naming",
     ],
     imagePath: "/assets/onboarding/multi-folder-sync.png",
-    imageMarginBottom: "mb-[75px]",
+    imageMarginBottom: "mb-[4.6875rem]",
     imageClassName: "px-4",
   },
   {
@@ -45,7 +45,7 @@ export const ONBOARDING_SCREENS = [
       "Keep copies in multiple places",
     ],
     imagePath: "/assets/onboarding/recovery-phrase.png",
-    imageMarginBottom: "mb-[75px]",
+    imageMarginBottom: "mb-[4.6875rem]",
     imageClassName: "pl-4",
   },
 ];

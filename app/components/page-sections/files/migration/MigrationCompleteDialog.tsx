@@ -30,7 +30,7 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
 
   return (
     <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[450px] h-fit">
+      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[28.125rem] h-fit">
         <Dialog.Title className="sr-only">Migration Complete</Dialog.Title>
 
         <div className="px-4 py-6 flex flex-col gap-5">
@@ -106,7 +106,7 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
 
           {/* Failed Files List */}
           {failedFiles.length > 0 && (
-            <div className="bg-error-50/5 border border-error-50/20 rounded-lg p-3 max-h-[150px] overflow-y-auto">
+            <div className="bg-error-50/5 border border-error-50/20 rounded-lg p-3 max-h-[9.375rem] overflow-y-auto">
               <p className="text-xs font-medium text-error-50 mb-2">Failed Files</p>
               <div className="space-y-2">
                 {failedFiles.map((file, index) => (

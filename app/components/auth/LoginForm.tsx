@@ -237,7 +237,7 @@ export function LoginForm({
     return (
         <div className="opacity-0 animate-fade-in-0.5 w-full">
             <div className="space-y-6 text-grey-10 w-full">
-                <Typography.P size="xl" className="text-grey-10 font-medium !text-[32px]">
+                <Typography.P size="xl" className="text-grey-10 font-medium !text-[2rem]">
                     Log In to Hippius
                 </Typography.P>
 

@@ -83,25 +83,25 @@ const ChangeImageModal: React.FC<Props> = ({
         <Dialog.Content
           className="
             fixed left-1/2 top-1/2 z-50 
-            w-full max-w-sm sm:max-w-[428px] 
+            w-full max-w-sm sm:max-w-[26.75rem] 
             max-h-[90vh] overflow-y-auto
             -translate-x-1/2 -translate-y-1/2
-            bg-white rounded-[8px]
+            bg-white rounded-[0.5rem]
             shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
             p-4 border border-grey-80
           "
         >
-          <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[8px] sm:hidden" />
+          <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[0.5rem] sm:hidden" />
           <Dialog.Close asChild className="sm:hidden">
             <button
               aria-label="Close"
-              className="absolute top-[30px] right-4 text-grey-10 hover:text-grey-20"
+              className="absolute top-[1.875rem] right-4 text-grey-10 hover:text-grey-20"
             >
               <CloseCircle className="size-6" />
             </button>
           </Dialog.Close>
 
-          <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center max-sm:mt-2.5 mb-4">
+          <Dialog.Title className="text-grey-10 text-[1.375rem] sm:text-2xl font-medium text-center max-sm:mt-2.5 mb-4">
             Change Image
           </Dialog.Title>
 

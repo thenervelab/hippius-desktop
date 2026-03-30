@@ -89,7 +89,7 @@ const CreditsWidget: FC<CreditsWidgetProps> = ({
                   </button>
                   <Typography.P
                     style={{
-                      fontSize: "12px",
+                      fontSize: "0.75rem",
                     }}
                     className="text-grey-60"
                   >
@@ -103,7 +103,7 @@ const CreditsWidget: FC<CreditsWidgetProps> = ({
       </div>
       <div className="relative bg-grey-100 w-full border-grey-80 border-t">
         <CardButton
-          className="w-full mt-4 h-[50px]"
+          className="w-full mt-4 h-[3.125rem]"
           onClick={handleOpenConsoleCreditsPage}
         >
           <div className="flex items-center gap-2 text-lg font-medium">

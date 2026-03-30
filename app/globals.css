@@ -225,8 +225,8 @@ html {
 }
 
 .visx-tooltip-glyph > svg {
-  width: 8px;
-  height: 8px;
+  width: 0.5rem;
+  height: 0.5rem;
 }
 @keyframes spin {
   to {
@@ -279,9 +279,9 @@ input[type="password"]::-ms-clear {
 /* globals.css */
 .toaster-auth-aware {
   position: fixed !important;
-  right: 24px !important;
-  /* default = 24px; auth layer can raise this dynamically */
-  bottom: var(--toast-bottom-offset, 24px) !important;
+  right: 1.5rem !important;
+  /* default = 1.5rem; auth layer can raise this dynamically */
+  bottom: var(--toast-bottom-offset, 1.5rem) !important;
   z-index: 100000; /* above page chrome */
   pointer-events: none; /* let clicks pass through the container */
 }
@@ -300,17 +300,17 @@ body.body-scroll-locked {
 [data-sonner-toast] {
   display: flex !important;
   align-items: center !important;
-  gap: 12px !important;
+  gap: 0.75rem !important;
 }
 
 [data-sonner-toast] [data-close-button] {
   position: absolute !important;
-  right: 8px !important;
+  right: 0.5rem !important;
   left: auto !important;
-  top: 8px !important;
+  top: 0.5rem !important;
   transform: none !important;
   margin: 0 !important;
-  padding: 4px !important;
+  padding: 0.25rem !important;
   border: none !important;
   background: transparent !important;
   cursor: pointer !important;
@@ -324,5 +324,5 @@ body.body-scroll-locked {
 
 [data-sonner-toast] [data-content] {
   flex: 1 !important;
-  padding-right: 32px !important;
+  padding-right: 2rem !important;
 }

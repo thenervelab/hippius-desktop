@@ -98,7 +98,7 @@ const TokenForm: FC<TokenFormProps> = ({
             <div className="bg-white border border-grey-80 rounded-lg p-4">
                 {/* Header */}
                 <div className="text-center mb-6">
-                    <h1 className="text-[22px] font-semibold text-grey-10 mb-2">{title}</h1>
+                    <h1 className="text-[1.375rem] font-semibold text-grey-10 mb-2">{title}</h1>
                     <p className="text-grey-50 text-base font-medium">{description}</p>
                 </div>
 

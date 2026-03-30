@@ -37,7 +37,7 @@ export function SyncDestinationDialog({
       }}
     >
       <DialogContainer
-        className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit"
+        className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit"
         preventClose={isSyncing}
       >
         <Dialog.Title className="sr-only">Choose Destination</Dialog.Title>

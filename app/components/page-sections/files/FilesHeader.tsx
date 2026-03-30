@@ -192,10 +192,10 @@ const FilesHeader: FC<FilesHeaderProps> = ({
               </div>
               <button
                 onClick={handleViewAllFiles}
-                className="px-2 py-2 items-center flex bg-grey-90  border border-grey-80 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
+                className="px-2 py-2 items-center flex bg-grey-90  border border-grey-80 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[0.875rem] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
               >
                 View All Files
-                <Icons.ArrowRight className="size-[14px] ml-1" />
+                <Icons.ArrowRight className="size-[0.875rem] ml-1" />
               </button>
             </>
           )}

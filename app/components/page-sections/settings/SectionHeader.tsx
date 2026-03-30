@@ -31,7 +31,7 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
       </AbstractIconWrapper>
       <div className="flex flex-col">
         <div className="flex gap-2 mb-0.5">
-          <div className="text-[16px] leading-[18px] text-grey-10 font-medium">
+          <div className="text-[1rem] leading-[1.125rem] text-grey-10 font-medium">
             {title}
           </div>
           {info && (

@@ -12,7 +12,7 @@ export const SWIPE_CONTENT = [
     text: "Global Reliability",
     subText:
       "Powered by a decentralized network of hardware providers, not a single point of failure.",
-    icon: <GlobalReliability className="xl:h-[270px] h-[160px] w-full" />,
+    icon: <GlobalReliability className="xl:h-[16.875rem] h-[10rem] w-full" />,
   },
   {
     heading: "Secure Your Files with Blockchain",
@@ -21,7 +21,7 @@ export const SWIPE_CONTENT = [
       "Your files are stored securely on our decentralized blockchain, with Arion Hash tracking ensuring traceability and preventing unauthorized access",
 
     icon: (
-      <SecureFilesWithBlockChain className="xl:h-[270px] h-[160px] w-full" />
+      <SecureFilesWithBlockChain className="xl:h-[16.875rem] h-[10rem] w-full" />
     ),
   },
   {
@@ -29,14 +29,14 @@ export const SWIPE_CONTENT = [
     text: "Pay Only for What You Use",
     subText:
       "Store your data with cost-effective rates and no hidden fees, powered by transparent blockchain technology",
-    icon: <SmartAffordableStorage className="xl:h-[270px] h-[160px] w-full" />,
+    icon: <SmartAffordableStorage className="xl:h-[16.875rem] h-[10rem] w-full" />,
   },
   {
     heading: "Earn Continuously with Referrals",
     text: "Share Your Unique Code",
     subText:
       "Generate a unique referral code and share it with anyone—earn ongoing rewards based on referred users’ usage, all tracked on the blockchain",
-    icon: <EarnWithRefferals className="xl:h-[270px] h-[160px] w-full" />,
+    icon: <EarnWithRefferals className="xl:h-[16.875rem] h-[10rem] w-full" />,
   },
   // {
   //   heading: "Your Secret Phrase: The Key to Your Account",
@@ -44,7 +44,7 @@ export const SWIPE_CONTENT = [
   //   subText:
   //     "No third-party logins here! Your unique word phrase (mnemonic) unlocks a decentralized world. We don’t store it, so keep it safe and take full control.",
   //   icon: (
-  //     <CircularShield className="xl:size-[270px] size-[160px] text-primary-80" />
+  //     <CircularShield className="xl:size-[16.875rem] size-[10rem] text-primary-80" />
   //   ),
   // },
 ];

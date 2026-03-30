@@ -164,7 +164,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   return (
     <>
     <Dialog.Root open={open} onOpenChange={handleClose}>
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit" preventClose={isAdding}>
+      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit" preventClose={isAdding}>
         <Dialog.Title className="sr-only">Add Local Folder</Dialog.Title>
 
         <div className="px-4 py-6 flex flex-col gap-5">

@@ -371,11 +371,11 @@ const FileCard: React.FC<FileCardProps> = ({
                     className="object-center object-contain"
                   />
                 )}
-                <div className="flex items-center sm:justify-center h-[56px] w-[56px] relative">
+                <div className="flex items-center sm:justify-center h-[3.5rem] w-[3.5rem] relative">
                   {file.isFolder ? (
                     <Folder2 className="size-10 text-primary-50" />
                   ) : (
-                    <div className="flex items-center justify-center size-9 bg-primary-50 rounded-[8px] relative">
+                    <div className="flex items-center justify-center size-9 bg-primary-50 rounded-[0.5rem] relative">
                       <FileTypeIcon
                         fileType={fileType ?? undefined}
                         file={file}

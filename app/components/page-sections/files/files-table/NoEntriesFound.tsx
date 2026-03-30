@@ -104,7 +104,7 @@ const NoEntriesFound: React.FC<NoEntriesFoundProps> = ({
   return (
     <>
       {isRecentFiles ? (
-        <div className="flex flex-col items-center justify-center py-4 min-h-[300px]">
+        <div className="flex flex-col items-center justify-center py-4 min-h-[18.75rem]">
           <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
             <Icons.File className="size-7 text-primary-50" />
           </div>
@@ -121,7 +121,7 @@ const NoEntriesFound: React.FC<NoEntriesFoundProps> = ({
               if (IS_SYNC_PAUSED) return;
               handleOpenModal();
             }}
-            className="flex gap-x-2 items-center w-full h-14 max-w-[280px] mt-3"
+            className="flex gap-x-2 items-center w-full h-14 max-w-[17.5rem] mt-3"
             disabled={isCheckingSyncPath}
           >
             {isCheckingSyncPath
@@ -143,7 +143,7 @@ const NoEntriesFound: React.FC<NoEntriesFoundProps> = ({
           onDragLeave={handleDragLeave}
         >
           <div className="text-2xl font-medium text-grey-10 flex flex-col items-center justify-center pt-4 gap-4">
-            <div className="flex items-center sm:justify-center h-[56px] w-[56px] relative">
+            <div className="flex items-center sm:justify-center h-[3.5rem] w-[3.5rem] relative">
               <Graphsheet
                 majorCell={{
                   lineColor: [221, 227, 245, 1],
@@ -158,14 +158,14 @@ const NoEntriesFound: React.FC<NoEntriesFoundProps> = ({
                 className="absolute w-full h-full top-0 left-0 duration-300 opacity-10 hidden sm:block"
               />
               <div className="bg-white-cloud-gradient-lg absolute inset-0" />
-              <div className="flex items-center justify-center h-8 w-8 bg-primary-50 rounded-[8px] relative">
+              <div className="flex items-center justify-center h-8 w-8 bg-primary-50 rounded-[0.5rem] relative">
                 <HippiusLogo className="size-9 text-white" />
               </div>
             </div>
             <span>No Entries in Your Storage</span>
           </div>
 
-          <div className="flex flex-col items-center justify-center mt-4 max-w-[320px]">
+          <div className="flex flex-col items-center justify-center mt-4 max-w-[20rem]">
             <div className="text-sm text-grey-60 font-medium mb-4 text-center">
               {!isDragging ? (
                 <>

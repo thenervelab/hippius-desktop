@@ -44,14 +44,14 @@ const LeftCarouselPanel = () => {
             >
               {SWIPE_CONTENT.map((item) => (
                 <SwiperSlide key={item.heading}>
-                  <div className=" py-8 [@media(min-height:880px)]:py-[84px] px-5 w-full h-full items-center  flex  justify-between flex-col">
+                  <div className=" py-8 [@media(min-height:880px)]:py-[5.25rem] px-5 w-full h-full items-center  flex  justify-between flex-col">
                     <RevealTextLine
                       rotate
                       reveal={inView}
                       className="delay-300 w-full"
                     >
                       <div
-                        className="hidden [@media(min-height:750px)]:block text-center xl:text-[40px] text-[28px] 
+                        className="hidden [@media(min-height:750px)]:block text-center xl:text-[2.5rem] text-[1.75rem] 
                       font-medium text-grey-100 [@media(min-height:750px)]:mb-12  "
                       >
                         {item.heading}
@@ -66,7 +66,7 @@ const LeftCarouselPanel = () => {
                         reveal={inView}
                         className="delay-300"
                       >
-                        <span className="text-[22px] text-center text-grey-100">
+                        <span className="text-[1.375rem] text-center text-grey-100">
                           {item.text}
                         </span>
                       </RevealTextLine>
@@ -85,7 +85,7 @@ const LeftCarouselPanel = () => {
               ))}
             </Swiper>
             <div className="absolute right-0 bottom-0 w-full z-0">
-              <LoginRightBottom className="w-full h-[280px]" />
+              <LoginRightBottom className="w-full h-[17.5rem]" />
             </div>
           </div>
         )}

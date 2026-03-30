@@ -28,7 +28,7 @@ const config: ChartTrendsConfig = {
     dx: -3,
   }),
   margin: { top: 10, left: 60, bottom: 30, right: 5 },
-  gridMarginClasses: "mt-[10px] ml-[60px] mb-[30px] mr-[21px]",
+  gridMarginClasses: "mt-[0.625rem] ml-[3.75rem] mb-[1.875rem] mr-[1.3125rem]",
   renderTooltip: (tooltipData, timeRange) => (
     <StorageUsedTooltip tooltipData={tooltipData} timeRange={timeRange} />
   ),

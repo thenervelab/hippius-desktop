@@ -24,7 +24,7 @@ const ReferralLinkCard: React.FC = () => {
   }, [fullLink]);
 
   return (
-    <div className="bg-white p-3 rounded-lg border border-grey-80 shadow-sm h-[166px] relative bg-[url('/assets/refferal.png')] bg-repeat-round bg-cover">
+    <div className="bg-white p-3 rounded-lg border border-grey-80 shadow-sm h-[10.375rem] relative bg-[url('/assets/refferal.png')] bg-repeat-round bg-cover">
       <div className="flex flex-col gap-4">
         <div className="flex justify-between items-center">
           <div className="flex gap-2">
@@ -36,7 +36,7 @@ const ReferralLinkCard: React.FC = () => {
             </div>
           </div>
           <button className="flex items-center text-xs gap-1 cursor-not-allowed opacity-50">
-            <Refresh className="size-[18px] text-grey-60" />
+            <Refresh className="size-[1.125rem] text-grey-60" />
             {loading && !lastCode ? (
               <div className="h-4 w-20 bg-grey-70 rounded animate-pulse" />
             ) : lastCode ? (
@@ -46,9 +46,9 @@ const ReferralLinkCard: React.FC = () => {
             )}
           </button>
         </div>
-        <div className="h-[86px] text-base leading-[22px] text-grey-60 flex flex-col justify-center">
+        <div className="h-[5.375rem] text-base leading-[1.375rem] text-grey-60 flex flex-col justify-center">
           <span className="mb-2">Your Referral Link</span>
-          <div className="flex items-center justify-between rounded-[8px] p-3 border border-grey-80 bg-white">
+          <div className="flex items-center justify-between rounded-[0.5rem] p-3 border border-grey-80 bg-white">
             <div
               className="flex-1 whitespace-nowrap overflow-x-auto no-scrollbar"
               title={fullLink}

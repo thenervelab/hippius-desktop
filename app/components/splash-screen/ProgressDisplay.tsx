@@ -6,7 +6,7 @@ const ProgressDisplay: React.FC = () => {
   const roundedProgress = Math.round(progress);
 
   return (
-    <span className="font-digital font-normal text-[#3167DD] text-[34px] leading-[40px] overflow-hidden tabular-nums">
+    <span className="font-digital font-normal text-[#3167DD] text-[2.125rem] leading-[2.5rem] overflow-hidden tabular-nums">
       {roundedProgress}%
     </span>
   );

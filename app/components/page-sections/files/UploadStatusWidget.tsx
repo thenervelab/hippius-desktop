@@ -23,7 +23,7 @@ const UploadStatusWidget: React.FC = () => {
     return (
         <div
             className={cn(
-                "fixed flex w-[300px] max-w-[270px] gap-x-2 shadow-dialog z-40 bottom-16 right-4 bg-white border border-grey-80 rounded-[8px] p-3.5 translate-y-32 duration-500 opacity-0",
+                "fixed flex w-[18.75rem] max-w-[16.875rem] gap-x-2 shadow-dialog z-40 bottom-16 right-4 bg-white border border-grey-80 rounded-[0.5rem] p-3.5 translate-y-32 duration-500 opacity-0",
                 requestState !== "idle" && "translate-y-0 opacity-100"
             )}
         >

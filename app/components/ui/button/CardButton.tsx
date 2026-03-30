@@ -26,7 +26,7 @@ const buttonCardVariants = ({
   className,
 }: ButtonCardVariantProps) => {
   const baseClasses =
-    "rounded-[4px] py-3 px-4 w-[208px] min-w-fit font-medium duration-300 flex justify-center items-center gap-x-2";
+    "rounded-[0.25rem] py-3 px-4 w-[13rem] min-w-fit font-medium duration-300 flex justify-center items-center gap-x-2";
 
   // Variant classes
   let variantClasses = "";
@@ -116,10 +116,10 @@ const ButtonCardOrLinkInner: React.FC<{
           <div className="absolute border rounded border-primary-40 left-0.5 right-0.5 top-0.5 bottom-0.5 shadow-inner-buttonCard" />
         )}
         {variant === "dialog" && (
-          <div className="absolute border rounded border-primary-40 left-[5px] right-[5px] top-[5px] bottom-[5px] shadow-inner-action-button" />
+          <div className="absolute border rounded border-primary-40 left-[0.3125rem] right-[0.3125rem] top-[0.3125rem] bottom-[0.3125rem] shadow-inner-action-button" />
         )}
         {variant === "error" && (
-          <div className="absolute border rounded border-error-70/80 left-[5px] right-[5px] top-[5px] bottom-[5px] shadow-inner-buttonCard shadow-md" />
+          <div className="absolute border rounded border-error-70/80 left-[0.3125rem] right-[0.3125rem] top-[0.3125rem] bottom-[0.3125rem] shadow-inner-buttonCard shadow-md" />
         )}
 
         {appendToStart && icon && (

@@ -7,7 +7,7 @@ const h4Variants = cva({
   variants: {
     size: {
       md: "text-3xl lg:text-4xl",
-      sm: "text-[22px] leading-[32px] lg:text-[32px] lg:leading-[40px]",
+      sm: "text-[1.375rem] leading-[2rem] lg:text-[2rem] lg:leading-[2.5rem]",
     },
   },
   defaultVariants: {

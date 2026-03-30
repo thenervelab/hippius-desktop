@@ -233,7 +233,7 @@ export function MnemonicBackupDialog({
   return (
     <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <DialogContainer
-        className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[560px] h-fit"
+        className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[35rem] h-fit"
         preventClose={!canClose}
       >
         <Dialog.Title className="sr-only">{stepConfig[step]?.title}</Dialog.Title>

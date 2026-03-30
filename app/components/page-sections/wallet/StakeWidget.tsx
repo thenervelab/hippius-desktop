@@ -58,7 +58,7 @@ const StakeWidget: FC = () => {
     const hasWithdrawable = parseFloat(stakingInfo.withdrawable) > 0;
 
     return (
-        <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between min-h-[310px]">
+        <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between min-h-[19.375rem]">
             <div className="flex flex-col w-full items-start">
                 <div className="flex gap-4 items-center">
                     <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
@@ -142,7 +142,7 @@ const StakeWidget: FC = () => {
                 {/* Withdraw Button - Higher priority if withdrawable funds exist */}
                 {hasWithdrawable && (
                     <CardButton
-                        className="w-full mt-4 h-[50px]"
+                        className="w-full mt-4 h-[3.125rem]"
                         onClick={handleWithdrawUnbonded}
                         disabled={isWithdrawing}
                         variant="secondary"
@@ -159,7 +159,7 @@ const StakeWidget: FC = () => {
                 {/* Only show unstake button if user has staked tokens */}
                 {hasStakedTokens && (
                     <CardButton
-                        className="w-full mt-4 h-[50px]"
+                        className="w-full mt-4 h-[3.125rem]"
                         variant="secondary"
                         onClick={handleUnstakeAlpha}
                     >
@@ -170,7 +170,7 @@ const StakeWidget: FC = () => {
                     </CardButton>
                 )}
                 <CardButton
-                    className="w-full mt-3 h-[50px]"
+                    className="w-full mt-3 h-[3.125rem]"
                     onClick={handleStakeNow}
                 >
                     <div className="flex items-center gap-2">

@@ -68,7 +68,7 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
           <div className="flex-1 flex flex-col gap-2">
             <div className="flex gap-1 items-center">
               <Icons.Cpu className="size-4 text-grey-10" />
-              <p className="font-medium leading-[22px] text-base text-grey-10 tracking-tight">
+              <p className="font-medium leading-[1.375rem] text-base text-grey-10 tracking-tight">
                 RAM
               </p>
             </div>
@@ -81,7 +81,7 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
           <div className="flex-1 flex flex-col gap-2">
             <div className="flex gap-1 items-center">
               <Icons.CpuCharge className="size-4 text-grey-10" />
-              <p className="font-medium leading-[22px] text-base text-grey-10 tracking-tight">
+              <p className="font-medium leading-[1.375rem] text-base text-grey-10 tracking-tight">
                 Cores
               </p>
             </div>
@@ -95,7 +95,7 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
         <div className="flex flex-col gap-2 w-full">
           <div className="flex gap-1 items-center">
             <Icons.MoreSquare className="size-4 text-grey-10" />
-            <p className="font-medium leading-[22px] text-base text-grey-10 tracking-tight">
+            <p className="font-medium leading-[1.375rem] text-base text-grey-10 tracking-tight">
               Other Specifications
             </p>
           </div>
@@ -118,7 +118,7 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
         <div className="flex flex-col gap-2 w-full">
           <div className="flex gap-1 items-center">
             <Icons.DollarSquare className="size-4 text-grey-10" />
-            <p className="font-medium leading-[22px] text-base text-grey-10 tracking-tight">
+            <p className="font-medium leading-[1.375rem] text-base text-grey-10 tracking-tight">
               Price
             </p>
           </div>
@@ -132,12 +132,12 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
       {showSetupButton && onSelect && (
         <div className="px-4 pb-4">
           <Button
-            className={`flex gap-x-2 items-center  h-[42px] w-full`}
+            className={`flex gap-x-2 items-center  h-[2.625rem] w-full`}
             icon={<Icons.ArrowRight className="size-4" />}
             onClick={() => onSelect(template)}
           >
             {" "}
-            <span className="font-medium text-base leading-[22px] tracking-tight">
+            <span className="font-medium text-base leading-[1.375rem] tracking-tight">
               Set Up Virtual Machine
             </span>
           </Button>

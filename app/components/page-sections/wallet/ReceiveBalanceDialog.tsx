@@ -29,7 +29,7 @@ const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
     <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
       <DialogContainer
         className="md:inset-0 md:m-auto
-          md:w-[90vw] md:max-w-[428px] h-fit"
+          md:w-[90vw] md:max-w-[26.75rem] h-fit"
       >
         <Dialog.Title className="sr-only">Receive Balance</Dialog.Title>
         {/* Top accent bar (only mobile) */}
@@ -65,8 +65,8 @@ const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
 
           {/* QR Code */}
           <div className="w-full flex justify-center mb-4">
-            <div className="border border-grey-80 rounded-lg p-4 bg-white w-full flex items-center justify-center flex-col gap-[22px]">
-              <div className="w-[194px] h-[194px] flex items-center justify-center">
+            <div className="border border-grey-80 rounded-lg p-4 bg-white w-full flex items-center justify-center flex-col gap-[1.375rem]">
+              <div className="w-[12.125rem] h-[12.125rem] flex items-center justify-center">
                 <QRCode
                   value={fullAddress}
                   size={194}
@@ -97,7 +97,7 @@ const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
           {/* Cancel Button */}
           <div className="mb-6">
             <CardButton
-              className="w-full text-[18px]"
+              className="w-full text-[1.125rem]"
               variant="secondary"
               onClick={onClose}
             >

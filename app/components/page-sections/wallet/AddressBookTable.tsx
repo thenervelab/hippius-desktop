@@ -195,12 +195,12 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
         )}
 
         {contacts.length === 0 && (
-          <div className="w-full h-[350px] flex items-center justify-center p-6">
+          <div className="w-full h-[21.875rem] flex items-center justify-center p-6">
             <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
               <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
                 <Icons.DocumentText className="size-7 text-primary-50" />
               </div>
-              <span className="text-grey-60 text-sm font-medium max-w-[190px] text-center">
+              <span className="text-grey-60 text-sm font-medium max-w-[11.875rem] text-center">
                 No saved addresses. Add a new address to get started.
               </span>
             </div>

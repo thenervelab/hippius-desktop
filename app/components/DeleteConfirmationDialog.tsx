@@ -30,7 +30,7 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
     <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
       <DialogContainer
         className="md:inset-0 md:m-auto
-    md:w-[90vw] md:max-w-[428px] h-fit"
+    md:w-[90vw] md:max-w-[26.75rem] h-fit"
       >
         <Dialog.Title className="sr-only">{heading}</Dialog.Title>
         {/* Top accent bar (only mobile) */}
@@ -75,7 +75,7 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
           </div>
 
           {/* Message */}
-          <div className="font-medium text-base text-grey-20 max-w-[320px] flex mx-auto w-full text-center mb-4 ">
+          <div className="font-medium text-base text-grey-20 max-w-[20rem] flex mx-auto w-full text-center mb-4 ">
             {text}
           </div>
 

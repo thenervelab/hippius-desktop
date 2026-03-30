@@ -107,7 +107,7 @@ export function RemoteFoldersSection({
                                   <Tooltip.Portal>
                                     <Tooltip.Content
                                       side="bottom"
-                                      className="z-[9999] max-w-[400px] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+                                      className="z-[9999] max-w-[25rem] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
                                       sideOffset={4}
                                     >
                                       {folder.folderName}

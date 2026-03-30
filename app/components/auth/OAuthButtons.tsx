@@ -66,7 +66,7 @@ function AuthButton({
             onClick={onClick}
             disabled={disabled || isLoading}
             className={cn(
-                "w-full flex items-center justify-center gap-2 h-[60px] font-semibold text-lg rounded-lg",
+                "w-full flex items-center justify-center gap-2 h-[3.75rem] font-semibold text-lg rounded-lg",
                 "bg-grey-90 text-grey-10",
                 "hover:bg-grey-80",
                 "transition-all duration-200",

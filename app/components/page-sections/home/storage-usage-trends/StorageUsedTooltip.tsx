@@ -37,11 +37,11 @@ const StorageUsedTooltip: React.FC<{
 
   return (
     <div>
-      <p className="mb-1 text-[10px] font-medium text-gray-500">
+      <p className="mb-1 text-[0.625rem] font-medium text-gray-500">
         {dateDisplay}
       </p>
 
-      <div className="font-medium text-[10px] text-grey-10">
+      <div className="font-medium text-[0.625rem] text-grey-10">
         <span className="mr-1">Storage Used:</span>
         <span>{formattedSize}</span>
       </div>

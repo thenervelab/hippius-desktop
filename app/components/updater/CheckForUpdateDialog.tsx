@@ -189,7 +189,7 @@ export default function CheckForUpdateDialog({
         <Dialog.Content
           className="
             fixed left-1/2 top-1/2 z-50 
-            w-full max-w-[1100px] h-[calc(100vh-100px)] md:h-[667px]
+            w-full max-w-[68.75rem] h-[calc(100vh-100px)] md:h-[41.6875rem]
             -translate-x-1/2 -translate-y-1/2
           "
         >
@@ -198,11 +198,11 @@ export default function CheckForUpdateDialog({
           </Dialog.Title>
 
           <div
-            className="bg-white rounded-[8px]
+            className="bg-white rounded-[0.5rem]
                        shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
                        border border-grey-80 mx-6 h-full relative max-md:overflow-y-scroll"
           >
-            <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[8px] sm:hidden" />
+            <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[0.5rem] sm:hidden" />
             <Dialog.Close className="max-md:hidden absolute top-4 right-4 border-[0.7px] border-grey-80 flex justify-center items-center size-10 hover:bg-grey-90 transition-colors">
               <X className="size-4 text-grey-10" />
             </Dialog.Close>
@@ -222,7 +222,7 @@ export default function CheckForUpdateDialog({
                     <CloseCircle className="size-6" />
                   </button>
 
-                  <div className="bg-primary-100 md:rounded-tl-lg md:rounded-bl-lg relative h-full max-md:h-[359px]">
+                  <div className="bg-primary-100 md:rounded-tl-lg md:rounded-bl-lg relative h-full max-md:h-[22.4375rem]">
                     <div className="absolute w-full top-0 h-full opacity-5">
                       <Graphsheet
                         majorCell={{
@@ -249,7 +249,7 @@ export default function CheckForUpdateDialog({
                           src="/desktop-app-homepage.png"
                           alt="Desktop App frontend view"
                           fill
-                          className="object-contain object-center w-[380px] md:scale-110"
+                          className="object-contain object-center w-[23.75rem] md:scale-110"
                         />
                       </RevealTextLine>
                     </div>
@@ -260,7 +260,7 @@ export default function CheckForUpdateDialog({
                     {/* header icon */}
                     <div className="shrink-0">
                       <div className="flex items-center mt-9">
-                        <div className="flex items-center justify-center h-[56px] w-[56px] relative">
+                        <div className="flex items-center justify-center h-[3.5rem] w-[3.5rem] relative">
                           <Graphsheet
                             majorCell={{
                               lineColor: [31, 80, 189, 1],
@@ -274,7 +274,7 @@ export default function CheckForUpdateDialog({
                             }}
                             className="absolute w-full h-full top-0 bottom-0 left-0 duration-300 opacity-10 block"
                           />
-                          <div className="flex items-center justify-center size-8 bg-primary-50 rounded-[8px] relative">
+                          <div className="flex items-center justify-center size-8 bg-primary-50 rounded-[0.5rem] relative">
                             <Icons.HippiusLogo className="size-5 text-white" />
                           </div>
                         </div>
@@ -285,13 +285,13 @@ export default function CheckForUpdateDialog({
                         <>
                           <div className="mt-6">
                             <RevealTextLine rotate reveal className="delay-200">
-                              <span className="text-success-50 font-geist text-base lg:text-[18px]">
+                              <span className="text-success-50 font-geist text-base lg:text-[1.125rem]">
                                 Update Available
                               </span>
                             </RevealTextLine>
                           </div>
 
-                          <h1 className="text-[28px] lg:text-[40px] leading-[48px] text-grey-10 mt-2">
+                          <h1 className="text-[1.75rem] lg:text-[2.5rem] leading-[3rem] text-grey-10 mt-2">
                             <RevealTextLine rotate reveal className="delay-300">
                               <span className="font-medium text-grey-30">
                                 New Update Available -
@@ -323,7 +323,7 @@ export default function CheckForUpdateDialog({
                             </span>
                           </div>
 
-                          <h1 className="text-[40px] leading-[48px] text-grey-10 mt-4">
+                          <h1 className="text-[2.5rem] leading-[3rem] text-grey-10 mt-4">
                             Please wait while your update is downloading
                           </h1>
 
@@ -352,7 +352,7 @@ export default function CheckForUpdateDialog({
                             </span>
                           </div>
 
-                          <h1 className="text-[40px] leading-[48px] text-grey-40 mt-2">
+                          <h1 className="text-[2.5rem] leading-[3rem] text-grey-40 mt-2">
                             Please wait while your update is installing
                           </h1>
 
@@ -374,7 +374,7 @@ export default function CheckForUpdateDialog({
                             </span>
                           </div>
 
-                          <h1 className="text-[40px] leading-[48px] text-grey-40 mt-2">
+                          <h1 className="text-[2.5rem] leading-[3rem] text-grey-40 mt-2">
                             Update is now complete. Please restart the app to use the new version.
                           </h1>
 
@@ -396,7 +396,7 @@ export default function CheckForUpdateDialog({
                             </span>
                           </div>
 
-                          <h1 className="text-[28px] lg:text-[40px] leading-[48px] text-grey-40 mt-2">
+                          <h1 className="text-[1.75rem] lg:text-[2.5rem] leading-[3rem] text-grey-40 mt-2">
                             Update is now complete. Restarting app...
                           </h1>
 
@@ -431,12 +431,12 @@ export default function CheckForUpdateDialog({
                       {(isLatest || status === "error") && (
                         <>
                           <div className="mt-24">
-                            <span className="text-success-50 font-geist text-base lg:text-[18px]">
+                            <span className="text-success-50 font-geist text-base lg:text-[1.125rem]">
                               You&apos;re on the latest version
                             </span>
                           </div>
 
-                          <h1 className="text-[28px] lg:text-[40px] leading-[48px] text-grey-10 mt-2">
+                          <h1 className="text-[1.75rem] lg:text-[2.5rem] leading-[3rem] text-grey-10 mt-2">
                             No update is available at the moment.
                           </h1>
 
@@ -471,7 +471,7 @@ export default function CheckForUpdateDialog({
                       <div className="shrink-0 flex flex-col gap-4 mt-10">
                         <CardButton
                           variant="dialog"
-                          className="w-[208px] h-[48px] py-4 text-base"
+                          className="w-[13rem] h-[3rem] py-4 text-base"
                           onClick={handleUpdateNow}
                         >
                           Update Now
@@ -483,7 +483,7 @@ export default function CheckForUpdateDialog({
                       <div className="shrink-0 flex flex-col gap-2 mt-10">
                         <CardButton
                           variant="dialog"
-                          className="w-[208px] h-[48px] py-4 text-base"
+                          className="w-[13rem] h-[3rem] py-4 text-base"
                           onClick={() => {
                             try {
                               relaunch();

@@ -68,14 +68,14 @@ const Select: React.FC<RadixSelectProps> = ({
             sideOffset={4}
             avoidCollisions={true}
             className={cn(
-              "mt-1 overflow-hidden rounded-md bg-white shadow-lg border border-grey-80 w-[110px] z-[100]",
+              "mt-1 overflow-hidden rounded-md bg-white shadow-lg border border-grey-80 w-[6.875rem] z-[100]",
               contentClassName,
             )}
           >
             <RadixSelect.ScrollUpButton className="flex items-center justify-center text-grey-50 rotate-180 bg-white border-b border-grey-80 py-1">
               <Icons.ChevronDown className="h-4 w-4" />
             </RadixSelect.ScrollUpButton>
-            <RadixSelect.Viewport className="py-1 max-h-80 overflow-auto min-w-[180px]">
+            <RadixSelect.Viewport className="py-1 max-h-80 overflow-auto min-w-[11.25rem]">
               {options.map((opt) => {
                 const isSelected = opt.value === value;
                 return (

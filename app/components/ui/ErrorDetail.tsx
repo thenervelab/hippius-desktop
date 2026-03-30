@@ -50,7 +50,7 @@ const ErrorDetail: React.FC<{ errorType: "not-found" | "unknown", backLink: stri
 
           <P
             size="sm"
-            className="max-w-[300px] text-center relative text-grey-60"
+            className="max-w-[18.75rem] text-center relative text-grey-60"
           >
             {errorType === "unknown" &&
               "An error occurred while fetching this block's data"}

@@ -133,14 +133,14 @@ export default function FolderUploadDialog({
                 <Dialog.Content
                     className="
                         fixed left-1/2 top-1/2 z-50 
-                        w-full max-w-sm sm:max-w-[488px] 
+                        w-full max-w-sm sm:max-w-[30.5rem] 
                         -translate-x-1/2 -translate-y-1/2
-                        bg-white rounded-[8px]
+                        bg-white rounded-[0.5rem]
                         shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
-                        p-[16px]
+                        p-[1rem]
                     "
                 >
-                    <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[8px] sm:hidden" />
+                    <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[0.5rem] sm:hidden" />
                     <Dialog.Close asChild className="sm:hidden">
                         <button
                             aria-label="Close"
@@ -151,14 +151,14 @@ export default function FolderUploadDialog({
                     </Dialog.Close>
 
                     <div className="flex items-center sm:justify-center">
-                        <div className="flex items-center sm:justify-center h-[56px] w-[56px] relative">
+                        <div className="flex items-center sm:justify-center h-[3.5rem] w-[3.5rem] relative">
                             <AbstractIconWrapper className="size-10 rounded-2xl text-primary-50 ">
                                 <FolderAdd className="absolute size-6 text-primary-50" />
                             </AbstractIconWrapper>
                         </div>
                     </div>
 
-                    <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center flex items-center justify-center gap-2">
+                    <Dialog.Title className="text-grey-10 text-[1.375rem] sm:text-2xl font-medium text-center flex items-center justify-center gap-2">
                         Upload Folder
                         {!IS_SYNC_PAUSED && <PrivacyBadge variant="folder" />}
                     </Dialog.Title>
@@ -190,7 +190,7 @@ export default function FolderUploadDialog({
                                 Folder Location
                             </Label>
                             <div className="relative flex items-start w-full">
-                                <FolderIcon className="size-6 absolute left-3 top-[28px] transform -translate-y-1/2 text-grey-60" />
+                                <FolderIcon className="size-6 absolute left-3 top-[1.75rem] transform -translate-y-1/2 text-grey-60" />
                                 <div className="flex-1 min-w-0">
                                     <Input
                                         id="folderPath"
@@ -211,7 +211,7 @@ export default function FolderUploadDialog({
                                     type="button"
                                     onClick={handleSelectFolder}
                                     className="absolute right-3 top-1/2 -translate-y-1/2 text-primary-50 hover:text-primary-40 z-10"
-                                    style={{ maxWidth: "80px" }}
+                                    style={{ maxWidth: "5rem" }}
                                 >
                                     Browse
                                 </button>

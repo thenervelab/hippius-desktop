@@ -35,7 +35,7 @@ const MigrationConfirmSkipDialog: React.FC<MigrationConfirmSkipDialogProps> = ({
 
   return (
     <Dialog.Root open={open}>
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[450px] h-fit" preventClose>
+      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[28.125rem] h-fit" preventClose>
         <Dialog.Title className="sr-only">Confirm Skip Migration</Dialog.Title>
 
         <div className="px-4 py-6 flex flex-col gap-5">

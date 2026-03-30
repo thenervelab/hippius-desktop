@@ -53,8 +53,8 @@ const NotFoundContent = () => {
                   style={{
                     WebkitTextStrokeWidth:
                       isTablet || isLaptop || isDesktop || isLargeDesktop
-                        ? "6px"
-                        : "3px",
+                        ? "0.375rem"
+                        : "0.1875rem",
                     WebkitTextStrokeColor: "#1F51BE",
                   }}
                 >
@@ -83,7 +83,7 @@ const NotFoundContent = () => {
                     {/* back home button */}
                     <div
                       className={cn(
-                        "bg-primary-50 p-1 border border-primary-40 rounded max-w-[166px] hover:bg-primary-40 opacity-0 translate-y-7 duration-300 delay-300",
+                        "bg-primary-50 p-1 border border-primary-40 rounded max-w-[10.375rem] hover:bg-primary-40 opacity-0 translate-y-7 duration-300 delay-300",
                         inView && "opacity-100 translate-y-0"
                       )}
                     >

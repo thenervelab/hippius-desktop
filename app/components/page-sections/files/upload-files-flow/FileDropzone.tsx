@@ -128,7 +128,7 @@ const FileDropzone: FC<{
   return (
     <div
       className={cn(
-        "w-full h-full border rounded-[8px] p-2 transition-colors duration-200",
+        "w-full h-full border rounded-[0.5rem] p-2 transition-colors duration-200",
         isDragging
           ? "border-primary-50 border-2 bg-primary-50/5"
           : "border-grey-80"
@@ -137,7 +137,7 @@ const FileDropzone: FC<{
       <button
         onClick={handleSelectFiles}
         className={cn(
-          "h-full w-full flex border border-dashed justify-center py-10 px-10 bg-white cursor-pointer hover:bg-grey-90 duration-300 rounded-[8px]",
+          "h-full w-full flex border border-dashed justify-center py-10 px-10 bg-white cursor-pointer hover:bg-grey-90 duration-300 rounded-[0.5rem]",
           isDragging
             ? "border-primary-50 bg-primary-50/10"
             : "border-grey-80"
@@ -154,7 +154,7 @@ const FileDropzone: FC<{
             </P>
             <P
               size="sm"
-              className="mt-2 text-center text-grey-60 max-w-[264px]"
+              className="mt-2 text-center text-grey-60 max-w-[16.5rem]"
             >
               Drag and drop or click to add one or more files here to upload
             </P>

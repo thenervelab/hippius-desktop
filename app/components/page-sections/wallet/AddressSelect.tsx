@@ -125,7 +125,7 @@ const AddressSelect: React.FC<AddressSelectProps> = ({
             sideOffset={8}
             onEscapeKeyDown={() => handleOpenChange(false)}
             onInteractOutside={() => handleOpenChange(false)}
-            className="w-[var(--radix-menubar-trigger-width)] max-h-[300px] overflow-y-auto bg-white shadow-menu rounded-lg border border-grey-80 z-50 py-2 flex flex-col gap-1"
+            className="w-[var(--radix-menubar-trigger-width)] max-h-[18.75rem] overflow-y-auto bg-white shadow-menu rounded-lg border border-grey-80 z-50 py-2 flex flex-col gap-1"
             hidden={!isOpen}
           >
             {filteredAddresses.length > 0 &&
@@ -141,10 +141,10 @@ const AddressSelect: React.FC<AddressSelectProps> = ({
                   onSelect={() => handleSelectAddress(addr.walletAddress)}
                 >
                   <div className="flex flex-col">
-                    <span className="text-grey-70 text-[10px] leading-4 group-hover:text-primary-50">
+                    <span className="text-grey-70 text-[0.625rem] leading-4 group-hover:text-primary-50">
                       {addr.name}
                     </span>
-                    <span className="text-grey-50 text-[12px]  leading-[18px] font-medium group-hover:text-primary-50">
+                    <span className="text-grey-50 text-[0.75rem]  leading-[1.125rem] font-medium group-hover:text-primary-50">
                       {addr.walletAddress.slice(0, 12)}...
                       {addr.walletAddress.slice(-12)}
                     </span>

@@ -119,7 +119,7 @@ const InstancesTable: FC<InstancesTableProps> = ({
     <div className="flex flex-col gap-y-8">
       <TableModule.TableWrapper className=" duration-300 delay-300">
         {error ? (
-          <div className="w-full h-[800px] flex items-center justify-center p-6">
+          <div className="w-full h-[50rem] flex items-center justify-center p-6">
             <P className="text-error-70 font-medium">
               Oops an error occurred...
             </P>
@@ -141,17 +141,17 @@ const InstancesTable: FC<InstancesTableProps> = ({
             </TableModule.THead>
             <TableModule.TBody>
               <TableModule.SkeletonTableRow
-                rowClassName="h-[69px]"
+                rowClassName="h-[4.3125rem]"
                 rows={10}
                 columns={7}
                 columnWidths={[
-                  "100px",
-                  "160px",
-                  "140px",
-                  "100px",
-                  "100px",
-                  "90px",
-                  "50px",
+                  "6.25rem",
+                  "10rem",
+                  "8.75rem",
+                  "6.25rem",
+                  "6.25rem",
+                  "5.625rem",
+                  "3.125rem",
                 ]}
               />
             </TableModule.TBody>

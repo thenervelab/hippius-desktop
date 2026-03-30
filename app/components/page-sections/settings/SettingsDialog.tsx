@@ -59,7 +59,7 @@ const SettingsWidthDialog: React.FC<SettingsWidthDialogProps> = ({
           )}
         >
           {/* Header */}
-          <div className="flex items-center justify-between py-1.5  ml-[223px] mt-2 mr-8 ">
+          <div className="flex items-center justify-between py-1.5  ml-[13.9375rem] mt-2 mr-8 ">
             <Dialog.Title className="text-2xl text-grey-10  font-medium">
               {heading}
             </Dialog.Title>
@@ -69,7 +69,7 @@ const SettingsWidthDialog: React.FC<SettingsWidthDialogProps> = ({
           </div>
 
           {/* Body */}
-          <div className="flex-1 overflow-y-auto overscroll-contain pl-[23px] pr-8 h-[calc(100%-70px)]">
+          <div className="flex-1 overflow-y-auto overscroll-contain pl-[1.4375rem] pr-8 h-[calc(100%-70px)]">
             {children}
           </div>
         </Dialog.Content>

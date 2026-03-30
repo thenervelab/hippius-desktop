@@ -124,19 +124,19 @@ const EmailNotificationSection: React.FC = () => {
           <Dialog.Content
             className="
               fixed left-1/2 top-1/2 z-50 
-              w-full max-w-sm sm:max-w-[428px] 
+              w-full max-w-sm sm:max-w-[26.75rem] 
               max-h-[90vh] overflow-y-auto
               -translate-x-1/2 -translate-y-1/2
-              bg-white rounded-[8px]
+              bg-white rounded-[0.5rem]
               shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
               p-4 border border-grey-80
             "
           >
-            <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[8px] sm:hidden" />
+            <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[0.5rem] sm:hidden" />
             <Dialog.Close asChild className="sm:hidden">
               <button
                 aria-label="Close"
-                className="absolute top-[30px] right-4 text-grey-10 hover:text-grey-20"
+                className="absolute top-[1.875rem] right-4 text-grey-10 hover:text-grey-20"
               >
                 <CloseCircle className="size-6" />
               </button>
@@ -152,7 +152,7 @@ const EmailNotificationSection: React.FC = () => {
                   <Dialog.Title className="text-2xl font-medium text-grey-10 mb-2">
                     Login Required
                   </Dialog.Title>
-                  <Dialog.Description className="text-base text-grey-50 max-w-[330px] mx-auto">
+                  <Dialog.Description className="text-base text-grey-50 max-w-[20.625rem] mx-auto">
                     Email notifications are not available with Access Key login. Please
                     sign in with one of the following providers to manage your notification settings.
                   </Dialog.Description>
@@ -176,10 +176,10 @@ const EmailNotificationSection: React.FC = () => {
               <>
                 <div className="flex justify-between items-start mb-6 max-sm:mt-2.5">
                   <div className="flex flex-col gap-4">
-                    <Dialog.Title className="text-grey-10 text-[24px] leading-8 font-medium">
+                    <Dialog.Title className="text-grey-10 text-[1.5rem] leading-8 font-medium">
                       Email Notifications
                     </Dialog.Title>
-                    <Dialog.Description className="text-grey-50 text-[16px] leading-[22px] font-medium tracking-[-0.32px]">
+                    <Dialog.Description className="text-grey-50 text-[1rem] leading-[1.375rem] font-medium tracking-[-0.32px]">
                       Choose the type of emails you want to recieve
                     </Dialog.Description>
                   </div>
@@ -198,11 +198,11 @@ const EmailNotificationSection: React.FC = () => {
                     <div className="flex flex-col gap-2">
                       <label
                         htmlFor="email-enabled"
-                        className="text-[18px] leading-6 font-medium text-grey-10 tracking-[-0.36px]"
+                        className="text-[1.125rem] leading-6 font-medium text-grey-10 tracking-[-0.36px]"
                       >
                         Receive Email Notifications
                       </label>
-                      <p className="text-[16px] leading-[22px] font-medium text-grey-60 tracking-[-0.32px]">
+                      <p className="text-[1rem] leading-[1.375rem] font-medium text-grey-60 tracking-[-0.32px]">
                         Get emails on everything from us
                       </p>
                     </div>
@@ -212,9 +212,9 @@ const EmailNotificationSection: React.FC = () => {
                       onCheckedChange={(checked) =>
                         updateLocalSetting("email_enabled", checked)
                       }
-                      className="w-[40px] h-[24px] bg-grey-80 rounded-full relative data-[state=checked]:bg-primary-50 outline-none cursor-pointer border border-grey-80 transition-colors"
+                      className="w-[2.5rem] h-[1.5rem] bg-grey-80 rounded-full relative data-[state=checked]:bg-primary-50 outline-none cursor-pointer border border-grey-80 transition-colors"
                     >
-                      <Switch.Thumb className="block w-[20px] h-[20px] bg-white rounded-full transition-transform duration-100 translate-x-0.5 will-change-transform data-[state=checked]:translate-x-[18px]" />
+                      <Switch.Thumb className="block w-[1.25rem] h-[1.25rem] bg-white rounded-full transition-transform duration-100 translate-x-0.5 will-change-transform data-[state=checked]:translate-x-[1.125rem]" />
                     </Switch.Root>
                   </div>
 
@@ -288,7 +288,7 @@ const CheckboxItem = ({
     )}
   >
     <Checkbox.Root
-      className="flex h-4 w-4 appearance-none items-center justify-center rounded-[4px] bg-white border border-grey-80 outline-none data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors disabled:cursor-not-allowed"
+      className="flex h-4 w-4 appearance-none items-center justify-center rounded-[0.25rem] bg-white border border-grey-80 outline-none data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors disabled:cursor-not-allowed"
       checked={checked}
       onCheckedChange={onCheckedChange}
       id={label}
@@ -300,7 +300,7 @@ const CheckboxItem = ({
     </Checkbox.Root>
     <label
       className={cn(
-        "text-[16px] leading-[22px] font-medium text-grey-50 select-none tracking-[-0.32px]",
+        "text-[1rem] leading-[1.375rem] font-medium text-grey-50 select-none tracking-[-0.32px]",
         disabled ? "cursor-not-allowed" : "cursor-pointer"
       )}
       htmlFor={label}

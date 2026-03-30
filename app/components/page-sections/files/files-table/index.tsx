@@ -460,7 +460,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   <>
                     {isSelectionMode ? (
                       <NameCell
-                        className="px-4 py-[22px]"
+                        className="px-4 py-[1.375rem]"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
                         arionHash={info.row.original.arionHash}
@@ -499,7 +499,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   <>
                     {isSelectionMode ? (
                       <NameCell
-                        className="px-4 py-[22px]"
+                        className="px-4 py-[1.375rem]"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
                         arionHash={info.row.original.arionHash}
@@ -537,7 +537,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   <>
                     {isSelectionMode ? (
                       <NameCell
-                        className="px-4 py-[22px]"
+                        className="px-4 py-[1.375rem]"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
                         arionHash={info.row.original.arionHash}
@@ -573,7 +573,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               }
               return (
                 <NameCell
-                  className="px-4 py-[22px]"
+                  className="px-4 py-[1.375rem]"
                   rawName={info.getValue()}
                   actualName={info.row.original.actualFileName}
                   arionHash={info.row.original.arionHash}
@@ -997,7 +997,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         <div
           className={cn(
             "w-full relative",
-            isRecentFiles ? "min-h-[350px]" : "min-h-[700px]"
+            isRecentFiles ? "min-h-[21.875rem]" : "min-h-[43.75rem]"
           )}
         >
           <TableModule.TableWrapper

@@ -70,7 +70,7 @@ const StakeConfirmationDialog: React.FC<StakeConfirmationDialogProps> = ({
                             {isUnstaking && (
                                 <div className="flex justify-between items-start mt-3 pt-3 border-t border-grey-80">
                                     <span className="text-grey-50 font-semibold">Note:</span>
-                                    <span className="text-grey-10 text-right text-sm max-w-[200px]">
+                                    <span className="text-grey-10 text-right text-sm max-w-[12.5rem]">
                                         Tokens will be available after unbonding period
                                     </span>
                                 </div>

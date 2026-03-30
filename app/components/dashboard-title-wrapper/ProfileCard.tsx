@@ -52,7 +52,7 @@ const ProfileCard: React.FC = () => {
 
   if (displayAddress) {
     return (
-      <div className="flex max-h-[50px]">
+      <div className="flex max-h-[3.125rem]">
         <div
           className="bg-white hover:bg-primary-100/60 animate-fade-in-0.3 flex items-center gap-x-2 duration-300 transition-colors rounded-full cursor-pointer"
           onClick={handleCopyAddress}

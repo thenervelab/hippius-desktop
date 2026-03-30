@@ -12,7 +12,7 @@ const BridgeWidget: FC = () => {
     };
 
     return (
-        <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between h-[310px]">
+        <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between h-[19.375rem]">
             <div className="flex flex-col w-full items-start">
                 <div className="flex gap-4 items-center">
                     <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
@@ -35,7 +35,7 @@ const BridgeWidget: FC = () => {
             </div>
             <div className="flex flex-col">
                 <CardButton
-                    className="w-full mt-4 h-[50px]"
+                    className="w-full mt-4 h-[3.125rem]"
                     onClick={handleBridgeTokens}
                 >
                     <div className="flex items-center gap-2">

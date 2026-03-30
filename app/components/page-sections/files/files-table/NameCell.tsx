@@ -43,7 +43,7 @@ const SyncStatusIcon: FC<{ status?: SyncStatusType }> = ({ status }) => {
           <Tooltip.Portal>
             <Tooltip.Content
               side="top"
-              className="z-50 bg-white border border-grey-80 rounded-[8px] px-3 py-2 text-xs font-medium text-grey-40 shadow-lg"
+              className="z-50 bg-white border border-grey-80 rounded-[0.5rem] px-3 py-2 text-xs font-medium text-grey-40 shadow-lg"
               sideOffset={4}
             >
               {label}
@@ -64,7 +64,7 @@ const SyncStatusIcon: FC<{ status?: SyncStatusType }> = ({ status }) => {
           <Tooltip.Portal>
             <Tooltip.Content
               side="top"
-              className="z-50 bg-white border border-grey-80 rounded-[8px] px-3 py-2 text-xs font-medium text-grey-40 shadow-lg"
+              className="z-50 bg-white border border-grey-80 rounded-[0.5rem] px-3 py-2 text-xs font-medium text-grey-40 shadow-lg"
               sideOffset={4}
             >
               Downloading

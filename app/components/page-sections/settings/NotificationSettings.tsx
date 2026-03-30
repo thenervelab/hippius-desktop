@@ -92,7 +92,7 @@ const NotificationSettings: React.FC = () => {
                   learnMoreUrl="https://docs.hippius.com/use/desktop/settings#notifications"
                 />
                 <CardButton
-                  className="max-w-[160px] h-[42px] shrink-0"
+                  className="max-w-[10rem] h-[2.625rem] shrink-0"
                   variant="dialog"
                   disabled={isSaving || !hasChanged}
                   onClick={handleSaveChanges}
@@ -114,7 +114,7 @@ const NotificationSettings: React.FC = () => {
                 >
                   Select All
                 </button>
-                <div className="w-[2px] bg-grey-80 mx-4"></div>
+                <div className="w-[0.125rem] bg-grey-80 mx-4"></div>
 
                 <button
                   onClick={handleSelectNone}
@@ -130,7 +130,7 @@ const NotificationSettings: React.FC = () => {
                 {preferences.map((item) => (
                   <div key={item.id} className="flex items-start">
                     <Checkbox.Root
-                      className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-grey-90 my-[3px] data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50"
+                      className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-grey-90 my-[0.1875rem] data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50"
                       checked={checkedItems[item.id] ?? false}
                       onCheckedChange={() => handleCheckboxChange(item.id)}
                       id={item.id}
@@ -142,7 +142,7 @@ const NotificationSettings: React.FC = () => {
                     <div className="ml-2">
                       <label
                         htmlFor={item.id}
-                        className="text-base font-medium text-grey-10 leading-[22px]"
+                        className="text-base font-medium text-grey-10 leading-[1.375rem]"
                       >
                         {item.label}
                       </label>

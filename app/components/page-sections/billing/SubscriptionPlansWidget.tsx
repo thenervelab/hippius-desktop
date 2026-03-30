@@ -106,7 +106,7 @@ const SubscriptionPlansWidget: FC<SubscriptionPlansWidgetProps> = ({
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.Content
-                  className="min-w-[180px] bg-white rounded shadow-lg p-1 border border-grey-80"
+                  className="min-w-[11.25rem] bg-white rounded shadow-lg p-1 border border-grey-80"
                   sideOffset={5}
                   align="end"
                 >
@@ -197,7 +197,7 @@ const SubscriptionPlansWidget: FC<SubscriptionPlansWidgetProps> = ({
           </div>
         ) : (
           <CardButton
-            className="w-full mt-4 h-[50px]"
+            className="w-full mt-4 h-[3.125rem]"
             variant={hasActiveSubscription ? "secondary" : "primary"}
             asLink
             href="/billing/plans"

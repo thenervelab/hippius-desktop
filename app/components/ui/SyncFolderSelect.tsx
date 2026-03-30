@@ -76,7 +76,7 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
         <button
           type="button"
           onClick={() => setOpen((prev) => !prev)}
-          className="flex w-full justify-between cursor-pointer items-center gap-2 px-4 h-[48px] text-sm font-medium border border-grey-80 rounded-lg text-grey-10 bg-grey-100 focus:outline-none"
+          className="flex w-full justify-between cursor-pointer items-center gap-2 px-4 h-[3rem] text-sm font-medium border border-grey-80 rounded-lg text-grey-10 bg-grey-100 focus:outline-none"
         >
           <span className="truncate">{selectedLabel ?? "Select folder"}</span>
           <Icons.ChevronDown

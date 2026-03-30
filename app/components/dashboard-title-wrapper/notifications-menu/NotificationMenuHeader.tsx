@@ -16,7 +16,7 @@ const NotificationMenuHeader: React.FC<NotificationMenuHeaderProps> = ({
       {count > 0 && (
         <span
           className={cn(
-            "inline-flex items-center justify-center rounded-full bg-primary-50 text-white text-[11px] px-1 font-semibold min-w-4 min-h-4",
+            "inline-flex items-center justify-center rounded-full bg-primary-50 text-white text-[0.6875rem] px-1 font-semibold min-w-4 min-h-4",
             count > 99 && "w-6 h-6"
           )}
         >

@@ -161,7 +161,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
           ref={ref}
           className="w-full flex gap-3 border border-grey-80 rounded p-4 h-[80.9vh]"
         >
-          <AbstractIconWrapper className="min-w-[32px] size-8 text-primary-40">
+          <AbstractIconWrapper className="min-w-[2rem] size-8 text-primary-40">
             <Icon className="absolute text-primary-40 size-5" />
           </AbstractIconWrapper>
           <div className="flex flex-col min-h-0 flex-1 min-w-0">
@@ -172,14 +172,14 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
 
             {/* Title */}
             <RevealTextLine rotate reveal={inView} className="delay-300">
-              <h2 className="text-[22px] leading-8 font-semibold text-grey-10 mt-[3px] mb-[7px]">
+              <h2 className="text-[1.375rem] leading-8 font-semibold text-grey-10 mt-[0.1875rem] mb-[0.4375rem]">
                 {title}
               </h2>
             </RevealTextLine>
 
             {/* Description */}
             <RevealTextLine rotate reveal={inView} className="delay-400">
-              <p className="text-sm text-grey-30 font-medium leading-5 mb-[7px] break-all">
+              <p className="text-sm text-grey-30 font-medium leading-5 mb-[0.4375rem] break-all">
                 {descriptionText}
               </p>
             </RevealTextLine>
@@ -216,7 +216,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
                 </div>
 
                 {/* File list */}
-                <div className="max-h-[280px] overflow-y-auto rounded-lg border border-grey-80 divide-y divide-grey-90">
+                <div className="max-h-[17.5rem] overflow-y-auto rounded-lg border border-grey-80 divide-y divide-grey-90">
                   {fileDetails.map((file, index) => {
                     const { fileFormat } = getFilePartsFromFileName(file.fileName);
                     const fileType = getFileTypeFromExtension(fileFormat || null);
@@ -277,14 +277,14 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
                   <Icons.Note2 className="size-5" />
                   <span className="text-base font-bold">Release Notes</span>
                 </div>
-                <div className=" max-h-[280px] overflow-y-auto pr-2">
+                <div className=" max-h-[17.5rem] overflow-y-auto pr-2">
                   <BasicMarkdown text={releaseNotesText} />
                 </div>
               </div>
             )}
             {/* Time */}
             <RevealTextLine rotate reveal={inView} className="delay-500">
-              <span className="text-xs text-grey-60 leading-[18px] mb-[7px]">
+              <span className="text-xs text-grey-60 leading-[1.125rem] mb-[0.4375rem]">
                 {timestamp ? <TimeAgo date={timestamp} /> : time}
               </span>
             </RevealTextLine>
@@ -292,7 +292,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
             {/* Action button */}
             {shouldShowButton && (
               <CardButton
-                className="max-w-[152px] h-10"
+                className="max-w-[9.5rem] h-10"
                 onClick={handleLinkClick}
               >
                 <span className="flex items-center text-lg font-medium">

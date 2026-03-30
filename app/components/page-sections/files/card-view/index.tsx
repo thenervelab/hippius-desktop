@@ -151,7 +151,7 @@ const CardView: FC<CardViewProps> = ({
       <div
         className={cn(
           "w-full relative",
-          isRecentFiles ? "min-h-[200px]" : "min-h-[700px]"
+          isRecentFiles ? "min-h-[12.5rem]" : "min-h-[43.75rem]"
         )}
       >
         <div className="duration-300 delay-300">

@@ -55,7 +55,7 @@ const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
 
     return (
         <Dialog.Root open={open}>
-            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[500px] h-fit">
+            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[31.25rem] h-fit">
                 <Dialog.Title className="sr-only">Migration Progress</Dialog.Title>
 
                 <div className="px-4 py-6 flex flex-col gap-5">
@@ -163,7 +163,7 @@ const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
                     </div>
 
                     {/* File List (scrollable) */}
-                    <div className="bg-grey-95 border border-grey-80 rounded-lg p-3 max-h-[200px] overflow-y-auto">
+                    <div className="bg-grey-95 border border-grey-80 rounded-lg p-3 max-h-[12.5rem] overflow-y-auto">
                         <p className="text-xs font-medium text-grey-50 mb-2 px-1">File Status</p>
                         <div className="space-y-1">
                             {files.map((file, index) => (

@@ -214,7 +214,7 @@ const BrandedDialog: React.FC<BrandedModeProps> = ({
   return (
     <Dialog.Root open={open} onOpenChange={(o) => !o && onCancel()}>
       <DialogContainer
-        className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit"
+        className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit"
       >
         <Dialog.Title className="sr-only">{title}</Dialog.Title>
 
@@ -267,7 +267,7 @@ const BrandedDialog: React.FC<BrandedModeProps> = ({
           </div>
 
           {/* Message */}
-          <div className="font-medium text-base text-grey-50 max-w-[320px] flex mx-auto w-full text-center mb-4">
+          <div className="font-medium text-base text-grey-50 max-w-[20rem] flex mx-auto w-full text-center mb-4">
             {description}
           </div>
 

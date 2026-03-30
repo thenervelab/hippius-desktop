@@ -276,7 +276,7 @@ const VirtualMachines: FC = () => {
               onTabChange={handleTabChange}
               className="w-full "
               gap="gap-1"
-              width="w-full sm:min-w-[148px]"
+              width="w-full sm:min-w-[9.25rem]"
             />
           </div>
         </div>
@@ -327,7 +327,7 @@ const VirtualMachines: FC = () => {
         <div className="animate-in fade-in duration-300">
           {activeTab === "Instances" ? (
             isBetaError(instancesError) ? (
-              <NoEntriesFound className="h-[500px]">
+              <NoEntriesFound className="h-[31.25rem]">
                 <div className="text-center">
                   <p className="text-grey-30 font-semibold mb-1 text-base">
                     Feature Not Available
@@ -360,7 +360,7 @@ const VirtualMachines: FC = () => {
           ) : activeTab === "Templates" ? (
             <>
               {isBetaError(flavorsError) ? (
-                <NoEntriesFound className="h-[500px]">
+                <NoEntriesFound className="h-[31.25rem]">
                   <div className="text-center">
                     <p className="text-grey-30 font-semibold mb-1 text-base">
                       Feature Not Available

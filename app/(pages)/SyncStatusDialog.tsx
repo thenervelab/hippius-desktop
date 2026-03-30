@@ -275,7 +275,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   return (
     <div
       onClick={(e: React.MouseEvent) => e.stopPropagation()}
-      className="outline-none shadow-menu rounded-[8px] overflow-hidden transition-[width] duration-300 ease-in-out"
+      className="outline-none shadow-menu rounded-[0.5rem] overflow-hidden transition-[width] duration-300 ease-in-out"
       style={{ width: isExpanded ? W_EXPANDED : effectiveCompleted || hasFailed ? W_COLLAPSED_DONE : W_COLLAPSED_ACTIVE }}
     >
       {/* Header */}
@@ -283,8 +283,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
         className={cn(
           "shadow-menu bg-grey-100 border border-grey-80 cursor-pointer hover:bg-grey-90 transition-[border-radius] duration-300 ease-in-out",
           isExpanded
-            ? "rounded-t-[8px]"
-            : "rounded-[8px]"
+            ? "rounded-t-[0.5rem]"
+            : "rounded-[0.5rem]"
         )}
         onClick={handleHeaderClick}
       >
@@ -459,11 +459,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       <div
         className="overflow-hidden transition-[max-height,opacity] duration-300 ease-in-out"
         style={{
-          maxHeight: isExpanded ? `${BODY_MAX_HEIGHT_REM}rem` : "0px",
+          maxHeight: isExpanded ? `${BODY_MAX_HEIGHT_REM}rem` : "0",
           opacity: isExpanded ? 1 : 0,
         }}
       >
-        <div className="bg-grey-100 border border-grey-80 rounded-b-[8px] flex flex-col" style={{ width: W_EXPANDED, maxHeight: `${BODY_MAX_HEIGHT_REM}rem` }}>
+        <div className="bg-grey-100 border border-grey-80 rounded-b-[0.5rem] flex flex-col" style={{ width: W_EXPANDED, maxHeight: `${BODY_MAX_HEIGHT_REM}rem` }}>
           {/* Status banner */}
           <div className="flex flex-col w-full mt-4 ml-4 gap-2">
             <div className="flex items-center gap-2 flex-wrap">

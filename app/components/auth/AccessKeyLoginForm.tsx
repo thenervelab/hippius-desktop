@@ -108,7 +108,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
         <form onSubmit={handleLogin} className="space-y-6">
           {/* Title */}
           <div>
-            <h1 className="text-grey-10 text-[32px] font-medium">
+            <h1 className="text-grey-10 text-[2rem] font-medium">
               Login with your access key
             </h1>
             <p className="text-sm font-medium text-grey-70">
@@ -136,7 +136,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                   setMnemonic(e.target.value)
                 }
-                className="pl-10 pr-4 border-grey-80 h-14 text-grey-10 bg-grey-100 font-normal text-[15px] rounded-lg duration-200 outline-none hover:border-grey-70 placeholder-grey-60 focus:ring-0 focus:border-primary-50 w-full"
+                className="pl-10 pr-4 border-grey-80 h-14 text-grey-10 bg-grey-100 font-normal text-[0.9375rem] rounded-lg duration-200 outline-none hover:border-grey-70 placeholder-grey-60 focus:ring-0 focus:border-primary-50 w-full"
                 disabled={logginIn}
               />
             </div>

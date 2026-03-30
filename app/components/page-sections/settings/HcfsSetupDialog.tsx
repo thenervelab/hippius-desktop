@@ -58,7 +58,7 @@ export function HcfsSetupDialog({
   return (
     <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <DialogContainer
-        className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit"
+        className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit"
         preventClose={loading}
       >
         <Dialog.Title className="sr-only">Setup Sync Encryption</Dialog.Title>

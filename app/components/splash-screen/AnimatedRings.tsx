@@ -40,13 +40,13 @@ export default function AnimatedRings({
       <div
         className="absolute rounded-full bg-[#0B1A48] "
         style={{
-          width: `${blurDiameter}px`,
-          height: `${blurDiameter}px`,
+          width: `${blurDiameter / 16}rem`,
+          height: `${blurDiameter / 16}rem`,
           left: "50%",
           top: "50%",
           transform: "translate(-50%, -50%)",
           opacity: 0.9,
-          filter: "blur(144px)",
+          filter: "blur(9rem)",
           pointerEvents: "none",
           zIndex: 10,
         }}
@@ -54,13 +54,13 @@ export default function AnimatedRings({
       <div
         className="absolute rounded-full"
         style={{
-          width: `${innerBlurDiameter}px`,
-          height: `${innerBlurDiameter}px`,
+          width: `${innerBlurDiameter / 16}rem`,
+          height: `${innerBlurDiameter / 16}rem`,
           left: "50%",
           top: "50%",
           transform: "translate(-50%, -50%)",
           background: "#274996",
-          filter: "blur(80px)",
+          filter: "blur(5rem)",
           pointerEvents: "none",
           zIndex: 11,
         }}

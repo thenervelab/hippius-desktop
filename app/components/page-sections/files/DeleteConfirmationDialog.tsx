@@ -43,7 +43,7 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
 
     return (
         <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && handleCancel()}>
-            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit">
+            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit">
                 <Dialog.Title className="sr-only">Delete {isMultiple ? 'Files' : 'File'}</Dialog.Title>
 
                 {/* Top accent bar (mobile only) */}

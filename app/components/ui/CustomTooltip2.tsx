@@ -38,9 +38,9 @@ const CustomTooltip2: React.FC<InfoTooltipProps> = ({
           <Tooltip.Content
             side={side}
             className="
-                            z-50 bg-white border border-grey-80 rounded-[8px]
-                            px-2 py-2 text-[10px] font-medium text-grey-40 shadow-lg
-                            max-w-[260px] w-max whitespace-normal break-words
+                            z-50 bg-white border border-grey-80 rounded-[0.5rem]
+                            px-2 py-2 text-[0.625rem] font-medium text-grey-40 shadow-lg
+                            max-w-[16.25rem] w-max whitespace-normal break-words
                             transition-opacity duration-200
                             data-[state=closed]:opacity-0 data-[state=open]:opacity-100
                         "

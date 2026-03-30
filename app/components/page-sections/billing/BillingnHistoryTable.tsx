@@ -373,7 +373,7 @@ const BillingHistoryTable: React.FC = () => {
         </div>
 
         {isPending && !error && (
-          <div className="w-full h-[350px] flex items-center justify-center p-6 animate-fade-in-0.3">
+          <div className="w-full h-[21.875rem] flex items-center justify-center p-6 animate-fade-in-0.3">
             <Loader2 className="size-6 animate-spin text-grey-50" />
           </div>
         )}
@@ -381,12 +381,12 @@ const BillingHistoryTable: React.FC = () => {
         {((transactions && !transactions.length) || error) &&
           !isPending &&
           transactions !== null && (
-            <div className="w-full h-[350px] flex items-center justify-center p-6">
+            <div className="w-full h-[21.875rem] flex items-center justify-center p-6">
               <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
                 <AbstractIconWrapper className="size-10 rounded-2xl bg-grey-40/20 mb-2">
                   <Dollar className="absolute size-6" />
                 </AbstractIconWrapper>
-                <span className="text-grey-60 text-sm font-medium max-w-[260px] text-center">
+                <span className="text-grey-60 text-sm font-medium max-w-[16.25rem] text-center">
                   {error
                     ? `Unable to load billing history: ${error}`
                     : "You do not have any billing history yet"}

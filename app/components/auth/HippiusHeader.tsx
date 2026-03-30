@@ -23,7 +23,7 @@ const HippiusHeader = ({
             "text-xl  font-medium text-grey-10   flex gap-2 items-center",
             inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8",
             {
-              "mb-[26px]": isVerify,
+              "mb-[1.625rem]": isVerify,
               "mb-6": !isVerify,
               "mb-0": isOnboarding
             }

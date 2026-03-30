@@ -35,14 +35,14 @@ const CreditsTrendsTooltip: React.FC<{
 
   return (
     <div className="">
-      <p className="mb-1 text-[10px] font-medium text-gray-500">
+      <p className="mb-1 text-[0.625rem] font-medium text-gray-500">
         {dateDisplay}
       </p>
 
       {/* credit row */}
       <div className="flex items-center">
         <span className="inline-block w-2 h-2 rounded-full mr-1.5 bg-primary-40" />
-        <div className="font-medium text-[10px] text-grey-10">
+        <div className="font-medium text-[0.625rem] text-grey-10">
           <span className="mr-1">Credits:</span>
           <span>{numberFmt(datum.credit ?? 0)}</span>
         </div>

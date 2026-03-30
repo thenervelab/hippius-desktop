@@ -79,14 +79,14 @@ const FileTypeSelector: React.FC<FileTypeSelectorProps> = ({
     <Menubar.Root>
       <Menubar.Menu>
         <Menubar.Trigger asChild>
-          <button className="flex justify-center group px-3 py-2 bg-grey-100 w-full rounded border border-grey-80 hover:bg-grey-80 min-w-[112px] transition-colors">
+          <button className="flex justify-center group px-3 py-2 bg-grey-100 w-full rounded border border-grey-80 hover:bg-grey-80 min-w-[7rem] transition-colors">
             <div className="text-sm font-medium text-grey-40 leading-5">
               {getDisplayText()}
             </div>
             <Icons.ChevronDown className="ml-2 mt-0.5 size-4 text-grey-10 transition-transform duration-200 group-data-[state=open]:rotate-180" />
           </button>
         </Menubar.Trigger>
-        <Menubar.Content className="mt-1 bg-white border border-grey-80 rounded-lg px-2 py-1 shadow-menu min-w-[153px] z-50">
+        <Menubar.Content className="mt-1 bg-white border border-grey-80 rounded-lg px-2 py-1 shadow-menu min-w-[9.5625rem] z-50">
           {fileTypes.map((fileType) => (
             <Menubar.Item
               key={fileType.type}

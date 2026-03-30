@@ -387,12 +387,12 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
           <label className="text-sm font-medium text-grey-50 mb-1.5 block">
             Selected File{files.length > 1 ? "s" : ""}
           </label>
-          <div className="bg-grey-90 max-h-[200px] overflow-y-auto custom-scrollbar-thin pr-2 rounded-[8px]">
+          <div className="bg-grey-90 max-h-[12.5rem] overflow-y-auto custom-scrollbar-thin pr-2 rounded-[0.5rem]">
             <div className="flex items-center font-medium px-2 gap-x-3 pr-1.5 py-1.5">
               <div className="text-grey-10 flex items-center justify-start w-0 grow">
                 <div className="w-fit truncate">{files[0].name}</div>
                 {files.length > 1 && !revealFiles && (
-                  <div className="text-grey-60 ml-1 mr-auto min-w-fit p-0.5 px-[3px] border rounded-[2px] border-grey-80 text-[10px]">
+                  <div className="text-grey-60 ml-1 mr-auto min-w-fit p-0.5 px-[0.1875rem] border rounded-[0.125rem] border-grey-80 text-[0.625rem]">
                     + {files.length - 1} More File
                     {files.length > 2 ? "s" : ""}
                   </div>

@@ -266,29 +266,29 @@ const ReferralHistoryTable: React.FC = () => {
           </TBody>
         </Table>
         {isError && !data && (
-          <div className="p-6 w-full h-[350px] flex items-center justify-center">
+          <div className="p-6 w-full h-[21.875rem] flex items-center justify-center">
             <div className="flex flex-col animate-fade-in-0.5 items-center opacity-0">
               <AbstractIconWrapper className="size-10 rounded-2xl flex items-center justify-center bg-grey-40/20 mb-2">
                 <AlertCircle className="absolute size-6 text-red-400" />
               </AbstractIconWrapper>
-              <span className="text-grey-60 text-sm font-medium max-w-[190px] text-center">
+              <span className="text-grey-60 text-sm font-medium max-w-[11.875rem] text-center">
                 Failed to get data
               </span>
             </div>
           </div>
         )}
         {isPending && (
-          <div className="w-full animate-fade-in-0.3 opacity-0 h-[350px] flex items-center justify-center p-6">
+          <div className="w-full animate-fade-in-0.3 opacity-0 h-[21.875rem] flex items-center justify-center p-6">
             <Loader2 className="size-6 animate-spin text-grey-50" />
           </div>
         )}
         {data && !data.referralHistory.length && (
-          <div className="w-full h-[350px] flex items-center justify-center p-6">
+          <div className="w-full h-[21.875rem] flex items-center justify-center p-6">
             <div className="flex flex-col animate-fade-in-0.5 items-center opacity-0">
               <AbstractIconWrapper className="size-10 rounded-2xl flex items-center justify-center bg-grey-40/20 mb-2">
                 <Send className="absolute size-6 text-primary-50" />
               </AbstractIconWrapper>
-              <span className="text-grey-60 text-sm font-medium max-w-[190px] text-center">
+              <span className="text-grey-60 text-sm font-medium max-w-[11.875rem] text-center">
                 You have not made any referrals yet
               </span>
             </div>

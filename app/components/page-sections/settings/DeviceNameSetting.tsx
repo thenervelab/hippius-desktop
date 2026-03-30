@@ -95,7 +95,7 @@ export default function DeviceNameSetting() {
                   />
                   {!isEditing && (
                     <IconButton
-                      className="w-[146px] h-[42px]"
+                      className="w-[9.125rem] h-[2.625rem]"
                       icon={Edit}
                       text="Edit Name"
                       onClick={toggleEditMode}
@@ -119,7 +119,7 @@ export default function DeviceNameSetting() {
                     Device Name
                   </Label>
                   <div className="relative flex items-start w-full">
-                    <Monitor className="size-6 absolute left-3 top-[28px] transform -translate-y-1/2 text-grey-60" />
+                    <Monitor className="size-6 absolute left-3 top-[1.75rem] transform -translate-y-1/2 text-grey-60" />
                     <Input
                       id="device-name"
                       placeholder="e.g. Work MacBook, Home PC"
@@ -150,7 +150,7 @@ export default function DeviceNameSetting() {
                 >
                   <CardButton
                     type="submit"
-                    className="max-w-[160px] h-[48px]"
+                    className="max-w-[10rem] h-[3rem]"
                     variant="dialog"
                     disabled={isSaving || !hasChanged}
                     onClick={handleSave}

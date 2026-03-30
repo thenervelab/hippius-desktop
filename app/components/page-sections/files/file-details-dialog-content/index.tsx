@@ -27,7 +27,7 @@ const DetailRow: React.FC<DetailRowProps> = ({
     className={cn("pb-4 border-b border-grey-80", { "border-b-0": lastChild })}
   >
     <div className="text-sm font-medium text-grey-70 mb-2">{label}</div>
-    <div className="text-base leading-[22px] font-medium text-grey-20 break-all">
+    <div className="text-base leading-[1.375rem] font-medium text-grey-20 break-all">
       {children}
     </div>
   </div>
@@ -147,13 +147,13 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
                           toastMessage="Arion Hash Copied Successfully!"
                           copyAbleText={arionCid || ""}
                           isTable={true}
-                          className="max-sm:[200px] max-w-[400px] h-full"
+                          className="max-sm:max-w-[12.5rem] max-w-[25rem] h-full"
                         />
                       </div>
                     </Tooltip.Trigger>
                     <Tooltip.Portal>
                       <Tooltip.Content
-                        className="z-50 max-w-[300px] bg-white border border-grey-80 rounded-[8px] px-3 py-2 text-xs font-medium text-grey-40 break-all shadow-lg"
+                        className="z-50 max-w-[18.75rem] bg-white border border-grey-80 rounded-[0.5rem] px-3 py-2 text-xs font-medium text-grey-40 break-all shadow-lg"
                         side="top"
                         sideOffset={4}
                       >

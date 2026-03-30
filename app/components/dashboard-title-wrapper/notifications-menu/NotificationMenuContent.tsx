@@ -155,11 +155,11 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
         )}
         {enabledTypes.length === 0 ? (
           <NoNotificationsEnabled
-            heightClassName="h-[340px]"
+            heightClassName="h-[21.25rem]"
             onOpenSettings={handleOpenSettings}
           />
         ) : visible.length === 0 ? (
-          <NoNotificationsFound heightClassName="h-[340px]" />
+          <NoNotificationsFound heightClassName="h-[21.25rem]" />
         ) : (
           <NotificationMenuList
             notifications={visible}

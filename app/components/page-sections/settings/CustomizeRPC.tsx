@@ -204,7 +204,7 @@ const CustomizeRPC: React.FC = () => {
                   />
                   {!editMode && (
                     <IconButton
-                      className="w-[146px] h-[42px]"
+                      className="w-[9.125rem] h-[2.625rem]"
                       icon={Edit}
                       text={"Update RPC"}
                       onClick={toggleEditMode}
@@ -228,7 +228,7 @@ const CustomizeRPC: React.FC = () => {
                     RPC Endpoint
                   </Label>
                   <div className="relative flex items-start w-full">
-                    <Icons.Key className="size-6 absolute left-3 top-[28px] transform -translate-y-1/2 text-grey-60" />
+                    <Icons.Key className="size-6 absolute left-3 top-[1.75rem] transform -translate-y-1/2 text-grey-60" />
                     <Input
                       id="rpc-endpoint"
                       placeholder="Enter RPC endpoint"
@@ -266,7 +266,7 @@ const CustomizeRPC: React.FC = () => {
                 >
                   <CardButton
                     type="submit"
-                    className="max-w-[160px] h-[48px]"
+                    className="max-w-[10rem] h-[3rem]"
                     variant="dialog"
                     disabled={saving || testing || !hasEndpointChanged}
                     onClick={handleSave}

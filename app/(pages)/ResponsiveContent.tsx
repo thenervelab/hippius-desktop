@@ -19,7 +19,7 @@ export default function ResponsiveContent({
       <main
         className={cn(
           "flex flex-col h-screen transition-all duration-300 ease-in-out overflow-hidden",
-          collapsed ? "ml-[60px]" : "ml-[186px]"
+          collapsed ? "ml-[3.75rem]" : "ml-[11.625rem]"
         )}
       >
         {/* Sticky toolbar — always visible at the top */}

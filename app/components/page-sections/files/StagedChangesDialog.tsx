@@ -100,7 +100,7 @@ const StagedChangesDialog: FC<StagedChangesDialogProps> = ({
         if (!isOpen) handleCancel();
       }}
     >
-      <DialogContainer className="sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:max-w-[640px] sm:max-h-[80vh] sm:bottom-auto sm:right-auto">
+      <DialogContainer className="sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:max-w-[40rem] sm:max-h-[80vh] sm:bottom-auto sm:right-auto">
         <Dialog.Title className="sr-only">Review Staged Changes</Dialog.Title>
 
         {/* Header */}

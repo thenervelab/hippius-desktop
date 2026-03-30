@@ -497,14 +497,14 @@ export default function FolderView({
         ) : (
           <>
             {files.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
+              <div className="flex flex-col items-center justify-center py-16 min-h-[37.5rem]">
                 <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
                   <Icons.Folder className="size-7 text-primary-50" />
                 </div>
                 <h3 className="text-lg font-medium text-grey-10 mb-1">
                   Empty Folder
                 </h3>
-                <p className="text-grey-50 text-sm max-w-[270px] text-center">
+                <p className="text-grey-50 text-sm max-w-[16.875rem] text-center">
                   This folder does not contain any files.
                 </p>
               </div>

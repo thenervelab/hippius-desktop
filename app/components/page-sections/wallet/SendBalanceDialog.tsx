@@ -155,7 +155,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
   return (
     <>
       <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-        <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit">
+        <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit">
           <Dialog.Title className="sr-only">Send Balance</Dialog.Title>
           {/* Mobile accent line */}
           <div className="h-4 bg-primary-50 md:hidden" />
@@ -232,7 +232,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
                       }`}
                     disabled={loading}
                   />
-                  <div className="absolute right-3 top-[29px] -translate-y-1/2 flex items-center gap-2 text-base font-medium">
+                  <div className="absolute right-3 top-[1.8125rem] -translate-y-1/2 flex items-center gap-2 text-base font-medium">
                     <span className="text-grey-10">hALPHA</span>
                     <button
                       onClick={handleSetMax}
@@ -265,7 +265,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
             {/* Actions */}
             <div className="flex flex-col gap-4 my-4">
               <CardButton
-                className="bg-primary-50 text-[18px] hover:bg-primary-40 transition text-white w-full font-medium"
+                className="bg-primary-50 text-[1.125rem] hover:bg-primary-40 transition text-white w-full font-medium"
                 variant="dialog"
                 onClick={handleOpenConfirmation}
                 disabled={loading || !address.trim() || !amount.trim()}
@@ -275,7 +275,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
               </CardButton>
 
               <CardButton
-                className="w-full text-[18px]"
+                className="w-full text-[1.125rem]"
                 variant="secondary"
                 onClick={onClose}
                 disabled={loading}

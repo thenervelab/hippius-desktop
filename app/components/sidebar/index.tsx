@@ -105,7 +105,7 @@ const Sidebar: React.FC = () => {
             ref={ref}
             className={cn(
               "fixed top-0 left-0 bottom-0 bg-white flex flex-col ml-4 my-4 border border-grey-80 rounded transition-all duration-300 ease-in-out z-50",
-              collapsed ? "w-[48px]" : "w-[170px]"
+              collapsed ? "w-[3rem]" : "w-[10.625rem]"
             )}
           >
             <div className="flex flex-col items-start w-full">
@@ -212,7 +212,7 @@ const Sidebar: React.FC = () => {
               )}
             >
               <>
-                <span className={cn(collapsed ? "text-[10px]" : "")}>
+                <span className={cn(collapsed ? "text-[0.625rem]" : "")}>
                   {!collapsed ? "VER" : <AppVersion />}
                 </span>
                 {!collapsed && (
@@ -256,7 +256,7 @@ const Sidebar: React.FC = () => {
               onClick={() => submitABug()}
             >
               <>
-                <span className={cn(collapsed ? "text-[10px]" : "")}>
+                <span className={cn(collapsed ? "text-[0.625rem]" : "")}>
                   {!collapsed ? "Submit a Bug" : "Bug"}
                 </span>
               </>

@@ -55,13 +55,13 @@ const SettingsDialogContent: React.FC = () => {
 
   return (
     <div className="flex h-full w-full">
-      <div className="pt-[18px] mr-8 shrink-0 sticky top-0 self-start">
+      <div className="pt-[1.125rem] mr-8 shrink-0 sticky top-0 self-start">
         <TabList
           tabs={tabs}
           activeTab={activeTab}
           onTabChange={setActiveTab}
           className=" flex-col"
-          width="min-w-[168px]"
+          width="min-w-[10.5rem]"
           isJustifyStart
           showTooltip={false}
         />
@@ -72,7 +72,7 @@ const SettingsDialogContent: React.FC = () => {
           {({ inView, ref }) => (
             <div
               key={activeTab}
-              className="flex flex-col animate-in fade-in duration-300 gap-8 w-full h-max mb-4 pt-[18px]"
+              className="flex flex-col animate-in fade-in duration-300 gap-8 w-full h-max mb-4 pt-[1.125rem]"
               ref={ref}
             >
             {activeTab === "Notifications" && (

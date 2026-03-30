@@ -23,7 +23,7 @@ const config: ChartTrendsConfig = {
     return num.toString();
   },
   margin: { top: 10, left: 45, bottom: 30, right: 5 },
-  gridMarginClasses: "mt-[10px] ml-[45px] mb-[30px] mr-[21px]",
+  gridMarginClasses: "mt-[0.625rem] ml-[2.8125rem] mb-[1.875rem] mr-[1.3125rem]",
   renderTooltip: (tooltipData, timeRange) => (
     <CreditUsedTooltip tooltipData={tooltipData} timeRange={timeRange} />
   ),

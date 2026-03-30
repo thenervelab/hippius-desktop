@@ -20,7 +20,7 @@ const config: ChartTrendsConfig = {
     return n.toFixed(n < 0.01 ? 4 : 2);
   },
   margin: { top: 20, left: 45, bottom: 30, right: 5 },
-  gridMarginClasses: "mt-[36px] ml-[43px] mb-[30px] mr-[21px]",
+  gridMarginClasses: "mt-[2.25rem] ml-[2.6875rem] mb-[1.875rem] mr-[1.3125rem]",
   gridBgClass: "bg-[url('/wallet-chart-grid.png')]",
   renderTooltip: (tooltipData, timeRange) => (
     <CreditsTrendsTooltip tooltipData={tooltipData} timeRange={timeRange} />

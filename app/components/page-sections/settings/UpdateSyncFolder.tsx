@@ -305,7 +305,7 @@ const UpdateSyncFolder: React.FC = () => {
                       {selectedPrivateFolderName ? (
                         <div className="flex-1">
                           <div className="flex">
-                            <Icons.Folder className="size-4 mr-[6px] text-grey-40" />
+                            <Icons.Folder className="size-4 mr-[0.375rem] text-grey-40" />
                             <span className="font-medium text-base text-grey-40 -mt-0.5">
                               {selectedPrivateFolderName}
                             </span>
@@ -355,7 +355,7 @@ const UpdateSyncFolder: React.FC = () => {
                           )
                         )}
                         <CardButton
-                          className="max-w-[160px] h-10"
+                          className="max-w-[10rem] h-10"
                           variant="primary"
                           disabled={IS_SYNC_PAUSED}
                           onClick={() => {

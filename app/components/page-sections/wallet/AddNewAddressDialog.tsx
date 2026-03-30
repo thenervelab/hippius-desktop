@@ -88,7 +88,7 @@ const AddNewAddressDialog: React.FC<AddNewAddressDialogProps> = ({
       open={open}
       onOpenChange={(isOpen) => !isOpen && handleClose()}
     >
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit">
+      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit">
         <Dialog.Title className="sr-only">Add New Address</Dialog.Title>
         {/* Mobile accent line */}
         <div className="h-4 bg-primary-50 md:hidden" />
@@ -172,7 +172,7 @@ const AddNewAddressDialog: React.FC<AddNewAddressDialogProps> = ({
           {/* Actions */}
           <div className="flex flex-col gap-4 mt-4 mb-4">
             <CardButton
-              className="bg-primary-50 text-[18px] hover:bg-primary-40 transition text-white w-full font-medium"
+              className="bg-primary-50 text-[1.125rem] hover:bg-primary-40 transition text-white w-full font-medium"
               variant="dialog"
               onClick={handleSave}
               disabled={loading}
@@ -182,7 +182,7 @@ const AddNewAddressDialog: React.FC<AddNewAddressDialogProps> = ({
             </CardButton>
 
             <CardButton
-              className="w-full text-[18px]"
+              className="w-full text-[1.125rem]"
               variant="secondary"
               onClick={handleClose}
               disabled={loading}

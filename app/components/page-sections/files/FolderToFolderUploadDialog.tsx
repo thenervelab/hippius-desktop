@@ -131,7 +131,7 @@ export default function FolderToFolderUploadDialog({
         <Dialog.Root open={open} onOpenChange={(o) => !o && handleClose()}>
             <Dialog.Portal>
                 <Dialog.Overlay className="bg-white/70 fixed p-4 z-30 top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
-                    <Dialog.Content className="border shadow-dialog bg-white flex flex-col max-w-[428px] border-grey-80 bg-background-1 rounded-[8px] overflow-hidden w-full relative data-[state=open]:animate-scale-in-95-0.2">
+                    <Dialog.Content className="border shadow-dialog bg-white flex flex-col max-w-[26.75rem] border-grey-80 bg-background-1 rounded-[0.5rem] overflow-hidden w-full relative data-[state=open]:animate-scale-in-95-0.2">
                         <Dialog.Title className="hidden">Add Folder</Dialog.Title>
 
                         <div className="flex p-4 items-center text-grey-10 relative gap-2">
@@ -158,7 +158,7 @@ export default function FolderToFolderUploadDialog({
                                         Folder Location
                                     </Label>
                                     <div className="relative flex items-start w-full">
-                                        <FolderIcon className="size-6 absolute left-3 top-[28px] transform -translate-y-1/2 text-grey-60" />
+                                        <FolderIcon className="size-6 absolute left-3 top-[1.75rem] transform -translate-y-1/2 text-grey-60" />
                                         <div className="flex-1 min-w-0">
                                             <Input
                                                 id="folderPath"
@@ -179,7 +179,7 @@ export default function FolderToFolderUploadDialog({
                                             type="button"
                                             onClick={handleSelectFolder}
                                             className="absolute right-3 top-1/2 -translate-y-1/2 text-primary-50 hover:text-primary-40 z-10"
-                                            style={{ maxWidth: "80px" }}
+                                            style={{ maxWidth: "5rem" }}
                                         >
                                             Browse
                                         </button>

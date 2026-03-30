@@ -254,7 +254,7 @@ export default function PlansPage() {
             return (
               <div
                 key={plan.id}
-                className="p-4 border rounded-lg overflow-hidden relative border-grey-80 w-full sm:max-w-[300px]"
+                className="p-4 border rounded-lg overflow-hidden relative border-grey-80 w-full sm:max-w-[18.75rem]"
               >
                 <div>
                   <div className="flex flex-col mb-1">
@@ -279,7 +279,7 @@ export default function PlansPage() {
                           </DropdownMenu.Trigger>
                           <DropdownMenu.Portal>
                             <DropdownMenu.Content
-                              className="min-w-[180px] bg-white rounded shadow-lg p-1 border border-grey-80 z-20"
+                              className="min-w-[11.25rem] bg-white rounded shadow-lg p-1 border border-grey-80 z-20"
                               sideOffset={5}
                               align="end"
                             >
@@ -303,7 +303,7 @@ export default function PlansPage() {
                       )}
                     </div>
 
-                    <h3 className="text-[24px] font-medium text-primary-40 mt-4">
+                    <h3 className="text-[1.5rem] font-medium text-primary-40 mt-4">
                       {plan.name}
                     </h3>
                   </div>

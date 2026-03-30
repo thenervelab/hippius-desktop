@@ -17,7 +17,7 @@ const SearchBar: React.FC<SearchBarProps> = ({ className }) => {
           ref={ref}
           className={cn(
             // container
-            "flex items-center opacity-0 w-full min-w-[309px] h-[52px] duration-300",
+            "flex items-center opacity-0 w-full min-w-[19.3125rem] h-[3.25rem] duration-300",
             "p-2 border border-white rounded-lg bg-white/20",
             inView && "translate-y-0 opacity-100",
             className

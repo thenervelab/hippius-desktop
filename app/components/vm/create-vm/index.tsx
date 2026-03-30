@@ -133,7 +133,7 @@ const CreateVM: React.FC = () => {
           >
             <ArrowLeft className="size-6 text-grey-10" />
           </button>
-          <h1 className="text-[22px] font-medium text-grey-10">
+          <h1 className="text-[1.375rem] font-medium text-grey-10">
             Create New Virtual Machine
           </h1>
         </div>
@@ -149,7 +149,7 @@ const CreateVM: React.FC = () => {
       {/* Select a Model Section */}
       <div className="mb-6">
         <div className="flex items-center gap-2 mb-4">
-          <h2 className="text-[22px] font-medium text-grey-10">
+          <h2 className="text-[1.375rem] font-medium text-grey-10">
             Select a Model
           </h2>
           <CustomTooltip2
@@ -169,7 +169,7 @@ const CreateVM: React.FC = () => {
             value={activeCategory}
             onValueChange={setActiveCategory}
             placeholder="Select a tab"
-            className="w-[200px] h-[38px] z-20"
+            className="w-[12.5rem] h-[2.375rem] z-20"
             triggerClassName="w-full justify-between"
           />
         </div>
@@ -189,7 +189,7 @@ const CreateVM: React.FC = () => {
 
       {/* Templates Grid */}
       {isBetaError ? (
-        <NoEntriesFound className="h-[500px]">
+        <NoEntriesFound className="h-[31.25rem]">
           <div className="text-center">
             <p className="text-grey-30 font-semibold mb-1 text-base">
               Feature Not Available

@@ -456,7 +456,7 @@ const CreateVMModal: React.FC<Props> = ({
             <div
               className="
               fixed left-1/2 top-1/2 z-50
-              w-full max-w-sm sm:max-w-[490px]
+              w-full max-w-sm sm:max-w-[30.625rem]
               -translate-x-1/2 -translate-y-1/2
             "
             >
@@ -469,7 +469,7 @@ const CreateVMModal: React.FC<Props> = ({
                 className="
                 w-full
                 max-h-[90vh]
-                bg-white rounded-[8px]
+                bg-white rounded-[0.5rem]
                 shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
                 border border-grey-80
                 overflow-hidden flex flex-col min-h-0
@@ -591,21 +591,21 @@ const CreateVMModal: React.FC<Props> = ({
                 <div className="px-4 pb-4 pt-2 space-y-3">
                   {currentStep === 1 ? (
                     <Button
-                      className={`flex gap-x-2 items-center  h-[60px] w-full`}
+                      className={`flex gap-x-2 items-center  h-[3.75rem] w-full`}
                       onClick={handleNext}
                       disabled={
                         isLoading || isLoadingImages || isLoadingSSHKeys
                       }
                     >
                       {" "}
-                      <div className="font-medium text-base leading-[22px] tracking-tight">
+                      <div className="font-medium text-base leading-[1.375rem] tracking-tight">
                         Next
                       </div>
                     </Button>
                   ) : (
                     <>
                       <Button
-                        className={`flex gap-x-2 items-center  h-[60px] w-full`}
+                        className={`flex gap-x-2 items-center  h-[3.75rem] w-full`}
                         onClick={handleSubmit}
                         disabled={
                           isLoading ||
@@ -615,7 +615,7 @@ const CreateVMModal: React.FC<Props> = ({
                         }
                       >
                         {" "}
-                        <div className="font-medium text-base leading-[22px] tracking-tight">
+                        <div className="font-medium text-base leading-[1.375rem] tracking-tight">
                           {isCreatingVM
                             ? "Creating..."
                             : "Create Virtual Machine"}
@@ -623,7 +623,7 @@ const CreateVMModal: React.FC<Props> = ({
                       </Button>
 
                       <Button2
-                        className="bg-grey-100  border border-grey-80 text-grey-10 w-full my-4 text-lg font-medium h-[56px] hover:bg-grey-80 transition"
+                        className="bg-grey-100  border border-grey-80 text-grey-10 w-full my-4 text-lg font-medium h-[3.5rem] hover:bg-grey-80 transition"
                         onClick={handleBack}
                         disabled={isLoading || isCreatingVM}
                       >

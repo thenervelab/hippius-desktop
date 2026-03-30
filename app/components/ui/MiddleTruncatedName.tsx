@@ -159,7 +159,7 @@ const MiddleTruncatedName: FC<MiddleTruncatedNameProps> = ({
           <Tooltip.Portal>
             <Tooltip.Content
               side="top"
-              className="z-[10000] bg-white border border-grey-80 rounded-[8px] px-3 py-2 text-sm font-medium text-grey-40 shadow-lg max-w-[400px] w-max whitespace-normal break-all transition-opacity duration-200 data-[state=closed]:opacity-0 data-[state=open]:opacity-100"
+              className="z-[10000] bg-white border border-grey-80 rounded-[0.5rem] px-3 py-2 text-sm font-medium text-grey-40 shadow-lg max-w-[25rem] w-max whitespace-normal break-all transition-opacity duration-200 data-[state=closed]:opacity-0 data-[state=open]:opacity-100"
               sideOffset={4}
             >
               {name}

@@ -114,8 +114,8 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
             {trigger && <Dialog.Trigger asChild>{trigger}</Dialog.Trigger>}
             <Dialog.Portal>
                 <Dialog.Overlay className="bg-white/70 fixed px-4 z-10 top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
-                    <Dialog.Content className="relative p-4 border shadow-dialog bg-white flex flex-col max-w-[428px] max-h-[75vh] h-auto overflow-y-auto custom-scrollbar-thin border-grey-80 bg-background-1 rounded sm:rounded-[8px] overflow-hidden w-full data-[state=open]:animate-scale-in-95-0.2">
-                        <div className="z-10 absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[8px] sm:hidden" />
+                    <Dialog.Content className="relative p-4 border shadow-dialog bg-white flex flex-col max-w-[26.75rem] max-h-[75vh] h-auto overflow-y-auto custom-scrollbar-thin border-grey-80 bg-background-1 rounded sm:rounded-[0.5rem] overflow-hidden w-full data-[state=open]:animate-scale-in-95-0.2">
+                        <div className="z-10 absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[0.5rem] sm:hidden" />
                         <Graphsheet
                             majorCell={{
                                 lineColor: [246, 248, 254, 1.0],
@@ -130,7 +130,7 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
                             className="absolute w-full h-full left-0 top-0"
                         />
                         <div className="flex items-center text-grey-10 relative mt-2 sm:mt-0">
-                            <div className="text-[22px] lg:text-2xl text-grey-10 sm:flex w-full font-medium relative">
+                            <div className="text-[1.375rem] lg:text-2xl text-grey-10 sm:flex w-full font-medium relative">
                                 <Dialog.Title>
                                     Your are about to cancel your subscription
                                 </Dialog.Title>

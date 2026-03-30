@@ -20,12 +20,12 @@ export const ImageDialogTrigger: React.FC<{
   return (
     <button
       onClick={onClick}
-      className="px-4 py-[22px] relative group overflow-hidden flex items-center w-full"
+      className="px-4 py-[1.375rem] relative group overflow-hidden flex items-center w-full"
     >
       <span className="flex-1 min-w-0">{children}</span>
       {/* Eye icon on hover */}
       <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-white right-4">
-        <Icons.Eye className="size-5 text-primary-60 [&>path]:stroke-[3px]" />
+        <Icons.Eye className="size-5 text-primary-60 [&>path]:stroke-[0.1875rem]" />
       </div>
     </button>
   );
@@ -191,7 +191,7 @@ const ImageDialog: React.FC<{
                           </div>
                           <span
                             title={file.name}
-                            className="truncate max-sm:max-w-[180px] text-grey-100 text-[22px] font-medium"
+                            className="truncate max-sm:max-w-[11.25rem] text-grey-100 text-[1.375rem] font-medium"
                           >
                             {file.name}
                           </span>

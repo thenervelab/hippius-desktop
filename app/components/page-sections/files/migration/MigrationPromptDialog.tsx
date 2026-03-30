@@ -24,7 +24,7 @@ const MigrationPromptDialog: React.FC<MigrationPromptDialogProps> = ({
 }) => {
     return (
         <Dialog.Root open={open}>
-            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[480px] h-fit" preventClose>
+            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[30rem] h-fit" preventClose>
                 <Dialog.Title className="sr-only">Migration Required</Dialog.Title>
 
                 <div className="px-4 py-6 flex flex-col gap-5">

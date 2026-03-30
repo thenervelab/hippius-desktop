@@ -295,7 +295,7 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
         {({ ref }) => (
           <div
             ref={ref}
-            className={`p-4 border border-grey-80 rounded-lg w-full h-[310px] ${
+            className={`p-4 border border-grey-80 rounded-lg w-full h-[19.375rem] ${
               className || ""
             }`}
           >
@@ -314,7 +314,7 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
                 onValueChange={setTimeRange}
               />
             </div>
-            <div className="border border-grey-80 rounded-lg h-[225px] relative">
+            <div className="border border-grey-80 rounded-lg h-[14.0625rem] relative">
               {chartContent}
             </div>
           </div>
@@ -342,7 +342,7 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
                   </AbstractIconWrapper>
                   <H4
                     size="sm"
-                    className="max-w-screen-sm text-center ml-2 transition-colors !text-[16px] sm:!text-[24px] text-grey-10"
+                    className="max-w-screen-sm text-center ml-2 transition-colors !text-[1rem] sm:!text-[1.5rem] text-grey-10"
                   >
                     <RevealTextLine rotate reveal={inView}>
                       {title}
@@ -361,7 +361,7 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
               </div>
             }
             className={cn("flex-1 rounded", className)}
-            contentClassName="relative h-[246px]"
+            contentClassName="relative h-[15.375rem]"
           >
             {chartContent}
           </Card>

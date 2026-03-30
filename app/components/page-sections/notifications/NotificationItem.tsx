@@ -136,7 +136,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
             onClick={onClick}
             onContextMenu={handleContextMenu}
           >
-            <AbstractIconWrapper className="min-w-[32px] size-8 text-primary-40">
+            <AbstractIconWrapper className="min-w-[2rem] size-8 text-primary-40">
               <Icon className="absolute text-primary-40 size-5" />
             </AbstractIconWrapper>
 
@@ -150,7 +150,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
                 {/* Notification text */}
                 <RevealTextLine rotate reveal={inView} className="delay-300">
                   <p
-                    className="text-sm font-medium text-grey-10 leading-5 mb-0.5 truncate max-w-[300px]"
+                    className="text-sm font-medium text-grey-10 leading-5 mb-0.5 truncate max-w-[18.75rem]"
                     title={notificationText}
                   >
                     {notificationText}
@@ -161,7 +161,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
                 {notificationDescription && (
                   <RevealTextLine rotate reveal={inView} className="delay-350">
                     <p
-                      className="text-xs text-grey-50 leading-4 mb-1 truncate max-w-[300px]"
+                      className="text-xs text-grey-50 leading-4 mb-1 truncate max-w-[18.75rem]"
                       title={notificationDescription}
                     >
                       {notificationDescription}
@@ -171,7 +171,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
 
                 {/* Time */}
                 <RevealTextLine rotate reveal={inView} className="delay-400">
-                  <span className="text-xs text-grey-60 leading-[18px]">
+                  <span className="text-xs text-grey-60 leading-[1.125rem]">
                     {timestamp ? (
                       <TimeAgo date={timestamp} />
                     ) : (
@@ -190,7 +190,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
                       className="text-sm font-medium rounded py-2 self-start px-3 text-grey-10 flex items-center justify-center bg-grey-90 group-hover:bg-grey-100 whitespace-nowrap"
                     >
                       {buttonText}
-                      <Icons.ArrowRight className="size-[14px] text-grey-10 ml-1" />
+                      <Icons.ArrowRight className="size-[0.875rem] text-grey-10 ml-1" />
                     </button>
                   </RevealTextLine>
                 )}

@@ -7,7 +7,7 @@ interface GridOverlayProps {
 }
 
 const ChartGridOverlay: React.FC<GridOverlayProps> = ({
-  marginClasses = "mt-[50px] ml-[60px] mb-[30px] mr-[21px]",
+  marginClasses = "mt-[3.125rem] ml-[3.75rem] mb-[1.875rem] mr-[1.3125rem]",
   className = "",
   bgClass = "bg-[url('/chart-grid.png')]",
 }) => (

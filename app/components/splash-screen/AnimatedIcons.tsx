@@ -43,7 +43,7 @@ export default function AnimatedProgressIcon({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -30 }}
               transition={{ duration: 0.3, ease: "easeInOut" }}
-              className="h-[250px] w-[250px] flex items-center justify-center overflow-hidden"
+              className="h-[15.625rem] w-[15.625rem] flex items-center justify-center overflow-hidden"
             >
               <RevealTextLine reveal={inView}>
                 <div className="h-full w-full flex items-center justify-center overflow-hidden">

@@ -72,7 +72,7 @@ const RecoveryPhraseSettings: React.FC = () => {
                   Your recovery phrase is the only way to restore access to your encrypted sync folder. Keep it safe and never share it.
                 </p>
                 <CardButton
-                  className="max-w-[220px] h-10 ml-4 shrink-0"
+                  className="max-w-[13.75rem] h-10 ml-4 shrink-0"
                   variant="primary"
                   onClick={handleBackup}
                 >

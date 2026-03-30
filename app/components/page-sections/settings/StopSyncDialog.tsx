@@ -30,7 +30,7 @@ const StopSyncDialog: React.FC<StopSyncDialogProps> = ({
 
     return (
         <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && !loading && onClose()}>
-            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit" preventClose={loading}>
+            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit" preventClose={loading}>
                 <Dialog.Title className="sr-only">Stop folder sync</Dialog.Title>
 
                 <div className="px-4 py-6 flex flex-col gap-5">

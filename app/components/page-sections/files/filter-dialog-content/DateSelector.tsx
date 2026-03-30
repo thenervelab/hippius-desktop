@@ -145,14 +145,14 @@ const DateSelector: React.FC<DateSelectorProps> = ({
     <Menubar.Root>
       <Menubar.Menu>
         <Menubar.Trigger asChild>
-          <button className="flex justify-center group px-3 py-2 bg-grey-100 min-w-[112px] rounded border border-grey-80 hover:bg-grey-80 transition-colors">
+          <button className="flex justify-center group px-3 py-2 bg-grey-100 min-w-[7rem] rounded border border-grey-80 hover:bg-grey-80 transition-colors">
             <div className="text-sm font-medium text-grey-10 leading-5">
               {getDisplayText()}
             </div>
             <Icons.CalendarNew className="ml-2 mt-0.5 size-4 text-primary-10" />
           </button>
         </Menubar.Trigger>
-        <Menubar.Content className="mt-1 bg-white border border-grey-80 rounded-lg p-4 shadow-menu min-w-[320px] max-w-[360px] z-50" align="start" sideOffset={4}>
+        <Menubar.Content className="mt-1 bg-white border border-grey-80 rounded-lg p-4 shadow-menu min-w-[20rem] max-w-[22.5rem] z-50" align="start" sideOffset={4}>
           {/* Calendar Header */}
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
@@ -167,7 +167,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
               )}
               <button
                 onClick={() => setShowYearPicker(!showYearPicker)}
-                className="text-sm font-medium text-grey-10 min-w-[120px] text-center hover:text-primary-50 transition-colors"
+                className="text-sm font-medium text-grey-10 min-w-[7.5rem] text-center hover:text-primary-50 transition-colors"
               >
                 {showYearPicker ? `${viewDate.getFullYear()}` : formatMonthYear(viewDate)}
               </button>
@@ -276,7 +276,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
                         }}
                         disabled={dayObj.isFuture}
                         className={cn(
-                          "text-xs py-2 px-1 rounded transition-colors min-h-[28px]",
+                          "text-xs py-2 px-1 rounded transition-colors min-h-[1.75rem]",
                           !dayObj.isCurrentMonth && "text-grey-80 hover:bg-grey-90 cursor-pointer",
                           dayObj.isCurrentMonth && dayObj.isFuture && "text-grey-80 cursor-not-allowed",
                           dayObj.isCurrentMonth && !dayObj.isFuture && "text-grey-30 hover:bg-grey-90 cursor-pointer",
