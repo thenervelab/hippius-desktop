@@ -344,14 +344,14 @@ export default function PlansPage() {
                     </h3>
 
                     <div className="flex items-center">
-                      <CircularTickGrid />
+                      <CircularTickGrid className="size-9 shrink-0" />
                       <span className="text-grey-10 text-base font-medium ml-2">
                         Automatic Reload
                       </span>
                     </div>
 
                     <div className="flex items-center">
-                      <CircularTickGrid />
+                      <CircularTickGrid className="size-9 shrink-0" />
                       <span className="text-grey-10 text-base font-medium ml-2">
                         {getIdealUsageDescription(plan.credits_per_billing)}
                       </span>
