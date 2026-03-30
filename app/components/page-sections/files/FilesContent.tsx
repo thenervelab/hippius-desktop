@@ -6,6 +6,7 @@ import {
   useRef,
   useEffect,
   useMemo,
+  useCallback,
   memo,
 } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
@@ -31,6 +32,7 @@ import { cn } from "@/lib/utils";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import NoMatchingResults from "./NoMatchingResults";
+import BackgroundContextMenu from "@/app/components/ui/context-menu/BackgroundContextMenu";
 
 interface FilesContentProps {
   isRecentFiles?: boolean;
@@ -46,6 +48,9 @@ interface FilesContentProps {
   loadMore: () => void;
   isSyncPathEmpty?: boolean;
   onSyncPathConfigured?: () => void;
+  onUploadFile?: () => void;
+  onAddFolder?: () => void;
+  onAddSyncFolder?: () => void;
 }
 
 const FilesContent: FC<FilesContentProps> = ({
@@ -62,10 +67,14 @@ const FilesContent: FC<FilesContentProps> = ({
   loadMore,
   isSyncPathEmpty = false,
   onSyncPathConfigured,
+  onUploadFile,
+  onAddFolder,
+  onAddSyncFolder,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
   const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
@@ -226,6 +235,14 @@ const FilesContent: FC<FilesContentProps> = ({
     downloadFile(file, polkadotAddress);
   };
 
+  const handleHeaderContextMenu = useCallback((e: React.MouseEvent) => {
+    if (isSyncPathEmpty || isRecentFiles || !onUploadFile) return;
+    e.preventDefault();
+    e.stopPropagation();
+    window.getSelection()?.removeAllRanges();
+    setBgContextMenu({ x: e.clientX, y: e.clientY });
+  }, [isSyncPathEmpty, isRecentFiles, onUploadFile]);
+
   const renderContent = () => {
 
     // Only show full loading state on initial load (no data yet).
@@ -269,7 +286,7 @@ const FilesContent: FC<FilesContentProps> = ({
           sharedState={sharedState}
           hasMore={hasMore}
           loadMore={loadMore}
-
+          onHeaderContextMenu={handleHeaderContextMenu}
         />
       );
     } else {
@@ -289,8 +306,14 @@ const FilesContent: FC<FilesContentProps> = ({
   return (
     <>
       <div
+        onContextMenu={(e) => {
+          // Only show background context menu if sync path is configured and not on recent files
+          if (isSyncPathEmpty || isRecentFiles || !onUploadFile) return;
+          e.preventDefault();
+          setBgContextMenu({ x: e.clientX, y: e.clientY });
+        }}
         className={cn(
-          "w-full mt-4 relative",
+          "w-full mt-4 relative select-none",
           isDragging &&
           "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
         )}
@@ -394,6 +417,17 @@ const FilesContent: FC<FilesContentProps> = ({
             setIsFileDetailsOpen(true);
             setContextMenu(null);
           }}
+        />
+      )}
+
+      {bgContextMenu && onUploadFile && onAddFolder && (
+        <BackgroundContextMenu
+          x={bgContextMenu.x}
+          y={bgContextMenu.y}
+          onClose={() => setBgContextMenu(null)}
+          onUploadFile={onUploadFile}
+          onAddFolder={onAddFolder}
+          onAddSyncFolder={onAddSyncFolder}
         />
       )}
 

@@ -7,6 +7,7 @@ import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension, getFileTypeDisplayLabel } from "@/lib/utils/getTileTypeFromExtension";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { getFileIcon } from "@/app/lib/utils/fileTypeUtils";
 import { cn } from "@/app/lib/utils";
 import * as Tooltip from "@radix-ui/react-tooltip";
@@ -122,9 +123,12 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
                       ? filePath.slice(0, filePath.length - relativeName.length - 1)
                       : filePath;
                     await revealItemInDir(syncFolderPath);
+                  } else {
+                    toast.error("File is not available locally. It may only exist on another device.");
                   }
                 } catch (error) {
                   console.error("Failed to reveal in Finder:", error);
+                  toast.error("File is not available locally. It may only exist on another device.");
                 }
               }}
             >

@@ -54,6 +54,8 @@ interface FilesHeaderProps {
   onDateChange: (date: string) => void;
   onFileSizesChange: (sizes: number[]) => void;
   defaultFolderLabel?: string | null;
+  isFolderUploadOpen?: boolean;
+  onSetFolderUploadOpen?: (open: boolean) => void;
 }
 
 const FilesHeader: FC<FilesHeaderProps> = ({
@@ -82,8 +84,12 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   onDateChange,
   onFileSizesChange,
   defaultFolderLabel,
+  isFolderUploadOpen: isFolderUploadOpenProp,
+  onSetFolderUploadOpen,
 }) => {
-  const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
+  const [isFolderUploadOpenLocal, setIsFolderUploadOpenLocal] = useState(false);
+  const isFolderUploadOpen = isFolderUploadOpenProp ?? isFolderUploadOpenLocal;
+  const setIsFolderUploadOpen = onSetFolderUploadOpen ?? setIsFolderUploadOpenLocal;
   const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
 
   const { navigateToFilesView } = useFilesNavigation();

@@ -20,6 +20,7 @@ import TableActionMenu, { ActionItem } from "@/components/ui/alt-table/TableActi
 import { Button } from "@/components/ui/button";
 import type { RemoteFolder } from "@/app/lib/types/sync-folder";
 import { Pagination } from "@/components/ui/alt-table";
+import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
 
 const FOLDERS_PER_PAGE = 6;
 
@@ -49,6 +50,7 @@ export function RemoteFoldersSection({
   onBrowseFolder,
 }: RemoteFoldersSectionProps) {
   const [currentPage, setCurrentPage] = useState(1);
+  const [cardContextMenu, setCardContextMenu] = useState<{ x: number; y: number; folder: RemoteFolder } | null>(null);
 
   const totalPages = Math.max(1, Math.ceil(remoteFolders.length / FOLDERS_PER_PAGE));
   const paginatedFolders = useMemo(() => {
@@ -60,6 +62,7 @@ export function RemoteFoldersSection({
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
+        <>
         <div
           ref={ref}
           className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
@@ -91,6 +94,10 @@ export function RemoteFoldersSection({
                     <div
                       key={folder.folderName}
                       className="p-4 border border-grey-80 rounded-lg bg-white hover:bg-grey-98 transition-colors"
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setCardContextMenu({ x: e.clientX, y: e.clientY, folder });
+                      }}
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex-1 min-w-0">
@@ -195,6 +202,33 @@ export function RemoteFoldersSection({
             </div>
           </div>
         </div>
+
+      {cardContextMenu && (
+        <FolderCardContextMenu
+          x={cardContextMenu.x}
+          y={cardContextMenu.y}
+          onClose={() => setCardContextMenu(null)}
+          items={[
+            {
+              icon: <FolderSearch className="size-4" />,
+              label: "Browse Contents",
+              onClick: () => onBrowseFolder(cardContextMenu.folder),
+            },
+            {
+              icon: <CloudDownload className="size-4" />,
+              label: "Sync to This Device",
+              onClick: () => onSyncFolder(cardContextMenu.folder),
+            },
+            {
+              icon: <ServerCrash className="size-4" />,
+              label: "Delete from Server",
+              variant: "destructive" as const,
+              onClick: () => onDeleteFromServer(cardContextMenu.folder.folderName),
+            },
+          ]}
+        />
+      )}
+      </>
       )}
     </InView>
   );

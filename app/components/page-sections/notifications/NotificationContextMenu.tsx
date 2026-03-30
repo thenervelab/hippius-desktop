@@ -59,7 +59,7 @@ const NotificationContextMenu: React.FC<NotificationContextMenuProps> = ({
       style={menuStyle}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="bg-white border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] rounded-md overflow-hidden p-0 min-w-[13.75rem]">
+      <div className="bg-white border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] rounded-lg overflow-hidden p-0 min-w-[13.75rem]">
         <div className="flex flex-col">
           <button
             className="flex items-center gap-2 p-2 text-xs font-medium text-grey-30 hover:text-primary-60 hover:bg-primary-100 active:bg-primary-70 active:text-primary-80 transition-colors"

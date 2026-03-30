@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import { Icons, RevealTextLine, IconButton } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
@@ -26,6 +26,7 @@ import * as Tooltip from "@radix-ui/react-tooltip";
 import type { SyncFolder } from "@/app/lib/types/sync-folder";
 import { Pagination } from "@/components/ui/alt-table";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
 
 const FOLDERS_PER_PAGE = 6;
 
@@ -107,6 +108,12 @@ export function LocalFoldersSection({
   onBrowseFolder,
 }: LocalFoldersSectionProps) {
   const [currentPage, setCurrentPage] = useState(1);
+  const [cardContextMenu, setCardContextMenu] = useState<{ x: number; y: number; folder: SyncFolder } | null>(null);
+
+  const getFileManagerLabel = useCallback(() => {
+    if (typeof navigator !== "undefined" && /win/i.test(navigator.platform)) return "Explorer";
+    return "Finder";
+  }, []);
 
   const totalPages = Math.max(1, Math.ceil(syncFolders.length / FOLDERS_PER_PAGE));
   const paginatedFolders = useMemo(() => {
@@ -118,6 +125,7 @@ export function LocalFoldersSection({
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
+        <>
         <div
           ref={ref}
           className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
@@ -169,6 +177,10 @@ export function LocalFoldersSection({
                     <div
                       key={folder.id}
                       className="p-4 border border-grey-80 rounded-lg bg-white hover:bg-grey-98 transition-colors"
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setCardContextMenu({ x: e.clientX, y: e.clientY, folder });
+                      }}
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex-1 min-w-0">
@@ -305,6 +317,53 @@ export function LocalFoldersSection({
             </div>
           </div>
         </div>
+
+      {cardContextMenu && (
+        <FolderCardContextMenu
+          x={cardContextMenu.x}
+          y={cardContextMenu.y}
+          onClose={() => setCardContextMenu(null)}
+          items={[
+            {
+              icon: <FolderSearch className="size-4" />,
+              label: "Browse Contents",
+              onClick: () => onBrowseFolder(cardContextMenu.folder),
+            },
+            {
+              icon: cardContextMenu.folder.status === "syncing"
+                ? <PauseCircle className="size-4" />
+                : <PlayCircle className="size-4" />,
+              label: cardContextMenu.folder.status === "syncing" ? "Pause Sync" : "Resume Sync",
+              onClick: () => cardContextMenu.folder.status === "syncing"
+                ? onPauseFolder(cardContextMenu.folder)
+                : onResumeFolder(cardContextMenu.folder),
+            },
+            {
+              icon: <FolderOpen className="size-4" />,
+              label: `Open in ${getFileManagerLabel()}`,
+              onClick: async () => {
+                try {
+                  await revealItemInDir(cardContextMenu.folder.localPath);
+                } catch (error) {
+                  console.error("Failed to open in file manager:", error);
+                }
+              },
+            },
+            {
+              icon: <Trash2 className="size-4" />,
+              label: "Remove from Sync",
+              onClick: () => onRemoveFolder(cardContextMenu.folder),
+            },
+            {
+              icon: <ServerCrash className="size-4" />,
+              label: "Delete from Server",
+              variant: "destructive" as const,
+              onClick: () => onDeleteFromServer(cardContextMenu.folder.folderName, cardContextMenu.folder.id),
+            },
+          ]}
+        />
+      )}
+      </>
       )}
     </InView>
   );

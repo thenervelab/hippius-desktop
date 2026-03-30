@@ -14,7 +14,10 @@ import { WaitAMoment } from "@/components/ui";
 import FilesOnboarding from "./FilesOnboarding";
 import {
   getPrivateSyncPath,
+  removeSyncPath,
+  getAllSyncPaths,
 } from "@/lib/utils/syncPathUtils";
+import { deleteRemoteFolder } from "@/app/lib/utils/restoreUtils";
 import SyncFolderTabs from "./SyncFolderTabs";
 import { formatBytesFromBigInt } from "@/lib/utils";
 import { useRemoteStorageStats } from "@/app/lib/hooks/api/useRemoteStorageStats";
@@ -43,6 +46,7 @@ import {
   triggerSyncPathRefreshAtom,
   syncEngineStatusAtom,
   isSyncConfiguredAtom,
+  SYNC_STOPPED_STORAGE_KEY,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
@@ -50,9 +54,16 @@ import { SyncStoppedAlert } from "@/components/ui/SyncStoppedAlert";
 import { SyncConnectivityAlert } from "@/components/ui/SyncConnectivityAlert";
 import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
 import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
+import {
+  PauseSyncDialog,
+  RemoveFolderDialog,
+  DeleteServerDialog,
+  RemoteFolderBrowser,
+} from "../settings/multi-folder-sync";
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { appStore } from "@/lib/store/jotaiStore";
 
 const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
@@ -88,6 +99,9 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     : isRegularFilesFetching;
   const addButtonRef = useRef<{ openWithFiles(files: FileList): void; openWithPaths(paths: string[]): void; isDialogOpen(): boolean }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
+
+  // Folder upload dialog state (lifted from FilesHeader so context menus can trigger it)
+  const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
 
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState(
     undefined as string | null | undefined
@@ -195,6 +209,33 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
   const [showMnemonicBackup, setShowMnemonicBackup] = useState(false);
 
+  // Tab context menu dialog states
+  const [pauseDialog, setPauseDialog] = useState<{
+    open: boolean;
+    label: string | null;
+  }>({ open: false, label: null });
+  const [isPausing, setIsPausing] = useState(false);
+
+  const [removeDialog, setRemoveDialog] = useState<{
+    open: boolean;
+    label: string | null;
+  }>({ open: false, label: null });
+  const [isRemoving, setIsRemoving] = useState(false);
+
+  const [deleteDialog, setDeleteDialog] = useState<{
+    open: boolean;
+    folderName: string;
+    label: string | null;
+  }>({ open: false, folderName: "", label: null });
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
+  const [isDeletingServer, setIsDeletingServer] = useState(false);
+
+  // Browse contents dialog state
+  const [browseDialog, setBrowseDialog] = useState<{
+    open: boolean;
+    label: string | null;
+  }>({ open: false, label: null });
+
   // Sync folder labels from the query data
   const syncFolderLabels = useMemo(() => {
     if (regularFilesData && "syncFolderLabels" in regularFilesData) {
@@ -203,6 +244,20 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     }
     return [];
   }, [regularFilesData]);
+
+  // Track paused labels for tab context menu
+  const [pausedLabels, setPausedLabels] = useState<string[]>([]);
+  useEffect(() => {
+    if (!polkadotAddress || syncFolderLabels.length === 0) return;
+    (async () => {
+      try {
+        const allPaths = await getAllSyncPaths(polkadotAddress);
+        setPausedLabels(allPaths.filter(p => p.isPaused).map(p => p.label));
+      } catch {
+        // ignore
+      }
+    })();
+  }, [polkadotAddress, syncFolderLabels]);
 
   // Get the appropriate data based on view mode
   const allData = useMemo(() => {
@@ -561,6 +616,132 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     setShowPrivateStartSyncingSelector(true);
   }, [isRecentFiles, handleNavigateToSettings]);
 
+  // Context menu handlers
+  const handleContextUploadFile = useCallback(() => {
+    addButtonRef.current?.openWithPaths([]);
+  }, []);
+
+  const handleContextAddFolder = useCallback(() => {
+    setIsFolderUploadOpen(true);
+  }, []);
+
+  const handleContextAddSyncFolder = useCallback(() => {
+    setActiveSettingsTab("Sync & Storage");
+    setSettingsDialogOpen(true);
+  }, [setActiveSettingsTab, setSettingsDialogOpen]);
+
+  // Tab context menu handlers (operate on folder label strings)
+  const handleTabOpenInFinder = useCallback(async (label: string) => {
+    if (!polkadotAddress) return;
+    try {
+      const allPaths = await getAllSyncPaths(polkadotAddress);
+      const match = allPaths.find((p) => p.label === label);
+      if (match) {
+        const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+        await revealItemInDir(match.path);
+      }
+    } catch (err) {
+      console.error("Failed to open folder:", err);
+      toast.error("Failed to open folder");
+    }
+  }, [polkadotAddress]);
+
+  // Tab context menu: open dialogs instead of executing directly
+  const handleTabRemoveFromSync = useCallback((label: string) => {
+    setRemoveDialog({ open: true, label });
+  }, []);
+
+  const handleTabDeleteFromServer = useCallback((label: string) => {
+    setDeleteDialog({ open: true, folderName: label, label });
+  }, []);
+
+  const handleTabBrowseContents = useCallback((label: string) => {
+    setBrowseDialog({ open: true, label });
+  }, []);
+
+  const handleTabPauseSync = useCallback((label: string) => {
+    const isPaused = pausedLabels.includes(label);
+    if (isPaused) {
+      // Resume directly (no confirmation needed, same as settings)
+      (async () => {
+        if (!polkadotAddress) return;
+        try {
+          const mnemonic = (await getMnemonic()) ?? undefined;
+          await invoke("resume_drive", { label, mnemonic });
+          localStorage.removeItem(SYNC_STOPPED_STORAGE_KEY);
+          appStore.set(syncEngineStatusAtom, "active");
+          appStore.set(isSyncConfiguredAtom, true);
+          toast.success(`Sync resumed for "${label}"`);
+          setPausedLabels(prev => prev.filter(l => l !== label));
+        } catch (err) {
+          console.error("Failed to resume sync:", err);
+          toast.error("Failed to resume sync");
+        }
+      })();
+    } else {
+      setPauseDialog({ open: true, label });
+    }
+  }, [pausedLabels, polkadotAddress, getMnemonic]);
+
+  // Dialog confirmation handlers
+  const handleConfirmPause = useCallback(async () => {
+    const label = pauseDialog.label;
+    if (!label || !polkadotAddress) return;
+    setIsPausing(true);
+    try {
+      await invoke("pause_drive", { label });
+      toast.success(`Sync paused for "${label}"`);
+      setPausedLabels(prev => [...prev, label]);
+    } catch (err) {
+      console.error("Failed to pause sync:", err);
+      toast.error("Failed to pause sync");
+    } finally {
+      setIsPausing(false);
+      setPauseDialog({ open: false, label: null });
+    }
+  }, [pauseDialog.label, polkadotAddress]);
+
+  const handleConfirmRemove = useCallback(async () => {
+    const label = removeDialog.label;
+    if (!label || !polkadotAddress) return;
+    setIsRemoving(true);
+    try {
+      await removeSyncPath(polkadotAddress, label);
+      toast.success(`Folder "${label}" removed from sync`);
+      triggerSyncPathRefresh((prev) => prev + 1);
+      refetchUserFiles();
+    } catch (err) {
+      console.error("Failed to remove sync path:", err);
+      toast.error("Failed to remove folder from sync");
+    } finally {
+      setIsRemoving(false);
+      setRemoveDialog({ open: false, label: null });
+    }
+  }, [removeDialog.label, polkadotAddress, triggerSyncPathRefresh, refetchUserFiles]);
+
+  const handleConfirmDeleteServer = useCallback(async () => {
+    const label = deleteDialog.label;
+    if (!label || !polkadotAddress) return;
+    setIsDeletingServer(true);
+    try {
+      const result = await deleteRemoteFolder(polkadotAddress, label);
+      // Also remove from local sync paths
+      await removeSyncPath(polkadotAddress, label).catch(() => {});
+      toast.success(
+        `Folder deleted from server (${result.files_deleted} file${result.files_deleted !== 1 ? "s" : ""} removed)`
+      );
+      triggerSyncPathRefresh((prev) => prev + 1);
+      refetchUserFiles();
+    } catch (err) {
+      console.error("Failed to delete from server:", err);
+      toast.error("Failed to delete folder from server");
+    } finally {
+      setIsDeletingServer(false);
+      setDeleteDialog({ open: false, folderName: "", label: null });
+      setDeleteConfirmInput("");
+    }
+  }, [deleteDialog.label, polkadotAddress, triggerSyncPathRefresh, refetchUserFiles]);
+
   // Load data on mount and set up interval refresh
   useEffect(() => {
     if (isRecentFiles) {
@@ -786,6 +967,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             onDateChange={handleDateChange}
             onFileSizesChange={handleFileSizesChange}
             defaultFolderLabel={selectedFolderTab}
+            isFolderUploadOpen={isFolderUploadOpen}
+            onSetFolderUploadOpen={setIsFolderUploadOpen}
           />
 
           {!isRecentFiles && (
@@ -793,6 +976,12 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
               labels={syncFolderLabels}
               selectedTab={selectedFolderTab}
               onTabChange={setSelectedFolderTab}
+              onBrowseContents={handleTabBrowseContents}
+              onPauseSync={handleTabPauseSync}
+              onOpenInFinder={handleTabOpenInFinder}
+              onRemoveFromSync={handleTabRemoveFromSync}
+              onDeleteFromServer={handleTabDeleteFromServer}
+              pausedLabels={pausedLabels}
             />
           )}
 
@@ -812,6 +1001,9 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             onSyncPathConfigured={
               isRecentFiles ? handleNavigateToSettings : handleStartSyncing
             }
+            onUploadFile={handleContextUploadFile}
+            onAddFolder={handleContextAddFolder}
+            onAddSyncFolder={handleContextAddSyncFolder}
           />
         </div>
       </FileSelectionProvider>
@@ -835,6 +1027,52 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
         onConfirm={handleMnemonicBackupConfirm}
         onClose={handleMnemonicBackupConfirm}
       />
+
+      <PauseSyncDialog
+        open={pauseDialog.open}
+        folderName={pauseDialog.label ?? undefined}
+        isPausing={isPausing}
+        onClose={() => setPauseDialog({ open: false, label: null })}
+        onConfirm={handleConfirmPause}
+      />
+
+      <RemoveFolderDialog
+        open={removeDialog.open}
+        folderName={removeDialog.label}
+        isRemoving={isRemoving}
+        onClose={() => setRemoveDialog({ open: false, label: null })}
+        onConfirm={handleConfirmRemove}
+      />
+
+      <DeleteServerDialog
+        open={deleteDialog.open}
+        folderName={deleteDialog.folderName}
+        confirmInput={deleteConfirmInput}
+        isDeletingServer={isDeletingServer}
+        onConfirmInputChange={setDeleteConfirmInput}
+        onClose={() => {
+          setDeleteDialog({ open: false, folderName: "", label: null });
+          setDeleteConfirmInput("");
+        }}
+        onConfirm={handleConfirmDeleteServer}
+      />
+
+      {browseDialog.label && (
+        <RemoteFolderBrowser
+          open={browseDialog.open}
+          onClose={() => setBrowseDialog({ open: false, label: null })}
+          folder={{
+            folderName: browseDialog.label,
+            deviceName: "This Device",
+            lastModified: 0,
+            fileCount: 0,
+            totalBytes: 0,
+          }}
+          accountId={polkadotAddress ?? ""}
+          onSyncSelected={() => setBrowseDialog({ open: false, label: null })}
+          isLocal
+        />
+      )}
     </>
   );
 };

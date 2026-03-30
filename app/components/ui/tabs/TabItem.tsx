@@ -35,6 +35,7 @@ const TabItem: React.FC<TabItemProps> = ({
 
   const content = (
     <div
+      data-tab-label={label}
       className={cn(
         "flex items-center gap-2 relative transition-all duration-300 cursor-pointer",
         iconOnly ? "w-[2.5rem] justify-center" : width,

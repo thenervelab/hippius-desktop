@@ -75,6 +75,9 @@ export function useFileViewShared(): FileViewSharedState {
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, file: FormattedUserFile) => {
       e.preventDefault();
+      e.stopPropagation();
+      // Clear any text selection caused by right-click
+      window.getSelection()?.removeAllRanges();
       setContextMenu({
         x: e.clientX,
         y: e.clientY,

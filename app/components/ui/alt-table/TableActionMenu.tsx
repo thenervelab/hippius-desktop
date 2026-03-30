@@ -59,7 +59,7 @@ const TableActionMenu = memo(function TableActionMenu({
       <DropdownMenuContent
         align="end"
         className="bg-white border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)]
-         rounded-2 overflow-hidden p-0 min-w-[9.375rem]"
+         rounded-lg overflow-hidden p-0 min-w-[9.375rem]"
       >
         {/* Dropdown title */}
         {dropdownTitle && (

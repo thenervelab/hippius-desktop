@@ -50,6 +50,7 @@ import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserFile>();
@@ -134,6 +135,7 @@ interface FilesTableProps {
   ) => void;
   hasMore: boolean;
   loadMore: () => void;
+  onHeaderContextMenu?: (e: React.MouseEvent) => void;
 }
 
 const FilesTable: FC<FilesTableProps> = memo(
@@ -145,6 +147,7 @@ const FilesTable: FC<FilesTableProps> = memo(
     handleFileDownload,
     hasMore,
     loadMore,
+    onHeaderContextMenu,
   }) => {
     const { polkadotAddress } = useWalletAuth();
     // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads
@@ -352,9 +355,12 @@ const FilesTable: FC<FilesTableProps> = memo(
                 }
                 if (filePath) {
                   await revealItemInDir(filePath);
+                } else {
+                  toast.error("File is not available locally. It may only exist on another device.");
                 }
               } catch (error) {
                 console.error("Failed to reveal file in Finder:", error);
+                toast.error("File is not available locally. It may only exist on another device.");
               }
             },
           },
@@ -981,7 +987,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             key={`table-${files?.length}-${isSelectionMode}`}
           >
             <TableModule.Table className="w-full table-fixed" key={`table-${isSelectionMode}`}>
-              <TableModule.THead>{headerRows}</TableModule.THead>
+              <TableModule.THead onContextMenu={onHeaderContextMenu}>{headerRows}</TableModule.THead>
               <TableModule.TBody>{tableBody}</TableModule.TBody>
             </TableModule.Table>
           </TableModule.TableWrapper>

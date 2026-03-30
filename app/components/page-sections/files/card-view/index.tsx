@@ -28,6 +28,7 @@ import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 
@@ -275,9 +276,12 @@ const CardView: FC<CardViewProps> = ({
                                 }
                                 if (filePath) {
                                   await revealItemInDir(filePath);
+                                } else {
+                                  toast.error("File is not available locally. It may only exist on another device.");
                                 }
                               } catch (error) {
                                 console.error("Failed to reveal file in Finder:", error);
+                                toast.error("File is not available locally. It may only exist on another device.");
                               }
                             },
                           },
