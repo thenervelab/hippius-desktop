@@ -12,6 +12,7 @@ import { getFileIcon } from "@/app/lib/utils/fileTypeUtils";
 import { cn } from "@/app/lib/utils";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { FolderOpen } from "lucide-react";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 interface DetailRowProps {
   label: string;
@@ -41,6 +42,7 @@ interface FileDetailsDialogContentProps {
 const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
   file
 }) => {
+  const { polkadotAddress } = useWalletAuth();
 
   // Get Arion Hash for display
   const arionCid = file ? file.arionCid : null;
@@ -108,16 +110,29 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
               onClick={async () => {
                 try {
                   let filePath = file.source;
-                  if (!filePath && file.label) {
+
+                  // If source path is set, try it first
+                  if (filePath) {
+                    const relativeName = file.actualFileName || file.name;
+                    const syncFolderPath = filePath.endsWith(relativeName)
+                      ? filePath.slice(0, filePath.length - relativeName.length - 1)
+                      : filePath;
+                    try {
+                      await revealItemInDir(syncFolderPath);
+                      return;
+                    } catch {
+                      console.warn("[RevealInFinder] source path failed, trying resolve_file_path. syncFolderPath:", syncFolderPath);
+                    }
+                  }
+
+                  // Fallback: resolve canonical path from DB
+                  if (file.label && polkadotAddress) {
                     const fileName = file.actualFileName || file.name;
                     filePath = await invoke<string>("resolve_file_path", {
-                      accountId: "",
+                      accountId: polkadotAddress,
                       label: file.label,
                       fileName,
                     });
-                  }
-                  if (filePath) {
-                    // Derive the sync folder path by stripping the relative file portion
                     const relativeName = file.actualFileName || file.name;
                     const syncFolderPath = filePath.endsWith(relativeName)
                       ? filePath.slice(0, filePath.length - relativeName.length - 1)

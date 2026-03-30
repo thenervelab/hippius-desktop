@@ -23,7 +23,7 @@ export const VideoDialogTrigger: React.FC<{
     >
       <span className="flex-1 min-w-0">{children}</span>
       {/* Play icon on hover */}
-      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-white right-4">
+      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100 to-white right-4 inset-y-0 flex items-center">
         <Icons.PlayCircle className="size-5 text-primary-60 [&>path]:stroke-[0.25rem]" />
       </div>
     </button>

@@ -266,15 +266,25 @@ const CardView: FC<CardViewProps> = ({
                               setOpenMenuIndex(null);
                               try {
                                 let filePath = file.source;
-                                if (!filePath && file.label && polkadotAddress) {
+
+                                // If source path is set, try it first
+                                if (filePath) {
+                                  try {
+                                    await revealItemInDir(filePath);
+                                    return;
+                                  } catch {
+                                    console.warn("[RevealInFinder] source path failed, trying resolve_file_path. source:", filePath);
+                                  }
+                                }
+
+                                // Fallback: resolve canonical path from DB
+                                if (file.label && polkadotAddress) {
                                   const fileName = file.actualFileName || file.name;
                                   filePath = await invoke<string>("resolve_file_path", {
                                     accountId: polkadotAddress,
                                     label: file.label,
                                     fileName,
                                   });
-                                }
-                                if (filePath) {
                                   await revealItemInDir(filePath);
                                 } else {
                                   toast.error("File is not available locally. It may only exist on another device.");

@@ -1271,4 +1271,53 @@ mod tests {
         let result = eng.get_sync_activity(None, Some("docs".to_string()));
         assert_eq!(result[0].file_name, "sub/deep/renamed.txt");
     }
+
+    #[test]
+    fn subfolder_file_name_preserved_in_activity() {
+        // Verify that activity items with subfolder-relative paths
+        // (e.g. "deps/photo.jpg") retain the full relative path after
+        // commit, not just the basename. This is critical for
+        // recent-files to construct the correct on-disk source path.
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity(
+            "deps/librust_plugin.rmeta",
+            "downloaded",
+            "march-09",
+            48,
+        ));
+        eng.add_pending_activity(activity(
+            "branch-cleanup.md",
+            "uploaded",
+            "march-09",
+            4186,
+        ));
+        eng.commit_pending_activity_for_label("march-09");
+
+        let result = eng.get_sync_activity(None, Some("march-09".to_string()));
+        assert_eq!(result.len(), 2);
+
+        // Subfolder file must keep its relative path prefix
+        let subfolder_file = result.iter().find(|i| i.file_name.contains("librust_plugin")).unwrap();
+        assert_eq!(subfolder_file.file_name, "deps/librust_plugin.rmeta");
+
+        // Root-level file should remain as-is
+        let root_file = result.iter().find(|i| i.file_name.contains("branch-cleanup")).unwrap();
+        assert_eq!(root_file.file_name, "branch-cleanup.md");
+    }
+
+    #[test]
+    fn deeply_nested_subfolder_path_preserved() {
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity(
+            "a/b/c/deep-file.txt",
+            "uploaded",
+            "sync-folder",
+            100,
+        ));
+        eng.commit_pending_activity_for_label("sync-folder");
+
+        let result = eng.get_sync_activity(None, Some("sync-folder".to_string()));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].file_name, "a/b/c/deep-file.txt");
+    }
 }

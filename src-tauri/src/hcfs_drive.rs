@@ -1689,9 +1689,12 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             if outcome.files_uploaded > 0 || outcome.files_downloaded > 0
                 || outcome.files_deleted_locally > 0 || outcome.files_deleted_remotely > 0
             {
-                // Download progress callbacks record entries with encrypted
-                // names (e.g. "file_a7339456c25845c2"). Replace them with
-                // real file names before committing.
+                // Download progress callbacks now record entries with the
+                // full relative path when the path_index resolves the file,
+                // or encrypted names (e.g. "file_a7339456c25845c2") when
+                // unresolved.  If staged_downloads is available (currently
+                // always empty), override with those names.  Otherwise,
+                // resolve any remaining encrypted names via the path_index.
                 {
                     let now = chrono::Utc::now().timestamp();
 

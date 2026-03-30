@@ -1560,18 +1560,20 @@ fn setup_progress_handlers(
                 sync_events::DOWNLOAD_PROGRESS,
                 sync_events::TransferProgressPayload { label: l2.clone(), bytes: b, total: t, path: p.map(String::from) },
             );
-            // Record download completion with the encrypted name. The real
-            // file name is resolved later in trigger_sync_for_drive using
-            // the path_index (the callback only sees names like "file_09977d01...").
+            // Record download completion. The path from hcfs-client may be
+            // the full relative path (e.g. "deps/photo.jpg") if the
+            // path_index resolved it, or an encrypted name like
+            // "file_09977d01...".  Keep the full string so recent-files
+            // can build the correct on-disk location for subfolder files.
             if b == t && t > 0 {
                 if let Some(path_str) = p {
-                    let file_name = Path::new(path_str)
+                    let display_name = Path::new(path_str)
                         .file_name()
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| path_str.to_string());
-                    info!("Download complete [{}]: {} ({} bytes)", l2, file_name, t);
+                    info!("Download complete [{}]: {} ({} bytes)", l2, display_name, t);
                     sync_for_download.add_pending_activity(SyncActivityItem {
-                        file_name,
+                        file_name: path_str.to_string(),
                         action: "downloaded".to_string(),
                         timestamp: chrono::Utc::now().timestamp(),
                         size_bytes: t,
