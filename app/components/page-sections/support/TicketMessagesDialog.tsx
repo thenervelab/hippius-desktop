@@ -228,7 +228,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
         <Dialog.Overlay className="fixed inset-0  z-[10000]" />
         <Dialog.Content
           className={cn(
-            "fixed right-4 max-h-[31.25rem] bottom-4 h-full bg-white shadow-xl z-[10001] border border-grey-80 rounded",
+            "fixed right-4 max-h-[min(31.25rem,calc(100vh-5rem))] bottom-4 h-full bg-white shadow-xl z-[10001] border border-grey-80 rounded",
             "flex flex-col",
             "max-sm:left-4 max-sm:right-4 max-sm:w-auto",
             "sm:w-[25rem]"

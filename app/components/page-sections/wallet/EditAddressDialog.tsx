@@ -103,7 +103,7 @@ const EditAddressDialog: React.FC<EditAddressDialogProps> = ({
       open={open}
       onOpenChange={(isOpen) => !isOpen && handleClose()}
     >
-      <DialogContainer className="md:inset-0 md:m-auto w-[26.75rem] h-fit">
+      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit">
         <Dialog.Title className="sr-only">Edit Address</Dialog.Title>
         {/* Mobile accent line */}
         <div className="h-4 bg-primary-50 md:hidden" />

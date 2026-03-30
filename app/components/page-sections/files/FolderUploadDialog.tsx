@@ -133,7 +133,7 @@ export default function FolderUploadDialog({
                 <Dialog.Content
                     className="
                         fixed left-1/2 top-1/2 z-50 
-                        w-full max-w-sm sm:max-w-[30.5rem] 
+                        w-full max-w-sm sm:max-w-[30.5rem] max-h-[90vh] overflow-y-auto
                         -translate-x-1/2 -translate-y-1/2
                         bg-white rounded-[0.5rem]
                         shadow-[0px_12px_36px_rgba(0,0,0,0.14)]

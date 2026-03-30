@@ -131,7 +131,7 @@ export default function FolderToFolderUploadDialog({
         <Dialog.Root open={open} onOpenChange={(o) => !o && handleClose()}>
             <Dialog.Portal>
                 <Dialog.Overlay className="bg-white/70 fixed p-4 z-30 top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
-                    <Dialog.Content className="border shadow-dialog bg-white flex flex-col max-w-[26.75rem] border-grey-80 bg-background-1 rounded-[0.5rem] overflow-hidden w-full relative data-[state=open]:animate-scale-in-95-0.2">
+                    <Dialog.Content className="border shadow-dialog bg-white flex flex-col max-w-[26.75rem] max-h-[90vh] border-grey-80 bg-background-1 rounded-[0.5rem] overflow-hidden overflow-y-auto w-full relative data-[state=open]:animate-scale-in-95-0.2">
                         <Dialog.Title className="hidden">Add Folder</Dialog.Title>
 
                         <div className="flex p-4 items-center text-grey-10 relative gap-2">

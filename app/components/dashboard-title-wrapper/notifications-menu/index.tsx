@@ -43,7 +43,7 @@ export default function NotificationMenu({ className = "delay-500" }: Props) {
           <Menubar.Content
             align="end"
             sideOffset={8}
-            className="max-w-[26.75rem] min-w-[26.75rem] bg-white shadow-menu rounded-lg border border-grey-80 z-50"
+            className="max-w-[26.75rem] min-w-[26.75rem] bg-white shadow-menu rounded-lg border border-grey-80 z-50 max-h-[calc(100vh-5rem)] flex flex-col overflow-hidden"
           >
             <NotificationMenuContent
               count={count}

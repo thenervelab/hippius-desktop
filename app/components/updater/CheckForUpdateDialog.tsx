@@ -189,7 +189,7 @@ export default function CheckForUpdateDialog({
         <Dialog.Content
           className="
             fixed left-1/2 top-1/2 z-50 
-            w-full max-w-[68.75rem] h-[calc(100vh-100px)] md:h-[41.6875rem]
+            w-full max-w-[68.75rem] h-[calc(100vh-100px)] md:max-h-[41.6875rem] md:h-auto
             -translate-x-1/2 -translate-y-1/2
           "
         >
@@ -200,7 +200,7 @@ export default function CheckForUpdateDialog({
           <div
             className="bg-white rounded-[0.5rem]
                        shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
-                       border border-grey-80 mx-6 h-full relative max-md:overflow-y-scroll"
+                       border border-grey-80 mx-6 h-full relative overflow-y-auto"
           >
             <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[0.5rem] sm:hidden" />
             <Dialog.Close className="max-md:hidden absolute top-4 right-4 border-[0.7px] border-grey-80 flex justify-center items-center size-10 hover:bg-grey-90 transition-colors">
@@ -256,7 +256,7 @@ export default function CheckForUpdateDialog({
                   </div>
 
                   {/* RIGHT pane */}
-                  <div className="bg-grey-100 flex flex-col md:h-full md:overflow-hidden my-9 md:my-0 pr-2 md:pr-4 pb-6">
+                  <div className="bg-grey-100 flex flex-col md:h-full md:overflow-y-auto my-9 md:my-0 pr-2 md:pr-4 pb-6">
                     {/* header icon */}
                     <div className="shrink-0">
                       <div className="flex items-center mt-9">

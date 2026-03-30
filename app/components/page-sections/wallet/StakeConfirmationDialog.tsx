@@ -32,7 +32,7 @@ const StakeConfirmationDialog: React.FC<StakeConfirmationDialogProps> = ({
         <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
             <Dialog.Portal>
                 <Dialog.Overlay className="bg-black/40 fixed inset-0 flex items-center justify-center data-[state=open]:animate-fade-in-0.3 z-[60]" />
-                <Dialog.Content className="fixed top-1/2 left-1/2 w-[90%] max-w-md -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 shadow-xl z-[70] animate-fade-in-0.2">
+                <Dialog.Content className="fixed top-1/2 left-1/2 w-[90%] max-w-md max-h-[85vh] overflow-y-auto -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 shadow-xl z-[70] animate-fade-in-0.2">
                     <div className="flex justify-between items-center mb-5">
                         <Dialog.Title className="text-xl font-semibold text-grey-10 flex items-center gap-2">
                             <ShieldCheck className="text-primary-50 size-6" />
