@@ -157,7 +157,7 @@ const CreateVM: React.FC = () => {
             tooltipContent="Choose a VM model that fits your workload requirements. Different models are optimized for specific use cases like general purpose computing, memory-intensive tasks, or storage operations."
           />
         </div>
-        <div className="flex sm:hidden justify-between items-center p-1 border border-grey-80 rounded z-20">
+        <div className="flex @sm:hidden justify-between items-center p-1 border border-grey-80 rounded z-20">
           <div className="w-full text-lg font-medium text-grey-10">
             Currently Viewing
           </div>
@@ -174,7 +174,7 @@ const CreateVM: React.FC = () => {
           />
         </div>
         {/* Category Tabs */}
-        <div className="hidden sm:block">
+        <div className="hidden @sm:block">
           <div className="border border-grey-80 rounded p-1 bg-grey-100">
             <TabList
               tabs={categories}
@@ -198,7 +198,7 @@ const CreateVM: React.FC = () => {
           </div>
         </NoEntriesFound>
       ) : isFlavorsLoading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
           {Array.from({ length: 8 }).map((_, index) => (
             <VMTemplateCardSkeleton key={`skeleton-${index}`} />
           ))}
@@ -207,7 +207,7 @@ const CreateVM: React.FC = () => {
         <NoEntriesFound text="No templates available" />
       ) : (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
+          <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
             {templates.map((template) => (
               <VMTemplateCard
                 key={template.id}

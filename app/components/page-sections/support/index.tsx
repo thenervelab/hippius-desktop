@@ -263,7 +263,7 @@ const Support: React.FC = () => {
         <>
           {/* Header & Controls */}
           <div className="flex items-center w-full justify-between gap-4 flex-wrap mb-5">
-            <div className="flex items-center justify-between w-full sm:w-auto">
+            <div className="flex items-center justify-between w-full @sm:w-auto">
               <div className="flex items-center gap-x-2">
                 <AbstractIconWrapper className="size-10 flex items-center justify-center">
                   <Ticket className="size-6 relative text-primary-50" />

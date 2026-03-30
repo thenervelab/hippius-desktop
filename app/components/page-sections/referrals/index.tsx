@@ -113,7 +113,7 @@ const Referrals: React.FC = () => {
             position="top-right"
             size="small"
           />
-          <div className="grid grid-cols-1 md:grid-cols-2 min-[81.25rem]:grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-1 @md:grid-cols-2 @4xl:grid-cols-4 gap-4 mb-6">
             <StaticReferralLinkCard />
             <PlaceholderCard icon={UserSquare} title="Total Referrals" value="0" />
             <PlaceholderCard icon={PieChart} title="Usage Count" value="0" />

@@ -24,6 +24,8 @@ function applyZoom(percent: number) {
     "--zoom-factor",
     String(percent / 100)
   );
+  // Dispatch a custom event so other components (e.g. sidebar) can react
+  window.dispatchEvent(new CustomEvent("zoom-changed", { detail: percent }));
 }
 
 /**
@@ -49,26 +51,18 @@ export function useZoom() {
   }, []);
 
   const zoomIn = useCallback(() => {
-    setZoom((prev) => {
-      const next = Math.min(prev + ZOOM_STEP, MAX_ZOOM);
-      if (next !== prev) flashIndicator();
-      return next;
-    });
+    flashIndicator();
+    setZoom((prev) => Math.min(prev + ZOOM_STEP, MAX_ZOOM));
   }, [flashIndicator]);
 
   const zoomOut = useCallback(() => {
-    setZoom((prev) => {
-      const next = Math.max(prev - ZOOM_STEP, MIN_ZOOM);
-      if (next !== prev) flashIndicator();
-      return next;
-    });
+    flashIndicator();
+    setZoom((prev) => Math.max(prev - ZOOM_STEP, MIN_ZOOM));
   }, [flashIndicator]);
 
   const resetZoom = useCallback(() => {
-    setZoom((prev) => {
-      if (prev !== DEFAULT_ZOOM) flashIndicator();
-      return DEFAULT_ZOOM;
-    });
+    flashIndicator();
+    setZoom(DEFAULT_ZOOM);
   }, [flashIndicator]);
 
   // Keyboard listener

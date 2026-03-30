@@ -84,7 +84,7 @@ const Home: React.FC = () => {
 
           <DetailList />
 
-          <div className="gap-4 mt-6 w-full h-full grid grid-cols-1 md:grid-cols-2">
+          <div className="gap-4 mt-6 w-full h-full grid grid-cols-1 @xl:grid-cols-2">
             <CreditUsageTrends
               chartData={transformedCreditsData}
               isLoading={isLoadingCredits}

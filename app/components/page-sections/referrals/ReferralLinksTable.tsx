@@ -220,8 +220,8 @@ export default function ReferralLinksTable() {
           const fullReferralCode = `${REFERRAL_CODE_CONFIG.link}${getValue()}`;
           return (
             <>
-              <div className="hidden lg:block">{fullReferralCode}</div>
-              <div className="lg:hidden max-w-[9.375rem]">
+              <div className="hidden @lg:block">{fullReferralCode}</div>
+              <div className="@lg:hidden max-w-[9.375rem]">
                 {fullReferralCode.slice(0, 5)}...
                 {fullReferralCode.slice(fullReferralCode.length - 6)}
               </div>

@@ -109,7 +109,7 @@ const TransactionHistoryTable: React.FC<TransactionHistoryTableProps> = ({
           />
         ),
         meta: {
-          cellClassName: "lg:max-w-[25rem] lg:min-w-[25rem] lg:w-[25rem]",
+          cellClassName: "@lg:max-w-[25rem] @lg:min-w-[25rem] @lg:w-[25rem]",
         },
       }),
 
@@ -125,7 +125,7 @@ const TransactionHistoryTable: React.FC<TransactionHistoryTableProps> = ({
           />
         ),
         meta: {
-          cellClassName: "lg:max-w-[25rem] lg:min-w-[25rem] lg:w-[25rem]",
+          cellClassName: "@lg:max-w-[25rem] @lg:min-w-[25rem] @lg:w-[25rem]",
         },
       }),
 

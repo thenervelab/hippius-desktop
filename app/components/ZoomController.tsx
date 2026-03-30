@@ -11,13 +11,15 @@ export default function ZoomController() {
 
   if (!showIndicator) return null;
 
+  const limitLabel = zoom <= 50 ? " (min)" : zoom >= 200 ? " (max)" : "";
+
   return (
     <div
       className="fixed inset-0 pointer-events-none flex items-center justify-center"
       style={{ zIndex: 9999 }}
     >
       <div className="bg-black/70 text-white text-lg font-semibold px-5 py-2.5 rounded-xl shadow-lg animate-fade-in-0.2">
-        {zoom}%
+        {zoom}%{limitLabel}
       </div>
     </div>
   );

@@ -80,7 +80,7 @@ export default function Wallet() {
     <>
       <DashboardTitleWrapper mainText="Wallet">
         {/* <div className="w-full mt-6 grid grid-cols-3 gap-4"> */}
-        <div className="w-full mt-6 grid grid-cols-[auto_minmax(0,1fr)] gap-4">
+        <div className="w-full mt-6 grid grid-cols-1 @2xl:grid-cols-[auto_minmax(0,1fr)] gap-4">
           <WalletBalanceWidget
             refetchTransactions={refetch}
             refetchSystemBalance={refetchSystemBalance}

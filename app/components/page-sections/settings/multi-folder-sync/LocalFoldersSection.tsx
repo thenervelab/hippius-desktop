@@ -164,7 +164,7 @@ export function LocalFoldersSection({
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-2 w-full">
+                <div className="grid grid-cols-1 @xl:grid-cols-2 gap-2 w-full">
                   {paginatedFolders.map((folder) => (
                     <div
                       key={folder.id}

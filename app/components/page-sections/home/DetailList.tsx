@@ -203,7 +203,7 @@ export default function DetailList() {
   ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 @md:grid-cols-2 @3xl:grid-cols-4 gap-4">
       {detailCards.map((card) => (
         <DetailsCard
           key={card.id}

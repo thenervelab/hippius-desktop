@@ -86,7 +86,7 @@ export function RemoteFoldersSection({
                   <Icons.Loader className="size-6 animate-spin text-primary-50" />
                 </div>
               ) : remoteFolders.length > 0 ? (
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-2 w-full">
+                <div className="grid grid-cols-1 @xl:grid-cols-2 gap-2 w-full">
                   {paginatedFolders.map((folder) => (
                     <div
                       key={folder.folderName}

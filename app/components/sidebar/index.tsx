@@ -22,6 +22,13 @@ import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
 const AUTO_COLLAPSE_WIDTH = 1000;
 
+/** Effective viewport width accounting for zoom */
+function getEffectiveWidth(): number {
+  const stored = localStorage.getItem("hippius-zoom-level");
+  const zoom = stored ? parseInt(stored, 10) : 100;
+  return window.innerWidth / (zoom / 100);
+}
+
 const Sidebar: React.FC = () => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -31,18 +38,18 @@ const Sidebar: React.FC = () => {
   const collapsedRef = useRef(collapsed);
   collapsedRef.current = collapsed;
 
-  // Auto-collapse sidebar when window is narrow, auto-expand when it widens
+  // Auto-collapse sidebar when effective viewport is narrow (accounts for zoom)
   useEffect(() => {
-    let wasNarrow = window.innerWidth < AUTO_COLLAPSE_WIDTH;
+    let wasNarrow = getEffectiveWidth() < AUTO_COLLAPSE_WIDTH;
 
-    const handleResize = () => {
-      const isNarrow = window.innerWidth < AUTO_COLLAPSE_WIDTH;
+    const handleChange = () => {
+      const isNarrow = getEffectiveWidth() < AUTO_COLLAPSE_WIDTH;
       if (isNarrow && !wasNarrow && !collapsedRef.current) {
-        // Window just became narrow — auto-collapse
+        // Effective viewport just became narrow — auto-collapse
         setCollapsed(true);
         autoCollapsedRef.current = true;
       } else if (!isNarrow && wasNarrow && autoCollapsedRef.current) {
-        // Window just became wide again — restore if we auto-collapsed
+        // Effective viewport just became wide again — restore if we auto-collapsed
         setCollapsed(false);
         autoCollapsedRef.current = false;
       }
@@ -55,8 +62,12 @@ const Sidebar: React.FC = () => {
       autoCollapsedRef.current = true;
     }
 
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    window.addEventListener("resize", handleChange);
+    window.addEventListener("zoom-changed", handleChange);
+    return () => {
+      window.removeEventListener("resize", handleChange);
+      window.removeEventListener("zoom-changed", handleChange);
+    };
   }, [setCollapsed]);
   const [settingsDialogOpen, setSettingsDialogOpen] = useAtom(
     settingsDialogOpenAtom

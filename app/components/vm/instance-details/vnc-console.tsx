@@ -35,7 +35,7 @@ const VncConsole: React.FC<VncConsoleProps> = ({
           </div>
         )}
       </div>
-      <div className="w-full sm:h-[41.5rem] p-3 sm:p-10 bg-white bg-[url('/vnc-bg-grid.png')] bg-repeat-round bg-cove">
+      <div className="w-full @sm:h-[41.5rem] p-3 @sm:p-10 bg-white bg-[url('/vnc-bg-grid.png')] bg-repeat-round bg-cove">
         {/* VNC Console Content */}
         <div className="relative w-full h-full    ">
           <img

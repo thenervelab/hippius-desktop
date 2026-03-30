@@ -24,7 +24,7 @@ export default function ResponsiveContent({
       >
         {/* Sticky toolbar — always visible at the top */}
         <div className="sticky top-0 z-30 bg-white px-4 pt-4 pb-2">
-          <div className="justify-between flex relative gap-6 min-w-0">
+          <div className="justify-between flex flex-wrap relative gap-x-4 gap-y-1 min-w-0">
             <HeaderText />
             <div className="flex -mt-2 gap-2 items-center justify-center shrink-0">
               <BlockChainStats />
@@ -34,8 +34,8 @@ export default function ResponsiveContent({
           <ConflictsBanner />
         </div>
 
-        {/* Scrollable content area */}
-        <div className="flex-1 overflow-y-auto px-4 pb-4">
+        {/* Scrollable content area — serves as container query context */}
+        <div className="flex-1 overflow-y-auto px-4 pb-4 @container">
           <div className="w-full">{children}</div>
         </div>
       </main>
