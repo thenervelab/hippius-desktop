@@ -38,7 +38,7 @@ export const PHASE_CONTENT_BASE: Record<string, AppSetupPhaseContent> = {
     commandTriggerPercent: 50, // Execute at 10% (50% through the 0-20% range)
   },
   downloading_nebula: {
-    icon: <Icons.DownloadingIPFS className="h-[200] w-[8.125rem]" />,
+    icon: <Icons.DownloadingIPFS className="h-[12.5rem] w-[8.125rem]" />,
     status: "Downloading Tools",
     subStatus: "Fetching tools for Hippius Mesh...",
     command: "download_nebula",

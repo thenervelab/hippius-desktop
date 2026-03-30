@@ -24,7 +24,7 @@ export const ProgressBar = ({
   }, [value, stuckTimeout]);
 
   return (
-    <div className="relative flex gap-[2px] w-[36.25rem] h-3 bg-transparent overflow-hidden">
+    <div className="relative flex gap-[2px] w-[min(36.25rem,90vw)] h-3 bg-transparent overflow-hidden">
       {Array.from({ length: segments }).map((_, idx) => {
         const start = idx * segPercent;
         const end = (idx + 1) * segPercent;

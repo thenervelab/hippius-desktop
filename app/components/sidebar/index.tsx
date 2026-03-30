@@ -173,7 +173,7 @@ const Sidebar: React.FC = () => {
             </div>
           </div> */}
 
-            <div className="flex gap-4 flex-col flex-1 pt-4 border-t border-gray-80 w-full">
+            <div className="flex gap-4 flex-col flex-1 pt-4 border-t border-gray-80 w-full overflow-y-auto min-h-0">
               {navItems.map((item) => {
                 // Check if current path matches or starts with the item path (for child routes)
                 const isActive =
