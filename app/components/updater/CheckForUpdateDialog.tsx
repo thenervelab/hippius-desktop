@@ -189,7 +189,7 @@ export default function CheckForUpdateDialog({
         <Dialog.Content
           className="
             fixed left-1/2 top-1/2 z-50 
-            w-full max-w-[68.75rem] h-[calc(100vh-100px)] md:max-h-[41.6875rem] md:h-auto
+            w-full max-w-[68.75rem] h-[calc(100vh-100px)] md:h-[min(41.6875rem,calc(100vh-3rem))]
             -translate-x-1/2 -translate-y-1/2
           "
         >
@@ -256,10 +256,10 @@ export default function CheckForUpdateDialog({
                   </div>
 
                   {/* RIGHT pane */}
-                  <div className="bg-grey-100 flex flex-col md:h-full md:overflow-y-auto my-9 md:my-0 pr-2 md:pr-4 pb-6">
+                  <div className="bg-grey-100 flex flex-col justify-center md:h-full md:overflow-y-auto my-9 md:my-0 pr-2 md:pr-4 pb-6">
                     {/* header icon */}
                     <div className="shrink-0">
-                      <div className="flex items-center mt-9">
+                      <div className="flex items-center mt-6">
                         <div className="flex items-center justify-center h-[3.5rem] w-[3.5rem] relative">
                           <Graphsheet
                             majorCell={{
@@ -316,14 +316,14 @@ export default function CheckForUpdateDialog({
 
                       {status === "downloading" && (
                         <>
-                          <div className="mt-24 flex items-center gap-2">
+                          <div className="mt-6 flex items-center gap-2">
                             <Icons.Refresh className="size-5 text-warning-50 animate-spin" />
                             <span className="text-warning-50 font-geist text-lg">
                               Update In Progress
                             </span>
                           </div>
 
-                          <h1 className="text-[2.5rem] leading-[3rem] text-grey-10 mt-4">
+                          <h1 className="text-[1.75rem] lg:text-[2.5rem] leading-tight lg:leading-[3rem] text-grey-10 mt-4">
                             Please wait while your update is downloading
                           </h1>
 
@@ -345,14 +345,14 @@ export default function CheckForUpdateDialog({
 
                       {status === "installing" && (
                         <>
-                          <div className="mt-24 flex items-center gap-2">
+                          <div className="mt-6 flex items-center gap-2">
                             <Icons.Refresh className="size-5 text-warning-50 animate-spin" />
                             <span className="text-warning-50 font-geist text-lg">
                               Update In Progress
                             </span>
                           </div>
 
-                          <h1 className="text-[2.5rem] leading-[3rem] text-grey-40 mt-2">
+                          <h1 className="text-[1.75rem] lg:text-[2.5rem] leading-tight lg:leading-[3rem] text-grey-40 mt-2">
                             Please wait while your update is installing
                           </h1>
 
@@ -367,14 +367,14 @@ export default function CheckForUpdateDialog({
 
                       {status === "complete" && (
                         <>
-                          <div className="mt-24 flex items-center gap-2">
+                          <div className="mt-6 flex items-center gap-2">
                             <Icons.TickCircle className="size-5 text-success-50" />
                             <span className="text-success-50 font-geist text-lg">
                               Update Complete
                             </span>
                           </div>
 
-                          <h1 className="text-[2.5rem] leading-[3rem] text-grey-40 mt-2">
+                          <h1 className="text-[1.75rem] lg:text-[2.5rem] leading-tight lg:leading-[3rem] text-grey-40 mt-2">
                             Update is now complete. Please restart the app to use the new version.
                           </h1>
 
@@ -389,7 +389,7 @@ export default function CheckForUpdateDialog({
 
                       {status === "restarting" && (
                         <>
-                          <div className="mt-24 flex items-center gap-2">
+                          <div className="mt-6 flex items-center gap-2">
                             <Icons.TickCircle className="size-5 text-success-50" />
                             <span className="text-success-50 font-geist text-lg">
                               Update Complete
@@ -411,7 +411,7 @@ export default function CheckForUpdateDialog({
 
                       {status === "checking" && (
                         <div
-                          className="mt-40"
+                          className="mt-6"
                           role="status"
                           aria-live="polite"
                           aria-label="Checking for updates"
@@ -430,13 +430,13 @@ export default function CheckForUpdateDialog({
 
                       {(isLatest || status === "error") && (
                         <>
-                          <div className="mt-24">
+                          <div className="mt-6">
                             <span className="text-success-50 font-geist text-base lg:text-[1.125rem]">
                               You&apos;re on the latest version
                             </span>
                           </div>
 
-                          <h1 className="text-[1.75rem] lg:text-[2.5rem] leading-[3rem] text-grey-10 mt-2">
+                          <h1 className="text-[1.75rem] lg:text-[2rem] leading-tight lg:leading-[2.5rem] text-grey-10 mt-2">
                             No update is available at the moment.
                           </h1>
 
@@ -468,7 +468,7 @@ export default function CheckForUpdateDialog({
 
                     {/* CTA */}
                     {isAvailable && status === "available" && (
-                      <div className="shrink-0 flex flex-col gap-4 mt-10">
+                      <div className="shrink-0 flex flex-col gap-4 mt-6">
                         <CardButton
                           variant="dialog"
                           className="w-[13rem] h-[3rem] py-4 text-base"
@@ -480,7 +480,7 @@ export default function CheckForUpdateDialog({
                     )}
 
                     {status === "complete" && (
-                      <div className="shrink-0 flex flex-col gap-2 mt-10">
+                      <div className="shrink-0 flex flex-col gap-2 mt-6">
                         <CardButton
                           variant="dialog"
                           className="w-[13rem] h-[3rem] py-4 text-base"

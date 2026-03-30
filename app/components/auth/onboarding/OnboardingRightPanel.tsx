@@ -37,7 +37,7 @@ const OnboardingRightPanel = ({
     <InView>
       {({ inView, ref }) => (
         <div ref={ref} className="relative h-full w-full">
-          <div className="absolute z-3 inset-0 flex flex-col justify-between h-full w-full">
+          <div className="absolute z-3 inset-0 flex flex-col justify-between h-full w-full overflow-y-auto">
             <div className="flex flex-col w-full">
               <div className="flex justify-between gap-4  items-center mb-10">
                 <HippiusHeader isOnboarding />
@@ -114,7 +114,7 @@ const OnboardingRightPanel = ({
               </div>
             </div>
 
-            <div className="flex gap-20 self-end h-[3.125rem] w-full">
+            <div className="flex gap-[min(5rem,80px)] self-end h-[3.125rem] w-full">
               {!isFirstPanel && (
                 <CardButton
                   className="w-full"

@@ -58,8 +58,8 @@ const BaseAuthLayout = ({
             ></div>
 
             <main
-              className="p-8 lg:p-[5.5rem] items-center justify-between 
-            relative h-full w-full grid grid-cols-1 lg:grid-cols-2 gap-8 2xl:gap-[7.5rem] overflow-y-auto"
+              className="p-[min(2rem,32px)] lg:p-[min(5.5rem,88px)] items-center justify-between 
+            relative h-full w-full grid grid-cols-1 lg:grid-cols-2 gap-[min(2rem,32px)] 2xl:gap-[min(7.5rem,120px)] overflow-y-auto"
             >
               {children}
             </main>
