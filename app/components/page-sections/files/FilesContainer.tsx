@@ -37,7 +37,7 @@ import {
   getViewModePreference,
   saveViewModePreference,
 } from "@/lib/utils/userPreferencesDb";
-import { usePagination } from "@/lib/hooks";
+import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import {
   triggerSyncPathRefreshAtom,
@@ -88,7 +88,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     : isRegularFilesFetching;
   const addButtonRef = useRef<{ openWithFiles(files: FileList): void; openWithPaths(paths: string[]): void; isDialogOpen(): boolean }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
-  const [shouldResetPagination, setShouldResetPagination] = useState(false);
+
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState(
     undefined as string | null | undefined
   );
@@ -250,9 +250,9 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     filterState.fileSizes,
   ]);
 
-  // Shared pagination state between list and card views
-  const { paginatedData, setCurrentPage, currentPage, totalPages } =
-    usePagination(filteredData, 12);
+  // Infinite scroll state for list and card views
+  const { visibleData, hasMore, loadMore, resetScroll } =
+    useInfiniteScroll(filteredData);
 
   // Batch update helper to prevent multiple rapid filter updates
   const updateFilters = useCallback(
@@ -262,11 +262,10 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
         ...updates,
         lastUpdated: Date.now(),
       }));
-      // Always reset pagination when filters change
-      setCurrentPage(1);
-      setShouldResetPagination(true);
+      // Always reset scroll position when filters change
+      resetScroll();
     },
-    [setCurrentPage]
+    [resetScroll]
   );
 
   // Update active filters when filter settings change
@@ -286,9 +285,9 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     filterState.lastUpdated,
   ]);
 
-  // Reset pagination when filters or folder tab change
+  // Reset scroll when filters or folder tab change
   useEffect(() => {
-    setShouldResetPagination(true);
+    resetScroll();
   }, [
     searchTerm,
     filterState.fileTypes,
@@ -297,25 +296,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     filterState.fileSizes,
     filterState.lastUpdated,
     selectedFolderTab,
+    resetScroll,
   ]);
-
-  // Reset pagination when data changes
-  useEffect(() => {
-    // Force reset pagination
-    setShouldResetPagination(true);
-    setCurrentPage(1);
-  }, [setCurrentPage]);
-
-  // Handle pagination reset
-  useEffect(() => {
-    if (shouldResetPagination) {
-      setCurrentPage(1);
-    }
-  }, [shouldResetPagination, setCurrentPage]);
-
-  const handlePaginationReset = useCallback(() => {
-    setShouldResetPagination(false);
-  }, []);
 
   // Handle removing a filter
   const handleRemoveFilter = useCallback(
@@ -818,17 +800,14 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             isRecentFiles={isRecentFiles}
             isLoading={isLoading}
             filteredData={filteredData}
-            displayedData={paginatedData}
+            displayedData={visibleData}
             searchTerm={searchTerm}
             activeFilters={activeFilters}
             viewMode={viewMode}
-            shouldResetPagination={shouldResetPagination}
-            handlePaginationReset={handlePaginationReset}
             error={error}
             addButtonRef={addButtonRef}
-            currentPage={currentPage}
-            totalPages={totalPages}
-            setCurrentPage={setCurrentPage}
+            hasMore={hasMore}
+            loadMore={loadMore}
             isSyncPathEmpty={effectiveSyncPathEmpty}
             onSyncPathConfigured={
               isRecentFiles ? handleNavigateToSettings : handleStartSyncing

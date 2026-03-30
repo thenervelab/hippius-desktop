@@ -126,41 +126,27 @@ const convertBaseWidthsToMode = (baseWidths: Record<string, number>, isSelection
 interface FilesTableProps {
   files: FormattedUserFile[];
   allFiles: FormattedUserFile[];
-  resetPagination?: boolean;
-  onPaginationReset?: () => void;
   isRecentFiles?: boolean;
   sharedState?: FileViewSharedState;
   handleFileDownload: (
     file: FormattedUserFile,
     polkadotAddress: string
   ) => void;
-  currentPage: number;
-  totalPages: number;
-  setCurrentPage: (page: number) => void;
+  hasMore: boolean;
+  loadMore: () => void;
 }
 
 const FilesTable: FC<FilesTableProps> = memo(
   ({
     files,
     allFiles,
-    resetPagination,
-    onPaginationReset,
     isRecentFiles = false,
     sharedState,
     handleFileDownload,
-    currentPage,
-    totalPages,
-    setCurrentPage,
+    hasMore,
+    loadMore,
   }) => {
-    // Use refs to store current values - header function will read from these
-    // This prevents stale closure captures in TanStack Table's cached header functions
-    const currentPageRef = useRef(currentPage);
-    const filesRef = useRef(files);
-
-    // Update refs on every render BEFORE columns are created
-    currentPageRef.current = currentPage;
-    filesRef.current = files;
-
+    const { polkadotAddress } = useWalletAuth();
     // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads
     const snapshot = useSyncSnapshot();
     const enrichedAllFiles = useMemo(() => {
@@ -184,7 +170,27 @@ const FilesTable: FC<FilesTableProps> = memo(
       });
     }, [allFiles, snapshot.isActive, snapshot.files]);
 
-    const { polkadotAddress } = useWalletAuth();
+    // Sentinel ref for infinite scroll
+    const sentinelRef = useRef<HTMLDivElement>(null);
+
+    // IntersectionObserver for infinite scroll
+    useEffect(() => {
+      if (!hasMore) return;
+      const sentinel = sentinelRef.current;
+      if (!sentinel) return;
+
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (entries[0].isIntersecting) {
+            loadMore();
+          }
+        },
+        { rootMargin: "200px" }
+      );
+      observer.observe(sentinel);
+      return () => observer.disconnect();
+    }, [hasMore, loadMore]);
+
     const [sorting, setSorting] = useState<SortingState>([]);
     const [prevFileCount, setPrevFileCount] = useState<number>(0);
     const { getParam } = useUrlParams();
@@ -244,21 +250,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       },
       [handleContextMenu]
     );
-
-    useEffect(() => {
-      if (resetPagination) {
-        if (onPaginationReset) {
-          onPaginationReset();
-        }
-      }
-    }, [resetPagination, setCurrentPage, onPaginationReset]);
-
-    // Handle pagination adjustment when current page becomes invalid
-    useEffect(() => {
-      if (totalPages > 0 && currentPage > totalPages) {
-        setCurrentPage(Math.max(1, totalPages));
-      }
-    }, [totalPages, currentPage, setCurrentPage]);
 
     // Memoize handler functions to maintain stable references
     const handleDownload = useCallback(
@@ -425,13 +416,10 @@ const FilesTable: FC<FilesTableProps> = memo(
           columnHelper.display({
             id: "selection",
             header: () => {
-              // CRITICAL: Read from refs to get latest values, not closure captures
-              const latestFiles = filesRef.current;
-
               return (
                 <div className="flex justify-center items-center h-full">
                   <SelectionHeaderColumn
-                    files={latestFiles}
+                    files={files}
                   />
                 </div>
               );
@@ -676,6 +664,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         handleSetSelectedFile,
         createTableItems,
         isSelectionMode,
+        files,
       ]
     );
 
@@ -853,18 +842,14 @@ const FilesTable: FC<FilesTableProps> = memo(
 
     const table = useReactTable(tableConfig);
 
-    // Get sorted rows and manually paginate them.
+    // Get sorted rows — show all visible items (no client-side slicing).
     // Include enrichedAllFiles in deps so rows recompute when the data source changes
     // (e.g. folder tab switch). useReactTable returns a stable reference, so
     // without enrichedAllFiles this memo would stay stale.
-    const paginatedRows = useMemo(() => {
-      const sortedRows = table.getRowModel().rows;
-      const pageSize = 12; // Use the same page size as the paginated data
-      const start = (currentPage - 1) * pageSize;
-      const end = start + pageSize;
-      return sortedRows.slice(start, end);
+    const visibleRows = useMemo(() => {
+      return table.getRowModel().rows;
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [table, currentPage, enrichedAllFiles]);
+    }, [table, enrichedAllFiles]);
 
     const headerRows = useMemo(
       () =>
@@ -887,7 +872,7 @@ const FilesTable: FC<FilesTableProps> = memo(
 
     const tableBody = useMemo(
       () =>
-        paginatedRows?.map((row) => {
+        visibleRows?.map((row) => {
           const rowData = row.original;
           let rowState: "success" | "pending" | "error" = "success";
 
@@ -958,7 +943,7 @@ const FilesTable: FC<FilesTableProps> = memo(
           );
         }),
       [
-        paginatedRows,
+        visibleRows,
         localHandleContextMenu,
         isSelectionMode,
         toggleFileSelection,
@@ -966,17 +951,6 @@ const FilesTable: FC<FilesTableProps> = memo(
         columnWidths
       ]
     );
-
-    const paginationComponent = useMemo(() => {
-      if (totalPages <= 1) return null;
-      return (
-        <TableModule.Pagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          setPage={setCurrentPage}
-        />
-      );
-    }, [currentPage, totalPages, setCurrentPage]);
 
     const dialogComponent = useMemo(() => {
       if (sharedState || !localIsFileDetailsOpen) return null;
@@ -1004,21 +978,15 @@ const FilesTable: FC<FilesTableProps> = memo(
             className={cn(
               "duration-300 delay-300"
             )}
-            key={`pagination-${currentPage}-${files?.length}-${isSelectionMode}`}
+            key={`table-${files?.length}-${isSelectionMode}`}
           >
-            <TableModule.Table className="w-full table-fixed" key={`table-${currentPage}-${isSelectionMode}`}>
-              <TableModule.THead key={`thead-${currentPage}`}>{headerRows}</TableModule.THead>
-              <TableModule.TBody key={`tbody-${currentPage}`}>{tableBody}</TableModule.TBody>
+            <TableModule.Table className="w-full table-fixed" key={`table-${isSelectionMode}`}>
+              <TableModule.THead>{headerRows}</TableModule.THead>
+              <TableModule.TBody>{tableBody}</TableModule.TBody>
             </TableModule.Table>
           </TableModule.TableWrapper>
-          <div
-            className={cn(
-              "my-8",
-              isSelectionMode && "pb-20" // Add bottom padding when selection mode is active to prevent overlap
-            )}
-          >
-            {paginationComponent}
-          </div>
+          {/* Sentinel element for infinite scroll */}
+          <div ref={sentinelRef} className={cn("h-1", isSelectionMode && "mb-20")} />
         </div>
 
         {/* Selection action bar positioned above pagination */}

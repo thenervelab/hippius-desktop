@@ -36,7 +36,7 @@ import { getFullPath } from "@/app/utils/folderPathUtils";
 import AddFolderToFolderButton from "@/app/components/page-sections/files/AddFolderToFolderButton";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
-import { usePagination } from "@/lib/hooks";
+import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { List } from "lucide-react";
 import {
   getPrivateSyncPath,
@@ -84,7 +84,7 @@ export default function FolderView({
 
   const [searchTerm, setSearchTerm] = useState("");
   const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
-  const [shouldResetPagination, setShouldResetPagination] = useState(false);
+
   const [selectedFileTypes, setSelectedFileTypes] = useState<FileTypes[]>([]);
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedFileSize, setSelectedFileSize] = useState(0);
@@ -104,9 +104,9 @@ export default function FolderView({
     });
   }, [files, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
 
-  // Shared pagination state between list and card views
-  const { paginatedData, setCurrentPage, currentPage, totalPages } =
-    usePagination(filteredData, 12);
+  // Infinite scroll state for list and card views
+  const { visibleData, hasMore, loadMore, resetScroll } =
+    useInfiniteScroll(filteredData);
 
   useEffect(() => {
     const newActiveFilters = generateActiveFilters(
@@ -118,15 +118,8 @@ export default function FolderView({
   }, [selectedFileTypes, selectedDate, selectedFileSize]);
 
   useEffect(() => {
-    setShouldResetPagination(true);
-  }, [searchTerm, selectedFileTypes, selectedDate, selectedFileSize, viewMode]);
-
-  // Handle pagination reset
-  useEffect(() => {
-    if (shouldResetPagination) {
-      setCurrentPage(1);
-    }
-  }, [shouldResetPagination, setCurrentPage]);
+    resetScroll();
+  }, [searchTerm, selectedFileTypes, selectedDate, selectedFileSize, viewMode, resetScroll]);
 
   const loadFolderContents = useCallback(
     async (showLoading = true) => {
@@ -260,10 +253,6 @@ export default function FolderView({
     loadFolderContents(false);
   };
 
-  function handlePaginationReset() {
-    setShouldResetPagination(false);
-  }
-
   const initiateDownloadFolder = async () => {
     try {
       // Ask for output directory — default to Downloads so the dialog
@@ -317,8 +306,8 @@ export default function FolderView({
 
   const handleSearchChange = useCallback((value: string) => {
     setSearchTerm(value);
-    setShouldResetPagination(true);
-  }, []);
+    resetScroll();
+  }, [resetScroll]);
 
   const handleRemoveFilter = useCallback((filter: ActiveFilter) => {
     switch (filter.type) {
@@ -334,8 +323,8 @@ export default function FolderView({
         setSelectedFileSize(0);
         break;
     }
-    setShouldResetPagination(true);
-  }, []);
+    resetScroll();
+  }, [resetScroll]);
 
   useEffect(() => {
     const handleFileDrop = (event: Event) => {
@@ -513,15 +502,12 @@ export default function FolderView({
                 isRecentFiles={false}
                 isLoading={false}
                 filteredData={filteredData}
-                displayedData={paginatedData}
+                displayedData={visibleData}
                 searchTerm={searchTerm}
                 activeFilters={activeFilters}
                 viewMode={viewMode}
-                shouldResetPagination={shouldResetPagination}
-                handlePaginationReset={handlePaginationReset}
-                currentPage={currentPage}
-                totalPages={totalPages}
-                setCurrentPage={setCurrentPage}
+                hasMore={hasMore}
+                loadMore={loadMore}
                 isSyncPathEmpty={isSyncPathEmpty}
               />
             )}

@@ -40,13 +40,10 @@ interface FilesContentProps {
   searchTerm: string;
   activeFilters: ActiveFilter[];
   viewMode: "list" | "card";
-  shouldResetPagination: boolean;
-  handlePaginationReset: () => void;
   error?: unknown;
   addButtonRef?: React.RefObject<{ openWithFiles(files: FileList): void; openWithPaths(paths: string[]): void; isDialogOpen(): boolean } | null>;
-  currentPage: number;
-  totalPages: number;
-  setCurrentPage: (page: number) => void;
+  hasMore: boolean;
+  loadMore: () => void;
   isSyncPathEmpty?: boolean;
   onSyncPathConfigured?: () => void;
 }
@@ -59,13 +56,10 @@ const FilesContent: FC<FilesContentProps> = ({
   searchTerm,
   activeFilters,
   viewMode,
-  shouldResetPagination,
-  handlePaginationReset,
   error,
   addButtonRef,
-  currentPage,
-  totalPages,
-  setCurrentPage,
+  hasMore,
+  loadMore,
   isSyncPathEmpty = false,
   onSyncPathConfigured,
 }) => {
@@ -271,13 +265,10 @@ const FilesContent: FC<FilesContentProps> = ({
           isRecentFiles={isRecentFiles}
           files={displayedData}
           allFiles={filteredData}
-          resetPagination={shouldResetPagination}
-          onPaginationReset={handlePaginationReset}
           handleFileDownload={handleFileDownload}
           sharedState={sharedState}
-          currentPage={currentPage}
-          totalPages={totalPages}
-          setCurrentPage={setCurrentPage}
+          hasMore={hasMore}
+          loadMore={loadMore}
 
         />
       );
@@ -286,13 +277,10 @@ const FilesContent: FC<FilesContentProps> = ({
         <CardView
           isRecentFiles={isRecentFiles}
           files={displayedData}
-          resetPagination={shouldResetPagination}
-          onPaginationReset={handlePaginationReset}
           handleFileDownload={handleFileDownload}
           sharedState={sharedState}
-          currentPage={currentPage}
-          totalPages={totalPages}
-          setCurrentPage={setCurrentPage}
+          hasMore={hasMore}
+          loadMore={loadMore}
 
         />
       );

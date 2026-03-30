@@ -1,4 +1,4 @@
-import React, { FC, useState, useEffect, useCallback, memo, useMemo } from "react";
+import React, { FC, useState, useEffect, useCallback, memo, useMemo, useRef } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,7 +15,6 @@ import { Icons } from "@/components/ui";
 import FileCard from "./FileCard";
 import SelectionActionBar from "../SelectionActionBar";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
-import * as TableModule from "@/components/ui/alt-table";
 import { useRouter } from "next/navigation";
 
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -34,30 +33,45 @@ const TIME_BEFORE_ERR = 30 * 60 * 1000;
 
 interface CardViewProps {
   files: FormattedUserFile[];
-  resetPagination?: boolean;
-  onPaginationReset?: () => void;
   isRecentFiles?: boolean;
   sharedState?: FileViewSharedState;
   handleFileDownload: (
     file: FormattedUserFile,
     polkadotAddress: string
   ) => void;
-  currentPage: number;
-  totalPages: number;
-  setCurrentPage: (page: number) => void;
+  hasMore: boolean;
+  loadMore: () => void;
 }
 
 const CardView: FC<CardViewProps> = ({
   files,
-  resetPagination,
-  onPaginationReset,
   isRecentFiles = false,
   sharedState,
   handleFileDownload,
-  currentPage,
-  totalPages,
-  setCurrentPage,
+  hasMore,
+  loadMore,
 }) => {
+  // Sentinel ref for infinite scroll
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  // IntersectionObserver for infinite scroll
+  useEffect(() => {
+    if (!hasMore) return;
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          loadMore();
+        }
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, loadMore]);
+
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
@@ -136,14 +150,6 @@ const CardView: FC<CardViewProps> = ({
 
   // Ensure files is always an array to prevent undefined errors
 
-
-  useEffect(() => {
-    if (resetPagination) {
-      if (onPaginationReset) {
-        onPaginationReset();
-      }
-    }
-  }, [resetPagination, setCurrentPage, onPaginationReset]);
 
   return (
     <div className="flex flex-col gap-y-8 relative">
@@ -353,15 +359,8 @@ const CardView: FC<CardViewProps> = ({
             })}
           </div>
         </div>
-        <div className="my-8 pb-20">
-          {totalPages > 1 && (
-            <TableModule.Pagination
-              currentPage={currentPage}
-              totalPages={totalPages}
-              setPage={setCurrentPage}
-            />
-          )}
-        </div>
+        {/* Sentinel element for infinite scroll */}
+        <div ref={sentinelRef} className="h-1" />
       </div>
 
       {/* Selection action bar positioned above pagination */}
