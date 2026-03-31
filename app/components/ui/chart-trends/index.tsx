@@ -248,11 +248,14 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
   const scaledYTickLabelProps = useCallback(
     () => {
       const base = yTickLabelProps();
+      const fontSize = typeof base.fontSize === 'number' ? base.fontSize : 10;
+      const dx = typeof base.dx === 'number' ? base.dx : -2;
+      const width = 'width' in base && typeof base.width === 'number' ? base.width : undefined;
       return {
         ...base,
-        fontSize: Math.round((base.fontSize ?? 10) * remScale),
-        dx: Math.round((base.dx ?? -2) * remScale),
-        ...(base.width != null ? { width: Math.round(base.width * remScale) } : {}),
+        fontSize: Math.round(fontSize * remScale),
+        dx: Math.round(dx * remScale),
+        ...(width != null ? { width: Math.round(width * remScale) } : {}),
       };
     },
     [yTickLabelProps, remScale],
