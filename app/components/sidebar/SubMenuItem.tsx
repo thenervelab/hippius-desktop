@@ -55,7 +55,7 @@ const SubMenuItem: React.FC<Props> = ({
       )}
       <div
         className={cn(
-          "absolute left-[3px] bg-primary-50 w-0.5 h-[22px] rounded-3xl",
+          "absolute left-[0.1875rem] bg-primary-50 w-0.5 h-[1.375rem] rounded-3xl",
           (!visiblyActive || isViewingRecentFiles) && "opacity-0 transition-opacity duration-300",
           (!visiblyActive || isViewingRecentFiles) && !comingSoon && "group-hover:opacity-100"
         )}
@@ -82,7 +82,7 @@ const SubMenuItem: React.FC<Props> = ({
         </span>
 
         {comingSoon && (
-          <span className="text-[9px] text-amber-700 px-1.5 py-0.5 rounded-sm whitespace-nowrap absolute right-0 -top-1">
+          <span className="text-[0.5625rem] text-amber-700 px-1.5 py-0.5 rounded-sm whitespace-nowrap absolute right-0 -top-1">
             Coming Soon
           </span>
         )}

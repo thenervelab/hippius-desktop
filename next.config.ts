@@ -40,8 +40,17 @@ const nextConfig = {
         ...(config.resolve.fallback || {}),
         fs: false,
         path: false,
+        crypto: false,
       };
     }
+    // Rewrite node: scheme imports to bare specifiers so fallbacks apply
+    config.plugins = config.plugins || [];
+    const webpack = require("webpack");
+    config.plugins.push(
+      new webpack.NormalModuleReplacementPlugin(/^node:/, (resource: { request: string }) => {
+        resource.request = resource.request.replace(/^node:/, "");
+      })
+    );
     return config;
   },
 };

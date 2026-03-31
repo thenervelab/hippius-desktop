@@ -6,8 +6,8 @@ const h1Variants = cva({
   base: "font-medium ",
   variants: {
     size: {
-      lg: "text-[40px] leading-[48px] md:text-6xl lg:text-7xl 2xl:text-[82px]",
-      md: "text-4xl md:text-6xl lg:text-7xl 2xl:text-[82px]",
+      lg: "text-[2.5rem] leading-[3rem] md:text-6xl lg:text-7xl 2xl:text-[5.125rem]",
+      md: "text-4xl md:text-6xl lg:text-7xl 2xl:text-[5.125rem]",
       sm: "text-[2rem] lg:text-[3.5rem]",
     },
   },

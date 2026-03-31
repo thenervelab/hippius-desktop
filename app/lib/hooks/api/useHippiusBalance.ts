@@ -1,7 +1,10 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { usePolkadotApi } from "@/lib/polkadot-api-context";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { useQuery } from "@tanstack/react-query";
+import { useInvokeQuery } from "./useInvokeQuery";
+
+interface AccountBalance {
+  free: string;
+  reserved: string;
+  frozen: string;
+}
 
 export interface FrameSystemAccountInfo {
   nonce: number;
@@ -17,46 +20,35 @@ export interface FrameSystemAccountInfo {
 }
 
 /**
- * Read `system.account(AccountId32) -> FrameSystemAccountInfo`
- * Returns account info with balance data (free, reserved, frozen)
- * Returns undefined → api not ready or any error
+ * Query account balance via Rust `get_account_balance` command.
+ * Returns the same FrameSystemAccountInfo shape for backward compatibility.
  */
 export function useHippiusBalance() {
-  const { api, isConnected } = usePolkadotApi();
-  const { polkadotAddress } = useWalletAuth();
-
-  return useQuery<FrameSystemAccountInfo | undefined>({
-    queryKey: ["hippius-balance", polkadotAddress],
-    enabled: !!polkadotAddress, // don't run before we have an address
-    refetchInterval: 30_000,
-
-    queryFn: async () => {
-      /* ── Guard: API not ready ───────────────────────────── */
-      if (!api || !isConnected || !polkadotAddress) return undefined;
-
-      try {
-        const accountInfo = await api.query.system.account(polkadotAddress);
-
-        // Convert the account info to a plain object with BigInt values
-        const rawData = accountInfo.toJSON() as any;
-
-        return {
-          nonce: rawData.nonce,
-          consumers: rawData.consumers,
-          providers: rawData.providers,
-          sufficients: rawData.sufficients,
-          data: {
-            free: BigInt(rawData.data.free || 0),
-            reserved: BigInt(rawData.data.reserved || 0),
-            frozen: BigInt(rawData.data.frozen || 0),
-            flags: rawData.data.flags,
-          },
-        };
-      } catch (err) {
-        console.error("system.account query failed:", err);
-        /* any error → treat as no data */
-        return undefined;
-      }
+  return useInvokeQuery<AccountBalance, FrameSystemAccountInfo | undefined>({
+    command: "get_account_balance",
+    queryKey: (addr) => ["hippius-balance", addr],
+    params: (polkadotAddress) => ({ address: polkadotAddress }),
+    options: {
+      refetchInterval: 30_000,
+      select: (balance) => {
+        try {
+          return {
+            nonce: 0,
+            consumers: 0,
+            providers: 0,
+            sufficients: 0,
+            data: {
+              free: BigInt(balance.free),
+              reserved: BigInt(balance.reserved),
+              frozen: BigInt(balance.frozen),
+              flags: "0",
+            },
+          };
+        } catch (err) {
+          console.error("get_account_balance failed:", err);
+          return undefined;
+        }
+      },
     },
   });
 }

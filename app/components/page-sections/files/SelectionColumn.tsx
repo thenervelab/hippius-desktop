@@ -41,7 +41,7 @@ const SelectionHeaderColumnComponent: React.FC<{
     // Check if all files on the CURRENT PAGE are selected
     const allSelected = deletableFiles.length > 0 && deletableFiles.every(file =>
         selectedFiles.some(selectedFile =>
-            selectedFile.actualFileName === file.actualFileName
+            selectedFile.actualFileName === file.actualFileName && selectedFile.label === file.label
         )
     );
 

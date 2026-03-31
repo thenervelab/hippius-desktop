@@ -1,11 +1,12 @@
 /**
  * Token Validation Hook
- * Validates token exists and is not expired when route changes
+ * Validates token exists and is not expired when route changes.
+ * Uses the Rust backend for server-side expiry checking.
  */
 
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
-import { getApiAuth } from "@/app/lib/helpers/sessionStore";
+import { invoke } from "@tauri-apps/api/core";
 
 interface UseTokenValidationConfig {
     onTokenInvalid?: () => Promise<void>;
@@ -13,6 +14,7 @@ interface UseTokenValidationConfig {
 
 export function useTokenValidation(
     isAuthenticated: boolean,
+    accountId: string | null,
     config?: UseTokenValidationConfig
 ) {
     const pathname = usePathname();
@@ -31,20 +33,16 @@ export function useTokenValidation(
             return;
         }
 
+        // Skip if we don't have an account to check
+        if (!accountId) return;
+
         // Validate token only on route change to protected pages
         const validateToken = async () => {
             try {
-                const apiAuth = await getApiAuth();
+                const valid = await invoke<boolean>("is_token_valid", { accountId });
 
-                // No token or token is expired
-                if (!apiAuth?.token) {
-                    console.warn("[TokenValidation] No token found on route:", pathname);
-                    if (config?.onTokenInvalid) await config.onTokenInvalid();
-                    return;
-                }
-
-                if (apiAuth.tokenExpiry && apiAuth.tokenExpiry < Date.now()) {
-                    console.warn("[TokenValidation] Token expired on route:", pathname);
+                if (!valid) {
+                    console.warn("[TokenValidation] Token invalid/expired on route:", pathname);
                     if (config?.onTokenInvalid) await config.onTokenInvalid();
                     return;
                 }
@@ -56,5 +54,5 @@ export function useTokenValidation(
         };
 
         validateToken();
-    }, [pathname, isAuthenticated, config]);
+    }, [pathname, isAuthenticated, accountId, config]);
 }

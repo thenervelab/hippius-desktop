@@ -5,7 +5,7 @@
 /**
  * Builds the folder path for navigation and backend operations
  * @param currentFolderName - The actual name of the current folder
- * @param mainFolderCID - The actual CID of the main folder
+ * @param mainFolderCID - The actual Arion Hash of the main folder
  * @param mainFolderName - The main/root folder name
  * @param existingPath - The existing subfolder path (if any)
  * @returns An object with updated path information

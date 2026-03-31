@@ -92,7 +92,7 @@ const SSHKeysTable: FC<SSHKeysTableProps> = ({
     <div className="flex flex-col gap-y-8">
       <TableModule.TableWrapper className=" duration-300 delay-300">
         {error ? (
-          <div className="w-full h-[800px] flex items-center justify-center p-6">
+          <div className="w-full h-[50rem] flex items-center justify-center p-6">
             <P className="text-error-70 font-medium">
               Oops an error occured...
             </P>
@@ -114,16 +114,16 @@ const SSHKeysTable: FC<SSHKeysTableProps> = ({
             </TableModule.THead>
             <TableModule.TBody>
               <TableModule.SkeletonTableRow
-                rowClassName="h-[69px]"
+                rowClassName="h-[4.3125rem]"
                 rows={10}
                 columns={6}
                 columnWidths={[
-                  "150px",
-                  "250px",
-                  "150px",
-                  "150px",
-                  "150px",
-                  "70px",
+                  "9.375rem",
+                  "15.625rem",
+                  "9.375rem",
+                  "9.375rem",
+                  "9.375rem",
+                  "4.375rem",
                 ]}
               />
             </TableModule.TBody>

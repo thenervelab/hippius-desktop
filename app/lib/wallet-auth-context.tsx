@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import React, {
@@ -9,38 +8,88 @@ import React, {
   useRef,
   useCallback,
 } from "react";
-import { Keyring } from "@polkadot/keyring";
 import {
-  getWalletRecord,
   clearHippiusDesktopDB,
 } from "./helpers/hippiusDesktopDB";
-import {
-  saveSession,
-  getSession,
-  clearSession,
-  clearApiAuth,
-  getApiAuth,
-} from "./helpers/sessionStore";
 
 import { useRouter } from "next/navigation";
+import { logger } from "@/lib/utils/logger";
 
-import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
-import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
-import { useTrayInit } from "./hooks/useTraySync";
-import { cryptoWaitReady } from "@polkadot/util-crypto";
+import { listen } from "@tauri-apps/api/event";
+import { useTrayInit, clearLoginStatusCache } from "./hooks/useTraySync";
+import { tryAutoInitSync } from "./hooks/useHcfsSync";
+import { ensureSyncMnemonic } from "./helpers/ensureSyncMnemonic";
+import { appStore } from "./store/jotaiStore";
+import { migrationCheckAtom } from "./global-atoms/migrationAtoms";
+
+/** Result from Rust login_with_mnemonic / unlock_with_passcode commands */
+interface LoginResult {
+  substrateAddress: string;
+  ethAddress: string;
+  userId: number | string | null;
+  username: string;
+  provider: string;
+  token: string;
+  tokenExpiry: number;
+  isNew: boolean;
+}
+
+/** Result from Rust get_auth_session / get_last_auth_session commands */
+interface AuthSession {
+  authToken: string | null;
+  tokenExpiry: number | null;
+  userId: number | null;
+  username: string | null;
+  provider: string | null;
+  substrateAddress: string | null;
+  logoutTimeMinutes: number | null;
+  lastLoginAt: string | null;
+}
+
+/** Result from Rust get_auth_token command */
+interface ApiAuth {
+  token: string;
+  tokenExpiry: number;
+  userId: number | null;
+  username: string | null;
+}
+
+/** Build an OAuthSession-compatible object from a login/unlock result. */
+function buildOAuthSession(
+  result: LoginResult,
+  providerOverride?: string
+): import("@/app/lib/types/oAuth").OAuthSession {
+  return {
+    token: result.token,
+    userId: typeof result.userId === "number" ? result.userId : 0,
+    username: result.username,
+    provider: (providerOverride ?? result.provider ?? "mnemonic") as import("@/app/lib/types/oAuth").OAuthSession["provider"],
+    expiresAt: new Date(result.tokenExpiry).toISOString(),
+    substrateAddress: result.substrateAddress,
+    isNew: result.isNew,
+  };
+}
+
+/** Signal MigrationChecker to run the single authoritative check_migration call. */
+function triggerMigrationCheck() {
+  appStore.set(migrationCheckAtom, {
+    checked: false,
+    needsMigration: false,
+    fileCount: 0,
+    totalSize: 0,
+    shouldCheck: true,
+  });
+}
 
 interface WalletContextType {
   isAuthenticated: boolean;
-  address: string | null;
   polkadotAddress: string | null;
   isLoading: boolean;
-  walletManager: {
-    polkadotPair: any;
-  } | null;
   authType: "mnemonic" | "oauth" | null;
   oauthSession: import("@/app/lib/types/oAuth").OAuthSession | null;
-  login: (mnemonic: string) => Promise<void>;
+  getMnemonic: () => Promise<string | null>;
+  login: (mnemonic: string, referralCode?: string | null) => Promise<void>;
   setOAuthSession: (
     session: import("@/app/lib/types/oAuth").OAuthSession
   ) => Promise<void>;
@@ -58,33 +107,9 @@ interface WalletContextType {
 }
 const MAX_DELAY = 2_147_483_647; // ~24.8 days
 
-// Helper function to validate token
-const isTokenValid = (token: string | null | undefined, expiresAt?: string): boolean => {
-  // Check if token exists and is not empty
-  if (!token || token.trim() === "") {
-    return false;
-  }
-
-  // Check if expiration date is provided and has passed
-  if (expiresAt) {
-    try {
-      const expirationTime = new Date(expiresAt).getTime();
-      const currentTime = Date.now();
-
-      if (currentTime >= expirationTime) {
-        console.log("[WalletAuth] Token has expired");
-        return false;
-      }
-    } catch (err) {
-      console.error("[WalletAuth] Failed to parse expiration date:", err);
-      return false;
-    }
-  }
-
-  return true;
-};
-
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
+
+const TOKEN_REFRESH_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
 export function WalletAuthProvider({
   children,
@@ -94,12 +119,8 @@ export function WalletAuthProvider({
   const router = useRouter();
 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [address, setAddress] = useState<string | null>(null);
   const [polkadotAddress, setPolkadotAddress] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [walletManager, setWalletManager] = useState<{
-    polkadotPair: any;
-  } | null>(null);
   const [authType, setAuthType] = useState<"mnemonic" | "oauth" | null>(null);
   const [oauthSession, setOAuthSessionState] = useState<
     import("@/app/lib/types/oAuth").OAuthSession | null
@@ -110,39 +131,62 @@ export function WalletAuthProvider({
 
   const syncInitialized = useRef(false);
   const logoutTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Ref mirrors polkadotAddress so scheduleLogout's timer callback
+  // always reads the current value (avoids stale closure).
+  const polkadotAddressRef = useRef<string | null>(null);
+  // Keep the login mnemonic in-memory so getMnemonic() can return it
+  // even before a Drive is initialized (e.g. on a new device before
+  // the user creates their first sync folder).
+  const sessionMnemonicRef = useRef<string | null>(null);
 
-  const ensureTempAuthKey = useCallback(
-    async (accountId?: string | null, token?: string | null) => {
-      if (!accountId || !token) return;
-      try {
-        await invoke("save_temp_auth_key_command", {
-          accountId,
-          tempAuthKey: token,
-        });
-      } catch (err) {
-        console.error("[WalletAuth] Failed to persist temp auth key:", err);
+  useEffect(() => {
+    polkadotAddressRef.current = polkadotAddress;
+  }, [polkadotAddress]);
+
+  const getMnemonic = useCallback(async (): Promise<string | null> => {
+    // 1. Try the Rust Drive backend (master mnemonic on disk)
+    try {
+      if (polkadotAddress) {
+        const result = await invoke<string>("get_drive_mnemonic", { accountId: polkadotAddress });
+        if (result) return result;
       }
-    },
-    []
-  );
+    } catch {
+      // Drive not initialized or password unavailable — fall through
+    }
+    // 2. Fall back to the in-memory login mnemonic. This covers the
+    //    case where the user logged in on a new device but hasn't
+    //    created a sync folder yet (no Drive on disk).
+    return sessionMnemonicRef.current;
+  }, [polkadotAddress]);
 
   const logout = useCallback(
     async (redirectPath?: string) => {
       try {
-        console.log("[WalletAuth] Starting sync cleanup...");
-        invoke("cleanup_sync");
-        console.log("[WalletAuth] Sync cleanup completed");
+        logger.debug("[WalletAuth] Starting sync cleanup...");
+        await invoke("stop_sync").catch(() => { });
+        logger.debug("[WalletAuth] Sync cleanup completed");
 
-        await clearSession();
-        await clearApiAuth();
+        // Read from ref so timer callbacks get the current address
+        const currentAddress = polkadotAddressRef.current;
+        if (currentAddress) {
+          await invoke("auth_logout", { accountId: currentAddress }).catch((err: unknown) =>
+            console.warn("[WalletAuth] auth_logout failed:", err)
+          );
+        }
 
-        // Clear OAuth session and token if present
+        // Clear OAuth session if present
         if (typeof window !== "undefined") {
           localStorage.removeItem("hippius_oauth_session");
           localStorage.removeItem("hippius_oauth_session_expiry");
-          localStorage.removeItem("hippius_token");
-          localStorage.removeItem("hippius_token_expiry");
+          localStorage.removeItem("hippius_oauth_provider");
         }
+
+        // Clear sync progress data to prevent cross-account data leaking
+        await invoke("sp_clear_all_data").catch(() => {});
+
+        // Immediately invalidate login status cache so the tray watcher
+        // picks up the logged-out state on its next 2-second tick.
+        clearLoginStatusCache();
       } catch (error) {
         console.error("Failed to cleanup sync on logout:", error);
       }
@@ -153,16 +197,14 @@ export function WalletAuthProvider({
         logoutTimerRef.current = null;
       }
 
-      setAddress(null);
       setPolkadotAddress(null);
-      setWalletManager(null);
       setAuthType(null);
       setOAuthSessionState(null);
       setIsAuthenticated(false);
       setSessionTimeRemaining(null);
-      syncInitialized.current = false; // Reset sync flag for next login
+      syncInitialized.current = false;
+      sessionMnemonicRef.current = null;
 
-      // Optionally redirect after logout
       if (redirectPath && typeof window !== "undefined") {
         router.push(redirectPath);
       }
@@ -183,8 +225,25 @@ export function WalletAuthProvider({
     }, delay);
   }
 
+  /** Start sync for the given account, called after any successful auth */
+  function initSync(accountId: string, mnemonic?: string) {
+    if (syncInitialized.current) return;
+    syncInitialized.current = true;
+    // Store the mnemonic so getMnemonic() can return it later
+    // (e.g. when migration needs it for OAuth users)
+    if (mnemonic && !sessionMnemonicRef.current) {
+      sessionMnemonicRef.current = mnemonic;
+    }
+    invoke("stop_sync").catch(() => { });
+    tryAutoInitSync(accountId, mnemonic).catch((err) =>
+      console.error("[WalletAuth] Failed to start sync:", err)
+    );
+    triggerMigrationCheck();
+  }
+
+  // Boot: restore session from Rust DB or localStorage OAuth session
   useEffect(() => {
-    const bootOnce = { done: false }; // local guard
+    const bootOnce = { done: false };
 
     const setupSessionTimeout = async () => {
       if (bootOnce.done) return;
@@ -203,25 +262,27 @@ export function WalletAuthProvider({
         );
 
         if (storedSession && storedExpiry) {
-          // Parse expiry - handle both ISO string and timestamp formats
           const expiryTime = isNaN(Number(storedExpiry))
             ? new Date(storedExpiry).getTime()
             : parseInt(storedExpiry, 10);
 
-          // Check if session is still valid
           if (Date.now() < expiryTime) {
             try {
               const oauthSessionData = JSON.parse(storedSession);
 
-              // Validate token before restoring session
-              if (!isTokenValid(oauthSessionData.token, oauthSessionData.expiresAt)) {
-                console.log("[WalletAuth] Token is invalid or expired, clearing session");
-                localStorage.removeItem("hippius_oauth_session");
-                localStorage.removeItem("hippius_oauth_session_expiry");
-                localStorage.removeItem("hippius_token");
-                localStorage.removeItem("hippius_token_expiry");
-                await logout("/login");
-                return;
+              // Validate token via Rust if we have a substrate address
+              if (oauthSessionData.substrateAddress) {
+                const apiAuth = await invoke<ApiAuth | null>(
+                  "get_auth_token",
+                  { accountId: oauthSessionData.substrateAddress }
+                );
+                if (!apiAuth) {
+                  logger.debug("[WalletAuth] Token expired in DB, clearing session");
+                  localStorage.removeItem("hippius_oauth_session");
+                  localStorage.removeItem("hippius_oauth_session_expiry");
+                  await logout("/login");
+                  return;
+                }
               }
 
               console.log(
@@ -229,135 +290,98 @@ export function WalletAuthProvider({
                 oauthSessionData.username
               );
 
-              // Restore OAuth session state
               setOAuthSessionState(oauthSessionData);
               setPolkadotAddress(oauthSessionData.substrateAddress || null);
               setAuthType(
                 oauthSessionData.provider === "mnemonic" ? "mnemonic" : "oauth"
               );
               setIsAuthenticated(true);
-              await ensureTempAuthKey(
-                oauthSessionData.substrateAddress,
-                oauthSessionData.token
-              );
 
-              // Initialize sync for OAuth session if not already started
-              if (
-                oauthSessionData.substrateAddress &&
-                !syncInitialized.current
-              ) {
-                try {
-                  // await invoke("initialize_sync", {
-                  //   accountId: oauthSessionData.substrateAddress,
-                  //   tempAuthKey: oauthSessionData.token || null,
-                  // });
-                  await invoke("stop_sync_for_scope_command", {
-                    scope: "public",
-                  });
-                  await invoke("stop_sync_for_scope_command", {
-                    scope: "private",
-                  });
-                  syncInitialized.current = true;
-                } catch (err) {
-                  console.error("[WalletAuth] Failed to start sync for OAuth restore:", err);
-                }
-              }
-
-              // For mnemonic-based auth, also restore mnemonic from database for sync
-              if (oauthSessionData.provider === "mnemonic") {
-                const mnemonicSession = await getSession();
-                if (mnemonicSession && mnemonicSession.mnemonic) {
-                  console.log(
-                    "[WalletAuth] Restoring mnemonic session for sync"
-                  );
-                  await cryptoWaitReady();
-                  const keyring = new Keyring({ type: "sr25519" });
-                  const pair = keyring.addFromMnemonic(
-                    mnemonicSession.mnemonic
-                  );
-
-                  setWalletManager({ polkadotPair: pair });
-
-                  // Initialize sync
-                  if (!syncInitialized.current) {
-                    // await invoke("initialize_sync", {
-                    //   accountId: pair.address,
-                    //   tempAuthKey: oauthSessionData.token || null,
-                    // });
-                    await invoke("stop_sync_for_scope_command", {
-                      scope: "public",
-                    });
-                    await invoke("stop_sync_for_scope_command", {
-                      scope: "private",
-                    });
-                    syncInitialized.current = true;
+              // OAuth sessions rely on server-side token expiry (30 days)
+              // rather than a frontend logout timer. Token validity is
+              // checked via get_auth_token on each boot.
+              if (oauthSessionData.substrateAddress) {
+                if (oauthSessionData.provider === "mnemonic") {
+                  initSync(oauthSessionData.substrateAddress);
+                } else {
+                  try {
+                    const mnemonic = await ensureSyncMnemonic(oauthSessionData.substrateAddress);
+                    initSync(oauthSessionData.substrateAddress, mnemonic);
+                  } catch (err) {
+                    console.error("[WalletAuth] Failed to start sync for OAuth restore:", err);
                   }
-                  console.log(
-                    "[WalletAuth] ✅ Mnemonic session restored with sync"
-                  );
                 }
               }
 
-              console.log("[WalletAuth] ✅ OAuth session restored");
-              return; // Skip mnemonic-only session check
+              logger.debug("[WalletAuth] OAuth session restored");
+              return;
             } catch (error) {
               console.error(
                 "[WalletAuth] Failed to restore OAuth session:",
                 error
               );
-              // Clear invalid session data
               localStorage.removeItem("hippius_oauth_session");
               localStorage.removeItem("hippius_oauth_session_expiry");
-              localStorage.removeItem("hippius_token");
-              localStorage.removeItem("hippius_token_expiry");
             }
           } else {
-            console.log("[WalletAuth] OAuth session expired, clearing");
+            logger.debug("[WalletAuth] OAuth session expired, clearing");
             localStorage.removeItem("hippius_oauth_session");
             localStorage.removeItem("hippius_oauth_session_expiry");
-            localStorage.removeItem("hippius_token");
-            localStorage.removeItem("hippius_token_expiry");
           }
         }
       }
 
-      // Check for mnemonic session (legacy or fallback)
-      const session = await getSession();
-      if (!session || !session.mnemonic) {
+      // Fall back to Rust DB session (mnemonic-based logins)
+      const lastSession = await invoke<AuthSession | null>("get_last_auth_session");
+      if (!lastSession || !lastSession.authToken) {
         setSessionTimeRemaining(null);
         return;
       }
 
-      // Validate token from API auth if it exists
-      const apiAuth = await getApiAuth();
-
-      // If there's a mnemonic session, we must have a valid token
-      if (!apiAuth?.token || (apiAuth.tokenExpiry && apiAuth.tokenExpiry < Date.now())) {
-        console.log("[WalletAuth] No token or token expired for mnemonic session, redirecting to login");
-        await clearApiAuth();
-        localStorage.removeItem("hippius_token");
-        localStorage.removeItem("hippius_token_expiry");
+      // Validate token expiry via Rust
+      if (lastSession.tokenExpiry && lastSession.tokenExpiry < Date.now()) {
+        logger.debug("[WalletAuth] Token expired for session, redirecting to login");
+        if (lastSession.substrateAddress) {
+          await invoke("clear_auth_session", { accountId: lastSession.substrateAddress }).catch((err: unknown) =>
+            console.warn("[WalletAuth] Failed to clear expired auth session:", err)
+          );
+        }
         await logout("/login");
         return;
       }
 
-      // Don't leak mnemonic in logs/toasts
-      // toast.success("Session restored");  // optional
+      // Session exists with valid token — restore state.
+      // Can't derive keypair without plaintext mnemonic, so just mark
+      // authenticated. The user will get a passcode prompt for staking.
+      setIsAuthenticated(true);
+      if (lastSession.substrateAddress) {
+        setPolkadotAddress(lastSession.substrateAddress);
+      }
+      setAuthType(lastSession.provider === "oauth" ? "oauth" : "mnemonic");
 
-      const timeRemaining = session.logoutTimeStamp - Date.now();
-      setSessionTimeRemaining(Math.max(timeRemaining, 0));
-
-      if (timeRemaining <= 0 && !isAuthenticated) {
-        await logout();
-        return;
+      // Build OAuthSession so the API Token settings tab can display the token
+      if (lastSession.authToken) {
+        setOAuthSessionState({
+          token: lastSession.authToken,
+          userId: lastSession.userId ?? 0,
+          username: lastSession.username ?? "",
+          provider: (lastSession.provider as import("@/app/lib/types/oAuth").OAuthSession["provider"]) ?? "mnemonic",
+          expiresAt: lastSession.tokenExpiry ? new Date(lastSession.tokenExpiry).toISOString() : "",
+          substrateAddress: lastSession.substrateAddress ?? undefined,
+          isNew: false,
+        });
       }
 
-      // Re-adopt the session minutes to avoid -1 bug
-      const ok = await setSession(
-        session.mnemonic,
-        session.logoutTimeInMinutes
-      );
-      if (ok) router.push("/");
+      const effMinutes = lastSession.logoutTimeMinutes ?? 1440;
+      const timeRemaining = effMinutes === -1 ? Infinity : effMinutes * 60_000;
+      setSessionTimeRemaining(timeRemaining === Infinity ? null : timeRemaining);
+      scheduleLogout(timeRemaining);
+
+      if (lastSession.substrateAddress) {
+        initSync(lastSession.substrateAddress);
+      }
+
+      router.push("/");
     };
 
     setupSessionTimeout();
@@ -368,24 +392,79 @@ export function WalletAuthProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logout, router]);
 
+  // Silently refresh the auth token when the sync server returns 401.
+  // Rust handles the entire challenge-response flow — no frontend crypto needed.
+  const refreshingTokenRef = useRef(false);
+  const lastRefreshAttemptRef = useRef(0);
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+
+    listen<{ label: string }>("hcfs_auth_token_expired", async () => {
+      const now = Date.now();
+      const elapsed = now - lastRefreshAttemptRef.current;
+      if (
+        refreshingTokenRef.current ||
+        !isAuthenticated ||
+        !polkadotAddress ||
+        elapsed < TOKEN_REFRESH_COOLDOWN_MS
+      ) {
+        return;
+      }
+      refreshingTokenRef.current = true;
+      logger.debug("[WalletAuth] Auth token expired, attempting silent refresh");
+
+      try {
+        await invoke("refresh_auth_token", { accountId: polkadotAddress });
+        lastRefreshAttemptRef.current = Date.now();
+        logger.debug("[WalletAuth] Auth token refreshed successfully");
+      } catch (err) {
+        console.error("[WalletAuth] Silent token refresh failed:", err);
+      } finally {
+        refreshingTokenRef.current = false;
+      }
+    }).then((u) => {
+      if (cancelled) {
+        u();
+      } else {
+        unlisten = u;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [isAuthenticated, polkadotAddress]);
+
   const unlockWithPasscode = async (
     passcode: string,
     logoutTimeInMinutes?: number
   ): Promise<boolean> => {
+    if (!polkadotAddress) return false;
     setIsLoading(true);
     try {
-      const record = await getWalletRecord();
-      if (!record) throw new Error("No wallet record found");
+      const result = await invoke<LoginResult>("unlock_with_passcode", {
+        accountId: polkadotAddress,
+        passcode,
+        logoutTimeMinutes: logoutTimeInMinutes ?? 1440,
+      });
 
-      if (hashPasscode(passcode) !== record.passcodeHash)
-        throw new Error("Incorrect passcode");
-      await cryptoWaitReady();
-      const mnemonic = decryptMnemonic(record.encryptedMnemonic, passcode);
-      if (!isMnemonicValid(mnemonic)) throw new Error("Decryption failed");
+      sessionMnemonicRef.current = null; // Rust holds it now
+      setPolkadotAddress(result.substrateAddress);
+      setAuthType("mnemonic");
+      setIsAuthenticated(true);
 
-      // check that session actually initialized
-      const sessionOk = await setSession(mnemonic, logoutTimeInMinutes);
-      if (!sessionOk) throw new Error("Session setup failed");
+      if (result.token) {
+        setOAuthSessionState(buildOAuthSession(result, "mnemonic"));
+      }
+
+      const effMinutes = logoutTimeInMinutes ?? 1440;
+      const timeRemaining = effMinutes === -1 ? Infinity : effMinutes * 60_000;
+      setSessionTimeRemaining(timeRemaining === Infinity ? null : timeRemaining);
+      scheduleLogout(timeRemaining);
+
+      initSync(result.substrateAddress);
 
       return true;
     } catch (err) {
@@ -402,167 +481,79 @@ export function WalletAuthProvider({
     inputMnemonic: string,
     logoutTimeInMinutes?: number
   ): Promise<boolean> => {
-    if (!isMnemonicValid(inputMnemonic)) {
-      console.error("[setSession] Invalid mnemonic");
-      return false;
-    }
-    await cryptoWaitReady();
+    sessionMnemonicRef.current = inputMnemonic;
     try {
-      const keyring = new Keyring({ type: "sr25519" });
-      const pair = keyring.addFromMnemonic(inputMnemonic);
+      // Validate mnemonic in Rust
+      const valid = await invoke<boolean>("validate_mnemonic", { mnemonic: inputMnemonic });
+      if (!valid) {
+        console.error("[setSession] Invalid mnemonic");
+        return false;
+      }
 
-      setPolkadotAddress(pair.address);
-      setWalletManager({ polkadotPair: pair });
+      // Full login via Rust: derive keys + challenge-response + persist session
+      const result = await invoke<LoginResult>("login_with_mnemonic", {
+        mnemonic: inputMnemonic,
+        logoutTimeMinutes: logoutTimeInMinutes ?? 1440,
+      });
+
+      setPolkadotAddress(result.substrateAddress);
+      setAuthType("mnemonic");
       setIsAuthenticated(true);
+
+      if (result.token) {
+        setOAuthSessionState(buildOAuthSession(result, "mnemonic"));
+      }
 
       if (logoutTimerRef.current) {
         clearTimeout(logoutTimerRef.current);
         logoutTimerRef.current = null;
       }
 
-      // Persist session and get timestamp
-      const logoutTimeStamp = await saveSession(
-        inputMnemonic,
-        logoutTimeInMinutes
-      );
+      const effMinutes = logoutTimeInMinutes ?? 1440;
+      const timeRemaining = effMinutes === -1 ? Infinity : effMinutes * 60_000;
+      setSessionTimeRemaining(timeRemaining === Infinity ? null : timeRemaining);
+      scheduleLogout(timeRemaining);
 
-      // Validate API token if it exists
-      const apiAuth = await getApiAuth();
-      if (!apiAuth?.token || (apiAuth.tokenExpiry && apiAuth.tokenExpiry < Date.now())) {
-        console.error("[setSession] No token or token expired");
-        await clearApiAuth();
-        localStorage.removeItem("hippius_token");
-        localStorage.removeItem("hippius_token_expiry");
-        setPolkadotAddress(null);
-        setWalletManager(null);
-        setIsAuthenticated(false);
-        return false;
-      }
-
-      const timeRemaining = +logoutTimeStamp - Date.now();
-      setSessionTimeRemaining(timeRemaining);
-
-      // If minutes === -1, we won't schedule; else schedule in safe chunks
-      const effMinutes =
-        logoutTimeInMinutes ??
-        (await getSession())?.logoutTimeInMinutes ??
-        1440;
-
-      scheduleLogout(effMinutes === -1 ? Infinity : timeRemaining);
-
-      if (!syncInitialized.current) {
-        // await invoke("initialize_sync", {
-        //   accountId: pair.address,
-        //   tempAuthKey: null,
-        // });
-        await invoke("stop_sync_for_scope_command", {
-          scope: "public",
-        });
-        await invoke("stop_sync_for_scope_command", {
-          scope: "private",
-        });
-        syncInitialized.current = true;
-      }
+      initSync(result.substrateAddress, inputMnemonic);
 
       return true;
     } catch (err) {
       console.error("[setSession] ", err);
       setPolkadotAddress(null);
-      setWalletManager(null);
       setIsAuthenticated(false);
       return false;
     }
   };
 
-  // Mnemonic login with challenge-based authentication
-  const login = async (inputMnemonic: string): Promise<void> => {
+  // Mnemonic login — all crypto happens in Rust
+  const login = async (inputMnemonic: string, referralCode?: string | null): Promise<void> => {
     setIsLoading(true);
+    sessionMnemonicRef.current = inputMnemonic;
     try {
-      console.log("[WalletAuth] Starting mnemonic login with challenge");
+      logger.debug("[WalletAuth] Starting mnemonic login via Rust");
 
-      // Wait for crypto WASM to be ready
-      await cryptoWaitReady();
-
-      // Import viem for Ethereum account
-      const { mnemonicToAccount } = await import("viem/accounts");
-
-      // Create Polkadot account
-      const keyring = new Keyring({ type: "sr25519" });
-      const polkadotPair = keyring.addFromMnemonic(inputMnemonic);
-      const polkadotAddr = polkadotPair.address;
-
-      // Create Ethereum account
-      const ethAccount = mnemonicToAccount(inputMnemonic);
-      const ethAddress = ethAccount.address;
-
-      console.log("[WalletAuth] Derived addresses:", {
-        eth: ethAddress,
-        polkadot: polkadotAddr,
+      const result = await invoke<LoginResult>("login_with_mnemonic", {
+        mnemonic: inputMnemonic,
+        referralCode: referralCode ?? null,
+        logoutTimeMinutes: -1,
       });
 
-      // Import auth service dynamically
-      const { authService } = await import("./services/authService");
-
-      // Request challenge
-      const challengeData = await authService.requestChallenge(
-        ethAddress,
-        polkadotAddr
-      );
-      console.log("[WalletAuth] Got challenge:", challengeData.message);
-
-      // Sign challenge
-      const signature = await ethAccount.signMessage({
-        message: challengeData.message,
+      logger.debug("[WalletAuth] Mnemonic login successful:", {
+        substrate: result.substrateAddress,
+        eth: result.ethAddress,
       });
-      console.log("[WalletAuth] Generated signature");
 
-      // Verify signature and get session
-      await authService.verifySignature({
-        signature,
-        address: ethAddress,
-        substrateAddress: polkadotAddr,
-        referralCode: null,
-      });
-      console.log("[WalletAuth] Signature verified");
+      const session = buildOAuthSession(result, "mnemonic");
 
-      // Get session from auth service (already stored)
-      const session = authService.getSession();
-      if (!session) {
-        throw new Error("Session not stored properly after verification");
-      }
-
-      console.log("[WalletAuth] Mnemonic login successful");
-
-      // Update state
-      setPolkadotAddress(polkadotAddr);
-      setWalletManager({ polkadotPair });
+      setPolkadotAddress(result.substrateAddress);
       setOAuthSessionState(session);
       setAuthType("mnemonic");
       setIsAuthenticated(true);
-      await saveSession(inputMnemonic, -1);
 
-      // Initialize sync with the mnemonic
-      if (!syncInitialized.current) {
-        // await invoke("initialize_sync", {
-        //   accountId: polkadotAddr,
-        //   tempAuthKey: session.token || null,
-        // });
-        await invoke("stop_sync_for_scope_command", {
-          scope: "public",
-        });
-        await invoke("stop_sync_for_scope_command", {
-          scope: "private",
-        });
-        syncInitialized.current = true;
-      }
-
-      // Ensure temp auth key is stored for S3 access if no master token yet
-      await ensureTempAuthKey(polkadotAddr, session.token);
+      initSync(result.substrateAddress, inputMnemonic);
     } catch (error) {
       console.error("[WalletAuth] Login failed:", error);
-      // Clear sensitive data on error
       setPolkadotAddress(null);
-      setWalletManager(null);
       setAuthType(null);
       setIsAuthenticated(false);
       throw error;
@@ -575,12 +566,18 @@ export function WalletAuthProvider({
   const setOAuthSession = async (
     session: import("@/app/lib/types/oAuth").OAuthSession
   ) => {
-    console.log("[WalletAuth] Setting OAuth session");
+    logger.debug("[WalletAuth] Setting OAuth session");
 
-    // Validate token before setting session
-    if (!isTokenValid(session.token, session.expiresAt)) {
-      console.error("[WalletAuth] Invalid or expired token, rejecting OAuth session");
+    // Validate token
+    if (!session.token || session.token.trim() === "") {
+      console.error("[WalletAuth] Invalid token, rejecting OAuth session");
       throw new Error("Token is invalid or expired");
+    }
+
+    // Persist to localStorage after validation
+    if (typeof window !== "undefined") {
+      localStorage.setItem("hippius_oauth_session", JSON.stringify(session));
+      localStorage.setItem("hippius_oauth_session_expiry", session.expiresAt);
     }
 
     setOAuthSessionState(session);
@@ -588,28 +585,11 @@ export function WalletAuthProvider({
     setAuthType("oauth");
     setIsAuthenticated(true);
 
-    console.log("[WalletAuth] ✅ OAuth session persisted and state updated");
+    logger.debug("[WalletAuth] OAuth session persisted and state updated");
 
-    // Ensure temp auth key is stored for S3 access if no master token yet
-    await ensureTempAuthKey(session.substrateAddress, session.token);
-
-    // Kick off sync for OAuth login if not already started
     if (session.substrateAddress && !syncInitialized.current) {
-      try {
-        // await invoke("initialize_sync", {
-        //   accountId: session.substrateAddress,
-        //   tempAuthKey: session.token || null,
-        // });
-        await invoke("stop_sync_for_scope_command", {
-          scope: "public",
-        });
-        await invoke("stop_sync_for_scope_command", {
-          scope: "private",
-        });
-        syncInitialized.current = true;
-      } catch (err) {
-        console.error("[WalletAuth] Failed to start sync for OAuth login:", err);
-      }
+      const mnemonic = await ensureSyncMnemonic(session.substrateAddress);
+      initSync(session.substrateAddress, mnemonic);
     }
   };
 
@@ -619,18 +599,17 @@ export function WalletAuthProvider({
     await logout();
   };
 
-  useTrayInit(polkadotAddress || "");
+  useTrayInit(isAuthenticated);
 
   return (
     <WalletContext.Provider
       value={{
         isAuthenticated,
-        address,
         polkadotAddress,
         isLoading,
-        walletManager,
         authType,
         oauthSession,
+        getMnemonic,
         login,
         setOAuthSession,
         setSession,

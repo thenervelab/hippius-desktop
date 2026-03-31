@@ -1,5 +1,5 @@
-// lib/hooks/useUserReferrals.ts
 import { useQuery } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 export interface ReferralEvent {
@@ -16,7 +16,10 @@ export interface UserReferralsData {
   referralCodes: string[];
 }
 
-const RPC_URL = "https://rpc.hippius.network";
+interface ReferralLink {
+  code: string;
+  reward: string;
+}
 
 export const useUserReferrals = () => {
   const { polkadotAddress } = useWalletAuth();
@@ -31,50 +34,16 @@ export const useUserReferrals = () => {
         throw new Error("No address provided");
       }
 
-      // start with the defaults
-      const dataToReturn: UserReferralsData = {
+      const links = await invoke<ReferralLink[]>("get_referral_links", {
+        address: polkadotAddress,
+      });
+
+      return {
         referralHistory: [],
         totalReferrals: 0,
         totalRewards: "0",
-        referralCodes: []
+        referralCodes: links.map((l) => l.code),
       };
-
-      // 1) fetch on-chain data here if you need to populate
-      //    referralHistory, totalReferrals, totalRewards
-      //    e.g. via api.query.credits.*
-      //    For now we leave them as defaults.
-
-      // 2) fetch referralCodes via JSON-RPC
-      const res = await fetch(RPC_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "get_referral_codes",
-          params: [polkadotAddress],
-          id: 1
-        })
-      });
-      if (!res.ok) {
-        throw new Error(`RPC error ${res.status}`);
-      }
-
-      const rpc = (await res.json()) as {
-        jsonrpc: string;
-        result: number[][];
-        error?: { code: number; message: string };
-      };
-      if (rpc.error) {
-        throw new Error(rpc.error.message || "RPC returned an error");
-      }
-
-      // decode each array of byte-values into a UTF-8 string
-      const decoder = new TextDecoder();
-      dataToReturn.referralCodes = rpc.result.map((bytes) =>
-        decoder.decode(new Uint8Array(bytes))
-      );
-
-      return dataToReturn;
-    }
+    },
   });
 };

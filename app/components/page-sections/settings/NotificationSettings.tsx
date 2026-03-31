@@ -15,6 +15,7 @@ import {
 const NotificationSettings: React.FC = () => {
   const { preferences, savePreferences } = useNotificationPreferences();
   const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
+  const [isSaving, setIsSaving] = useState(false);
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
   const refreshNotifications = useSetAtom(refreshNotificationsAtom);
 
@@ -52,15 +53,24 @@ const NotificationSettings: React.FC = () => {
     setCheckedItems(noneSelected);
   };
 
-  const handleSaveChanges = async () => {
-    const success = await savePreferences(checkedItems);
-    if (success) {
-      await refreshEnabledTypes();
-      await refreshNotifications();
+  // Check if preferences have changed from their original values
+  const hasChanged = preferences.length > 0 && preferences.some(
+    (item) => checkedItems[item.id] !== item.enabled
+  );
 
-      toast.success("Notification preferences saved successfully");
-    } else {
-      toast.error("Failed to save notification preferences");
+  const handleSaveChanges = async () => {
+    setIsSaving(true);
+    try {
+      const success = await savePreferences(checkedItems);
+      if (success) {
+        await refreshEnabledTypes();
+        await refreshNotifications();
+        toast.success("Notification preferences saved successfully");
+      } else {
+        toast.error("Failed to save notification preferences");
+      }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -73,24 +83,38 @@ const NotificationSettings: React.FC = () => {
             className="flex flex-col w-full border broder-grey-80 rounded-lg p-4 relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover"
           >
             <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
-              <SectionHeader
-                Icon={Icons.Notification}
-                title="Notification Preferences"
-                subtitle="Choose which updates you'd like to receive in your inbox. You're in control—check only the notifications that matter to you."
-                info="Customize which events trigger notifications to stay informed about activity relevant to you. These settings control in-app notifications that appear within the application. Your preferences can be updated anytime."
-                learnMoreUrl="https://docs.hippius.com/use/desktop/settings#notifications"
-              />
+              <div className="w-full flex justify-between gap-4">
+                <SectionHeader
+                  Icon={Icons.Notification}
+                  title="Notification Preferences"
+                  subtitle="Choose which updates you'd like to receive in your inbox. You're in control—check only the notifications that matter to you."
+                  info="Customize which events trigger notifications to stay informed about activity relevant to you. These settings control in-app notifications that appear within the application. Your preferences can be updated anytime."
+                  learnMoreUrl="https://docs.hippius.com/use/desktop/settings#notifications"
+                />
+                <CardButton
+                  className="max-w-[10rem] h-[2.625rem] shrink-0"
+                  variant="dialog"
+                  disabled={isSaving || !hasChanged}
+                  onClick={handleSaveChanges}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center text-base leading-6 font-medium">
+                      {isSaving ? "Saving..." : "Save"}
+                    </span>
+                  </div>
+                </CardButton>
+              </div>
             </RevealTextLine>
 
             <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
-              <div className="mt-12 flex">
+              <div className="mt-4 flex">
                 <button
                   onClick={handleSelectAll}
                   className="text-primary-50 hover:text-primary-40 text-sm font-medium"
                 >
                   Select All
                 </button>
-                <div className="w-[2px] bg-grey-80 mx-4"></div>
+                <div className="w-[0.125rem] bg-grey-80 mx-4"></div>
 
                 <button
                   onClick={handleSelectNone}
@@ -106,7 +130,7 @@ const NotificationSettings: React.FC = () => {
                 {preferences.map((item) => (
                   <div key={item.id} className="flex items-start">
                     <Checkbox.Root
-                      className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-grey-90 my-[3px] data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50"
+                      className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-grey-90 my-[0.1875rem] data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50"
                       checked={checkedItems[item.id] ?? false}
                       onCheckedChange={() => handleCheckboxChange(item.id)}
                       id={item.id}
@@ -118,7 +142,7 @@ const NotificationSettings: React.FC = () => {
                     <div className="ml-2">
                       <label
                         htmlFor={item.id}
-                        className="text-base font-medium text-grey-10 leading-[22px]"
+                        className="text-base font-medium text-grey-10 leading-[1.375rem]"
                       >
                         {item.label}
                       </label>
@@ -128,22 +152,6 @@ const NotificationSettings: React.FC = () => {
                     </div>
                   </div>
                 ))}
-              </div>
-            </RevealTextLine>
-
-            <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
-              <div className="flex gap-4 mt-8 self-start">
-                <CardButton
-                  className="max-w-[160px] h-[48px]"
-                  variant="dialog"
-                  onClick={handleSaveChanges}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="flex items-center text-lg leading-6 font-medium">
-                      Save
-                    </span>
-                  </div>
-                </CardButton>
               </div>
             </RevealTextLine>
           </div>

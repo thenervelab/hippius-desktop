@@ -93,6 +93,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
         scrollToBottom();
       }, 150);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const scrollToBottom = () => {
@@ -227,15 +228,15 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
         <Dialog.Overlay className="fixed inset-0  z-[10000]" />
         <Dialog.Content
           className={cn(
-            "fixed right-4 max-h-[500px] bottom-4 h-full bg-white shadow-xl z-[10001] border border-grey-80 rounded",
+            "fixed right-4 max-h-[min(31.25rem,calc(100vh-5rem))] bottom-4 h-full bg-white shadow-xl z-[10001] border border-grey-80 rounded",
             "flex flex-col",
             "max-sm:left-4 max-sm:right-4 max-sm:w-auto",
-            "sm:w-[400px]"
+            "sm:w-[25rem]"
           )}
         >
           {/* Header */}
           <div className="flex-shrink-0">
-            <div className="h-[50px] px-4 flex items-center justify-between border-b border-grey-80 relative">
+            <div className="h-[3.125rem] px-4 flex items-center justify-between border-b border-grey-80 relative">
               <Graphsheet
                 majorCell={{
                   lineColor: [213, 224, 248, 1],
@@ -275,7 +276,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
 
             {/* Close Ticket Banner */}
             {ticket?.status !== "closed" && (
-              <div className="h-[26px] px-4 flex items-center justify-between bg-grey-100 border-b border-grey-80">
+              <div className="h-[1.625rem] px-4 flex items-center justify-between bg-grey-100 border-b border-grey-80">
                 <span className="text-xs text-grey-60">
                   Has this ticket been resolved?
                 </span>
@@ -361,7 +362,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
                     key={index}
                     className="flex items-center gap-2 px-2 py-1 bg-white border border-grey-80 rounded text-xs group hover:border-grey-60 transition-colors"
                   >
-                    <span className="text-grey-10 truncate max-w-[150px]">
+                    <span className="text-grey-10 truncate max-w-[9.375rem]">
                       {file.name}
                     </span>
                     <button
@@ -377,8 +378,8 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
             )}
 
             {/* Input Area */}
-            <div className="h-[56px] px-2 py-2.5">
-              <div className="h-[36px] flex items-center gap-2 px-2 bg-grey-100 rounded-lg border border-grey-80">
+            <div className="h-[3.5rem] px-2 py-2.5">
+              <div className="h-[2.25rem] flex items-center gap-2 px-2 bg-grey-100 rounded-lg border border-grey-80">
                 <input
                   ref={inputRef}
                   type="text"

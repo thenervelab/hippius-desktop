@@ -31,13 +31,13 @@ const SidebarDialog: React.FC<SidebarDialogProps> = ({
       <Dialog.Content
         forceMount
         className={cn(
-          "fixed top-4 right-4 bottom-4 w-full max-w-[360px] rounded-lg z-50 bg-grey-100 border border-grey-80 shadow-menu font-geist duration-300  data-[state=open]:animate-panel-in data-[state=closed]:animate-panel-out h-[calc(100% -32px)]",
+          "fixed top-4 right-4 bottom-4 w-full max-w-[22.5rem] rounded-lg z-50 bg-grey-100 border border-grey-80 shadow-menu font-geist duration-300  data-[state=open]:animate-panel-in data-[state=closed]:animate-panel-out h-[calc(100% -32px)]",
           className
         )}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-grey-80">
-          <Dialog.Title className="text-[22px] text-grey-10 leading-8 font-medium">
+          <Dialog.Title className="text-[1.375rem] text-grey-10 leading-8 font-medium">
             {heading}
           </Dialog.Title>
           <Dialog.Close className=" rounded-full hover:bg-grey-90 transition-colors">

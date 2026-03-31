@@ -7,7 +7,7 @@ const h5Variants = cva({
   variants: {
     size: {
       md: "text-2xl lg:text-3xl",
-      sm: "text-2xl lg:text-[28px] lg:leading-[36px]"
+      sm: "text-2xl lg:text-[1.75rem] lg:leading-[2.25rem]"
     }
   },
   defaultVariants: {

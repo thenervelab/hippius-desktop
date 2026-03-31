@@ -1,19 +1,19 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import {
   FormattedUserFile,
-  parseMinerIds,
 } from "@/app/lib/hooks/use-user-files";
-import { hexToCid } from "@/lib/utils/hexToCid";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { useRef } from "react";
+import { useRef, useEffect } from "react";
+import { SyncActivityItem } from "../useSyncActivity";
+import { getAllSyncPaths, SyncPathResult } from "@/lib/utils/syncPathUtils";
 
-// Match the structure from get_user_synced_files
+// Re-export types for backward compatibility
 export type UserProfileFile = {
   fileName: string;
   fileSizeInBytes: number;
   lastChargedAt: number;
-  cid?: string;
+  arionHash?: string;
   createdAt: number;
   fileHash: string;
   selectedValidator?: string;
@@ -26,20 +26,16 @@ export type UserProfileFile = {
   deleted: boolean;
 };
 
-// Use the same response structure as useUserFiles
 export type RecentFilesResponse = {
   recent?: UserProfileFile[];
   uploading?: UserProfileFile[];
 };
 
-// Remove fastHash and implement a compact deterministic signature for the formatted files
 function makeFilesSignature(files: Array<FormattedUserFile>): string {
-  // Only include the fields that affect rendering and ordering
-  // Sorting by lastChargedAt desc is already applied before this signature
   return files
     .map(
       (f) =>
-        `${f.cid}|${f.name}|${f.lastChargedAt}|${f.size}|${f.isFolder ? 1 : 0
+        `${f.arionHash}|${f.name}|${f.lastChargedAt}|${f.size}|${f.isFolder ? 1 : 0
         }|${f.type}|${f.isAssigned ? 1 : 0}`
     )
     .join("||");
@@ -48,123 +44,177 @@ function makeFilesSignature(files: Array<FormattedUserFile>): string {
 const useRecentFiles = () => {
   const { polkadotAddress } = useWalletAuth();
   const queryKey = ["recent-files", polkadotAddress];
+  const queryClient = useQueryClient();
 
-  // Track last signature and last data reference to preserve referential equality
   const lastSignatureRef = useRef<string>("");
   const lastDataRef = useRef<Array<FormattedUserFile>>([]);
+
+  // Listen for sync file completion events to trigger refetch
+  useEffect(() => {
+    const handleFilesCompleted = () => {
+      console.log("[useRecentFiles] Files completed, invalidating and refetching query");
+      // Use refetch instead of invalidate for immediate data refresh
+      queryClient.refetchQueries({ queryKey: ["recent-files"] });
+    };
+
+    window.addEventListener("sync_files_completed_changed", handleFilesCompleted);
+    return () => {
+      window.removeEventListener("sync_files_completed_changed", handleFilesCompleted);
+    };
+  }, [queryClient]);
 
   return useQuery({
     queryKey,
     queryFn: async (): Promise<Array<FormattedUserFile>> => {
       if (!polkadotAddress) {
-        console.log("No wallet connected, returning empty recent files array");
         return [];
       }
 
       try {
-        // Use the same invoke pattern as useUserFiles
-        const response = await invoke<RecentFilesResponse>(
-          "get_sync_activity",
-          {
-            accountId: polkadotAddress,
+        // Fetch sync paths and activity items in parallel
+        const [items, syncPaths] = await Promise.all([
+          invoke<SyncActivityItem[]>("get_sync_activity", { limit: 50 }),
+          getAllSyncPaths(polkadotAddress).catch((err: unknown) => { console.warn("getAllSyncPaths failed:", err); return [] as SyncPathResult[]; }),
+        ]);
+
+        if (!items || items.length === 0) {
+          return [];
+        }
+
+        // Build label → folder path lookup
+        const labelToPath = new Map<string, string>();
+        for (const sp of syncPaths) {
+          if (sp.path && sp.label) {
+            labelToPath.set(sp.label, sp.path);
           }
+        }
+
+        // Fetch arion hashes, CIDs, and server timestamps from sync state.
+        // Uses get_synced_file_metadata which returns a flat list of ALL
+        // synced files (including subfolders) without reading the filesystem.
+        const arionHashMap = new Map<string, string>();
+        const arionCidMap = new Map<string, string>();
+        const uploadedAtMap = new Map<string, number>();
+        const updatedAtMap = new Map<string, number>();
+        try {
+          const metadata = await invoke<{ file_name: string; label: string; arion_hash: string; arion_cid: string; uploaded_at: number; updated_at: number }[]>("get_synced_file_metadata");
+          for (const entry of metadata) {
+            const key = `${entry.file_name}::${entry.label}`;
+            if (entry.arion_hash) {
+              arionHashMap.set(key, entry.arion_hash);
+            }
+            if (entry.arion_cid) {
+              arionCidMap.set(key, entry.arion_cid);
+            }
+            if (entry.uploaded_at) {
+              uploadedAtMap.set(key, entry.uploaded_at);
+            }
+            if (entry.updated_at) {
+              updatedAtMap.set(key, entry.updated_at);
+            }
+          }
+        } catch {
+          // Ignore - supplementary data
+        }
+
+        // Collect names of files that have been deleted — these should
+        // not appear in recent files even if an older "uploaded" entry
+        // exists. The Rust remove_file command records "deleted" entries
+        // in the activity ring buffer when a label is provided.
+        const deletedNames = new Set(
+          items
+            .filter((item) => item.action === "deleted")
+            .map((item) => `${item.file_name}::${item.label}`)
         );
 
-        // Combine recent and uploading items (if any)
-        const combinedFiles = [...(response.recent || [])];
+        const nonDeletedItems = items.filter(
+          (item) =>
+            item.action !== "deleted" &&
+            !deletedNames.has(`${item.file_name}::${item.label}`)
+        );
 
-        if (combinedFiles.length === 0) {
+        if (nonDeletedItems.length === 0) {
           return [];
         }
 
-        // Filter out deleted files
-        const nonDeletedFiles = combinedFiles.filter((file) => !file.deleted);
+        // Format SyncActivityItem[] to FormattedUserFile[]
+        const formattedFiles = nonDeletedItems.map(
+          (item): FormattedUserFile => {
+            // file_name is now the relative path from the sync root
+            // (e.g. "bucket/photo.jpg" for migration, or "photo.jpg"
+            // for files at the root). Use it for source path and
+            // extract the basename for display.
+            const syncFolderPath = labelToPath.get(item.label);
+            const source = syncFolderPath && item.file_name
+              ? `${syncFolderPath}/${item.file_name}`
+              : "";
+            const displayName = item.file_name
+              ? item.file_name.split("/").pop() || item.file_name
+              : "Unknown";
 
-        if (nonDeletedFiles.length === 0) {
-          return [];
-        }
-
-        // Format the data exactly like useUserFiles does
-        const formattedFiles = nonDeletedFiles.map(
-          (file): FormattedUserFile => {
-            const isErasureCodedFolder = file.fileName?.endsWith(
-              ".folder.ec_metadata"
-            );
-            const isErasureCoded =
-              !isErasureCodedFolder && file.fileName?.endsWith(".ec_metadata");
-            const isFolder =
-              !isErasureCodedFolder &&
-              (file.isFolder || file.fileName?.endsWith(".folder"));
-
-            let displayName = file.fileName;
-            if (isErasureCodedFolder) {
-              displayName = file.fileName.slice(
-                0,
-                -".folder.ec_metadata".length
-              );
-            } else if (isErasureCoded) {
-              displayName = file.fileName.slice(0, -".ec_metadata".length);
-            } else if (isFolder && displayName?.endsWith(".folder")) {
-              displayName = file.fileName.slice(0, -".folder".length);
-            }
+            const key = `${item.file_name}::${item.label}`;
+            const activityMs = item.timestamp ? item.timestamp * 1000 : Date.now();
+            // Prefer server-side upload timestamp over activity timestamp
+            const uploadedAtSec = uploadedAtMap.get(key) ?? 0;
+            const updatedAtSec = updatedAtMap.get(key) ?? 0;
+            // Recent files were already uploaded — use server timestamp,
+            // or fall back to activity timestamp if server hasn't returned it yet.
+            const createdAtMs = uploadedAtSec ? uploadedAtSec * 1000 : activityMs;
+            const lastChargedAtMs = updatedAtSec ? updatedAtSec * 1000 : (uploadedAtSec ? uploadedAtSec * 1000 : activityMs);
 
             return {
-              name: displayName || "Unnamed File",
-              actualFileName: file.fileName,
-              size: file.fileSizeInBytes,
-              createdAt: file.createdAt || Date.now(),
-              cid: hexToCid(file.fileHash) ?? "",
-              source: file.source || "Unknown",
-              minerIds: parseMinerIds(file.minerIds || "[]"),
-              isAssigned:
-                file.isAssigned !== undefined ? file.isAssigned : true,
-              lastChargedAt: file.lastChargedAt || file.createdAt || Date.now(),
-              fileHash: file.fileHash,
-              isFolder: isFolder || file.isFolder || false,
-              type:
-                file.type || (file.source === "private" ? "Private" : "Public"),
-              isErasureCoded: isErasureCoded || false,
-              mainReqHash: file.mainReqHash || "",
+              name: displayName,
+              actualFileName: item.file_name,
+              size: item.size_bytes,
+              createdAt: createdAtMs,
+              arionHash: arionHashMap.get(key) || "",
+              arionCid: arionCidMap.get(key) || "",
+              source,
+              minerIds: [],
+              isAssigned: true,
+              lastChargedAt: lastChargedAtMs,
+              fileHash: "",
+              isFolder: false,
+              type: item.action.charAt(0).toUpperCase() + item.action.slice(1),
+              isErasureCoded: false,
+              mainReqHash: "",
+              label: item.label,
             };
           }
         );
 
-        // Remove duplicates based on fileHash (unique identifier)
+        // Remove duplicates based on relative path (actualFileName)
         const uniqueFiles = formattedFiles.filter(
           (file, index, self) =>
-            index === self.findIndex((f) => f.name === file.name)
+            index ===
+            self.findIndex(
+              (f) => f.actualFileName === file.actualFileName && f.label === file.label
+            )
         );
 
-        // Sort by timestamp (newest first) - same as useUserFiles
+        // Sort by timestamp (newest first)
         return uniqueFiles.sort((a, b) => b.lastChargedAt - a.lastChargedAt);
       } catch (error) {
         console.error("Error fetching recent files:", error);
         return [];
       }
     },
-    // Preserve referential equality when no meaningful changes occur
     select: (newData) => {
       const newSignature = makeFilesSignature(newData);
       if (
         lastSignatureRef.current === newSignature &&
         lastDataRef.current.length > 0
       ) {
-        // Data identical; reuse previous array reference
         return lastDataRef.current;
       }
-      // Data changed; update signature and reference
       lastSignatureRef.current = newSignature;
       lastDataRef.current = newData;
       return newData;
     },
-    // Poll frequently, but only notify components when data actually changes
-    refetchInterval: 10000,
-    refetchOnWindowFocus: true,
-    staleTime: 5000,
+    refetchOnWindowFocus: false,
+    staleTime: 0, // Always refetch - updates driven by sync_files_completed_changed event
     enabled: !!polkadotAddress,
-    // Only notify on data changes to avoid re-renders from isFetching toggles
     notifyOnChangeProps: ["data", "dataUpdatedAt"],
-    // We are returning the previous array reference manually when unchanged
     structuralSharing: false,
   });
 };

@@ -35,7 +35,7 @@ const PlaceholderCard = ({
 
 // Static referral link card
 const StaticReferralLinkCard = () => (
-  <div className="bg-white p-3 rounded-lg border border-grey-80 shadow-sm h-[166px] relative bg-[url('/assets/refferal.png')] bg-repeat-round bg-cover">
+  <div className="bg-white p-3 rounded-lg border border-grey-80 shadow-sm min-h-[10.375rem] relative bg-[url('/assets/refferal.png')] bg-repeat-round bg-cover">
     <div className="flex flex-col gap-4">
       <div className="flex justify-between items-center">
         <div className="flex gap-2">
@@ -47,13 +47,13 @@ const StaticReferralLinkCard = () => (
           </div>
         </div>
         <button className="flex items-center text-xs gap-1 cursor-not-allowed opacity-50" disabled>
-          <Refresh className="size-[18px] text-grey-60" />
+          <Refresh className="size-[1.125rem] text-grey-60" />
           Generate Link
         </button>
       </div>
-      <div className="h-[86px] text-base leading-[22px] text-grey-60 flex flex-col justify-center">
+      <div className="min-h-[5.375rem] text-base leading-[1.375rem] text-grey-60 flex flex-col justify-center">
         <span className="mb-2">Your Referral Link</span>
-        <div className="flex items-center justify-between rounded-[8px] p-3 border border-grey-80 bg-white">
+        <div className="flex items-center justify-between rounded-[0.5rem] p-3 border border-grey-80 bg-white">
           <div className="text-grey-60 text-sm font-medium">
             Referral links coming soon
           </div>
@@ -87,12 +87,12 @@ const StaticReferralHistoryTable = () => (
       </AbstractIconWrapper>
       <P size="lg">Referral History</P>
     </div>
-    <div className="w-full h-[200px] flex items-center justify-center border border-grey-80 rounded-lg">
+    <div className="w-full min-h-[12.5rem] flex items-center justify-center border border-grey-80 rounded-lg">
       <div className="flex flex-col items-center">
         <AbstractIconWrapper className="size-10 rounded-2xl flex items-center justify-center bg-grey-40/20 mb-2">
           <Send className="absolute size-6 text-primary-50" />
         </AbstractIconWrapper>
-        <span className="text-grey-60 text-sm font-medium max-w-[190px] text-center">
+        <span className="text-grey-60 text-sm font-medium max-w-[11.875rem] text-center">
           You have not made any referrals yet
         </span>
       </div>
@@ -113,7 +113,7 @@ const Referrals: React.FC = () => {
             position="top-right"
             size="small"
           />
-          <div className="grid grid-cols-1 md:grid-cols-2 min-[1300px]:grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-1 @md:grid-cols-2 @4xl:grid-cols-4 gap-4 mb-6">
             <StaticReferralLinkCard />
             <PlaceholderCard icon={UserSquare} title="Total Referrals" value="0" />
             <PlaceholderCard icon={PieChart} title="Usage Count" value="0" />

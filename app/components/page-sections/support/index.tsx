@@ -3,8 +3,6 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
 
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
-import { cn } from "@/lib/utils";
-import { useAtomValue } from "jotai";
 import TicketsTable from "./TicketsTable";
 import { P } from "@/components/ui/typography";
 import CreateTicketModal, {
@@ -26,7 +24,6 @@ import useSupportTickets, {
 } from "@/app/lib/hooks/useSupportTickets";
 import useUpdateSupportTicket from "@/app/lib/hooks/useUpdateSupportTicket";
 import CreateButton from "../../ui/button/CreateButton";
-import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import ConfirmModal from "./SupportConfirmModal";
 import { OAuthButtonsGroup } from "../../auth/OAuthButtons";
 
@@ -36,7 +33,6 @@ const Support: React.FC = () => {
   const { oauthSession } = useWalletAuth();
   const createTicketModalRef = useRef<CreateTicketModalRef>(null);
 
-  const isUnpinnedOpen = useAtomValue(isUnpinnedDialogOpenAtom);
   const [pageSize] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
@@ -238,12 +234,12 @@ const Support: React.FC = () => {
   const isAccessKeyLogin = oauthSession?.provider === "mnemonic";
 
   return (
-    <div className={cn("w-full", isUnpinnedOpen && "mb-[90px]")}>
+    <div className="w-full">
       {/* Access Key Login Overlay */}
       {isAccessKeyLogin ? (
-        <div className="flex items-center justify-center min-h-[600px]">
+        <div className="flex items-center justify-center min-h-[37.5rem]">
           <div className="max-w-md w-full px-4 py-6 bg-white rounded-lg shadow-lg border border-grey-80">
-            <div className="text-center mb-4 w-[330px] mx-auto">
+            <div className="text-center mb-4 max-w-[20.625rem] w-full mx-auto">
               <AbstractIconWrapper className="size-12 mx-auto mb-4 flex items-center justify-center">
                 <Lock className="size-7 relative text-primary-50" />
               </AbstractIconWrapper>
@@ -267,7 +263,7 @@ const Support: React.FC = () => {
         <>
           {/* Header & Controls */}
           <div className="flex items-center w-full justify-between gap-4 flex-wrap mb-5">
-            <div className="flex items-center justify-between w-full sm:w-auto">
+            <div className="flex items-center justify-between w-full @sm:w-auto">
               <div className="flex items-center gap-x-2">
                 <AbstractIconWrapper className="size-10 flex items-center justify-center">
                   <Ticket className="size-6 relative text-primary-50" />
@@ -333,7 +329,7 @@ const Support: React.FC = () => {
             open={isCloseModalOpen}
             title="Close Ticket"
             description={
-              <div className="w-[324px] text-center mx-auto">
+              <div className="max-w-[20.25rem] w-full text-center mx-auto">
                 Are you sure you want to close ticket{" "}
                 <strong>{ticketToClose?.subject}</strong>? This action is
                 permanent

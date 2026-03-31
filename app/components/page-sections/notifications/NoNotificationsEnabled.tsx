@@ -37,7 +37,7 @@ const NoNotificationsEnabled: React.FC<NoNotificationsEnabledProps> = ({
             </RevealTextLine>
           </p>
           <button
-            className="px-4 py-2.5 bg-grey-90 rounded text-grey-10 leading-5 text-[14px] font-medium flex items-center gap-2 transition-colors hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white focus:outline-none focus:ring-2 focus:ring-primary-50"
+            className="px-4 py-2.5 bg-grey-90 rounded text-grey-10 leading-5 text-[0.875rem] font-medium flex items-center gap-2 transition-colors hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white focus:outline-none focus:ring-2 focus:ring-primary-50"
             onClick={onOpenSettings}
           >
             <Icons.Setting className="size-4" />

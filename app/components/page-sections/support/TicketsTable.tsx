@@ -155,8 +155,8 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
         header: "",
         size: 80,
         meta: {
-          cellClassName: "w-[80px] max-w-[80px]",
-          headerClassName: "w-[80px] max-w-[80px]",
+          cellClassName: "w-[5rem] max-w-[5rem]",
+          headerClassName: "w-[5rem] max-w-[5rem]",
         },
         cell: ({ row }) => {
           const ticket = row.original;
@@ -207,12 +207,12 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
     <>
       <TableWrapper className="mt-5">
         {isError ? (
-          <div className="p-6 w-full h-[350px] flex items-center justify-center">
+          <div className="p-6 w-full min-h-[21.875rem] flex items-center justify-center">
             <div className="flex flex-col animate-fade-in-0.5 items-center opacity-0">
               <AbstractIconWrapper className="size-10 rounded-2xl flex items-center justify-center bg-grey-40/20 mb-2">
                 <AlertCircle className="absolute size-6 text-red-400" />
               </AbstractIconWrapper>
-              <span className="text-grey-60 text-sm font-medium max-w-[190px] text-center">
+              <span className="text-grey-60 text-sm font-medium max-w-[11.875rem] text-center">
                 Failed to get data
               </span>
             </div>
@@ -230,27 +230,27 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
             </THead>
             <TBody>
               <SkeletonTableRow
-                rowClassName="h-[69px]"
+                rowClassName="h-[4.3125rem]"
                 rows={10}
                 columns={columns.length}
                 columnWidths={[
-                  "300px",
-                  "150px",
-                  "150px",
-                  "120px",
-                  "180px",
-                  "80px",
+                  "18.75rem",
+                  "9.375rem",
+                  "9.375rem",
+                  "7.5rem",
+                  "11.25rem",
+                  "5rem",
                 ]}
               />
             </TBody>
           </Table>
         ) : !data || data.length === 0 ? (
-          <div className="w-full h-[350px] flex items-center justify-center p-6">
+          <div className="w-full min-h-[21.875rem] flex items-center justify-center p-6">
             <div className="flex flex-col animate-fade-in-0.5 items-center opacity-0">
               <AbstractIconWrapper className="size-10 rounded-2xl flex items-center justify-center bg-grey-40/20 mb-2">
                 <Ticket className="absolute size-6" />
               </AbstractIconWrapper>
-              <span className="text-grey-60 text-sm font-medium max-w-[190px] text-center">
+              <span className="text-grey-60 text-sm font-medium max-w-[11.875rem] text-center">
                 You have no support tickets yet
               </span>
             </div>
@@ -278,7 +278,7 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
                     transparent
                     className={cn(
                       shouldHighlight &&
-                        "bg-primary-70/10 hover:bg-primary-70/20 border-l-[6px]  border-l-primary-50"
+                        "bg-primary-70/10 hover:bg-primary-70/20 border-l-[0.375rem]  border-l-primary-50"
                     )}
                   >
                     {row.getVisibleCells().map((cell) => (

@@ -1,7 +1,7 @@
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "./getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "./getTileTypeFromExtension";
-import { isLocalFile } from "./ipfsUrlResolver";
+import { isLocalFile } from "./fileUrlResolver";
 
 export type ViewableFileType = "image" | "video" | "PDF";
 
@@ -62,16 +62,16 @@ export function getViewableFiles(files: FormattedUserFile[], options?: ViewableF
 
 /**
  * Creates a unique identifier for a file
- * Uses actualFileName if available, otherwise falls back to cid + name combination
- * This handles cases where multiple files might have the same CID
+ * Uses actualFileName if available, otherwise falls back to arionHash + name combination
+ * This handles cases where multiple files might have the same Arion Hash
  */
 function getFileIdentifier(file: FormattedUserFile): string {
   // actualFileName is the most reliable unique identifier
   if (file.actualFileName) {
     return file.actualFileName;
   }
-  // Fallback: combine cid and name for uniqueness
-  return `${file.cid}:${file.name}`;
+  // Fallback: combine arionHash and name for uniqueness
+  return `${file.arionHash}:${file.name}`;
 }
 
 /**

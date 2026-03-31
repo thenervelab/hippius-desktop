@@ -1,14 +1,14 @@
 "use client";
 
-import { useState, ReactNode, useMemo } from "react";
+import { useState, useEffect, ReactNode, useMemo } from "react";
 import { Icons } from "@/components/ui";
 import DetailsCard from "./DetailsCard";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
-import useUserFiles from "@/app/lib/hooks/use-user-files";
-import useFiles from "@/app/lib/hooks/api/useFilesSize";
-import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transformMarketplaceCredits";
-import { formatStorageForChartByRange } from "@/app/lib/utils/getFormatDataForStorageUsageChart";
+import { invoke } from "@tauri-apps/api/core";
+import { Account } from "@/lib/types";
+import { useRemoteStorageStats } from "@/app/lib/hooks/api/useRemoteStorageStats";
+import useFilesCount from "@/app/lib/hooks/api/useFilesCount";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { toast } from "sonner";
@@ -29,24 +29,30 @@ export default function DetailList() {
   } = useUserCredits();
 
   const {
-    data: userFilesData,
-    isLoading: isUserFilesLoading,
-  } = useUserFiles();
+    data: remoteStats,
+    isLoading: isRemoteStatsLoading,
+  } = useRemoteStorageStats();
 
   const {
-    data: filesData,
-    isLoading: isFilesLoading,
-    error: filesError,
-  } = useFiles();
+    data: fileCount,
+    isLoading: isFileCountLoading,
+  } = useFilesCount();
 
   // Fetch marketplace credits for Total Credits Used (all-time)
   const { data: marketplaceCredits, isLoading: isLoadingMarketplaceCredits } =
     useMarketplaceCredits();
 
   // Transform marketplace credits to the format expected by the chart
-  const transformedCreditsData = transformMarketplaceCreditsToAccounts(
-    marketplaceCredits || []
-  );
+  const [transformedCreditsData, setTransformedCreditsData] = useState<Account[]>([]);
+  useEffect(() => {
+    if (!marketplaceCredits?.length) {
+      setTransformedCreditsData([]);
+      return;
+    }
+    invoke<Account[]>("transform_marketplace_credits", { credits: marketplaceCredits })
+      .then(setTransformedCreditsData)
+      .catch(() => setTransformedCreditsData([]));
+  }, [marketplaceCredits]);
 
   const handleRefreshCredits = async () => {
     try {
@@ -63,8 +69,8 @@ export default function DetailList() {
 
   const getCreditsValue = () => {
     if (isCreditsLoading) return "Loading...";
-    if (creditsError) return "Error";
     if (credits !== undefined) return formatCreditBalance(credits);
+    if (creditsError) return "0";
     return "--";
   };
 
@@ -129,16 +135,9 @@ export default function DetailList() {
     return "≈0 GB/mo Storage";
   };
 
-  // Helper functions for file data - count only private files
   const getTotalFiles = () => {
-    if (isFilesLoading) return "Loading...";
-    if (filesError) return "Error";
-    if (!userFilesData?.files) return 0;
-    // Filter for private files only (matching FilesContainer logic)
-    const privateFiles = userFilesData.files.filter(
-      (file) => file.type?.toLowerCase() === "private"
-    );
-    return privateFiles.length;
+    if (isFileCountLoading) return "Loading...";
+    return fileCount ?? 0;
   };
 
   // Calculate all-time Total Credits Used from marketplace credits
@@ -153,24 +152,11 @@ export default function DetailList() {
     return allTimeTotal.toFixed(6);
   }, [transformedCreditsData, isLoadingMarketplaceCredits]);
 
-  // Calculate all-time Total Storage Used from files data
-  // Using the SAME LOGIC as StorageUsageTrends component
   const getTotalStorageUsed = useMemo(() => {
-    if (isFilesLoading) return "Loading...";
-    if (!filesData || filesData.length === 0) return "0 B";
-
-    // Format the raw data using the same transformer as the chart
-    const formattedData = formatStorageForChartByRange(
-      filesData,
-      "last7days" // Use last7days as base range
-    );
-
-    if (!formattedData || formattedData.length === 0) return "0 B";
-
-    // Get the last entry's value (most recent day) - same as the chart component
-    const lastEntry = formattedData[formattedData.length - 1];
-    return formatBytes(lastEntry.balance || 0, 2);
-  }, [filesData, isFilesLoading]);
+    if (isRemoteStatsLoading) return "Loading...";
+    if (!remoteStats?.totalBytes) return "0 B";
+    return formatBytes(remoteStats.totalBytes, 2);
+  }, [remoteStats, isRemoteStatsLoading]);
 
 
 
@@ -185,7 +171,7 @@ export default function DetailList() {
       showAddCreditsButton: (!isCreditsLoading && (credits === undefined || getCreditsAsNumber(credits) === 0)) ? true : false,
       onRefresh: handleRefreshCredits,
       isLoading: isRefreshingCredits,
-      info: "Credits available for storage usage. Each credit equals $1 and can be used to pay for IPFS storage costs.",
+      info: "Credits available for storage usage. Each credit equals $1 and can be used to pay for arion storage costs.",
     },
     {
       id: "total-files",
@@ -193,8 +179,8 @@ export default function DetailList() {
       title: "Total Files",
       value: getTotalFiles(),
       showRefresh: false,
-      isLoading: isUserFilesLoading,
-      info: "Total number of files synced using the Hippius desktop app. This does not include files from other buckets or console uploads.",
+      isLoading: isFileCountLoading,
+      info: "Total number of files stored on the Hippius network.",
     },
     {
       id: "total-credits-used",
@@ -211,13 +197,13 @@ export default function DetailList() {
       title: "Total Storage Used",
       value: getTotalStorageUsed,
       showRefresh: false,
-      isLoading: isFilesLoading,
-      info: "All time total storage space used across all synced files from the desktop app and console.",
+      isLoading: isRemoteStatsLoading,
+      info: "Total storage space used on the Hippius network.",
     },
   ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 @md:grid-cols-2 @3xl:grid-cols-4 gap-4">
       {detailCards.map((card) => (
         <DetailsCard
           key={card.id}

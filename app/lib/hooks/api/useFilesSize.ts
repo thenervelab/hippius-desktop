@@ -1,11 +1,9 @@
 import {
-  useQuery,
   UseQueryOptions,
   UseQueryResult,
   keepPreviousData,
 } from "@tanstack/react-query";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { indexerGet } from "@/lib/api/indexerClient";
+import { useInvokeQuery } from "./useInvokeQuery";
 import { sciToFullString } from "../../utils/formatters/formatBalance";
 
 // Define types based on the indexer API response
@@ -49,8 +47,7 @@ export interface FileChartData {
 }
 
 export interface UseFilesParams {
-  page?: number;
-  limit?: number;
+  daysAgo?: number;
 }
 function toChartFormat(file: FileEvent): FileChartData {
   return {
@@ -76,36 +73,30 @@ export default function useFiles(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<FileChartData[], Error> {
-  const { polkadotAddress } = useWalletAuth();
-  const page = params?.page || 1;
-  const limit = params?.limit || 100000;
+  const daysAgo = params?.daysAgo || 30;
 
-  return useQuery<FilesResponse, Error, FileChartData[]>({
-    queryKey: ["files", polkadotAddress, page, limit],
-    queryFn: async () => {
-      if (!polkadotAddress) {
-        throw new Error("No wallet address available");
-      }
-
-      return indexerGet<FilesResponse>("/ipfs/user-total-files-size", {
-        limit,
-        account_id: polkadotAddress,
-      });
+  return useInvokeQuery<FilesResponse, FileChartData[]>({
+    command: "get_files_size",
+    queryKey: (addr) => ["files", addr, daysAgo],
+    params: (polkadotAddress) => ({
+      accountId: polkadotAddress,
+      daysAgo,
+    }),
+    options: {
+      select: (data) => {
+        if (!data?.data?.length) return [];
+        // Convert scientific notation to full string and map to chart format
+        const filtered = data.data.map((storage) => ({
+          ...storage,
+          total_files_size: storage.total_files_size.includes("+")
+            ? sciToFullString(storage.total_files_size)
+            : storage.total_files_size,
+        }));
+        // Return data directly from API without any delta calculations
+        return filtered.map(toChartFormat);
+      },
+      placeholderData: keepPreviousData,
+      ...options,
     },
-    select: (data) => {
-      if (!data?.data?.length) return [];
-      // Convert scientific notation to full string and map to chart format
-      const filtered = data.data.map((storage) => ({
-        ...storage,
-        total_files_size: storage.total_files_size.includes("+")
-          ? sciToFullString(storage.total_files_size)
-          : storage.total_files_size,
-      }));
-      // Return data directly from API without any delta calculations
-      return filtered.map(toChartFormat);
-    },
-    placeholderData: keepPreviousData,
-    enabled: !!polkadotAddress,
-    ...options,
   });
 }

@@ -9,7 +9,8 @@
 
 import React, { useState } from "react";
 import { cn } from "@/lib/utils";
-import { oauthService } from "@/app/lib/services/oAuthService";
+import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { OAuthProvider } from "@/app/lib/types/oAuth";
 import { LucideLoader2 } from "lucide-react";
 import * as Icons from "@/components/ui/icons";
@@ -65,7 +66,7 @@ function AuthButton({
             onClick={onClick}
             disabled={disabled || isLoading}
             className={cn(
-                "w-full flex items-center justify-center gap-2 h-[60px] font-semibold text-lg rounded-lg",
+                "w-full flex items-center justify-center gap-2 h-[min(3.75rem,60px)] font-semibold text-[min(1.125rem,18px)] rounded-lg",
                 "bg-grey-90 text-grey-10",
                 "hover:bg-grey-80",
                 "transition-all duration-200",
@@ -125,7 +126,19 @@ export function OAuthButton({
 
         try {
             setIsLoading(true);
-            await oauthService.initiateLogin(provider);
+
+            // Preserve redirect parameter if present
+            const urlParams = new URLSearchParams(window.location.search);
+            const redirectParam = urlParams.get("redirect");
+            if (redirectParam) {
+                sessionStorage.setItem("oauth_redirect", redirectParam);
+            }
+
+            const result = await invoke<{ url: string; provider: string }>(
+                "start_oauth_flow",
+                { provider }
+            );
+            await openUrl(result.url);
         } catch (error) {
             console.error(`Failed to initiate ${provider} login:`, error);
             setIsLoading(false);
@@ -187,7 +200,7 @@ export function OAuthButtonsGroup({
     hideAccessKey = false,
 }: OAuthButtonsGroupProps) {
     return (
-        <div className={cn("space-y-4", className)}>
+        <div className={cn("space-y-[min(1rem,16px)]", className)}>
             {/* Social OAuth Buttons */}
             <OAuthButton provider="google" disabled={disabled} />
             <OAuthButton provider="github" disabled={disabled} />

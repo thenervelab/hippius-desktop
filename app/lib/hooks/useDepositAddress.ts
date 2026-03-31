@@ -1,43 +1,29 @@
 import { useQuery } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { API_CONFIG } from "@/lib/config";
 
 export default function useDepositAddress() {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
 
   return useQuery({
-    queryKey: ["get-deposit-address", oauthSession?.userId],
+    queryKey: ["get-deposit-address", polkadotAddress],
     queryFn: async () => {
-      if (!oauthSession?.token) {
-        throw new Error("Not authenticated");
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
 
-      const response = await fetch(
-        `${API_CONFIG.baseUrl}/api/billing/substrate-address/`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Token ${oauthSession.token}`,
-            Accept: "application/json",
-          },
-        }
+      const data = await invoke<{ ss58_address: string }>(
+        "get_deposit_address",
+        { accountId: polkadotAddress }
       );
-
-      if (!response.ok) {
-        toast.error("Failed to fetch deposit address");
-        throw new Error(`Failed to fetch deposit address: ${response.status}`);
-      }
-
-      const data = await response.json();
 
       if (!data.ss58_address) {
         console.error("Invalid response data:", data);
         throw new Error("No ss58_address in response");
       }
 
-      return data.ss58_address as string;
+      return data.ss58_address;
     },
-    enabled: !!oauthSession?.token,
+    enabled: !!polkadotAddress,
   });
 }

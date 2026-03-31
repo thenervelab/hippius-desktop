@@ -9,14 +9,14 @@ const WaitAMoment: React.FC<WaitAMomentProps> = ({ isRecentFiles = false }) => (
   <div
     className={cn("w-full p-6 flex items-center justify-center", {
       "h-[80vh]": !isRecentFiles,
-      "h-[150px]": isRecentFiles,
+      "h-[9.375rem]": isRecentFiles,
     })}
   >
     <div className="flex flex-col items-center justify-center">
       <AbstractIconWrapper className="size-6 flex items-center justify-center">
         <Icons.Timer className="size-4 text-primary-50 relative" />
       </AbstractIconWrapper>
-      <P className="text-center mt-2 text-grey-60 max-w-[190px]" size="sm">
+      <P className="text-center mt-2 text-grey-60 max-w-[11.875rem]" size="sm">
         Wait a moment...
       </P>
     </div>

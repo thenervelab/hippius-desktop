@@ -1,3 +1,6 @@
+// NOTE: Kept in TypeScript — called synchronously in render-time binary search loops
+// (DetailList.tsx, plans/page.tsx). Async IPC per iteration would be prohibitive.
+// Rust equivalent available as invoke("calculate_storage_cost") for non-render contexts.
 import pricingJson from "@/app/utils/data/pricing-cfg.json";
 
 export type PricingData = typeof pricingJson;

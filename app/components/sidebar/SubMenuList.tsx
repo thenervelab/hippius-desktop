@@ -13,7 +13,7 @@ const SubMenuList: React.FC<SubMenuListProps> = ({
   onItemClick
 }) => {
   return (
-    <div className="min-w-[163px] bg-white rounded-md flex gap-1 flex-col p-2">
+    <div className="min-w-[10.1875rem] bg-white rounded-md flex gap-1 flex-col p-2">
       {items.map((item, index) => (
         <SubMenuItem
           key={`submenu-item-${index}`}

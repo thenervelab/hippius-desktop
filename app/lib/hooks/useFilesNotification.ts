@@ -1,5 +1,5 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { addNotification } from "@/app/lib/helpers/notificationsDb";
 import { useSetAtom, useAtom } from "jotai";
@@ -8,231 +8,194 @@ import {
   enabledNotificationTypesAtom,
   refreshEnabledTypesAtom,
 } from "@/components/page-sections/notifications/notificationStore";
-import { syncPercentAtom, syncStatusAtom } from "@/app/lib/store/syncAtoms";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { SyncActivityResponse } from "./useSyncActivity";
-// import { toast } from "sonner";
-const processSyncActivity = (response: SyncActivityResponse) => {
-  const allFiles = [];
+import type { SyncSnapshot } from "@/lib/types/syncSnapshot";
 
-  if (response.uploading) {
-    for (const file of response.uploading) {
-      allFiles.push({ ...file, status: "uploading" });
-    }
-  }
-  if (response.recent) {
-    for (const file of response.recent) {
-      const isAlreadyProcessed = allFiles.some(
-        (existingFile) => existingFile.fileHash === file.fileHash
-      );
-      if (!isAlreadyProcessed) {
-        allFiles.push({ ...file, status: "uploaded" });
-      }
-    }
-  }
+/** Serialisable summary of a synced file stored inside releaseNotes JSON. */
+export interface SyncedFileDetail {
+  fileName: string;
+  totalBytes: number;
+  action: string; // upload | download | local_delete | remote_delete
+}
 
-  return allFiles;
-};
+interface SyncOutcome {
+  label?: string;
+  files_uploaded: number;
+  files_downloaded: number;
+  files_deleted_locally: number;
+  files_deleted_remotely: number;
+  conflicts_resolved: number;
+  conflicts_skipped: number;
+}
 
-const calculateSyncMetrics = (syncFiles: Array<any>) => {
-  if (!syncFiles || syncFiles.length === 0) {
-    return {
-      syncPercent: null,
-      totalFiles: 0,
-      syncedFiles: 0,
-      uploadingFiles: 0,
-      isInProgress: false,
-      isCompleted: false,
-    };
-  }
+interface SyncError {
+  label?: string;
+  error: string;
+}
 
-  const totalFiles = syncFiles.length;
-  const uploadingFiles = syncFiles.filter(
-    (file) => file.status === "uploading"
-  ).length;
-  const syncedFiles = syncFiles.filter(
-    (file) => file.status === "uploaded"
-  ).length;
-  const isInProgress = uploadingFiles > 0;
-
-  let syncPercent: number | null = null;
-  if (totalFiles > 0) {
-    if (uploadingFiles === 0) {
-      // No uploading files means sync is complete
-      syncPercent = 100;
-    } else {
-      // Calculate percentage based on uploaded files
-      syncPercent = Math.round((syncedFiles / totalFiles) * 100);
-    }
-  }
-
-  const isCompleted = syncPercent === 100;
-
-  return {
-    syncPercent,
-    totalFiles,
-    syncedFiles,
-    uploadingFiles,
-    isInProgress,
-    isCompleted,
-  };
-};
-interface SyncStatusResponse {
-  synced_files: number;
-  total_files: number;
-  in_progress: boolean;
-  percent: number;
+/** Build a human-readable description from aggregated sync counts. */
+export function buildSyncDescription(counts: {
+  uploaded: number;
+  downloaded: number;
+  deletedLocally: number;
+  deletedRemotely: number;
+}): string {
+  const parts: string[] = [];
+  if (counts.uploaded > 0)
+    parts.push(`${counts.uploaded} file${counts.uploaded !== 1 ? "s" : ""} uploaded`);
+  if (counts.downloaded > 0)
+    parts.push(`${counts.downloaded} file${counts.downloaded !== 1 ? "s" : ""} downloaded`);
+  if (counts.deletedLocally > 0)
+    parts.push(`${counts.deletedLocally} file${counts.deletedLocally !== 1 ? "s" : ""} deleted locally`);
+  if (counts.deletedRemotely > 0)
+    parts.push(`${counts.deletedRemotely} file${counts.deletedRemotely !== 1 ? "s" : ""} deleted remotely`);
+  return parts.join(", ") + ".";
 }
 
 export function useFilesNotification() {
-  const [invokeCount, setInvokeCount] = useState<number>(0);
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
   const { polkadotAddress, oauthSession } = useWalletAuth();
 
-  // Use both atoms
-  const setSyncPercent = useSetAtom(syncPercentAtom);
-  const [syncStatus, setSyncStatus] = useAtom(syncStatusAtom);
-
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
   const areFilesNotificationsEnabled = enabledTypes.includes("Files");
 
-  // Refs to track sync state changes
-  const wasInProgress = useRef(false);
-  const notificationSent = useRef(false);
-  const lastUpdateTime = useRef(Date.now());
-  // Ref to track the last sync complete timestamp to prevent duplicate notifications
-  const lastSyncCompleteTime = useRef<number | null>(null);
+  // Accumulate counts and file details across multiple drives before creating one notification.
+  const pendingCountsRef = useRef({
+    uploaded: 0,
+    downloaded: 0,
+    deletedLocally: 0,
+    deletedRemotely: 0,
+  });
+  const pendingFilesRef = useRef<SyncedFileDetail[]>([]);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const getSyncStatus = async () => {
+    if (!areFilesNotificationsEnabled || !polkadotAddress) return;
+
+    let cancelled = false;
+    const unsubs: (() => void)[] = [];
+
+    const userAddress = oauthSession?.substrateAddress || polkadotAddress;
+
+    const flushNotification = async () => {
+      if (cancelled || !userAddress) return;
+      const counts = { ...pendingCountsRef.current };
+      const capturedFiles = [...pendingFilesRef.current];
+      // Reset accumulators
+      pendingCountsRef.current = {
+        uploaded: 0,
+        downloaded: 0,
+        deletedLocally: 0,
+        deletedRemotely: 0,
+      };
+      pendingFilesRef.current = [];
+
+      const totalFiles =
+        counts.uploaded + counts.downloaded + counts.deletedLocally + counts.deletedRemotely;
+      if (totalFiles === 0) return;
+
+      const fileDetailsJson = capturedFiles.length > 0
+        ? JSON.stringify(capturedFiles)
+        : "";
+
+      const timestamp = new Date().toISOString();
+      await addNotification({
+        userAddress,
+        notificationType: "Files",
+        notificationSubtype: `FileSyncComplete-${timestamp}`,
+        notificationTitleText: "Sync Complete",
+        notificationDescription: buildSyncDescription(counts),
+        notificationLinkText: "View Files",
+        notificationLink: "/files",
+        notificationReleaseNotes: fileDetailsJson,
+      });
+      await refreshUnread();
+    };
+
+    /** Capture completed file details from the snapshot immediately (before the session resets). */
+    const captureFileDetails = async () => {
       try {
-        if (!polkadotAddress) {
-          return;
+        const snapshot = await invoke<SyncSnapshot>("sp_get_snapshot");
+        const completedFiles: SyncedFileDetail[] = snapshot.files
+          .filter((f) => f.status === "completed")
+          .map((f) => ({
+            fileName: f.fileName,
+            totalBytes: f.totalBytes,
+            action: f.action,
+          }));
+        if (completedFiles.length > 0) {
+          pendingFilesRef.current.push(...completedFiles);
         }
-
-        // Increment the invoke counter
-        setInvokeCount((prevCount) => prevCount + 1);
-
-        // Get sync activity data
-        const response = await invoke<SyncActivityResponse>(
-          "get_sync_activity",
-          {
-            accountId: polkadotAddress,
-          }
-        );
-
-        // Process the sync activity data
-        const syncFiles = processSyncActivity(response);
-        const metrics = calculateSyncMetrics(syncFiles);
-
-        // Convert to the expected status format
-        const status: SyncStatusResponse = {
-          synced_files: metrics.syncedFiles,
-          total_files: metrics.totalFiles,
-          in_progress: metrics.isInProgress,
-          percent: metrics.syncPercent || 0,
-        };
-
-        // Use a timestamp to track freshness of updates
-        const now = Date.now();
-        const timeSinceLastUpdate = now - lastUpdateTime.current;
-
-        // Log every 3 seconds or when status changes
-        if (
-          timeSinceLastUpdate > 3000 ||
-          !syncStatus ||
-          status.in_progress !== syncStatus.in_progress ||
-          status.percent !== syncStatus.percent
-        ) {
-          // console.log("[Sync Status]", status, "Time since last log:", timeSinceLastUpdate);
-          lastUpdateTime.current = now;
-        }
-
-        // Update both atoms atomically to keep them in sync
-        setSyncStatus(status);
-
-        // Update sync percentage atom - this triggers the tray update
-        if (status.in_progress) {
-          setSyncPercent(status.percent); // 0–100
-        } else if (status.percent === 100) {
-          setSyncPercent(100);
-        } else {
-          // If not in progress and not 100%, don't show any sync status
-          setSyncPercent(null);
-        }
-
-        // Track when sync starts
-        if (status.in_progress && !wasInProgress.current) {
-          wasInProgress.current = true;
-          notificationSent.current = false;
-        }
-
-        // Check if sync has completed - with additional time-based check
-        const syncCompleted =
-          wasInProgress.current &&
-          !status.in_progress &&
-          status.percent === 100;
-
-        if (syncCompleted && !notificationSent.current) {
-          const now = Date.now();
-          // Only send notification if we haven't sent one in the last 5 seconds
-          const shouldSendNotification =
-            lastSyncCompleteTime.current === null ||
-            now - lastSyncCompleteTime.current > 5000;
-
-          if (shouldSendNotification) {
-            // Add notification for completed sync
-            const timestamp = new Date().toISOString();
-            const notificationSubtype = `FileSyncComplete-${timestamp}`;
-            const userAddress = oauthSession?.substrateAddress || polkadotAddress;
-            if (!userAddress) return;
-
-            await addNotification({
-              userAddress: userAddress,
-              notificationType: "Files",
-              notificationSubtype: notificationSubtype,
-              notificationTitleText: "Files Sync Complete!",
-              notificationDescription: `All your files have been successfully synchronized. Your files are now up to date.`,
-              notificationLinkText: "View Files",
-              notificationLink: "/#recent-files",
-            });
-
-            notificationSent.current = true;
-            lastSyncCompleteTime.current = now;
-            await refreshUnread();
-          }
-        }
-
-        // Reset wasInProgress when sync is no longer in progress
-        if (!status.in_progress) {
-          wasInProgress.current = false;
-        }
-      } catch (error) {
-        console.error("Failed to get sync status:", error);
+      } catch (err) {
+        console.warn("[FilesNotification] Failed to get file details from snapshot:", err);
       }
     };
 
-    // Skip if notifications are disabled or no wallet address
-    if (!areFilesNotificationsEnabled || !polkadotAddress) return;
+    (async () => {
+      try {
+        const results = await Promise.all([
+          listen<SyncOutcome>("hcfs_sync_completed", (e) => {
+            const o = e.payload;
+            const totalCompleted =
+              o.files_uploaded + o.files_downloaded + o.files_deleted_locally + o.files_deleted_remotely;
+            if (totalCompleted === 0) return;
 
-    // Set up interval to periodically refresh the status - don't call immediately
-    const intervalId = setInterval(getSyncStatus, 1000);
+            // Accumulate counts (multi-drive may fire several events in quick succession)
+            pendingCountsRef.current.uploaded += o.files_uploaded;
+            pendingCountsRef.current.downloaded += o.files_downloaded;
+            pendingCountsRef.current.deletedLocally += o.files_deleted_locally;
+            pendingCountsRef.current.deletedRemotely += o.files_deleted_remotely;
 
-    // Clean up interval on component unmount
-    return () => clearInterval(intervalId);
-  }, [
-    areFilesNotificationsEnabled,
-    refreshUnread,
-    setSyncPercent,
-    syncStatus,
-    setSyncStatus,
-    polkadotAddress,
-  ]);
+            // Capture file details NOW, before the session resets
+            captureFileDetails();
+
+            // Debounce: wait 2s after last completion event to aggregate across drives
+            if (debounceTimerRef.current) {
+              clearTimeout(debounceTimerRef.current);
+            }
+            debounceTimerRef.current = setTimeout(() => {
+              debounceTimerRef.current = null;
+              flushNotification();
+            }, 2000);
+          }),
+          listen<SyncError>("hcfs_sync_error", async (e) => {
+            if (cancelled || !userAddress) return;
+            const label = e.payload.label || "default";
+            const timestamp = new Date().toISOString();
+            await addNotification({
+              userAddress,
+              notificationType: "Files",
+              notificationSubtype: `FileSyncError-${timestamp}`,
+              notificationTitleText: "Sync Failed",
+              notificationDescription: `Sync failed for folder "${label}": ${e.payload.error}`,
+              notificationLinkText: "View Files",
+              notificationLink: "/files",
+            });
+            await refreshUnread();
+          }),
+        ]);
+        if (cancelled) {
+          results.forEach((u) => u());
+        } else {
+          unsubs.push(...results);
+        }
+      } catch (err) {
+        console.warn("[FilesNotification] Failed to register event listeners:", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsubs.forEach((u) => u());
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+    };
+  }, [areFilesNotificationsEnabled, polkadotAddress, oauthSession, refreshUnread]);
 
   useEffect(() => {
     refreshEnabledTypes();
   }, [refreshEnabledTypes]);
-
-  return { syncStatus, invokeCount };
 }

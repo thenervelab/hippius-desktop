@@ -46,7 +46,7 @@ const ComingSoon: React.FC<ComingSoonProps> = ({
     };
 
     const sizeStyles = {
-        small: "px-3 py-1.5 text-[10px]",
+        small: "px-3 py-1.5 text-[0.625rem]",
         medium: "px-4 py-2 text-xs",
         large: "px-6 py-3 text-sm",
     };

@@ -25,7 +25,7 @@ const VncConsole: React.FC<VncConsoleProps> = ({
       {/* Status Bar */}
       <div className=" w-full bg-white border-b border-grey-80 py-3.5 flex items-center justify-center">
         {isLoading ? (
-          <Skeleton className="!h-[24px] !w-[300px]" />
+          <Skeleton className="!h-[1.5rem] !w-[18.75rem]" />
         ) : (
           <div className="flex items-center gap-1">
             <StatusCell value="Connected" className="p-0" />
@@ -35,7 +35,7 @@ const VncConsole: React.FC<VncConsoleProps> = ({
           </div>
         )}
       </div>
-      <div className="w-full sm:h-[664px] p-3 sm:p-10 bg-white bg-[url('/vnc-bg-grid.png')] bg-repeat-round bg-cove">
+      <div className="w-full @sm:h-[41.5rem] p-3 @sm:p-10 bg-white bg-[url('/vnc-bg-grid.png')] bg-repeat-round bg-cove">
         {/* VNC Console Content */}
         <div className="relative w-full h-full    ">
           <img

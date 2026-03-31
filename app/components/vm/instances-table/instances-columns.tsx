@@ -49,7 +49,7 @@ export const getDesktopColumns = (
     minSize: 150,
     maxSize: 300,
     meta: {
-      cellClassName: "!max-w-[300px] !min-w-[150px] !w-[200px]",
+      cellClassName: "!max-w-[18.75rem] !min-w-[9.375rem] !w-[12.5rem]",
     },
   }),
   columnHelper.accessor("flavor", {

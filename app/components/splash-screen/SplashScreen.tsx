@@ -34,10 +34,9 @@ const SplashScreen = () => {
   });
   const nebulaInstalled = useAtomValue(nebulaInstalledAtom);
 
-  // Get dynamic phase content based on installation state
   const phaseContent = useMemo(() => {
-    return getPhaseContent(nebulaInstalled);
-  }, [nebulaInstalled]);
+    return getPhaseContent();
+  }, []);
 
   // Show progress bar during setup phases (both fresh install and when already installed)
   // Only hide progress bar when status is still unknown (null) or explicitly disabled
@@ -139,10 +138,10 @@ const SplashScreen = () => {
               href="/"
             >
               <RevealTextLine rotate reveal={inView}>
-                <Icons.HippiusLogoLoader className="h-[100px] w-[100px]" />
+                <Icons.HippiusLogoLoader className="h-[min(100px,14vh)] w-[min(100px,14vh)]" />
               </RevealTextLine>
               <RevealTextLine reveal={inView} className="delay-300">
-                <span className="text-[32px] font-medium leading-[40px]">
+                <span className="text-[2rem] font-medium leading-[2.5rem]">
                   Hippius
                 </span>
               </RevealTextLine>
@@ -161,7 +160,7 @@ const SplashScreen = () => {
       {showProgress && !showProgressBar && (
         <AnimatedProgressIcon
           status={progressData?.status}
-          icon={<Icons.SplashHippiusLogo className="h-[73px] w-[74px]" />}
+          icon={<Icons.SplashHippiusLogo className="h-[min(73px,11vh)] w-[min(74px,11vh)]" />}
           step={isUpdateCheckPhase ? -1 : step}
           showProgressBar={showProgressBar}
         />
@@ -174,8 +173,8 @@ const SplashScreen = () => {
             <div
               ref={ref}
               className="flex flex-col text-lg items-center absolute z-20
-            justify-center gap-y-2 duration-300"
-              style={{ top: showProgressBar ? "72%" : "56%" }}
+            justify-center gap-y-1 duration-300"
+              style={{ bottom: showProgressBar ? "12%" : "30%" }}
             >
               {showProgressBar && (
                 <RevealTextLine rotate reveal={inView}>
@@ -191,7 +190,7 @@ const SplashScreen = () => {
                     exit={{ opacity: 0, y: -30 }}
                     transition={{ duration: 0.3 }}
                   >
-                    <span className="text-white text-[22px] font-medium">
+                    <span className="text-white text-[1.375rem] font-medium">
                       {progressData?.status}
                     </span>
                   </motion.div>
@@ -206,7 +205,7 @@ const SplashScreen = () => {
                     exit={{ opacity: 0, y: -30 }}
                     transition={{ duration: 0.3 }}
                   >
-                    <span className="text-sm font-medium text-white">
+                    <span className="text-[0.875rem] font-medium text-white">
                       {progressData?.subStatus}
                     </span>
                   </motion.div>

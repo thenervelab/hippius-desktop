@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Fluid root font-size: scales text proportionally with window width.
+   At ~1073px and below → 13px (min), at 1320px (default) → 16px, wider → 16px (max).
+   --zoom-factor (set by JS) lets Cmd/Ctrl +/- scale everything further. */
+html {
+  --zoom-factor: 1;
+  font-size: calc(clamp(13px, 1.212vw, 16px) * var(--zoom-factor));
+}
+
 :root {
   /* Primary Shades */
   --primary-100: 233 239 251;
@@ -217,8 +225,8 @@
 }
 
 .visx-tooltip-glyph > svg {
-  width: 8px;
-  height: 8px;
+  width: 0.5rem;
+  height: 0.5rem;
 }
 @keyframes spin {
   to {
@@ -240,6 +248,18 @@
     background-color: #5c8eef;
   }
 }
+
+@keyframes dotPulse {
+  0% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
 .pulse-blue {
   animation: pulseBlue 1s infinite;
 }
@@ -259,27 +279,38 @@ input[type="password"]::-ms-clear {
 /* globals.css */
 .toaster-auth-aware {
   position: fixed !important;
-  right: 24px !important;
-  /* default = 24px; auth layer can raise this dynamically */
-  bottom: var(--toast-bottom-offset, 24px) !important;
+  right: 1.5rem !important;
+  /* default = 1.5rem; auth layer can raise this dynamically */
+  bottom: var(--toast-bottom-offset, 1.5rem) !important;
   z-index: 100000; /* above page chrome */
+  pointer-events: none; /* let clicks pass through the container */
+}
+
+.toaster-auth-aware > * {
+  pointer-events: auto; /* only individual toasts capture clicks */
+}
+
+html.body-scroll-locked,
+body.body-scroll-locked {
+  height: 100%;
+  overflow: hidden;
 }
 
 /* Custom toast styles with close button on the right */
 [data-sonner-toast] {
   display: flex !important;
   align-items: center !important;
-  gap: 12px !important;
+  gap: 0.75rem !important;
 }
 
 [data-sonner-toast] [data-close-button] {
   position: absolute !important;
-  right: 12px !important;
+  right: 0.5rem !important;
   left: auto !important;
-  top: 50% !important;
-  transform: translateY(-50%) !important;
+  top: 0.5rem !important;
+  transform: none !important;
   margin: 0 !important;
-  padding: 4px !important;
+  padding: 0.25rem !important;
   border: none !important;
   background: transparent !important;
   cursor: pointer !important;
@@ -293,5 +324,5 @@ input[type="password"]::-ms-clear {
 
 [data-sonner-toast] [data-content] {
   flex: 1 !important;
-  padding-right: 32px !important;
+  padding-right: 2rem !important;
 }

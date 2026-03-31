@@ -1,2295 +1,1323 @@
-use anyhow::{Result, anyhow};
-use aws_sdk_s3::Client;
-use aws_sdk_s3::error::SdkError;
-use aws_sdk_s3::operation::get_object::GetObjectError;
-use aws_sdk_s3::primitives::ByteStream;
-use hex;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::io::{self, Read};
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::fs as tokio_fs;
-use tokio::time::{Duration, sleep};
+//! Consolidated sync engine state.
+//!
+//! Lives as `AppState.sync: Arc<SyncEngine>` (see `app_state.rs`). Tauri
+//! commands access it via `state.sync`, background tasks via
+//! `app.state::<AppState>().sync.clone()`, and sync callbacks capture the
+//! `Arc<SyncEngine>` at setup time.
+//!
+//! All fields use interior mutability so `&SyncEngine` suffices everywhere:
+//! - `AtomicBool` / `AtomicI64` for simple flags and counters
+//! - `std::sync::Mutex` for complex types accessed from sync callbacks
+//! - `tokio::sync::Mutex` for drive registry (async-only access)
 
-/// Short, deterministic key derived from the main account id to namespace per-user data.
-pub fn account_key(account_id: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(account_id.as_bytes());
-    let digest = hasher.finalize();
-    hex::encode(&digest)[..8].to_string()
+use crate::hcfs_drive::HcfsDriveManager;
+use crate::sync_progress::SyncProgressState;
+use crate::sync_shared::{HcfsSyncState, SyncActivityItem, SyncEngineHealth};
+
+use std::collections::HashMap;
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
+use tauri::{AppHandle, Emitter};
+use tokio::sync::Mutex as TokioMutex;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use tracing::{info, warn};
+
+/// Per-drive state stored in the drives registry.
+///
+/// The `manager` is behind its own `TokioMutex` so syncing one drive does not
+/// block access to other drives. The `cancel_token` is replaced at the start
+/// of each sync cycle; calling `.cancel()` on it aborts the in-progress sync
+/// for this drive without touching the drives map lock.
+pub struct DriveSlot {
+    pub manager: Arc<TokioMutex<HcfsDriveManager>>,
+    pub cancel_token: CancellationToken,
 }
 
-/* =============================== Policy ===================================== */
+/// Maximum number of recent activity items to keep per drive.
+const MAX_ACTIVITY: usize = 100;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeletePolicy {
-    MirrorLocalDeletes,
-    RestoreFromRemote,
-    LocalOnlyDeletes, // “remote-backup”: deletes are local-only
-    UploadOnly,       // no downloads for new keys; conflict => rename local + upload conflict
+/// RAII guard that sets `token_refreshing` to true on creation and false on drop.
+/// Holds an `Arc<SyncEngine>` so it works without global state.
+pub struct TokenRefreshGuard {
+    sync: std::sync::Arc<SyncEngine>,
 }
 
-/* ============================ Manifest & Prunefile ========================== */
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct FileMeta {
-    #[serde(default)]
-    pub path: String,
-    #[serde(default)]
-    pub etag: String,
-    #[serde(default)]
-    pub cid: String,
-    #[serde(default)]
-    pub deletion_count: u32,
-    #[serde(default)]
-    pub resurrection_count: u32,
-    #[serde(default)]
-    pub renamed_to: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct Manifest {
-    pub entries: HashMap<String, FileMeta>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct PruneEntry {
-    #[serde(default)]
-    pub present: bool,
-    #[serde(default)]
-    pub cid: String,
-    #[serde(default)]
-    pub deletion_count: u32,
-    #[serde(default)]
-    pub resurrection_count: u32,
-    #[serde(default)]
-    pub adopted_remote_etag: Option<String>,
-    // explicit local delete intent: blocks LOD re-downloads until recreated locally
-    #[serde(default)]
-    pub locally_deleted: bool,
-
-    // per-file delete policy override; None => use global DeletePolicy
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file_deletion_policy: Option<DeletePolicy>,
-
-    // content id we last *adopted from remote* on this client (set on successful
-    // upload verification or download/adopt).
-    #[serde(default)]
-    pub last_adopted_cid: String,
-}
-
-pub type PrunedMap = HashMap<String, PruneEntry>;
-
-/* =============================== Constants ================================== */
-
-pub const MANIFEST_ROOT: &str = ".hippius_manifest_v1";
-pub const MANIFEST_FOLDER: &str = ".hippius_manifest_v1/";
-pub const MANIFEST_KEY: &str = ".hippius_manifest_v1/sync_state.json";
-#[allow(dead_code)]
-pub const TRASH_PREFIX: &str = ".hippius_manifest_v1/.trash_v0/";
-
-// S3 user metadata key used to store the *previous* content id for an object.
-// S3 will expose this as `metadata()["hippius_prev_cid"]` on GET.
-const META_PREV_CID_KEY: &str = "hippius_prev_cid";
-
-/* ============================ Storage keys ================================== */
-
-pub fn pruned_key_for(prunefile_id: &str) -> String {
-    format!("{}/clients/{}/pruned.json", MANIFEST_ROOT, prunefile_id)
-}
-
-pub fn prunefile_id(account_id: &str, path_hash: &str, private: &str) -> String {
-    let account_key = account_key(account_id);
-    let mut hasher = Sha256::new();
-    hasher.update(b"hippius_manifest_v1");
-    hasher.update(b":");
-    hasher.update(path_hash.as_bytes());
-    hasher.update(b":");
-    hasher.update(account_key.as_bytes());
-    hasher.update(b":");
-    hasher.update(private.as_bytes());
-    let digest = hasher.finalize();
-    hex::encode(&digest[..8])
-}
-
-/* ============================= Retry helpers ================================ */
-
-const OP_MAX_RETRIES: usize = 5;
-const OP_BASE_BACKOFF_MS: u64 = 75;
-
-#[inline]
-fn is_retryable_service_code(code: u16) -> bool {
-    (500..600).contains(&code) || code == 429 || code == 408 || code == 403
-}
-
-#[inline]
-fn is_retryable_sdk_error<E>(e: &SdkError<E>) -> bool {
-    match e {
-        SdkError::ServiceError(se) => is_retryable_service_code(se.raw().status().as_u16()),
-        SdkError::DispatchFailure(_) => true,
-        SdkError::TimeoutError(_) => true,
-        _ => false,
+impl TokenRefreshGuard {
+    pub fn new(sync: std::sync::Arc<SyncEngine>) -> Self {
+        sync.set_token_refreshing(true);
+        Self { sync }
     }
 }
 
-async fn backoff_attempt(attempt: usize) {
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-    let jitter = now_ms % 31;
-    let delay = (OP_BASE_BACKOFF_MS * (1u64 << attempt)).min(1500) + jitter;
-    sleep(Duration::from_millis(delay)).await;
-}
-
-async fn small_jitter_backoff() {
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-    let delay = 50 + (now_ms % 151);
-    sleep(Duration::from_millis(delay)).await;
-}
-
-/* ============================ Small helpers ================================= */
-
-#[inline]
-fn normalize_etag(s: &str) -> String {
-    let t = s.trim();
-    let t = t.strip_prefix("W/").unwrap_or(t).trim();
-    t.trim_matches('"').to_string()
-}
-
-#[inline]
-fn is_deleted(del: u32, res: u32) -> bool {
-    del > res
-}
-
-#[inline]
-fn is_ignored_key(path: &str) -> bool {
-    if let Some(name) = Path::new(path).file_name().and_then(|s| s.to_str()) {
-        let n = name.to_ascii_lowercase();
-        return n == ".ds_store" || n == "thumbs.db";
+impl Drop for TokenRefreshGuard {
+    fn drop(&mut self) {
+        self.sync.set_token_refreshing(false);
     }
-    false
 }
 
-#[inline]
-fn client_tag8_from(prunefile_id: &str) -> String {
-    let mut tag: String = prunefile_id.chars().take(8).collect();
-    if tag.is_empty() {
-        tag = "noclient".into();
-    }
-    tag
+/// RAII guard that enters review mode for a specific drive on creation.
+/// On drop, exits review mode — unless `commit()` was called (meaning
+/// the review was successfully entered and should stay active).
+pub struct ReviewModeGuard {
+    sync: Arc<SyncEngine>,
+    label: String,
+    committed: bool,
 }
 
-/* ============================== Local scanning ============================== */
-
-fn rel_key(root: &Path, p: &Path) -> Option<String> {
-    p.strip_prefix(root)
-        .ok()
-        .map(|rp| rp.to_string_lossy().replace('\\', "/"))
-}
-
-fn sha256_file(p: &Path) -> io::Result<String> {
-    let mut f = fs::File::open(p)?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex::encode(hasher.finalize()))
-}
-
-fn visit_dir(map: &mut HashMap<String, FileMeta>, root: &Path, start: &Path) -> io::Result<()> {
-    let mut stack = vec![start.to_path_buf()];
-
-    while let Some(dir) = stack.pop() {
-        if let Some(rel) = rel_key(root, &dir) {
-            if rel.starts_with(MANIFEST_FOLDER) || rel == MANIFEST_ROOT {
-                continue;
-            }
-        }
-
-        for entry in fs::read_dir(&dir)? {
-            let entry = entry?;
-            let p = entry.path();
-
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.is_file() {
-                if let Some(key) = rel_key(root, &p) {
-                    if key.starts_with(MANIFEST_FOLDER) || is_ignored_key(&key) {
-                        continue;
-                    }
-                    let cid = sha256_file(&p).unwrap_or_default();
-                    map.insert(
-                        key.clone(),
-                        FileMeta {
-                            path: key,
-                            etag: String::new(),
-                            cid,
-                            deletion_count: 0,
-                            resurrection_count: 0,
-                            renamed_to: None,
-                        },
-                    );
-                }
-            }
+impl ReviewModeGuard {
+    pub fn new(sync: Arc<SyncEngine>, label: String) -> Self {
+        sync.set_drive_review(&label);
+        Self {
+            sync,
+            label,
+            committed: false,
         }
     }
 
-    Ok(())
+    pub fn commit(mut self) {
+        self.committed = true;
+    }
 }
 
-async fn scan_local(root: &str) -> Result<HashMap<String, FileMeta>> {
-    let root = root.to_string();
-    tokio::task::spawn_blocking(move || {
-        let mut map = HashMap::new();
-        let rootp = Path::new(&root);
-        if rootp.exists() {
-            visit_dir(&mut map, rootp, rootp)?;
+impl Drop for ReviewModeGuard {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.sync.clear_drive_review(&self.label);
         }
-        Ok::<_, io::Error>(map)
-    })
-    .await?
-    .map_err(|e| anyhow!("walk local failed: {e}"))
+    }
 }
 
-/* =============================== S3 I/O ===================================== */
+// Manual Debug impl because several fields (Mutex internals, JoinHandle, AppHandle)
+// don't implement Debug. We only need the derive for Tauri's `manage()`.
+impl std::fmt::Debug for SyncEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncEngine").finish_non_exhaustive()
+    }
+}
 
-async fn load_manifest(client: &Client, bucket: &str) -> Result<(Manifest, Option<String>)> {
-    match client
-        .get_object()
-        .bucket(bucket)
-        .key(MANIFEST_KEY)
-        .send()
-        .await
+pub struct SyncEngine {
+    // ── Drive Registry (async-only access) ──────────────────────────────
+    pub drives: TokioMutex<HashMap<String, DriveSlot>>,
+    pub loop_handle: TokioMutex<Option<JoinHandle<()>>>,
+
+    // ── Atomic Flags (lock-free, any context) ───────────────────────────
+    pub cancel_token: AtomicBool,
+    /// Counter of drives currently syncing. File watcher suppresses events
+    /// when > 0. Replaces the old `AtomicBool` to support concurrent syncs.
+    pub syncs_in_progress: AtomicU32,
+    pub changes_pending: AtomicBool,
+    pub token_refreshing: AtomicBool,
+    pub consecutive_failures: AtomicI64,
+    pub emit_scheduled: AtomicBool,
+    /// Epoch timestamp of the last progress callback. Used by stall detection
+    /// to abort syncs that stop making forward progress (e.g. hung upload).
+    pub last_progress_time: AtomicI64,
+    /// Epoch-second timestamp when the next retry will be attempted after a failure.
+    /// 0 means no retry is scheduled.
+    pub retry_at: AtomicI64,
+    /// Last sync error message (cleared on success).
+    pub last_error: StdMutex<Option<String>>,
+
+    // ── Blocking Mutex State (sync-callback safe) ───────────────────────
+    pub states: StdMutex<HashMap<String, HcfsSyncState>>,
+    pub pending_activity: StdMutex<Vec<SyncActivityItem>>,
+    pub health: StdMutex<SyncEngineHealth>,
+    pub progress: StdMutex<SyncProgressState>,
+    pub app_handle: StdMutex<Option<AppHandle>>,
+    pub last_emit_time: StdMutex<Instant>,
+    pub session_counter: AtomicU64,
+
+    // ── Synced Paths Cache (fallback when drives lock unavailable) ────
+    pub synced_paths_cache:
+        StdMutex<HashMap<String, HashMap<String, crate::commands::file_commands::SyncedFileInfo>>>,
+
+    // ── File Watcher (shared so new drives can be added dynamically) ──
+    pub watcher: StdMutex<Option<notify::RecommendedWatcher>>,
+
+    /// Rename hints captured by the file watcher.
+    /// Drained per-drive at the start of each sync cycle.
+    pub rename_hints: StdMutex<Vec<crate::sync_logic::RenameHint>>,
+
+    /// Maps drive label → sync folder root path.
+    /// Populated when drives are registered, used by
+    /// `apply_rename_to_activity` to convert absolute paths to relative.
+    pub label_roots: StdMutex<HashMap<String, std::path::PathBuf>>,
+}
+
+impl SyncEngine {
+    pub fn new() -> Self {
+        Self {
+            drives: TokioMutex::new(HashMap::new()),
+            loop_handle: TokioMutex::new(None),
+            cancel_token: AtomicBool::new(false),
+            syncs_in_progress: AtomicU32::new(0),
+            changes_pending: AtomicBool::new(false),
+            token_refreshing: AtomicBool::new(false),
+            consecutive_failures: AtomicI64::new(0),
+            emit_scheduled: AtomicBool::new(false),
+            last_progress_time: AtomicI64::new(0),
+            retry_at: AtomicI64::new(0),
+            last_error: StdMutex::new(None),
+            states: StdMutex::new(HashMap::new()),
+            pending_activity: StdMutex::new(Vec::new()),
+            health: StdMutex::new(SyncEngineHealth::default()),
+            progress: StdMutex::new(SyncProgressState {
+                current_session: None,
+                recent_files: Vec::new(),
+                last_updated: crate::sync_progress::now_ms(),
+            }),
+            app_handle: StdMutex::new(None),
+            last_emit_time: StdMutex::new(Instant::now()),
+            session_counter: AtomicU64::new(0),
+            synced_paths_cache: StdMutex::new(HashMap::new()),
+            watcher: StdMutex::new(None),
+            rename_hints: StdMutex::new(Vec::new()),
+            label_roots: StdMutex::new(HashMap::new()),
+        }
+    }
+
+    // ── Cancellation ────────────────────────────────────────────────────
+
+    pub fn request_cancel(&self) {
+        self.cancel_token.store(true, Ordering::SeqCst);
+    }
+
+    pub fn clear_cancel(&self) {
+        self.cancel_token.store(false, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_token.load(Ordering::SeqCst)
+    }
+
+    // ── Sync-In-Progress Counter ────────────────────────────────────────
+
+    /// Increment when a drive starts syncing.
+    pub fn begin_sync(&self) {
+        self.syncs_in_progress.fetch_add(1, Ordering::Release);
+    }
+
+    /// Decrement when a drive finishes syncing.
+    pub fn end_sync(&self) {
+        self.syncs_in_progress.fetch_sub(1, Ordering::Release);
+    }
+
+    /// True when at least one drive is actively syncing.
+    pub fn is_any_sync_in_progress(&self) -> bool {
+        self.syncs_in_progress.load(Ordering::Acquire) > 0
+    }
+
+    /// True when OTHER drives (besides the caller) are still syncing.
+    /// Used to defer session completion until the last drive finishes,
+    /// preventing the sync widget from disappearing prematurely.
+    pub fn other_syncs_in_progress(&self) -> bool {
+        self.syncs_in_progress.load(Ordering::Acquire) > 1
+    }
+
+    /// Reset counter to zero (used during full stop).
+    pub fn reset_sync_counter(&self) {
+        self.syncs_in_progress.store(0, Ordering::Release);
+    }
+
+    // ── Stall Detection ────────────────────────────────────────────────
+
+    /// Record that forward progress was just made (called from every
+    /// progress callback).
+    pub fn touch_progress_time(&self) {
+        self.last_progress_time
+            .store(chrono::Utc::now().timestamp(), Ordering::Release);
+    }
+
+    /// Reset the progress clock at the start of a sync cycle.
+    pub fn reset_progress_time(&self) {
+        self.last_progress_time
+            .store(chrono::Utc::now().timestamp(), Ordering::Release);
+    }
+
+    /// Returns `true` when no progress callback has fired for 3 minutes,
+    /// indicating the sync is probably hung.
+    pub fn is_progress_stalled(&self) -> bool {
+        let last = self.last_progress_time.load(Ordering::Acquire);
+        if last == 0 {
+            return false;
+        }
+        (chrono::Utc::now().timestamp() - last) > 180
+    }
+
+    // ── Review Mode (per-drive) ────────────────────────────────────────
+
+    /// Enter review mode for a specific drive (only if not in cooldown).
+    /// Returns true if review mode was entered, false if cooldown is active.
+    pub fn set_drive_review(&self, label: &str) -> bool {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut states = self.states.lock().unwrap_or_else(|p| p.into_inner());
+        let s = states.entry(label.to_string()).or_default();
+        if s.review_cooldown_until > now {
+            return false;
+        }
+        s.in_review = true;
+        s.review_entered_at = now;
+        true
+    }
+
+    /// Check if a specific drive is in review mode.
+    pub fn is_drive_in_review(&self, label: &str) -> bool {
+        let states = self.states.lock().unwrap_or_else(|p| p.into_inner());
+        states.get(label).map_or(false, |s| s.in_review)
+    }
+
+    /// Exit review mode for a specific drive and start a 60-second cooldown
+    /// that prevents the same conflict from immediately re-triggering the banner.
+    pub fn clear_drive_review(&self, label: &str) {
+        let cooldown_ms = 60_000; // 60 seconds
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut states = self.states.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(s) = states.get_mut(label) {
+            s.in_review = false;
+            s.review_entered_at = 0;
+            s.review_cooldown_until = now + cooldown_ms;
+        }
+    }
+
+    /// Exit review mode for ALL drives with cooldown (used during full stop/reset).
+    pub fn clear_all_reviews(&self) {
+        let cooldown_ms = 60_000;
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut states = self.states.lock().unwrap_or_else(|p| p.into_inner());
+        for s in states.values_mut() {
+            s.in_review = false;
+            s.review_entered_at = 0;
+            s.review_cooldown_until = now + cooldown_ms;
+        }
+    }
+
+    // ── Token Refresh ───────────────────────────────────────────────────
+
+    pub fn is_token_refreshing(&self) -> bool {
+        self.token_refreshing.load(Ordering::SeqCst)
+    }
+
+    pub fn set_token_refreshing(&self, v: bool) {
+        self.token_refreshing.store(v, Ordering::SeqCst);
+    }
+
+    // ── Consecutive Failures ────────────────────────────────────────────
+
+    pub fn record_sync_failure(&self) -> i64 {
+        self.consecutive_failures.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    pub fn reset_sync_failures(&self) {
+        self.consecutive_failures.store(0, Ordering::SeqCst);
+    }
+
+    pub fn get_sync_failures(&self) -> i64 {
+        self.consecutive_failures.load(Ordering::SeqCst)
+    }
+
+    /// Clear all failure-related state after a successful sync.
+    pub fn clear_failure_state(&self) {
+        self.reset_sync_failures();
+        self.retry_at.store(0, Ordering::Relaxed);
+        if let Ok(mut guard) = self.last_error.lock() {
+            *guard = None;
+        }
+    }
+
+    // ── Health ──────────────────────────────────────────────────────────
+
+    pub fn get_health(&self) -> SyncEngineHealth {
+        self.health
+            .lock()
+            .unwrap_or_else(|p| {
+                warn!("Poisoned mutex recovered in get_health");
+                p.into_inner()
+            })
+            .clone()
+    }
+
+    pub fn reset_health(&self) {
+        let mut health = self.health.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in reset_health");
+            p.into_inner()
+        });
+        *health = SyncEngineHealth::default();
+    }
+
+    // ── Per-Drive Sync State ────────────────────────────────────────────
+
+    pub fn update_state<F>(&self, label: &str, f: F)
+    where
+        F: FnOnce(&mut HcfsSyncState),
     {
-        Ok(obj) => {
-            let mut body = obj.body.collect().await?.to_vec();
-            const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
-            if body.starts_with(BOM) {
-                body.drain(..BOM.len());
-            }
-            if body.is_empty() {
-                return Ok((Manifest::default(), obj.e_tag.map(|e| normalize_etag(&e))));
-            }
-            let m: Manifest = serde_json::from_slice(&body).map_err(|e| {
-                anyhow!(
-                    "manifest load failed: invalid JSON ({} bytes): {e}",
-                    body.len()
-                )
-            })?;
-            Ok((m, obj.e_tag.map(|e| normalize_etag(&e))))
-        }
-        Err(SdkError::ServiceError(ref se)) => {
-            let code = se.raw().status().as_u16();
-            if code == 403 {
-                return Ok((Manifest::default(), None));
-            }
-            match se.err() {
-                GetObjectError::NoSuchKey(_) => Ok((Manifest::default(), None)),
-                other => Err(anyhow!("manifest load failed: {other:?}"))?,
-            }
-        }
-        Err(e) => Err(anyhow!("manifest load failed: {e:?}"))?,
+        let mut states = self.states.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in update_state");
+            p.into_inner()
+        });
+        let state = states.entry(label.to_string()).or_default();
+        f(state);
     }
-}
 
-async fn save_manifest_cas(
-    client: &Client,
-    bucket: &str,
-    manifest: &Manifest,
-    previous_etag: Option<&str>,
-) -> Result<(bool, Option<String>)> {
-    println!("[Sync] trying to upload manifest to S3");
-    let body_bytes = serde_json::to_vec_pretty(manifest)?;
-    let mut req = client
-        .put_object()
-        .bucket(bucket)
-        .key(MANIFEST_KEY)
-        .body(ByteStream::from(body_bytes));
-    req = if let Some(etag) = previous_etag {
-        req.if_match(etag)
-    } else {
-        req.if_none_match("*")
-    };
-    match req.send().await {
-        Ok(out) => Ok((true, out.e_tag.map(|e| normalize_etag(&e)))),
-        Err(SdkError::ServiceError(ref se)) if se.raw().status().as_u16() == 412 => {
-            Ok((false, None))
-        }
-        Err(e) => Err(anyhow!("manifest save failed: {e:?}")),
+    pub fn reset_all_states(&self) {
+        let mut states = self.states.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in reset_all_states");
+            p.into_inner()
+        });
+        states.clear();
     }
-}
 
-/* ---- Robust remote listing with retries on 403/5xx/429 ---- */
-async fn list_remote(client: &Client, bucket: &str) -> Result<HashMap<String, FileMeta>> {
-    let mut attempt = 0usize;
-    loop {
-        let mut out = HashMap::new();
-        let mut token: Option<String> = None;
-        let mut page_ok = true;
+    pub fn remove_state(&self, label: &str) {
+        let mut states = self.states.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in remove_state");
+            p.into_inner()
+        });
+        states.remove(label);
+    }
 
-        loop {
-            let mut req = client.list_objects_v2().bucket(bucket).max_keys(1000);
-            if let Some(t) = &token {
-                req = req.continuation_token(t);
-            }
+    // ── Pending Activity ────────────────────────────────────────────────
 
-            match req.send().await {
-                Ok(resp) => {
-                    if let Some(contents) = resp.contents {
-                        for obj in contents {
-                            if let Some(key) = obj.key {
-                                if key == MANIFEST_KEY || key.starts_with(MANIFEST_FOLDER) {
-                                    continue;
-                                }
-                                if is_ignored_key(&key) {
-                                    continue;
-                                }
-                                out.insert(
-                                    key.clone(),
-                                    FileMeta {
-                                        path: key.clone(),
-                                        etag: obj
-                                            .e_tag
-                                            .map(|e| normalize_etag(&e))
-                                            .unwrap_or_default(),
-                                        cid: String::new(),
-                                        deletion_count: 0,
-                                        resurrection_count: 0,
-                                        renamed_to: None,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    if resp.is_truncated.unwrap_or(false) {
-                        token = resp.next_continuation_token;
-                        continue;
-                    }
-                    break;
+    pub fn add_pending_activity(&self, item: SyncActivityItem) {
+        let mut pending = self.pending_activity.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in add_pending_activity");
+            p.into_inner()
+        });
+        let already_exists = pending.iter().any(|existing| {
+            existing.file_name == item.file_name
+                && existing.action == item.action
+                && existing.label == item.label
+                && existing.size_bytes == item.size_bytes
+        });
+        if !already_exists {
+            pending.push(item);
+        }
+    }
+
+    pub fn commit_pending_activity_for_label(&self, label: &str) {
+        let items: Vec<SyncActivityItem> = {
+            let mut pending = self.pending_activity.lock().unwrap_or_else(|p| {
+                warn!("Poisoned mutex recovered in commit_pending_activity_for_label");
+                p.into_inner()
+            });
+            let (matching, remaining): (Vec<_>, Vec<_>) =
+                pending.drain(..).partition(|item| item.label == label);
+            *pending = remaining;
+            matching
+        };
+        if !items.is_empty() {
+            info!(
+                "[Sync] Committing {} activity items for label '{}' to recent files",
+                items.len(),
+                label
+            );
+            self.update_state(label, |state| {
+                for item in &items {
+                    info!("[Sync] -> {} ({})", item.file_name, item.action);
                 }
-                Err(e) => {
-                    page_ok = false;
-                    if let SdkError::ServiceError(se) = &e {
-                        if is_retryable_service_code(se.raw().status().as_u16()) {
-                            break;
-                        }
-                    }
-                    if is_retryable_sdk_error(&e) {
+                for item in items {
+                    state.add_activity(item);
+                }
+            });
+        }
+    }
+
+    pub fn discard_pending_activity_for_label(&self, label: &str) {
+        let mut pending = self.pending_activity.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in discard_pending_activity_for_label");
+            p.into_inner()
+        });
+        let before = pending.len();
+        pending.retain(|item| item.label != label);
+        let removed = before - pending.len();
+        if removed > 0 {
+            info!(
+                "[Sync] Discarding {} pending activity items for label '{}' (sync failed or no real transfers)",
+                removed, label
+            );
+        }
+    }
+
+    pub fn discard_all_pending_activity(&self) {
+        let mut pending = self.pending_activity.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in discard_all_pending_activity");
+            p.into_inner()
+        });
+        if !pending.is_empty() {
+            info!(
+                "[Sync] Discarding all {} pending activity items",
+                pending.len()
+            );
+        }
+        pending.clear();
+    }
+
+    // ── Combined Sync Status (Tauri commands) ───────────────────────────
+
+    pub fn get_sync_status(&self) -> crate::sync_shared::CombinedSyncState {
+        let states = self.states.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in get_sync_status");
+            p.into_inner()
+        });
+
+        let is_syncing = states.values().any(|s| s.is_syncing);
+        let last_sync_time = states.values().filter_map(|s| s.last_sync_time).max();
+
+        let mut all_activity: Vec<SyncActivityItem> = states
+            .values()
+            .flat_map(|s| s.recent_activity.iter().cloned())
+            .collect();
+        all_activity.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        all_activity.truncate(MAX_ACTIVITY);
+
+        crate::sync_shared::CombinedSyncState {
+            is_syncing,
+            last_sync_time,
+            recent_activity: all_activity.into(),
+        }
+    }
+
+    pub fn get_sync_activity(
+        &self,
+        limit: Option<usize>,
+        label: Option<String>,
+    ) -> Vec<SyncActivityItem> {
+        let max = limit.unwrap_or(50);
+
+        // Committed activity from previous sync cycles
+        let states = self.states.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in get_sync_activity");
+            p.into_inner()
+        });
+
+        let mut all: Vec<SyncActivityItem> = if let Some(ref lbl) = label {
+            states
+                .get(lbl)
+                .map(|s| s.recent_activity.iter().cloned().collect())
+                .unwrap_or_default()
+        } else {
+            states
+                .values()
+                .flat_map(|s| s.recent_activity.iter().cloned())
+                .collect()
+        };
+        drop(states);
+
+        // Include pending activity (files completed during the current
+        // sync cycle that haven't been committed yet). This lets the
+        // frontend show recently synced files before the cycle ends.
+        if let Ok(pending) = self.pending_activity.lock() {
+            for item in pending.iter() {
+                let dominated = label.as_ref().is_some_and(|l| l != &item.label);
+                if !dominated {
+                    all.push(item.clone());
+                }
+            }
+        }
+
+        all.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        all.truncate(max);
+        all
+    }
+
+    // ── App Handle (for snapshot emission) ──────────────────────────────
+
+    pub fn set_app_handle(&self, app: AppHandle) {
+        if let Ok(mut handle) = self.app_handle.lock() {
+            *handle = Some(app);
+        }
+    }
+
+    // ── Snapshot Emission (throttled) ───────────────────────────────────
+
+    pub fn emit_snapshot(&self, immediate: bool) {
+        let mut snapshot = {
+            let state = self.progress.lock().unwrap_or_else(|p| {
+                warn!("Poisoned mutex in emit_snapshot");
+                p.into_inner()
+            });
+            crate::sync_progress::build_snapshot(&state)
+        };
+
+        // Inject retry state from SyncEngine atomics
+        let retry_at = self.retry_at.load(Ordering::Relaxed);
+        if retry_at > 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
+        }
+        snapshot.last_error = self.last_error.lock().ok().and_then(|g| g.clone());
+
+        let app = self.app_handle.lock().ok().and_then(|g| g.clone());
+
+        let Some(app) = app else { return };
+
+        if immediate {
+            if let Ok(mut t) = self.last_emit_time.lock() {
+                *t = Instant::now();
+            }
+            let _ = app.emit("sync_progress_snapshot", &snapshot);
+            return;
+        }
+
+        // Throttled path
+        let should_emit = self
+            .last_emit_time
+            .lock()
+            .ok()
+            .map_or(true, |t| t.elapsed().as_millis() >= 250);
+
+        if should_emit {
+            if let Ok(mut t) = self.last_emit_time.lock() {
+                *t = Instant::now();
+            }
+            let _ = app.emit("sync_progress_snapshot", &snapshot);
+        } else if !self.emit_scheduled.swap(true, Ordering::AcqRel) {
+            let app_clone = app.clone();
+            // Retrieve the SyncEngine from Tauri managed AppState inside the
+            // thread — avoids raw pointers and lifetime issues.
+            std::thread::spawn(move || {
+                use tauri::Manager;
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                let app_state = app_clone.state::<crate::app_state::AppState>();
+                let sync = &app_state.sync;
+                sync.emit_scheduled.store(false, Ordering::Release);
+                let mut snapshot = {
+                    let state = sync.progress.lock().unwrap_or_else(|p| {
+                        warn!("Poisoned mutex in delayed emit");
+                        p.into_inner()
+                    });
+                    crate::sync_progress::build_snapshot(&state)
+                };
+                // Inject retry state
+                let retry_at = sync.retry_at.load(Ordering::Relaxed);
+                if retry_at > 0 {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
+                }
+                snapshot.last_error = sync.last_error.lock().ok().and_then(|g| g.clone());
+                if let Ok(mut t) = sync.last_emit_time.lock() {
+                    *t = Instant::now();
+                }
+                let _ = app_clone.emit("sync_progress_snapshot", &snapshot);
+            });
+        }
+    }
+
+    // ── Synced Paths Cache ───────────────────────────────────────────────
+
+    /// Update the cached synced-paths map for a given drive label.
+    /// Called after each successful sync so the file browser can fall back
+    /// to this snapshot when the drives lock is unavailable.
+    pub fn update_synced_paths_cache(
+        &self,
+        label: &str,
+        paths: HashMap<String, crate::commands::file_commands::SyncedFileInfo>,
+    ) {
+        if let Ok(mut cache) = self.synced_paths_cache.lock() {
+            cache.insert(label.to_string(), paths);
+        }
+    }
+
+    /// Return a clone of the cached synced-paths for `label`, if available.
+    pub fn get_cached_synced_paths(
+        &self,
+        label: &str,
+    ) -> Option<HashMap<String, crate::commands::file_commands::SyncedFileInfo>> {
+        let cache = self.synced_paths_cache.lock().ok()?;
+        cache.get(label).cloned()
+    }
+
+    /// Insert or update a single file entry in the synced-paths cache.
+    /// Called from the `on_file_synced` progress callback to make arion
+    /// hashes available to the frontend before the full sync cycle ends.
+    pub fn upsert_synced_path(
+        &self,
+        label: &str,
+        rel_path: String,
+        info: crate::commands::file_commands::SyncedFileInfo,
+    ) {
+        if let Ok(mut cache) = self.synced_paths_cache.lock() {
+            cache
+                .entry(label.to_string())
+                .or_default()
+                .insert(rel_path, info);
+        }
+    }
+
+    // ── Rename Hints ────────────────────────────────────────────────────
+
+    /// Push a rename hint captured by the file watcher.
+    /// Drops the hint if the buffer is at capacity (10 000) to prevent
+    /// unbounded memory growth under bulk-rename workloads.
+    ///
+    /// Also updates existing activity items so the recent-files list
+    /// reflects the new filename immediately (without waiting for a
+    /// full sync cycle).
+    pub fn push_rename_hint(&self, hint: crate::sync_logic::RenameHint) {
+        const MAX_RENAME_HINTS: usize = 10_000;
+
+        // Update activity items before storing the hint
+        self.apply_rename_to_activity(&hint);
+
+        let mut guard = self.rename_hints.lock().unwrap_or_else(|p| {
+            warn!("Poisoned rename_hints mutex recovered");
+            p.into_inner()
+        });
+        if guard.len() >= MAX_RENAME_HINTS {
+            return;
+        }
+        guard.push(hint);
+    }
+
+    /// Drain rename hints whose paths fall under `sync_root`.
+    /// Hints for other drives remain in the buffer. This prevents
+    /// concurrent drives from stealing each other's hints.
+    pub fn drain_rename_hints_for_root(
+        &self,
+        sync_root: &std::path::Path,
+    ) -> Vec<crate::sync_logic::RenameHint> {
+        let mut guard = self.rename_hints.lock().unwrap_or_else(|p| {
+            warn!("Poisoned rename_hints mutex recovered in drain");
+            p.into_inner()
+        });
+        let mut matched = Vec::new();
+        let mut remaining = Vec::new();
+        for hint in guard.drain(..) {
+            if hint.old_path.starts_with(sync_root)
+                || hint.new_path.starts_with(sync_root)
+            {
+                matched.push(hint);
+            } else {
+                remaining.push(hint);
+            }
+        }
+        *guard = remaining;
+        matched
+    }
+
+    // ── Label Roots (for rename → activity mapping) ──────────────────
+
+    /// Register the sync folder root for a drive label.
+    pub fn register_label_root(
+        &self,
+        label: String,
+        root: std::path::PathBuf,
+    ) {
+        let mut guard = self.label_roots.lock().unwrap_or_else(|p| {
+            warn!("Poisoned label_roots mutex recovered");
+            p.into_inner()
+        });
+        guard.insert(label, root);
+    }
+
+    /// Remove a label root (when a drive is stopped).
+    pub fn unregister_label_root(&self, label: &str) {
+        let mut guard = self.label_roots.lock().unwrap_or_else(|p| {
+            warn!("Poisoned label_roots mutex recovered");
+            p.into_inner()
+        });
+        guard.remove(label);
+    }
+
+    /// Clear all label roots (on full stop).
+    pub fn clear_label_roots(&self) {
+        let mut guard = self.label_roots.lock().unwrap_or_else(|p| {
+            warn!("Poisoned label_roots mutex recovered");
+            p.into_inner()
+        });
+        guard.clear();
+    }
+
+    /// Update file_name in committed and pending activity items when
+    /// a file is renamed on disk. Emits `hcfs_activity_updated` so
+    /// the frontend can refresh the recent-files list.
+    fn apply_rename_to_activity(
+        &self,
+        hint: &crate::sync_logic::RenameHint,
+    ) {
+        // Find the label and relative paths for this rename hint
+        let label_roots = self.label_roots.lock().unwrap_or_else(|p| {
+            warn!("Poisoned label_roots mutex in apply_rename");
+            p.into_inner()
+        });
+
+        let mut matched_label = None;
+        let mut old_relative = None;
+        let mut new_relative = None;
+
+        for (label, root) in label_roots.iter() {
+            if hint.old_path.starts_with(root) {
+                if let Ok(old_rel) = hint.old_path.strip_prefix(root) {
+                    let new_rel = if hint.new_path.starts_with(root) {
+                        hint.new_path.strip_prefix(root).ok()
+                    } else {
+                        None
+                    };
+                    if let Some(nr) = new_rel {
+                        matched_label = Some(label.clone());
+                        old_relative =
+                            Some(old_rel.to_string_lossy().to_string());
+                        new_relative =
+                            Some(nr.to_string_lossy().to_string());
                         break;
                     }
-                    return Err(anyhow!("list_remote failed: {e:?}"));
                 }
             }
         }
+        drop(label_roots);
 
-        if page_ok {
-            return Ok(out);
-        }
-        if attempt + 1 >= OP_MAX_RETRIES {
-            return Err(anyhow!("list_remote failed persistently (ban/timeout)"));
-        }
-        backoff_attempt(attempt).await;
-        attempt += 1;
-    }
-}
+        let (label, old_rel, new_rel) =
+            match (matched_label, old_relative, new_relative) {
+                (Some(l), Some(o), Some(n)) => (l, o, n),
+                _ => return,
+            };
 
-async fn get_object_bytes_with_retries(
-    client: &Client,
-    bucket: &str,
-    key: &str,
-) -> Result<(Vec<u8>, Option<String>, Option<String>)> {
-    let mut attempt = 0;
-    loop {
-        match client.get_object().bucket(bucket).key(key).send().await {
-            Ok(obj) => {
-                let et = obj.e_tag.clone().map(|e| normalize_etag(&e));
-                let prev_cid = obj
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.get(META_PREV_CID_KEY))
-                    .cloned();
-                match obj.body.collect().await {
-                    Ok(b) => return Ok((b.into_bytes().to_vec(), et, prev_cid)),
-                    Err(e) => {
-                        if attempt + 1 >= OP_MAX_RETRIES {
-                            return Err(anyhow!("GET body read failed for {key}: {e:?}"));
-                        }
+        let mut updated = false;
+
+        // Update committed activity (per-drive state)
+        {
+            let mut states = self.states.lock().unwrap_or_else(|p| {
+                warn!("Poisoned states mutex in apply_rename");
+                p.into_inner()
+            });
+            if let Some(state) = states.get_mut(&label) {
+                for item in &mut state.recent_activity {
+                    if item.file_name == old_rel {
+                        info!(
+                            old = %old_rel,
+                            new = %new_rel,
+                            label = %label,
+                            "Renamed file in committed activity",
+                        );
+                        item.file_name.clone_from(&new_rel);
+                        updated = true;
                     }
                 }
             }
-            Err(e) => {
-                if let SdkError::ServiceError(se) = &e {
-                    if se.raw().status().as_u16() == 404 {
-                        return Err(anyhow!("GET 404 for {key}"));
-                    }
-                }
-                if !is_retryable_sdk_error(&e) || attempt + 1 >= OP_MAX_RETRIES {
-                    return Err(anyhow!("GET failed for {key}: {e:?}"));
-                }
-            }
         }
-        backoff_attempt(attempt).await;
-        attempt += 1;
-    }
-}
 
-async fn remote_equals_local(
-    client: &Client,
-    bucket: &str,
-    key: &str,
-    local_bytes: &[u8],
-) -> Result<(bool, Option<String>)> {
-    let (remote_bytes, remote_etag, _remote_prev_cid) =
-        get_object_bytes_with_retries(client, bucket, key).await?;
-    let local_cid = hex::encode(Sha256::digest(local_bytes));
-    let remote_cid = hex::encode(Sha256::digest(&remote_bytes));
-    Ok((local_cid == remote_cid, remote_etag))
-}
-
-/* ============================ Local path utils ============================== */
-
-fn key_to_local_path(local_root: &str, key: &str) -> PathBuf {
-    let mut pb = PathBuf::from(local_root);
-    for seg in key.split('/') {
-        if !seg.is_empty() {
-            pb.push(seg);
-        }
-    }
-    pb
-}
-
-async fn ensure_parent(path: &Path) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        tokio_fs::create_dir_all(parent).await?;
-    }
-    Ok(())
-}
-
-async fn safe_rename(src: &Path, dst: &Path) -> Result<()> {
-    if let Err(_e) = tokio_fs::rename(src, dst).await {
-        ensure_parent(dst).await?;
-        let data = tokio_fs::read(src).await?;
-        tokio_fs::write(dst, &data).await?;
-        tokio_fs::remove_file(src).await.map_err(|e2| {
-            anyhow!(
-                "rename fallback remove failed after copy (src={:?}, dst={:?}): {e2:?}",
-                src,
-                dst
-            )
-        })?;
-        if let Err(e3) = tokio_fs::metadata(dst).await {
-            return Err(anyhow!(
-                "rename fallback verification failed (dst missing): {e3:?}"
-            ));
-        }
-    }
-    Ok(())
-}
-
-/* ============================ Conflict helpers ============================= */
-
-fn join_rel(left: &str, right: &str) -> String {
-    if left.is_empty() {
-        right.to_string()
-    } else {
-        format!(
-            "{}/{}",
-            left.trim_end_matches('/'),
-            right.trim_start_matches('/')
-        )
-    }
-}
-
-fn split_dir_stem_ext(original: &str) -> (String, String, String) {
-    let p = Path::new(original);
-    let parent: String = p
-        .parent()
-        .map(|pp| pp.to_string_lossy().replace('\\', "/"))
-        .unwrap_or_default();
-    let stem: String = p
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
-    let ext: String = p
-        .extension()
-        .map(|e| e.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    (parent, stem, ext)
-}
-
-/// <name[.ext]>_conflict_<remoteetag16|noetag>_<localcid16|nocid>_<client8>
-fn make_conflict_name_deterministic(
-    original: &str,
-    local_cid: &str,
-    remote_etag: &str,
-    client_tag: &str,
-) -> String {
-    use std::fmt::Write;
-    let (parent, stem, ext) = split_dir_stem_ext(original);
-
-    let ne = normalize_etag(remote_etag);
-    let etag_tag: String = if ne.is_empty() {
-        "noetag".into()
-    } else {
-        ne.chars().take(16).collect()
-    };
-    let lc_tag: String = if local_cid.is_empty() {
-        "nocid".into()
-    } else {
-        local_cid.chars().take(16).collect()
-    };
-    let suffix = format!("{etag_tag}_{lc_tag}_{client_tag}");
-
-    let mut base = String::new();
-    if ext.is_empty() {
-        let _ = write!(&mut base, "{stem}_conflict_{suffix}");
-    } else {
-        let _ = write!(&mut base, "{stem}_conflict_{suffix}.{ext}");
-    }
-
-    if parent.is_empty() {
-        base
-    } else {
-        join_rel(&parent, &base)
-    }
-}
-
-async fn choose_available_conflict(local_root: &str, desired: &str) -> Result<(String, PathBuf)> {
-    let mut candidate_rel = desired.to_string();
-    let bump_once = |rel: &str, idx: u32| -> String { format!("{rel} ({idx})") };
-    let mut idx: u32 = 2;
-    loop {
-        let full = key_to_local_path(local_root, &candidate_rel);
-        if tokio_fs::metadata(&full).await.is_err() {
-            return Ok((candidate_rel.clone(), full));
-        }
-        candidate_rel = bump_once(&candidate_rel, idx);
-        idx += 1;
-    }
-}
-
-#[allow(dead_code)]
-fn bump_rel_candidate(rel: &str, idx: u32) -> String {
-    let p = Path::new(rel);
-    let parent = p.parent().map(|pp| pp.to_path_buf()).unwrap_or_default();
-    let file_os = p.file_name().unwrap_or_default();
-    let stem = Path::new(file_os)
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
-    let ext = Path::new(file_os)
-        .extension()
-        .map(|e| e.to_string_lossy().into_owned())
-        .unwrap_or_default();
-
-    let bumped = if ext.is_empty() {
-        format!("{stem} ({idx})")
-    } else {
-        format!("{stem} ({idx}).{ext}")
-    };
-    let mut out = parent;
-    out.push(bumped);
-    out.to_string_lossy().replace('\\', "/")
-}
-
-/* --------- Robust conflict publish: retry + bump remote key on 412 ---------- */
-
-async fn publish_conflict_object_with_bumps(
-    client: &Client,
-    bucket: &str,
-    local_bytes: &[u8],
-    desired_key: &str,
-) -> (Option<String>, String) {
-    let mut used_key = desired_key.to_string();
-    let mut bump_idx: u32 = 2;
-    let mut attempt = 0usize;
-    println!(
-        "[Sync] trying to upload conflict object with bumps: {}",
-        used_key
-    );
-    loop {
-        let res = client
-            .put_object()
-            .bucket(bucket)
-            .key(&used_key)
-            .if_none_match("*")
-            .body(ByteStream::from(local_bytes.to_vec()))
-            .send()
-            .await;
-
-        match res {
-            Ok(out) => return (out.e_tag.map(|e| normalize_etag(&e)), used_key),
-            Err(SdkError::ServiceError(ref se)) if se.raw().status().as_u16() == 412 => {
-                used_key = format!("{desired_key} ({bump_idx})");
-                bump_idx += 1;
-                continue;
-            }
-            Err(e) if is_retryable_sdk_error(&e) && attempt + 1 < OP_MAX_RETRIES => {
-                backoff_attempt(attempt).await;
-                attempt += 1;
-                continue;
-            }
-            Err(_) => {
-                backoff_attempt(attempt).await;
-                attempt += 1;
-                continue;
-            }
-        }
-    }
-}
-
-/* ============================ CAS patching ================================= */
-
-#[derive(Debug, Clone)]
-enum ManifestPatch {
-    BumpDeletion {
-        path: String,
-        to: u32,
-    },
-    BumpResurrection {
-        path: String,
-        to: u32,
-    },
-    UpdateEtag {
-        path: String,
-        etag: String,
-    },
-    SetRename {
-        path: String,
-        renamed_to: Option<String>,
-    },
-    ClearRename {
-        path: String,
-    },
-}
-
-fn apply_patches(manifest: &mut Manifest, patches: &[ManifestPatch]) -> bool {
-    let mut changed = false;
-    for p in patches {
-        match p {
-            ManifestPatch::BumpDeletion { path, to } => {
-                let e = manifest.entries.entry(path.clone()).or_insert(FileMeta {
-                    path: path.clone(),
-                    etag: String::new(),
-                    cid: String::new(),
-                    deletion_count: 0,
-                    resurrection_count: 0,
-                    renamed_to: None,
+        // Update pending activity (current sync cycle)
+        {
+            let mut pending =
+                self.pending_activity.lock().unwrap_or_else(|p| {
+                    warn!("Poisoned pending mutex in apply_rename");
+                    p.into_inner()
                 });
-                if e.deletion_count < *to {
-                    e.deletion_count = *to;
-                    changed = true;
+            for item in pending.iter_mut() {
+                if item.file_name == old_rel && item.label == label {
+                    info!(
+                        old = %old_rel,
+                        new = %new_rel,
+                        label = %label,
+                        "Renamed file in pending activity",
+                    );
+                    item.file_name.clone_from(&new_rel);
+                    updated = true;
                 }
             }
-            ManifestPatch::BumpResurrection { path, to } => {
-                let e = manifest.entries.entry(path.clone()).or_insert(FileMeta {
-                    path: path.clone(),
-                    etag: String::new(),
-                    cid: String::new(),
-                    deletion_count: 0,
-                    resurrection_count: 0,
-                    renamed_to: None,
+        }
+
+        // Also update the synced_paths_cache so get_synced_file_metadata
+        // returns the new name before the next sync cycle
+        {
+            let mut cache =
+                self.synced_paths_cache.lock().unwrap_or_else(|p| {
+                    warn!("Poisoned synced_paths_cache in apply_rename");
+                    p.into_inner()
                 });
-                if e.resurrection_count < *to {
-                    e.resurrection_count = *to;
-                    changed = true;
+            if let Some(drive_cache) = cache.get_mut(&label) {
+                if let Some(info) = drive_cache.remove(&old_rel) {
+                    drive_cache.insert(new_rel.clone(), info);
+                    updated = true;
                 }
             }
-            ManifestPatch::UpdateEtag { path, etag } => {
-                let e = manifest.entries.entry(path.clone()).or_insert(FileMeta {
-                    path: path.clone(),
-                    etag: String::new(),
-                    cid: String::new(),
-                    deletion_count: 0,
-                    resurrection_count: 0,
-                    renamed_to: None,
-                });
-                let ne = normalize_etag(etag);
-                if e.etag != ne {
-                    e.etag = ne;
-                    changed = true;
-                }
-            }
-            ManifestPatch::SetRename { path, renamed_to } => {
-                let e = manifest.entries.entry(path.clone()).or_insert(FileMeta {
-                    path: path.clone(),
-                    etag: String::new(),
-                    cid: String::new(),
-                    deletion_count: 0,
-                    resurrection_count: 0,
-                    renamed_to: None,
-                });
-                if &e.renamed_to != renamed_to {
-                    e.renamed_to = renamed_to.clone();
-                    changed = true;
-                }
-            }
-            ManifestPatch::ClearRename { path } => {
-                let e = manifest.entries.entry(path.clone()).or_insert(FileMeta {
-                    path: path.clone(),
-                    etag: String::new(),
-                    cid: String::new(),
-                    deletion_count: 0,
-                    resurrection_count: 0,
-                    renamed_to: None,
-                });
-                if e.renamed_to.is_some() {
-                    e.renamed_to = None;
-                    changed = true;
-                }
+        }
+
+        if updated {
+            // Emit event so frontend refreshes recent files
+            let app = self
+                .app_handle
+                .lock()
+                .ok()
+                .and_then(|g| g.clone());
+            if let Some(app) = app {
+                let _ = app.emit(
+                    crate::sync_events::ACTIVITY_UPDATED,
+                    (),
+                );
             }
         }
     }
-    changed
 }
 
-async fn apply_manifest_patches_cas(
-    client: &Client,
-    bucket: &str,
-    mut manifest: Manifest,
-    mut manifest_etag: Option<String>,
-    patches: &[ManifestPatch],
-    max_retries: usize,
-) -> Result<(Manifest, Option<String>)> {
-    let mut tries = 0usize;
-    loop {
-        let mut patched = manifest.clone();
-        let changed = apply_patches(&mut patched, patches);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync_shared::SyncActivityItem;
 
-        if !changed {
-            return Ok((manifest, manifest_etag));
+    fn activity(name: &str, action: &str, label: &str, size: u64) -> SyncActivityItem {
+        SyncActivityItem {
+            file_name: name.to_string(),
+            action: action.to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            size_bytes: size,
+            label: label.to_string(),
         }
+    }
 
-        let (saved, new_etag) =
-            save_manifest_cas(client, bucket, &patched, manifest_etag.as_deref()).await?;
-        if saved {
-            manifest_etag = new_etag;
-            return Ok((patched, manifest_etag));
-        } else {
-            tries += 1;
-            if tries > max_retries {
-                return Err(anyhow!(
-                    "CAS: manifest save conflicted too many times ({max_retries})"
+    #[test]
+    fn duplicate_pending_activity_is_skipped() {
+        let eng = SyncEngine::new();
+        let item = activity("a.txt", "uploaded", "docs", 100);
+        eng.add_pending_activity(item.clone());
+        eng.add_pending_activity(item);
+        eng.commit_pending_activity_for_label("docs");
+        let states = eng.states.lock().unwrap();
+        assert_eq!(states.get("docs").unwrap().recent_activity.len(), 1);
+    }
+
+    #[test]
+    fn different_action_is_not_deduplicated() {
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity("a.txt", "uploaded", "docs", 100));
+        eng.add_pending_activity(activity("a.txt", "downloaded", "docs", 100));
+        eng.commit_pending_activity_for_label("docs");
+        let states = eng.states.lock().unwrap();
+        assert_eq!(states.get("docs").unwrap().recent_activity.len(), 2);
+    }
+
+    #[test]
+    fn different_size_is_not_deduplicated() {
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity("a.txt", "uploaded", "docs", 100));
+        eng.add_pending_activity(activity("a.txt", "uploaded", "docs", 200));
+        eng.commit_pending_activity_for_label("docs");
+        let states = eng.states.lock().unwrap();
+        assert_eq!(states.get("docs").unwrap().recent_activity.len(), 2);
+    }
+
+    #[test]
+    fn different_label_is_not_deduplicated() {
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity("a.txt", "uploaded", "docs", 100));
+        eng.add_pending_activity(activity("a.txt", "uploaded", "photos", 100));
+        eng.commit_pending_activity_for_label("docs");
+        eng.commit_pending_activity_for_label("photos");
+        let states = eng.states.lock().unwrap();
+        assert_eq!(states.get("docs").unwrap().recent_activity.len(), 1);
+        assert_eq!(states.get("photos").unwrap().recent_activity.len(), 1);
+    }
+
+    #[test]
+    fn commit_moves_matching_label_only() {
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity("d.txt", "uploaded", "docs", 10));
+        eng.add_pending_activity(activity("p.jpg", "uploaded", "photos", 20));
+        eng.commit_pending_activity_for_label("docs");
+        let states = eng.states.lock().unwrap();
+        assert_eq!(states.get("docs").unwrap().recent_activity.len(), 1);
+        assert!(states.get("photos").is_none());
+    }
+
+    #[test]
+    fn discard_removes_matching_label_only() {
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity("d.txt", "uploaded", "docs", 10));
+        eng.add_pending_activity(activity("p.jpg", "uploaded", "photos", 20));
+        eng.discard_pending_activity_for_label("docs");
+        eng.commit_pending_activity_for_label("photos");
+        let states = eng.states.lock().unwrap();
+        assert!(states.get("docs").is_none());
+        assert_eq!(states.get("photos").unwrap().recent_activity.len(), 1);
+    }
+
+    #[test]
+    fn discard_all_clears_everything() {
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity("a.txt", "uploaded", "docs", 10));
+        eng.add_pending_activity(activity("b.jpg", "uploaded", "photos", 20));
+        eng.discard_all_pending_activity();
+        eng.commit_pending_activity_for_label("docs");
+        eng.commit_pending_activity_for_label("photos");
+        let states = eng.states.lock().unwrap();
+        assert!(states.get("docs").is_none());
+        assert!(states.get("photos").is_none());
+    }
+
+    #[test]
+    fn activity_ring_buffer_caps_at_100() {
+        let eng = SyncEngine::new();
+        for i in 0..120 {
+            eng.update_state("docs", |state| {
+                state.add_activity(activity(
+                    &format!("file_{i}.txt"),
+                    "uploaded",
+                    "docs",
+                    i as u64,
+                ));
+            });
+        }
+        let states = eng.states.lock().unwrap();
+        assert_eq!(states.get("docs").unwrap().recent_activity.len(), 100);
+    }
+
+    #[test]
+    fn per_label_state_is_isolated() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| s.is_syncing = true);
+        eng.update_state("photos", |s| s.last_sync_time = Some(1234));
+        let states = eng.states.lock().unwrap();
+        let docs = states.get("docs").unwrap();
+        let photos = states.get("photos").unwrap();
+        assert!(docs.is_syncing);
+        assert_eq!(docs.last_sync_time, None);
+        assert!(!photos.is_syncing);
+        assert_eq!(photos.last_sync_time, Some(1234));
+    }
+
+    #[test]
+    fn remove_state_deletes_label() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| s.is_syncing = true);
+        eng.remove_state("docs");
+        let states = eng.states.lock().unwrap();
+        assert!(states.get("docs").is_none());
+    }
+
+    #[test]
+    fn combined_status_any_syncing() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| s.is_syncing = false);
+        eng.update_state("photos", |s| s.is_syncing = true);
+        let combined = eng.get_sync_status();
+        assert!(combined.is_syncing);
+    }
+
+    #[test]
+    fn combined_status_last_sync_time_is_max() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| s.last_sync_time = Some(100));
+        eng.update_state("photos", |s| s.last_sync_time = Some(500));
+        eng.update_state("music", |s| s.last_sync_time = Some(300));
+        let combined = eng.get_sync_status();
+        assert_eq!(combined.last_sync_time, Some(500));
+    }
+
+    #[test]
+    fn combined_status_merges_activity_sorted_by_time() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| {
+            s.add_activity(SyncActivityItem {
+                file_name: "old.txt".to_string(),
+                action: "uploaded".to_string(),
+                timestamp: 100,
+                size_bytes: 1,
+                label: "docs".to_string(),
+            });
+        });
+        eng.update_state("photos", |s| {
+            s.add_activity(SyncActivityItem {
+                file_name: "new.jpg".to_string(),
+                action: "uploaded".to_string(),
+                timestamp: 200,
+                size_bytes: 2,
+                label: "photos".to_string(),
+            });
+        });
+        let combined = eng.get_sync_status();
+        assert_eq!(combined.recent_activity.len(), 2);
+        assert_eq!(combined.recent_activity[0].file_name, "new.jpg");
+        assert_eq!(combined.recent_activity[1].file_name, "old.txt");
+    }
+
+    #[test]
+    fn get_activity_filters_by_label() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| {
+            s.add_activity(activity("a.txt", "uploaded", "docs", 1));
+        });
+        eng.update_state("photos", |s| {
+            s.add_activity(activity("b.jpg", "uploaded", "photos", 2));
+        });
+        let result = eng.get_sync_activity(None, Some("docs".to_string()));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].file_name, "a.txt");
+    }
+
+    #[test]
+    fn get_activity_no_label_returns_all() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| {
+            s.add_activity(activity("a.txt", "uploaded", "docs", 1));
+        });
+        eng.update_state("photos", |s| {
+            s.add_activity(activity("b.jpg", "uploaded", "photos", 2));
+        });
+        let result = eng.get_sync_activity(None, None);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn get_activity_respects_limit() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| {
+            for i in 0..10 {
+                s.add_activity(activity(
+                    &format!("file_{i}.txt"),
+                    "uploaded",
+                    "docs",
+                    i as u64,
                 ));
             }
-            small_jitter_backoff().await;
-            let (remote_manifest, remote_etag) = load_manifest(client, bucket).await?;
-            manifest = remote_manifest;
-            manifest_etag = remote_etag;
-        }
-    }
-}
-
-/* ============================ Prunefile I/O ================================= */
-
-async fn load_pruned_remote(
-    client: &Client,
-    bucket: &str,
-    prunefile_id: &str,
-) -> Result<(PrunedMap, Option<String>)> {
-    let key = pruned_key_for(prunefile_id);
-    match client.get_object().bucket(bucket).key(&key).send().await {
-        Ok(obj) => {
-            let etag = obj.e_tag.map(|e| normalize_etag(&e));
-            let bytes = obj.body.collect().await?.to_vec();
-            let map: PrunedMap = serde_json::from_slice(&bytes)?;
-            Ok((map, etag))
-        }
-        Err(SdkError::ServiceError(ref se)) => {
-            let code = se.raw().status().as_u16();
-            if code == 403 {
-                return Ok((PrunedMap::default(), None));
-            }
-            match se.err() {
-                GetObjectError::NoSuchKey(_) => Ok((PrunedMap::default(), None)),
-                other => Err(anyhow!("load_pruned_remote failed: {other:?}"))?,
-            }
-        }
-        Err(e) => Err(anyhow!("load_pruned_remote failed: {e:?}"))?,
-    }
-}
-
-async fn save_pruned_remote_cas(
-    client: &Client,
-    bucket: &str,
-    prunefile_id: &str,
-    map: &PrunedMap,
-    previous_etag: Option<&str>,
-) -> Result<(bool, Option<String>)> {
-    println!("[Sync] trying to upload prunefile to S3");
-    let key = pruned_key_for(prunefile_id);
-    let body = serde_json::to_vec_pretty(map)?;
-    let mut req = client
-        .put_object()
-        .bucket(bucket)
-        .key(&key)
-        .body(ByteStream::from(body));
-    req = if let Some(etag) = previous_etag {
-        req.if_match(etag)
-    } else {
-        req.if_none_match("*")
-    };
-    match req.send().await {
-        Ok(out) => Ok((true, out.e_tag.map(|e| normalize_etag(&e)))),
-        Err(SdkError::ServiceError(ref se)) if se.raw().status().as_u16() == 412 => {
-            Ok((false, None))
-        }
-        Err(e) => Err(anyhow!("save_pruned_remote_cas failed: {e:?}")),
-    }
-}
-
-/* ============================ Ops ========================================== */
-
-#[derive(Debug, Clone)]
-enum Op {
-    Upload { path: String },
-    DeleteRemote { path: String },
-    Download { path: String },
-    DeleteLocal { path: String },
-    RenameLocal { from: String, to: String },
-}
-
-/* ======================== Execution helpers (prune) ========================= */
-
-fn set_prune_present(pe: &mut PruneEntry, cid: Option<String>, adopted_etag: Option<String>) {
-    pe.present = true;
-    pe.locally_deleted = false;
-    if let Some(c) = cid {
-        if !c.is_empty() {
-            pe.cid = c;
-        }
-    }
-    if adopted_etag.is_some() {
-        pe.adopted_remote_etag = adopted_etag;
-    }
-}
-
-fn set_prune_absent(pe: &mut PruneEntry) {
-    pe.present = false;
-}
-
-/* ======================== Conflict flow (policy-aware) ====================== */
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum ConflictStrategy {
-    RenameLocalAndAdoptRemote,
-    #[allow(dead_code)]
-    RenameLocalOnly,
-}
-
-async fn execute_conflict_flow(
-    client: &Client,
-    bucket: &str,
-    local_root: &str,
-    path: &str,
-    local_cid: &str,
-    client_tag8: &str,
-    remote_etag_hint: Option<String>,
-    prune: &mut PrunedMap,
-    strategy: ConflictStrategy,
-) -> Result<()> {
-    println!("[Sync] trying to execute conflict flow");
-    match strategy {
-        ConflictStrategy::RenameLocalOnly => {
-            let conflict_name_base = make_conflict_name_deterministic(
-                path,
-                local_cid,
-                &remote_etag_hint.clone().unwrap_or_default(),
-                client_tag8,
-            );
-            let (conflict_rel, conflict_full) =
-                choose_available_conflict(local_root, &conflict_name_base).await?;
-            let full_original = key_to_local_path(local_root, path);
-            ensure_parent(&conflict_full).await?;
-            safe_rename(&full_original, &conflict_full).await?;
-
-            if let Ok(conflict_bytes) = tokio_fs::read(&conflict_full).await {
-                let conflict_cid = hex::encode(Sha256::digest(&conflict_bytes));
-                let (uploaded_etag, used_key) = publish_conflict_object_with_bumps(
-                    client,
-                    bucket,
-                    &conflict_bytes,
-                    &conflict_rel,
-                )
-                .await;
-
-                if used_key != conflict_rel {
-                    let new_full = key_to_local_path(local_root, &used_key);
-                    if let Err(e) = ensure_parent(&new_full).await {
-                        eprintln!(
-                            "[Sync] ensure parent failed for retagged conflict {:?}: {e:?}",
-                            used_key
-                        );
-                    } else if let Err(e) = safe_rename(&conflict_full, &new_full).await {
-                        eprintln!(
-                            "[Sync] rename to retagged conflict {:?} failed: {e:?}",
-                            used_key
-                        );
-                    }
-                }
-
-                prune.insert(
-                    used_key.clone(),
-                    PruneEntry {
-                        present: uploaded_etag.is_some(),
-                        cid: conflict_cid,
-                        deletion_count: 0,
-                        resurrection_count: 0,
-                        adopted_remote_etag: uploaded_etag,
-                        locally_deleted: false,
-                        file_deletion_policy: None,
-                        last_adopted_cid: String::new(),
-                    },
-                );
-
-                let pe_old = prune.entry(path.to_string()).or_default();
-                set_prune_absent(pe_old);
-            }
-            Ok(())
-        }
-
-        ConflictStrategy::RenameLocalAndAdoptRemote => {
-            let conflict_name_base = make_conflict_name_deterministic(
-                path,
-                local_cid,
-                &remote_etag_hint.clone().unwrap_or_default(),
-                client_tag8,
-            );
-            let (conflict_rel, conflict_full) =
-                choose_available_conflict(local_root, &conflict_name_base).await?;
-            let full_original = key_to_local_path(local_root, path);
-            ensure_parent(&conflict_full).await?;
-            safe_rename(&full_original, &conflict_full).await?;
-
-            let conflict_bytes = tokio_fs::read(&conflict_full).await?;
-            let conflict_cid = hex::encode(Sha256::digest(&conflict_bytes));
-            let (uploaded_etag, used_key) =
-                publish_conflict_object_with_bumps(client, bucket, &conflict_bytes, &conflict_rel)
-                    .await;
-
-            if used_key != conflict_rel {
-                let new_full = key_to_local_path(local_root, &used_key);
-                if let Err(e) = ensure_parent(&new_full).await {
-                    eprintln!(
-                        "[Sync] ensure parent failed for retagged conflict {:?}: {e:?}",
-                        used_key
-                    );
-                } else if let Err(e) = safe_rename(&conflict_full, &new_full).await {
-                    eprintln!(
-                        "[Sync] rename to retagged conflict {:?} failed: {e:?}",
-                        used_key
-                    );
-                }
-            }
-
-            prune.insert(
-                used_key.clone(),
-                PruneEntry {
-                    present: uploaded_etag.is_some(),
-                    cid: conflict_cid,
-                    deletion_count: 0,
-                    resurrection_count: 0,
-                    adopted_remote_etag: uploaded_etag,
-                    locally_deleted: false,
-                    file_deletion_policy: None,
-                    last_adopted_cid: String::new(),
-                },
-            );
-
-            if let Ok((body, remote_etag, _remote_prev_cid)) =
-                get_object_bytes_with_retries(client, bucket, path).await
-            {
-                let full = key_to_local_path(local_root, path);
-                ensure_parent(&full).await?;
-                tokio_fs::write(&full, &body).await?;
-                let new_cid = hex::encode(Sha256::digest(&body));
-                prune
-                    .entry(path.to_string())
-                    .and_modify(|pe| {
-                        set_prune_present(pe, Some(new_cid.clone()), remote_etag.clone());
-                        pe.last_adopted_cid = new_cid.clone();
-                    })
-                    .or_insert(PruneEntry {
-                        present: true,
-                        cid: new_cid.clone(),
-                        deletion_count: 0,
-                        resurrection_count: 0,
-                        adopted_remote_etag: remote_etag,
-                        locally_deleted: false,
-                        file_deletion_policy: None,
-                        last_adopted_cid: new_cid,
-                    });
-            }
-            Ok(())
-        }
-    }
-}
-
-/* ============================ Remote↔Manifest =============================== */
-
-fn compute_manifest_patches_from_remote(
-    manifest: &Manifest,
-    remote: &HashMap<String, FileMeta>,
-    confirmed_local_renames: &[(String, String)],
-    uploaded_new_etags: &HashMap<String, String>,
-) -> Vec<ManifestPatch> {
-    let mut patches = Vec::new();
-
-    // Update etags & resurrections for remote-present entries.
-    for (rk, rm) in remote {
-        if !rm.etag.is_empty() {
-            patches.push(ManifestPatch::UpdateEtag {
-                path: rk.clone(),
-                etag: rm.etag.clone(),
-            });
-        }
-        if let Some(m) = manifest.entries.get(rk) {
-            if m.deletion_count > m.resurrection_count {
-                patches.push(ManifestPatch::BumpResurrection {
-                    path: rk.clone(),
-                    to: m.deletion_count,
-                });
-            }
-        }
+        });
+        let result = eng.get_sync_activity(Some(3), Some("docs".to_string()));
+        assert_eq!(result.len(), 3);
     }
 
-    // Clear rename markers once both ends have caught up.
-    for (mk, m) in &manifest.entries {
-        if m.renamed_to.is_some() && remote.contains_key(mk) {
-            patches.push(ManifestPatch::ClearRename { path: mk.clone() });
-        }
+    #[test]
+    fn get_activity_unknown_label_returns_empty() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| {
+            s.add_activity(activity("a.txt", "uploaded", "docs", 1));
+        });
+        let result = eng.get_sync_activity(None, Some("nonexistent".to_string()));
+        assert!(result.is_empty());
     }
 
-    // Record explicit local renames (which were executed as MOVES on remote).
-    for (old, new) in confirmed_local_renames {
-        if !remote.contains_key(old) {
-            let new_del_to = manifest
-                .entries
-                .get(old)
-                .map(|m| m.deletion_count.max(m.resurrection_count + 1))
-                .unwrap_or(1);
-            patches.push(ManifestPatch::BumpDeletion {
-                path: old.clone(),
-                to: new_del_to,
-            });
-            patches.push(ManifestPatch::SetRename {
-                path: old.clone(),
-                renamed_to: Some(new.clone()),
-            });
-            patches.push(ManifestPatch::SetRename {
-                path: new.clone(),
-                renamed_to: None,
-            });
-            if let Some(et) = uploaded_new_etags.get(new) {
-                patches.push(ManifestPatch::UpdateEtag {
-                    path: new.clone(),
-                    etag: et.clone(),
-                });
-            }
-        }
-    }
+    #[test]
+    fn push_and_drain_rename_hints_by_root() {
+        let engine = SyncEngine::new();
+        let now = std::time::Instant::now();
 
-    // Rename inference based on matching etags.
-    let mut remote_by_etag: HashMap<String, Vec<String>> = HashMap::new();
-    for (rk, rm) in remote {
-        if !rm.etag.is_empty() {
-            remote_by_etag
-                .entry(rm.etag.clone())
-                .or_default()
-                .push(rk.clone());
-        }
-    }
-    for (mk, m) in &manifest.entries {
-        if remote.contains_key(mk) {
-            continue;
-        }
-        if !m.etag.is_empty() {
-            if let Some(cands) = remote_by_etag.get(&m.etag) {
-                if cands.len() == 1 {
-                    let new_key = &cands[0];
-                    patches.push(ManifestPatch::SetRename {
-                        path: mk.clone(),
-                        renamed_to: Some(new_key.clone()),
-                    });
-                    patches.push(ManifestPatch::SetRename {
-                        path: new_key.clone(),
-                        renamed_to: None,
-                    });
-                    let new_del_to = m.deletion_count.max(m.resurrection_count + 1);
-                    patches.push(ManifestPatch::BumpDeletion {
-                        path: mk.clone(),
-                        to: new_del_to,
-                    });
-                    patches.push(ManifestPatch::UpdateEtag {
-                        path: new_key.clone(),
-                        etag: m.etag.clone(),
-                    });
-                }
-            }
-        }
-    }
+        engine.push_rename_hint(crate::sync_logic::RenameHint {
+            old_path: std::path::PathBuf::from("/drive_a/old.txt"),
+            new_path: std::path::PathBuf::from("/drive_a/new.txt"),
+            captured_at: now,
+        });
+        engine.push_rename_hint(crate::sync_logic::RenameHint {
+            old_path: std::path::PathBuf::from("/drive_b/old.txt"),
+            new_path: std::path::PathBuf::from("/drive_b/new.txt"),
+            captured_at: now,
+        });
 
-    patches
-}
-
-/* ============================= Download gating ============================== */
-
-#[inline]
-fn should_download(
-    policy: DeletePolicy,
-    key: &str,
-    local_has: bool,
-    prune: &PrunedMap,
-    remote_etag: &str,
-    manifest: Option<&Manifest>,
-) -> bool {
-    match policy {
-        DeletePolicy::UploadOnly => {
-            if local_has {
-                let adopted = prune
-                    .get(key)
-                    .and_then(|p| p.adopted_remote_etag.clone())
-                    .unwrap_or_default();
-                adopted != remote_etag
-            } else {
-                false
-            }
-        }
-        DeletePolicy::LocalOnlyDeletes => {
-            if local_has {
-                let adopted = prune
-                    .get(key)
-                    .and_then(|p| p.adopted_remote_etag.clone())
-                    .unwrap_or_default();
-                adopted != remote_etag
-            } else {
-                let (explicit_local_tomb, counter_tomb) = match prune.get(key) {
-                    Some(pe) => (
-                        pe.locally_deleted,
-                        pe.deletion_count > pe.resurrection_count,
-                    ),
-                    None => (false, false),
-                };
-                if explicit_local_tomb {
-                    false
-                } else if counter_tomb {
-                    if let Some(mf) = manifest {
-                        if let Some(m) = mf.entries.get(key) {
-                            !is_deleted(m.deletion_count, m.resurrection_count)
-                        } else {
-                            true
-                        }
-                    } else {
-                        true
-                    }
-                } else {
-                    true
-                }
-            }
-        }
-        DeletePolicy::MirrorLocalDeletes | DeletePolicy::RestoreFromRemote => {
-            let adopted = prune
-                .get(key)
-                .and_then(|p| p.adopted_remote_etag.clone())
-                .unwrap_or_default();
-            !local_has || adopted != remote_etag
-        }
-    }
-}
-
-/* ================================ sync_once_cas ============================= */
-
-pub async fn sync_once_cas(
-    client: &Client,
-    bucket: &str,
-    local_root: &str,
-    delete_policy: DeletePolicy,
-    max_retries: usize,
-    prunefile_id: &str,
-) -> Result<()> {
-    println!("[Sync] sync_once_cas beimg called");
-    let client_tag8 = client_tag8_from(prunefile_id);
-
-    /* ---- Phase 0: Snapshot ---- */
-    let (mut prune, mut prune_etag) = load_pruned_remote(client, bucket, prunefile_id).await?;
-    let mut prune_origin = prune.clone();
-    let (mut manifest, mut manifest_etag) = load_manifest(client, bucket).await?;
-    let local = scan_local(local_root).await?;
-    let remote0 = list_remote(client, bucket).await?;
-
-    // Diagnostic logging to detect prune state issues
-    println!("[Sync] Phase 0 snapshot complete:");
-    println!("  - Prune state entries: {}", prune.len());
-    println!("  - Local files scanned: {}", local.len());
-    println!("  - Remote files listed: {}", remote0.len());
-    println!("  - Manifest entries: {}", manifest.entries.len());
-    println!("  - Prunefile ID: {}", prunefile_id);
-    if prune.is_empty() && !local.is_empty() {
-        eprintln!(
-            "[Sync] WARNING: Prune state is EMPTY but local has {} files - all will be treated as NEW!",
-            local.len()
+        // Drain only drive_a hints
+        let a_hints = engine.drain_rename_hints_for_root(
+            std::path::Path::new("/drive_a"),
         );
+        assert_eq!(a_hints.len(), 1);
+        assert_eq!(a_hints[0].old_path, std::path::PathBuf::from("/drive_a/old.txt"));
+
+        // drive_b hint is still in the buffer
+        let b_hints = engine.drain_rename_hints_for_root(
+            std::path::Path::new("/drive_b"),
+        );
+        assert_eq!(b_hints.len(), 1);
+        assert_eq!(b_hints[0].old_path, std::path::PathBuf::from("/drive_b/old.txt"));
+
+        // Buffer is now empty
+        let empty = engine.drain_rename_hints_for_root(
+            std::path::Path::new("/drive_a"),
+        );
+        assert!(empty.is_empty());
     }
 
-    /* ---- Phase 3 Preamble: REMOTE -> LOCAL (diff vs remote) --------------------------- */
+    #[test]
+    fn rename_hints_capped_at_10000() {
+        let engine = SyncEngine::new();
+        let now = std::time::Instant::now();
 
-    let mut ops_adopt: Vec<Op> = Vec::new();
-
-    /* ---- Phase 1: LOCAL → REMOTE (diff vs prune) --------------------------- */
-
-    let mut local_by_cid: HashMap<String, Vec<String>> = HashMap::new();
-    for (lk, lm) in &local {
-        if !lm.cid.is_empty() {
-            local_by_cid
-                .entry(lm.cid.clone())
-                .or_default()
-                .push(lk.clone());
-        }
-    }
-
-    let mut ops_l2r: Vec<Op> = Vec::new();
-    let mut scheduled_uploads: HashSet<String> = HashSet::new();
-    let mut scheduled_remote_deletes: HashSet<String> = HashSet::new();
-
-    let mut confirmed_local_renames: Vec<(String, String)> = Vec::new();
-    let mut uploaded_new_etags: HashMap<String, String> = HashMap::new();
-
-    fn schedule_upload(ops: &mut Vec<Op>, scheduled: &mut HashSet<String>, path: &str) {
-        println!("[Sync] trying to scheduling upload for {}", path);
-        if is_ignored_key(path) {
-            return;
-        }
-        if scheduled.insert(path.to_string()) {
-            ops.push(Op::Upload {
-                path: path.to_string(),
+        for i in 0..10_001 {
+            engine.push_rename_hint(crate::sync_logic::RenameHint {
+                old_path: std::path::PathBuf::from(format!("/sync/old_{i}.txt")),
+                new_path: std::path::PathBuf::from(format!("/sync/new_{i}.txt")),
+                captured_at: now,
             });
         }
-    }
-    fn schedule_remote_delete(ops: &mut Vec<Op>, scheduled: &mut HashSet<String>, path: &str) {
-        if is_ignored_key(path) {
-            return;
-        }
-        if scheduled.insert(path.to_string()) {
-            ops.push(Op::DeleteRemote {
-                path: path.to_string(),
-            });
-        }
+
+        let drained = engine.drain_rename_hints_for_root(
+            std::path::Path::new("/sync"),
+        );
+        assert_eq!(drained.len(), 10_000);
     }
 
-    for (lk, lm) in &local {
-        if is_ignored_key(lk) {
-            continue;
-        }
-        match prune.get(lk) {
-            None => {
-                println!("[Sync] Scheduling upload for '{}': not in prune state", lk);
-                schedule_upload(&mut ops_l2r, &mut scheduled_uploads, lk);
-            }
-            Some(pe) => {
-                if !pe.present {
-                    println!(
-                        "[Sync] Scheduling upload for '{}': marked as not present in prune",
-                        lk
-                    );
-                    schedule_upload(&mut ops_l2r, &mut scheduled_uploads, lk);
-                } else if (!pe.cid.is_empty() && pe.cid != lm.cid)
-                    || (pe.cid.is_empty() && !lm.cid.is_empty())
-                {
-                    println!(
-                        "[Sync] Scheduling upload for '{}': CID mismatch (prune: '{}', local: '{}')",
-                        lk,
-                        &pe.cid.chars().take(16).collect::<String>(),
-                        &lm.cid.chars().take(16).collect::<String>()
-                    );
-                    schedule_upload(&mut ops_l2r, &mut scheduled_uploads, lk);
-                } else {
-                    // File is already synced - CID matches and present=true
-                    // This log confirms we're NOT re-uploading unchanged files
-                    println!("[Sync] Skipping '{}': already synced (CID matches)", lk);
-                }
-            }
-        }
+    #[test]
+    fn drain_rename_hints_empty_by_default() {
+        let engine = SyncEngine::new();
+        let drained = engine.drain_rename_hints_for_root(
+            std::path::Path::new("/sync"),
+        );
+        assert!(drained.is_empty());
     }
 
-    // Local deletes / EXACT-ONE rename detection
-    let prune_snapshot: Vec<(String, PruneEntry)> =
-        prune.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    #[test]
+    fn rename_updates_committed_activity() {
+        let eng = SyncEngine::new();
+        eng.register_label_root(
+            "docs".to_string(),
+            std::path::PathBuf::from("/sync/docs"),
+        );
+        eng.update_state("docs", |s| {
+            s.add_activity(activity("report.txt", "uploaded", "docs", 100));
+        });
 
-    let mut claimed_new_paths: HashSet<String> = HashSet::new();
-    let mut planned_local_renames_old_to_new: HashMap<String, String> = HashMap::new();
-    let mut planned_local_renames_new_to_old: HashMap<String, String> = HashMap::new();
+        eng.push_rename_hint(crate::sync_logic::RenameHint {
+            old_path: std::path::PathBuf::from("/sync/docs/report.txt"),
+            new_path: std::path::PathBuf::from("/sync/docs/report_v2.txt"),
+            captured_at: std::time::Instant::now(),
+        });
 
-    for (old_path, pe) in prune_snapshot {
-        if is_ignored_key(&old_path) || !pe.present {
-            continue;
-        }
-        if local.contains_key(&old_path) {
-            continue;
-        }
-
-        let mut rename_target: Option<String> = None;
-        if !pe.cid.is_empty() {
-            if let Some(cands) = local_by_cid.get(&pe.cid) {
-                let fresh_new: Vec<String> = cands
-                    .iter()
-                    .filter(|cand| !prune.contains_key(*cand))
-                    .cloned()
-                    .collect();
-                if fresh_new.len() == 1 {
-                    rename_target = Some(fresh_new[0].clone());
-                }
-            }
-        }
-
-        if let Some(new_path) = rename_target {
-            if claimed_new_paths.contains(&new_path) {
-                continue;
-            }
-            schedule_upload(&mut ops_l2r, &mut scheduled_uploads, &new_path);
-
-            planned_local_renames_old_to_new.insert(old_path.clone(), new_path.clone());
-            planned_local_renames_new_to_old.insert(new_path.clone(), old_path.clone());
-            claimed_new_paths.insert(new_path.clone());
-
-            // treat renames as MOVES in all policies
-            schedule_remote_delete(&mut ops_l2r, &mut scheduled_remote_deletes, &old_path);
-
-            let pe_old = prune.entry(old_path.clone()).or_default();
-            set_prune_absent(pe_old);
-            let pe_new = prune.entry(new_path.clone()).or_default();
-            pe_new.locally_deleted = false;
-        } else {
-            if matches!(delete_policy, DeletePolicy::MirrorLocalDeletes) {
-                schedule_remote_delete(&mut ops_l2r, &mut scheduled_remote_deletes, &old_path);
-            } else {
-                let pe_local = prune.entry(old_path.clone()).or_default();
-                set_prune_absent(pe_local);
-                pe_local.locally_deleted = true;
-                pe_local.deletion_count = pe_local.deletion_count.saturating_add(1);
-            }
-        }
+        let result = eng.get_sync_activity(None, Some("docs".to_string()));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].file_name, "report_v2.txt");
     }
 
-    // Early-exit optimization: skip sync if no operations needed
-    // Check this BEFORE executing ops to avoid unnecessary S3 API calls
-    let ops_l2r_count = ops_l2r.len();
-    println!(
-        "[Sync] Phase 1 operations queued: {} uploads/deletes",
-        ops_l2r_count
-    );
+    #[test]
+    fn rename_updates_pending_activity() {
+        let eng = SyncEngine::new();
+        eng.register_label_root(
+            "docs".to_string(),
+            std::path::PathBuf::from("/sync/docs"),
+        );
+        eng.add_pending_activity(activity("draft.md", "uploaded", "docs", 50));
 
-    // === Execute Phase 1 ops ===
-    for op in ops_l2r {
-        match op {
-            Op::Upload { path } => {
-                let full = key_to_local_path(local_root, &path);
-                let bytes = match tokio_fs::read(&full).await {
-                    Ok(b) => b,
-                    Err(e) => {
-                        eprintln!("[Sync] upload read failed for {path}: {e:?}");
-                        continue;
-                    }
-                };
-                let local_cid = hex::encode(Sha256::digest(&bytes));
+        eng.push_rename_hint(crate::sync_logic::RenameHint {
+            old_path: std::path::PathBuf::from("/sync/docs/draft.md"),
+            new_path: std::path::PathBuf::from("/sync/docs/final.md"),
+            captured_at: std::time::Instant::now(),
+        });
 
-                // Decide CAS mode strictly from prune:
-                let (use_if_none_match, expected_if_match) = match prune.get(&path) {
-                    None => (true, None),
-                    Some(pe) if !pe.present => (true, None),
-                    Some(pe) => {
-                        let pe_etag = pe.adopted_remote_etag.clone();
-                        if pe_etag.is_some() {
-                            (false, pe_etag)
-                        } else {
-                            // last resort for modified-but-unknown: use remote0 only here (not for new)
-                            let r0 = remote0.get(&path).and_then(|r| {
-                                let e = r.etag.clone();
-                                if e.is_empty() { None } else { Some(e) }
-                            });
-                            if r0.is_some() {
-                                (false, r0)
-                            } else {
-                                // still unknown: force create-only; server will 412 if exists -> conflict flow
-                                (true, None)
-                            }
-                        }
-                    }
-                };
-
-                // prev_cid for S3 metadata: only meaningful when we are doing an update
-                // (if_match). We approximate "previous remote content" as the last adopted
-                // content id on this client at the start of the sync (or its last known cid).
-                let prev_cid_for_meta: Option<String> = if use_if_none_match {
-                    None
-                } else {
-                    let base = prune_origin.get(&path).and_then(|pe0| {
-                        if !pe0.last_adopted_cid.is_empty() {
-                            Some(pe0.last_adopted_cid.clone())
-                        } else if !pe0.cid.is_empty() {
-                            Some(pe0.cid.clone())
-                        } else {
-                            None
-                        }
-                    });
-                    base
-                };
-
-                let r0 = remote0.get(&path).and_then(|r| {
-                    let e = r.etag.clone();
-                    if e.is_empty() { None } else { Some(e) }
-                });
-
-                let pe = prune.entry(path.clone()).or_default();
-                let pe_etag = pe.adopted_remote_etag.clone();
-
-                if (r0.is_some() && pe_etag.is_none())
-                    || (r0.is_some() && pe_etag.is_some() && r0 != pe_etag)
-                {
-                    // preemptive conflict resolution
-                    // skip upload and handle conflict in download
-                    ops_adopt.push(Op::Download { path: path.clone() });
-                    continue;
-                }
-
-                let mut attempt = 0usize;
-                let put_outcome: Option<String> = loop {
-                    let mut req = client
-                        .put_object()
-                        .bucket(bucket)
-                        .key(&path)
-                        .body(ByteStream::from(bytes.clone()));
-
-                    if let Some(ref prev) = prev_cid_for_meta {
-                        if !prev.is_empty() {
-                            req = req.metadata(META_PREV_CID_KEY, prev.clone());
-                        }
-                    }
-
-                    req = if use_if_none_match {
-                        req.if_none_match("*")
-                    } else if let Some(ref et) = expected_if_match {
-                        req.if_match(et.clone())
-                    } else {
-                        req
-                    };
-
-                    let put_res = req.send().await;
-
-                    match put_res {
-                        Ok(out) => {
-                            match remote_equals_local(client, bucket, &path, &bytes).await {
-                                Ok((equal, verified_etag)) => {
-                                    let final_et = verified_etag
-                                        .or_else(|| out.e_tag.map(|e| normalize_etag(&e)))
-                                        .unwrap_or_default();
-                                    if equal {
-                                        break Some(final_et);
-                                    } else {
-                                        if let Err(e) = execute_conflict_flow(
-                                            client,
-                                            bucket,
-                                            local_root,
-                                            &path,
-                                            &local_cid,
-                                            &client_tag8,
-                                            Some(final_et.clone()),
-                                            &mut prune,
-                                            ConflictStrategy::RenameLocalAndAdoptRemote,
-                                        )
-                                        .await
-                                        {
-                                            eprintln!(
-                                                "[Sync] conflict flow after PUT failed for {path}: {e:?}"
-                                            );
-                                        }
-                                        break None;
-                                    }
-                                }
-                                Err(_) => {
-                                    // Verification failed; accept success tag (likely no conflict)
-                                    break None;
-                                }
-                            }
-                        }
-                        Err(SdkError::ServiceError(ref se))
-                            if se.raw().status().as_u16() == 412 =>
-                        {
-                            // CAS miss => conflict depending on policy (handled as before)
-                            if matches!(delete_policy, DeletePolicy::UploadOnly) {
-                                if let Err(e) = execute_conflict_flow(
-                                    client,
-                                    bucket,
-                                    local_root,
-                                    &path,
-                                    &local_cid,
-                                    &client_tag8,
-                                    None,
-                                    &mut prune,
-                                    ConflictStrategy::RenameLocalAndAdoptRemote,
-                                )
-                                .await
-                                {
-                                    eprintln!(
-                                        "[Sync] conflict flow (UploadOnly) failed for {path}: {e:?}"
-                                    );
-                                }
-                                break None;
-                            } else {
-                                match remote_equals_local(client, bucket, &path, &bytes).await {
-                                    Ok((equal, remote_et)) => {
-                                        if equal {
-                                            break Some(remote_et.unwrap_or_default());
-                                        } else {
-                                            if let Err(e) = execute_conflict_flow(
-                                                client,
-                                                bucket,
-                                                local_root,
-                                                &path,
-                                                &local_cid,
-                                                &client_tag8,
-                                                remote_et.clone(),
-                                                &mut prune,
-                                                ConflictStrategy::RenameLocalAndAdoptRemote,
-                                            )
-                                            .await
-                                            {
-                                                eprintln!(
-                                                    "[Sync] conflict flow failed for {path}: {e:?}"
-                                                );
-                                            }
-                                            break None;
-                                        }
-                                    }
-                                    Err(_e) => {
-                                        if attempt + 1 < OP_MAX_RETRIES {
-                                            backoff_attempt(attempt).await;
-                                            attempt += 1;
-                                            continue;
-                                        } else {
-                                            if let Err(e2) = execute_conflict_flow(
-                                                client,
-                                                bucket,
-                                                local_root,
-                                                &path,
-                                                &local_cid,
-                                                &client_tag8,
-                                                None,
-                                                &mut prune,
-                                                ConflictStrategy::RenameLocalAndAdoptRemote,
-                                            )
-                                            .await
-                                            {
-                                                eprintln!(
-                                                    "[Sync] conflict flow (fallback) failed for {path}: {e2:?}"
-                                                );
-                                            }
-                                            break None;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) if is_retryable_sdk_error(&e) && attempt + 1 < OP_MAX_RETRIES => {
-                            backoff_attempt(attempt).await;
-                            attempt += 1;
-                            continue;
-                        }
-                        Err(e) => {
-                            eprintln!("[Sync] PUT failed for {path}: {e:?}");
-                            break None;
-                        }
-                    }
-                };
-
-                if let Some(remote_etag_final) = put_outcome {
-                    let pe = prune.entry(path.clone()).or_default();
-                    set_prune_present(pe, Some(local_cid.clone()), Some(remote_etag_final.clone()));
-                    pe.last_adopted_cid = local_cid.clone();
-                    if pe.deletion_count > pe.resurrection_count {
-                        pe.resurrection_count = pe.deletion_count;
-                    }
-                    if let Some(old) = planned_local_renames_new_to_old.get(&path) {
-                        let pe_old = prune.entry(old.clone()).or_default();
-                        set_prune_absent(pe_old);
-                        pe_old.locally_deleted = false;
-                    }
-                    uploaded_new_etags.insert(path.clone(), remote_etag_final);
-                }
-            }
-
-            Op::DeleteRemote { path } => {
-                let expected = remote0
-                    .get(&path)
-                    .and_then(|r| {
-                        if r.etag.is_empty() {
-                            None
-                        } else {
-                            Some(r.etag.clone())
-                        }
-                    })
-                    .or_else(|| prune.get(&path).and_then(|p| p.adopted_remote_etag.clone()))
-                    .or_else(|| {
-                        manifest
-                            .entries
-                            .get(&path)
-                            .map(|m| m.etag.clone())
-                            .filter(|s| !s.is_empty())
-                    });
-
-                let mut attempt = 0usize;
-                let mut success = false;
-                if let Some(etag) = expected {
-                    loop {
-                        let res = client
-                            .delete_object()
-                            .bucket(bucket)
-                            .key(&path)
-                            .if_match(etag.clone())
-                            .send()
-                            .await;
-
-                        match res {
-                            Ok(_) => {
-                                success = true;
-                                break;
-                            }
-                            Err(SdkError::ServiceError(ref se))
-                                if se.raw().status().as_u16() == 412 =>
-                            {
-                                success = false;
-                                break;
-                            }
-                            Err(e)
-                                if is_retryable_sdk_error(&e) && attempt + 1 < OP_MAX_RETRIES =>
-                            {
-                                backoff_attempt(attempt).await;
-                                attempt += 1;
-                                continue;
-                            }
-                            Err(_) => {
-                                success = false;
-                                break;
-                            }
-                        }
-                    }
-                } else {
-                    eprintln!("[Sync] DeleteRemote skipped (no ETag known) for {path}");
-                }
-
-                if success {
-                    let pe = prune.entry(path.clone()).or_default();
-                    set_prune_absent(pe);
-                    pe.deletion_count = pe.deletion_count.saturating_add(1);
-                    pe.locally_deleted = false;
-
-                    if let Some(new) = planned_local_renames_old_to_new.get(&path) {
-                        confirmed_local_renames.push((path.clone(), new.clone()));
-                    }
-                }
-            }
-
-            _ => {}
-        }
+        let result = eng.get_sync_activity(None, Some("docs".to_string()));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].file_name, "final.md");
     }
 
-    if prune != prune_origin {
-        match save_pruned_remote_cas(client, bucket, prunefile_id, &prune, prune_etag.as_deref())
-            .await
-        {
-            Ok((true, new_etag)) => {
-                println!("[Sync] Prune state saved successfully (Phase 1)");
-                prune_etag = new_etag;
-            }
-            Ok((false, _)) => {
-                eprintln!("[Sync] WARNING: Prune save conflicted (Phase 1) - merging remote state");
-                if let Ok((cur, etag2)) = load_pruned_remote(client, bucket, prunefile_id).await {
-                    let mut merged = prune.clone();
-                    for (k, v) in cur {
-                        let me = merged.entry(k).or_default();
-                        me.deletion_count = me.deletion_count.max(v.deletion_count);
-                        me.resurrection_count = me.resurrection_count.max(v.resurrection_count);
-                        me.present = me.present || v.present;
-                        me.locally_deleted = me.locally_deleted || v.locally_deleted;
-                        if me.adopted_remote_etag.is_none() {
-                            me.adopted_remote_etag = v.adopted_remote_etag;
-                        }
-                        if me.cid.is_empty() && !v.cid.is_empty() {
-                            me.cid = v.cid;
-                        }
-                        if me.last_adopted_cid.is_empty() && !v.last_adopted_cid.is_empty() {
-                            me.last_adopted_cid = v.last_adopted_cid;
-                        }
-                        if me.file_deletion_policy.is_none() && v.file_deletion_policy.is_some() {
-                            me.file_deletion_policy = v.file_deletion_policy;
-                        }
-                    }
-                    let _ = save_pruned_remote_cas(
-                        client,
-                        bucket,
-                        prunefile_id,
-                        &merged,
-                        etag2.as_deref(),
-                    )
-                    .await;
-                    prune = merged;
-                    prune_etag = etag2;
-                }
-            }
-            Err(e) => eprintln!("[Sync] warning: save prunefile (phase1) failed: {e:?}"),
-        }
-    } else {
-        println!("[Sync] Prune state unchanged, skipping Phase 1 save");
+    #[test]
+    fn rename_without_label_root_is_no_op() {
+        let eng = SyncEngine::new();
+        eng.update_state("docs", |s| {
+            s.add_activity(activity("report.txt", "uploaded", "docs", 100));
+        });
+
+        // No label root registered — rename should not change anything
+        eng.push_rename_hint(crate::sync_logic::RenameHint {
+            old_path: std::path::PathBuf::from("/sync/docs/report.txt"),
+            new_path: std::path::PathBuf::from("/sync/docs/report_v2.txt"),
+            captured_at: std::time::Instant::now(),
+        });
+
+        let result = eng.get_sync_activity(None, Some("docs".to_string()));
+        assert_eq!(result[0].file_name, "report.txt");
     }
 
-    /* ---- Phase 2: Remote → Manifest --------------------------------------- */
-    let remote = list_remote(client, bucket).await?;
-    let confirmed_for_manifest = confirmed_local_renames.clone();
-    let manifest_patches = compute_manifest_patches_from_remote(
-        &manifest,
-        &remote,
-        &confirmed_for_manifest,
-        &uploaded_new_etags,
-    );
-    let (m2, et2) = apply_manifest_patches_cas(
-        client,
-        bucket,
-        manifest,
-        manifest_etag,
-        &manifest_patches,
-        max_retries,
-    )
-    .await?;
-    manifest = m2;
-    manifest_etag = et2;
+    #[test]
+    fn rename_only_affects_matching_label() {
+        let eng = SyncEngine::new();
+        eng.register_label_root(
+            "docs".to_string(),
+            std::path::PathBuf::from("/sync/docs"),
+        );
+        eng.register_label_root(
+            "photos".to_string(),
+            std::path::PathBuf::from("/sync/photos"),
+        );
+        eng.update_state("docs", |s| {
+            s.add_activity(activity("file.txt", "uploaded", "docs", 10));
+        });
+        eng.update_state("photos", |s| {
+            s.add_activity(activity("file.txt", "uploaded", "photos", 20));
+        });
 
-    /* ---- Phase 3: Adopt remote → local (per policy) ------------------------ */
+        eng.push_rename_hint(crate::sync_logic::RenameHint {
+            old_path: std::path::PathBuf::from("/sync/docs/file.txt"),
+            new_path: std::path::PathBuf::from("/sync/docs/renamed.txt"),
+            captured_at: std::time::Instant::now(),
+        });
 
-    match delete_policy {
-        DeletePolicy::UploadOnly => {
-            // Renames FIRST
-            for (old_path, m) in &manifest.entries {
-                if let Some(new_path) = &m.renamed_to {
-                    let old_on_remote = remote.contains_key(old_path);
-                    let new_on_remote = remote.contains_key(new_path);
-
-                    if !old_on_remote && new_on_remote {
-                        let old_exists_locally = prune
-                            .get(old_path)
-                            .map(|p| p.present)
-                            .unwrap_or_else(|| local.contains_key(old_path));
-
-                        if old_exists_locally {
-                            ops_adopt.push(Op::RenameLocal {
-                                from: old_path.clone(),
-                                to: new_path.clone(),
-                            });
-                        } else if let Some(pe_old) = prune.get(old_path) {
-                            let we_had_it_before = !pe_old.cid.is_empty()
-                                && (pe_old.resurrection_count > 0 || pe_old.deletion_count > 0);
-                            let we_deleted_it_intentionally = pe_old.locally_deleted;
-                            if we_had_it_before && !we_deleted_it_intentionally {
-                                ops_adopt.push(Op::Download {
-                                    path: new_path.clone(),
-                                });
-                            }
-                        }
-                    } else if old_on_remote
-                        && new_on_remote
-                        && m.deletion_count > m.resurrection_count
-                    {
-                        let old_exists_locally = prune
-                            .get(old_path)
-                            .map(|p| p.present)
-                            .unwrap_or_else(|| local.contains_key(old_path));
-                        if old_exists_locally {
-                            ops_adopt.push(Op::RenameLocal {
-                                from: old_path.clone(),
-                                to: new_path.clone(),
-                            });
-                        }
-                    }
-                }
-            }
-
-            // Download new versions for files we have locally
-            for (rk, rmeta) in &remote {
-                if is_ignored_key(rk) {
-                    continue;
-                }
-                let handled_as_rename = ops_adopt.iter().any(|op| {
-                    matches!(op, Op::Download { path } | Op::RenameLocal { to: path, .. } if path == rk)
-                });
-                if handled_as_rename {
-                    continue;
-                }
-
-                let local_exists = prune
-                    .get(rk)
-                    .map(|p| p.present)
-                    .unwrap_or_else(|| local.contains_key(rk));
-
-                if should_download(
-                    DeletePolicy::UploadOnly,
-                    rk,
-                    local_exists,
-                    &prune,
-                    &rmeta.etag,
-                    Some(&manifest),
-                ) {
-                    ops_adopt.push(Op::Download { path: rk.clone() });
-                }
-            }
-
-            // Handle global deletions
-            for (mk, m) in &manifest.entries {
-                if !remote.contains_key(mk) || is_deleted(m.deletion_count, m.resurrection_count) {
-                    if m.renamed_to.is_some() {
-                        let already_handled = ops_adopt
-                            .iter()
-                            .any(|op| matches!(op, Op::RenameLocal { from, .. } if from == mk));
-                        if already_handled {
-                            continue;
-                        }
-                    }
-
-                    let local_exists = prune
-                        .get(mk)
-                        .map(|p| p.present)
-                        .unwrap_or_else(|| local.contains_key(mk));
-                    if local_exists {
-                        ops_adopt.push(Op::DeleteLocal { path: mk.clone() });
-                    }
-
-                    let pe = prune.entry(mk.clone()).or_default();
-                    set_prune_absent(pe);
-                    pe.deletion_count = pe.deletion_count.max(m.deletion_count);
-                    pe.resurrection_count = pe.resurrection_count.max(m.resurrection_count);
-                }
-            }
-        }
-        DeletePolicy::LocalOnlyDeletes => {
-            for (rk, rmeta) in &remote {
-                if is_ignored_key(rk) {
-                    continue;
-                }
-                if prune.get(rk).map(|p| p.locally_deleted).unwrap_or(false) {
-                    continue;
-                }
-                let local_exists = prune
-                    .get(rk)
-                    .map(|p| p.present)
-                    .unwrap_or_else(|| local.contains_key(rk));
-
-                if should_download(
-                    DeletePolicy::LocalOnlyDeletes,
-                    rk,
-                    local_exists,
-                    &prune,
-                    &rmeta.etag,
-                    Some(&manifest),
-                ) {
-                    ops_adopt.push(Op::Download { path: rk.clone() });
-                }
-            }
-
-            for (mk, m) in &manifest.entries {
-                if !remote.contains_key(mk) || is_deleted(m.deletion_count, m.resurrection_count) {
-                    let local_exists = prune
-                        .get(mk)
-                        .map(|p| p.present)
-                        .unwrap_or_else(|| local.contains_key(mk));
-                    if local_exists {
-                        ops_adopt.push(Op::DeleteLocal { path: mk.clone() });
-                    }
-                    let pe = prune.entry(mk.clone()).or_default();
-                    set_prune_absent(pe);
-                    pe.deletion_count = pe.deletion_count.max(m.deletion_count);
-                    pe.resurrection_count = pe.resurrection_count.max(m.resurrection_count);
-                }
-            }
-
-            for (old, m) in &manifest.entries {
-                if let Some(to) = &m.renamed_to {
-                    if !remote.contains_key(old) {
-                        let old_exists = prune
-                            .get(old)
-                            .map(|p| p.present)
-                            .unwrap_or_else(|| local.contains_key(old));
-                        let dest_is_tombstoned =
-                            prune.get(to).map(|pe| pe.locally_deleted).unwrap_or(false);
-                        if old_exists && !dest_is_tombstoned {
-                            ops_adopt.push(Op::RenameLocal {
-                                from: old.clone(),
-                                to: to.clone(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        DeletePolicy::MirrorLocalDeletes | DeletePolicy::RestoreFromRemote => {
-            for (rk, rmeta) in &remote {
-                if is_ignored_key(rk) {
-                    continue;
-                }
-                let local_exists = prune
-                    .get(rk)
-                    .map(|p| p.present)
-                    .unwrap_or_else(|| local.contains_key(rk));
-                if should_download(
-                    delete_policy,
-                    rk,
-                    local_exists,
-                    &prune,
-                    &rmeta.etag,
-                    Some(&manifest),
-                ) {
-                    ops_adopt.push(Op::Download { path: rk.clone() });
-                }
-            }
-
-            for (mk, m) in &manifest.entries {
-                if !remote.contains_key(mk) || is_deleted(m.deletion_count, m.resurrection_count) {
-                    let local_exists = prune
-                        .get(mk)
-                        .map(|p| p.present)
-                        .unwrap_or_else(|| local.contains_key(mk));
-                    if local_exists {
-                        ops_adopt.push(Op::DeleteLocal { path: mk.clone() });
-                    }
-                    let pe = prune.entry(mk.clone()).or_default();
-                    set_prune_absent(pe);
-                    pe.locally_deleted = false;
-                    pe.deletion_count = pe.deletion_count.max(m.deletion_count);
-                    pe.resurrection_count = pe.resurrection_count.max(m.resurrection_count);
-                }
-            }
-
-            for (old, m) in &manifest.entries {
-                if let Some(to) = &m.renamed_to {
-                    if !remote.contains_key(old) {
-                        let old_exists = prune
-                            .get(old)
-                            .map(|p| p.present)
-                            .unwrap_or_else(|| local.contains_key(old));
-                        if old_exists {
-                            ops_adopt.push(Op::RenameLocal {
-                                from: old.clone(),
-                                to: to.clone(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
+        let docs = eng.get_sync_activity(None, Some("docs".to_string()));
+        assert_eq!(docs[0].file_name, "renamed.txt");
+        let photos = eng.get_sync_activity(None, Some("photos".to_string()));
+        assert_eq!(photos[0].file_name, "file.txt");
     }
 
-    // Early-exit if no operations needed (both phases)
-    let ops_adopt_count = ops_adopt.len();
-    println!(
-        "[Sync] Phase 3 operations queued: {} downloads/renames/deletes",
-        ops_adopt_count
-    );
+    #[test]
+    fn rename_in_subfolder_uses_relative_path() {
+        let eng = SyncEngine::new();
+        eng.register_label_root(
+            "docs".to_string(),
+            std::path::PathBuf::from("/sync/docs"),
+        );
+        eng.update_state("docs", |s| {
+            s.add_activity(activity(
+                "sub/deep/file.txt",
+                "uploaded",
+                "docs",
+                100,
+            ));
+        });
 
-    if ops_l2r_count == 0 && ops_adopt_count == 0 {
-        println!("[Sync] No changes detected, skipping sync cycle");
-        return Ok(());
+        eng.push_rename_hint(crate::sync_logic::RenameHint {
+            old_path: std::path::PathBuf::from("/sync/docs/sub/deep/file.txt"),
+            new_path: std::path::PathBuf::from("/sync/docs/sub/deep/renamed.txt"),
+            captured_at: std::time::Instant::now(),
+        });
+
+        let result = eng.get_sync_activity(None, Some("docs".to_string()));
+        assert_eq!(result[0].file_name, "sub/deep/renamed.txt");
     }
 
-    // === Execute ADOPT ops ===
-    for op in ops_adopt {
-        match op {
-            Op::Download { path } => {
-                // LOD gating (unchanged)
-                if matches!(delete_policy, DeletePolicy::LocalOnlyDeletes) {
-                    if let Some(pe) = prune.get(&path) {
-                        let globally_resurrected = manifest
-                            .entries
-                            .get(&path)
-                            .map(|m| !is_deleted(m.deletion_count, m.resurrection_count))
-                            .unwrap_or(true);
-                        if pe.locally_deleted {
-                            continue;
-                        }
-                        if (pe.deletion_count > pe.resurrection_count) && !globally_resurrected {
-                            continue;
-                        }
-                    }
-                }
+    #[test]
+    fn subfolder_file_name_preserved_in_activity() {
+        // Verify that activity items with subfolder-relative paths
+        // (e.g. "deps/photo.jpg") retain the full relative path after
+        // commit, not just the basename. This is critical for
+        // recent-files to construct the correct on-disk source path.
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity(
+            "deps/librust_plugin.rmeta",
+            "downloaded",
+            "march-09",
+            48,
+        ));
+        eng.add_pending_activity(activity(
+            "branch-cleanup.md",
+            "uploaded",
+            "march-09",
+            4186,
+        ));
+        eng.commit_pending_activity_for_label("march-09");
 
-                match get_object_bytes_with_retries(client, bucket, &path).await {
-                    Ok((body, remote_etag, remote_prev_cid_opt)) => {
-                        let remote_cid_now = hex::encode(Sha256::digest(&body));
-                        let full = key_to_local_path(local_root, &path);
-                        let pe_snap = prune.get(&path).cloned();
-                        let local_exists_now = tokio_fs::metadata(&full).await.is_ok();
+        let result = eng.get_sync_activity(None, Some("march-09".to_string()));
+        assert_eq!(result.len(), 2);
 
-                        let remote_prev_cid = remote_prev_cid_opt.unwrap_or_default();
+        // Subfolder file must keep its relative path prefix
+        let subfolder_file = result.iter().find(|i| i.file_name.contains("librust_plugin")).unwrap();
+        assert_eq!(subfolder_file.file_name, "deps/librust_plugin.rmeta");
 
-                        // Commit helper: also refresh last_adopted_cid here (only in download path).
-                        let commit_prune_after_adopt = |pe: &mut PruneEntry| {
-                            set_prune_present(
-                                pe,
-                                Some(remote_cid_now.clone()),
-                                remote_etag.clone(),
-                            );
-                            pe.last_adopted_cid = remote_cid_now.clone();
-                            if pe.deletion_count > pe.resurrection_count {
-                                pe.resurrection_count = pe.deletion_count;
-                            }
-                            if let Some(m) = manifest.entries.get(&path) {
-                                pe.deletion_count = pe.deletion_count.max(m.deletion_count);
-                                pe.resurrection_count =
-                                    pe.resurrection_count.max(m.resurrection_count);
-                            }
-                        };
-
-                        if !local_exists_now {
-                            if let Err(e) = ensure_parent(&full).await {
-                                eprintln!("[Sync] ensure parent failed for {path}: {e:?}");
-                                continue;
-                            }
-                            if let Err(e) = tokio_fs::write(&full, &body).await {
-                                eprintln!("[Sync] write failed for {path}: {e:?}");
-                                continue;
-                            }
-                            let pe = prune.entry(path.clone()).or_default();
-                            commit_prune_after_adopt(pe);
-                            continue;
-                        }
-
-                        match tokio_fs::read(&full).await {
-                            Ok(local_bytes) => {
-                                let local_cid_now = hex::encode(Sha256::digest(&local_bytes));
-
-                                if local_cid_now == remote_cid_now {
-                                    let pe = prune.entry(path.clone()).or_default();
-                                    commit_prune_after_adopt(pe);
-                                    continue;
-                                }
-
-                                // Preferred base: last adopted (downloaded) content.
-                                let adopted_base = pe_snap
-                                    .as_ref()
-                                    .map(|p| p.last_adopted_cid.clone())
-                                    .unwrap_or_default();
-
-                                let r0 = remote0.get(&path).and_then(|r| {
-                                    let e = r.etag.clone();
-                                    if e.is_empty() { None } else { Some(e) }
-                                });
-
-                                let pe = prune.entry(path.clone()).or_default();
-                                let pe_etag = pe.adopted_remote_etag.clone();
-
-                                let pe_snap_orig = prune_origin.entry(path.clone()).or_default();
-                                let _pe_o_etag = pe_snap_orig.adopted_remote_etag.clone();
-
-                                let me_last_cid = remote_prev_cid.clone();
-
-                                if !adopted_base.is_empty() {
-                                    let local_diverged = local_cid_now != adopted_base;
-                                    let remote_diverged = remote_cid_now != adopted_base;
-
-                                    if local_diverged && remote_diverged
-                                        || (((((r0.is_some() && pe_etag.is_none())
-                                            || (r0.is_some()
-                                                && pe_etag.is_some()
-                                                && r0 != pe_etag))
-                                            && r0 != remote_etag)
-                                            || (((remote_etag.is_some() && pe_etag.is_none())
-                                                || (remote_etag.is_some()
-                                                    && pe_etag.is_some()
-                                                    && remote_etag != pe_etag))
-                                                && r0 != pe_etag))
-                                            // Use previous_cid from S3 metadata instead of manifest.
-                                            && me_last_cid != local_cid_now)
-                                    {
-                                        // TRUE CONFLICT against the last adopted base
-                                        let local_cid_for_tag = local_cid_now.clone();
-
-                                        if let Err(e) = execute_conflict_flow(
-                                            client,
-                                            bucket,
-                                            local_root,
-                                            &path,
-                                            &local_cid_for_tag,
-                                            &client_tag8,
-                                            remote_etag.clone(),
-                                            &mut prune,
-                                            ConflictStrategy::RenameLocalAndAdoptRemote,
-                                        )
-                                        .await
-                                        {
-                                            eprintln!(
-                                                "[Sync] adopt conflict flow failed for {path}: {e:?}"
-                                            );
-                                        }
-                                        continue;
-                                    } else if !local_diverged && remote_diverged {
-                                        // Remote-only change since last adoption → safe overwrite
-                                        if let Err(e) = tokio_fs::write(&full, &body).await {
-                                            eprintln!(
-                                                "[Sync] overwrite write failed for {path}: {e:?}"
-                                            );
-                                            continue;
-                                        }
-                                        let pe = prune.entry(path.clone()).or_default();
-                                        commit_prune_after_adopt(pe);
-                                        continue;
-                                    } else {
-                                        // Either local-only change (odd to be here) or no content change
-                                        // Do not clobber; at most refresh ETag if matching adopted base
-                                        let pe = prune.entry(path.clone()).or_default();
-                                        if remote_cid_now == adopted_base {
-                                            if remote_etag.is_some() {
-                                                pe.adopted_remote_etag = remote_etag.clone();
-                                            }
-                                        }
-                                        continue;
-                                    }
-                                } else {
-                                    // No adopted base recorded (first-time adopter on this client)
-
-                                    if local_cid_now != remote_cid_now {
-                                        // Conservative conflict: avoid data loss
-                                        let local_cid_for_tag = local_cid_now.clone();
-
-                                        if let Err(e) = execute_conflict_flow(
-                                            client,
-                                            bucket,
-                                            local_root,
-                                            &path,
-                                            &local_cid_for_tag,
-                                            &client_tag8,
-                                            remote_etag.clone(),
-                                            &mut prune,
-                                            ConflictStrategy::RenameLocalAndAdoptRemote,
-                                        )
-                                        .await
-                                        {
-                                            eprintln!(
-                                                "[Sync] adopt conflict flow failed for {path}: {e:?}"
-                                            );
-                                        }
-                                        continue;
-                                    } else {
-                                        // Equal → just adopt and record base
-                                        let pe = prune.entry(path.clone()).or_default();
-                                        commit_prune_after_adopt(pe);
-                                        continue;
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("[Sync] read(local) failed for {path}: {e:?}");
-                                // Conservative: do not overwrite unreadable files silently.
-                            }
-                        }
-                    }
-                    Err(e) => eprintln!("[Sync] GET failed: {path}: {e:?}"),
-                }
-            }
-
-            Op::DeleteLocal { path } => {
-                let full = key_to_local_path(local_root, &path);
-                if let Err(e) = tokio_fs::remove_file(&full).await {
-                    eprintln!("[Sync] DeleteLocal failed: {path}: {e:?}");
-                } else {
-                    let pe = prune.entry(path.clone()).or_default();
-                    set_prune_absent(pe);
-                    if !matches!(
-                        delete_policy,
-                        DeletePolicy::UploadOnly | DeletePolicy::LocalOnlyDeletes
-                    ) {
-                        pe.locally_deleted = false;
-                    }
-                    if let Some(m) = manifest.entries.get(&path) {
-                        pe.deletion_count = pe.deletion_count.max(m.deletion_count);
-                        pe.resurrection_count = pe.resurrection_count.max(m.resurrection_count);
-                    }
-                }
-            }
-
-            Op::RenameLocal { from, to } => {
-                let src = key_to_local_path(local_root, &from);
-                let dst = key_to_local_path(local_root, &to);
-                if tokio_fs::metadata(&src).await.is_ok() {
-                    if let Err(e) = ensure_parent(&dst).await {
-                        eprintln!("[Sync] ensure parent failed for rename {from}->{to}: {e:?}");
-                    } else if let Err(e) = safe_rename(&src, &dst).await {
-                        eprintln!("[Sync] local rename failed {from}->{to}: {e:?}");
-                    } else {
-                        let to_cid = if let Ok(bytes) = tokio_fs::read(&dst).await {
-                            hex::encode(Sha256::digest(&bytes))
-                        } else {
-                            String::new()
-                        };
-                        {
-                            let pe_old = prune.entry(from.clone()).or_default();
-                            set_prune_absent(pe_old);
-                        }
-                        {
-                            let pe_new = prune.entry(to.clone()).or_default();
-                            pe_new.present = true;
-                            pe_new.locally_deleted = false;
-                            if !to_cid.is_empty() {
-                                pe_new.cid = to_cid;
-                            }
-                            if let Some(m) = manifest.entries.get(&to) {
-                                pe_new.deletion_count = pe_new.deletion_count.max(m.deletion_count);
-                                pe_new.resurrection_count =
-                                    pe_new.resurrection_count.max(m.resurrection_count);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // allow DeleteRemote to be executed during adopt if queued
-            Op::DeleteRemote { path } => {
-                if let Some(et) = remote.get(&path).and_then(|r| {
-                    if r.etag.is_empty() {
-                        None
-                    } else {
-                        Some(r.etag.clone())
-                    }
-                }) {
-                    let _ = client
-                        .delete_object()
-                        .bucket(bucket)
-                        .key(&path)
-                        .if_match(et)
-                        .send()
-                        .await;
-                }
-            }
-
-            Op::Upload { .. } => {}
-        }
+        // Root-level file should remain as-is
+        let root_file = result.iter().find(|i| i.file_name.contains("branch-cleanup")).unwrap();
+        assert_eq!(root_file.file_name, "branch-cleanup.md");
     }
 
-    // Final saves
-    let _ =
-        save_pruned_remote_cas(client, bucket, prunefile_id, &prune, prune_etag.as_deref()).await;
-    let _ = apply_manifest_patches_cas(client, bucket, manifest, manifest_etag, &[], max_retries)
-        .await?;
+    #[test]
+    fn deeply_nested_subfolder_path_preserved() {
+        let eng = SyncEngine::new();
+        eng.add_pending_activity(activity(
+            "a/b/c/deep-file.txt",
+            "uploaded",
+            "sync-folder",
+            100,
+        ));
+        eng.commit_pending_activity_for_label("sync-folder");
 
-    Ok(())
+        let result = eng.get_sync_activity(None, Some("sync-folder".to_string()));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].file_name, "a/b/c/deep-file.txt");
+    }
 }

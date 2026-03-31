@@ -38,7 +38,7 @@ const CustomTooltip: React.FC<CustomTooltipProps> = ({
 
             // Calculate horizontal position
             const newTooltipStyle: React.CSSProperties = {
-                maxWidth: "260px",
+                maxWidth: "16.25rem",
                 width: "max-content"
             };
 
@@ -56,8 +56,8 @@ const CustomTooltip: React.FC<CustomTooltipProps> = ({
             if (shouldBeOnTop) {
                 // Position above the icon
                 newTooltipStyle.bottom = "100%";
-                newTooltipStyle.marginBottom = "8px";
-                newArrowStyle.bottom = "-8px";
+                newTooltipStyle.marginBottom = "0.5rem";
+                newArrowStyle.bottom = "-0.5rem";
                 newArrowStyle.borderLeft = "8px solid transparent";
                 newArrowStyle.borderRight = "8px solid transparent";
                 newArrowStyle.borderTop = "8px solid white";
@@ -66,8 +66,8 @@ const CustomTooltip: React.FC<CustomTooltipProps> = ({
             } else {
                 // Position below the icon
                 newTooltipStyle.top = "100%";
-                newTooltipStyle.marginTop = "8px";
-                newArrowStyle.top = "-8px";
+                newTooltipStyle.marginTop = "0.5rem";
+                newArrowStyle.top = "-0.5rem";
                 newArrowStyle.borderLeft = "8px solid transparent";
                 newArrowStyle.borderRight = "8px solid transparent";
                 newArrowStyle.borderBottom = "8px solid white";
@@ -92,7 +92,7 @@ const CustomTooltip: React.FC<CustomTooltipProps> = ({
                 newArrowStyle.transform = "translateX(-50%)";
             } else if (spaceToRight < tooltipHalfWidth) {
                 // Not enough space on the right, align tooltip to the right edge
-                newTooltipStyle.right = "-20px";
+                newTooltipStyle.right = "-1.25rem";
                 newTooltipStyle.left = "auto";
 
                 const childCenterFromRight = containerRect.width - childCenterX;
@@ -149,7 +149,7 @@ const CustomTooltip: React.FC<CustomTooltipProps> = ({
             <div
                 ref={tooltipRef}
 
-                className={cn("absolute z-[9999] bg-white border border-grey-80 rounded-lg px-2 py-2 text-[10px] font-medium text-grey-40 whitespace-normal break-words opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200", tooltipClassName)}
+                className={cn("absolute z-[9999] bg-white border border-grey-80 rounded-lg px-2 py-2 text-[0.625rem] font-medium text-grey-40 whitespace-normal break-words opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200", tooltipClassName)}
                 style={{
                     ...tooltipStyle,
                     boxShadow: shouldBeOnTop ? '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)' : '0 -4px 6px -1px rgba(0, 0, 0, 0.1), 0 -2px 4px -1px rgba(0, 0, 0, 0.06)'

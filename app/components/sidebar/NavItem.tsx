@@ -5,11 +5,11 @@ import { ChevronDown } from "lucide-react";
 import * as NavigationMenu from "@radix-ui/react-navigation-menu";
 import { SubMenuItemData } from "./NavData";
 import SubMenuList from "./SubMenuList";
-import { activeSubMenuItemAtom, isViewingRecentFilesAtom } from "./sideBarAtoms";
+import { activeSubMenuItemAtom } from "./sideBarAtoms";
 import { usePathname } from "next/navigation";
 
 import { useState, useEffect, useRef } from "react";
-import { useAtom, useAtomValue } from "jotai";
+import { useSetAtom } from "jotai";
 
 interface NavItemProps {
   icon: React.ReactNode;
@@ -39,10 +39,9 @@ const NavItem: React.FC<NavItemProps> = ({
   const [openValue, setOpenValue] = useState<string | undefined>(undefined);
 
   const hasSubMenu = subMenuItems.length > 0;
-  const [activeSubMenuItem, setActiveSubMenuItem] = useAtom(
+  const setActiveSubMenuItem = useSetAtom(
     activeSubMenuItemAtom
   );
-  const isViewingRecentFiles = useAtomValue(isViewingRecentFilesAtom);
 
 
   const pathname = usePathname();
@@ -79,7 +78,7 @@ const NavItem: React.FC<NavItemProps> = ({
 
       <div
         className={cn(
-          "absolute left-[3px] bg-primary-50 w-0.5 h-[22px] rounded-3xl",
+          "absolute left-[0.1875rem] bg-primary-50 w-0.5 h-[1.375rem] rounded-3xl",
           !active && "opacity-0  transition-opacity duration-300",
           !active &&
           label !== "Logout" &&
@@ -106,29 +105,16 @@ const NavItem: React.FC<NavItemProps> = ({
             {label}
           </span>
 
-          {activeSubMenuItem &&
-            label === "Files" &&
-            !isViewingRecentFiles &&
-            (activeSubMenuItem === "Public" ||
-              activeSubMenuItem === "Private") &&
-            !collapsed && (
-              <span
-                className="ml-1 transform translate-x-[0.5px] shrink-0 rounded-full border border-primary-70
-                 bg-primary-90/20 px-2 py-[1px] text-[10px] leading-none
-                 font-medium text-primary-40"
-              >
-                {activeSubMenuItem}
-              </span>
-            )}
+
           {comingSoon && !collapsed && (
-            <span className=" text-[9px]  text-amber-700 px-1.5 py-0.5 rounded-sm whitespace-nowrap absolute right-0 -top-1">
+            <span className=" text-[0.5625rem]  text-amber-700 px-1.5 py-0.5 rounded-sm whitespace-nowrap absolute right-0 -top-1">
               Coming Soon
             </span>
           )}
 
           {hasSubMenu && !collapsed && (
-            <div className="z-20 h-4 w-4 border border-primary-80 bg-primary-100 rounded-[4px] flex items-center justify-center ml-auto">
-              <ChevronDown className="transition-transform duration-200 w-[12px] h-[12px] text-primary-50 group-[[data-state=open]]:-rotate-90" />
+            <div className="z-20 h-4 w-4 border border-primary-80 bg-primary-100 rounded-[0.25rem] flex items-center justify-center ml-auto">
+              <ChevronDown className="transition-transform duration-200 w-[0.75rem] h-[0.75rem] text-primary-50 group-[[data-state=open]]:-rotate-90" />
             </div>
           )}
         </div>
@@ -154,11 +140,6 @@ const NavItem: React.FC<NavItemProps> = ({
     const ITEM_VALUE = label;
 
     const closeMenu = () => setOpenValue?.(undefined);
-    // const handleClick = (e: React.MouseEvent) => {
-    //   if (comingSoon) return;
-    //   setActiveSubMenuItem("Private");
-    //   closeMenu();
-    // };
     return (
       <NavigationMenu.Root
         value={openValue}

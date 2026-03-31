@@ -1,12 +1,11 @@
 import { IconComponent } from "@/app/lib/types";
 
-export const CircularTickGrid: IconComponent = (props) => (
+export const CircularTickGrid: IconComponent = ({ className, ...props }) => (
     <svg
-        width="36"
-        height="36"
         viewBox="0 0 36 36"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
+        className={className || "size-9"}
         {...props}
     >
         <rect width="36" height="36" rx="18" fill="#D3DFF8" />

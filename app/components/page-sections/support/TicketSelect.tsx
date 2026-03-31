@@ -41,9 +41,9 @@ export default function TicketSelect({
       <SelectTrigger
         className="
           w-full flex items-center justify-between  relative
-          bg-grey-100 border border-grey-80 rounded-[8px]
+          bg-grey-100 border border-grey-80 rounded-[0.5rem]
           px-4 py-3 text-base font-medium text-grey-60
-          h-[56px] focus:outline-none focus:border-grey-80
+          h-[3.5rem] focus:outline-none focus:border-grey-80
           disabled:opacity-50 disabled:cursor-not-allowed
         "
       >
@@ -62,7 +62,7 @@ export default function TicketSelect({
 
       <SelectContent
         className="
-          mt-1 bg-grey-100 border border-grey-80 rounded-[8px]
+          mt-1 bg-grey-100 border border-grey-80 rounded-[0.5rem]
           shadow-lg max-h-60 overflow-auto z-50 p-0
         "
       >

@@ -1,9 +1,7 @@
-/* eslint-disable @next/next/no-img-element */
 import React, { ReactNode, useState, useEffect, useCallback, useMemo } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Icons } from "@/components/ui";
-import { toast } from "sonner";
 import { Loader2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
@@ -13,25 +11,21 @@ import {
   getViewableFilePosition
 } from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { getFileUrlAndSource, getFileUrlAndSourceSync } from "@/app/lib/utils/ipfsUrlResolver";
+import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
 
 export const ImageDialogTrigger: React.FC<{
   children: ReactNode;
   onClick: () => void;
-  hasCheckmark?: boolean;
-}> = ({ children, onClick, hasCheckmark = false }) => {
+}> = ({ children, onClick }) => {
   return (
     <button
       onClick={onClick}
-      className="px-4 py-[22px] relative group overflow-hidden flex items-center w-full"
+      className="px-2.5 py-3 relative group overflow-hidden flex items-center w-full"
     >
-      <span>{children}</span>
-      {/* Eye icon on hover - positioned to avoid checkmark */}
-      <div className={cn(
-        "absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-white",
-        hasCheckmark ? "right-10" : "right-4"
-      )}>
-        <Icons.Eye className="size-5 text-primary-60 [&>path]:stroke-[3px]" />
+      <span className="flex-1 min-w-0">{children}</span>
+      {/* Eye icon on hover */}
+      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100 to-white right-4 inset-y-0 flex items-center">
+        <Icons.Eye className="size-5 text-primary-60 [&>path]:stroke-[0.1875rem]" />
       </div>
     </button>
   );
@@ -80,24 +74,20 @@ const ImageDialog: React.FC<{
     file: FormattedUserFile,
     polkadotAddress: string
   ) => void;
-  isPrivateView?: boolean;
-}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload, isPrivateView = false }) => {
+}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload }) => {
   const { polkadotAddress } = useWalletAuth();
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
   const [nextFile, setNextFile] = useState<FormattedUserFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserFile | null>(null);
   const [resolvedUrl, setResolvedUrl] = useState<string>("");
-  const [isResolvingUrl, setIsResolvingUrl] = useState<boolean>(false);
-  const [isFromIpfs, setIsFromIpfs] = useState<boolean>(false);
-  const [isFromS3, setIsFromS3] = useState<boolean>(false);
   const [position, setPosition] = useState<{ current: number; total: number } | null>(null);
 
   // Track the current file to prevent race conditions
   const currentFileRef = React.useRef<FormattedUserFile | null>(null);
 
-  // For private files, only navigate between locally synced files
-  const navigationOptions = useMemo(() => ({ localOnly: isPrivateView }), [isPrivateView]);
+  // All files are private — only navigate between locally synced files
+  const navigationOptions = useMemo(() => ({ localOnly: true }), []);
 
   // Calculate next and previous files whenever the current file changes
   useEffect(() => {
@@ -122,34 +112,9 @@ const ImageDialog: React.FC<{
     // Reset states immediately when file changes
     setImageLoaded(false);
     setImageError(null);
-    setResolvedUrl("");
-    setIsResolvingUrl(true);
 
-    const resolveUrl = async () => {
-      try {
-        const result = await getFileUrlAndSource(file);
-
-        // Only update state if this is still the current file (prevent race condition)
-        if (currentFileRef.current === file) {
-          setResolvedUrl(result.url);
-          setIsFromIpfs(result.isFromIpfs);
-          setIsFromS3(result.isFromS3 || false);
-          setIsResolvingUrl(false);
-        }
-      } catch (error) {
-        console.error('Failed to resolve URL:', error);
-        // Fallback to sync version - also check for current file
-        if (currentFileRef.current === file) {
-          const result = getFileUrlAndSourceSync(file);
-          setResolvedUrl(result.url);
-          setIsFromIpfs(result.isFromIpfs);
-          setIsFromS3(result.isFromS3 || false);
-          setIsResolvingUrl(false);
-        }
-      }
-    };
-
-    resolveUrl();
+    const result = getFileUrl(file);
+    setResolvedUrl(result.url);
   }, [file]);
 
   const handleNext = useCallback(() => {
@@ -184,6 +149,21 @@ const ImageDialog: React.FC<{
     };
   }, [file, nextFile, prevFile, handleNext, handlePrev, onCloseClicked]);
 
+  // Prevent body and html scroll when dialog is open, and scroll to top
+  useEffect(() => {
+    if (file) {
+      const scrollY = window.scrollY;
+      document.documentElement.style.overflow = 'hidden';
+      document.body.style.overflow = 'hidden';
+      window.scrollTo(0, 0);
+      return () => {
+        document.documentElement.style.overflow = '';
+        document.body.style.overflow = '';
+        window.scrollTo(0, scrollY);
+      };
+    }
+  }, [file]);
+
   if (!file) return null;
 
   return (
@@ -196,7 +176,7 @@ const ImageDialog: React.FC<{
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="bg-black/80 fixed p-3 sm:p-10 md:p-20 z-[999] top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
+        <Dialog.Overlay className="bg-black/80 fixed inset-0 pt-8 sm:pt-10 md:pt-20 p-3 sm:p-10 md:p-20 z-[999] flex items-center justify-center overflow-hidden data-[state=open]:animate-fade-in-0.3">
           <Dialog.Content className="h-full max-w-screen-1.5xl text-grey-10 w-full flex flex-col items-center">
             {(() => {
               if (file) {
@@ -211,7 +191,7 @@ const ImageDialog: React.FC<{
                           </div>
                           <span
                             title={file.name}
-                            className="truncate max-sm:max-w-[180px] text-grey-100 text-[22px] font-medium"
+                            className="truncate max-sm:max-w-[11.25rem] text-grey-100 text-[1.375rem] font-medium"
                           >
                             {file.name}
                           </span>
@@ -234,22 +214,6 @@ const ImageDialog: React.FC<{
                               Download File
                             </span>
                           </button>
-                          {(isFromIpfs || isFromS3) && (
-                            <button
-                              onClick={() => {
-                                navigator.clipboard
-                                  .writeText(resolvedUrl)
-                                  .then(() => {
-                                    toast.success(
-                                      "Copied to clipboard successfully!"
-                                    );
-                                  });
-                              }}
-                              className="size-9 border duration-300 border-grey-8 flex items-center justify-center rounded bg-white"
-                            >
-                              <Icons.Link className="size-5 [&>path]:stroke-2" />
-                            </button>
-                          )}
                           <button
                             className="duration-300"
                             onClick={onCloseClicked}
@@ -286,8 +250,8 @@ const ImageDialog: React.FC<{
                       onClick={onCloseClicked}
                       className="w-full h-full flex items-center justify-center"
                     >
-                      {/* Loading spinner - show when resolving URL or loading image */}
-                      {(isResolvingUrl || (!imageLoaded && !imageError && resolvedUrl)) && (
+                      {/* Loading spinner - show when loading image */}
+                      {(!imageLoaded && !imageError && resolvedUrl) && (
                         <div className="absolute top-0 left-0 h-full flex items-center justify-center w-full pointer-events-none">
                           <Loader2 className="size-6 text-primary-50 animate-spin" />
                         </div>

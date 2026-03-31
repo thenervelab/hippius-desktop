@@ -3,12 +3,12 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { CloseCircle } from "@/components/ui/icons";
 import { P } from "@/components/ui/typography";
 import { toast } from "sonner";
+import { invoke } from "@tauri-apps/api/core";
 import useSubscriptionData from "@/app/lib/hooks/useSubscriptionData";
 import ButtonCard from "../../ui/button/CardButton";
 import { Graphsheet } from "../../ui";
-import { getAuthHeaders } from "@/app/lib/services/authService";
 import { ensureBillingAuth } from "@/app/lib/hooks/api/useBillingAuth";
-import { API_CONFIG } from "@/app/lib/helpers/sessionStore";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 export interface Plan {
     name: string;
@@ -34,6 +34,7 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
     const [internalOpen, setInternalOpen] = useState(false);
     const [isCancelling, setIsCancelling] = useState(false);
     const { activeSubscription, subscriptionPlans } = useSubscriptionData();
+    const { polkadotAddress } = useWalletAuth();
 
     // Use either the external open state or internal state
     const dialogOpen = open !== undefined ? open : internalOpen;
@@ -60,32 +61,26 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
         try {
             setIsCancelling(true);
 
+            if (!polkadotAddress) {
+                toast.error("Wallet address not available");
+                return;
+            }
+
             // Ensure authentication is valid
-            const authOk = await ensureBillingAuth();
+            const authOk = await ensureBillingAuth(polkadotAddress);
             if (!authOk.ok) {
                 toast.error(authOk.error || "Authentication failed");
                 return;
             }
 
-            const headers = await getAuthHeaders();
-            if (!headers) {
-                toast.error("Not authenticated");
-                return;
-            }
+            const data = await invoke<{ portal_url?: string }>(
+                "get_customer_portal_url",
+                {
+                    accountId: polkadotAddress,
+                    returnUrl: `${window.location.origin}/dashboard/billing`,
+                }
+            );
 
-            const response = await fetch(`${API_CONFIG.baseUrl}/api/billing/stripe/customer-portal/`, {
-                method: "POST",
-                headers,
-                body: JSON.stringify({
-                    return_url: `${window.location.origin}/dashboard/billing`,
-                }),
-            });
-
-            if (!response.ok) {
-                throw new Error("Failed to get customer portal link");
-            }
-
-            const data = await response.json();
             if (data.portal_url) {
                 handleDialogOpenChange(false);
                 window.open(data.portal_url, "_blank");
@@ -119,8 +114,8 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
             {trigger && <Dialog.Trigger asChild>{trigger}</Dialog.Trigger>}
             <Dialog.Portal>
                 <Dialog.Overlay className="bg-white/70 fixed px-4 z-10 top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
-                    <Dialog.Content className="relative p-4 border shadow-dialog bg-white flex flex-col max-w-[428px] max-h-[75vh] h-auto overflow-y-auto custom-scrollbar-thin border-grey-80 bg-background-1 rounded sm:rounded-[8px] overflow-hidden w-full data-[state=open]:animate-scale-in-95-0.2">
-                        <div className="z-10 absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[8px] sm:hidden" />
+                    <Dialog.Content className="relative p-4 border shadow-dialog bg-white flex flex-col max-w-[26.75rem] max-h-[75vh] h-auto overflow-y-auto custom-scrollbar-thin border-grey-80 bg-background-1 rounded sm:rounded-[0.5rem] overflow-hidden w-full data-[state=open]:animate-scale-in-95-0.2">
+                        <div className="z-10 absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[0.5rem] sm:hidden" />
                         <Graphsheet
                             majorCell={{
                                 lineColor: [246, 248, 254, 1.0],
@@ -135,7 +130,7 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
                             className="absolute w-full h-full left-0 top-0"
                         />
                         <div className="flex items-center text-grey-10 relative mt-2 sm:mt-0">
-                            <div className="text-[22px] lg:text-2xl text-grey-10 sm:flex w-full font-medium relative">
+                            <div className="text-[1.375rem] lg:text-2xl text-grey-10 sm:flex w-full font-medium relative">
                                 <Dialog.Title>
                                     Your are about to cancel your subscription
                                 </Dialog.Title>

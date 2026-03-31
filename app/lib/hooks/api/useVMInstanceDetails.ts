@@ -1,12 +1,10 @@
 "use client";
 
 import {
-  useQuery,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
-import { API_CONFIG } from "@/lib/config";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { useInvokeQuery } from "./useInvokeQuery";
 
 export interface VMInstanceDetailsResponse {
   id: number;
@@ -42,42 +40,17 @@ export default function useVMInstanceDetails(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<VMInstanceDetailsResponse, Error> {
-  const { oauthSession } = useWalletAuth();
-
-  return useQuery<VMInstanceDetailsResponse, Error, VMInstanceDetailsResponse>({
+  return useInvokeQuery<VMInstanceDetailsResponse>({
+    command: "get_vm_instance",
     queryKey: ["vm-instance-details", instanceId],
-    queryFn: async () => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
-      }
-
-      const url = `${API_CONFIG.baseUrl}${API_CONFIG.infrastructure.vm.instance(
-        Number(instanceId)
-      )}`;
-
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const message =
-          errorData.error ||
-          errorData.message ||
-          errorData.detail ||
-          `Failed to fetch VM instance details`;
-        throw new Error(message);
-      }
-
-      return response.json() as Promise<VMInstanceDetailsResponse>;
+    params: (polkadotAddress) => ({
+      accountId: polkadotAddress,
+      instanceId: Number(instanceId),
+    }),
+    enabled: !!instanceId,
+    options: {
+      staleTime: 30 * 1000,
+      ...options,
     },
-    enabled: !!oauthSession?.token && !!instanceId,
-    refetchOnWindowFocus: false,
-    staleTime: 30 * 1000, // 30 seconds
-    ...options,
   });
 }

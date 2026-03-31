@@ -15,20 +15,20 @@ const LeftPanelItem = ({
   titleText,
   description,
   imagePath,
-  imageMarginBottom = "mb-[75px]",
+  imageMarginBottom = "mb-[4.6875rem]",
   inView,
   imagClassName
 }: LeftPanelItemProps) => {
   return (
     <div className="absolute inset-0 right-0 left-0 z-4 h-full flex gap-4 justify-between flex-col">
       {/* text */}
-      <div className="flex flex-col gap-[9px] mx-8 mt-8">
-        <div className="text-primary-50 text-[40px] leading-[48px] font-medium">
+      <div className="flex flex-col gap-[min(0.5625rem,9px)] mx-[min(2rem,32px)] mt-[min(2rem,32px)]">
+        <div className="text-primary-50 text-[min(2.5rem,40px)] leading-[min(3rem,48px)] font-medium">
           <RevealTextLine rotate reveal={inView} className="delay-300">
             {titleText}
           </RevealTextLine>
         </div>
-        <div className="text-grey-50 text-base font-medium">
+        <div className="text-grey-50 text-[min(1rem,16px)] font-medium">
           <RevealTextLine rotate reveal={inView} className="delay-300">
             {description}
           </RevealTextLine>

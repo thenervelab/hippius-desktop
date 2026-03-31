@@ -27,8 +27,6 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
     };
 
     const handleConfirm = () => {
-        console.log("Delete confirmation - files being deleted:", selectedFiles.map(f => ({ name: f.name, actualFileName: f.actualFileName })));
-
         // Capture the files before clearing selection
         const filesToDelete = [...selectedFiles];
 
@@ -45,7 +43,7 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
 
     return (
         <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && handleCancel()}>
-            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit">
+            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit">
                 <Dialog.Title className="sr-only">Delete {isMultiple ? 'Files' : 'File'}</Dialog.Title>
 
                 {/* Top accent bar (mobile only) */}
@@ -101,8 +99,8 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
                         <div className="mb-4 max-h-32 overflow-y-auto">
                             <div className="text-xs text-grey-50 mb-2">Files to delete:</div>
                             <ul className="text-sm space-y-1">
-                                {selectedFiles.slice(0, 5).map((file) => (
-                                    <li key={file.cid} className="text-grey-20 truncate">
+                                {selectedFiles.slice(0, 5).map((file, index) => (
+                                    <li key={file.arionHash || `${file.actualFileName || file.name}-${index}`} className="text-grey-20 truncate">
                                         • {file.actualFileName || file.name}
                                     </li>
                                 ))}
@@ -118,6 +116,15 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
                     {/* Action Buttons */}
                     <div className="flex gap-4 mb-6">
                         <CardButton
+                            className="w-full"
+                            variant="secondary"
+                            onClick={handleCancel}
+                            disabled={isLoading}
+                        >
+                            Cancel
+                        </CardButton>
+
+                        <CardButton
                             className="text-base w-full"
                             variant="error"
                             onClick={handleConfirm}
@@ -125,15 +132,6 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
                             loading={isLoading}
                         >
                             {isLoading ? 'Deleting...' : `Delete ${isMultiple ? 'Files' : 'File'}`}
-                        </CardButton>
-
-                        <CardButton
-                            className="w-full"
-                            variant="secondary"
-                            onClick={handleCancel}
-                            disabled={isLoading}
-                        >
-                            Cancel
                         </CardButton>
                     </div>
                 </div>

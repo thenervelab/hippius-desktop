@@ -15,7 +15,6 @@ import { Icons, RefreshButton } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import {
   FormattedUserFile,
-  parseMinerIds,
 } from "@/app/lib/hooks/use-user-files";
 import FilesContent from "@/app/components/page-sections/files/FilesContent";
 import { toast } from "sonner";
@@ -27,40 +26,35 @@ import {
 } from "@/lib/utils/fileFilterUtils";
 import { SearchInput } from "@/components/ui";
 import FilterChips from "@/app/components/page-sections/files/filter-chips";
-import { useAtom } from "jotai";
-import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { downloadFolder } from "@/app/lib/utils/downloadFolder";
 import AddFileToFolderButton from "@/app/components/page-sections/files/AddFileToFolderButton";
 import {
   getViewModePreference,
   saveViewModePreference,
 } from "@/lib/utils/userPreferencesDb";
-import { getFolderPathArray } from "@/app/utils/folderPathUtils";
+import { getFullPath } from "@/app/utils/folderPathUtils";
 import AddFolderToFolderButton from "@/app/components/page-sections/files/AddFolderToFolderButton";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
-import { usePagination } from "@/lib/hooks";
+import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { List } from "lucide-react";
 import {
   getPrivateSyncPath,
-  getPublicSyncPath,
+  getAllSyncPaths,
 } from "@/lib/utils/syncPathUtils";
 import { useAtomValue } from "jotai";
 import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import FolderBreadcrumb from "./FolderBreadcrumb";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 
-interface FileEntry {
-  file_name: string;
-  file_size: number;
-  cid: string;
-  created_at: string;
-  file_hash: string;
-  last_charged_at: string;
-  miner_ids: string | string[];
-  source: string;
+interface SyncFileEntry {
+  name: string;
   is_folder: boolean;
-  main_req_hash: string;
+  size: number;
+  modified: number | null;
+  arion_hash?: string;
+  arion_cid?: string;
+  sync_status?: string;
 }
 
 interface FolderViewProps {
@@ -80,26 +74,26 @@ export default function FolderView({
   const router = useRouter();
   const { getParam } = useUrlParams();
   const { polkadotAddress } = useWalletAuth();
-  const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
   const [files, setFiles] = useState<FormattedUserFile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
   const [isDownloading, setIsDownloading] = useState(false);
-  const isPrivateFolder = activeSubMenuItem === "Private";
-  const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
+  const addButtonRef = useRef<{ openWithFiles(files: FileList): void; openWithPaths(paths: string[]): void; isDialogOpen(): boolean }>(null);
   const addFolderButtonRef = useRef<object>({});
 
   const [searchTerm, setSearchTerm] = useState("");
   const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
-  const [shouldResetPagination, setShouldResetPagination] = useState(false);
+
   const [selectedFileTypes, setSelectedFileTypes] = useState<FileTypes[]>([]);
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedFileSize, setSelectedFileSize] = useState(0);
 
   const [syncFolderPath, setSyncFolderPath] = useState<string>("");
+  const [syncFolderLabel, setSyncFolderLabel] = useState<string>("");
   const [isLoadingSyncPath, setIsLoadingSyncPath] = useState(true);
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
+  const folderSource = getParam("folderSource");
 
   const filteredData = useMemo(() => {
     return filterFiles(files, {
@@ -110,9 +104,9 @@ export default function FolderView({
     });
   }, [files, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
 
-  // Shared pagination state between list and card views
-  const { paginatedData, setCurrentPage, currentPage, totalPages } =
-    usePagination(filteredData, 12);
+  // Infinite scroll state for list and card views
+  const { visibleData, hasMore, loadMore, resetScroll } =
+    useInfiniteScroll(filteredData);
 
   useEffect(() => {
     const newActiveFilters = generateActiveFilters(
@@ -124,15 +118,8 @@ export default function FolderView({
   }, [selectedFileTypes, selectedDate, selectedFileSize]);
 
   useEffect(() => {
-    setShouldResetPagination(true);
-  }, [searchTerm, selectedFileTypes, selectedDate, selectedFileSize, viewMode]);
-
-  // Handle pagination reset
-  useEffect(() => {
-    if (shouldResetPagination) {
-      setCurrentPage(1);
-    }
-  }, [shouldResetPagination, setCurrentPage]);
+    resetScroll();
+  }, [searchTerm, selectedFileTypes, selectedDate, selectedFileSize, viewMode, resetScroll]);
 
   const loadFolderContents = useCallback(
     async (showLoading = true) => {
@@ -143,67 +130,48 @@ export default function FolderView({
           setIsRefreshing(true);
         }
 
-        // Parse the folder path into an array of folder names
-        const folderPath = getFolderPathArray(
-          mainFolderActualName,
-          subFolderPath
-        );
+        const syncPath = syncFolderPath || ((await getPrivateSyncPath(polkadotAddress || ""))?.path ?? "");
 
-        const fileEntries = await invoke<FileEntry[]>("list_folder_contents", {
-          accountId: polkadotAddress,
-          scope: isPrivateFolder ? "private" : "public",
-          mainFolderName: mainFolderActualName || null,
-          subfolderPath: folderPath || null,
+        // Build the subfolder path relative to the sync root
+        const subfolder = getFullPath(mainFolderActualName, subFolderPath) || null;
+
+        const entries = await invoke<SyncFileEntry[]>("list_sync_folder", {
+          syncPath,
+          subfolder,
+          label: syncFolderLabel || null,
         });
 
-        console.log("Fetched folder contents:", fileEntries);
+        console.log("Fetched folder contents:", entries);
 
-        const formattedFiles = fileEntries.map((entry): FormattedUserFile => {
-          const isErasureCodedFolder = entry.file_name.endsWith(
-            ".folder.ec_metadata"
-          );
-          const isErasureCoded =
-            !isErasureCodedFolder && entry.file_name.endsWith(".ec_metadata");
-          const isFolder =
-            !isErasureCodedFolder && entry.file_name.endsWith(".folder");
-
-          let displayName = entry.file_name;
-          if (isErasureCodedFolder) {
-            displayName = entry.file_name.slice(
-              0,
-              -".folder.ec_metadata".length
-            );
-          } else if (isErasureCoded) {
-            displayName = entry.file_name.slice(0, -".ec_metadata".length);
-          } else if (isFolder) {
-            displayName = entry.file_name.slice(0, -".folder".length);
-          }
+        const formattedFiles = entries.map((entry): FormattedUserFile => {
+          const modifiedMs = (entry.modified ?? 0) * 1000;
+          const filePath = subfolder
+            ? `${syncPath}/${subfolder}/${entry.name}`
+            : `${syncPath}/${entry.name}`;
           return {
-            cid: entry.cid,
-            name: displayName || "Unnamed File",
-            actualFileName: entry.file_name,
-            size: entry.file_size,
-            type: isPrivateFolder ? "private" : "public",
-            fileHash: entry.file_hash,
-            isAssigned: true,
-            source: entry.source || "Unknown",
-            createdAt: Number(entry.created_at),
-            minerIds: parseMinerIds(entry.miner_ids),
-            lastChargedAt: Number(entry.last_charged_at),
-            isErasureCoded,
-            isFolder: isFolder || entry.is_folder,
+            name: entry.name,
+            actualFileName: (subfolder && !entry.is_folder) ? `${subfolder}/${entry.name}` : entry.name,
+            size: entry.size,
+            createdAt: modifiedMs,
+            arionHash: entry.arion_hash || "",
+            arionCid: entry.arion_cid || "",
+            source: filePath,
+            minerIds: [],
+            isAssigned: entry.is_folder || entry.sync_status === "synced",
+            lastChargedAt: modifiedMs,
+            isFolder: entry.is_folder,
+            type: "private",
+            isErasureCoded: false,
             parentFolderId: folderCid,
             parentFolderName: folderName,
-            mainReqHash: entry.main_req_hash,
+            mainReqHash: "",
+            label: syncFolderLabel || undefined,
           };
         });
 
         setFiles(formattedFiles);
       } catch (error) {
         console.error("Error loading folder contents:", error);
-        // toast.error(
-        //     `Failed to load folder contents: ${error instanceof Error ? error.message : String(error)}`
-        // );
       } finally {
         if (showLoading) {
           setIsLoading(false);
@@ -217,8 +185,9 @@ export default function FolderView({
       folderName,
       mainFolderActualName,
       subFolderPath,
-      isPrivateFolder,
       polkadotAddress,
+      syncFolderPath,
+      syncFolderLabel,
     ]
   );
 
@@ -226,23 +195,39 @@ export default function FolderView({
     loadFolderContents();
   }, [loadFolderContents]);
 
-  // Load sync path based on current view (private/public)
+  // Resolve the correct sync path + label by matching folderSource against all sync paths.
+  // Falls back to getPrivateSyncPath when folderSource is unavailable.
+  const resolveSyncPath = useCallback(async (): Promise<{ path: string; label: string }> => {
+    if (folderSource) {
+      try {
+        const allPaths = await getAllSyncPaths(polkadotAddress ?? undefined);
+        const match = allPaths.find((sp) => folderSource.startsWith(sp.path));
+        if (match) return { path: match.path, label: match.label };
+      } catch {
+        // Fall through to default
+      }
+    }
+    const result = await getPrivateSyncPath(polkadotAddress ?? undefined);
+    return { path: result?.path ?? "", label: result?.label ?? "" };
+  }, [folderSource, polkadotAddress]);
+
+  // Load sync path (all files use private/encrypted HCFS path)
   useEffect(() => {
     (async () => {
       try {
         setIsLoadingSyncPath(true);
-        const path = isPrivateFolder
-          ? await getPrivateSyncPath()
-          : await getPublicSyncPath();
-        setSyncFolderPath(path || "");
+        const { path, label } = await resolveSyncPath();
+        setSyncFolderPath(path);
+        setSyncFolderLabel(label);
       } catch (error) {
         console.error("Failed to load sync path:", error);
         setSyncFolderPath("");
+        setSyncFolderLabel("");
       } finally {
         setIsLoadingSyncPath(false);
       }
     })();
-  }, [isPrivateFolder]);
+  }, [resolveSyncPath]);
 
   // Reload sync path when settings are updated
   useEffect(() => {
@@ -250,60 +235,63 @@ export default function FolderView({
       (async () => {
         try {
           setIsLoadingSyncPath(true);
-          const path = isPrivateFolder
-            ? await getPrivateSyncPath()
-            : await getPublicSyncPath();
-          setSyncFolderPath(path || "");
+          const { path, label } = await resolveSyncPath();
+          setSyncFolderPath(path);
+          setSyncFolderLabel(label);
         } catch (error) {
           console.error("Failed to reload sync path:", error);
           setSyncFolderPath("");
+          setSyncFolderLabel("");
         } finally {
           setIsLoadingSyncPath(false);
         }
       })();
     }
-  }, [syncPathRefreshTrigger, isPrivateFolder]);
+  }, [syncPathRefreshTrigger, resolveSyncPath]);
   const handleRefresh = () => {
+    invoke("trigger_sync_now").catch((err: unknown) => console.warn("[FilesFolder] trigger_sync_now failed:", err));
     loadFolderContents(false);
   };
 
-  function handlePaginationReset() {
-    setShouldResetPagination(false);
-  }
-
   const initiateDownloadFolder = async () => {
     try {
-      // Ask for output directory
+      // Ask for output directory — default to Downloads so the dialog
+      // always opens in a predictable location regardless of cancel/retry.
+      const { downloadDir } = await import("@tauri-apps/api/path");
+      let defaultPath: string | undefined;
+      try {
+        defaultPath = await downloadDir();
+      } catch {
+        // Fall back to no directory hint
+      }
       const outputDir = (await open({
         directory: true,
         multiple: false,
+        defaultPath,
       })) as string | null;
 
       if (!outputDir) {
         return; // User canceled directory selection
       }
 
-      const folderSource = getParam("folderSource");
-      const mainReqHash = getParam("mainReqHash");
-
-      // Download folder
+      // Download folder — build a minimal file object so downloadFolder
+      // resolves the correct sync path (via label) and uses the actual
+      // subfolder path relative to the sync root as the fileName.
+      const actualFolderPath = getFullPath(mainFolderActualName, subFolderPath) || folderName;
       setIsDownloading(true);
       const result = await downloadFolder({
-        folderCid,
         folderName,
         polkadotAddress: polkadotAddress ?? "",
-        isPrivate: isPrivateFolder,
         outputDir,
-        source: folderSource,
-        mainReqHash: mainReqHash,
+        file: {
+          actualFileName: actualFolderPath,
+        } as FormattedUserFile,
       });
 
       if (result && !result.success) {
         toast.error(
           `Failed to download folder: ${result.message || "Unknown error"}`
         );
-      } else if (result && result.success) {
-        toast.success(`Folder downloaded successfully to ${outputDir}`);
       }
     } catch (error) {
       console.error("Error downloading folder:", error);
@@ -318,8 +306,8 @@ export default function FolderView({
 
   const handleSearchChange = useCallback((value: string) => {
     setSearchTerm(value);
-    setShouldResetPagination(true);
-  }, []);
+    resetScroll();
+  }, [resetScroll]);
 
   const handleRemoveFilter = useCallback((filter: ActiveFilter) => {
     switch (filter.type) {
@@ -335,8 +323,8 @@ export default function FolderView({
         setSelectedFileSize(0);
         break;
     }
-    setShouldResetPagination(true);
-  }, []);
+    resetScroll();
+  }, [resetScroll]);
 
   useEffect(() => {
     const handleFileDrop = (event: Event) => {
@@ -370,13 +358,12 @@ export default function FolderView({
   // Check if sync path is empty (user skipped setup)
   const isSyncPathEmpty = syncFolderPath === "";
 
-  const folderSource = getParam("folderSource");
   const mainReqHash = getParam("mainReqHash");
 
   return (
     <FileSelectionProvider>
       <div className="w-full relative mt-6">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-y-3">
           <div className="flex items-center gap-2">
             <button
               className="flex gap-2 font-semibold text-lg items-center"
@@ -387,7 +374,7 @@ export default function FolderView({
             </button>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 flex-wrap">
             <RefreshButton onClick={handleRefresh} refetching={isRefreshing} />
 
             <div className="">
@@ -432,23 +419,22 @@ export default function FolderView({
                 <AddFolderToFolderButton
                   ref={addFolderButtonRef}
                   className="h-9"
-                  folderCid={folderCid}
                   folderName={folderName}
-                  isPrivateFolder={isPrivateFolder}
                   mainFolderActualName={mainFolderActualName}
                   subFolderPath={subFolderPath}
                   onFolderAdded={handleRefresh}
                   disabled={IS_SYNC_PAUSED}
+                  syncBasePath={syncFolderPath}
                 />
 
                 <AddFileToFolderButton
                   ref={addButtonRef}
                   className="h-9"
-                  folderCid={folderCid}
                   folderName={folderName}
-                  isPrivateFolder={isPrivateFolder}
+                  subfolder={getFullPath(mainFolderActualName, subFolderPath) || undefined}
                   onFileAdded={handleRefresh}
                   disabled={IS_SYNC_PAUSED}
+                  syncBasePath={syncFolderPath}
                 />
               </>
             )}
@@ -500,14 +486,14 @@ export default function FolderView({
         ) : (
           <>
             {files.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
+              <div className="flex flex-col items-center justify-center py-16 min-h-[37.5rem]">
                 <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
                   <Icons.Folder className="size-7 text-primary-50" />
                 </div>
                 <h3 className="text-lg font-medium text-grey-10 mb-1">
                   Empty Folder
                 </h3>
-                <p className="text-grey-50 text-sm max-w-[270px] text-center">
+                <p className="text-grey-50 text-sm max-w-[16.875rem] text-center">
                   This folder does not contain any files.
                 </p>
               </div>
@@ -515,19 +501,15 @@ export default function FolderView({
               <FilesContent
                 isRecentFiles={false}
                 isLoading={false}
-                isFetching={false}
                 filteredData={filteredData}
-                displayedData={paginatedData}
+                displayedData={visibleData}
                 searchTerm={searchTerm}
                 activeFilters={activeFilters}
                 viewMode={viewMode}
-                shouldResetPagination={shouldResetPagination}
-                handlePaginationReset={handlePaginationReset}
-                isPrivateView={isPrivateFolder}
-                currentPage={currentPage}
-                totalPages={totalPages}
-                setCurrentPage={setCurrentPage}
+                hasMore={hasMore}
+                loadMore={loadMore}
                 isSyncPathEmpty={isSyncPathEmpty}
+                addButtonRef={addButtonRef}
               />
             )}
           </>

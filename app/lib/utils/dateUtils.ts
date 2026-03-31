@@ -1,4 +1,26 @@
 /**
+ * Normalises an ISO-8601 date string to milliseconds since epoch.
+ * Handles fractional seconds of any length (e.g. `.740567Z`).
+ * Returns `null` for undefined / un-parseable input.
+ */
+export const normalizeIsoToMillis = (iso?: string): number | null => {
+  if (!iso) return null;
+  const s = iso.trim();
+
+  const direct = Date.parse(s);
+  if (!Number.isNaN(direct)) return direct;
+
+  // Normalize fraction to 3 digits (ms)
+  const m = s.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.(\d+))?Z$/);
+  if (!m) return null;
+  const base = m[1];
+  const frac = (m[3] ?? "").padEnd(3, "0").slice(0, 3);
+  const safeIso = frac ? `${base}.${frac}Z` : `${base}.000Z`;
+  const t = Date.parse(safeIso);
+  return Number.isNaN(t) ? null : t;
+};
+
+/**
  * Formats a date to compact format: MM/DD/YY H:MM am/pm
  * @param date - Date object to format
  * @returns Formatted date string like "09/22/25 4:59 pm"

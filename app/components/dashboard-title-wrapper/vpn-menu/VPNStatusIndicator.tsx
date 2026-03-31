@@ -57,7 +57,7 @@ const VPNStatusIndicator = () => {
                     <span className="block w-1.5 h-1.5 rounded-full bg-success-50"></span>
                   </span>
                 </span>
-                <span className="font-medium text-[15px] leading-5 text-grey-10">
+                <span className="font-medium text-[0.9375rem] leading-5 text-grey-10">
                   Connected
                 </span>
               </div>
@@ -72,7 +72,7 @@ const VPNStatusIndicator = () => {
             <RevealTextLine reveal={inView} delay={300}>
               <div className="flex items-center gap-2">
                 <Lock className="w-3.5 h-3.5 text-grey-10" />
-                <span className="font-medium text-[15px] leading-5 text-grey-10">
+                <span className="font-medium text-[0.9375rem] leading-5 text-grey-10">
                   Encrypted
                 </span>
               </div>
@@ -113,7 +113,7 @@ const VPNStatusIndicator = () => {
                   <div className="p-1 bg-primary-50 rounded-md">
                     <TrendUp className="size-3.5 text-white" />
                   </div>
-                  <span className="text-[11px] font-medium text-grey-50">
+                  <span className="text-[0.6875rem] font-medium text-grey-50">
                     Sent
                   </span>
                 </div>
@@ -135,7 +135,7 @@ const VPNStatusIndicator = () => {
                   <div className="p-1 bg-success-50 rounded-md">
                     <TrendDown className="size-3.5 text-white" />
                   </div>
-                  <span className="text-[11px] font-medium text-grey-50">
+                  <span className="text-[0.6875rem] font-medium text-grey-50">
                     Received
                   </span>
                 </div>

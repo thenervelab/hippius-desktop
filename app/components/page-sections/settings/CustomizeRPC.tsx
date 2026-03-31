@@ -77,12 +77,36 @@ const CustomizeRPC: React.FC = () => {
       return false;
     }
 
+    // Validate URL format
+    if (!rpcEndpoint.startsWith("ws://") && !rpcEndpoint.startsWith("wss://")) {
+      setError(formatErrorMessage("Invalid WSS endpoint format"));
+      return false;
+    }
+
     setError(null);
     setTesting(true);
 
     try {
-      // Test the endpoint using the Tauri command
-      await invoke("test_wss_endpoint_command", { endpoint: rpcEndpoint });
+      // Test the endpoint by opening a WebSocket connection
+      await new Promise<void>((resolve, reject) => {
+        const ws = new WebSocket(rpcEndpoint);
+        const timeout = setTimeout(() => {
+          ws.close();
+          reject(new Error("timed out"));
+        }, 10000);
+
+        ws.onopen = () => {
+          clearTimeout(timeout);
+          ws.close();
+          resolve();
+        };
+        ws.onerror = () => {
+          clearTimeout(timeout);
+          ws.close();
+          reject(new Error("connection refused"));
+        };
+      });
+
       setTesting(false);
       return true;
     } catch (err) {
@@ -170,7 +194,7 @@ const CustomizeRPC: React.FC = () => {
                 parentClassName="w-full"
                 className="delay-300 w-full"
               >
-                <div className="w-full flex justify-between gap-4">
+                <div className="w-full flex flex-wrap justify-between gap-4 items-start">
                   <SectionHeader
                     Icon={Icons.Box}
                     title="RPC Setting"
@@ -180,7 +204,7 @@ const CustomizeRPC: React.FC = () => {
                   />
                   {!editMode && (
                     <IconButton
-                      className="w-[146px] h-[42px]"
+                      className="shrink-0 h-[2.625rem]"
                       icon={Edit}
                       text={"Update RPC"}
                       onClick={toggleEditMode}
@@ -194,7 +218,7 @@ const CustomizeRPC: React.FC = () => {
                 rotate
                 reveal={inView}
                 parentClassName="w-full"
-                className="delay-300 w-full mt-[38px]"
+                className="delay-300 w-full mt-4"
               >
                 <div className="space-y-1 text-grey-10 w-full flex flex-col">
                   <Label
@@ -204,7 +228,7 @@ const CustomizeRPC: React.FC = () => {
                     RPC Endpoint
                   </Label>
                   <div className="relative flex items-start w-full">
-                    <Icons.Key className="size-6 absolute left-3 top-[28px] transform -translate-y-1/2 text-grey-60" />
+                    <Icons.Key className="size-6 absolute left-3 top-[1.75rem] transform -translate-y-1/2 text-grey-60" />
                     <Input
                       id="rpc-endpoint"
                       placeholder="Enter RPC endpoint"
@@ -242,7 +266,7 @@ const CustomizeRPC: React.FC = () => {
                 >
                   <CardButton
                     type="submit"
-                    className="max-w-[160px] h-[48px]"
+                    className="max-w-[10rem] h-[3rem]"
                     variant="dialog"
                     disabled={saving || testing || !hasEndpointChanged}
                     onClick={handleSave}

@@ -24,8 +24,6 @@ import useBillingTransactions, {
   TransactionObject,
 } from "@/app/lib/hooks/api/useBillingTransactions";
 import StatusTypeBadge from "./StatusTypeBadge";
-import { useAtomValue } from "jotai";
-import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { cn } from "@/app/lib/utils";
 
 export const formatDate = (
@@ -103,6 +101,7 @@ const normalizeColumnWidths = (maybeStored?: Record<string, number>) => {
 };
 
 const getStoredColumnWidths = () => {
+  if (typeof window === "undefined") return normalizeColumnWidths();
   try {
     const stored = localStorage.getItem("billingTable_columnWidths");
     return normalizeColumnWidths(stored ? JSON.parse(stored) : undefined);
@@ -112,6 +111,7 @@ const getStoredColumnWidths = () => {
 };
 
 const saveColumnWidths = (columnWidths: Record<string, number>) => {
+  if (typeof window === "undefined") return;
   try {
     localStorage.setItem("billingTable_columnWidths", JSON.stringify(columnWidths));
   } catch { }
@@ -119,7 +119,6 @@ const saveColumnWidths = (columnWidths: Record<string, number>) => {
 
 const BillingHistoryTable: React.FC = () => {
   const { data: transactions, isPending, error } = useBillingTransactions();
-  const isUnpinnedOpen = useAtomValue(isUnpinnedDialogOpenAtom);
 
   const tableRef = useRef<HTMLDivElement>(null);
 
@@ -336,7 +335,6 @@ const BillingHistoryTable: React.FC = () => {
     <>
       <TableWrapper
         className={cn(
-          isUnpinnedOpen && transactions && transactions.length > 0 ? "mb-[90px]" : "",
           "mt-5 overflow-x-hidden"
         )}
       >
@@ -375,7 +373,7 @@ const BillingHistoryTable: React.FC = () => {
         </div>
 
         {isPending && !error && (
-          <div className="w-full h-[350px] flex items-center justify-center p-6 animate-fade-in-0.3">
+          <div className="w-full h-[21.875rem] flex items-center justify-center p-6 animate-fade-in-0.3">
             <Loader2 className="size-6 animate-spin text-grey-50" />
           </div>
         )}
@@ -383,12 +381,12 @@ const BillingHistoryTable: React.FC = () => {
         {((transactions && !transactions.length) || error) &&
           !isPending &&
           transactions !== null && (
-            <div className="w-full h-[350px] flex items-center justify-center p-6">
+            <div className="w-full h-[21.875rem] flex items-center justify-center p-6">
               <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
                 <AbstractIconWrapper className="size-10 rounded-2xl bg-grey-40/20 mb-2">
                   <Dollar className="absolute size-6" />
                 </AbstractIconWrapper>
-                <span className="text-grey-60 text-sm font-medium max-w-[260px] text-center">
+                <span className="text-grey-60 text-sm font-medium max-w-[16.25rem] text-center">
                   {error
                     ? `Unable to load billing history: ${error}`
                     : "You do not have any billing history yet"}

@@ -6,7 +6,7 @@ import {
   UseQueryResult,
   keepPreviousData,
 } from "@tanstack/react-query";
-import { SUPPORT_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 export interface TicketMessage {
@@ -68,50 +68,25 @@ export default function useSupportTickets(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<SupportTicketsResponse, Error> {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
 
   const { page = 1, limit = 10, search = "" } = params || {};
 
   return useQuery<SupportTicketsResponse, Error, SupportTicketsResponse>({
-    queryKey: ["supportTickets", page, limit, search, oauthSession?.token],
+    queryKey: ["supportTickets", page, limit, search, polkadotAddress],
     queryFn: async () => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
 
-      // Build query string
-      const queryParams = new URLSearchParams({
-        page: String(page),
-        limit: String(limit),
+      return invoke<SupportTicketsResponse>("list_support_tickets", {
+        accountId: polkadotAddress,
+        page,
+        limit,
+        search: search || null,
       });
-
-      // Add search parameter if provided
-      if (search) {
-        queryParams.append("search", search);
-      }
-
-      // Direct API call
-      const url = `${SUPPORT_CONFIG.baseUrl}${
-        SUPPORT_CONFIG.endpoints.list
-      }?${queryParams.toString()}&ordering=status`;
-
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(
-          `HTTP ${response.status}: Failed to fetch support tickets`
-        );
-      }
-
-      return response.json() as Promise<SupportTicketsResponse>;
     },
-    enabled: !!oauthSession?.token,
+    enabled: !!polkadotAddress,
     placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
     staleTime: 5 * 60 * 1000, // 5 minutes

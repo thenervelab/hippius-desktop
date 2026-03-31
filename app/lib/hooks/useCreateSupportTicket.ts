@@ -6,7 +6,7 @@ import {
   UseMutationResult,
   useQueryClient,
 } from "@tanstack/react-query";
-import { SUPPORT_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { SupportTicket } from "./useSupportTickets";
 
@@ -29,36 +29,19 @@ export default function useCreateSupportTicket(
     "mutationFn"
   >
 ): UseMutationResult<SupportTicket, Error, CreateTicketPayload> {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
   const queryClient = useQueryClient();
 
   return useMutation<SupportTicket, Error, CreateTicketPayload>({
     mutationFn: async (payload: CreateTicketPayload) => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
 
-      // Direct API call
-      const url = `${SUPPORT_CONFIG.baseUrl}${SUPPORT_CONFIG.endpoints.list}`;
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
+      return invoke<SupportTicket>("create_support_ticket", {
+        accountId: polkadotAddress,
+        params: payload,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(
-          errorData.message ||
-            `HTTP ${response.status}: Failed to create support ticket`
-        );
-      }
-
-      return response.json() as Promise<SupportTicket>;
     },
     onSuccess: () => {
       // Invalidate and refetch support tickets list

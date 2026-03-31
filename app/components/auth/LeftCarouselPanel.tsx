@@ -44,15 +44,15 @@ const LeftCarouselPanel = () => {
             >
               {SWIPE_CONTENT.map((item) => (
                 <SwiperSlide key={item.heading}>
-                  <div className=" py-8 [@media(min-height:880px)]:py-[84px] px-5 w-full h-full items-center  flex  justify-between flex-col">
+                  <div className=" py-[min(2rem,32px)] [@media(min-height:880px)]:py-[min(5.25rem,84px)] px-5 w-full h-full items-center  flex  justify-between flex-col">
                     <RevealTextLine
                       rotate
                       reveal={inView}
                       className="delay-300 w-full"
                     >
                       <div
-                        className="hidden [@media(min-height:750px)]:block text-center xl:text-[40px] text-[28px] 
-                      font-medium text-grey-100 [@media(min-height:750px)]:mb-12  "
+                        className="hidden [@media(min-height:750px)]:block text-center xl:text-[min(2.5rem,40px)] text-[min(1.75rem,28px)] 
+                      font-medium text-grey-100 [@media(min-height:750px)]:mb-[min(3rem,48px)]  "
                       >
                         {item.heading}
                       </div>
@@ -60,13 +60,13 @@ const LeftCarouselPanel = () => {
                     <div className="w-full flex items-center justify-center">
                       {item.icon}
                     </div>
-                    <div className="flex flex-col gap-1 items-center justify-center font-normal [@media(min-height:750px)]:mt-10 w-full px-10 relative z-30">
+                    <div className="flex flex-col gap-1 items-center justify-center font-normal [@media(min-height:750px)]:mt-[min(2.5rem,40px)] w-full px-[min(2.5rem,40px)] relative z-30">
                       <RevealTextLine
                         rotate
                         reveal={inView}
                         className="delay-300"
                       >
-                        <span className="text-[22px] text-center text-grey-100">
+                        <span className="text-[min(1.375rem,22px)] text-center text-grey-100">
                           {item.text}
                         </span>
                       </RevealTextLine>
@@ -75,7 +75,7 @@ const LeftCarouselPanel = () => {
                         reveal={inView}
                         className="delay-500"
                       >
-                        <p className="text-sm text-center text-grey-80">
+                        <p className="text-[min(0.875rem,14px)] text-center text-grey-80">
                           {item.subText}
                         </p>
                       </RevealTextLine>
@@ -85,7 +85,7 @@ const LeftCarouselPanel = () => {
               ))}
             </Swiper>
             <div className="absolute right-0 bottom-0 w-full z-0">
-              <LoginRightBottom className="w-full h-[280px]" />
+              <LoginRightBottom className="w-full h-[17.5rem]" />
             </div>
           </div>
         )}

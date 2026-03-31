@@ -19,7 +19,7 @@ const NotificationIconButton: React.FC<{
               {count > 0 && (
                 <span
                   className={cn(
-                    "absolute top-0.5 right-0.5 bg-primary-50 text-white text-[9px] rounded-full px-1.5 w-3.5 h-3.5 py-[1px] flex items-center justify-center",
+                    "absolute top-0.5 right-0.5 bg-primary-50 text-white text-[0.5625rem] rounded-full px-1.5 w-3.5 h-3.5 py-[1px] flex items-center justify-center",
                     count > 99 && "right-0 w-5 h-5"
                   )}
                   data-testid="notification-unread-count"

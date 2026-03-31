@@ -6,6 +6,7 @@
     "permissions": [
         "core:default",
         "opener:default",
+        "opener:allow-reveal-item-in-dir",
         "deep-link:default",
         "deep-link:allow-register",
         "fs:default",
@@ -38,6 +39,8 @@
             "identifier": "fs:allow-read-file",
             "allow": [{
                 "path": "$APPLOCALDATA/hippius-desktop.db"
+            }, {
+                "path": "$HOME/**"
             }]
         },
         {

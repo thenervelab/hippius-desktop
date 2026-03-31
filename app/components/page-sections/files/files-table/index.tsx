@@ -17,34 +17,27 @@ import {
 
 } from "@tanstack/react-table";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { useSyncSnapshot } from "@/lib/hooks/useSyncSnapshot";
 import * as TableModule from "@/components/ui/alt-table";
-import { isLocalFile } from "@/app/lib/utils/ipfsUrlResolver";
-import { shouldAllowPreview } from "@/app/lib/utils/filePreviewPermissions";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { Button } from "@/components/ui/button";
 import {
-  Copy,
   Download,
-  LinkIcon,
   MoreVertical,
-  Share,
   Folder,
+  FolderOpen,
 } from "lucide-react";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
-import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
-import CustomTooltip from "@/components/ui/CustomTooltip";
 import SelectionActionBar from "../SelectionActionBar";
 import { SelectionColumn, SelectionHeaderColumn } from "../SelectionColumn";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
-import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
+import { getFileTypeFromExtension, getFileTypeDisplayLabel } from "@/lib/utils/getTileTypeFromExtension";
 import { VideoDialogTrigger } from "./VideoDialog";
 import { ImageDialogTrigger } from "./ImageDialog";
 import { PdfDialogTrigger } from "./PdfDialog";
 import { Icons } from "@/app/components/ui";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { FileViewSharedState } from "@/app/components/page-sections/files/shared/FileViewUtils";
 import FileDetailsDialogContent from "@/app/components/page-sections/files/file-details-dialog-content";
@@ -55,8 +48,9 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { FormattedTimestamp } from "@/app/components/ui"; // Add this import
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
-import { useAtomValue } from "jotai";
-import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserFile>();
@@ -81,9 +75,10 @@ const MIN_COLUMN_WIDTHS = {
 };
 
 // Store the "base" column widths (without selection column) to preserve user preferences
-const getStoredBaseColumnWidths = (isRecentFiles: boolean, isPrivateFolder: boolean) => {
+const getStoredBaseColumnWidths = (isRecentFiles: boolean) => {
+  if (typeof window === "undefined") return DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
   try {
-    const key = `filesTable_baseColumnWidths_${isRecentFiles ? 'recent' : 'main'}_${isPrivateFolder ? 'private' : 'public'}`;
+    const key = `filesTable_baseColumnWidths_${isRecentFiles ? 'recent' : 'main'}`;
     const stored = localStorage.getItem(key);
     if (stored) {
       return JSON.parse(stored);
@@ -94,13 +89,14 @@ const getStoredBaseColumnWidths = (isRecentFiles: boolean, isPrivateFolder: bool
   }
 };
 
-const saveBaseColumnWidths = (columnWidths: Record<string, number>, isRecentFiles: boolean, isPrivateFolder: boolean) => {
+const saveBaseColumnWidths = (columnWidths: Record<string, number>, isRecentFiles: boolean) => {
+  if (typeof window === "undefined") return;
   try {
     // Remove selection column before saving as base widths
     const baseWidths = { ...columnWidths };
     delete baseWidths.selection;
 
-    const key = `filesTable_baseColumnWidths_${isRecentFiles ? 'recent' : 'main'}_${isPrivateFolder ? 'private' : 'public'}`;
+    const key = `filesTable_baseColumnWidths_${isRecentFiles ? 'recent' : 'main'}`;
     localStorage.setItem(key, JSON.stringify(baseWidths));
   } catch { }
 };
@@ -129,96 +125,75 @@ const convertBaseWidthsToMode = (baseWidths: Record<string, number>, isSelection
 
 
 interface FilesTableProps {
-  showUnpinnedDialog?: boolean;
   files: FormattedUserFile[];
   allFiles: FormattedUserFile[];
-  resetPagination?: boolean;
-  onPaginationReset?: () => void;
   isRecentFiles?: boolean;
   sharedState?: FileViewSharedState;
   handleFileDownload: (
     file: FormattedUserFile,
     polkadotAddress: string
   ) => void;
-  currentPage: number;
-  totalPages: number;
-  setCurrentPage: (page: number) => void;
+  hasMore: boolean;
+  loadMore: () => void;
+  onHeaderContextMenu?: (e: React.MouseEvent) => void;
 }
-
-// Component to wrap NameCell with checkmark positioned outside dialog triggers
-const NameCellWithCheckmark: React.FC<{
-  children: React.ReactNode;
-  hasCheckmark: boolean;
-}> = ({ children, hasCheckmark }) => {
-  return (
-    <>
-      {children}
-      {/* Checkmark positioned at the end of the cell, outside any dialog triggers */}
-      {hasCheckmark && (
-        <div
-          className="absolute right-4 top-1/2 -translate-y-[36%] z-20 cursor-pointer"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <CustomTooltip
-            tooltip="Synced from your computer"
-            tooltipClassName="z-[9999]"
-          >
-            <Icons.TickCircle className="size-4 text-primary-70 hover:text-primary-60 transition-colors" />
-          </CustomTooltip>
-        </div>
-      )}
-    </>
-  );
-};
-
-// Create stable action functions outside component to prevent recreation
-const openExplorerUrl = async (decodedCid: string) => {
-  try {
-    await openUrl(`http://hipstats.com/cid-tracker/${decodedCid}`);
-  } catch (error) {
-    console.error("Failed to open Explorer:", error);
-  }
-};
-
-const openIpfsUrl = async (decodedCid: string) => {
-  try {
-    await openUrl(`https://get.hippius.network/ipfs/${decodedCid}`);
-  } catch (error) {
-    console.error("Failed to open IPFS:", error);
-  }
-};
-
-const copyToClipboard = (decodedCid: string) => {
-  navigator.clipboard
-    .writeText(`https://get.hippius.network/ipfs/${decodedCid}`)
-    .then(() => {
-      toast.success("Copied to clipboard successfully!");
-    });
-};
 
 const FilesTable: FC<FilesTableProps> = memo(
   ({
     files,
     allFiles,
-    resetPagination,
-    onPaginationReset,
     isRecentFiles = false,
     sharedState,
     handleFileDownload,
-    currentPage,
-    totalPages,
-    setCurrentPage,
+    hasMore,
+    loadMore,
+    onHeaderContextMenu,
   }) => {
-    // Use refs to store current values - header function will read from these
-    // This prevents stale closure captures in TanStack Table's cached header functions
-    const currentPageRef = useRef(currentPage);
-    const filesRef = useRef(files);
-
-    // Update refs on every render BEFORE columns are created
-    currentPageRef.current = currentPage;
-    filesRef.current = files;
-
     const { polkadotAddress } = useWalletAuth();
+    // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads
+    const snapshot = useSyncSnapshot();
+    const enrichedAllFiles = useMemo(() => {
+      if (!snapshot.isActive && snapshot.files.length === 0) return allFiles;
+      // Build a lookup from fileName → action for active/pending files
+      const actionByName = new Map<string, "upload" | "download">();
+      for (const f of snapshot.files) {
+        if (f.status !== "completed" && (f.action === "upload" || f.action === "download")) {
+          actionByName.set(f.fileName, f.action);
+        }
+      }
+      if (actionByName.size === 0) return allFiles;
+
+      return allFiles.map((file) => {
+        const actualName = file.actualFileName || file.name;
+        const action = actionByName.get(actualName);
+        if (!action) return file;
+        const liveSyncStatus: FormattedUserFile["syncStatus"] =
+          action === "download" ? "downloading" : "uploading";
+        return { ...file, syncStatus: liveSyncStatus };
+      });
+    }, [allFiles, snapshot.isActive, snapshot.files]);
+
+    // Sentinel ref for infinite scroll
+    const sentinelRef = useRef<HTMLDivElement>(null);
+
+    // IntersectionObserver for infinite scroll
+    useEffect(() => {
+      if (!hasMore) return;
+      const sentinel = sentinelRef.current;
+      if (!sentinel) return;
+
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (entries[0].isIntersecting) {
+            loadMore();
+          }
+        },
+        { rootMargin: "200px" }
+      );
+      observer.observe(sentinel);
+      return () => observer.disconnect();
+    }, [hasMore, loadMore]);
+
     const [sorting, setSorting] = useState<SortingState>([]);
     const [prevFileCount, setPrevFileCount] = useState<number>(0);
     const { getParam } = useUrlParams();
@@ -229,15 +204,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       enterSelectionModeAndSelectFile,
       toggleFileSelection,
     } = useFileSelection();
-    const isUnpinnedOpen = useAtomValue(isUnpinnedDialogOpenAtom);
-
-    // Determine if this is a private folder based on the files
-    const isPrivateFolder = useMemo(() => {
-      return (
-        allFiles.length > 0 &&
-        allFiles.some((file) => file.type?.toLowerCase() === "private")
-      );
-    }, [allFiles]);
 
     // State for captured files to delete (to handle timing issue with clearSelection)
     const [filesToDelete, setFilesToDelete] = useState<FormattedUserFile[]>(
@@ -251,6 +217,18 @@ const FilesTable: FC<FilesTableProps> = memo(
     const [localFileDetailsFile, setLocalFileDetailsFile] =
       useState<FormattedUserFile | null>(null);
     const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
+
+    // Look up the latest version of the file details from live query data.
+    // The captured snapshot may have stale arion hashes if it was opened
+    // before sync completed.
+    const liveLocalFileDetailsFile = useMemo(() => {
+      if (!localFileDetailsFile) return null;
+      return allFiles.find(
+        (f) =>
+          f.actualFileName === localFileDetailsFile.actualFileName &&
+          f.label === localFileDetailsFile.label
+      ) ?? localFileDetailsFile;
+    }, [localFileDetailsFile, allFiles]);
 
     const { setSelectedFile, handleShowFileDetails, handleContextMenu } =
       sharedState || {};
@@ -275,21 +253,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       },
       [handleContextMenu]
     );
-
-    useEffect(() => {
-      if (resetPagination) {
-        if (onPaginationReset) {
-          onPaginationReset();
-        }
-      }
-    }, [resetPagination, setCurrentPage, onPaginationReset]);
-
-    // Handle pagination adjustment when current page becomes invalid
-    useEffect(() => {
-      if (totalPages > 0 && currentPage > totalPages) {
-        setCurrentPage(Math.max(1, totalPages));
-      }
-    }, [totalPages, currentPage, setCurrentPage]);
 
     // Memoize handler functions to maintain stable references
     const handleDownload = useCallback(
@@ -317,45 +280,29 @@ const FilesTable: FC<FilesTableProps> = memo(
     // Handle file deletion with captured files from confirmation dialog
     const handleDeleteSelectedFiles = useCallback(
       (capturedFiles: FormattedUserFile[]) => {
-        console.log(
-          "FilesTable - handleDeleteSelectedFiles called with captured files:",
-          capturedFiles.map((f) => ({
-            name: f.name,
-            actualFileName: f.actualFileName,
-            isFolder: f.isFolder,
-          }))
-        );
+        if (capturedFiles.length === 0) return;
 
-        if (capturedFiles.length === 0) {
-          console.log("No files to delete, aborting");
-          return;
-        }
-
-        // Set the files to delete and trigger the delete operation
         setFilesToDelete(capturedFiles);
 
         // Use setTimeout to ensure the delete hook reinitializes with new files
         setTimeout(() => {
           deleteFiles(undefined, {
             onSuccess: () => {
-              console.log("Delete successful, clearing filesToDelete state");
               setFilesToDelete([]);
-              setCurrentPage(Math.max(1, totalPages));
             },
-            onError: (error) => {
-              console.error("Delete failed:", error);
+            onError: () => {
               setFilesToDelete([]);
             },
           });
         }, 100);
       },
-      [deleteFiles, setCurrentPage, totalPages]
+      [deleteFiles]
     );
     const createTableItems = useCallback(
       (
         file: FormattedUserFile,
         fileType: string | null,
-        decodedCid: string,
+        arionHash: string,
         canPreview: boolean = true
       ) => {
         // Compute folderUrl if file is a folder
@@ -391,35 +338,71 @@ const FilesTable: FC<FilesTableProps> = memo(
               },
             ]
             : []),
+
           {
-            icon: <Share className="size-4" />,
-            itemTitle: "Go To Explorer",
-            onItemClick: () => openExplorerUrl(decodedCid),
-          },
-          {
-            icon: <LinkIcon className="size-4" />,
-            itemTitle: "View on IPFS",
-            onItemClick: () => openIpfsUrl(decodedCid),
-          },
-          {
-            icon: <Copy className="size-4" />,
-            itemTitle: "Copy Link",
-            onItemClick: () => copyToClipboard(decodedCid),
+            icon: <FolderOpen className="size-4" />,
+            itemTitle: "Reveal in Finder",
+            onItemClick: async () => {
+              try {
+                let filePath = file.source;
+
+                // If source path is set, try it first
+                if (filePath) {
+                  try {
+                    await revealItemInDir(filePath);
+                    return;
+                  } catch {
+                    console.warn("[RevealInFinder] source path failed, trying resolve_file_path. source:", filePath);
+                  }
+                }
+
+                // Fallback: resolve canonical path from DB
+                if (file.label && polkadotAddress) {
+                  const fileName = file.actualFileName || file.name;
+                  filePath = await invoke<string>("resolve_file_path", {
+                    accountId: polkadotAddress,
+                    label: file.label,
+                    fileName,
+                  });
+                  await revealItemInDir(filePath);
+                } else {
+                  toast.error("File is not available locally. It may only exist on another device.");
+                }
+              } catch (error) {
+                console.error("Failed to reveal file in Finder:", error);
+                toast.error("File is not available locally. It may only exist on another device.");
+              }
+            },
           },
           {
             icon: <Icons.InfoCircle className="size-4" />,
             itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,
             onItemClick: () => localHandleShowFileDetails(file),
           },
+          ...(!file.isFolder && arionHash && arionHash !== "pending"
+            ? [
+              {
+                icon: <Icons.SendSquare2 className="size-4" />,
+                itemTitle: "View on Explorer",
+                onItemClick: async () => {
+                  try {
+                    await openUrl(`https://hipstats.com/file-tracker/${arionHash}`);
+                  } catch (error) {
+                    console.error("Failed to open Explorer:", error);
+                  }
+                },
+              },
+            ]
+            : []),
           // Always show delete option, but disabled for unpinned files
           {
             icon: <Icons.Trash className="size-4" />,
             itemTitle: !file.isAssigned
-              ? "Delete (Pinning in progress...)"
+              ? "Delete (Syncing in progress...)"
               : "Delete",
             disabled: !file.isAssigned,
             tooltip: !file.isAssigned
-              ? "This file is currently being pinned and cannot be deleted yet. Please wait for the pinning process to complete."
+              ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete."
               : undefined,
             onItemClick: () => {
               if (file.isAssigned) {
@@ -437,12 +420,9 @@ const FilesTable: FC<FilesTableProps> = memo(
         handleDeleteFile,
         getParam,
         router,
+        polkadotAddress,
       ]
     );
-
-    // Create a unique key that changes when page or files change
-    // This forces useMemo to re-run when user navigates pages
-    const pageKey = `${currentPage}-${files[0]?.actualFileName || 'empty'}`;
 
     // Create a stable memo of columns that doesn't depend on every prop
     const columns = useMemo(
@@ -450,15 +430,12 @@ const FilesTable: FC<FilesTableProps> = memo(
         // Create selection column inside useMemo to capture fresh values
         const selectionColumn = !isSelectionMode ? [] : [
           columnHelper.display({
-            id: `selection-page-${currentPage}`, // Unique ID per page
+            id: "selection",
             header: () => {
-              // CRITICAL: Read from refs to get latest values, not closure captures
-              const latestFiles = filesRef.current;
-
               return (
                 <div className="flex justify-center items-center h-full">
                   <SelectionHeaderColumn
-                    files={latestFiles}
+                    files={files}
                   />
                 </div>
               );
@@ -482,133 +459,135 @@ const FilesTable: FC<FilesTableProps> = memo(
               const { fileFormat } = getFilePartsFromFileName(info.getValue());
               const fileType = getFileTypeFromExtension(fileFormat || null);
 
-              // Check if file has checkmark (locally synced)
-              const hasCheckmark = isLocalFile(info.row.original.source);
-              const canPreview = shouldAllowPreview(info.row.original, hasCheckmark, isPrivateFolder);
-
               if (fileType === "video") {
                 return (
-                  <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
-                    {isSelectionMode || !canPreview ? (
+                  <>
+                    {isSelectionMode ? (
                       <NameCell
-                        className="px-4 py-[22px]"
+                        className="px-2.5 py-3"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
-                        cid={info.row.original.cid}
+                        arionHash={info.row.original.arionHash}
                         isAssigned={info.row.original.isAssigned}
                         fileType={fileType}
                         isPreviewable={false}
                         isFolder={info.row.original.isFolder}
                         source={info.row.original.source}
                         mainReqHash={info.row.original.mainReqHash}
+                        syncStatus={info.row.original.syncStatus}
+
                       />
                     ) : (
                       <VideoDialogTrigger
                         onClick={() => handleSetSelectedFile(info.row.original)}
-                        hasCheckmark={hasCheckmark}
                       >
                         <NameCell
                           rawName={info.getValue()}
                           actualName={info.row.original.actualFileName}
-                          cid={info.row.original.cid}
+                          arionHash={info.row.original.arionHash}
                           isAssigned={info.row.original.isAssigned}
                           fileType={fileType}
                           isPreviewable={true}
                           isFolder={info.row.original.isFolder}
                           source={info.row.original.source}
                           mainReqHash={info.row.original.mainReqHash}
+                          syncStatus={info.row.original.syncStatus}
+
                         />
                       </VideoDialogTrigger>
                     )}
-                  </NameCellWithCheckmark>
+                  </>
                 );
               } else if (fileType === "image") {
                 return (
-                  <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
-                    {isSelectionMode || !canPreview ? (
+                  <>
+                    {isSelectionMode ? (
                       <NameCell
-                        className="px-4 py-[22px]"
+                        className="px-2.5 py-3"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
-                        cid={info.row.original.cid}
+                        arionHash={info.row.original.arionHash}
                         isAssigned={info.row.original.isAssigned}
                         fileType={fileType}
                         isPreviewable={false}
                         isFolder={info.row.original.isFolder}
                         source={info.row.original.source}
                         mainReqHash={info.row.original.mainReqHash}
+
                       />
                     ) : (
                       <ImageDialogTrigger
                         onClick={() => handleSetSelectedFile(info.row.original)}
-                        hasCheckmark={hasCheckmark}
                       >
                         <NameCell
                           rawName={info.getValue()}
                           actualName={info.row.original.actualFileName}
-                          cid={info.row.original.cid}
+                          arionHash={info.row.original.arionHash}
                           isAssigned={info.row.original.isAssigned}
                           fileType={fileType}
                           isPreviewable={true}
                           isFolder={info.row.original.isFolder}
                           source={info.row.original.source}
                           mainReqHash={info.row.original.mainReqHash}
+                          syncStatus={info.row.original.syncStatus}
+
                         />
                       </ImageDialogTrigger>
                     )}
-                  </NameCellWithCheckmark>
+                  </>
                 );
               } else if (fileType === "PDF") {
                 return (
-                  <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
-                    {isSelectionMode || !canPreview ? (
+                  <>
+                    {isSelectionMode ? (
                       <NameCell
-                        className="px-4 py-[22px]"
+                        className="px-2.5 py-3"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
-                        cid={info.row.original.cid}
+                        arionHash={info.row.original.arionHash}
                         isAssigned={info.row.original.isAssigned}
                         fileType={fileType}
                         isPreviewable={false}
                         isFolder={info.row.original.isFolder}
                         source={info.row.original.source}
                         mainReqHash={info.row.original.mainReqHash}
+
                       />
                     ) : (
                       <PdfDialogTrigger
                         onClick={() => handleSetSelectedFile(info.row.original)}
-                        hasCheckmark={hasCheckmark}
                       >
                         <NameCell
                           rawName={info.getValue()}
                           actualName={info.row.original.actualFileName}
-                          cid={info.row.original.cid}
+                          arionHash={info.row.original.arionHash}
                           isAssigned={info.row.original.isAssigned}
                           fileType={fileType}
                           isPreviewable={true}
                           isFolder={info.row.original.isFolder}
                           source={info.row.original.source}
                           mainReqHash={info.row.original.mainReqHash}
+                          syncStatus={info.row.original.syncStatus}
+
                         />
                       </PdfDialogTrigger>
                     )}
-                  </NameCellWithCheckmark>
+                  </>
                 );
               }
               return (
-                <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
-                  <NameCell
-                    className="px-4 py-[22px]"
-                    rawName={info.getValue()}
-                    actualName={info.row.original.actualFileName}
-                    cid={info.row.original.cid}
-                    isAssigned={info.row.original.isAssigned}
-                    fileType={fileType || "document"}
-                    isFolder={info.row.original.isFolder}
-                    source={info.row.original.source}
-                    mainReqHash={info.row.original.mainReqHash}
-                  />
-                </NameCellWithCheckmark>
+                <NameCell
+                  className="px-2.5 py-3"
+                  rawName={info.getValue()}
+                  actualName={info.row.original.actualFileName}
+                  arionHash={info.row.original.arionHash}
+                  isAssigned={info.row.original.isAssigned}
+                  fileType={fileType || "document"}
+                  isFolder={info.row.original.isFolder}
+                  source={info.row.original.source}
+                  mainReqHash={info.row.original.mainReqHash}
+                  syncStatus={info.row.original.syncStatus}
+                />
               );
             },
           }),
@@ -621,7 +600,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               if (cell.row.original.tempData) return "...";
               if (value === undefined || value === 0) return "Unknown";
               return (
-                <div className="text-grey-20 text-base font-medium truncate">
+                <div className="text-grey-20 text-sm font-medium truncate">
                   {formatBytesFromBigInt(BigInt(value))}
                 </div>
               );
@@ -634,10 +613,10 @@ const FilesTable: FC<FilesTableProps> = memo(
             cell: (cell) => {
               const createdAt = cell.row.original.createdAt;
               return createdAt === 0 ? (
-                <div className="truncate">Unknown</div>
+                <div className="truncate text-grey-50">—</div>
               ) : (
                 <div className="truncate">
-                  <FormattedTimestamp timestamp={createdAt} />
+                  <FormattedTimestamp timestamp={createdAt} className="text-grey-20 text-sm" />
                 </div>
               );
             },
@@ -648,9 +627,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               const fileType = getFileTypeFromExtension(fileFormat || null);
               return row.isFolder
                 ? "Folder"
-                : fileType
-                  ? fileType.charAt(0).toUpperCase() + fileType.slice(1)
-                  : "Document";
+                : getFileTypeDisplayLabel(fileType);
             },
             {
               header: "FILE TYPE",
@@ -660,7 +637,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                 const value = getValue();
                 return (
                   <div className="flex flex-col">
-                    <div className="text-grey-70 text-base font-medium truncate">
+                    <div className="text-grey-20 text-sm font-medium truncate">
                       {value}
                     </div>
                   </div>
@@ -676,16 +653,15 @@ const FilesTable: FC<FilesTableProps> = memo(
             enableResizing: false,
             cell: ({ cell }) => {
               const file = cell.row.original;
-              const { cid, name } = file;
-              const decodedCid = decodeHexCid(cid);
+              const { arionHash, name } = file;
+              const resolvedHash = arionHash;
               const { fileFormat } = getFilePartsFromFileName(name);
               const fileType = getFileTypeFromExtension(fileFormat || null);
-              const hasCheckmark = isLocalFile(file.source);
-              const canPreview = shouldAllowPreview(file, hasCheckmark, isPrivateFolder); const menuItems = createTableItems(file, fileType, decodedCid, canPreview);
+              const menuItems = createTableItems(file, fileType, resolvedHash);
 
               return (
                 <div className="flex justify-center items-center">
-                  <TableActionMenu dropdownTitle="IPFS Options" items={menuItems}>
+                  <TableActionMenu dropdownTitle="" items={menuItems}>
                     <Button
                       variant="ghost"
                       size="md"
@@ -704,17 +680,13 @@ const FilesTable: FC<FilesTableProps> = memo(
         handleSetSelectedFile,
         createTableItems,
         isSelectionMode,
-        isPrivateFolder,
         files,
-        currentPage,
-        selectedFiles,
-        pageKey, // Add pageKey to force re-run when page/files change
       ]
     );
 
 
     const [columnWidths, setColumnWidths] = useState(() => {
-      const baseWidths = getStoredBaseColumnWidths(isRecentFiles, isPrivateFolder);
+      const baseWidths = getStoredBaseColumnWidths(isRecentFiles);
       return convertBaseWidthsToMode(baseWidths, isSelectionMode);
     });
 
@@ -730,18 +702,18 @@ const FilesTable: FC<FilesTableProps> = memo(
 
     // Load base widths when file context changes (not selection mode)
     useEffect(() => {
-      const baseWidths = getStoredBaseColumnWidths(isRecentFiles, isPrivateFolder);
+      const baseWidths = getStoredBaseColumnWidths(isRecentFiles);
       const newWidths = convertBaseWidthsToMode(baseWidths, isSelectionMode);
       setColumnWidths(newWidths);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isRecentFiles, isPrivateFolder]);
+    }, [isRecentFiles]);
 
     useEffect(() => {
       const timeoutId = setTimeout(() => {
-        saveBaseColumnWidths(columnWidths, isRecentFiles, isPrivateFolder);
+        saveBaseColumnWidths(columnWidths, isRecentFiles);
       }, 300);
       return () => clearTimeout(timeoutId);
-    }, [columnWidths, isRecentFiles, isPrivateFolder]);
+    }, [columnWidths, isRecentFiles]);
 
     // Handle smooth transition when entering/exiting selection mode
     const [prevSelectionMode, setPrevSelectionMode] = useState(isSelectionMode);
@@ -848,7 +820,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       // Check if we have a significant change in the number of files
       // which indicates a view switch (private/public) or major filter change
       if (prevFileCount > 0 && Math.abs(allFiles.length - prevFileCount) > 5) {
-        console.log('Files changed significantly, resetting sorting');
         setSorting([]);
       }
 
@@ -857,14 +828,13 @@ const FilesTable: FC<FilesTableProps> = memo(
     }, [allFiles.length, prevFileCount]);
 
     const handleSortingChange = useCallback((updaterOrValue: SortingState | ((old: SortingState) => SortingState)) => {
-      console.log('Sorting changed:', updaterOrValue);
       setSorting(updaterOrValue);
     }, []);
 
     const tableConfig = useMemo(
       () => ({
         columns,
-        data: allFiles || [],
+        data: enrichedAllFiles || [],
         state: {
           sorting,
         },
@@ -880,22 +850,22 @@ const FilesTable: FC<FilesTableProps> = memo(
         enableExpanding: false,
         enableGrouping: false,
         // Use stable ID generation
-        getRowId: (row: FormattedUserFile) => row.actualFileName || row.name,
+        getRowId: (row: FormattedUserFile, index: number) => row.arionHash ? `${row.arionHash}-${index}` : `${row.actualFileName || row.name}-${index}`,
 
       }),
-      [columns, allFiles, sorting, handleSortingChange, currentPage, files, isSelectionMode]
+      [columns, enrichedAllFiles, sorting, handleSortingChange]
     );
 
     const table = useReactTable(tableConfig);
 
-    // Get sorted rows and manually paginate them
-    const paginatedRows = useMemo(() => {
-      const sortedRows = table.getRowModel().rows;
-      const pageSize = 12; // Use the same page size as the paginated data
-      const start = (currentPage - 1) * pageSize;
-      const end = start + pageSize;
-      return sortedRows.slice(start, end);
-    }, [table, currentPage, sorting]);
+    // Get sorted rows — show all visible items (no client-side slicing).
+    // Include enrichedAllFiles in deps so rows recompute when the data source changes
+    // (e.g. folder tab switch). useReactTable returns a stable reference, so
+    // without enrichedAllFiles this memo would stay stale.
+    const visibleRows = useMemo(() => {
+      return table.getRowModel().rows;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [table, enrichedAllFiles]);
 
     const headerRows = useMemo(
       () =>
@@ -913,12 +883,12 @@ const FilesTable: FC<FilesTableProps> = memo(
             ))}
           </TableModule.Tr>
         )),
-      [table, columnWidths, handleResizeStart, isResizing, resizeData?.columnId, isSelectionMode, sorting, justResized]
+      [table, columnWidths, handleResizeStart, justResized]
     );
 
     const tableBody = useMemo(
       () =>
-        paginatedRows?.map((row) => {
+        visibleRows?.map((row) => {
           const rowData = row.original;
           let rowState: "success" | "pending" | "error" = "success";
 
@@ -940,13 +910,13 @@ const FilesTable: FC<FilesTableProps> = memo(
                 isSelectionMode && rowData.isAssigned && "cursor-pointer",
                 isSelectionMode &&
                 selectedFiles.some(
-                  (f) => f.actualFileName === rowData.actualFileName
+                  (f) => f.actualFileName === rowData.actualFileName && f.label === rowData.label
                 ) &&
                 rowData.isAssigned &&
                 "bg-primary-60/10",
                 isSelectionMode &&
                 !selectedFiles.some(
-                  (f) => f.actualFileName === rowData.actualFileName
+                  (f) => f.actualFileName === rowData.actualFileName && f.label === rowData.label
                 ) &&
                 rowData.isAssigned &&
                 "hover:bg-primary-60/8",
@@ -978,7 +948,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   className={cn(
                     cell.column.id === "actions" && "",
                     cell.column.id === "name" && "p-0 relative",
-                    cell.column.id === "cid" && "p-0"
+                    cell.column.id === "arionHash" && "p-0"
                   )}
                   key={cell.id}
                   cell={cell}
@@ -989,7 +959,7 @@ const FilesTable: FC<FilesTableProps> = memo(
           );
         }),
       [
-        paginatedRows,
+        visibleRows,
         localHandleContextMenu,
         isSelectionMode,
         toggleFileSelection,
@@ -998,62 +968,41 @@ const FilesTable: FC<FilesTableProps> = memo(
       ]
     );
 
-    const paginationComponent = useMemo(() => {
-      if (totalPages <= 1) return null;
-      return (
-        <TableModule.Pagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          setPage={setCurrentPage}
-        />
-      );
-    }, [currentPage, totalPages, setCurrentPage]);
-
     const dialogComponent = useMemo(() => {
       if (sharedState || !localIsFileDetailsOpen) return null;
       return (
         <SidebarDialog
-          heading={`${localFileDetailsFile?.isFolder ? "Folder" : "File"
+          heading={`${liveLocalFileDetailsFile?.isFolder ? "Folder" : "File"
             } Details`}
           open={localIsFileDetailsOpen}
           onOpenChange={setLocalIsFileDetailsOpen}
         >
-          <FileDetailsDialogContent file={localFileDetailsFile ?? undefined} />
+          <FileDetailsDialogContent file={liveLocalFileDetailsFile ?? undefined} />
         </SidebarDialog>
       );
-    }, [sharedState, localIsFileDetailsOpen, localFileDetailsFile]);
+    }, [sharedState, localIsFileDetailsOpen, liveLocalFileDetailsFile]);
 
     return (
       <div className="flex flex-col gap-y-8 relative">
         <div
           className={cn(
             "w-full relative",
-            isRecentFiles ? "min-h-[350px]" : "min-h-[700px]"
+            isRecentFiles ? "min-h-[21.875rem]" : "min-h-[43.75rem]"
           )}
         >
           <TableModule.TableWrapper
             className={cn(
-              "duration-300 delay-300",
-              isUnpinnedOpen &&
-              totalPages === 1 &&
-              files.length > 2 &&
-              "mb-[90px]"
+              "duration-300 delay-300"
             )}
-            key={`pagination-${currentPage}-${files?.length}-${isSelectionMode}`}
+            key={`table-${files?.length}-${isSelectionMode}`}
           >
-            <TableModule.Table className="w-full table-fixed" key={`table-${currentPage}-${isSelectionMode}`}>
-              <TableModule.THead key={`thead-${currentPage}`}>{headerRows}</TableModule.THead>
-              <TableModule.TBody key={`tbody-${currentPage}`}>{tableBody}</TableModule.TBody>
+            <TableModule.Table className="w-full table-fixed" key={`table-${isSelectionMode}`}>
+              <TableModule.THead onContextMenu={onHeaderContextMenu}>{headerRows}</TableModule.THead>
+              <TableModule.TBody>{tableBody}</TableModule.TBody>
             </TableModule.Table>
           </TableModule.TableWrapper>
-          <div
-            className={cn(
-              "my-8",
-              isSelectionMode && "pb-20" // Add bottom padding when selection mode is active to prevent overlap
-            )}
-          >
-            {paginationComponent}
-          </div>
+          {/* Sentinel element for infinite scroll */}
+          <div ref={sentinelRef} className={cn("h-1", isSelectionMode && "mb-20")} />
         </div>
 
         {/* Selection action bar positioned above pagination */}

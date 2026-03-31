@@ -6,7 +6,7 @@ import {
   UseMutationResult,
   useQueryClient,
 } from "@tanstack/react-query";
-import { SUPPORT_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { SupportTicket } from "./useSupportTickets";
 
@@ -27,43 +27,25 @@ export default function useUpdateSupportTicket(
     "mutationFn"
   >
 ): UseMutationResult<SupportTicket, Error, UpdateTicketPayload> {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
   const queryClient = useQueryClient();
 
   return useMutation<SupportTicket, Error, UpdateTicketPayload>({
     mutationFn: async (payload: UpdateTicketPayload) => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
 
       const { id, ...updateData } = payload;
 
-      // API endpoint: /support/tickets/{id}/
-      const url = `${SUPPORT_CONFIG.baseUrl}${SUPPORT_CONFIG.endpoints.list}${id}/`;
-
-      const response = await fetch(url, {
-        method: "PATCH",
-        headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(updateData),
+      return invoke<SupportTicket>("update_support_ticket", {
+        accountId: polkadotAddress,
+        ticketId: id,
+        updates: updateData,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(
-          errorData.message ||
-            `HTTP ${response.status}: Failed to update support ticket`
-        );
-      }
-
-      return response.json() as Promise<SupportTicket>;
     },
     onSuccess: (data, variables) => {
-      // Invalidate and refetch support tickets list
       queryClient.invalidateQueries({ queryKey: ["supportTickets"] });
-      // Also invalidate the specific ticket query if it exists
       queryClient.invalidateQueries({
         queryKey: ["supportTicket", variables.id.toString()],
       });

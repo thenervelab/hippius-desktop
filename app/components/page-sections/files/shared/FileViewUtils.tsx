@@ -5,19 +5,6 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { toast } from "sonner";
-import { decodeHexCid } from "@/app/lib/utils/decodeHexCid";
-import { FileDetail } from "@/app/(pages)/UnpinFilesDialog";
-
-export interface FileViewSharedProps {
-  files: FormattedUserFile[];
-  showUnpinnedDialog: boolean;
-  isRecentFiles: boolean;
-  resetPagination: boolean;
-  onPaginationReset: () => void;
-}
-
 export interface FileViewSharedState {
   fileToDelete: FormattedUserFile | null;
   setFileToDelete: (file: FormattedUserFile | null) => void;
@@ -25,8 +12,6 @@ export interface FileViewSharedState {
   setOpenDeleteModal: (open: boolean) => void;
   selectedFile: FormattedUserFile | null;
   setSelectedFile: (file: FormattedUserFile | null) => void;
-  unpinnedFiles: FileDetail[] | null;
-  isUnpinnedOpen: boolean;
   fileDetailsFile: FormattedUserFile | null;
   setFileDetailsFile: (file: FormattedUserFile | null) => void;
   isFileDetailsOpen: boolean;
@@ -35,9 +20,6 @@ export interface FileViewSharedState {
   isDeleting: boolean;
   handleDelete: () => void;
 
-  handleCopyLink: (file: FormattedUserFile) => void;
-  handleOpenInExplorer: (file: FormattedUserFile) => Promise<void>;
-  handleOpenOnIpfs: (file: FormattedUserFile) => Promise<void>;
   handleShowFileDetails: (file: FormattedUserFile) => void;
   getFileType: (file: FormattedUserFile) => string | null;
   contextMenu: { x: number; y: number; file: FormattedUserFile } | null;
@@ -47,12 +29,7 @@ export interface FileViewSharedState {
   handleContextMenu: (e: React.MouseEvent, file: FormattedUserFile) => void;
 }
 
-export function useFileViewShared(
-  props: FileViewSharedProps
-): FileViewSharedState {
-  const { files, showUnpinnedDialog } = props;
-  // Ensure files is always an array to prevent undefined errors
-  const safeFiles = files || [];
+export function useFileViewShared(): FileViewSharedState {
 
   const [fileToDelete, setFileToDelete] =
     useState<FormattedUserFile | null>(null);
@@ -64,8 +41,6 @@ export function useFileViewShared(
 
   const [selectedFile, setSelectedFile] =
     useState<FormattedUserFile | null>(null);
-  const [unpinnedFiles, setUnpinnedFiles] = useState<FileDetail[] | null>(null);
-  const [isUnpinnedOpen, setIsUnpinnedOpen] = useState(false);
   const [fileDetailsFile, setFileDetailsFile] =
     useState<FormattedUserFile | null>(null);
   const [isFileDetailsOpen, setIsFileDetailsOpen] = useState(false);
@@ -75,70 +50,13 @@ export function useFileViewShared(
     file: FormattedUserFile;
   } | null>(null);
 
-  // Extract unpinned file details from files
-  const unpinnedFileDetails = showUnpinnedDialog
-    ? safeFiles
-      .filter((file) => !file.isAssigned)
-      .map((file) => ({
-        filename: file.name || "Unnamed File",
-        cid: decodeHexCid(file.cid),
-        createdAt: file.createdAt,
-      }))
-    : [];
-
-  // Update unpinned files state when unpinned file details change
-  if (showUnpinnedDialog && unpinnedFileDetails.length > 0 && !unpinnedFiles) {
-    setUnpinnedFiles(unpinnedFileDetails);
-    setIsUnpinnedOpen(true);
-  } else if (
-    (showUnpinnedDialog && unpinnedFileDetails.length === 0 && unpinnedFiles) ||
-    !showUnpinnedDialog
-  ) {
-    if (unpinnedFiles !== null) {
-      setUnpinnedFiles(null);
-      setIsUnpinnedOpen(false);
-    }
-  }
-
   const deleteFile = async () => {
-    console.log("we are here in delete File");
     await deleteFileMutation();
   };
 
   const handleDelete = () => {
     setOpenDeleteModal(true);
   };
-
-  const handleCopyLink = useCallback((file: FormattedUserFile) => {
-    navigator.clipboard
-      .writeText(`https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`)
-      .then(() => {
-        toast.success("Copied to clipboard successfully!");
-      });
-  }, []);
-
-  const handleOpenInExplorer = useCallback(
-    async (file: FormattedUserFile) => {
-      try {
-        await openUrl(
-          `http://hipstats.com/cid-tracker/${decodeHexCid(file.cid)}`
-        );
-      } catch (error) {
-        console.error("Failed to open Explorer:", error);
-      }
-    },
-    []
-  );
-
-  const handleOpenOnIpfs = useCallback(async (file: FormattedUserFile) => {
-    try {
-      await openUrl(
-        `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
-      );
-    } catch (error) {
-      console.error("Failed to open on IPFS:", error);
-    }
-  }, []);
 
   const handleShowFileDetails = useCallback((file: FormattedUserFile) => {
     setFileDetailsFile(file);
@@ -157,6 +75,9 @@ export function useFileViewShared(
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, file: FormattedUserFile) => {
       e.preventDefault();
+      e.stopPropagation();
+      // Clear any text selection caused by right-click
+      window.getSelection()?.removeAllRanges();
       setContextMenu({
         x: e.clientX,
         y: e.clientY,
@@ -173,8 +94,6 @@ export function useFileViewShared(
     setOpenDeleteModal,
     selectedFile,
     setSelectedFile,
-    unpinnedFiles,
-    isUnpinnedOpen,
     fileDetailsFile,
     setFileDetailsFile,
     isFileDetailsOpen,
@@ -182,9 +101,6 @@ export function useFileViewShared(
     deleteFile,
     isDeleting,
     handleDelete,
-    handleCopyLink,
-    handleOpenInExplorer,
-    handleOpenOnIpfs,
     handleShowFileDetails,
     getFileType,
     contextMenu,

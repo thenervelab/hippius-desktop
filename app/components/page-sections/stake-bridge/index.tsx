@@ -8,9 +8,8 @@ import TokenForm from "../wallet/shared/TokenForm";
 import { toast } from "sonner";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { useStaking } from "@/app/lib/hooks/useStaking";
-import { toPlancks } from "@/app/lib/utils/staking";
+import { invoke } from "@tauri-apps/api/core";
 import StakeConfirmationDialog from "../wallet/StakeConfirmationDialog";
-import { BN } from "@polkadot/util";
 
 const StakeBridge = () => {
     const searchParams = useSearchParams();
@@ -75,7 +74,7 @@ const StakeBridge = () => {
 
         try {
             // Convert amount to planck (18 decimals)
-            const amountInPlanck = toPlancks(pendingAmount);
+            const amountInPlanck = await invoke<string>("to_plancks", { amount: pendingAmount });
 
             await operations.bond(amountInPlanck);
             toast.dismiss(loadingToast);
@@ -106,28 +105,17 @@ const StakeBridge = () => {
     const calculateAvailableBalance = () => {
         if (!stakingInfo.balance) return "0";
 
-        const totalFreeBalance = stakingInfo.balance.toString();
-        const bondedAmount = stakingInfo.bonded || "0";
-        const unbondingAmount = stakingInfo.unbonding || "0";
-
         try {
-            // Convert to BN for safe calculation
-            const totalBN = new BN(totalFreeBalance);
-            const bondedBN = new BN(bondedAmount);
-            const unbondingBN = new BN(unbondingAmount);
-
-            // Available = Total Free - Bonded - Unbonding
-            const availableBN = totalBN.sub(bondedBN).sub(unbondingBN);
-
-            // Ensure we don't return negative values
-            return availableBN.gte(new BN(0)) ? availableBN.toString() : "0";
-        } catch (error) {
-            console.warn("Error calculating available balance:", error);
-            return totalFreeBalance; // Fallback to total balance
+            const total = BigInt(stakingInfo.balance || "0");
+            const bonded = BigInt(stakingInfo.bonded || "0");
+            const unbonding = BigInt(stakingInfo.unbonding || "0");
+            const available = total - bonded - unbonding;
+            return available > BigInt(0) ? available.toString() : "0";
+        } catch {
+            return stakingInfo.balance; // Fallback to total balance
         }
     };
 
-    // Get available balance for staking (truly free amount)
     const availableBalance = calculateAvailableBalance();
 
     return (
@@ -143,7 +131,7 @@ const StakeBridge = () => {
                         tabs={tabs}
                         activeTab={activeTab}
                         onTabChange={setActiveTab}
-                        width="min-w-[140px]"
+                        width="min-w-0"
                         gap="gap-1"
                     />
                 </div>
@@ -190,6 +178,7 @@ const StakeBridge = () => {
                 amount={pendingAmount}
                 isUnstaking={false}
             />
+
         </>
     );
 };

@@ -6,7 +6,7 @@ import {
   UseMutationResult,
   useQueryClient,
 } from "@tanstack/react-query";
-import { SUPPORT_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 // Request payload for uploading an attachment to a ticket message
@@ -26,7 +26,9 @@ export interface TicketAttachment {
 }
 
 /**
- * Hook to upload an attachment to a ticket message using react-query mutation
+ * Hook to upload an attachment to a ticket message using react-query mutation.
+ * Note: This uses fetch() directly because Tauri invoke() cannot handle
+ * multipart/form-data with browser File objects.
  */
 export default function useUploadTicketAttachment(
   options?: Omit<
@@ -34,25 +36,29 @@ export default function useUploadTicketAttachment(
     "mutationFn"
   >
 ): UseMutationResult<TicketAttachment, Error, UploadTicketAttachmentPayload> {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
   const queryClient = useQueryClient();
 
   return useMutation<TicketAttachment, Error, UploadTicketAttachmentPayload>({
     mutationFn: async (payload: UploadTicketAttachmentPayload) => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
+
+      // Get auth token from Rust DB
+      const token = await invoke<string>("get_auth_token", {
+        accountId: polkadotAddress,
+      });
 
       const { ticket_id, message_id, file, filename } = payload;
 
-      // API endpoint: /support/tickets/{ticket_id}/messages/{message_id}/attachments/
-      const url = `${SUPPORT_CONFIG.baseUrl}/tickets/${ticket_id}/messages/${message_id}/attachments/`;
+      // API endpoint: /api/support/tickets/{ticket_id}/messages/{message_id}/attachments/
+      const url = `https://api.hippius.com/api/support/tickets/${ticket_id}/messages/${message_id}/attachments/`;
 
       // Create FormData for multipart/form-data upload
       const formData = new FormData();
       formData.append("file", file);
 
-      // Add optional filename override if provided
       if (filename) {
         formData.append("filename", filename);
       }
@@ -60,8 +66,7 @@ export default function useUploadTicketAttachment(
       const response = await fetch(url, {
         method: "POST",
         headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          // Don't set Content-Type header - let the browser set it with boundary
+          Authorization: `Token ${token}`,
         },
         body: formData,
       });
@@ -77,11 +82,9 @@ export default function useUploadTicketAttachment(
       return response.json() as Promise<TicketAttachment>;
     },
     onSuccess: (data, variables) => {
-      // Invalidate ticket messages query to refresh the message with new attachment
       queryClient.invalidateQueries({
         queryKey: ["ticketMessages", variables.ticket_id],
       });
-      // Invalidate specific message query if it exists
       queryClient.invalidateQueries({
         queryKey: ["ticketMessage", variables.ticket_id, variables.message_id],
       });

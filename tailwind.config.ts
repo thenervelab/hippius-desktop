@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import containerQueries from "@tailwindcss/container-queries";
 
 export default {
   content: [
@@ -9,6 +10,7 @@ export default {
   theme: {
     extend: {
       screens: {
+        compact: "900px",
         desktop: "1310px",
       },
       maxWidth: {
@@ -317,6 +319,11 @@ export default {
           from: { transform: "translateX(0)" },
           to: { transform: "translateX(100%)" },
         },
+        shake: {
+          "0%, 100%": { transform: "translateX(0)" },
+          "25%": { transform: "translateX(-4px)" },
+          "75%": { transform: "translateX(4px)" },
+        },
       },
       backgroundSize: {
         full: "100% 100%",
@@ -356,8 +363,9 @@ export default {
         ["spin-reverse-slow"]: "spin-reverse 8s linear infinite",
         "panel-in": "panel-in 0.2s ease-out",
         "panel-out": "panel-out 0.2s ease-in",
+        shake: "shake 0.3s ease-in-out",
       },
     },
   },
-  plugins: [],
+  plugins: [containerQueries],
 } satisfies Config;

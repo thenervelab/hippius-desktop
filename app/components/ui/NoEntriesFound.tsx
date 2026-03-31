@@ -16,7 +16,7 @@ const NoEntriesFound: React.FC<NoEntriesFoundProps> = ({
 }) => (
   <div
     className={cn(
-      "w-full h-[400px] p-6 flex items-center justify-center",
+      "w-full h-[25rem] p-6 flex items-center justify-center",
       className
     )}
   >

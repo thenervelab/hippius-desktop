@@ -201,7 +201,7 @@ export default function SplashWrapper({
 
       // ========== MAIN PHASES (contribute to progress) ==========
       // Get the dynamic phase content based on installation state
-      const dynamicPhaseContent = getPhaseContent(isAlreadyInstalled);
+      const dynamicPhaseContent = getPhaseContent();
       const phaseNames = Object.keys(dynamicPhaseContent);
 
       for (let i = 0; i < phaseNames.length; i++) {

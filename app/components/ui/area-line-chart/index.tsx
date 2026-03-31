@@ -504,7 +504,7 @@ function AreaLineChart<T extends object>({
       zero: false,
       ...(yDomain ? { domain: yDomain } : {}),
     }),
-    [yScaleType, yDomain?.[0], yDomain?.[1]],
+    [yScaleType, yDomain],
   );
 
   return (
@@ -609,7 +609,7 @@ function AreaLineChart<T extends object>({
 
                   {/* X Axis */}
                   <AnimatedAxis
-                    key={xAxisProps?.label}
+                    key="x-axis"
                     labelProps={{
                       className: "fill-grey-10 animate-fade-in-0.3",
                       fontSize: 12,
@@ -620,12 +620,19 @@ function AreaLineChart<T extends object>({
                     {...xAxisProps}
                     tickLabelProps={
                       xAxisProps?.tickLabelProps
-                        ? {
-                            ...xAxisProps?.tickLabelProps,
-                            fontWeight: 500,
-                            fontFamily: "Geist",
-                            className: "fill-grey-60",
-                          }
+                        ? typeof xAxisProps.tickLabelProps === "function"
+                          ? (...args: any[]) => ({
+                              ...(xAxisProps.tickLabelProps as any)(...args),
+                              fontWeight: 500,
+                              fontFamily: "Geist",
+                              className: "fill-grey-60",
+                            })
+                          : {
+                              ...xAxisProps.tickLabelProps,
+                              fontWeight: 500,
+                              fontFamily: "Geist",
+                              className: "fill-grey-60",
+                            }
                         : {
                             className: "fill-grey-60",
                             fontWeight: 500,
@@ -635,7 +642,7 @@ function AreaLineChart<T extends object>({
 
                   {/* Y Axis */}
                   <AnimatedAxis
-                    key={yAxisProps?.label}
+                    key="y-axis"
                     labelProps={{
                       className: "fill-grey-10 animate-fade-in-0.3",
                       fontSize: 12,

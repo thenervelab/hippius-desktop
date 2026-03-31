@@ -8,12 +8,12 @@ import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import DetailList from "./DetailList";
 import CreditUsageTrends from "./credit-usage-trends";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
-import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transformMarketplaceCredits";
+import { invoke } from "@tauri-apps/api/core";
+import { Account } from "@/lib/types";
 import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import Ipfs from "@/app/components/page-sections/files/FilesContainer";
 import { Icons, IS_SYNC_PAUSED, SyncPausedAlert } from "@/components/ui";
-// import NebulaTest from "../../DemoIpfsUpload";
 
 const Home: React.FC = () => {
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
@@ -29,9 +29,16 @@ const Home: React.FC = () => {
   const { data: filesData, isLoading: isLoadingFiles } = useFiles();
 
   // Transform marketplace credits to the format expected by the chart
-  const transformedCreditsData = transformMarketplaceCreditsToAccounts(
-    marketplaceCredits || []
-  );
+  const [transformedCreditsData, setTransformedCreditsData] = useState<Account[]>([]);
+  useEffect(() => {
+    if (!marketplaceCredits?.length) {
+      setTransformedCreditsData([]);
+      return;
+    }
+    invoke<Account[]>("transform_marketplace_credits", { credits: marketplaceCredits })
+      .then(setTransformedCreditsData)
+      .catch(() => setTransformedCreditsData([]));
+  }, [marketplaceCredits]);
 
   useEffect(() => {
     const checkSyncPath = async () => {
@@ -47,10 +54,9 @@ const Home: React.FC = () => {
     checkSyncPath();
   }, []);
 
-  // Set active submenu item to "Private" when showing recent files
   useEffect(() => {
     if (!isCheckingSyncPath) {
-      setActiveSubMenuItem("Private");
+      setActiveSubMenuItem("");
       setIsViewingRecentFiles(true);
     }
 
@@ -75,9 +81,10 @@ const Home: React.FC = () => {
               <SyncPausedAlert variant="inline" />
             </div>
           )}
+
           <DetailList />
 
-          <div className="gap-4 mt-6 w-full h-full grid grid-cols-1 md:grid-cols-2">
+          <div className="gap-4 mt-6 w-full h-full grid grid-cols-1 @xl:grid-cols-2">
             <CreditUsageTrends
               chartData={transformedCreditsData}
               isLoading={isLoadingCredits}
@@ -98,6 +105,7 @@ const Home: React.FC = () => {
           )}
         </div>
       </DashboardTitleWrapper>
+
     </>
   );
 };

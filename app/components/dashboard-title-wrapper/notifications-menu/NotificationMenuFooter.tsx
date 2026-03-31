@@ -2,10 +2,7 @@
 
 import Link from "next/link";
 import { useSetAtom } from "jotai";
-import {
-  activeSubMenuItemAtom,
-  isViewingRecentFilesAtom,
-} from "@/components/sidebar/sideBarAtoms";
+import { isViewingRecentFilesAtom } from "@/components/sidebar/sideBarAtoms";
 
 interface NotificationMenuFooterProps {
   onClose?: () => void;
@@ -14,11 +11,9 @@ interface NotificationMenuFooterProps {
 const NotificationMenuFooter: React.FC<NotificationMenuFooterProps> = ({
   onClose,
 }) => {
-  const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   const setIsViewingRecentFiles = useSetAtom(isViewingRecentFilesAtom);
 
   const handleClick = () => {
-    setActiveSubMenuItem("");
     setIsViewingRecentFiles(false);
     onClose?.();
   };

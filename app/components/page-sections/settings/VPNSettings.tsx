@@ -138,7 +138,7 @@ const VPNSettings: React.FC = () => {
                 rotate
                 reveal={inView}
                 parentClassName="w-full"
-                className="delay-300 w-full mt-[38px]"
+                className="delay-300 w-full mt-4"
               >
                 <div className="space-y-4 text-grey-10 w-full flex flex-col">
                   {/* Autoconnect Checkbox */}
@@ -170,8 +170,8 @@ const VPNSettings: React.FC = () => {
                         className={cn(
                           "flex justify-center items-center w-5 h-5 bg-white rounded-full transition-transform duration-200 shadow-sm",
                           autoconnectEnabled
-                            ? "translate-x-[22px]"
-                            : "translate-x-[2px]"
+                            ? "translate-x-[1.375rem]"
+                            : "translate-x-[0.125rem]"
                         )}
                       >
                         {autoconnectEnabled && (
@@ -197,7 +197,7 @@ const VPNSettings: React.FC = () => {
                 >
                   <CardButton
                     type="submit"
-                    className="max-w-[160px] h-[48px]"
+                    className="max-w-[10rem] h-[3rem]"
                     variant="dialog"
                     disabled={saving || !hasSettingChanged}
                     onClick={handleSave}

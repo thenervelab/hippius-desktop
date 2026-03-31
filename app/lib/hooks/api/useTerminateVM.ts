@@ -1,12 +1,7 @@
 "use client";
 
-import {
-  useMutation,
-  UseMutationOptions,
-  UseMutationResult,
-} from "@tanstack/react-query";
-import { API_CONFIG } from "@/lib/config";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { UseMutationOptions, UseMutationResult } from "@tanstack/react-query";
+import { useVMAction, VMActionResponse } from "./useVMAction";
 
 export interface TerminateVMResponse {
   message: string;
@@ -18,42 +13,9 @@ export interface TerminateVMResponse {
  */
 export default function useTerminateVM(
   options?: Omit<
-    UseMutationOptions<TerminateVMResponse, Error, number>,
+    UseMutationOptions<VMActionResponse, Error, number>,
     "mutationFn"
   >
-): UseMutationResult<TerminateVMResponse, Error, number> {
-  const { oauthSession } = useWalletAuth();
-
-  return useMutation<TerminateVMResponse, Error, number>({
-    mutationFn: async (instanceId: number) => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
-      }
-
-      const url = `${
-        API_CONFIG.baseUrl
-      }${API_CONFIG.infrastructure.vm.terminate(instanceId)}`;
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const message =
-          errorData.message ||
-          errorData.error ||
-          errorData.detail ||
-          `Failed to terminate VM instance`;
-        throw new Error(message);
-      }
-
-      return response.json() as Promise<TerminateVMResponse>;
-    },
-    ...options,
-  });
+): UseMutationResult<VMActionResponse, Error, number> {
+  return useVMAction("terminate_vm", options);
 }

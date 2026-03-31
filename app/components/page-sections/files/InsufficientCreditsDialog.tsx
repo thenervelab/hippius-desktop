@@ -28,7 +28,7 @@ const InsufficientCreditsDialog: React.FC = () => {
       className="fixed inset-0 flex items-center justify-center z-50 bg-white/70"
       onClick={handleOverlayClick}
     >
-      <div className="bg-white rounded-lg shadow-dialog max-w-[428px] w-full p-6 animate-in fade-in border border-grey-80 relative overflow-hidden">
+      <div className="bg-white rounded-lg shadow-dialog max-w-[26.75rem] max-h-[85vh] overflow-y-auto w-full p-6 animate-in fade-in border border-grey-80 relative">
         <div className="flex flex-col items-center">
           <AbstractIconWrapper className="size-8 mb-4">
             <Icons.BoxSimple2 className="relative size-5 text-primary-50" />
