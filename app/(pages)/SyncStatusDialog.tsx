@@ -24,10 +24,12 @@ const COLLAPSED_HEIGHT_REM = 4;      // 64px at 16px base
 const EXPANDED_HEIGHT_REM = 28.75;   // 460px at 16px base
 const BODY_MAX_HEIGHT_REM = EXPANDED_HEIGHT_REM - COLLAPSED_HEIGHT_REM;
 
-// Collapsed widths (rem) — two states to avoid width jumps during progress
-const W_COLLAPSED_DONE = "13.75rem";    // 210px — "Complete" / "Failed"
-const W_COLLAPSED_ACTIVE = "15.5rem";  // 248px — "Syncing..." / "Syncing 98%" / "Retry 30s"
-const W_EXPANDED = "26rem";            // 416px
+// Collapsed widths (rem) — separate states to avoid width jumps and clipping
+const W_COLLAPSED_DONE = "13.75rem";          // 220px — "Complete" / "Failed"
+const W_COLLAPSED_ACTIVE = "15.5rem";        // 248px — "Syncing..." / "Syncing 98%"
+const W_COLLAPSED_RETRY = "15.5rem";         // 248px — "Retry 30s" / "Retrying..."
+const W_COLLAPSED_DISCONNECTED = "16.25rem"; // 260px — "Disconnected"
+const W_EXPANDED = "26rem";                  // 416px
 
 /** Format seconds into a human-readable ETA string. */
 function formatEta(totalSeconds: number): string {
@@ -276,7 +278,16 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     <div
       onClick={(e: React.MouseEvent) => e.stopPropagation()}
       className="outline-none shadow-menu rounded-[0.5rem] overflow-hidden transition-[width] duration-300 ease-in-out"
-      style={{ width: isExpanded ? W_EXPANDED : effectiveCompleted || hasFailed ? W_COLLAPSED_DONE : W_COLLAPSED_ACTIVE }}
+      style={{ width: isExpanded
+        ? W_EXPANDED
+        : isUnhealthy
+          ? W_COLLAPSED_DISCONNECTED
+          : isRetrying
+            ? W_COLLAPSED_RETRY
+            : effectiveCompleted || hasFailed
+              ? W_COLLAPSED_DONE
+              : W_COLLAPSED_ACTIVE
+      }}
     >
       {/* Header */}
       <div
