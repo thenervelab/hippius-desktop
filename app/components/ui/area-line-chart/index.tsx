@@ -620,12 +620,19 @@ function AreaLineChart<T extends object>({
                     {...xAxisProps}
                     tickLabelProps={
                       xAxisProps?.tickLabelProps
-                        ? {
-                            ...xAxisProps?.tickLabelProps,
-                            fontWeight: 500,
-                            fontFamily: "Geist",
-                            className: "fill-grey-60",
-                          }
+                        ? typeof xAxisProps.tickLabelProps === "function"
+                          ? (...args: any[]) => ({
+                              ...(xAxisProps.tickLabelProps as any)(...args),
+                              fontWeight: 500,
+                              fontFamily: "Geist",
+                              className: "fill-grey-60",
+                            })
+                          : {
+                              ...xAxisProps.tickLabelProps,
+                              fontWeight: 500,
+                              fontFamily: "Geist",
+                              className: "fill-grey-60",
+                            }
                         : {
                             className: "fill-grey-60",
                             fontWeight: 500,

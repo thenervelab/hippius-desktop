@@ -19,6 +19,7 @@ import { InView } from "react-intersection-observer";
 import { getNiceTicksAlways } from "@/app/lib/utils/getNiceTicksAlways";
 import { getXLabelsForTimeRange } from "@/app/lib/utils/getXLabelsForTimeRange";
 import { calculatePaddingOuter } from "@/app/lib/utils/calculatePaddingOuter";
+import { useRemScale } from "@/app/lib/hooks/useRemScale";
 
 // === Time-Range Options ===
 const timeRangeOptions: Option[] = [
@@ -80,7 +81,7 @@ export interface ChartTrendsProps {
   onRetry?: () => void;
 }
 
-// Default y-axis tick label props
+// Default y-axis tick label props (baseline values at 16px root font-size)
 const defaultYTickLabelProps = () => ({
   fontSize: 10,
   fill: "#6B7280",
@@ -89,6 +90,19 @@ const defaultYTickLabelProps = () => ({
   angle: -35,
   dx: -2,
 });
+
+/** Scale a margin object by a multiplier, rounding to integers. */
+function scaleMargin(
+  m: { top: number; left: number; bottom: number; right: number },
+  s: number,
+) {
+  return {
+    top: Math.round(m.top * s),
+    left: Math.round(m.left * s),
+    bottom: Math.round(m.bottom * s),
+    right: Math.round(m.right * s),
+  };
+}
 
 const ChartTrends: React.FC<ChartTrendsProps> = ({
   config,
@@ -120,6 +134,9 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
   const [formattedChartData, setFormattedChartData] = useState<ChartPoint[]>(
     [],
   );
+
+  // Scale factor: at 16px root = 1, at 13px root ≈ 0.81
+  const remScale = useRemScale();
 
   useEffect(() => {
     if (!chartData?.length) {
@@ -198,12 +215,12 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
 
   const xTickLabelProps = useCallback(
     () => ({
-      fontSize: 10,
+      fontSize: Math.round(10 * remScale),
       fill: "#6B7280",
       textAnchor: "middle" as const,
       dy: "0.5em",
     }),
-    [],
+    [remScale],
   );
 
   const xAxisProps = useMemo(
@@ -227,15 +244,35 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
     [paddingOuter],
   );
 
+  // Scale the y-axis tick label props so font size tracks root font-size
+  const scaledYTickLabelProps = useCallback(
+    () => {
+      const base = yTickLabelProps();
+      return {
+        ...base,
+        fontSize: Math.round((base.fontSize ?? 10) * remScale),
+        dx: Math.round((base.dx ?? -2) * remScale),
+        ...(base.width != null ? { width: Math.round(base.width * remScale) } : {}),
+      };
+    },
+    [yTickLabelProps, remScale],
+  );
+
+  // Scale margins so they stay proportional to the rem-based container
+  const scaledMargin = useMemo(
+    () => scaleMargin(margin, remScale),
+    [margin, remScale],
+  );
+
   const yAxisProps = useMemo(
     () => ({
       numTicks: yTicks.length,
       tickValues: yTicks,
       label: "",
       tickFormat: yTickFormat,
-      tickLabelProps: yTickLabelProps,
+      tickLabelProps: scaledYTickLabelProps,
     }),
-    [yTicks, yTickFormat, yTickLabelProps],
+    [yTicks, yTickFormat, scaledYTickLabelProps],
   );
 
   const tooltipRenderer = useCallback(
@@ -276,7 +313,7 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
             plots={plots}
             xDomain={xDomain}
             yDomain={yDomain}
-            margin={margin}
+            margin={scaledMargin}
             showVerticalCrosshair={true}
             showHorizontalCrosshair={true}
             xAxisProps={xAxisProps}
