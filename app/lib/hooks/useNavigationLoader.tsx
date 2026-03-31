@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, useCallback, ReactNode, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { createContext, useContext, useState, useCallback, useEffect, ReactNode, useMemo } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
 import NProgress from 'nprogress';
 
 // Configure NProgress
@@ -23,7 +23,16 @@ const NavigationLoaderContext = createContext<NavigationLoaderContextType | unde
 // Provider component
 export function NavigationLoaderProvider({ children }: { children: ReactNode }) {
     const router = useRouter();
+    const pathname = usePathname();
     const [loading, setLoading] = useState(false);
+
+    // Complete NProgress when the route changes (page finished loading)
+    useEffect(() => {
+        if (loading) {
+            setLoading(false);
+            NProgress.done();
+        }
+    }, [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Wrapper for router.push that shows the loader
     const push = useCallback((href: string) => {
@@ -72,10 +81,3 @@ export default function useNavigationLoader() {
     return context;
 }
 
-// Utility to stop the loader (call this in useEffect in destination pages)
-export function stopNavigationLoader() {
-    // Add a small delay to make the transition look smoother
-    setTimeout(() => {
-        NProgress.done();
-    }, 100);
-}

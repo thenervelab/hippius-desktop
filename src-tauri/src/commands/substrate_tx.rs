@@ -1,26 +1,14 @@
-use crate::DB_POOL;
-use crate::commands::syncing::ensure_aws_env;
 use crate::substrate_client::{
     get_current_wss_endpoint, get_substrate_client, update_wss_endpoint,
 };
-use crate::sync_engine::DeletePolicy;
-use crate::sync_shared::{
-    GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE, S3_PUBLIC_SYNC_STATE, S3SyncState, SYNCING_ACCOUNTS,
-};
-use crate::{start_private_folder_sync_tauri, start_public_folder_sync_tauri};
-use crate::utils::objectstore_tokens::{has_master_token, save_temp_auth_key};
+use crate::utils::account_key::account_key;
 use chrono::Utc;
-
 use serde::Deserialize;
 use serde::Serialize;
-
 use sqlx::Row;
-use crate::utils::account_key::account_key;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
-
-use tauri::Emitter;
-
+use sqlx::sqlite::SqlitePool;
+use std::path::Path;
+use tracing::{debug, error, info, warn};
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
@@ -43,7 +31,6 @@ impl TryFrom<FileHashWrapper> for FileHash {
     type Error = String;
 
     fn try_from(wrapper: FileHashWrapper) -> Result<Self, Self::Error> {
-        // Check if the file_hash length exceeds the maximum allowed length
         if wrapper.file_hash.len() > 350u32 as usize {
             return Err(format!(
                 "File hash length {} exceeds maximum allowed length {}",
@@ -51,7 +38,6 @@ impl TryFrom<FileHashWrapper> for FileHash {
                 350u32
             ));
         }
-        // Convert Vec<u8> to BoundedVec<u8, ConstU32<MAX_FILE_HASH_LENGTH>>
         Ok(BoundedVec(wrapper.file_hash))
     }
 }
@@ -66,11 +52,12 @@ impl From<FileInputWrapper> for FileInput {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SetSyncPathParams {
     pub path: String,
     pub is_public: bool,
     pub account_id: String,
-    pub temp_auth_key: Option<String>,
+    pub label: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -84,344 +71,166 @@ pub struct GetSyncPathParams {
 pub struct SyncPathResult {
     pub path: String,
     pub is_public: bool,
+    pub label: String,
+    pub is_paused: bool,
 }
 
-use crate::commands::syncing::get_sync_policy_from_db;
+/// Reject a new sync path if it overlaps (is a parent or child of) any existing sync path.
+fn validate_no_path_overlap(
+    new_path: &Path,
+    new_label: &str,
+    existing: &[(String, String)], // (label, path) pairs
+) -> Result<(), String> {
+    let canonical_new = std::fs::canonicalize(new_path).unwrap_or_else(|_| new_path.to_path_buf());
+
+    for (label, path_str) in existing {
+        if label == new_label {
+            continue; // skip self on update
+        }
+        let existing_path = Path::new(path_str);
+        let canonical_existing =
+            std::fs::canonicalize(existing_path).unwrap_or_else(|_| existing_path.to_path_buf());
+
+        if canonical_new.starts_with(&canonical_existing) {
+            return Err(format!(
+                "This folder is already being synced as part of '{}'",
+                label
+            ));
+        }
+        if canonical_existing.starts_with(&canonical_new) {
+            return Err(format!(
+                "This folder contains '{}' which is already being synced separately. \
+                 Remove it first if you want to sync the parent folder instead.",
+                label
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Core DB upsert + macOS bookmark logic, shared by `set_sync_path` and `restore_remote_folders`.
+pub(crate) async fn set_sync_path_internal(
+    pool: &SqlitePool,
+    account_id: &str,
+    path: &str,
+    is_public: bool,
+    label: Option<&str>,
+) -> Result<String, String> {
+    let path_type = if is_public { "public" } else { "private" };
+    let label = label.unwrap_or("default");
+    let timestamp = Utc::now().timestamp();
+    let owner = account_key(account_id);
+
+    // Check for overlapping sync paths before inserting
+    let rows = sqlx::query("SELECT label, path FROM sync_paths WHERE owner = ?")
+        .bind(&owner)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("DB error checking path overlap: {e}"))?;
+
+    let existing: Vec<(String, String)> = rows
+        .iter()
+        .map(|r| (r.get("label"), r.get("path")))
+        .collect();
+
+    validate_no_path_overlap(Path::new(path), label, &existing)?;
+
+    // Legacy cleanup: if a pre-owner row exists (owner is empty) with the same type, replace it once.
+    if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1",
+    )
+    .bind(path_type)
+    .fetch_optional(pool)
+    .await
+    {
+        if let Err(e) = sqlx::query(
+            "REPLACE INTO sync_paths (id, owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(legacy_id)
+        .bind(&owner)
+        .bind(path)
+        .bind(path_type)
+        .bind(label)
+        .bind(timestamp)
+        .execute(pool)
+        .await
+        {
+            warn!("Failed to replace legacy sync_paths row: {e}");
+        }
+    }
+
+    let res = sqlx::query(
+        "INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(owner, label) DO UPDATE SET path=excluded.path, type=excluded.type, timestamp=excluded.timestamp",
+    )
+    .bind(&owner)
+    .bind(path)
+    .bind(path_type)
+    .bind(label)
+    .bind(timestamp)
+    .execute(pool)
+    .await;
+
+    match res {
+        Ok(_) => {
+            info!("Sync path for '{}' set successfully in DB", path_type);
+
+            #[cfg(target_os = "macos")]
+            {
+                use crate::utils::bookmark_db::store_bookmark;
+                if let Err(e) = store_bookmark(pool, path, path_type).await {
+                    warn!("Failed to create security-scoped bookmark: {}", e);
+                }
+            }
+
+            Ok(format!("Sync path for '{}' set successfully.", path_type))
+        }
+        Err(e) => {
+            warn!(
+                "DB write failed for owner {} type {}: {}",
+                owner, path_type, e
+            );
+            Err(format!("Failed to set sync path: {}", e))
+        }
+    }
+}
 
 #[tauri::command]
 pub async fn set_sync_path(
+    state: tauri::State<'_, crate::app_state::AppState>,
     app_handle: tauri::AppHandle,
     params: SetSyncPathParams,
 ) -> Result<String, String> {
-    crate::utils::sync::set_active_account(&params.account_id);
+    info!(
+        "Setting sync path for label '{}': path='{}', is_public={}",
+        params.label.as_deref().unwrap_or("default"),
+        params.path,
+        params.is_public
+    );
+    crate::utils::sync::set_active_account(&*state, &params.account_id);
+    let pool = state.pool()?;
+    let result = set_sync_path_internal(
+        pool,
+        &params.account_id,
+        &params.path,
+        params.is_public,
+        params.label.as_deref(),
+    )
+    .await?;
 
-    // If no master token yet and a temp auth key is provided, store it now for this account.
-    if !has_master_token(&params.account_id).await.unwrap_or(false) {
-        if let Some(tk) = params
-            .temp_auth_key
-            .as_ref()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-        {
-            let _ = save_temp_auth_key(&params.account_id, tk).await;
-        }
-    }
-    let path_type = if params.is_public {
-        "public"
-    } else {
-        "private"
-    };
-    let timestamp = Utc::now().timestamp();
+    // Expand asset protocol scope so the frontend can display files from this path
+    crate::commands::file_commands::allow_asset_directory(&app_handle, &params.path);
 
-    if let Some(pool) = DB_POOL.get() {
-        // Get the current sync path (if any) to detect changes
-        let owner = account_key(&params.account_id);
-        // Legacy cleanup: if a pre-owner row exists (owner is empty) with the same type, replace it once.
-        if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>(
-            "SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1",
-        )
-        .bind(path_type)
-        .fetch_optional(pool)
-        .await
-        {
-            let _ = sqlx::query(
-                "REPLACE INTO sync_paths (id, owner, path, type, timestamp) VALUES (?, ?, ?, ?, ?)",
-            )
-            .bind(legacy_id)
-            .bind(&owner)
-            .bind(&params.path)
-            .bind(path_type)
-            .bind(timestamp)
-            .execute(pool)
-            .await;
-        }
-        let current_path: Option<String> =
-            sqlx::query_scalar("SELECT path FROM sync_paths WHERE owner = ? AND type = ?")
-                .bind(&owner)
-                .bind(path_type)
-                .fetch_optional(pool)
-                .await
-                .unwrap_or(None);
-
-        let is_path_changed = current_path
-            .as_ref()
-            .map(|p| p != &params.path)
-            .unwrap_or(true);
-
-        // Always stop any ongoing sync and clear state when setting a new path
-        {
-            println!(
-                "[set_sync_path] Preparing to update sync path for '{}'",
-                path_type
-            );
-
-            // 1. Signal global cancellation to stop any ongoing sync operations
-            GLOBAL_CANCEL_TOKEN.store(true, Ordering::SeqCst);
-
-            // 2. Clear the account from SYNCING_ACCOUNTS
-            {
-                let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
-                syncing_accounts
-                    .retain(|(acc, typ)| !(acc == &params.account_id && typ == &path_type));
-                println!(
-                    "[set_sync_path] Cleared sync account for {} {}",
-                    path_type, params.account_id
-                );
-            }
-
-            // 3. Reset the appropriate sync state
-            if params.is_public {
-                let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
-                *state = S3SyncState::default();
-                println!("[set_sync_path] Reset public sync state");
-            } else {
-                let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
-                *state = S3SyncState::default();
-                println!("[set_sync_path] Reset private sync state");
-            }
-
-            // 4. Reset the cancellation token for the new sync
-            GLOBAL_CANCEL_TOKEN.store(false, Ordering::SeqCst);
-
-            // Small delay to ensure all operations are cleaned up
-            tokio::time::sleep(Duration::from_millis(500)).await;
-
-            if is_path_changed && current_path.is_some() {
-                println!(
-                    "[set_sync_path] Sync path changed from {:?} to {}",
-                    current_path, params.path
-                );
-            }
-        }
-
-        // Rest of your existing code for database update and sync start...
-        let res = sqlx::query(
-            "INSERT INTO sync_paths (owner, path, type, timestamp) VALUES (?, ?, ?, ?)
-             ON CONFLICT(owner, type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
-        )
-        .bind(&owner)
-        .bind(&params.path)
-        .bind(path_type)
-        .bind(timestamp)
-        .execute(pool)
-        .await;
-
-        match res {
-            Ok(_) => {
-                println!(
-                    "[set_sync_path] Sync path for '{}' set successfully in DB.",
-                    path_type
-                );
-
-                // Create security-scoped bookmark for macOS
-                #[cfg(target_os = "macos")]
-                {
-                    use crate::utils::bookmark_db::store_bookmark;
-                    if let Err(e) = store_bookmark(&params.path, path_type).await {
-                        eprintln!(
-                            "[set_sync_path] Warning: Failed to create security-scoped bookmark: {}",
-                            e
-                        );
-                        // Don't fail the entire operation if bookmark creation fails
-                    }
-                }
-
-                // Now spawn the appropriate sync task depending on type
-                if params.is_public {
-                    let app_handle_public = app_handle.clone();
-                    let account = params.account_id.clone();
-
-                    let handle = tokio::spawn(async move {
-                        if let Err(e) = ensure_aws_env(account.clone()).await {
-                            eprintln!("[set_sync_path] Aborting public sync start: {}", e);
-                            return;
-                        }
-
-                        println!("[set_sync_path] Starting PUBLIC sync task...");
-                        match get_sync_policy_from_db().await {
-                            Ok(delete_policy) => {
-                        start_public_folder_sync_tauri(
-                            app_handle_public,
-                            account.clone(),
-                            delete_policy,
-                        )
-                        .await;
-                            }
-                            Err(e) => {
-                                eprintln!("[set_sync_path] Failed to get delete policy: {}", e);
-                                // Fallback to default policy if DB lookup fails
-                                start_public_folder_sync_tauri(
-                                    app_handle_public,
-                                    account.clone(),
-                                    DeletePolicy::UploadOnly,
-                                )
-                                .await;
-                            }
-                        }
-                    });
-                    crate::commands::syncing::register_task(app_handle.clone(), handle).await;
-                    // emit sync started event
-                    match crate::utils::sync::reset_sync_event_state("public").await {
-                        Ok(_) => {
-                            if let Err(e) = app_handle
-                                .emit("started_syncing", serde_json::json!({"type": "public"}))
-                                .map_err(|e| e.to_string())
-                            {
-                                eprintln!("Failed to emit started_syncing event: {}", e);
-                            }
-                            println!("[Sync] public Sync started event emitted");
-                        }
-                        Err(err) => {
-                            eprintln!("Failed to determine if first run: {}", err);
-                        }
-                    }
-
-                    // Start PUBLIC S3 listing cron
-                    if let Some(pool) = crate::DB_POOL.get() {
-                        let pool_pub = pool.clone();
-                        let account_for_cron_pub = params.account_id.clone();
-                        let handle = tokio::spawn(async move {
-                            let interval = 30u64;
-                            loop {
-                                match crate::sync_shared::list_bucket_contents(
-                                    account_for_cron_pub.clone(),
-                                    "public".to_string(),
-                                )
-                                .await
-                                {
-                                    Ok(items) => {
-                                        if let Err(e) =
-                                            crate::sync_shared::store_bucket_listing_in_db(
-                                                &pool_pub,
-                                                &account_for_cron_pub,
-                                                "public",
-                                                &items,
-                                            )
-                                            .await
-                                        {
-                                            eprintln!(
-                                                "[set_sync_path][S3InventoryCron][public] Failed storing listing: {}",
-                                                e
-                                            );
-                                        }
-                                    }
-                                    Err(e) => eprintln!(
-                                        "[set_sync_path][S3InventoryCron][public] List failed: {}",
-                                        e
-                                    ),
-                                }
-                                tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
-                            }
-                        });
-                        crate::commands::syncing::register_task(app_handle.clone(), handle).await;
-                    }
-                } else {
-                    // Similar logic for private...
-                    let app_handle_private = app_handle.clone();
-                    let account = params.account_id.clone();
-
-                    let handle = tokio::spawn(async move {
-                        if let Err(e) = ensure_aws_env(account.clone()).await {
-                            eprintln!("[set_sync_path] Aborting private sync start: {}", e);
-                            return;
-                        }
-
-                        println!("[set_sync_path] Starting PRIVATE sync task...");
-                        match get_sync_policy_from_db().await {
-                            Ok(delete_policy) => {
-                                start_private_folder_sync_tauri(
-                                    app_handle_private,
-                                    account.clone(),
-                                    delete_policy,
-                                )
-                                .await;
-                            }
-                            Err(e) => {
-                                eprintln!("[set_sync_path] Failed to get delete policy: {}", e);
-                                // Fallback to default policy if DB lookup fails
-                                start_private_folder_sync_tauri(
-                                    app_handle_private,
-                                    account.clone(),
-                                    DeletePolicy::UploadOnly,
-                                )
-                                .await;
-                            }
-                        }
-                    });
-                    crate::commands::syncing::register_task(app_handle.clone(), handle).await;
-                    // emit sync started event
-                    match crate::utils::sync::reset_sync_event_state("private").await {
-                        Ok(_) => {
-                            if let Err(e) = app_handle
-                                .emit("started_syncing", serde_json::json!({"type": "private"}))
-                                .map_err(|e| e.to_string())
-                            {
-                                eprintln!("Failed to emit started_syncing event: {}", e);
-                            }
-                            println!("[Sync] private Sync started event emitted");
-                        }
-                        Err(err) => {
-                            eprintln!("Failed to determine if first run: {}", err);
-                        }
-                    }
-
-                    // Start PRIVATE S3 listing cron
-                    if let Some(pool) = crate::DB_POOL.get() {
-                        let pool_priv = pool.clone();
-                        let account_for_cron_priv = params.account_id.clone();
-                        let handle = tokio::spawn(async move {
-                            let interval = 30u64;
-                            loop {
-                                match crate::sync_shared::list_bucket_contents(
-                                    account_for_cron_priv.clone(),
-                                    "private".to_string(),
-                                )
-                                .await
-                                {
-                                    Ok(items) => {
-                                        if let Err(e) =
-                                            crate::sync_shared::store_bucket_listing_in_db(
-                                                &pool_priv,
-                                                &account_for_cron_priv,
-                                                "private",
-                                                &items,
-                                            )
-                                            .await
-                                        {
-                                            eprintln!(
-                                                "[S3InventoryCron][private] Failed storing listing: {}",
-                                                e
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        eprintln!("[S3InventoryCron][private] List failed: {}", e)
-                                    }
-                                }
-                                tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
-                            }
-                        });
-                        crate::commands::syncing::register_task(app_handle.clone(), handle).await;
-                    }
-                }
-
-                Ok(format!("Sync path for '{}' set successfully.", path_type))
-            }
-            Err(e) => {
-                eprintln!(
-                    "[set_sync_path] DB write failed for owner {} type {}: {}",
-                    owner, path_type, e
-                );
-                Err(format!("Failed to set sync path: {}", e))
-            }
-        }
-    } else {
-        Err("DB_POOL not initialized".to_string())
-    }
+    info!(
+        "Sync path set successfully for label '{}'",
+        params.label.as_deref().unwrap_or("default")
+    );
+    Ok(result)
 }
 
 #[tauri::command]
 pub async fn transfer_balance_tauri(
+    state: tauri::State<'_, crate::app_state::AppState>,
     sender_seed: String,
     recipient_address: String,
     amount: String,
@@ -429,31 +238,26 @@ pub async fn transfer_balance_tauri(
     use sp_core::{Pair, crypto::Ss58Codec, sr25519};
     use subxt::tx::PairSigner;
 
-    // Parse the string to u128
     let amount: u128 = amount
         .parse()
         .map_err(|e| format!("Invalid amount: {}", e))?;
 
-    // Create signer from sender's seed
     let pair = sr25519::Pair::from_string(&sender_seed, None)
         .map_err(|e| format!("Failed to create signer pair: {e:?}"))?;
     let signer = PairSigner::new(pair);
 
-    // Parse recipient address
     let recipient = sp_core::crypto::AccountId32::from_ss58check(&recipient_address)
         .map_err(|e| format!("Invalid recipient address: {e:?}"))?;
 
-    // Get API client
-    let api = get_substrate_client()
+    let api = get_substrate_client(&state)
         .await
         .map_err(|e| format!("Failed to connect to Substrate node: {e}"))?;
 
-    // Use the generated call for transfer_keep_alive
     let tx = custom_runtime::tx()
         .balances()
         .transfer_keep_alive(recipient.into(), amount);
 
-    println!("[Substrate] Submitting balance transfer transaction...");
+    info!("Submitting balance transfer transaction...");
     let tx_hash = api
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
@@ -464,35 +268,42 @@ pub async fn transfer_balance_tauri(
         .map_err(|e| format!("Transaction failed: {}", e))?
         .extrinsic_hash();
 
-    println!("[Substrate] Transfer submitted with hash: {:?}", tx_hash);
+    info!("Transfer submitted with hash: {:?}", tx_hash);
 
     Ok(format!(
-        "✅ Transfer submitted successfully!\n📦 Finalized in block: {tx_hash}"
+        "Transfer submitted successfully! Finalized in block: {tx_hash}"
     ))
 }
 
-// Add this internal function
-pub async fn get_sync_path_internal(is_public: bool, owner: &str) -> Result<SyncPathResult, String> {
+pub async fn get_sync_path_internal(
+    pool: &SqlitePool,
+    is_public: bool,
+    owner: &str,
+) -> Result<SyncPathResult, String> {
     let path_type = if is_public { "public" } else { "private" };
-    if let Some(pool) = DB_POOL.get() {
+    {
         // Try scoped entry first
-        let rec_row = sqlx::query("SELECT path FROM sync_paths WHERE owner = ? AND type = ?")
-            .bind(owner)
-            .bind(path_type)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("DB error: {}", e))?;
+        let rec_row =
+            sqlx::query("SELECT path, label FROM sync_paths WHERE owner = ? AND type = ?")
+                .bind(owner)
+                .bind(path_type)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| format!("DB error: {}", e))?;
 
         // If not found, migrate a legacy (owner='') row only when no scoped rows exist yet.
-        let path_opt: Option<String> = if let Some(row) = rec_row {
-            Some(row.get::<String, _>("path"))
+        let path_label_opt: Option<(String, String)> = if let Some(row) = rec_row {
+            let label: String = row
+                .try_get("label")
+                .unwrap_or_else(|_| "default".to_string());
+            Some((row.get::<String, _>("path"), label))
         } else {
-            let scoped_count: i64 = sqlx::query_scalar(
-                "SELECT COUNT(1) FROM sync_paths WHERE owner != '' AND owner IS NOT NULL",
-            )
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+            let scoped_count: i64 =
+                sqlx::query_scalar("SELECT COUNT(1) FROM sync_paths WHERE owner = ?")
+                    .bind(owner)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap_or(0);
 
             if scoped_count == 0 {
                 let mut tx = pool
@@ -509,26 +320,28 @@ pub async fn get_sync_path_internal(is_public: bool, owner: &str) -> Result<Sync
                 .map_err(|e| format!("DB error: {}", e))?;
 
                 if let Some((legacy_id, legacy_path)) = legacy {
-                    // Remove any pre-existing scoped row to avoid UNIQUE constraint failures.
-                    let _ = sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND type = ?")
-                        .bind(owner)
-                        .bind(path_type)
-                        .execute(&mut *tx)
-                        .await;
+                    if let Err(e) =
+                        sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND type = ?")
+                            .bind(owner)
+                            .bind(path_type)
+                            .execute(&mut *tx)
+                            .await
+                    {
+                        warn!("Failed to delete scoped sync_paths during migration: {e}");
+                    }
 
-                    let _ = sqlx::query(
-                        "UPDATE sync_paths SET owner = ? WHERE id = ? AND owner = ''",
-                    )
-                    .bind(owner)
-                    .bind(legacy_id)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| format!("DB error updating legacy row: {}", e))?;
+                    let _ =
+                        sqlx::query("UPDATE sync_paths SET owner = ? WHERE id = ? AND owner = ''")
+                            .bind(owner)
+                            .bind(legacy_id)
+                            .execute(&mut *tx)
+                            .await
+                            .map_err(|e| format!("DB error updating legacy row: {}", e))?;
 
                     tx.commit()
                         .await
                         .map_err(|e| format!("DB error (commit): {}", e))?;
-                    Some(legacy_path)
+                    Some((legacy_path, "default".to_string()))
                 } else {
                     tx.commit()
                         .await
@@ -540,46 +353,273 @@ pub async fn get_sync_path_internal(is_public: bool, owner: &str) -> Result<Sync
             }
         };
 
-        if let Some(path) = path_opt {
-            Ok(SyncPathResult { path, is_public })
+        if let Some((path, label)) = path_label_opt {
+            Ok(SyncPathResult {
+                path,
+                is_public,
+                label,
+                is_paused: false,
+            })
         } else {
             Err(format!(
-                "Sync path for {} not set yet. Please configure encryption key first.",
+                "Sync path for {} not set yet. Please configure it first.",
                 path_type
             ))
         }
-    } else {
-        Err("DB_POOL not initialized".to_string())
     }
 }
 
 #[tauri::command]
-pub async fn get_sync_path(params: GetSyncPathParams) -> Result<SyncPathResult, String> {
-    // Allow camelCase param names from the frontend and fall back to the active account if none provided.
+pub async fn get_sync_path(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    params: GetSyncPathParams,
+) -> Result<SyncPathResult, String> {
     let account_id = match params
         .account_id
-        .or_else(|| crate::utils::sync::current_account_id().ok())
+        .or_else(|| crate::utils::sync::current_account_id(&*state).ok())
     {
         Some(id) => id,
         None => {
             return Ok(SyncPathResult {
                 path: "".to_string(),
                 is_public: params.is_public,
-            })
+                label: "default".to_string(),
+                is_paused: false,
+            });
         }
     };
     let owner = account_key(&account_id);
-    get_sync_path_internal(params.is_public, &owner).await
+    get_sync_path_internal(state.pool()?, params.is_public, &owner).await
 }
 
 #[tauri::command]
-pub async fn get_wss_endpoint() -> Result<String, String> {
-    get_current_wss_endpoint().await
+pub async fn get_all_sync_paths(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    params: GetSyncPathParams,
+) -> Result<Vec<SyncPathResult>, String> {
+    let account_id = match params
+        .account_id
+        .or_else(|| crate::utils::sync::current_account_id(&*state).ok())
+    {
+        Some(id) => id,
+        None => return Ok(Vec::new()),
+    };
+    let owner = account_key(&account_id);
+
+    let pool = state.pool()?;
+    let rows = sqlx::query("SELECT path, type, label, is_paused FROM sync_paths WHERE owner = ?")
+        .bind(&owner)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("DB error: {}", e))?;
+
+    let results: Vec<SyncPathResult> = rows
+        .iter()
+        .map(|row| {
+            let path_type: String = row.get("type");
+            let paused_int: i32 = row.try_get("is_paused").unwrap_or(0);
+            SyncPathResult {
+                path: row.get("path"),
+                is_public: path_type == "public",
+                label: row
+                    .try_get("label")
+                    .unwrap_or_else(|_| "default".to_string()),
+                is_paused: paused_int != 0,
+            }
+        })
+        .collect();
+
+    info!(
+        "Retrieved {} sync path(s) for account '{}'",
+        results.len(),
+        account_id
+    );
+    for sp in &results {
+        debug!(
+            "  Sync path: label='{}', path='{}', is_public={}",
+            sp.label, sp.path, sp.is_public
+        );
+    }
+
+    Ok(results)
+}
+
+/// Set the `is_paused` flag for a sync path in the DB.
+pub(crate) async fn set_sync_path_paused(
+    pool: &SqlitePool,
+    account_id: &str,
+    label: &str,
+    paused: bool,
+) -> Result<(), String> {
+    let owner = account_key(account_id);
+    let val: i32 = if paused { 1 } else { 0 };
+
+    sqlx::query("UPDATE sync_paths SET is_paused = ? WHERE owner = ? AND label = ?")
+        .bind(val)
+        .bind(&owner)
+        .bind(label)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update is_paused: {e}"))?;
+
+    Ok(())
+}
+
+/// Delete a sync path row from the DB without stopping the drive.
+/// Used for rollback when `initialize_sync` fails after the path was inserted.
+pub(crate) async fn remove_sync_path_internal(
+    pool: &SqlitePool,
+    account_id: &str,
+    label: &str,
+) -> Result<(), String> {
+    let owner = account_key(account_id);
+
+    sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND label = ?")
+        .bind(&owner)
+        .bind(label)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to remove sync path: {}", e))?;
+
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn update_wss_endpoint_command(endpoint: String) -> Result<String, String> {
-    update_wss_endpoint(endpoint.clone()).await?;
+pub async fn remove_sync_path(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    app: tauri::AppHandle,
+    account_id: String,
+    label: String,
+) -> Result<(), String> {
+    info!(
+        "Removing sync path for label '{}', account '{}'",
+        label, account_id
+    );
+    let pool = state.pool()?;
+    let owner = account_key(&account_id);
+
+    sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND label = ?")
+        .bind(&owner)
+        .bind(&label)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            error!("Failed to remove sync path for label '{}': {}", label, e);
+            format!("Failed to remove sync path: {}", e)
+        })?;
+
+    // Stop the corresponding drive
+    crate::commands::syncing::stop_drive(app, label.clone()).await?;
+
+    info!("Sync path removed and drive stopped for label '{}'", label);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_wss_endpoint(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<String, String> {
+    get_current_wss_endpoint(state.pool()?).await
+}
+
+#[tauri::command]
+pub async fn update_wss_endpoint_command(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    endpoint: String,
+) -> Result<String, String> {
+    update_wss_endpoint(&state, endpoint.clone()).await?;
     Ok(format!("WSS endpoint updated to: {}", endpoint))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
+        items
+            .iter()
+            .map(|(l, p)| (l.to_string(), p.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn sibling_paths_are_allowed() {
+        let existing = pairs(&[("photos", "/home/user/Photos")]);
+        assert!(
+            validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing).is_ok()
+        );
+    }
+
+    #[test]
+    fn child_of_existing_path_is_rejected() {
+        let existing = pairs(&[("docs", "/home/user/Documents")]);
+        let result =
+            validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "work", &existing);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("already being synced as part of")
+        );
+    }
+
+    #[test]
+    fn parent_of_existing_path_is_rejected() {
+        let existing = pairs(&[("work", "/home/user/Documents/Work")]);
+        let result = validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("already being synced separately")
+        );
+    }
+
+    #[test]
+    fn same_label_skips_self() {
+        let existing = pairs(&[("docs", "/home/user/Documents")]);
+        // Re-setting the same label to a child path should be allowed (it's an update)
+        assert!(
+            validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "docs", &existing)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn exact_same_path_different_label_is_rejected() {
+        let existing = pairs(&[("docs", "/home/user/Documents")]);
+        let result =
+            validate_no_path_overlap(Path::new("/home/user/Documents"), "docs2", &existing);
+        // starts_with returns true for equal paths, so this is caught as child-of-existing
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn multiple_existing_paths_checked() {
+        let existing = pairs(&[
+            ("photos", "/home/user/Photos"),
+            ("music", "/home/user/Music"),
+            ("docs", "/home/user/Documents"),
+        ]);
+        // Child of third entry
+        let result =
+            validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "work", &existing);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_existing_always_passes() {
+        assert!(validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &[]).is_ok());
+    }
+
+    #[test]
+    fn error_message_includes_conflicting_label() {
+        let existing = pairs(&[("my-photos", "/home/user/Photos")]);
+        let result = validate_no_path_overlap(
+            Path::new("/home/user/Photos/Vacation"),
+            "vacation",
+            &existing,
+        );
+        assert!(result.unwrap_err().contains("my-photos"));
+    }
+}

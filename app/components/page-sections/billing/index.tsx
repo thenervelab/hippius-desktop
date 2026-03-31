@@ -42,7 +42,7 @@ export default function Billing() {
       >
         <div className="flex flex-col mt-6">
           <div className="w-full grid">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 @md:grid-cols-2 @3xl:grid-cols-3 gap-4">
               <CreditsWidget />
               <SubscriptionPlansWidget />
               <TaoDepositWidget />

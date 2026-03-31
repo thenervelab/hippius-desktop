@@ -8,7 +8,6 @@ import SectionHeader from "@/components/page-sections/settings/SectionHeader";
 import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
-import { usePolkadotApi } from "@/app/lib/polkadot-api-context";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 
 interface SyncFolderSelectorProps {
@@ -26,8 +25,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
   isFromSettingsPage = false,
   handleBackClick,
 }) => {
-  const { api, isConnected } = usePolkadotApi();
-  const { data: balanceInfo } = useHippiusBalance();
+  const { data: balanceInfo, isLoading: balanceLoading } = useHippiusBalance();
   const { data: credits } = useUserCredits();
   const [suggested, setSuggested] = useState({
     desktop: "",
@@ -90,10 +88,18 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
 
   const pickCustom = async () => {
     try {
+      let defaultPath: string | undefined;
+      try {
+        const { homeDir } = await import("@tauri-apps/api/path");
+        defaultPath = await homeDir();
+      } catch {
+        // Fall back to OS default if homeDir is unavailable
+      }
       const p = await open({
         directory: true,
         multiple: false,
         title: "Select Folder to Sync",
+        defaultPath,
       });
       if (typeof p === "string") {
         setCustom(p);
@@ -113,10 +119,10 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
       return;
     }
 
-    // Check if chain connection is established
-    if (!api || !isConnected) {
+    // Check if balance data is available
+    if (balanceLoading) {
       toast.info(
-        "Please wait while we establish connection to the blockchain. This may take a few moments."
+        "Please wait while we fetch your balance. This may take a few moments."
       );
       return;
     }
@@ -245,12 +251,12 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
                   </div>
                   <div className="flex-1">
                     <div className="flex">
-                      <Icons.Folder className="size-4 mr-[6px] text-grey-40" />
+                      <Icons.Folder className="size-4 mr-[0.375rem] text-grey-40" />
                       <span className="font-medium text-base text-grey-40 -mt-0.5">
                         {opt.charAt(0).toUpperCase() + opt.slice(1)}
                       </span>
                       {!initialPath && (
-                        <div className="ml-4 px-2 py-1 text-[10px] rounded bg-primary-90 text-primary-50 font-medium border border-grey-80">
+                        <div className="ml-4 px-2 py-1 text-[0.625rem] rounded bg-primary-90 text-primary-50 font-medium border border-grey-80">
                           Suggested folder
                         </div>
                       )}
@@ -287,7 +293,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
                   </div>
                   <div className="flex-1">
                     <div className="flex">
-                      <Icons.Folder className="size-4 mr-[6px] text-grey-40" />
+                      <Icons.Folder className="size-4 mr-[0.375rem] text-grey-40" />
                       <span className="font-medium text-base text-grey-40 -mt-0.5">
                         {customName}
                       </span>
@@ -310,7 +316,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
         {/* Skip button - only show when not from settings page and onSkip is provided */}
         {!isFromSettingsPage && onSkip && (
           <CardButton
-            className="max-w-[100px] h-[48px]"
+            className="max-w-[6.25rem] h-[3rem]"
             variant="ghost"
             disabled={loading}
             onClick={handleSkip}
@@ -322,13 +328,13 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
         )}
 
         <CardButton
-          className="max-w-[160px] h-[48px]"
+          className="max-w-[10rem] h-[3rem]"
           variant="dialog"
           disabled={loading || !selected || IS_SYNC_PAUSED}
           loading={loading}
           onClick={apply}
         >
-          {!isConnected ? (
+          {balanceLoading ? (
             <ThreeDotLoader dotClassName="bg-white" />
           ) : (
             <span className="text-lg leading-6 font-medium">

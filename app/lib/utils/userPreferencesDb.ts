@@ -1,129 +1,104 @@
-import { initHippiusDesktopDB, saveBytes } from "@/lib/helpers/hippiusDesktopDB";
+import { invoke } from "@tauri-apps/api/core";
 
 type ViewMode = "list" | "card";
 
-interface UserPreferences {
-    viewMode?: ViewMode;
-}
-
-const TABLE_SCHEMA = `
-  CREATE TABLE IF NOT EXISTS user_preferences (
-    preference_key TEXT PRIMARY KEY,
-    preference_value TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
-  );
-`;
-
-async function ensurePreferencesTable() {
-    const db = await initHippiusDesktopDB();
-    db.run(TABLE_SCHEMA);
-    await saveBytes(db.export());
-    return db;
-}
-
 export async function getViewModePreference(): Promise<ViewMode> {
+  try {
+    const value = await invoke<string | null>("get_user_preference", {
+      key: "file_view_preferences",
+    });
+    if (!value) return "list";
     try {
-        const db = await ensurePreferencesTable();
-
-        const result = db.exec(
-            "SELECT preference_value FROM user_preferences WHERE preference_key = 'file_view_preferences'"
-        );
-
-        if (!result.length || !result[0]?.values.length) {
-            return "list";
-        }
-
-        try {
-            const rawValue = result[0].values[0][0] as string;
-            const parsedValue = JSON.parse(rawValue) as UserPreferences;
-            return parsedValue.viewMode || "list";
-        } catch (error) {
-            console.error("Failed to parse view mode preference:", error);
-            return "list";
-        }
-    } catch (error) {
-        console.error("Failed to get view mode preference:", error);
-        return "list";
+      const parsed = JSON.parse(value) as { viewMode?: ViewMode };
+      return parsed.viewMode || "list";
+    } catch {
+      return "list";
     }
+  } catch (error) {
+    console.error("Failed to get view mode preference:", error);
+    return "list";
+  }
 }
 
 export async function saveViewModePreference(viewMode: ViewMode): Promise<void> {
-    try {
-        const db = await ensurePreferencesTable();
-
-        const preferenceValue = JSON.stringify({ viewMode });
-
-        const existing = db.exec(
-            "SELECT preference_key FROM user_preferences WHERE preference_key = 'file_view_preferences'"
-        );
-
-        if (existing.length > 0 && existing[0]?.values.length > 0) {
-            db.run(
-                "UPDATE user_preferences SET preference_value = ?, updated_at = ? WHERE preference_key = ?",
-                [preferenceValue, Date.now(), 'file_view_preferences']
-            );
-        } else {
-            db.run(
-                "INSERT INTO user_preferences (preference_key, preference_value, updated_at) VALUES (?, ?, ?)",
-                ['file_view_preferences', preferenceValue, Date.now()]
-            );
-        }
-
-        await saveBytes(db.export());
-    } catch (error) {
-        console.error("Failed to save view mode preference:", error);
-    }
+  try {
+    const value = JSON.stringify({ viewMode });
+    await invoke("save_user_preference", {
+      key: "file_view_preferences",
+      value,
+    });
+  } catch (error) {
+    console.error("Failed to save view mode preference:", error);
+  }
 }
 
 export async function getUserPreference<T = unknown>(key: string): Promise<T | null> {
+  try {
+    const value = await invoke<string | null>("get_user_preference", { key });
+    if (!value) return null;
     try {
-        const db = await ensurePreferencesTable();
-
-        const result = db.exec(
-            `SELECT preference_value FROM user_preferences WHERE preference_key = '${key}'`
-        );
-
-        if (!result.length || !result[0]?.values.length) {
-            return null;
-        }
-
-        try {
-            const rawValue = result[0].values[0][0] as string;
-            return JSON.parse(rawValue) as T;
-        } catch (error) {
-            console.error(`Failed to parse preference for key ${key}:`, error);
-            return null;
-        }
+      return JSON.parse(value) as T;
     } catch (error) {
-        console.error(`Failed to get preference for key ${key}:`, error);
-        return null;
+      console.error(`Failed to parse preference for key ${key}:`, error);
+      return null;
     }
+  } catch (error) {
+    console.error(`Failed to get preference for key ${key}:`, error);
+    return null;
+  }
 }
 
 export async function saveUserPreference<T = unknown>(key: string, value: T): Promise<void> {
-    try {
-        const db = await ensurePreferencesTable();
+  try {
+    const preferenceValue = JSON.stringify(value);
+    await invoke("save_user_preference", { key, value: preferenceValue });
+  } catch (error) {
+    console.error(`Failed to save preference for key ${key}:`, error);
+  }
+}
 
-        const preferenceValue = JSON.stringify(value);
+// ── Last browse directory ──────────────────────────────────────────────────────
+// Remembers the last directory the user browsed to in file/folder pickers,
+// similar to how Chrome remembers the last download/upload location.
 
-        const existing = db.exec(
-            `SELECT preference_key FROM user_preferences WHERE preference_key = '${key}'`
-        );
+const LAST_BROWSE_DIR_KEY = "last_browse_directory";
 
-        if (existing.length > 0 && existing[0]?.values.length > 0) {
-            db.run(
-                "UPDATE user_preferences SET preference_value = ?, updated_at = ? WHERE preference_key = ?",
-                [preferenceValue, Date.now(), key]
-            );
-        } else {
-            db.run(
-                "INSERT INTO user_preferences (preference_key, preference_value, updated_at) VALUES (?, ?, ?)",
-                [key, preferenceValue, Date.now()]
-            );
-        }
+/**
+ * Returns the best default path for a file/folder picker dialog.
+ * Fallback chain: last browse directory → home directory → undefined (OS default).
+ */
+export async function getLastBrowseDirectory(): Promise<string | undefined> {
+  try {
+    const saved = await getUserPreference<string>(LAST_BROWSE_DIR_KEY);
+    if (saved) return saved;
+  } catch {
+    // Preference lookup failed; fall through
+  }
+  try {
+    const { homeDir } = await import("@tauri-apps/api/path");
+    return await homeDir();
+  } catch {
+    return undefined;
+  }
+}
 
-        await saveBytes(db.export());
-    } catch (error) {
-        console.error(`Failed to save preference for key ${key}:`, error);
+/**
+ * Saves the directory the user just browsed to so subsequent dialogs open there.
+ * For file selections, pass the file path — the parent directory is extracted automatically.
+ * For folder selections, pass the folder path directly.
+ */
+export async function saveLastBrowseDirectory(
+  selectedPath: string,
+  isFile: boolean = false
+): Promise<void> {
+  try {
+    let dir = selectedPath;
+    if (isFile) {
+      const { dirname } = await import("@tauri-apps/api/path");
+      dir = await dirname(selectedPath);
     }
+    await saveUserPreference(LAST_BROWSE_DIR_KEY, dir);
+  } catch (error) {
+    console.error("Failed to save last browse directory:", error);
+  }
 }

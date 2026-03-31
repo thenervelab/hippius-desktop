@@ -133,7 +133,7 @@ const CreateVM: React.FC = () => {
           >
             <ArrowLeft className="size-6 text-grey-10" />
           </button>
-          <h1 className="text-[22px] font-medium text-grey-10">
+          <h1 className="text-[1.375rem] font-medium text-grey-10">
             Create New Virtual Machine
           </h1>
         </div>
@@ -149,7 +149,7 @@ const CreateVM: React.FC = () => {
       {/* Select a Model Section */}
       <div className="mb-6">
         <div className="flex items-center gap-2 mb-4">
-          <h2 className="text-[22px] font-medium text-grey-10">
+          <h2 className="text-[1.375rem] font-medium text-grey-10">
             Select a Model
           </h2>
           <CustomTooltip2
@@ -157,7 +157,7 @@ const CreateVM: React.FC = () => {
             tooltipContent="Choose a VM model that fits your workload requirements. Different models are optimized for specific use cases like general purpose computing, memory-intensive tasks, or storage operations."
           />
         </div>
-        <div className="flex sm:hidden justify-between items-center p-1 border border-grey-80 rounded z-20">
+        <div className="flex @sm:hidden justify-between items-center p-1 border border-grey-80 rounded z-20">
           <div className="w-full text-lg font-medium text-grey-10">
             Currently Viewing
           </div>
@@ -169,12 +169,12 @@ const CreateVM: React.FC = () => {
             value={activeCategory}
             onValueChange={setActiveCategory}
             placeholder="Select a tab"
-            className="w-[200px] h-[38px] z-20"
+            className="w-[12.5rem] h-[2.375rem] z-20"
             triggerClassName="w-full justify-between"
           />
         </div>
         {/* Category Tabs */}
-        <div className="hidden sm:block">
+        <div className="hidden @sm:block">
           <div className="border border-grey-80 rounded p-1 bg-grey-100">
             <TabList
               tabs={categories}
@@ -189,7 +189,7 @@ const CreateVM: React.FC = () => {
 
       {/* Templates Grid */}
       {isBetaError ? (
-        <NoEntriesFound className="h-[500px]">
+        <NoEntriesFound className="h-[31.25rem]">
           <div className="text-center">
             <p className="text-grey-30 font-semibold mb-1 text-base">
               Feature Not Available
@@ -198,7 +198,7 @@ const CreateVM: React.FC = () => {
           </div>
         </NoEntriesFound>
       ) : isFlavorsLoading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
           {Array.from({ length: 8 }).map((_, index) => (
             <VMTemplateCardSkeleton key={`skeleton-${index}`} />
           ))}
@@ -207,7 +207,7 @@ const CreateVM: React.FC = () => {
         <NoEntriesFound text="No templates available" />
       ) : (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
+          <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
             {templates.map((template) => (
               <VMTemplateCard
                 key={template.id}

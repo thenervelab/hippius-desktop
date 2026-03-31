@@ -41,7 +41,7 @@ const VPNIconButton: React.FC<{
           <RevealTextLine reveal={inView} className={className}>
             <span
               className={cn(
-                "border rounded-[4px] relative flex items-center justify-center h-[36px] min-w-[36px] px-2 transition-colors duration-200",
+                "border rounded-[0.25rem] relative flex items-center justify-center h-[2.25rem] min-w-[2.25rem] px-2 transition-colors duration-200",
                 isConnected
                   ? "bg-primary-50 border-primary-50"
                   : "bg-white border-grey-80"
@@ -49,7 +49,7 @@ const VPNIconButton: React.FC<{
             >
               <span
                 className={cn(
-                  "font-medium text-[10px] leading-4 tracking-[-0.2px]",
+                  "font-medium text-[0.625rem] leading-4 tracking-[-0.2px]",
                   isConnected ? "text-white" : "text-grey-10"
                 )}
               >

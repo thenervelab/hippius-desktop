@@ -236,12 +236,12 @@ export function LoginForm({
 
     return (
         <div className="opacity-0 animate-fade-in-0.5 w-full">
-            <div className="space-y-6 text-grey-10 w-full">
-                <Typography.P size="xl" className="text-grey-10 font-medium !text-[32px]">
+            <div className="space-y-[min(1.5rem,24px)] text-grey-10 w-full">
+                <Typography.P size="xl" className="text-grey-10 font-medium !text-[min(2rem,32px)]">
                     Log In to Hippius
                 </Typography.P>
 
-                <div className="space-y-2">
+                <div className="space-y-[min(0.5rem,8px)]">
                     <OAuthButtonsGroup onAccessKeyClick={() => setShowAccessKeyForm(true)} />
                 </div>
             </div>
@@ -304,8 +304,8 @@ export function LoginForm({
                 🧪 Test Callback (Dev Only)
             </button> */}
 
-            <div className="text-center mt-4">
-                <p className="text-xs text-grey-60 font-semibold">
+            <div className="text-center mt-[min(1rem,16px)]">
+                <p className="text-[min(0.75rem,12px)] text-grey-60 font-semibold">
                     By continuing, you agree to our{" "}
                     <button
                         onClick={() => openUrl("https://hippius.com/terms-and-conditions")}
@@ -323,7 +323,7 @@ export function LoginForm({
                 </p>
             </div>
 
-            <div className="mt-2 text-center text-xs text-grey-70 font-medium">
+            <div className="mt-[min(0.5rem,8px)] text-center text-[min(0.75rem,12px)] text-grey-70 font-medium">
                 <p>Version {version}</p>
             </div>
         </div>

@@ -16,6 +16,8 @@ interface TabListProps {
   height?: string;
   gap?: string;
   isJustifyStart?: boolean;
+  showTooltip?: boolean;
+  iconOnly?: boolean;
 }
 
 const TabList: React.FC<TabListProps> = ({
@@ -23,10 +25,12 @@ const TabList: React.FC<TabListProps> = ({
   activeTab,
   onTabChange,
   className,
-  width = "min-w-[148px]",
-  height = "h-[36px]",
+  width = "min-w-[9.25rem]",
+  height = "h-[2.25rem]",
   gap = "gap-4",
   isJustifyStart = false,
+  showTooltip = true,
+  iconOnly = false,
 }) => {
   return (
     <div className={cn("flex ", gap, className)}>
@@ -40,6 +44,8 @@ const TabList: React.FC<TabListProps> = ({
           width={width}
           height={height}
           isJustifyStart={isJustifyStart}
+          showTooltip={showTooltip}
+          iconOnly={iconOnly}
         />
       ))}
     </div>

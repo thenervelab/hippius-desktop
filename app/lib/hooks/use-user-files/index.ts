@@ -1,11 +1,22 @@
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
-import { hexToCid } from "@/lib/utils/hexToCid";
+import { getAllSyncPaths, SyncPathResult } from "@/lib/utils/syncPathUtils";
+/**
+ * Check if a filename looks like an encrypted file ID from the server.
+ * Local synchronous implementation (the service version is now async via invoke).
+ */
+function isEncryptedFileId(fileName: string): boolean {
+  if (/^file_[a-f0-9]+$/i.test(fileName)) return true;
+  if (/^[a-f0-9]{20,}$/i.test(fileName)) return true;
+  if (/^[a-f0-9]{8,}$/i.test(fileName) && fileName.length >= 16 && !fileName.includes('.')) return true;
+  return false;
+}
 
 export type FileDetail = {
   filename: string;
-  cid: string;
+  arionHash: string;
 };
 
 export type FormattedUserFile = {
@@ -13,7 +24,8 @@ export type FormattedUserFile = {
   actualFileName?: string;
   size?: number;
   createdAt: number;
-  cid: string;
+  arionHash: string;
+  arionCid: string;
   minerIds: string | string[];
   isAssigned: boolean;
   lastChargedAt: number;
@@ -30,28 +42,25 @@ export type FormattedUserFile = {
   parentFolderId?: string;
   parentFolderName?: string;
   mainReqHash: string;
+  syncStatus?: "synced" | "pending" | "uploading" | "downloading" | "unknown" | "excluded";
+  label?: string;
+  fileCount?: number;
 };
 
-export type UserProfileFile = {
-  fileName: string;
-  fileSizeInBytes: number;
-  lastChargedAt: number;
-  cid?: string;
-  createdAt: number;
-  fileHash: string;
-  selectedValidator?: string;
-  isAssigned: boolean;
-  source: string;
-  minerIds: string;
-  isFolder: boolean;
-  type: string;
-  mainReqHash: string;
+type FileEntry = {
+  name: string;
+  is_folder: boolean;
+  size: number;
+  modified: number | null;
+  sync_status: "synced" | "pending" | "unknown" | "excluded";
+  arion_hash: string;
+  arion_cid: string;
+  file_count: number;
+  /** Server-side timestamp: when the file was first uploaded (Unix seconds, 0 if unknown) */
+  uploaded_at: number;
+  /** Server-side timestamp: when the file was last updated (Unix seconds, 0 if unknown) */
+  updated_at: number;
 };
-
-export interface FileSizeBreakdown {
-  publicSize: number;
-  privateSize: number;
-}
 
 export const GET_USER_IPFS_FILES_QUERY_KEY = "get-user-ipfs-files";
 
@@ -78,14 +87,25 @@ export const parseMinerIds = (minerIds: string | string[]): string[] => {
 
 export const useUserFiles = () => {
   const { polkadotAddress } = useWalletAuth();
-  const queryKey = [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress];
+  const queryClient = useQueryClient();
+  const queryKey = useMemo(
+    () => [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress],
+    [polkadotAddress]
+  );
+
+  // Refetch file list after sync completes so sync_status updates
+  useEffect(() => {
+    const handler = () => {
+      queryClient.refetchQueries({ queryKey });
+    };
+    window.addEventListener("sync_files_completed_changed", handler);
+    return () => window.removeEventListener("sync_files_completed_changed", handler);
+  }, [queryClient, queryKey]);
 
   return useQuery({
     queryKey,
-    refetchInterval: 1080000,
-    refetchIntervalInBackground: true,
     refetchOnWindowFocus: false,
-    staleTime: 30000,
+    staleTime: Infinity,
     notifyOnChangeProps: "all",
     queryFn: async () => {
       if (!polkadotAddress) {
@@ -93,93 +113,91 @@ export const useUserFiles = () => {
       }
 
       try {
-        let publicStorageSize = BigInt(0);
-        let privateStorageSize = BigInt(0);
+        const syncPaths: SyncPathResult[] = await getAllSyncPaths(polkadotAddress);
 
-        try {
-          const sizeBreakdown = await invoke<FileSizeBreakdown>(
-            "get_user_total_file_size",
-            {
-              owner: polkadotAddress,
-            }
-          );
-
-          publicStorageSize = BigInt(sizeBreakdown.publicSize);
-          privateStorageSize = BigInt(sizeBreakdown.privateSize);
-        } catch (error) {
-          console.error(
-            "Error fetching storage size breakdown from DB:",
-            error
-          );
+        if (syncPaths.length === 0) {
+          return {
+            files: [],
+            publicStorageSize: BigInt(0),
+            privateStorageSize: BigInt(0),
+            syncFolderLabels: [],
+          };
         }
 
-        // Fetch files from local database
-        const dbFiles = await invoke<UserProfileFile[]>(
-          "get_user_synced_files",
-          {
-            owner: polkadotAddress,
-          }
-        );
+        const allFiles: FormattedUserFile[] = [];
+        let totalPrivateSize = BigInt(0);
 
-        console.log("Fetched files from DB:", dbFiles);
+        for (const { path: syncPath, label } of syncPaths) {
+          if (!syncPath) continue;
+          try {
+            const entries = await invoke<FileEntry[]>("list_sync_folder", {
+              syncPath,
+              subfolder: null,
+              label,
+            });
 
-        // Format the data to match what the UI expects
-        const formattedFiles = dbFiles.map(
-          (
-            file
-          ): FormattedUserFile & {
-            isErasureCoded: boolean;
-            createdAt: number;
-          } => {
-            const isErasureCodedFolder = file.fileName.endsWith(
-              ".folder.ec_metadata"
+            totalPrivateSize += entries.reduce(
+              (sum, entry) => sum + BigInt(entry.size),
+              BigInt(0)
             );
-            const isErasureCoded =
-              !isErasureCodedFolder && file.fileName.endsWith(".ec_metadata");
-            const isFolder =
-              !isErasureCodedFolder && file.fileName.endsWith(".folder");
 
-            let displayName = file.fileName;
-            if (isErasureCodedFolder) {
-              displayName = file.fileName.slice(
-                0,
-                -".folder.ec_metadata".length
-              );
-            } else if (isErasureCoded) {
-              displayName = file.fileName.slice(0, -".ec_metadata".length);
-            } else if (isFolder) {
-              displayName = file.fileName.slice(0, -".folder".length);
+            for (const entry of entries.filter(e => e.sync_status !== "excluded")) {
+              const localModifiedMs = (entry.modified ?? 0) * 1000;
+              // Prefer server-side upload timestamp over local modified time
+              const uploadedAtMs = entry.uploaded_at ? entry.uploaded_at * 1000 : 0;
+              const updatedAtMs = entry.updated_at ? entry.updated_at * 1000 : 0;
+              // Use server timestamp when available. For synced/unknown files
+              // where the server hasn't returned a timestamp yet, fall back to
+              // local modified time. Pending (not-yet-uploaded) files show "—".
+              const isPending = entry.sync_status === "pending";
+              const createdAtMs = uploadedAtMs || (isPending ? 0 : localModifiedMs);
+              const lastChargedAtMs = updatedAtMs || uploadedAtMs || (isPending ? 0 : localModifiedMs);
+
+              // Check if this is an encrypted file name and provide friendly display name
+              const displayName = isEncryptedFileId(entry.name)
+                ? "Encrypted file"
+                : entry.name;
+
+              allFiles.push({
+                name: displayName,
+                actualFileName: entry.name, // Keep original name for backend operations
+                size: entry.size,
+                createdAt: createdAtMs,
+                arionHash: entry.arion_hash || "",
+                arionCid: entry.arion_cid || "",
+                source: `${syncPath}/${entry.name}`,
+                minerIds: [],
+                isAssigned: true,
+                lastChargedAt: lastChargedAtMs,
+                fileDetails: [],
+                isFolder: entry.is_folder,
+                type: "private",
+                isErasureCoded: false,
+                mainReqHash: "",
+                syncStatus: entry.sync_status,
+                label,
+                fileCount: entry.is_folder ? entry.file_count : undefined,
+              });
             }
-
-            return {
-              name: displayName || "Unnamed File",
-              actualFileName: file.fileName,
-              size: file.fileSizeInBytes,
-              createdAt: file.createdAt,
-              cid: hexToCid(file.fileHash) ?? "",
-              source: file.source || "Unknown",
-              minerIds: parseMinerIds(file.minerIds),
-              isAssigned: file.isAssigned,
-              lastChargedAt: file.lastChargedAt,
-              fileHash: file.fileHash,
-              fileDetails: [],
-              isFolder: file.isFolder,
-              type: file.type,
-              isErasureCoded,
-              mainReqHash: file.mainReqHash,
-            };
+          } catch (err) {
+            console.warn(`Failed to list files for label "${label}":`, err);
           }
-        );
+        }
 
-        formattedFiles.sort((a, b) => b.lastChargedAt - a.lastChargedAt);
+        allFiles.sort((a, b) => b.lastChargedAt - a.lastChargedAt);
+
+        const syncFolderLabels = syncPaths
+          .filter((sp) => !!sp.path)
+          .map((sp) => sp.label);
 
         return {
-          files: formattedFiles,
-          publicStorageSize,
-          privateStorageSize,
+          files: allFiles,
+          publicStorageSize: BigInt(0),
+          privateStorageSize: totalPrivateSize,
+          syncFolderLabels,
         };
       } catch (error) {
-        console.error("Error fetching user files from DB:", error);
+        console.error("Error fetching files from sync folder:", error);
         throw new Error("Failed to retrieve your files");
       }
     },

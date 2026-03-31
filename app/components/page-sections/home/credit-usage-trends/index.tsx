@@ -1,40 +1,33 @@
-import { useMemo, useState } from "react";
-import {
-  AbstractIconWrapper,
-  Icons,
-  Card,
-  Select,
-  H4,
-  RevealTextLine,
-  AreaLineChart,
-  ChartGridOverlay,
-} from "@/components/ui";
-import { cn } from "@/app/lib/utils";
-import { Option } from "@/components/ui/select";
+import { Icons } from "@/components/ui";
 import { Account } from "@/app/lib/types/accounts";
-import {
-  formatAccountsForChartByRange,
-  ChartPoint,
-} from "@/app/lib/utils/getFormatDataForCreditsUsageChart";
-import { InView } from "react-intersection-observer";
+import { ChartPoint } from "@/lib/types/chartTypes";
+import ChartTrends, { ChartTrendsConfig } from "@/components/ui/chart-trends";
 import CreditUsedTooltip from "./CreditsUsedTooltip";
-import { getNiceTicksAlways } from "@/app/lib/utils/getNiceTicksAlways";
-import { getXLabelsForTimeRange } from "@/app/lib/utils/getXLabelsForTimeRange";
-import { calculatePaddingOuter } from "@/app/lib/utils/calculatePaddingOuter";
 
-// === Time‐Range Options ===
-const timeRangeOptions: Option[] = [
-  { value: "last7days", label: "Last 7 Days" },
-  { value: "last30days", label: "Last 30 Days" },
-  { value: "last60days", label: "Last 60 Days" },
-  { value: "year", label: "1 Year" },
-  { value: "max", label: "MAX" },
-];
-
-// === Line + Area Colors ===
-const COLORS = {
-  line: "#2563eb",
-  area: "url(#area-gradient)", // Use the gradient defined in AreaLineChart
+const config: ChartTrendsConfig = {
+  invokeCommand: "format_credits_chart",
+  title: "Credit Usage",
+  icon: <Icons.Tag2 className="relative size-4 @sm:size-5 text-primary-50" />,
+  emptyText: "No Credits Data Available",
+  lineColor: "#2563eb",
+  dataKey: "balance",
+  yAccessor: (d: ChartPoint) => d?.balance || 0,
+  yMaxPadding: 1.02,
+  yTickFormat: (v) => {
+    const num = Number(v);
+    if (num >= 0.0001) {
+      if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+      if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+      return num.toFixed(num < 0.01 ? 4 : 2);
+    }
+    return num.toString();
+  },
+  margin: { top: 10, left: 45, bottom: 30, right: 5 },
+  gridMarginClasses: "mt-[0.625rem] ml-[2.8125rem] mb-[1.875rem] mr-[1.3125rem]",
+  renderTooltip: (tooltipData, timeRange) => (
+    <CreditUsedTooltip tooltipData={tooltipData} timeRange={timeRange} />
+  ),
+  variant: "card",
 };
 
 const CreditUsageTrends: React.FC<{
@@ -42,181 +35,6 @@ const CreditUsageTrends: React.FC<{
   isLoading?: boolean;
   className?: string;
   onRetry?: () => void;
-}> = ({ chartData, isLoading, className }) => {
-  const [timeRange, setTimeRange] = useState<string>("last7days");
-
-  // Format raw account‐data into ChartPoint[] according to the selected range
-  const formattedChartData: ChartPoint[] = useMemo(() => {
-    if (!chartData || chartData.length === 0) {
-      return [];
-    }
-
-    return formatAccountsForChartByRange(
-      chartData,
-      timeRange as "last7days" | "last30days" | "last60days" | "year" | "max",
-    );
-  }, [chartData, timeRange]);
-
-  // Compute Y‐ticks with minimal padding and more tick marks for better detail
-  const yTicks = useMemo(() => {
-    if (!formattedChartData.length) return [0, 1];
-    const balances = formattedChartData.map((d) => d.balance);
-    const max = Math.max(...balances, 0);
-    // Add very minimal padding (2%) above max and use fewer ticks for legibility
-    const paddedMax = max > 0 ? max * 1.02 : 1;
-    return getNiceTicksAlways(0, paddedMax, 5);
-  }, [formattedChartData]);
-
-  // Build X‐labels (strings) depending on selected range
-  const xTicks = useMemo(() => {
-    return getXLabelsForTimeRange(formattedChartData, timeRange);
-  }, [formattedChartData, timeRange]);
-
-  const xTickLabelMap = useMemo(() => {
-    return new Map(xTicks.map((tick) => [tick.value.getTime(), tick.label]));
-  }, [xTicks]);
-
-  const xTickValues = useMemo(() => {
-    return xTicks.map((tick) => tick.value);
-  }, [xTicks]);
-  const paddingOuter = useMemo(
-    () => calculatePaddingOuter(formattedChartData.length),
-    [formattedChartData.length],
-  );
-
-  return (
-    <InView triggerOnce threshold={0.2}>
-      {({ ref, inView }) => (
-        <div ref={ref} className="w-full">
-          <Card
-            title={
-              <div className="flex justify-between gap-3 w-full py-1 mb-1.5 px-2">
-                <div className="flex items-center group-x-2">
-                  <AbstractIconWrapper
-                    className={cn(
-                      "px-0 size-6 sm:size-7 opacity-0 translate-y-7 duration-500 transition-transform",
-                      inView && "opacity-100 translate-y-0",
-                    )}
-                  >
-                    <Icons.Tag2 className="relative size-4 sm:size-5 text-primary-50" />
-                  </AbstractIconWrapper>
-                  <H4
-                    size="sm"
-                    className="max-w-screen-sm text-center ml-2 transition-colors !text-[16px] sm:!text-[24px] text-grey-10"
-                  >
-                    <RevealTextLine rotate reveal={inView}>
-                      Credit Usage
-                    </RevealTextLine>
-                  </H4>
-                </div>
-                <div className="flex items-center ml-4 justify-end">
-                  <Select
-                    options={timeRangeOptions}
-                    value={timeRange}
-                    onValueChange={(value) => {
-                      setTimeRange(value);
-                    }}
-                  />
-                </div>
-              </div>
-            }
-            className={cn("flex-1 rounded", className)}
-            contentClassName="relative h-[246px]"
-          >
-            <div className="relative w-full h-full flex">
-              {isLoading ? (
-                <div className="flex items-center justify-center w-full h-full">
-                  <Icons.Loader className="size-8 animate-spin text-primary-60" />
-                </div>
-              ) : formattedChartData.length === 0 ? (
-                <div className="flex font-medium flex-col items-center justify-center w-full h-full">
-                  <Icons.Search className="size-8 text-primary-60" />
-                  <span className="max-w-40 text-center text-grey-40 mt-4">
-                    No Credits Data Available
-                  </span>
-                </div>
-              ) : (
-                <div className="w-full h-full relative pr-4 ">
-                  <ChartGridOverlay marginClasses="mt-[10px] ml-[45px] mb-[30px] mr-[21px]" />
-                  <AreaLineChart
-                    key={`chart-${timeRange}-${formattedChartData.length}`}
-                    data={formattedChartData}
-                    xScaleType="band"
-                    yScaleType="linear"
-                    plots={[
-                      {
-                        dataKey: "balance",
-                        xAccessor: (d: ChartPoint) => d.x,
-                        yAccessor: (d: ChartPoint) => d?.balance || 0,
-                        lineColor: COLORS.line,
-                        areaColor: COLORS.area,
-                      },
-                    ]}
-                    xDomain={formattedChartData.map((d) => d.x)}
-                    yDomain={[yTicks[0], yTicks[yTicks.length - 1]]}
-                    margin={{ top: 10, left: 45, bottom: 30, right: 5 }}
-                    showVerticalCrosshair={true}
-                    showHorizontalCrosshair={true}
-                    xAxisProps={{
-                      tickValues: xTickValues,
-                      tickFormat: (value) => {
-                        const date =
-                          value instanceof Date ? value : new Date(value);
-                        return xTickLabelMap.get(date.getTime()) || "";
-                      },
-                      label: "",
-                      hideTicks: false,
-                      hideAxisLine: false,
-                      tickLabelProps: () => ({
-                        fontSize: 10,
-                        fill: "#6B7280",
-                        textAnchor: "middle",
-                        dy: "0.5em",
-                      }),
-                    }}
-                    bandScaleConfig={{
-                      paddingInner: 0.3,
-                      paddingOuter,
-                      align: 0.5,
-                    }}
-                    yAxisProps={{
-                      numTicks: yTicks.length,
-                      tickValues: yTicks,
-                      label: "",
-                      tickFormat: (v) => {
-                        const num = Number(v);
-                        if (num >= 0.0001) {
-                          if (num >= 1000000)
-                            return `${(num / 1000000).toFixed(1)}M`;
-                          if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
-                          return num.toFixed(num < 0.01 ? 4 : 2);
-                        }
-                        return num.toString();
-                      },
-                      tickLabelProps: () => ({
-                        fontSize: 10,
-                        fill: "#6B7280",
-                        textAnchor: "end",
-                        verticalAnchor: "middle",
-                        angle: -35,
-                        dx: -2,
-                      }),
-                    }}
-                    renderTooltip={(tooltipData) => (
-                      <CreditUsedTooltip
-                        tooltipData={tooltipData}
-                        timeRange={timeRange}
-                      />
-                    )}
-                  />
-                </div>
-              )}
-            </div>
-          </Card>
-        </div>
-      )}
-    </InView>
-  );
-};
+}> = (props) => <ChartTrends config={config} {...props} />;
 
 export default CreditUsageTrends;

@@ -4,7 +4,7 @@ import { FC, useState, useMemo } from "react";
 import { Input, CardButton, Icons, AbstractIconWrapper } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useStaking } from "@/app/lib/hooks/useStaking";
-import { formatStakingAmount } from "@/app/lib/utils/staking";
+import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
 import { formatPreciseBalance } from "@/app/lib/utils/formatters/formatPreciseBalance";
 
 interface TokenFormProps {
@@ -56,7 +56,7 @@ const TokenForm: FC<TokenFormProps> = ({
             balanceAmountType: typeof balanceAmount,
             bondedAmount: stakingInfo.bonded,
             bondedAmountType: typeof stakingInfo.bonded,
-            formattedBonded: formatStakingAmount(stakingInfo.bonded)
+            formattedBonded: formatBalance(stakingInfo.bonded)
         });
 
         if (isStaking) {
@@ -75,7 +75,7 @@ const TokenForm: FC<TokenFormProps> = ({
     // Format the staked amount for display
     const formattedStakedAmount = useMemo(() => {
         if (showStakedAmount) {
-            return formatStakingAmount(stakingInfo.bonded);
+            return formatBalance(stakingInfo.bonded);
         }
         return stakedAmount || "0.00";
     }, [showStakedAmount, stakingInfo.bonded, stakedAmount]);
@@ -94,11 +94,11 @@ const TokenForm: FC<TokenFormProps> = ({
     }, [amount, availableAmount]);
 
     return (
-        <div className={cn("w-[29rem] mx-auto", className)}>
+        <div className={cn("w-full max-w-[29rem] mx-auto", className)}>
             <div className="bg-white border border-grey-80 rounded-lg p-4">
                 {/* Header */}
                 <div className="text-center mb-6">
-                    <h1 className="text-[22px] font-semibold text-grey-10 mb-2">{title}</h1>
+                    <h1 className="text-[1.375rem] font-semibold text-grey-10 mb-2">{title}</h1>
                     <p className="text-grey-50 text-base font-medium">{description}</p>
                 </div>
 
@@ -130,7 +130,7 @@ const TokenForm: FC<TokenFormProps> = ({
                             </span>
                             <span className="ml-1">
                                 {isUnstaking
-                                    ? `${formatStakingAmount(stakingInfo.bonded)} hALPHA`
+                                    ? `${formatBalance(stakingInfo.bonded)} hALPHA`
                                     : formatPreciseBalance(availableAmount, 8)
                                 }
                             </span>
@@ -181,8 +181,8 @@ const TokenForm: FC<TokenFormProps> = ({
                             <div className="flex justify-center mb-4">
                                 <div className="flex items-center w-full gap-4">
                                     <div className="h-0.5 flex-1 bg-gradient-to-l from-[#3167DD] to-transparent"></div>
-                                    <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
-                                        <Icons.ArrowDown className="absolute text-primary-40 size-4 sm:size-5" />
+                                    <AbstractIconWrapper className="size-8 @sm:size-10 text-primary-40">
+                                        <Icons.ArrowDown className="absolute text-primary-40 size-4 @sm:size-5" />
                                     </AbstractIconWrapper>
                                     <div className="h-0.5 flex-1 bg-gradient-to-r from-[#3167DD] to-transparent"></div>
                                 </div>

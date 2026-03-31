@@ -4,6 +4,7 @@ import localFont from "next/font/local";
 import "@/app/globals.css";
 import Providers from "@/components/providers";
 import { Toaster } from "sonner";
+import "sonner/dist/styles.css";
 import "react-circular-progressbar/dist/styles.css";
 import NextTopLoader from "nextjs-toploader";
 import { WalletAuthProvider } from "./lib/wallet-auth-context";
@@ -14,6 +15,7 @@ import SplashWrapper from "./components/splash-screen";
 import { NavigationLoaderProvider } from "./lib/hooks/useNavigationLoader";
 import UpdateChecker from "@/components/updater/UpdateChecker";
 import TrayNavigationListener from "@/app/components/tray/TrayNavigationListener";
+import ZoomController from "@/app/components/ZoomController";
 
 const digitalFonts = localFont({
   src: "./fonts/DigitalNumbers-Regular.ttf",
@@ -42,6 +44,7 @@ export default function RootLayout({
                 <NextTopLoader color="#3167DD" showSpinner={false} />
                 <NavigationLoaderProvider>
                   <TrayNavigationListener />
+                  <ZoomController />
                   <SplashWrapper preventClose={false}>
                     <Suspense fallback={<PageLoader />}>
                       <div className="flex min-h-screen h-screen">
@@ -51,7 +54,7 @@ export default function RootLayout({
                   </SplashWrapper>
 
                   <Toaster
-                    position="bottom-right"
+                    position="top-center"
                     className="toaster-auth-aware"
                     toastOptions={{
                       style: { fontFamily: "var(--font-geist-sans)" },

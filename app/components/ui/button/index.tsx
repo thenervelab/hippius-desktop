@@ -7,7 +7,7 @@ import { cn } from "@/app/lib/utils";
 import classes from "./button.module.css";
 
 const buttonVariants = cva({
-  base: "rounded-[4px] py-3 px-4 w-[208px] min-w-fit font-medium duration-300 flex justify-center items-center gap-x-2 disabled:opacity-50 disabled:hover:opacity-50 disabled:cursor-not-allowed",
+  base: "rounded-[0.25rem] py-3 px-4 w-[13rem] min-w-fit font-medium duration-300 flex justify-center items-center gap-x-2 disabled:opacity-50 disabled:hover:opacity-50 disabled:cursor-not-allowed",
   variants: {
     variant: {
       primary: cn(
@@ -64,7 +64,7 @@ const ButtonOrLinkInner: React.FC<{
     return (
       <>
         {variant === "primary" && (
-          <div className="absolute border rounded border-primary-40 left-[5px] right-[5px] top-[5px] bottom-[5px] shadow-inner-action-button" />
+          <div className="absolute border rounded border-primary-40 left-[0.3125rem] right-[0.3125rem] top-[0.3125rem] bottom-[0.3125rem] shadow-inner-action-button" />
         )}
         {variant === "error" && (
           <div className="absolute border rounded border-error-40 left-1 right-1 top-1 bottom-1" />

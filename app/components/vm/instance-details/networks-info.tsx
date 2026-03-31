@@ -29,7 +29,7 @@ const NetworksInfo: React.FC<NetworksInfoProps> = ({
             label="Nebula IP"
           />
           {isLoading ? (
-            <Skeleton className="!h-[26px] !w-[150px] mt-1" />
+            <Skeleton className="!h-[1.625rem] !w-[9.375rem] mt-1" />
           ) : (
             <CopyableText
               value={instanceData?.nebula_ip || "—"}
@@ -48,7 +48,7 @@ const NetworksInfo: React.FC<NetworksInfoProps> = ({
             label="SSH Public Key"
           />
           {isLoading ? (
-            <Skeleton className="!h-[26px] !w-[200px] mt-2" />
+            <Skeleton className="!h-[1.625rem] !w-[12.5rem] mt-2" />
           ) : (
             <CopyableCell
               title="Copy Public Key"

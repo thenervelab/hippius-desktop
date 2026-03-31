@@ -40,7 +40,7 @@ const BackButton: React.FC<BackButtonProps> = ({
       className="inline-flex self-start w-auto gap-1 font-medium text-sm items-center py-1 px-2 border border-grey-80 bg-grey-90 hover:bg-grey-80 rounded text-grey-20 transition-colors duration-200"
       onClick={handleClick}
     >
-      <Icons.ArrowLeft className="size-[15px] text-grey-20" />
+      <Icons.ArrowLeft className="size-[0.9375rem] text-grey-20" />
       {text}
     </button>
   );

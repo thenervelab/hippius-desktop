@@ -4,10 +4,10 @@ import {
   FC,
   useState,
   useRef,
-  useCallback,
   useEffect,
+  useMemo,
+  useCallback,
   memo,
-  DragEvent,
 } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { WaitAMoment } from "@/components/ui";
@@ -32,64 +32,55 @@ import { cn } from "@/lib/utils";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import NoMatchingResults from "./NoMatchingResults";
+import BackgroundContextMenu from "@/app/components/ui/context-menu/BackgroundContextMenu";
 
 interface FilesContentProps {
   isRecentFiles?: boolean;
   isLoading: boolean;
-  isFetching: boolean;
   filteredData: Array<FormattedUserFile & { timestamp?: Date | null }>;
   displayedData: Array<FormattedUserFile & { timestamp?: Date | null }>;
   searchTerm: string;
   activeFilters: ActiveFilter[];
   viewMode: "list" | "card";
-  shouldResetPagination: boolean;
-  handlePaginationReset: () => void;
   error?: unknown;
-  isPrivateView: boolean;
-  addButtonRef?: React.RefObject<{ openWithFiles(files: FileList): void }>;
-  currentPage: number;
-  totalPages: number;
-  setCurrentPage: (page: number) => void;
+  addButtonRef?: React.RefObject<{ openWithFiles(files: FileList): void; openWithPaths(paths: string[]): void; isDialogOpen(): boolean } | null>;
+  hasMore: boolean;
+  loadMore: () => void;
   isSyncPathEmpty?: boolean;
   onSyncPathConfigured?: () => void;
+  onUploadFile?: () => void;
+  onAddFolder?: () => void;
+  onAddSyncFolder?: () => void;
 }
 
 const FilesContent: FC<FilesContentProps> = ({
   isRecentFiles = false,
   isLoading,
-  isFetching,
   filteredData,
   displayedData,
   searchTerm,
   activeFilters,
   viewMode,
-  shouldResetPagination,
-  handlePaginationReset,
   error,
-  isPrivateView,
   addButtonRef,
-  currentPage,
-  totalPages,
-  setCurrentPage,
+  hasMore,
+  loadMore,
   isSyncPathEmpty = false,
   onSyncPathConfigured,
+  onUploadFile,
+  onAddFolder,
+  onAddSyncFolder,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
-  const dragCounterRef = useRef(0);
   const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
 
   // Use shared functionality between FilesTable and CardView
-  const sharedState = useFileViewShared({
-    files: displayedData,
-    showUnpinnedDialog: false,
-    isRecentFiles,
-    resetPagination: shouldResetPagination,
-    onPaginationReset: handlePaginationReset,
-  });
+  const sharedState = useFileViewShared();
 
   const {
     fileToDelete,
@@ -111,145 +102,152 @@ const FilesContent: FC<FilesContentProps> = ({
 
   const selectedFileType = selectedFile ? getFileType(selectedFile) : null;
 
-  // Drag and drop handlers
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  // Look up the latest version of the file details from live query data.
+  // The captured snapshot in fileDetailsFile may have stale arion hashes
+  // if it was opened before sync completed.
+  const liveFileDetailsFile = useMemo(() => {
+    if (!fileDetailsFile) return null;
+    return filteredData.find(
+      (f) =>
+        f.actualFileName === fileDetailsFile.actualFileName &&
+        f.label === fileDetailsFile.label
+    ) ?? fileDetailsFile;
+  }, [fileDetailsFile, filteredData]);
 
-    // Prevent drag and drop when sync path is empty (user skipped setup)
-    if (isSyncPathEmpty && !isRecentFiles) {
-      return;
-    }
-
-    if (
-      e.dataTransfer.items &&
-      Array.from(e.dataTransfer.items).some((item) => item.kind === "file")
-    ) {
-      dragCounterRef.current++;
-      setIsDragging(true);
-
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
-      }
-
-      dragTimeoutRef.current = setTimeout(() => {
-        setAnimateCloud(true);
-      }, 200);
-    }
-  }, [isSyncPathEmpty, isRecentFiles]);
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    dragCounterRef.current--;
-
-    if (dragCounterRef.current <= 0) {
-      dragCounterRef.current = 0;
-      setIsDragging(false);
-      setAnimateCloud(false);
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
-        dragTimeoutRef.current = null;
-      }
-    }
-  }, []);
-
-  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  };
-
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-
-      dragCounterRef.current = 0;
-      setIsDragging(false);
-      setAnimateCloud(false);
-
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
-        dragTimeoutRef.current = null;
-      }
-
-      // Prevent file drop when sync path is empty (user skipped setup) 
-      if (isSyncPathEmpty && !isRecentFiles) {
-        toast.info("Please set up sync folder first to upload files.");
-        return;
-      }
-
-      if (addButtonRef?.current && e.dataTransfer.files.length > 0) {
-        addButtonRef.current.openWithFiles(e.dataTransfer.files);
-      } else if (e.dataTransfer.files.length > 0) {
-        const customEvent = new CustomEvent("hippius:file-drop", {
-          detail: { files: e.dataTransfer.files },
-        });
-        window.dispatchEvent(customEvent);
-      }
-    },
-    [addButtonRef, isSyncPathEmpty, isRecentFiles]
-  );
-
-  // Add global event listeners to clean up dragging state when dragging ends outside
+  // Tauri native drag-and-drop via global event listeners
   useEffect(() => {
-    const handleDragEnd = () => {
-      // Only reset if we're currently showing dragging state
-      if (isDragging) {
-        dragCounterRef.current = 0;
-        setIsDragging(false);
-        setAnimateCloud(false);
-        if (dragTimeoutRef.current) {
-          clearTimeout(dragTimeoutRef.current);
-          dragTimeoutRef.current = null;
-        }
-      }
-    };
+    const unlisteners: Array<() => void> = [];
 
-    // Only handle document-level dragleave that indicates leaving the window
-    const handleDocumentDragLeave = (e: globalThis.DragEvent) => {
-      // Check if mouse left the document area
-      if (
-        e.clientX <= 0 ||
-        e.clientY <= 0 ||
-        e.clientX >= window.innerWidth ||
-        e.clientY >= window.innerHeight
-      ) {
-        handleDragEnd();
-      }
-    };
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
 
-    document.addEventListener("dragend", handleDragEnd);
-    document.addEventListener("dragleave", handleDocumentDragLeave);
+        console.log("[DragDrop] Registering global Tauri drag-drop listeners");
+
+        const unDragEnter = await listen<{ paths: string[]; position: { x: number; y: number } }>(
+          "tauri://drag-enter",
+          (event) => {
+            console.log("[DragDrop] drag-enter event received", event.payload);
+            if (isSyncPathEmpty && !isRecentFiles) return;
+            // Don't show background overlay if upload dialog is already open
+            if (addButtonRef?.current?.isDialogOpen()) return;
+            setIsDragging(true);
+            dragTimeoutRef.current = setTimeout(() => {
+              setAnimateCloud(true);
+            }, 200);
+          }
+        );
+        unlisteners.push(unDragEnter);
+
+        const unDragOver = await listen<{ position: { x: number; y: number } }>(
+          "tauri://drag-over",
+          () => {
+            // Keep showing drag state
+          }
+        );
+        unlisteners.push(unDragOver);
+
+        const unDragDrop = await listen<{ paths: string[]; position: { x: number; y: number } }>(
+          "tauri://drag-drop",
+          async (event) => {
+            console.log("[DragDrop] drag-drop event received", event.payload);
+            setIsDragging(false);
+            setAnimateCloud(false);
+            if (dragTimeoutRef.current) {
+              clearTimeout(dragTimeoutRef.current);
+              dragTimeoutRef.current = null;
+            }
+
+            // If upload dialog is already open, don't handle here (FileDropzone handles it)
+            if (addButtonRef?.current?.isDialogOpen()) return;
+
+            if (isSyncPathEmpty && !isRecentFiles) {
+              toast.info("Please set up sync folder first to upload files.");
+              return;
+            }
+
+            const paths = event.payload.paths;
+            if (!paths || paths.length === 0 || !addButtonRef?.current) return;
+
+            // Filter out directories
+            try {
+              const { stat } = await import("@tauri-apps/plugin-fs");
+              const results = await Promise.all(
+                paths.map(async (p) => {
+                  const info = await stat(p);
+                  return { path: p, isDir: info.isDirectory };
+                })
+              );
+              const dirs = results.filter((r) => r.isDir);
+              const filePaths = results.filter((r) => !r.isDir).map((r) => r.path);
+
+              if (dirs.length > 0) {
+                toast.error(
+                  "Folders cannot be uploaded via drag & drop. Please use the \"Add Folder\" button instead.",
+                  { duration: 5000 }
+                );
+              }
+              if (filePaths.length > 0) {
+                addButtonRef.current.openWithPaths(filePaths);
+              }
+            } catch (err) {
+              console.error("[DragDrop] Error checking paths:", err);
+              // Fallback: pass all paths through
+              addButtonRef.current.openWithPaths(paths);
+            }
+          }
+        );
+        unlisteners.push(unDragDrop);
+
+        const unDragLeave = await listen(
+          "tauri://drag-leave",
+          () => {
+            console.log("[DragDrop] drag-leave event received");
+            setIsDragging(false);
+            setAnimateCloud(false);
+            if (dragTimeoutRef.current) {
+              clearTimeout(dragTimeoutRef.current);
+              dragTimeoutRef.current = null;
+            }
+          }
+        );
+        unlisteners.push(unDragLeave);
+
+        console.log("[DragDrop] All listeners registered successfully");
+      } catch (err) {
+        console.error("[DragDrop] Failed to register drag-drop listeners:", err);
+      }
+    })();
 
     return () => {
-      document.removeEventListener("dragend", handleDragEnd);
-      document.removeEventListener("dragleave", handleDocumentDragLeave);
-    };
-  }, [isDragging]); // Only re-add listeners if isDragging changes
-
-  // Clean up any timers when component unmounts
-  useEffect(() => {
-    return () => {
+      unlisteners.forEach((fn) => fn());
       if (dragTimeoutRef.current) {
         clearTimeout(dragTimeoutRef.current);
         dragTimeoutRef.current = null;
       }
     };
-  }, []);
+  }, [addButtonRef, isSyncPathEmpty, isRecentFiles]);
 
   const handleFileDownload = (
     file: FormattedUserFile,
     polkadotAddress: string
   ) => {
-    downloadFile(file, polkadotAddress, isPrivateView);
+    downloadFile(file, polkadotAddress);
   };
+
+  const handleHeaderContextMenu = useCallback((e: React.MouseEvent) => {
+    if (isSyncPathEmpty || isRecentFiles || !onUploadFile) return;
+    e.preventDefault();
+    e.stopPropagation();
+    window.getSelection()?.removeAllRanges();
+    setBgContextMenu({ x: e.clientX, y: e.clientY });
+  }, [isSyncPathEmpty, isRecentFiles, onUploadFile]);
 
   const renderContent = () => {
 
-    if (isLoading || isFetching) {
+    // Only show full loading state on initial load (no data yet).
+    // During background refetches (isFetching), keep showing existing data.
+    if (isLoading) {
       return <WaitAMoment isRecentFiles={isRecentFiles} />;
     }
 
@@ -260,7 +258,6 @@ const FilesContent: FC<FilesContentProps> = ({
       return (
         <IPFSNoEntriesFound
           isRecentFiles={isRecentFiles}
-          isPrivateView={isPrivateView}
           isSyncPathConfigured={!isSyncPathEmpty}
           onStartSyncing={onSyncPathConfigured}
         />
@@ -283,31 +280,25 @@ const FilesContent: FC<FilesContentProps> = ({
       return (
         <FilesTable
           isRecentFiles={isRecentFiles}
-          showUnpinnedDialog={false}
           files={displayedData}
           allFiles={filteredData}
-          resetPagination={shouldResetPagination}
-          onPaginationReset={handlePaginationReset}
           handleFileDownload={handleFileDownload}
           sharedState={sharedState}
-          currentPage={currentPage}
-          totalPages={totalPages}
-          setCurrentPage={setCurrentPage}
+          hasMore={hasMore}
+          loadMore={loadMore}
+          onHeaderContextMenu={handleHeaderContextMenu}
         />
       );
     } else {
       return (
         <CardView
           isRecentFiles={isRecentFiles}
-          showUnpinnedDialog={false}
           files={displayedData}
-          resetPagination={shouldResetPagination}
-          onPaginationReset={handlePaginationReset}
           handleFileDownload={handleFileDownload}
           sharedState={sharedState}
-          currentPage={currentPage}
-          totalPages={totalPages}
-          setCurrentPage={setCurrentPage}
+          hasMore={hasMore}
+          loadMore={loadMore}
+
         />
       );
     }
@@ -315,15 +306,17 @@ const FilesContent: FC<FilesContentProps> = ({
   return (
     <>
       <div
+        onContextMenu={(e) => {
+          // Only show background context menu if sync path is configured and not on recent files
+          if (isSyncPathEmpty || isRecentFiles || !onUploadFile) return;
+          e.preventDefault();
+          setBgContextMenu({ x: e.clientX, y: e.clientY });
+        }}
         className={cn(
-          "w-full mt-4 relative",
+          "w-full mt-4 relative select-none",
           isDragging &&
           "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
         )}
-        onDrop={handleDrop}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDragEnter={handleDragEnter}
       >
         {isDragging && (
           <div className="absolute inset-0 bg-opacity-80 flex flex-col items-center justify-center z-20 pointer-events-none">
@@ -344,7 +337,7 @@ const FilesContent: FC<FilesContentProps> = ({
               </div>
               <div className="flex items-center justify-center">
                 <HardDrive className="size-6 text-white mr-2" />
-                <div className="text-white text-lg font-bold">IPFS Storage</div>
+                <div className="text-white text-lg font-bold">Arion Storage</div>
               </div>
             </div>
           </div>
@@ -378,7 +371,7 @@ const FilesContent: FC<FilesContentProps> = ({
             deleteFile()
               .then(() => {
                 toast.success(
-                  `${truncatedName} removed locally. App will auto sync with S3 in a moment.`,
+                  `${truncatedName} deleted successfully.`,
                   { id: toastId }
                 );
                 setFileToDelete(null);
@@ -427,6 +420,17 @@ const FilesContent: FC<FilesContentProps> = ({
         />
       )}
 
+      {bgContextMenu && onUploadFile && onAddFolder && (
+        <BackgroundContextMenu
+          x={bgContextMenu.x}
+          y={bgContextMenu.y}
+          onClose={() => setBgContextMenu(null)}
+          onUploadFile={onUploadFile}
+          onAddFolder={onAddFolder}
+          onAddSyncFolder={onAddSyncFolder}
+        />
+      )}
+
       {selectedFileType === "video" && (
         <VideoDialog
           onCloseClicked={() => setSelectedFile(null)}
@@ -434,7 +438,6 @@ const FilesContent: FC<FilesContentProps> = ({
           file={selectedFile}
           allFiles={filteredData}
           onNavigate={setSelectedFile}
-          isPrivateView={isPrivateView}
         />
       )}
       {selectedFileType === "image" && (
@@ -444,7 +447,6 @@ const FilesContent: FC<FilesContentProps> = ({
           file={selectedFile}
           allFiles={filteredData}
           onNavigate={setSelectedFile}
-          isPrivateView={isPrivateView}
         />
       )}
       {selectedFileType === "PDF" && (
@@ -454,7 +456,6 @@ const FilesContent: FC<FilesContentProps> = ({
           file={selectedFile}
           allFiles={filteredData}
           onNavigate={setSelectedFile}
-          isPrivateView={isPrivateView}
         />
       )}
 
@@ -466,7 +467,7 @@ const FilesContent: FC<FilesContentProps> = ({
         open={isFileDetailsOpen}
         onOpenChange={setIsFileDetailsOpen}
       >
-        <SidebarDialogContent file={fileDetailsFile ?? undefined} />
+        <SidebarDialogContent file={liveFileDetailsFile ?? undefined} />
       </SidebarDialog>
 
 

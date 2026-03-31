@@ -19,8 +19,6 @@ import {
 import {
   ReferralEvent,
 } from "@/app/lib/hooks/api/useUserReferrals";
-import { useAtomValue } from "jotai";
-import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { cn } from "@/app/lib/utils";
 import { useState, useMemo, useCallback, useEffect } from "react";
 
@@ -66,6 +64,7 @@ const normalizeColumnWidths = (maybeStored?: Record<string, number>) => {
 };
 
 const getStoredColumnWidths = () => {
+  if (typeof window === "undefined") return normalizeColumnWidths();
   try {
     const stored = localStorage.getItem("referralHistoryTable_columnWidths");
     return normalizeColumnWidths(stored ? JSON.parse(stored) : undefined);
@@ -75,6 +74,7 @@ const getStoredColumnWidths = () => {
 };
 
 const saveColumnWidths = (columnWidths: Record<string, number>) => {
+  if (typeof window === "undefined") return;
   try {
     localStorage.setItem("referralHistoryTable_columnWidths", JSON.stringify(columnWidths));
   } catch { }
@@ -86,7 +86,6 @@ const ReferralHistoryTable: React.FC = () => {
   const data = { referralHistory: [] as ReferralEvent[], totalReferrals: 0, totalRewards: "0", referralCodes: [] };
   const isPending = false;
   const isError = false;
-  const isUnpinnedOpen = useAtomValue(isUnpinnedDialogOpenAtom);
 
   // Column resizing state
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>(
@@ -231,11 +230,7 @@ const ReferralHistoryTable: React.FC = () => {
   return (
     <div
       className={cn(
-        isUnpinnedOpen &&
-        data &&
-        data.referralHistory &&
-        data.referralHistory.length > 0 &&
-        "mb-[90px]"
+        ""
       )}
     >
       <div className="flex items-center gap-x-2 mb-4">
@@ -271,29 +266,29 @@ const ReferralHistoryTable: React.FC = () => {
           </TBody>
         </Table>
         {isError && !data && (
-          <div className="p-6 w-full h-[350px] flex items-center justify-center">
+          <div className="p-6 w-full h-[21.875rem] flex items-center justify-center">
             <div className="flex flex-col animate-fade-in-0.5 items-center opacity-0">
               <AbstractIconWrapper className="size-10 rounded-2xl flex items-center justify-center bg-grey-40/20 mb-2">
                 <AlertCircle className="absolute size-6 text-red-400" />
               </AbstractIconWrapper>
-              <span className="text-grey-60 text-sm font-medium max-w-[190px] text-center">
+              <span className="text-grey-60 text-sm font-medium max-w-[11.875rem] text-center">
                 Failed to get data
               </span>
             </div>
           </div>
         )}
         {isPending && (
-          <div className="w-full animate-fade-in-0.3 opacity-0 h-[350px] flex items-center justify-center p-6">
+          <div className="w-full animate-fade-in-0.3 opacity-0 h-[21.875rem] flex items-center justify-center p-6">
             <Loader2 className="size-6 animate-spin text-grey-50" />
           </div>
         )}
         {data && !data.referralHistory.length && (
-          <div className="w-full h-[350px] flex items-center justify-center p-6">
+          <div className="w-full h-[21.875rem] flex items-center justify-center p-6">
             <div className="flex flex-col animate-fade-in-0.5 items-center opacity-0">
               <AbstractIconWrapper className="size-10 rounded-2xl flex items-center justify-center bg-grey-40/20 mb-2">
                 <Send className="absolute size-6 text-primary-50" />
               </AbstractIconWrapper>
-              <span className="text-grey-60 text-sm font-medium max-w-[190px] text-center">
+              <span className="text-grey-60 text-sm font-medium max-w-[11.875rem] text-center">
                 You have not made any referrals yet
               </span>
             </div>

@@ -1,5 +1,6 @@
-import { MONTHS } from "./getXlablesForAccounts";
-import { ChartPoint } from "./getFormatDataForCreditsUsageChart";
+import { ChartPoint } from "@/lib/types/chartTypes";
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /**
  * Generates X-axis labels based on the selected time range and chart data
@@ -30,9 +31,10 @@ export function getXLabelsForTimeRange(
   if (timeRange === "last7days") {
     // Use the day names for the last 7 days
     formattedChartData.forEach((point) => {
+      const date = new Date(point.x);
       addTick(
-        point.x,
-        point.x.toLocaleDateString("en-US", { weekday: "short" }),
+        date,
+        date.toLocaleDateString("en-US", { weekday: "short" }),
       );
     });
     return ticks;
@@ -43,7 +45,7 @@ export function getXLabelsForTimeRange(
   }
 
   const sortedPoints = [...formattedChartData].sort(
-    (a, b) => a.x.getTime() - b.x.getTime(),
+    (a, b) => new Date(a.x).getTime() - new Date(b.x).getTime(),
   );
 
   let desiredTicks = 10;
@@ -60,7 +62,8 @@ export function getXLabelsForTimeRange(
   const interval = Math.max(1, Math.ceil(sortedPoints.length / desiredTicks));
   for (let i = 0; i < sortedPoints.length; i += interval) {
     const point = sortedPoints[i];
-    addTick(point.x, formatDateLabel(point.x));
+    const date = new Date(point.x);
+    addTick(date, formatDateLabel(date));
   }
 
   return ticks;

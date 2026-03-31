@@ -7,7 +7,7 @@ import { Trash2 } from "lucide-react";
 import TicketSelect from "./TicketSelect";
 import AttachSqaure from "../../ui/icons/AttachSquare";
 import PictureFrame from "../../ui/icons/PictureFrame";
-import { getFilePartsFromFileName } from "@/app/lib/utils/get-file-parts-from-file-name";
+import { getFilePartsFromFileName } from "@/app/lib/utils/getFilePartsFromFileName";
 import { selectFile } from "@/app/lib/utils/tauri";
 
 export interface CreateTicketData {
@@ -27,7 +27,7 @@ type Props = {
 
 export const categories = [
   { value: "billing", label: "Account & Billing" },
-  { value: "storage", label: "Storage (IPFS & S3)" },
+  { value: "storage", label: "Storage (Arion & S3)" },
   { value: "general", label: "General" },
 ];
 
@@ -119,25 +119,25 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
           <Dialog.Content
             className="
             fixed left-1/2 top-1/2 z-50 
-            w-full max-w-sm sm:max-w-[488px] 
+            w-full max-w-sm sm:max-w-[30.5rem] 
             max-h-[90vh] overflow-y-auto
             -translate-x-1/2 -translate-y-1/2
-            bg-white rounded-[8px]
+            bg-white rounded-[0.5rem]
             shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
             p-4 border border-grey-80
           "
           >
-            <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[8px] sm:hidden" />
+            <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[0.5rem] sm:hidden" />
             <Dialog.Close asChild className="sm:hidden">
               <button
                 aria-label="Close"
-                className="absolute top-[30px] right-4 text-grey-10 hover:text-grey-20"
+                className="absolute top-[1.875rem] right-4 text-grey-10 hover:text-grey-20"
               >
                 <CloseCircle className="size-6" />
               </button>
             </Dialog.Close>
 
-            <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center max-sm:mt-2.5  mb-4">
+            <Dialog.Title className="text-grey-10 text-[1.375rem] sm:text-2xl font-medium text-center max-sm:mt-2.5  mb-4">
               Create a Ticket
             </Dialog.Title>
 
@@ -154,7 +154,7 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
                   placeholder="Choose a subject for this ticket"
                   className="
                   mt-2 w-full bg-grey-100 text-grey-60 placeholder-grey-60
-                  border border-grey-80 p-4 rounded-[8px]
+                  border border-grey-80 p-4 rounded-[0.5rem]
                   focus:outline-none focus:border-grey-80 text-base font-medium
                 "
                 />
@@ -203,7 +203,7 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
                   rows={4}
                   className="
                   mt-2 w-full bg-grey-100 text-grey-60 placeholder-grey-60
-                  border border-grey-80 p-4 rounded-[8px]
+                  border border-grey-80 p-4 rounded-[0.5rem]
                   focus:outline-none focus:border-grey-80 text-base font-medium
                   resize-none
                 "
@@ -220,7 +220,7 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
                   className="
                   flex items-center justify-between
                   w-full bg-grey-100 text-grey-10
-                  border border-grey-80 p-4 rounded-[8px]
+                  border border-grey-80 p-4 rounded-[0.5rem]
                   cursor-pointer hover:bg-grey-90 transition
                 "
                 >

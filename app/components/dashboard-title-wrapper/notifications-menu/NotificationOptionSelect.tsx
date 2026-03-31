@@ -24,16 +24,16 @@ const NotificationOptionSelect: React.FC<NotificationOptionSelectProps> = ({
     <Menubar.Root>
       <Menubar.Menu>
         <Menubar.Trigger asChild>
-          <button className="relative min-w-[121px] h-10 px-3 flex items-center justify-between gap-2 t bg-transparent rounded-lg border-none cursor-pointer">
+          <button className="relative min-w-[7.5625rem] h-10 px-3 flex items-center justify-between gap-2 t bg-transparent rounded-lg border-none cursor-pointer">
             {/* Active background */}
             <div className="absolute inset-0 pointer-events-none">
               <ActiveTabBg mainGroup={true} />
             </div>
-            <span className="relative z-10 font-medium text-[14px] leading-5 text-grey-10">
+            <span className="relative z-10 font-medium text-[0.875rem] leading-5 text-grey-10">
               {selected?.label}
             </span>
             <span className="relative z-10 ml-2 border-[1.5px] flex justify-center items-center rounded size-4 border-grey-50">
-              <Icons.ChevronDown className="size-[8px]" />
+              <Icons.ChevronDown className="size-[0.5rem]" />
             </span>
           </button>
         </Menubar.Trigger>
@@ -41,12 +41,12 @@ const NotificationOptionSelect: React.FC<NotificationOptionSelectProps> = ({
           <Menubar.Content
             align="start"
             sideOffset={8}
-            className="min-w-[160px] bg-white shadow-menu rounded-lg border border-grey-80 z-50 overflow-hidden"
+            className="min-w-[10rem] bg-white shadow-menu rounded-lg border border-grey-80 z-50 overflow-hidden"
           >
             {options.map((opt) => (
               <Menubar.Item
                 key={opt.value}
-                className={`pl-6 pr-3 py-2 cursor-pointer text-xs leading-[18px] font-medium hover:text-primary-50 ${value === opt.value
+                className={`pl-6 pr-3 py-2 cursor-pointer text-xs leading-[1.125rem] font-medium hover:text-primary-50 ${value === opt.value
                   ? "text-primary-50 border-l border-primary-50"
                   : "text-grey-70"
                   }`}

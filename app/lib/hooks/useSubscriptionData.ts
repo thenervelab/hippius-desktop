@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { API_CONFIG } from "@/lib/config";
 
 export interface SubscriptionPlan {
   id: string;
@@ -46,7 +46,7 @@ export interface SubscriptionPlansResponse {
 }
 
 export default function useSubscriptionData() {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
   const [activeSubscription, setActiveSubscription] =
     useState<ActiveSubscription | null>(null);
   const [subscriptionPlans, setSubscriptionPlans] = useState<
@@ -59,7 +59,7 @@ export default function useSubscriptionData() {
   const [plansError, setPlansError] = useState<string | null>(null);
 
   const fetchActiveSubscription = useCallback(async () => {
-    if (!oauthSession?.token) {
+    if (!polkadotAddress) {
       setActiveError("Not authenticated");
       setIsLoadingActive(false);
       return;
@@ -69,35 +69,21 @@ export default function useSubscriptionData() {
       setIsLoadingActive(true);
       setActiveError(null);
 
-      const response = await fetch(
-        `${API_CONFIG.baseUrl}${API_CONFIG.billing.activeSubscription}`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Token ${oauthSession.token}`,
-            Accept: "application/json",
-          },
-        },
+      const data = await invoke<ActiveSubscription>(
+        "get_active_subscription",
+        { accountId: polkadotAddress }
       );
-
-      if (!response.ok) {
-        throw new Error(
-          `Failed to fetch active subscription: ${response.status}`,
-        );
-      }
-
-      const data: ActiveSubscription = await response.json();
       setActiveSubscription(data);
     } catch (error) {
       console.error("Error fetching active subscription:", error);
-      setActiveError(error instanceof Error ? error.message : "Unknown error");
+      setActiveError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsLoadingActive(false);
     }
-  }, [oauthSession?.token]);
+  }, [polkadotAddress]);
 
   const fetchSubscriptionPlans = useCallback(async () => {
-    if (!oauthSession?.token) {
+    if (!polkadotAddress) {
       setPlansError("Not authenticated");
       setIsLoadingPlans(false);
       return;
@@ -107,40 +93,26 @@ export default function useSubscriptionData() {
       setIsLoadingPlans(true);
       setPlansError(null);
 
-      const response = await fetch(
-        `${API_CONFIG.baseUrl}${API_CONFIG.billing.subscriptionPlans}`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Token ${oauthSession.token}`,
-            Accept: "application/json",
-          },
-        },
+      const data = await invoke<SubscriptionPlansResponse>(
+        "get_subscription_plans",
+        { accountId: polkadotAddress }
       );
-
-      if (!response.ok) {
-        throw new Error(
-          `Failed to fetch subscription plans: ${response.status}`,
-        );
-      }
-
-      const data: SubscriptionPlansResponse = await response.json();
       setSubscriptionPlans(data.plans || []);
       setRecommendation(data.recommendation || "");
     } catch (error) {
       console.error("Error fetching subscription plans:", error);
-      setPlansError(error instanceof Error ? error.message : "Unknown error");
+      setPlansError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsLoadingPlans(false);
     }
-  }, [oauthSession?.token]);
+  }, [polkadotAddress]);
 
   useEffect(() => {
-    if (oauthSession?.token) {
+    if (polkadotAddress) {
       fetchActiveSubscription();
       fetchSubscriptionPlans();
     }
-  }, [oauthSession?.token, fetchActiveSubscription, fetchSubscriptionPlans]);
+  }, [polkadotAddress, fetchActiveSubscription, fetchSubscriptionPlans]);
 
   return {
     activeSubscription,

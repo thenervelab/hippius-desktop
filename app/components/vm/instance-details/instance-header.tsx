@@ -36,15 +36,15 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
 
   return (
     <div className="w-full">
-      <div className="flex sm:justify-between sm:items-center mb-4 sm:mb-6 flex-col gap-2 sm:flex-row">
-        <div className="flex items-center gap-2 text-base sm:text-[22px] font-medium text-grey-10">
+      <div className="flex @sm:justify-between @sm:items-center mb-4 @sm:mb-6 flex-col gap-2 @sm:flex-row">
+        <div className="flex items-center gap-2 text-base @sm:text-[1.375rem] font-medium text-grey-10">
           <Link href="/vm" className="text-grey-10 hover:text-grey-40">
             <Icons.ArrowLeft className="size-6" />
           </Link>
           <h1 className="text-nowrap">Instance Details</h1>
           <span className="text-grey-60">-</span>
           {isLoading ? (
-            <Skeleton className="!h-[28px] !w-[150px]" />
+            <Skeleton className="!h-[1.75rem] !w-[9.375rem]" />
           ) : (
             <span className="text-grey-60 truncate">{instanceName}</span>
           )}
@@ -60,7 +60,7 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
               activeTab={activeTab}
               onTabChange={onTabChange}
               className="w-full "
-              width="w-full sm:min-w-[148px]"
+              width="w-full @sm:min-w-[9.25rem]"
             />
           </div>
         </div>

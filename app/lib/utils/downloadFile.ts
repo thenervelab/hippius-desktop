@@ -1,12 +1,43 @@
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { decodeHexCid } from "./decodeHexCid";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
-import { downloadFolder } from "./downloadFolder";
+import { save, open } from "@tauri-apps/plugin-dialog";
+import { getPrivateSyncPath, getAllSyncPaths } from "@/lib/utils/syncPathUtils";
 
-const getFileSavePath = async (name: string) => {
+async function resolveSyncPath(
+  file: FormattedUserFile,
+  polkadotAddress: string
+): Promise<string> {
+  if (file.label) {
+    const allPaths = await getAllSyncPaths(polkadotAddress);
+    const match = allPaths.find((sp) => sp.label === file.label);
+    if (match?.path) return match.path;
+  }
+  return (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
+}
+
+/**
+ * Derive the file name relative to the sync root.
+ * Prefers computing from `file.source` (full filesystem path) so that
+ * files / folders inside subfolders resolve correctly even when
+ * `actualFileName` only contains the basename.
+ */
+function resolveRelativeName(
+  file: FormattedUserFile,
+  syncPath: string,
+): string {
+  if (file.source && syncPath) {
+    const prefix = syncPath.endsWith("/") ? syncPath : syncPath + "/";
+    if (file.source.startsWith(prefix)) {
+      return file.source.slice(prefix.length);
+    }
+  }
+  return file.actualFileName || file.name;
+}
+
+const getFileSavePath = async (name: string, directory?: string) => {
   const fileExtension = name.split(".").pop() || "";
+  const defaultPath = directory ? `${directory}/${name}` : name;
   return await save({
     filters: [
       {
@@ -16,68 +47,51 @@ const getFileSavePath = async (name: string) => {
         extensions: [fileExtension || "*"]
       }
     ],
-    defaultPath: name
+    defaultPath,
   });
-};
-
-const ensureWalletConnected = (polkadotAddress: string | undefined | null) => {
-  if (!polkadotAddress) {
-    throw new Error(
-      "Wallet not connected. Please connect your wallet to download files."
-    );
-  }
 };
 
 export const downloadFile = async (
   file: FormattedUserFile,
   polkadotAddress: string,
-  isPrivateView: boolean
 ) => {
   if (file.isFolder) {
-    console.log("isFolder", file)
-    const result = await downloadFolder({
-      folderCid: file.cid,
-      folderName: file.name,
-      polkadotAddress,
-      isPrivate: isPrivateView,
-      file
-    });
-
-    if (result && !result.success) {
-      toast.error(
-        `Failed to download folder: ${result.message || "Unknown error"}`
-      );
-    }
-    return;
-  } else if (isPrivateView) {
-    return downloadEncryptedIpfsFile(
-      file,
-      polkadotAddress ?? ""
-    );
-  } else {
-    return downloadRegularIpfsFile(file);
+    return downloadFolderExport(file, polkadotAddress);
   }
+  return downloadFileExport(file, polkadotAddress);
 };
 
-const downloadRegularIpfsFile = async (file: FormattedUserFile) => {
-  const { cid, name } = file;
+const downloadFileExport = async (
+  file: FormattedUserFile,
+  polkadotAddress: string
+) => {
+  const { name } = file;
   const toastId = toast.loading(`Preparing download: ${name}`);
 
   try {
-    const filePath = await getFileSavePath(name);
+    const syncPath = await resolveSyncPath(file, polkadotAddress);
 
+    const { downloadDir } = await import("@tauri-apps/api/path");
+    let saveDir: string | undefined;
+    try {
+      saveDir = await downloadDir();
+    } catch {
+      // Fall back to no directory hint
+    }
+
+    const filePath = await getFileSavePath(name, saveDir);
     if (!filePath) {
       toast.error("Download cancelled", { id: toastId });
       return;
     }
 
-    toast.loading(`Downloading: ${name}`, { id: toastId });
+    toast.loading(`Exporting: ${name}`, { id: toastId });
 
-    await invoke("download_file_public", {
-      fileCid: decodeHexCid(cid),
-      outputFile: filePath,
-      source: file.source,
-      mainReqHash: file.mainReqHash
+    const fileName = resolveRelativeName(file, syncPath);
+    await invoke("export_file", {
+      syncPath,
+      fileName,
+      outputPath: filePath,
     });
 
     toast.success(`Download complete: ${name}`, { id: toastId });
@@ -85,53 +99,58 @@ const downloadRegularIpfsFile = async (file: FormattedUserFile) => {
   } catch (err) {
     console.error("Download failed:", err);
     toast.error(
-      `Download failed: ${err instanceof Error ? err.message : "Unknown error"
-      }`,
+      `Download failed: ${err instanceof Error ? err.message : String(err)}`,
       { id: toastId }
     );
     return { success: false, error: "DOWNLOAD_FAILED", message: String(err) };
   }
 };
 
-const downloadEncryptedIpfsFile = async (
+const downloadFolderExport = async (
   file: FormattedUserFile,
   polkadotAddress: string
 ) => {
-  const { name, cid } = file;
-  const toastId = toast.loading(`Preparing download: ${name}`);
+  const { name } = file;
+  const toastId = toast.loading(`Preparing folder download: ${name}`);
 
   try {
-    ensureWalletConnected(polkadotAddress);
+    const { downloadDir } = await import("@tauri-apps/api/path");
+    let defaultPath: string | undefined;
+    try {
+      defaultPath = await downloadDir();
+    } catch {
+      // Fall back to no directory hint
+    }
+    const selectedDir = await open({
+      directory: true,
+      multiple: false,
+      defaultPath,
+    }) as string | null;
 
-    const savePath = await getFileSavePath(name);
-
-    if (!savePath) {
+    if (!selectedDir) {
       toast.dismiss(toastId);
       return { success: false, error: "Download cancelled" };
     }
 
-    toast.loading(`Downloading encrypted file: ${name}...`, { id: toastId });
+    const syncPath = await resolveSyncPath(file, polkadotAddress);
 
-    await invoke("download_and_decrypt_file", {
-      accountId: polkadotAddress,
-      metadataCid: cid,
-      outputFile: savePath,
-      source: file.source,
-      mainReqHash: file.mainReqHash
+    toast.loading(`Exporting folder: ${name}`, { id: toastId });
+
+    const fileName = resolveRelativeName(file, syncPath);
+    await invoke("export_file", {
+      syncPath,
+      fileName,
+      outputPath: `${selectedDir}/${name}`,
     });
 
-    toast.success(`Download complete: ${name}`, {
-      id: toastId
-    });
+    toast.success(`Folder downloaded: ${name}`, { id: toastId });
     return { success: true };
   } catch (err) {
     toast.dismiss(toastId);
-    const errorMsg = String(err);
-    console.error("Encrypted download failed:", err);
+    console.error("Folder download failed:", err);
     toast.error(
-      `Download failed: ${err instanceof Error ? err.message : "Unknown error"
-      }`
+      `Download failed: ${err instanceof Error ? err.message : String(err)}`
     );
-    return { success: false, error: "DOWNLOAD_FAILED", message: errorMsg };
+    return { success: false, error: "DOWNLOAD_FAILED", message: String(err) };
   }
 };

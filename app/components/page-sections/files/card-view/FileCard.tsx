@@ -3,7 +3,6 @@ import Image from "next/image";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { cn } from "@/lib/utils";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { FileTypeIcon } from "@/components/ui";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 // import { Graphsheet } from "@/components/ui";
@@ -14,14 +13,19 @@ import {
   getFileIcon,
 } from "@/lib/utils/fileTypeUtils";
 import { Folder2 } from "@/components/ui/icons";
-import { toBlobUrl } from "@/app/components/page-sections/files/files-table/VideoPlayer";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
-import { getFileUrlAndSourceSync } from "@/app/lib/utils/ipfsUrlResolver";
+
+/** Fetch a URL into a same-origin blob URL (needed for canvas thumbnail extraction). */
+async function toBlobUrl(url: string) {
+  const res = await fetch(url);
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
 import { buildFolderPath } from '@/app/utils/folderPathUtils';
 import { useFileSelection } from '@/app/contexts/FileSelectionContext';
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { Check } from "lucide-react";
-
 interface FileCardProps {
   file: FormattedUserFile;
   state: "success" | "pending" | "error";
@@ -33,7 +37,7 @@ const FileCard: React.FC<FileCardProps> = ({
   file,
   state,
   onClick,
-  actionMenu
+  actionMenu,
 }) => {
   const { fileName, fileFormat } = getFilePartsFromFileName(file.name);
   const { isSelectionMode, isFileSelected, toggleFileSelection } = useFileSelection();
@@ -53,16 +57,16 @@ const FileCard: React.FC<FileCardProps> = ({
 
   // Get current path information for folder navigation
   const folderActualName = file.isFolder ? file.actualFileName || "" : "";
-  const mainFolderCid = getParam("mainFolderCid", "");
+  const mainFolderHash = getParam("mainFolderCid", "");
   const mainFolderActualName = getParam("mainFolderActualName", folderActualName);
   const subFolderPath = getParam("subFolderPath", "");
-  const effectiveMainFolderCid = mainFolderCid || file.cid;
+  const effectiveMainFolderHash = mainFolderHash || file.arionHash;
   const effectiveMainFolderActualName = mainFolderActualName || folderActualName;
 
   // Build the folder path for navigation
-  const { mainFolderCid: newMainFolderCID, mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
+  const { mainFolderCid: newMainFolderHash, mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
     folderActualName,
-    effectiveMainFolderCid,
+    effectiveMainFolderHash,
     effectiveMainFolderActualName,
     subFolderPath
   );
@@ -70,7 +74,7 @@ const FileCard: React.FC<FileCardProps> = ({
   // Reset thumbnail state when file changes
   useEffect(() => {
     // Generate a unique ID for this file to track changes
-    const currentFileId = `${file.cid}-${file.name}`;
+    const currentFileId = `${file.arionHash}-${file.name}`;
 
     // If the file changed, reset all thumbnail states
     if (fileIdRef.current !== currentFileId) {
@@ -86,7 +90,7 @@ const FileCard: React.FC<FileCardProps> = ({
         timeoutRef.current = null;
       }
     }
-  }, [file.cid, file.name]);
+  }, [file.arionHash, file.name]);
 
   useEffect(() => {
     // Only attempt to load thumbnails for image and video files
@@ -129,7 +133,8 @@ const FileCard: React.FC<FileCardProps> = ({
 
     (async () => {
       try {
-        const { url: cidUrl, isFromIpfs } = getFileUrlAndSourceSync(file);
+        const { url: cidUrl, isLocal: isFromLocal } = getFileUrl(file);
+        const isFromIpfs = false;
         let finalUrl = cidUrl;
 
         if (fileType === "image") {
@@ -142,7 +147,7 @@ const FileCard: React.FC<FileCardProps> = ({
         } else if (fileType === "video") {
           timeoutRef.current = setTimeout(handleError, 15000);
 
-          if (!isFromIpfs) {
+          if (!isFromIpfs && !isFromLocal) {
             try {
               const blobUrl = await toBlobUrl(finalUrl);
               finalUrl = blobUrl;
@@ -157,8 +162,10 @@ const FileCard: React.FC<FileCardProps> = ({
           }
 
           const video = document.createElement("video");
-          video.crossOrigin = "anonymous";
-          video.src = cidUrl;
+          if (!isFromLocal) {
+            video.crossOrigin = "anonymous";
+          }
+          video.src = finalUrl || cidUrl;
           video.preload = "metadata";
 
           video.onloadedmetadata = () => {
@@ -216,8 +223,11 @@ const FileCard: React.FC<FileCardProps> = ({
         timeoutRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    file,
+    file.arionHash,
+    file.name,
+    file.isFolder,
     fileType,
     shouldLoadThumbnail,
     thumbnailUrl,
@@ -264,11 +274,11 @@ const FileCard: React.FC<FileCardProps> = ({
 
       <div className="p-2 flex items-center justify-between relative bg-white bg-opacity-80 border-b border-grey-80 h-10 w-full">
         {file.isFolder ? (
-          <div className="flex items-center">
+          <div className="flex items-center min-w-0 flex-1">
             {/* Selection checkbox - inline with filename */}
             {isSelectionMode && (
               <Checkbox.Root
-                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-white data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors mr-2"
+                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-white data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors mr-2 flex-shrink-0"
                 checked={isFileSelected(file)}
                 onCheckedChange={() => toggleFileSelection(file)}
                 onClick={(e) => e.stopPropagation()}
@@ -278,7 +288,7 @@ const FileCard: React.FC<FileCardProps> = ({
                 </Checkbox.Indicator>
               </Checkbox.Root>
             )}
-            <Icon className={cn("size-5 mr-1", color)} />
+            <Icon className={cn("size-5 mr-1 flex-shrink-0", color)} />
             {isSelectionMode ? (
               <span
                 className={cn(
@@ -288,7 +298,7 @@ const FileCard: React.FC<FileCardProps> = ({
                 {displayName}
               </span>
             ) : (
-              <Link href={`/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderCID)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}&folderSource=${file.source}&mainReqHash=${file.mainReqHash}`} draggable={false}>
+              <Link href={`/files?folderCid=${file.arionHash}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderHash)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}&folderSource=${file.source}&mainReqHash=${file.mainReqHash}`} draggable={false}>
                 <span
                   className={cn(
                     "text-sm text-grey-20 hover:text-primary-40 transition truncate"
@@ -300,11 +310,11 @@ const FileCard: React.FC<FileCardProps> = ({
             )}
           </div>
         ) : (
-          <div className="flex items-center">
+          <div className="flex items-center min-w-0 flex-1">
             {/* Selection checkbox - inline with filename */}
             {isSelectionMode && (
               <Checkbox.Root
-                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-white data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors mr-2"
+                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-white data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors mr-2 flex-shrink-0"
                 checked={isFileSelected(file)}
                 onCheckedChange={() => toggleFileSelection(file)}
                 onClick={(e) => e.stopPropagation()}
@@ -314,11 +324,11 @@ const FileCard: React.FC<FileCardProps> = ({
                 </Checkbox.Indicator>
               </Checkbox.Root>
             )}
-            <Icon className={cn("size-5 mr-1", color)} />
+            <Icon className={cn("size-5 mr-1 flex-shrink-0", color)} />
             <span className="text-sm text-grey-20 truncate">{displayName}</span>
           </div>
         )}
-        <div className="max-w-[20px] pr-8">{actionMenu}</div>
+        <div className="flex-shrink-0 ml-1">{actionMenu}</div>
       </div>
 
       <div
@@ -361,11 +371,11 @@ const FileCard: React.FC<FileCardProps> = ({
                     className="object-center object-contain"
                   />
                 )}
-                <div className="flex items-center sm:justify-center h-[56px] w-[56px] relative">
+                <div className="flex items-center sm:justify-center h-[3.5rem] w-[3.5rem] relative">
                   {file.isFolder ? (
                     <Folder2 className="size-10 text-primary-50" />
                   ) : (
-                    <div className="flex items-center justify-center size-9 bg-primary-50 rounded-[8px] relative">
+                    <div className="flex items-center justify-center size-9 bg-primary-50 rounded-[0.5rem] relative">
                       <FileTypeIcon
                         fileType={fileType ?? undefined}
                         file={file}
@@ -384,4 +394,4 @@ const FileCard: React.FC<FileCardProps> = ({
   );
 };
 
-export default FileCard;
+export default React.memo(FileCard);

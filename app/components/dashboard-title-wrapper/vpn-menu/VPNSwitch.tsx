@@ -29,7 +29,7 @@ const VPNSwitch = ({
       </span>
       <Switch.Root
         className={cn(
-          "w-[40px] h-[24px] rounded-full relative shadow-none outline-none transition-colors duration-200 ease-in-out cursor-pointer",
+          "w-[2.5rem] h-[1.5rem] rounded-full relative shadow-none outline-none transition-colors duration-200 ease-in-out cursor-pointer",
           checked ? "bg-primary-50 border border-primary-80" : "bg-grey-90"
         )}
         checked={checked}
@@ -37,10 +37,10 @@ const VPNSwitch = ({
       >
         <Switch.Thumb
           className={cn(
-            "block w-[14px] h-[14px]  rounded-full shadow-[0_2px_4px_0_rgba(0,0,0,0.2)] transition-transform duration-200 ease-in-out translate-x-0.5 will-change-transform",
+            "block w-[0.875rem] h-[0.875rem]  rounded-full shadow-[0_2px_4px_0_rgba(0,0,0,0.2)] transition-transform duration-200 ease-in-out translate-x-0.5 will-change-transform",
             checked
-              ? "translate-x-[21px] bg-white"
-              : "translate-x-[6px] bg-grey-70"
+              ? "translate-x-[1.3125rem] bg-white"
+              : "translate-x-[0.375rem] bg-grey-70"
           )}
         />
       </Switch.Root>

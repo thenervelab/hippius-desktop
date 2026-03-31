@@ -2,100 +2,72 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { getPrivateSyncPath, getAllSyncPaths } from "@/lib/utils/syncPathUtils";
+
 export interface DownloadIpfsFolderOptions {
-    folderCid: string;
     folderName: string;
     polkadotAddress: string;
-    isPrivate: boolean;
-    encryptionKey?: string | null;
     outputDir?: string | null;
     file?: FormattedUserFile;
-    source?: string | null,
-    mainReqHash?: string | null
 }
 
 export const downloadFolder = async ({
-    folderCid,
     folderName,
     polkadotAddress,
-    isPrivate,
-    encryptionKey,
     outputDir,
     file,
-    source,
-    mainReqHash
 }: DownloadIpfsFolderOptions) => {
     let selectedOutputDir = outputDir;
     if (!selectedOutputDir) {
+        const { downloadDir } = await import("@tauri-apps/api/path");
+        let defaultPath: string | undefined;
+        try {
+            defaultPath = await downloadDir();
+        } catch {
+            // Fall back to no directory hint
+        }
         selectedOutputDir = (await open({
             directory: true,
             multiple: false,
+            defaultPath,
         })) as string | null;
         if (!selectedOutputDir) {
             return { success: false, error: "Download cancelled" };
         }
     }
 
-    console.log("selectedOutputDir", selectedOutputDir)
-
-    console.log({
-        accountId: polkadotAddress,
-        folderMetadataCid: folderCid,
-        folderName: folderName,
-        outputDir: selectedOutputDir,
-        encryptionKey: encryptionKey,
-        source: source ? source : file?.source || "",
-        mainReqHash: mainReqHash ? mainReqHash : file?.mainReqHash || ""
-    })
-
     const toastId = toast.info("Downloading folder...", { duration: Infinity });
 
     try {
-        let result;
-        if (isPrivate) {
-            result = await invoke<{
-                success: boolean;
-                error?: string;
-                message?: string;
-            }>("download_and_decrypt_folder", {
-                accountId: polkadotAddress,
-                folderMetadataCid: folderCid,
-                folderName: folderName,
-                outputDir: selectedOutputDir,
-                encryptionKey: encryptionKey,
-                source: source ? source : file?.source || "",
-                mainReqHash: mainReqHash ? mainReqHash : file?.mainReqHash || ""
-            });
+        let syncPath: string;
+        if (file?.label) {
+            const allPaths = await getAllSyncPaths(polkadotAddress);
+            const match = allPaths.find((sp) => sp.label === file.label);
+            syncPath = match?.path ?? (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
         } else {
-            result = await invoke<{
-                success: boolean;
-                error?: string;
-                message?: string;
-            }>("public_download_folder", {
-                accountId: polkadotAddress,
-                folderMetadataCid: folderCid,
-                folderName: folderName,
-                outputDir: selectedOutputDir,
-                source: source ? source : file?.source || "",
-                mainReqHash: mainReqHash ? mainReqHash : file?.mainReqHash || ""
-            });
+            syncPath = (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
         }
+        const fileName = file?.source && syncPath
+            ? (() => {
+                const prefix = syncPath.endsWith("/") ? syncPath : syncPath + "/";
+                return file.source!.startsWith(prefix)
+                    ? file.source!.slice(prefix.length)
+                    : (file?.actualFileName || folderName);
+            })()
+            : (file?.actualFileName || folderName);
+
+        await invoke("export_file", {
+            syncPath,
+            fileName,
+            outputPath: `${selectedOutputDir}/${folderName}`,
+        });
 
         toast.dismiss(toastId);
-
-        if (result && !result.success) {
-            return {
-                success: false,
-                error: result.error || "DOWNLOAD_FAILED",
-                message: result.message || "Unknown error",
-            };
-        }
-
         toast.success("Folder downloaded successfully!");
         return { success: true };
     } catch (error) {
         toast.dismiss(toastId);
-        console.log("Download failed:", error);
+        console.error("Folder download failed:", error);
         return {
             success: false,
             error: "DOWNLOAD_FAILED",

@@ -12,7 +12,7 @@ import { useDeleteInstance } from "../hooks/useDeleteInstance";
 import { useStartStopInstance } from "../hooks/useStartStopInstance";
 import { useRebootInstance } from "../hooks/useRebootInstance";
 import { Icons } from "../../ui";
-import ConfirmDialog2 from "../../ui/ConfirmDialog2";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import TableActionMenu from "../../ui/alt-table/TableActionMenu";
 import { VMInstanceDetailsResponse } from "@/app/lib/hooks/api/useVMInstanceDetails";
 import Skeleton from "@/components/ui/skeleton";
@@ -181,7 +181,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
     <>
       <InfoPanel
         title="Virtual Machine Information"
-        icon={<Icons.Driver className="size-[18px] relative text-primary-50" />}
+        icon={<Icons.Driver className="size-[1.125rem] relative text-primary-50" />}
         headerAction={vmControlsMenu}
       >
         {/* Miner ID
@@ -209,10 +209,10 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
           />
           <div className="mt-1 flex justify-between gap-2">
             {isLoading ? (
-              <Skeleton className="!h-[26px] !w-[150px]" />
+              <Skeleton className="!h-[1.625rem] !w-[9.375rem]" />
             ) : instanceData ? (
               <ImageCell
-                iconClass="bg-[#F7F7F7] p-[5px] size-[26px]"
+                iconClass="bg-[#F7F7F7] p-[0.3125rem] size-[1.625rem]"
                 value={parseImageName(instanceData.image)}
               />
             ) : null}
@@ -236,7 +236,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
           />
           <div className="mt-1">
             {isLoading ? (
-              <Skeleton className="!h-[25px] !w-[150px]" />
+              <Skeleton className="!h-[1.5625rem] !w-[9.375rem]" />
             ) : instanceData ? (
               <StatusCell
                 className="p-2 bg-[#F7F7F7] w-min"
@@ -259,23 +259,23 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
                   <div className="text-grey-50 font-medium text-base">
                     Model
                   </div>
-                  <Skeleton className="!h-[20px] !w-[80px] mt-2" />
+                  <Skeleton className="!h-[1.25rem] !w-[5rem] mt-2" />
                 </div>
                 <div className="bg-[#F7F7F7] p-2 rounded">
                   <div className="text-grey-50 font-medium text-base">RAM</div>
-                  <Skeleton className="!h-[20px] !w-[80px] mt-2" />
+                  <Skeleton className="!h-[1.25rem] !w-[5rem] mt-2" />
                 </div>
                 <div className="bg-[#F7F7F7] p-2 rounded">
                   <div className="text-grey-50 font-medium text-base">
                     Processor
                   </div>
-                  <Skeleton className="!h-[20px] !w-[80px] mt-2" />
+                  <Skeleton className="!h-[1.25rem] !w-[5rem] mt-2" />
                 </div>
                 <div className="bg-[#F7F7F7] p-2 rounded">
                   <div className="text-grey-50 font-medium text-base">
                     Storage
                   </div>
-                  <Skeleton className="!h-[20px] !w-[80px] mt-2" />
+                  <Skeleton className="!h-[1.25rem] !w-[5rem] mt-2" />
                 </div>
               </>
             ) : instanceData ? (
@@ -310,7 +310,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
           />
           <div className="mt-1">
             {isLoading ? (
-              <Skeleton className="!h-[20px] !w-[200px]" />
+              <Skeleton className="!h-[1.25rem] !w-[12.5rem]" />
             ) : instanceData ? (
               <div className="text-grey-10 font-medium text-base">
                 {new Date(instanceData.created_at).toLocaleString()}
@@ -325,14 +325,15 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
         onSubmit={handleChangeImage}
       />
 
-      <ConfirmDialog2
+      <ConfirmDialog
+        mode="branded"
         open={openChangeInstanceModal}
-        onClose={() => setOpenChangeInstanceModal(false)}
-        onConfirm={handleConfirmChangeInstance}
+        onCancel={() => setOpenChangeInstanceModal(false)}
         onBack={() => setOpenChangeInstanceModal(false)}
-        button="Change Instance"
-        text="Are you sure you want to change this instance? This action will overwrite the instance"
-        heading="Change Instance"
+        onConfirm={handleConfirmChangeInstance}
+        confirmText="Change Instance"
+        description="Are you sure you want to change this instance? This action will overwrite the instance"
+        title="Change Instance"
         icon={<Icons.Refresh2 className="size-6 text-grey-100" />}
         iconBgColor="bg-primary-50"
       />

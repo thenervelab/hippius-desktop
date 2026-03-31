@@ -1,14 +1,16 @@
-import { useState, useRef, useEffect } from "react";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { useUserFiles } from "@/app/lib/hooks/use-user-files";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { useSetAtom } from "jotai";
+import { useSetAtom, useAtomValue } from "jotai";
 import { uploadProgressAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
+import { queryClientAtom } from "jotai-tanstack-query";
+import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
 import { toast } from "sonner";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { basename } from "@tauri-apps/api/path";
-import { triggerUnpinnedFilesRefetchAtom } from "../../global-atoms/unpinAtoms";
+import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 
 export type UploadFilesHandlers = {
   onSuccess?: () => void;
@@ -36,32 +38,21 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
   const setProgress = useSetAtom(uploadProgressAtom);
   const { data: credits } = useUserCredits();
   const { refetch: refetchUserFiles } = useUserFiles();
-  const setTriggerUnpinnedFilesRefetch = useSetAtom(
-    triggerUnpinnedFilesRefetchAtom
-  );
   const { polkadotAddress } = useWalletAuth();
+  const queryClient = useAtomValue(queryClientAtom);
 
   const [requestState, setRequestState] = useState<
     "idle" | "uploading" | "submitting"
   >("idle");
-  const idleTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(
-    () => () => {
-      if (idleTimeout.current) clearTimeout(idleTimeout.current);
-    },
-    []
-  );
 
   async function upload(
     filePaths: string[],
-    isPrivateView: boolean,
-    options?: UploadOptions
+    options?: UploadOptions,
+    syncPathOverride?: string,
   ) {
     if (!polkadotAddress) {
       throw new Error("Wallet not connected. Please log in first.");
     }
-    if (idleTimeout.current) clearTimeout(idleTimeout.current);
 
     const fileNames = await Promise.all(
       filePaths.map(async (path) => {
@@ -78,15 +69,15 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     const startText =
       filePaths.length > 1
         ? msgs?.startMultiple?.(filePaths.length) ??
-        `Uploading ${filePaths.length} files: 0%`
-        : msgs?.startSingle ?? `Uploading ${firstFileName}: 0%`;
+        `Adding ${filePaths.length} files to sync folder…`
+        : msgs?.startSingle ?? `Adding ${firstFileName} to sync folder…`;
 
     // If a toastId is given, update that toast; otherwise create a new one
     let localToastId = options?.toastId;
     if (localToastId !== undefined) {
-      toast.loading(startText, { id: localToastId });
+      toast.loading(startText, { id: localToastId, closeButton: true });
     } else {
-      localToastId = toast.loading(startText);
+      localToastId = toast.loading(startText, { closeButton: true });
     }
 
     setRequestState("uploading");
@@ -103,84 +94,64 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
       const cids: string[] = [];
 
-      console.log("Starting upload for files:", filePaths);
+      const syncPath = syncPathOverride ?? (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
+      if (!syncPath) {
+        throw new Error("Sync path not configured. Please set a sync folder first.");
+      }
 
-      // upload each file via Tauri using file paths
+      // Dismiss the loading toast — we'll show a success toast immediately
+      toast.dismiss(localToastId);
+
+      // Show "added" confirmation right away
+      const addedText =
+        filePaths.length === 1
+          ? `${firstFileName} added. Your sync will start soon.`
+          : `${filePaths.length} files added. Your sync will start soon.`;
+      toast.success(addedText, { duration: 4000, closeButton: true });
+
+      // Refetch immediately so the file list shows the new files
+      refetchUserFiles();
+      queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
+
+      // Add each file to sync folder (hcfs-client will handle upload/encryption)
       for (let i = 0; i < filePaths.length; i++) {
         const filePath = filePaths[i];
-        const fileName = fileNames[i]
-          ? formatDisplayName(fileNames[i])
-          : `file ${i + 1}`;
 
-        console.log("Uploading file:", filePath);
-        const cid = await invoke<string>(
-          isPrivateView ? "encrypt_and_upload_file" : "upload_file_public",
-          {
-            accountId: polkadotAddress,
-            filePath: filePath,
-          }
-        );
-        cids.push(cid);
+        const name = await invoke<string>("add_file", {
+          syncPath,
+          filePath,
+        });
+        cids.push(name);
 
         // update progress
         const percent = Math.round(((i + 1) / filePaths.length) * 100);
         setProgress(percent);
-
-        const uploadingText =
-          filePaths.length > 1
-            ? msgs?.uploadingMultiple?.(filePaths.length, percent) ??
-            `Uploading ${filePaths.length} files: ${percent}%`
-            : msgs?.uploadingSingle?.(percent) ??
-            `Uploading ${fileName}: ${percent}%`;
-
-        // Always update the same toast id
-        toast.loading(uploadingText, { id: localToastId });
       }
 
       // finish up
       setRequestState("idle");
-      idleTimeout.current = setTimeout(async () => {
-        refetchUserFiles();
-        setTriggerUnpinnedFilesRefetch((prev) => prev + 1);
-        onSuccess?.();
+      setProgress(0);
 
-        const successText =
-          filePaths.length > 1
-            ? msgs?.successMultiple?.(filePaths.length) ??
-            `${filePaths.length} files successfully uploaded!`
-            : msgs?.successSingle ?? `${firstFileName} successfully uploaded!`;
+      // Fire-and-forget: trigger sync without awaiting (it may block if a
+      // sync cycle is already running). The file watcher will also pick up
+      // the new files on its own heartbeat cycle.
+      invoke("trigger_sync_now").catch((err) => {
+        console.error("[Upload] trigger_sync_now failed:", err);
+      });
 
-        // Convert loading -> success on the same toast id (auto-closes)
-        toast.success(successText, { id: localToastId });
-        console.log("Upload successful", filePaths);
-
-        // Clean up temporary files
-        for (const filePath of filePaths) {
-          if (filePath.includes("/tmp/")) {
-            try {
-              await invoke("delete_file", { path: filePath });
-            } catch (error) {
-              console.error(
-                `Failed to delete temporary file ${filePath}:`,
-                error
-              );
-            }
-          }
-        }
-      }, 500);
+      onSuccess?.();
     } catch (err) {
       setRequestState("idle");
       setProgress(0);
       onError?.(err);
 
       const errorText =
-        filePaths.length > 1
-          ? msgs?.errorMultiple?.(filePaths.length) ??
-          `${filePaths.length} files failed to upload!`
-          : msgs?.errorSingle ?? `${firstFileName} failed to upload!`;
+        filePaths.length === 1
+          ? msgs?.errorSingle ?? `Failed to add ${firstFileName}`
+          : msgs?.errorMultiple?.(filePaths.length) ??
+          `Failed to add ${filePaths.length} files`;
 
-      // Convert loading -> error on the same toast id
-      toast.error(errorText, { id: localToastId });
+      toast.error(errorText);
     }
   }
 

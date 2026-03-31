@@ -42,7 +42,7 @@ const TicketMessage: React.FC<TicketMessageProps> = ({
   return (
     <div
       className={cn(
-        "flex flex-col gap-1.5 w-[264px]",
+        "flex flex-col gap-1.5 w-[16.5rem]",
         !isFirstMessage && "bg-white border border-grey-80 rounded-lg p-2"
       )}
     >
@@ -61,7 +61,7 @@ const TicketMessage: React.FC<TicketMessageProps> = ({
               // Image attachment - show preview with skeleton loader
               <div
                 key={attachment.id}
-                className="relative rounded overflow-hidden border border-grey-80 min-h-[200px]"
+                className="relative rounded overflow-hidden border border-grey-80 min-h-[12.5rem]"
               >
                 {/* Skeleton loader - shown while image loads */}
                 {!loadedImages.has(attachment.id) && (
@@ -77,7 +77,7 @@ const TicketMessage: React.FC<TicketMessageProps> = ({
                     alt={attachment.filename}
                     onLoad={() => handleImageLoad(attachment.id)}
                     className={cn(
-                      "w-full h-auto max-h-[200px] object-cover transition-opacity duration-300",
+                      "w-full h-auto max-h-[12.5rem] object-cover transition-opacity duration-300",
                       loadedImages.has(attachment.id)
                         ? "opacity-100"
                         : "opacity-0"
@@ -103,14 +103,14 @@ const TicketMessage: React.FC<TicketMessageProps> = ({
       {/* Author Info - Only show for staff messages */}
       <div className="flex flex-col gap-1">
         {isStaff && (
-          <p className="text-xs font-medium text-primary-50 leading-[18px] tracking-[-0.24px]">
+          <p className="text-xs font-medium text-primary-50 leading-[1.125rem] tracking-[-0.24px]">
             {message.author_display}{" "}
             {message.author_display ? "from Hippius" : "From Hippius"}
           </p>
         )}
 
         {/* Timestamp */}
-        <p className="text-xs font-medium text-grey-60 leading-[18px] tracking-[-0.24px]">
+        <p className="text-xs font-medium text-grey-60 leading-[1.125rem] tracking-[-0.24px]">
           {formatDate(message.created_at)}
         </p>
       </div>

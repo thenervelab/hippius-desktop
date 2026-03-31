@@ -67,6 +67,7 @@ const normalizeColumnWidths = (maybeStored?: Record<string, number>) => {
 };
 
 const getStoredColumnWidths = () => {
+  if (typeof window === "undefined") return normalizeColumnWidths();
   try {
     const stored = localStorage.getItem("referralTable_columnWidths");
     return normalizeColumnWidths(stored ? JSON.parse(stored) : undefined);
@@ -76,6 +77,7 @@ const getStoredColumnWidths = () => {
 };
 
 const saveColumnWidths = (columnWidths: Record<string, number>) => {
+  if (typeof window === "undefined") return;
   try {
     localStorage.setItem("referralTable_columnWidths", JSON.stringify(columnWidths));
   } catch { }
@@ -92,7 +94,8 @@ export default function ReferralLinksTable() {
   const totalPages = Math.ceil(links.length / pageSize);
   const pageData = useMemo(
     () => links.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize),
-    [links, pageIndex]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pageIndex]
   );
 
   // Column resizing state
@@ -217,8 +220,8 @@ export default function ReferralLinksTable() {
           const fullReferralCode = `${REFERRAL_CODE_CONFIG.link}${getValue()}`;
           return (
             <>
-              <div className="hidden lg:block">{fullReferralCode}</div>
-              <div className="lg:hidden max-w-[150px]">
+              <div className="hidden @lg:block">{fullReferralCode}</div>
+              <div className="@lg:hidden max-w-[9.375rem]">
                 {fullReferralCode.slice(0, 5)}...
                 {fullReferralCode.slice(fullReferralCode.length - 6)}
               </div>

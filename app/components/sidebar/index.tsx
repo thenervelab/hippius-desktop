@@ -17,31 +17,89 @@ import FooterNavItem from "./FooterNavItems";
 import SettingsWidthDialog from "@/components/page-sections/settings/SettingsDialog";
 import SettingsDialogContent from "@/components/page-sections/settings/SettingsDialogContent";
 import CheckForUpdateDialog from "../updater/CheckForUpdateDialog";
-import { useState } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
+
+const AUTO_COLLAPSE_WIDTH = 1000;
+
+/** Effective viewport width accounting for zoom */
+function getEffectiveWidth(): number {
+  const stored = localStorage.getItem("hippius-zoom-level");
+  const zoom = stored ? parseInt(stored, 10) : 100;
+  return window.innerWidth / (zoom / 100);
+}
 
 const Sidebar: React.FC = () => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useAtom(sidebarCollapsedAtom);
+  // Track whether we auto-collapsed so we can auto-expand when the window widens
+  const autoCollapsedRef = useRef(false);
+  const collapsedRef = useRef(collapsed);
+  collapsedRef.current = collapsed;
+
+  // Auto-collapse sidebar when effective viewport is narrow (accounts for zoom)
+  useEffect(() => {
+    let wasNarrow = getEffectiveWidth() < AUTO_COLLAPSE_WIDTH;
+
+    const handleChange = () => {
+      const isNarrow = getEffectiveWidth() < AUTO_COLLAPSE_WIDTH;
+      if (isNarrow && !wasNarrow && !collapsedRef.current) {
+        // Effective viewport just became narrow — auto-collapse
+        setCollapsed(true);
+        autoCollapsedRef.current = true;
+      } else if (!isNarrow && wasNarrow && autoCollapsedRef.current) {
+        // Effective viewport just became wide again — restore if we auto-collapsed
+        setCollapsed(false);
+        autoCollapsedRef.current = false;
+      }
+      wasNarrow = isNarrow;
+    };
+
+    // Collapse on mount if already narrow
+    if (wasNarrow && !collapsedRef.current) {
+      setCollapsed(true);
+      autoCollapsedRef.current = true;
+    }
+
+    window.addEventListener("resize", handleChange);
+    window.addEventListener("zoom-changed", handleChange);
+    return () => {
+      window.removeEventListener("resize", handleChange);
+      window.removeEventListener("zoom-changed", handleChange);
+    };
+  }, [setCollapsed]);
   const [settingsDialogOpen, setSettingsDialogOpen] = useAtom(
     settingsDialogOpenAtom
   );
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
+  const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
 
   const toggleSidebar = () => {
     setCollapsed(!collapsed);
   };
 
   const openSettingsWithDefaultTab = () => {
-    setActiveSettingsTab("File Settings");
+    setActiveSettingsTab("Sync & Storage");
     setSettingsDialogOpen(true);
   };
+
+  const handleSettingsOpenChange = useCallback(
+    (isOpen: boolean) => {
+      setSettingsDialogOpen(isOpen);
+      if (!isOpen) {
+        // Refresh Files page data when Settings dialog closes
+        triggerSyncPathRefresh((prev) => prev + 1);
+      }
+    },
+    [setSettingsDialogOpen, triggerSyncPathRefresh]
+  );
 
   return (
     <>
       <SettingsWidthDialog
         open={settingsDialogOpen}
-        onOpenChange={setSettingsDialogOpen}
+        onOpenChange={handleSettingsOpenChange}
         heading="Settings"
       >
         <SettingsDialogContent />
@@ -58,7 +116,7 @@ const Sidebar: React.FC = () => {
             ref={ref}
             className={cn(
               "fixed top-0 left-0 bottom-0 bg-white flex flex-col ml-4 my-4 border border-grey-80 rounded transition-all duration-300 ease-in-out z-50",
-              collapsed ? "w-[48px]" : "w-[170px]"
+              collapsed ? "w-[3rem]" : "w-[10.625rem]"
             )}
           >
             <div className="flex flex-col items-start w-full">
@@ -115,7 +173,7 @@ const Sidebar: React.FC = () => {
             </div>
           </div> */}
 
-            <div className="flex gap-4 flex-col flex-1 pt-4 border-t border-gray-80 w-full">
+            <div className="flex gap-4 flex-col flex-1 pt-4 border-t border-gray-80 w-full overflow-y-auto min-h-0">
               {navItems.map((item) => {
                 // Check if current path matches or starts with the item path (for child routes)
                 const isActive =
@@ -165,7 +223,7 @@ const Sidebar: React.FC = () => {
               )}
             >
               <>
-                <span className={cn(collapsed ? "text-[10px]" : "")}>
+                <span className={cn(collapsed ? "text-[0.625rem]" : "")}>
                   {!collapsed ? "VER" : <AppVersion />}
                 </span>
                 {!collapsed && (
@@ -209,7 +267,7 @@ const Sidebar: React.FC = () => {
               onClick={() => submitABug()}
             >
               <>
-                <span className={cn(collapsed ? "text-[10px]" : "")}>
+                <span className={cn(collapsed ? "text-[0.625rem]" : "")}>
                   {!collapsed ? "Submit a Bug" : "Bug"}
                 </span>
               </>

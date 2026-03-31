@@ -1,94 +1,58 @@
-import { Keyring } from "@polkadot/keyring";
-import { mnemonicToAccount } from "viem/accounts";
-import { API_CONFIG, setApiAuth, getApiAuth } from "@/app/lib/helpers/sessionStore";
-import { getSession } from "@/app/lib/helpers/sessionStore";
+import { invoke } from "@tauri-apps/api/core";
 
-const MAX_ATTEMPTS = 3;
 let __billingAuthInFlight: Promise<{ ok: boolean; error?: string }> | null = null;
+let __billingAuthAccountId: string | null = null;
 
-export async function ensureBillingAuth(): Promise<{ ok: boolean; error?: string }> {
-    if (__billingAuthInFlight) return __billingAuthInFlight;
+interface BillingAuthResult {
+    token: string;
+    user_id: number;
+    username: string;
+}
 
+interface ApiAuth {
+    token: string;
+    tokenExpiry: number;
+    userId: number | null;
+    username: string | null;
+}
+
+export async function ensureBillingAuth(
+    accountId: string,
+    mnemonic?: string,
+): Promise<{ ok: boolean; error?: string }> {
+    // Only deduplicate concurrent calls for the same account
+    if (__billingAuthInFlight && __billingAuthAccountId === accountId) {
+        return __billingAuthInFlight;
+    }
+
+    __billingAuthAccountId = accountId;
     __billingAuthInFlight = (async () => {
         try {
-            const existing = await getApiAuth();
-            if (existing && existing.token && (!existing.tokenExpiry || existing.tokenExpiry > Date.now())) {
+            const existing = await invoke<ApiAuth | null>("get_auth_token", { accountId });
+            if (existing && existing.token) {
                 return { ok: true as const };
             }
 
-            const session = await getSession();
-            if (!session?.mnemonic) return { ok: false as const, error: "Not authenticated" };
+            const result = await invoke<BillingAuthResult>("billing_auth", {
+                accountId,
+                mnemonic: mnemonic || null,
+            });
 
-            const keyring = new Keyring({ type: "sr25519" });
-            const pair = keyring.addFromMnemonic(session.mnemonic);
-            const ethAccount = mnemonicToAccount(session.mnemonic);
-            const ethAddress = ethAccount.address;
+            // Persist token in Rust DB
+            await invoke("save_auth_session", {
+                accountId,
+                authToken: result.token,
+                userId: result.user_id,
+                username: result.username,
+                provider: null,
+                substrateAddress: accountId,
+                logoutTimeMinutes: null,
+                tokenExpiry: Date.now() + 24 * 60 * 60 * 1000, // 24h default
+            });
 
-            const baseUrl = API_CONFIG.baseUrl;
-            const challengeUrl = `${baseUrl}${API_CONFIG.auth.mnemonic}`;
-            const verifyUrl = `${baseUrl}${API_CONFIG.auth.verify}`;
-
-            const attempt = async () => {
-                const challengeRes = await fetch(challengeUrl, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        Accept: "application/json",
-                        "X-Requested-With": "XMLHttpRequest",
-                    },
-                    body: JSON.stringify({
-                        address: ethAddress,
-                        substrate_address: pair.address,
-                    }),
-                });
-                if (!challengeRes.ok) {
-                    const t = await challengeRes.text();
-                    return { ok: false as const, error: `Challenge failed: ${challengeRes.status} ${t}` };
-                }
-                const { challenge, message } = await challengeRes.json();
-                const signature = await ethAccount.signMessage({ message });
-                const formattedSignature = signature.startsWith("0x") ? signature : `0x${signature}`;
-
-                const verifyRes = await fetch(verifyUrl, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        Accept: "application/json",
-                        "X-Requested-With": "XMLHttpRequest",
-                    },
-                    body: JSON.stringify({
-                        signature: formattedSignature,
-                        address: ethAddress,
-                        substrate_address: pair.address,
-                        challenge,
-                        referral_code: "",
-                        session_data: {
-                            challenge,
-                            address: ethAddress,
-                        },
-                    }),
-                });
-                if (!verifyRes.ok) {
-                    const t = await verifyRes.text();
-                    return { ok: false as const, error: `Verify failed: ${verifyRes.status} ${t}` };
-                }
-                const data = await verifyRes.json();
-                return { ok: true as const, data };
-            };
-
-            let lastErr: string | undefined;
-            for (let i = 0; i < MAX_ATTEMPTS; i++) {
-                const res = await attempt();
-                if (res.ok) {
-                    await setApiAuth(res.data.token, { userId: res.data.user_id, username: res.data.username });
-                    return { ok: true as const };
-                }
-                lastErr = res.error;
-            }
-
-            return { ok: false as const, error: lastErr || "Verification failed" };
+            return { ok: true as const };
         } catch (e: unknown) {
-            return { ok: false as const, error: e instanceof Error ? e.message : "Unknown error" };
+            return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
         }
     })();
 
@@ -96,5 +60,6 @@ export async function ensureBillingAuth(): Promise<{ ok: boolean; error?: string
         return await __billingAuthInFlight;
     } finally {
         __billingAuthInFlight = null;
+        __billingAuthAccountId = null;
     }
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { FC, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Icons, RefreshButton, SearchInput } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import AddButton from "./AddFileButton";
@@ -9,16 +10,17 @@ import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import FilterChips from "./filter-chips";
 import FolderUploadDialog from "./FolderUploadDialog";
 import { useFilesNavigation } from "@/lib/hooks/useFilesNavigation";
-import { toast } from "sonner";
-import { useLocalStorage } from "@/lib/hooks/useLocalStorage";
-import { openPath } from "@tauri-apps/plugin-opener";
+
 import useNavigationLoader from "@/app/lib/hooks/useNavigationLoader";
 import { List } from "lucide-react";
 import StartSyncingButton from "@/app/components/StartSyncingButton";
 import FilterPills from "./FilterPills";
 import { FileTypes } from "@/lib/types/fileTypes";
-import ManageButton from "./ManageButton";
 import { IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
+import { useAtomValue } from "jotai";
+import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { toast } from "sonner";
+
 
 interface FilesHeaderProps {
   isRecentFiles?: boolean;
@@ -35,15 +37,15 @@ interface FilesHeaderProps {
   refetchUserFiles: () => void;
   addButtonRef: React.RefObject<{
     openWithFiles(files: FileList): void;
+    openWithPaths(paths: string[]): void;
+    isDialogOpen(): boolean;
   } | null>;
   privateFileCount?: number;
   publicFileCount?: number;
-  syncFolderPath?: string;
   isSyncPathEmpty?: boolean;
   onStartSyncing?: () => void;
   hasNoSyncPaths?: boolean;
   onNavigateToSettings?: () => void;
-  isPrivateView?: boolean; // For recent files to determine upload type
   // New filter props
   selectedFileTypes: FileTypes[];
   selectedDate: string;
@@ -51,6 +53,9 @@ interface FilesHeaderProps {
   onFileTypesChange: (types: FileTypes[]) => void;
   onDateChange: (date: string) => void;
   onFileSizesChange: (sizes: number[]) => void;
+  defaultFolderLabel?: string | null;
+  isFolderUploadOpen?: boolean;
+  onSetFolderUploadOpen?: (open: boolean) => void;
 }
 
 const FilesHeader: FC<FilesHeaderProps> = ({
@@ -67,12 +72,10 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   handleRemoveFilter,
   refetchUserFiles,
   addButtonRef,
-  syncFolderPath,
   isSyncPathEmpty = false,
   onStartSyncing,
   hasNoSyncPaths = false,
   onNavigateToSettings,
-  isPrivateView,
   // New filter props
   selectedFileTypes,
   selectedDate,
@@ -80,10 +83,15 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   onFileTypesChange,
   onDateChange,
   onFileSizesChange,
+  defaultFolderLabel,
+  isFolderUploadOpen: isFolderUploadOpenProp,
+  onSetFolderUploadOpen,
 }) => {
-  const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
-  const [syncFolderPermissionGranted, setSyncFolderPermissionGranted] =
-    useLocalStorage("hippius-sync-folder-permission", false);
+  const [isFolderUploadOpenLocal, setIsFolderUploadOpenLocal] = useState(false);
+  const isFolderUploadOpen = isFolderUploadOpenProp ?? isFolderUploadOpenLocal;
+  const setIsFolderUploadOpen = onSetFolderUploadOpen ?? setIsFolderUploadOpenLocal;
+  const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
+
   const { navigateToFilesView } = useFilesNavigation();
   const { push } = useNavigationLoader();
 
@@ -92,59 +100,22 @@ const FilesHeader: FC<FilesHeaderProps> = ({
     push("/files");
   };
 
-  const handleManageBucketClick = () => {
-    push("/tokens");
-  };
 
-  const handleOpenSyncFolder = async () => {
-    try {
-      if (!syncFolderPath) {
-        toast.error("Sync folder not configured");
-        return;
-      }
-
-      await openPath(syncFolderPath);
-
-      if (!syncFolderPermissionGranted) {
-        setSyncFolderPermissionGranted(true);
-      }
-    } catch (e) {
-      console.error("Failed to open sync folder:", e);
-
-      const errorMessage = e instanceof Error ? e.message : String(e);
-      if (
-        errorMessage.includes("permission") ||
-        errorMessage.includes("denied")
-      ) {
-        toast.error(
-          "Permission to open folders was denied. Please try again and allow folder access."
-        );
-        setSyncFolderPermissionGranted(false);
-      } else {
-        toast.error(`Failed to open folder: ${errorMessage}`);
-      }
-    }
-  };
 
   return (
     <>
       {!isRecentFiles && (
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap min-w-0">
           <StorageStateList
             storageUsed={formattedStorageSize}
             numberOfFiles={allFilteredDataLength || 0}
           />
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <SearchInput
               className="h-9"
               value={searchTerm}
               onChange={handleSearchChange}
               placeholder="Search file"
-            />
-            <ManageButton
-              text="Manage"
-              isLoading={isRefetching || isFetching}
-              onClick={handleManageBucketClick}
             />
             <div className="flex gap-2 border border-grey-80 p-1 rounded justify-end">
               <button
@@ -192,7 +163,10 @@ const FilesHeader: FC<FilesHeaderProps> = ({
         <div className="flex items-center gap-3 flex-wrap">
           <RefreshButton
             refetching={isRefetching || isFetching}
-            onClick={() => refetchUserFiles()}
+            onClick={() => {
+              invoke("trigger_sync_now").catch((err: unknown) => console.warn("[FilesHeader] trigger_sync_now failed:", err));
+              refetchUserFiles();
+            }}
           />
           {isRecentFiles && (
             <>
@@ -224,10 +198,10 @@ const FilesHeader: FC<FilesHeaderProps> = ({
               </div>
               <button
                 onClick={handleViewAllFiles}
-                className="px-2 py-2 items-center flex bg-grey-90  border border-grey-80 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
+                className="px-2 py-2 items-center flex bg-grey-90  border border-grey-80 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[0.875rem] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
               >
                 View All Files
-                <Icons.ArrowRight className="size-[14px] ml-1" />
+                <Icons.ArrowRight className="size-[0.875rem] ml-1" />
               </button>
             </>
           )}
@@ -237,7 +211,13 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             {/* Folder Upload button - disabled for recent files with no sync paths or when sync is paused */}
             {(!isRecentFiles || !hasNoSyncPaths) && !isSyncPathEmpty && (
               <button
-                onClick={() => setIsFolderUploadOpen(true)}
+                onClick={() => {
+                  if (syncEngineStatus === "stopped") {
+                    toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading folders.");
+                    return;
+                  }
+                  setIsFolderUploadOpen(true);
+                }}
                 disabled={IS_SYNC_PAUSED}
                 className={cn(
                   "flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50",
@@ -260,16 +240,6 @@ const FilesHeader: FC<FilesHeaderProps> = ({
               </button>
             )}
 
-            {/* Open Sync Folder button - disabled for recent files with no sync paths */}
-            <button
-              onClick={isRecentFiles && hasNoSyncPaths ? onNavigateToSettings : handleOpenSyncFolder}
-              disabled={isRecentFiles && hasNoSyncPaths ? false : (!syncFolderPath || isSyncPathEmpty)}
-              className="flex items-center justify-between gap-1 h-9 px-2 py-2 bg-grey-100 text-sm font-meidum text-grey-10 border border-grey-80 rounded disabled:opacity-50 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50 disabled:hover:bg-grey-100 disabled:hover:text-grey-10"
-              title={isRecentFiles && hasNoSyncPaths ? "Configure sync folders" : (syncFolderPath || "Sync folder not configured")}
-            >
-              <Icons.Folder className="size-4" />
-              <span className="ml-1">Open Sync Folder</span>
-            </button>
 
             {/* Add File button - disabled for recent files with no sync paths or when sync is paused */}
             {isRecentFiles && hasNoSyncPaths ? (
@@ -285,8 +255,8 @@ const FilesHeader: FC<FilesHeaderProps> = ({
                 <AddButton
                   ref={addButtonRef}
                   className="h-9"
-                  isPrivateView={isPrivateView}
                   disabled={IS_SYNC_PAUSED}
+                  defaultFolderLabel={defaultFolderLabel}
                 />
               )
             )}
@@ -316,7 +286,9 @@ const FilesHeader: FC<FilesHeaderProps> = ({
         open={isFolderUploadOpen}
         onClose={() => setIsFolderUploadOpen(false)}
         onRefresh={refetchUserFiles}
+        defaultFolderLabel={defaultFolderLabel}
       />
+
     </>
   );
 };

@@ -62,12 +62,12 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
   return (
     <>
       <div className={cn("w-full", className)}>
-        {/* <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between h-[310px]"> */}
-        <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between h-[310px] min-w-[400px]">
+        {/* <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between h-[19.375rem]"> */}
+        <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between min-h-[19.375rem]">
           <div className="flex flex-col w-full items-start">
             <div className="flex gap-4 items-center">
-              <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
-                <WalletAdd className="absolute text-primary-40 size-4 sm:size-5" />
+              <AbstractIconWrapper className="size-8 @sm:size-10 text-primary-40">
+                <WalletAdd className="absolute text-primary-40 size-4 @sm:size-5" />
               </AbstractIconWrapper>
               <span className="text-base font-medium text-grey-60">
                 Native Balance
@@ -112,7 +112,7 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
           </div>
           <div className="flex flex-col">
             <CardButton
-              className="w-full mt-4 h-[50px]"
+              className="w-full mt-4 h-[3.125rem]"
               variant="secondary"
               onClick={handleSendBalance}
             >
@@ -122,7 +122,7 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
               </div>
             </CardButton>
             <CardButton
-              className="w-full mt-3 h-[50px]"
+              className="w-full mt-3 h-[3.125rem]"
               onClick={handleReceiveBalance}
             >
               <div className="flex items-center gap-2">

@@ -13,7 +13,7 @@ const NotificationType: React.FC<NotificationTypeProps> = ({ type }) => (
       <span className={cn("block w-2 h-2 rounded-full bg-success-50")} />
     </span>
     {/* Notification type */}
-    <span className="text-xs leading-[18px] font-medium text-grey-10">
+    <span className="text-xs leading-[1.125rem] font-medium text-grey-10">
       {type}
     </span>
   </div>

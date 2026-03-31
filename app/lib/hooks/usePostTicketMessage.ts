@@ -6,7 +6,7 @@ import {
   UseMutationResult,
   useQueryClient,
 } from "@tanstack/react-query";
-import { SUPPORT_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 // Request payload for posting a message to a ticket
@@ -41,49 +41,31 @@ export default function usePostTicketMessage(
     "mutationFn"
   >
 ): UseMutationResult<TicketMessage, Error, PostTicketMessagePayload> {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
   const queryClient = useQueryClient();
 
   return useMutation<TicketMessage, Error, PostTicketMessagePayload>({
     mutationFn: async (payload: PostTicketMessagePayload) => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
 
-      const { ticket_id, ...messageData } = payload;
+      const { ticket_id, message_type, body } = payload;
 
-      // API endpoint: /support/tickets/{ticket_id}/messages/
-      const url = `${SUPPORT_CONFIG.baseUrl}/tickets/${ticket_id}/messages/`;
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(messageData),
+      return invoke<TicketMessage>("post_ticket_message", {
+        accountId: polkadotAddress,
+        ticketId: parseInt(ticket_id, 10),
+        messageType: message_type,
+        body,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(
-          errorData.message ||
-            `HTTP ${response.status}: Failed to post message to ticket`
-        );
-      }
-
-      return response.json() as Promise<TicketMessage>;
     },
     onSuccess: (data, variables) => {
-      // Invalidate ticket messages query for this specific ticket
       queryClient.invalidateQueries({
         queryKey: ["supportTicketMessages", variables.ticket_id],
       });
-      // Also invalidate the ticket details in case last_message_at updated
       queryClient.invalidateQueries({
         queryKey: ["supportTicket", variables.ticket_id],
       });
-      // Don't invalidate support tickets list to avoid unnecessary table reloads
     },
     ...options,
   });

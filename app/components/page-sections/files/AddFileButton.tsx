@@ -19,10 +19,12 @@ import UploadFilesFlow from "./upload-files-flow";
 import { Icons } from "@/components/ui";
 import { uploadToIpfsAndSubmitToBlockcahinRequestStateAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
 import { useAtomValue } from "jotai";
+import PrivacyBadge from "@/components/ui/PrivacyBadge";
 
 import { cn } from "@/lib/utils";
-import { useIsPrivateView } from "@/app/lib/utils/viewUtils";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
+import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { toast } from "sonner";
 
 // Custom event name for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -34,41 +36,56 @@ const HIPPIUS_OPEN_MODAL_EVENT = "hippius:open-modal";
 
 type AddButtonProps = {
   className?: string;
-  isPrivateView?: boolean; // Optional override for private/public view
   disabled?: boolean; // Optional external disabled state
+  defaultFolderLabel?: string | null;
 };
 
 // Add ref interface for parent components to trigger the dialog
 export interface AddButtonRef {
   openWithFiles: (files: FileList) => void;
+  openWithPaths: (paths: string[]) => void;
+  isDialogOpen: () => boolean;
 }
 
 const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
-  ({ className, isPrivateView: isPrivateViewProp, disabled: externalDisabled }, ref) => {
+  ({ className, disabled: externalDisabled, defaultFolderLabel }, ref) => {
     // Keep state simple and isolated
     const [isOpen, setIsOpen] = useState(false);
 
     const [droppedFiles, setDroppedFiles] = useState<FileList | null>(null);
+    const [droppedPaths, setDroppedPaths] = useState<string[] | null>(null);
 
     const uploadingState = useAtomValue(
       uploadToIpfsAndSubmitToBlockcahinRequestStateAtom
     );
     const isLoading = uploadingState !== "idle";
-    const isPrivateViewFromHook = useIsPrivateView();
-
-    // Use prop if provided, otherwise use hook
-    const isPrivateView = isPrivateViewProp ?? isPrivateViewFromHook;
+    const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
 
     // Expose methods to parent components
     useImperativeHandle(
       ref,
       () => ({
         openWithFiles: (files: FileList) => {
+          if (syncEngineStatus === "stopped") {
+            toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading files.");
+            return;
+          }
+          setDroppedPaths(null);
           setDroppedFiles(files);
           setIsOpen(true);
-        }
+        },
+        openWithPaths: (paths: string[]) => {
+          if (syncEngineStatus === "stopped") {
+            toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading files.");
+            return;
+          }
+          setDroppedFiles(null);
+          setDroppedPaths(paths);
+          setIsOpen(true);
+        },
+        isDialogOpen: () => isOpen
       }),
-      []
+      [isOpen, syncEngineStatus]
     );
 
     // Memoize title to prevent recalculation
@@ -80,6 +97,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     const closeDialog = useCallback(() => {
       setIsOpen(false);
       setDroppedFiles(null);
+      setDroppedPaths(null);
     }, []);
 
 
@@ -108,7 +126,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         window.removeEventListener(HIPPIUS_DROP_EVENT, handleDroppedFiles);
         window.removeEventListener(HIPPIUS_OPEN_MODAL_EVENT, handleOpenModal);
       };
-    }, [isOpen, isPrivateView]);
+    }, [isOpen]);
 
     // Render current step content - memoized to prevent unnecessary re-renders
     const renderStepContent = useMemo(() => {
@@ -117,14 +135,16 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         <UploadFilesFlow
           key="upload-file"
           reset={closeDialog}
-          isPrivateView={isPrivateView}
           initialFiles={droppedFiles}
+          initialPaths={droppedPaths}
+          defaultFolderLabel={defaultFolderLabel}
         />
       );
     }, [
       droppedFiles,
+      droppedPaths,
       closeDialog,
-      isPrivateView
+      defaultFolderLabel
     ]);
 
     return (
@@ -133,7 +153,12 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           className={cn("h-10 w-fit p-1", externalDisabled && "opacity-50 cursor-not-allowed", className)}
           onClick={() => {
             if (IS_SYNC_PAUSED) return;
+            if (syncEngineStatus === "stopped") {
+              toast.warning("Syncing is stopped. Resume syncing from Settings → Sync & Storage before uploading files.");
+              return;
+            }
             setDroppedFiles(null);
+            setDroppedPaths(null);
             setIsOpen(true);
           }}
           disabled={isLoading || externalDisabled}
@@ -161,13 +186,14 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         >
           <Dialog.Portal>
             <Dialog.Overlay className="bg-white/60 fixed p-4 z-30 top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
-              <Dialog.Content className="border shadow-dialog bg-white flex flex-col max-w-[428px] border-grey-80 bg-background-1 rounded-[8px] overflow-hidden w-full relative data-[state=open]:animate-scale-in-95-0.2">
+              <Dialog.Content className="border shadow-dialog bg-white flex flex-col max-w-[26.75rem] border-grey-80 bg-background-1 rounded-[0.5rem] overflow-hidden w-full relative data-[state=open]:animate-scale-in-95-0.2">
                 <Dialog.Title className="hidden">{title}</Dialog.Title>
 
                 {/* Header */}
                 <div className="flex p-4 items-center text-grey-10 relative">
-                  <div className="lg:text-xl flex w-full 2xl:text-2xl font-medium relative">
+                  <div className="lg:text-xl flex w-full items-center gap-2 2xl:text-2xl font-medium relative">
                     <span className="capitalize">{title}</span>
+                    <PrivacyBadge variant="file" />
                   </div>
                   <button
                     type="button"

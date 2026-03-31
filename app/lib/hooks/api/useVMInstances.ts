@@ -1,12 +1,10 @@
 "use client";
 
 import {
-  useQuery,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
-import { API_CONFIG } from "@/lib/config";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { useInvokeQuery } from "./useInvokeQuery";
 
 export interface VMInstanceResponse {
   id: number;
@@ -29,41 +27,12 @@ export default function useVMInstances(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<VMInstanceResponse[], Error> {
-  const { oauthSession } = useWalletAuth();
-
-  return useQuery<VMInstanceResponse[], Error, VMInstanceResponse[]>({
+  return useInvokeQuery<VMInstanceResponse[]>({
+    command: "list_vm_instances",
     queryKey: ["vmInstances"],
-    queryFn: async () => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
-      }
-
-      const url = `${API_CONFIG.baseUrl}${API_CONFIG.infrastructure.vm.instances}`;
-
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const message =
-          errorData.error ||
-          errorData.message ||
-          errorData.detail ||
-          `Failed to fetch VM instances`;
-        throw new Error(message);
-      }
-
-      return response.json() as Promise<VMInstanceResponse[]>;
+    options: {
+      staleTime: 30 * 1000,
+      ...options,
     },
-    enabled: !!oauthSession?.token,
-    refetchOnWindowFocus: false,
-    staleTime: 30 * 1000, // 30 seconds (instances change frequently)
-    retry: false, // Don't retry on error to avoid long loading states
-    ...options,
   });
 }

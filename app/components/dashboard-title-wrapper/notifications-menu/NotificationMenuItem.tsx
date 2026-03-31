@@ -10,7 +10,6 @@ import { useRouter } from "next/navigation";
 import NotificationType from "@/components/page-sections/notifications/NotificationType";
 import NotificationContextMenu from "@/components/page-sections/notifications/NotificationContextMenu";
 import { useSetAtom } from "jotai";
-import { activeSubMenuItemAtom } from "@/components/sidebar/sideBarAtoms";
 import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
 import { useNotifications } from "@/lib/hooks/useNotifications";
@@ -69,14 +68,13 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
   const [isArchiving, setIsArchiving] = useState(false);
   const [currentVersion, setCurrentVersion] = useState<string>("");
   const router = useRouter();
-  const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const { refresh } = useNotifications();
 
   useEffect(() => {
     getVersion()
       .then(setCurrentVersion)
-      .catch(() => {});
+      .catch((err: unknown) => console.warn("[NotificationMenuItem] Failed to get app version:", err));
   }, []);
 
   // For Hippius update notifications, hide button if already on this version or newer
@@ -92,7 +90,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
     buttonText && buttonLink && !isUpdateAlreadyInstalled;
 
   const handleLinkClick = (e: React.MouseEvent) => {
-    handleButtonLink(e, buttonLink, router, setActiveSubMenuItem);
+    handleButtonLink(e, buttonLink, router);
     onClose?.();
   };
 
@@ -135,12 +133,11 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
               isArchiving && "opacity-0 translate-y-1 scale-[0.98]",
             )}
             onClick={() => {
-              setActiveSubMenuItem("");
               onClick?.();
             }}
             onContextMenu={handleContextMenu}
           >
-            <AbstractIconWrapper className="min-w-[32px] size-8 text-primary-40">
+            <AbstractIconWrapper className="min-w-[2rem] size-8 text-primary-40">
               <Icon className="absolute text-primary-40 size-5" />
             </AbstractIconWrapper>
 
@@ -154,7 +151,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
                 {/* Notification text */}
                 <RevealTextLine rotate reveal={inView} className="delay-300">
                   <p
-                    className="text-sm text-grey-30 leading-5 mb-1 truncate max-w-[200px]"
+                    className="text-sm text-grey-30 leading-5 mb-1 truncate max-w-[12.5rem]"
                     title={notificationText}
                   >
                     {notificationText}
@@ -163,7 +160,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
 
                 {/* Time */}
                 <RevealTextLine rotate reveal={inView} className="delay-400">
-                  <span className="text-xs text-grey-60 leading-[18px]">
+                  <span className="text-xs text-grey-60 leading-[1.125rem]">
                     {timestamp ? (
                       <TimeAgo date={timestamp} />
                     ) : (
@@ -182,7 +179,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
                       className="text-sm font-medium rounded py-2 self-start px-3 text-grey-10 flex items-center justify-center bg-grey-90 group-hover:bg-grey-100 whitespace-nowrap"
                     >
                       {buttonText}
-                      <Icons.ArrowRight className="size-[14px] text-grey-10 ml-1" />
+                      <Icons.ArrowRight className="size-[0.875rem] text-grey-10 ml-1" />
                     </button>
                   </RevealTextLine>
                 )}

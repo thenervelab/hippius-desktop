@@ -73,6 +73,9 @@ const FolderBreadcrumb: FC<FolderBreadcrumbProps> = ({
 
   if (breadcrumbSegments.length === 0) return null;
 
+  // At top level of a sync folder (only 1 segment = the folder itself), hide the breadcrumb
+  if (breadcrumbSegments.length <= 1) return null;
+
   const buildFolderUrl = (
     segment: BreadcrumbSegment,
     index: number,

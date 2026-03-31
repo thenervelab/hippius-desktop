@@ -1,11 +1,9 @@
 import {
-  useQuery,
   UseQueryOptions,
   UseQueryResult,
   keepPreviousData,
 } from "@tanstack/react-query";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { indexerGet } from "@/lib/api/indexerClient";
+import { useInvokeQuery } from "./useInvokeQuery";
 
 // Define types based on the indexer API response
 export interface MarketplaceCreditEvent {
@@ -55,40 +53,31 @@ export default function useMarketplaceCredits(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<MarketplaceCreditObject[], Error> {
-  const { polkadotAddress } = useWalletAuth();
   const page = params?.page || 1;
   const limit = params?.limit || 100000;
 
-  return useQuery<MarketplaceCreditsResponse, Error, MarketplaceCreditObject[]>(
-    {
-      queryKey: ["marketplace-credits", polkadotAddress, page, limit],
-      queryFn: async () => {
-        if (!polkadotAddress) {
-          throw new Error("No wallet address available");
-        }
-
-        return indexerGet<MarketplaceCreditsResponse>("/marketplace/credit", {
-          account_id: polkadotAddress,
-          limit,
-          page,
-          event_name: "CreditsConsumed",
-        });
-      },
+  return useInvokeQuery<MarketplaceCreditsResponse, MarketplaceCreditObject[]>({
+    command: "get_marketplace_credits",
+    queryKey: (addr) => ["marketplace-credits", addr, page, limit],
+    params: (polkadotAddress) => ({
+      accountId: polkadotAddress,
+      page,
+      limit,
+    }),
+    options: {
       select: (data) => {
-        return data.events
-          .map((event) => ({
-            blockNumber: event.block_number,
-            eventIndex: event.event_index,
-            eventName: event.event_name,
-            amount: event.credits_amount,
-            accountId: event.account_id,
-            transactionType: event.transaction_type || null,
-            date: event.processed_timestamp,
-          }));
+        return data.events.map((event) => ({
+          blockNumber: event.block_number,
+          eventIndex: event.event_index,
+          eventName: event.event_name,
+          amount: event.credits_amount,
+          accountId: event.account_id,
+          transactionType: event.transaction_type || null,
+          date: event.processed_timestamp,
+        }));
       },
       placeholderData: keepPreviousData,
-      enabled: !!polkadotAddress,
       ...options,
-    }
-  );
+    },
+  });
 }

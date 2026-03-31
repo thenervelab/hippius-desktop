@@ -8,9 +8,9 @@ const BackgroundRings = () => {
         className="
       absolute top-0 right-0
       -translate-y-1/2 translate-x-1/2
-      w-[505px] h-[505px]
+      w-[31.5625rem] h-[31.5625rem]
       rounded-full
-      border-[162px] border-primary-90
+      border-[10.125rem] border-primary-90
       z-3
     "
       />
@@ -20,9 +20,9 @@ const BackgroundRings = () => {
         className="
       absolute bottom-11 left-0
       -translate-x-1/2 translate-y-1/2
-      w-[505px] h-[505px]
+      w-[31.5625rem] h-[31.5625rem]
       rounded-full
-      border-[162px] border-primary-90
+      border-[10.125rem] border-primary-90
       z-3
     "
       />

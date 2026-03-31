@@ -37,13 +37,12 @@ const OnboardingRightPanel = ({
     <InView>
       {({ inView, ref }) => (
         <div ref={ref} className="relative h-full w-full">
-          <div className="absolute z-3 inset-0 flex flex-col justify-between h-full w-full">
+            <div className="absolute z-3 inset-0 flex flex-col justify-between h-full w-full overflow-y-auto no-scrollbar">
             <div className="flex flex-col w-full">
-              <div className="flex justify-between gap-4  items-center mb-10">
+                <div className="flex justify-between gap-[min(1rem,16px)] items-center mb-[min(2.5rem,40px)]">
                 <HippiusHeader isOnboarding />
                 {(!isFirstPanel || !isLastPanel) && (
-                  <div
-                    className="text-grey-60 text-base font-medium cursor-pointer "
+                    <div className="text-grey-60 text-[min(1rem,16px)] font-medium cursor-pointer"
                     onClick={handleOnBoardingDone}
                   >
                     <RevealTextLine
@@ -62,10 +61,10 @@ const OnboardingRightPanel = ({
                   rotate
                   reveal={inView && animate}
                   key={`title-${currentPanelIndex}`}
-                  parentClassName="mb-6 w-full"
+                  parentClassName="mb-[min(1.5rem,24px)] w-full"
                   className="delay-300 w-full"
                 >
-                  <div className="flex justify-between text-2xl font-medium text-grey-10 w-full">
+                    <div className="flex justify-between text-[min(1.5rem,24px)] font-medium text-grey-10 w-full">
                     <div>{currentPanel.screentTitleText}</div>
                     <div>
                       {currentPanel.id} / {ONBOARDING_SCREENS.length}
@@ -78,19 +77,19 @@ const OnboardingRightPanel = ({
                 {currentPanel.bulletPoints &&
                   currentPanel.bulletPoints.length > 0 && (
                     <>
-                      <div className="mt-10">
+                      <div className="mt-[min(2.5rem,40px)]">
                         <RevealTextLine
                           rotate
                           reveal={inView && animate}
                           className="delay-300"
                           key={`head-${currentPanelIndex}`}
                         >
-                          <h2 className="text-2xl  text-primary-50">
+                          <h2 className="text-[min(1.5rem,24px)] text-primary-50">
                             What Makes Us Stand Out
                           </h2>
                         </RevealTextLine>
 
-                        <div className="flex flex-col gap-4 mt-4">
+                        <div className="flex flex-col gap-[min(1rem,16px)] mt-[min(1rem,16px)]">
                           {currentPanel.bulletPoints.map((point, index) => (
                             <RevealTextLine
                               rotate
@@ -101,7 +100,7 @@ const OnboardingRightPanel = ({
                               <div className="flex items-center gap-2">
                                 <Icons.ArrowRight className="text-primary-90 size-5" />
 
-                                <span className="text-grey-50 font-medium text-base leadin-[22px]">
+                                <span className="text-grey-50 font-medium text-[min(1rem,16px)] leadin-[1.375rem]">
                                   {point}
                                 </span>
                               </div>
@@ -114,14 +113,14 @@ const OnboardingRightPanel = ({
               </div>
             </div>
 
-            <div className="flex gap-20 self-end h-[50px] w-full">
+            <div className="flex gap-[min(5rem,80px)] self-end h-[min(3.125rem,50px)] w-full">
               {!isFirstPanel && (
                 <CardButton
                   className="w-full"
                   variant="secondary"
                   onClick={handlePrevious}
                 >
-                  <div className="flex items-center gap-2 text-lg font-medium text-grey-10">
+                  <div className="flex items-center gap-2 text-[min(1.125rem,18px)] font-medium text-grey-10">
                     Previous
                   </div>
                 </CardButton>
@@ -130,19 +129,19 @@ const OnboardingRightPanel = ({
               <CardButton className="w-full" onClick={handleNext}>
                 <div className="flex items-center gap-2">
                   {isFirstPanel ? (
-                    <span className="flex items-center text-lg font-medium">
+                    <span className="flex items-center text-[min(1.125rem,18px)] font-medium">
                       Get Started
                     </span>
                   ) : isLastPanel ? (
                     <>
-                      <span className="flex items-center text-lg font-medium">
+                      <span className="flex items-center text-[min(1.125rem,18px)] font-medium">
                         Continue
                       </span>
                       <Icons.ArrowRight className="size-4" />
                     </>
                   ) : (
                     <>
-                      <span className="flex items-center text-lg font-medium">
+                      <span className="flex items-center text-[min(1.125rem,18px)] font-medium">
                         Next
                       </span>
                     </>

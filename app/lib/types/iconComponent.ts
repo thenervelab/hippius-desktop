@@ -1,5 +1,3 @@
-import { ReactNode, SVGProps } from "react";
+import React from "react";
 
-type IconProps = SVGProps<SVGSVGElement>;
-
-export type IconComponent = (props: IconProps) => ReactNode;
+export type IconComponent = React.FC<React.SVGProps<SVGSVGElement>>;

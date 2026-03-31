@@ -202,13 +202,13 @@ const Notifications = () => {
   return (
     <DashboardTitleWrapper mainText="Notifications">
       {/* controls */}
-      <div className="mt-6 flex justify-end gap-4">
+      <div className="mt-6 flex justify-end gap-4 flex-wrap">
         {tabs.length > 0 && (
           <>
             <TabList
               tabs={tabs}
-              width="min-w-[89px]"
-              height="h-[32px]"
+              width="min-w-[5.5625rem]"
+              height="h-[2rem]"
               gap="gap-1"
               activeTab={activeTab}
               onTabChange={setActiveTab}
@@ -222,14 +222,14 @@ const Notifications = () => {
               <Switch.Root
                 checked={onlyUnread}
                 onCheckedChange={setOnlyUnread}
-                className="w-[54px] h-[26px] bg-grey-90 rounded-full relative data-[state=checked]:bg-primary-50 transition-all outline-none border border-grey-80"
+                className="w-[3.375rem] h-[1.625rem] bg-grey-90 rounded-full relative data-[state=checked]:bg-primary-50 transition-all outline-none border border-grey-80"
               >
-                <Switch.Thumb className="block w-[18px] h-[18px] bg-primary-50 rounded-full shadow transition-transform duration-100 translate-x-0.5 data-[state=checked]:translate-x-8 data-[state=checked]:bg-white" />
+                <Switch.Thumb className="block w-[1.125rem] h-[1.125rem] bg-primary-50 rounded-full shadow transition-transform duration-100 translate-x-0.5 data-[state=checked]:translate-x-8 data-[state=checked]:bg-white" />
               </Switch.Root>
             </label>
 
             <button
-              className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-grey-90 disabled:hover:text-grey-10"
+              className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[0.875rem] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-grey-90 disabled:hover:text-grey-10"
               onClick={handleAllRead}
               disabled={visible.length === 0}
             >
@@ -237,7 +237,7 @@ const Notifications = () => {
             </button>
             {/* New: Delete All */}
             <button
-              className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-error-60 hover:text-white active:bg-error-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-grey-90 disabled:hover:text-grey-10"
+              className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-error-60 hover:text-white active:bg-error-70 active:text-white text-grey-10 leading-5 text-[0.875rem] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-grey-90 disabled:hover:text-grey-10"
               onClick={handleArchiveAll}
               disabled={visible.length === 0}
               title={
@@ -251,7 +251,7 @@ const Notifications = () => {
           </>
         )}
         <button
-          className="px-4 py-2.5 bg-grey-90 rounded text-grey-10 leading-5 text-[14px] font-medium flex items-center gap-2 transition-colors hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white focus:outline-none focus:ring-2 focus:ring-primary-50"
+          className="px-4 py-2.5 bg-grey-90 rounded text-grey-10 leading-5 text-[0.875rem] font-medium flex items-center gap-2 transition-colors hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white focus:outline-none focus:ring-2 focus:ring-primary-50"
           onClick={handleOpenSettings}
         >
           <Icons.Setting className="size-4" />

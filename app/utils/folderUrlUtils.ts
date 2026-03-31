@@ -1,5 +1,4 @@
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { buildFolderPath } from "./folderPathUtils";
 
 type ParamGetter = (name: string, defaultValue?: string) => string;
@@ -18,7 +17,7 @@ export function generateFolderUrl(file: FormattedUserFile, getParam: ParamGetter
     const mainFolderCid = getParam("mainFolderCid", "");
     const mainFolderActualName = getParam("mainFolderActualName", folderActualName);
     const subFolderPath = getParam("subFolderPath", "");
-    const effectiveMainFolderCid = mainFolderCid || file.cid;
+    const effectiveMainFolderCid = mainFolderCid || file.arionHash;
     const effectiveMainFolderActualName = mainFolderActualName || folderActualName;
 
     // Build the folder path for navigation
@@ -31,7 +30,7 @@ export function generateFolderUrl(file: FormattedUserFile, getParam: ParamGetter
 
     const queryParams = {
         mainFolderCid: effectiveMainFolderCid ?? "",
-        folderCid: decodeHexCid(file.cid) ?? "",
+        folderCid: file.arionHash ?? "",
         folderName: file.name ?? "",
         folderActualName: file.actualFileName ?? "",
         mainFolderActualName: newMainFolder ?? "",

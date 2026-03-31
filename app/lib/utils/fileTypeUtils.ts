@@ -13,6 +13,9 @@ import {
     EC,
     File,
     Folder2,
+    Zip,
+    Note,
+    DocumentText,
 } from "@/components/ui/icons";
 import { FileTypes } from "@/lib/types/fileTypes";
 
@@ -56,6 +59,8 @@ export const getFileIcon = (fileType: FileTypes | undefined, isFolder: boolean):
     switch (fileType) {
         case "video":
             return { icon: Video, color: "text-[#ea4335]" };
+        case "audio":
+            return { icon: Note, color: "text-[#9b59b6]" };
         case "ec":
             return { icon: EC, color: "text-primary-40" };
         case "document":
@@ -74,6 +79,14 @@ export const getFileIcon = (fileType: FileTypes | undefined, isFolder: boolean):
             return { icon: Document, color: "text-[#4285F4]" };
         case "image":
             return { icon: Image, color: "text-[#ea4335]" };
+        case "archive":
+            return { icon: Zip, color: "text-[#f39c12]" };
+        case "disk_image":
+            return { icon: File, color: "text-primary-70 fill-primary-60" };
+        case "markdown":
+            return { icon: DocumentText, color: "text-[#4285F4]" };
+        case "sql":
+            return { icon: Terminal, color: "text-[#4285F4]" };
         default:
             return { icon: File, color: "text-primary-70 fill-primary-60" };
     }
@@ -91,6 +104,8 @@ export const getFileIconForThumbnail = (fileType: FileTypes | undefined, isFolde
     switch (fileType) {
         case "video":
             return { icon: Video };
+        case "audio":
+            return { icon: Note, color: "fill-white" };
         case "ec":
             return { icon: EC, color: "fill-white" };
         case "document":
@@ -109,6 +124,14 @@ export const getFileIconForThumbnail = (fileType: FileTypes | undefined, isFolde
             return { icon: Document };
         case "image":
             return { icon: ImageWhite };
+        case "archive":
+            return { icon: Zip, color: "fill-white" };
+        case "disk_image":
+            return { icon: File, color: "fill-white" };
+        case "markdown":
+            return { icon: DocumentText, color: "fill-white" };
+        case "sql":
+            return { icon: TerminalWhite };
         default:
             return { icon: File, color: "fill-white" };
     }

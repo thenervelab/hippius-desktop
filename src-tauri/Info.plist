@@ -26,6 +26,17 @@
     <true/>
     <key>LSUIElement</key>
     <false/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>hippius.com</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>hippiusapp</string>
+            </array>
+        </dict>
+    </array>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

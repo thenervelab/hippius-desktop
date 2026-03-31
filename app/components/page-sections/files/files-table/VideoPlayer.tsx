@@ -6,18 +6,23 @@ import {
   defaultLayoutIcons,
   DefaultVideoLayout
 } from "@vidstack/react/player/layouts/default";
-import { SUPPORTED_VIDEO_MIME_TYPES } from "@/lib/constants/supportedMimeTypes";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import VideoPlayerError from "./VideoPlayerError";
 
-export async function toBlobUrl(url: string) {
-  const res = await fetch(url);
-  const blob = await res.blob();
-  return URL.createObjectURL(blob);
-}
-
 // Check if running in Tauri
 const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
+
+// Platform detection for codec-support decisions.
+const isLinux = typeof navigator !== "undefined" && /linux/i.test(navigator.platform);
+const isMacOS = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
+
+// Tauri on macOS uses WKWebView (Safari's engine) which does NOT support
+// MKV (Matroska) or 3GP containers, nor HEVC/x265 codec without hardware
+// decoder.  Windows uses WebView2 (Chromium) which handles these fine.
+const isUnsupportedEngine = isTauri && isMacOS;
+
+// Container formats that WKWebView / Safari fundamentally cannot play
+const UNSUPPORTED_FORMATS = ["mkv", "3gp"];
 
 // Helper functions for Tauri window fullscreen
 async function setTauriFullscreen(fullscreen: boolean) {
@@ -36,6 +41,7 @@ interface VideoPlayerProps {
   fileFormat: string;
   file?: FormattedUserFile;
   isFromIpfs?: boolean;
+  isFromLocal?: boolean;
   handleFileDownload: (
     file: FormattedUserFile,
     polkadotAddress: string
@@ -45,22 +51,16 @@ interface VideoPlayerProps {
 const VideoPlayer: React.FC<VideoPlayerProps> = ({
   videoUrl,
   fileFormat,
-  isFromIpfs = false,
   file,
   handleFileDownload
 }) => {
   const [error, setError] = useState<string>("");
-  const [playUrl, setPlayUrl] = useState<string>("");
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const [reloadKey, setReloadKey] = useState<number>(0);
   const timeoutRef = useRef<number | undefined>(undefined);
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const LOAD_TIMEOUT = 120_000;
-
-  const ua =
-    typeof navigator !== "undefined" ? navigator.userAgent.toLowerCase() : "";
-  const isFirefox = ua.includes("firefox");
 
   const clearLoadTimer = () => {
     if (timeoutRef.current) {
@@ -169,58 +169,67 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
       return;
     }
 
-    if (isFirefox && ["mkv", "3gp"].includes(fileFormat)) {
-      setError("This video format isn't supported in Firefox");
+    // WKWebView (Tauri on macOS) cannot play MKV or 3GP containers,
+    // nor HEVC/x265 codec.  Detect immediately so we don't spin for
+    // 2 minutes before the timeout fires.
+    if (isUnsupportedEngine && UNSUPPORTED_FORMATS.includes(fileFormat)) {
+      setError(
+        "This video format (." +
+          fileFormat +
+          ") can't be played in the built-in player."
+      );
       return;
     }
+
     timeoutRef.current = window.setTimeout(() => {
       setError("Video is taking too long to load");
     }, LOAD_TIMEOUT);
     return clearLoadTimer;
-  }, [videoUrl, fileFormat, isFirefox, reloadKey]);
-
-  useEffect(() => {
-    let revoke: string | null = null;
-
-    (async () => {
-      if (!videoUrl || videoUrl.trim() === "") {
-        setPlayUrl("");
-        return;
-      }
-
-      if (isFromIpfs) {
-        setPlayUrl(videoUrl);
-        return;
-      }
-
-      try {
-        const blobUrl = await toBlobUrl(videoUrl);
-        revoke = blobUrl;
-        setPlayUrl(blobUrl);
-      } catch (error) {
-        console.error('VideoPlayer - Failed to create blob URL:', error);
-        setError("Failed to load video file");
-      }
-    })();
-
-    return () => {
-      if (revoke) {
-        URL.revokeObjectURL(revoke);
-      }
-    };
-  }, [videoUrl, isFromIpfs]);
-  const finalPlayUrl = playUrl || videoUrl;
+  }, [videoUrl, fileFormat, reloadKey]);
 
   // Don't render MediaPlayer if no URL is available
-  if (!finalPlayUrl || finalPlayUrl.trim() === "") {
+  if (!videoUrl || videoUrl.trim() === "") {
     return (
-      <div className="flex items-center justify-center h-full text-white">
-        <div className="text-center">
-          <div className="text-lg font-medium mb-2">Loading video...</div>
-          <div className="text-sm text-gray-300">
-            {isFromIpfs ? "Resolving IPFS video URL..." : "Preparing video URL"}
-          </div>
-        </div>
+      <div className="flex items-center justify-center h-full w-full">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-50" />
+      </div>
+    );
+  }
+
+  // Formats where Chromium natively understands the container well.
+  // For these we provide an explicit MIME type hint so vidstack picks the
+  // correct decoder immediately. For everything else (mov, mkv, 3gp, …) we
+  // let the player auto-detect by passing just the URL string.
+  const nativeFormats: Record<string, string> = {
+    mp4: "video/mp4",
+    webm: "video/webm",
+    ogg: "video/ogg",
+  };
+
+  // .mov files are usually H.264 inside a QuickTime container – Chromium can
+  // play those if we tell it the MIME is video/mp4.
+  const movedToMp4 = fileFormat === "mov";
+  const mimeType = movedToMp4
+    ? "video/mp4"
+    : nativeFormats[fileFormat] ?? undefined;
+
+  // Stream the URL directly — the browser handles HTTP range-request
+  // streaming natively for remote URLs, and Tauri's asset:// protocol
+  // serves local files.
+  const srcProp: import("@vidstack/react").MediaSrc = mimeType
+    ? { src: videoUrl, type: mimeType as import("@vidstack/react").VideoMimeType }
+    : videoUrl;
+
+  // On Linux, skip the media player entirely and show the fallback UI.
+  // WebKitGTK lacks codecs for most video formats.
+  if (isTauri && isLinux) {
+    return (
+      <div className="relative w-full h-full bg-black">
+        <VideoPlayerError
+          message="Video playback is not supported in the built-in player on Linux."
+          file={file}
+          handleFileDownload={handleFileDownload}
+        />
       </div>
     );
   }
@@ -251,26 +260,23 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
         className="w-full h-full [--media-buffering-size:48px]"
         load="eager"
         autoPlay
-        src={{
-          src: finalPlayUrl,
-          type: SUPPORTED_VIDEO_MIME_TYPES[
-            fileFormat
-          ] as import("@vidstack/react").VideoMimeType
-        }}
+        src={srcProp}
         playsInline
         onLoadedData={() => {
           clearLoadTimer();
         }}
         onError={(error) => {
-          console.error('VideoPlayer - Media error:', error, 'URL:', finalPlayUrl, 'isFromIpfs:', isFromIpfs);
+          console.error('VideoPlayer - Media error:', error, 'URL:', videoUrl, 'format:', fileFormat, 'mime:', mimeType);
           clearLoadTimer();
-          setError("Unable to play this video");
+          setError(
+            "This video format (." + fileFormat + ") can't be played in the built-in player."
+          );
         }}
         onCanPlay={() => {
-          console.log('VideoPlayer - Video can play:', finalPlayUrl);
+          console.log('VideoPlayer - Video can play:', videoUrl);
         }}
         onLoadStart={() => {
-          console.log('VideoPlayer - Video load started:', finalPlayUrl);
+          console.log('VideoPlayer - Video load started:', videoUrl, 'format:', fileFormat, 'mime:', mimeType);
         }}
       >
         <MediaProvider />

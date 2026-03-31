@@ -40,7 +40,7 @@ const StatusCell: React.FC<StatusCellProps> = ({ value, className }) => {
   return (
     <div className={cn("flex items-center gap-2", className)}>
       <div
-        className={cn("border-[3px] p-[3px] rounded-full", getStatusColor())}
+        className={cn("border-[0.1875rem] p-[0.1875rem] rounded-full", getStatusColor())}
       ></div>
       <span className="text-xs font-medium text-grey-10">{displayValue}</span>
     </div>

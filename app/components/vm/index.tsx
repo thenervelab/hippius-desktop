@@ -233,8 +233,8 @@ const VirtualMachines: FC = () => {
   return (
     <div className="w-full">
       <div className="flex items-center w-full justify-between gap-4 flex-wrap mb-4">
-        <div className="flex flex-col max-sm:w-full sm:flex-row gap-4 items-center">
-          <div className="flex items-center jusityfy-between w-full sm:w-auto">
+        <div className="flex flex-col w-full @sm:w-auto @sm:flex-row gap-4 items-center">
+          <div className="flex items-center jusityfy-between w-full @sm:w-auto">
             <div className="flex flex-nowrap items-center gap-x-2">
               <AbstractIconWrapper className="size-10 flex items-center justify-center">
                 {activeTab === "SSH Keys" ? (
@@ -243,7 +243,7 @@ const VirtualMachines: FC = () => {
                   <Icons.Driver2 className="size-6 relative text-primary-50" />
                 )}
               </AbstractIconWrapper>
-              <p className="font-medium text-base md:text-lg lg:text-xl text-nowrap">
+              <p className="font-medium text-base @md:text-lg @xl:text-xl">
                 {getHeaderTitle()}
               </p>
               <button
@@ -276,7 +276,7 @@ const VirtualMachines: FC = () => {
               onTabChange={handleTabChange}
               className="w-full "
               gap="gap-1"
-              width="w-full sm:min-w-[148px]"
+              width="w-full @sm:min-w-[9.25rem]"
             />
           </div>
         </div>
@@ -327,7 +327,7 @@ const VirtualMachines: FC = () => {
         <div className="animate-in fade-in duration-300">
           {activeTab === "Instances" ? (
             isBetaError(instancesError) ? (
-              <NoEntriesFound className="h-[500px]">
+              <NoEntriesFound className="h-[31.25rem]">
                 <div className="text-center">
                   <p className="text-grey-30 font-semibold mb-1 text-base">
                     Feature Not Available
@@ -360,7 +360,7 @@ const VirtualMachines: FC = () => {
           ) : activeTab === "Templates" ? (
             <>
               {isBetaError(flavorsError) ? (
-                <NoEntriesFound className="h-[500px]">
+                <NoEntriesFound className="h-[31.25rem]">
                   <div className="text-center">
                     <p className="text-grey-30 font-semibold mb-1 text-base">
                       Feature Not Available
@@ -371,7 +371,7 @@ const VirtualMachines: FC = () => {
                   </div>
                 </NoEntriesFound>
               ) : flavorsLoading ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
+                <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
                   {Array.from({ length: 8 }).map((_, index) => (
                     <VMTemplateCardSkeleton key={`skeleton-${index}`} />
                   ))}
@@ -380,7 +380,7 @@ const VirtualMachines: FC = () => {
                 <NoEntriesFound text="No templates available" />
               ) : (
                 <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
+                  <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
                     {templates.map((template) => (
                       <VMTemplateCard
                         key={template.id}

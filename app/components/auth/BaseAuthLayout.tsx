@@ -45,34 +45,34 @@ const BaseAuthLayout = ({
           <div className="w-full h-full flex flex-col items-center justify-center">
             <div
               className={cn(
-                "absolute top-5 lg:top-8 right-5 lg:right-8 border-r border-t border-primary-40  w-[23px] h-[23px]",
+                "absolute top-5 lg:top-8 right-5 lg:right-8 border-r border-t border-primary-40  w-[1.4375rem] h-[1.4375rem]",
                 inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"
               )}
             ></div>
 
             <div
               className={cn(
-                "absolute top-5 lg:top-8 left-5 lg:left-8 border-l border-t border-primary-40 w-[23px] h-[23px]",
+                "absolute top-5 lg:top-8 left-5 lg:left-8 border-l border-t border-primary-40 w-[1.4375rem] h-[1.4375rem]",
                 inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"
               )}
             ></div>
 
             <main
-              className="p-[72px] lg:p-[88px] items-center justify-between 
-            relative h-full w-full grid grid-cols-2 gap-[72px] 2xl:gap-[120px]"
+              className="p-[min(2rem,32px)] lg:p-[min(4rem,64px)] items-center justify-between 
+            relative h-full w-full grid grid-cols-2 gap-[min(2rem,32px)] 2xl:gap-[min(5rem,80px)] overflow-y-auto no-scrollbar"
             >
               {children}
             </main>
 
             <div
               className={cn(
-                "absolute bottom-5 lg:bottom-8 left-5 lg:left-8 border-l border-b border-primary-40 w-[23px] h-[23px]",
+                "absolute bottom-5 lg:bottom-8 left-5 lg:left-8 border-l border-b border-primary-40 w-[1.4375rem] h-[1.4375rem]",
                 inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"
               )}
             ></div>
             <div
               className={cn(
-                "absolute bottom-5 lg:bottom-8 right-6 lg:right-8 border-r border-b border-primary-40 w-[23px] h-[23px]",
+                "absolute bottom-5 lg:bottom-8 right-6 lg:right-8 border-r border-b border-primary-40 w-[1.4375rem] h-[1.4375rem]",
                 inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"
               )}
             ></div>

@@ -2,7 +2,7 @@
  * OAuth Type Definitions
  * 
  * This module defines types and interfaces for OAuth authentication flows
- * supporting Google, GitHub, and Apple providers with PKCE.
+ * supporting Google, GitHub, and Apple providers.
  */
 
 /**
@@ -19,16 +19,6 @@ export interface OAuthProviderConfig {
     clientId?: string;
     scope?: string;
     redirectUri: string;
-}
-
-/**
- * PKCE (Proof Key for Code Exchange) state
- */
-export interface PKCEState {
-    codeVerifier: string;
-    codeChallenge: string;
-    username: string;
-    provider?: OAuthProvider;
 }
 
 /**

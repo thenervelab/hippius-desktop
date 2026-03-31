@@ -25,17 +25,19 @@ const AuthLayout = ({ children, isVerify = false, hideHeader = false }: AuthLayo
         >
           <LeftCarouselPanel />
         </RevealTextLine>
-        <div className="flex flex-col items-start justify-center h-full ">
-          {!hideHeader && <HippiusHeader isVerify={isVerify} />}
-          <Suspense
-            fallback={
-              <div className="flex h-full w-full items-center justify-center opacity-0 grow animate-fade-in-0.5">
-                <LucideLoader2 className="animate-spin text-primary-50" />
-              </div>
-            }
-          >
-            {children}
-          </Suspense>
+        <div className="flex flex-col items-start h-full overflow-y-auto no-scrollbar">
+          <div className="my-auto flex flex-col items-start w-full">
+            {!hideHeader && <HippiusHeader isVerify={isVerify} />}
+            <Suspense
+              fallback={
+                <div className="flex h-full w-full items-center justify-center opacity-0 grow animate-fade-in-0.5">
+                  <LucideLoader2 className="animate-spin text-primary-50" />
+                </div>
+              }
+            >
+              {children}
+            </Suspense>
+          </div>
         </div>
       </>
     </BaseAuthLayout>

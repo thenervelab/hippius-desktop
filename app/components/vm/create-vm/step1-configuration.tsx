@@ -75,7 +75,7 @@ const Step1Configuration: React.FC<Step1Props> = ({
           placeholder="Enter name of Instance"
           className="
             mt-2 w-full bg-white text-grey-60 placeholder-grey-60
-            border border-grey-80 p-4 rounded-[8px]
+            border border-grey-80 p-4 rounded-[0.5rem]
             focus:outline-none focus:border-grey-70 text-base font-medium
           "
         />
@@ -237,7 +237,7 @@ const Step1Configuration: React.FC<Step1Props> = ({
         onClick={onCreateSSHKey}
         className="flex items-center gap-2 text-grey-10 hover:text-grey-20 transition"
       >
-        <PlusCircle className="size-[18px]" />
+        <PlusCircle className="size-[1.125rem]" />
         <span className="text-base font-medium">Create New SSH Key</span>
       </button>
     </div>

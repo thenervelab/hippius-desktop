@@ -1,6 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { API_CONFIG } from "@/lib/config";
+import { useInvokeQuery } from "./useInvokeQuery";
 
 // Define types based on the indexer API response
 export interface BillingTransferEvent {
@@ -50,61 +48,26 @@ export interface UseBillingTransfersParams {
 }
 
 export default function useBillingTransactions() {
-    const { oauthSession } = useWalletAuth();
-    const [data, setData] = useState<TransactionObject[] | null>(null);
-    const [isPending, setIsPending] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+    const query = useInvokeQuery<BillingTransactionsResponse, TransactionObject[]>({
+        command: "get_billing_transactions",
+        queryKey: (addr) => ["billing-transactions", addr],
+        options: {
+            select: (json) => {
+                return (json.results || []).map((t) => ({
+                    id: t.id,
+                    transaction_type: t.payment_type.toLowerCase().includes('stripe') ? 'card' : 'tao',
+                    amount: typeof t.amount === "string" ? parseFloat(t.amount) : Number(t.amount ?? 0),
+                    transaction_date: t.created_at,
+                    status: t.status,
+                }));
+            },
+        },
+    });
 
-    const fetchTransactions = useCallback(async () => {
-        if (!oauthSession?.token) {
-            setData([]);
-            setError("Not authenticated");
-            setIsPending(false);
-            return;
-        }
-
-        try {
-            setIsPending(true);
-            setError(null);
-            setData(null);
-
-            const url = `${API_CONFIG.baseUrl}${API_CONFIG.billing.transactions}`;
-            const res = await fetch(url, {
-                method: "GET",
-                headers: {
-                    Authorization: `Token ${oauthSession.token}`,
-                    Accept: "application/json",
-                },
-            });
-
-            if (!res.ok) {
-                const text = await res.text();
-                throw new Error(`Failed to fetch billing transactions: ${res.status} ${text}`);
-            }
-
-            const json: BillingTransactionsResponse = await res.json();
-            const mapped: TransactionObject[] = (json.results || []).map((t) => ({
-                id: t.id,
-                transaction_type: t.payment_type.toLowerCase().includes('stripe') ? 'card' : 'tao',
-                amount: typeof t.amount === "string" ? parseFloat(t.amount) : Number(t.amount ?? 0),
-                transaction_date: t.created_at,
-                status: t.status,
-            }));
-
-            setData(mapped);
-        } catch (e: unknown) {
-            setData([]);
-            setError(e instanceof Error ? e.message : "Unknown error");
-        } finally {
-            setIsPending(false);
-        }
-    }, [oauthSession?.token]);
-
-    useEffect(() => {
-        if (oauthSession?.token) {
-            fetchTransactions();
-        }
-    }, [oauthSession?.token, fetchTransactions]);
-
-    return { data, isPending, error, refetch: fetchTransactions };
+    return {
+        data: query.data ?? null,
+        isPending: query.isPending,
+        error: query.error ? (query.error instanceof Error ? query.error.message : "Unknown error") : null,
+        refetch: query.refetch,
+    };
 }

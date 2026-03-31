@@ -1,23 +1,32 @@
+//! Substrate/Polkadot RPC client with auto-retry.
+//!
+//! Maintains a cached `OnlineClient<PolkadotConfig>` behind the `RwLock`
+//! in `AppState.blockchain.client`. On first use (or after
+//! `clear_substrate_client()`), connects to the WSS endpoint from the
+//! database with up to 10 retries using exponential backoff.
+
 use crate::constants::substrate::WSS_ENDPOINT;
-use crate::DB_POOL; // Add this import
-use once_cell::sync::Lazy;
 use sqlx::Row;
+use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
-use std::sync::RwLock;
 use std::time::Duration;
 use subxt::{OnlineClient, PolkadotConfig};
-use tokio::time::sleep; // Add this import
-
-static SUBSTRATE_CLIENT: Lazy<RwLock<Option<Arc<OnlineClient<PolkadotConfig>>>>> =
-    Lazy::new(|| RwLock::new(None));
+use tokio::time::sleep;
+use tracing::{info, warn};
 
 const MAX_RETRIES: usize = 10;
-const RETRY_DELAY_SECS: u64 = 5;
 
-pub async fn get_substrate_client() -> Result<Arc<OnlineClient<PolkadotConfig>>, String> {
+/// Get or create the shared Substrate RPC client from `AppState.blockchain.client`.
+pub async fn get_substrate_client(
+    app_state: &crate::app_state::AppState,
+) -> Result<Arc<OnlineClient<PolkadotConfig>>, String> {
+    let lock = &app_state.blockchain.client;
+
     // Check if we have an existing client
     let existing_client = {
-        let client = SUBSTRATE_CLIENT.read().unwrap();
+        let client = lock
+            .read()
+            .map_err(|e| format!("Substrate client lock failed: {e}"))?;
         client.clone()
     };
 
@@ -25,8 +34,10 @@ pub async fn get_substrate_client() -> Result<Arc<OnlineClient<PolkadotConfig>>,
         return Ok(client);
     }
 
+    let pool = app_state.pool()?;
+
     // Get the current WSS endpoint from database, fallback to default constant
-    let wss_endpoint = get_current_wss_endpoint()
+    let wss_endpoint = get_current_wss_endpoint(pool)
         .await
         .unwrap_or_else(|_| WSS_ENDPOINT.to_string());
 
@@ -36,18 +47,23 @@ pub async fn get_substrate_client() -> Result<Arc<OnlineClient<PolkadotConfig>>,
         match OnlineClient::<PolkadotConfig>::from_url(&wss_endpoint).await {
             Ok(client) => {
                 let arc = Arc::new(client);
-                let mut client_lock = SUBSTRATE_CLIENT.write().unwrap();
+                let mut client_lock = lock
+                    .write()
+                    .map_err(|e| format!("Substrate client lock failed: {e}"))?;
                 *client_lock = Some(arc.clone());
-                println!(
-                    "[Substrate] Connected to node on attempt {} using endpoint: {}",
-                    attempt, wss_endpoint
+                info!(
+                    attempt,
+                    endpoint = %wss_endpoint,
+                    "Connected to Substrate node"
                 );
                 return Ok(arc);
             }
             Err(e) => {
-                eprintln!(
-                    "[Substrate] Failed to connect to node (attempt {}) using endpoint {}: {}",
-                    attempt, wss_endpoint, e
+                warn!(
+                    attempt,
+                    endpoint = %wss_endpoint,
+                    error = %e,
+                    "Failed to connect to Substrate node"
                 );
                 if attempt >= MAX_RETRIES {
                     return Err(format!(
@@ -55,22 +71,29 @@ pub async fn get_substrate_client() -> Result<Arc<OnlineClient<PolkadotConfig>>,
                         MAX_RETRIES, e
                     ));
                 }
-                sleep(Duration::from_secs(RETRY_DELAY_SECS)).await;
+                // Exponential backoff: 2^min(attempt,5) seconds + random jitter (0-1s)
+                let base_delay = 2u64.pow(attempt.min(5) as u32);
+                let jitter_ms = rand::random::<u64>() % 1000;
+                let delay = Duration::from_millis(base_delay * 1000 + jitter_ms);
+                sleep(delay).await;
             }
         }
     }
 }
 
-pub fn clear_substrate_client() {
-    let mut client = SUBSTRATE_CLIENT.write().unwrap();
-    *client = None;
-    println!("[Substrate] Cleared substrate client");
+/// Clear the cached Substrate client so the next call to `get_substrate_client`
+/// will reconnect.
+pub fn clear_substrate_client(app_state: &crate::app_state::AppState) {
+    if let Ok(mut client) = app_state.blockchain.client.write() {
+        *client = None;
+        info!("Cleared substrate client");
+    } else {
+        warn!("Failed to acquire write lock to clear substrate client");
+    }
 }
 
-// Get the current WSS endpoint from database
-pub async fn get_current_wss_endpoint() -> Result<String, String> {
-    let pool = DB_POOL.get().ok_or("Database pool not initialized")?;
-
+/// Get the current WSS endpoint from database.
+pub async fn get_current_wss_endpoint(pool: &SqlitePool) -> Result<String, String> {
     let row = sqlx::query("SELECT endpoint FROM wss_endpoint WHERE id = 1")
         .fetch_optional(pool)
         .await
@@ -85,14 +108,17 @@ pub async fn get_current_wss_endpoint() -> Result<String, String> {
     }
 }
 
-// Update the WSS endpoint in database and clear the current client
-pub async fn update_wss_endpoint(new_endpoint: String) -> Result<(), String> {
-    let pool = DB_POOL.get().ok_or("Database pool not initialized")?;
-
+/// Update the WSS endpoint in database and clear the current client.
+pub async fn update_wss_endpoint(
+    app_state: &crate::app_state::AppState,
+    new_endpoint: String,
+) -> Result<(), String> {
     // Validate the endpoint format (basic check)
     if !new_endpoint.starts_with("ws://") && !new_endpoint.starts_with("wss://") {
         return Err("Invalid WSS endpoint format. Must start with ws:// or wss://".to_string());
     }
+
+    let pool = app_state.pool()?;
 
     // Update or insert the endpoint
     let result = sqlx::query(
@@ -105,8 +131,8 @@ pub async fn update_wss_endpoint(new_endpoint: String) -> Result<(), String> {
 
     if result.rows_affected() > 0 {
         // Clear the current client so it will reconnect with new endpoint
-        clear_substrate_client();
-        println!("[Substrate] WSS endpoint updated to: {}", new_endpoint);
+        clear_substrate_client(app_state);
+        info!("WSS endpoint updated to: {}", new_endpoint);
         Ok(())
     } else {
         Err("Failed to update WSS endpoint".to_string())

@@ -126,7 +126,7 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
     <>
       <NotificationMenuHeader count={count} onClose={onClose} />
 
-      <div className="p-4 flex flex-col gap-4">
+      <div className="p-4 flex flex-col gap-4 flex-1 min-h-0">
         {notificationOptions.length > 0 && (
           <div className="flex justify-between">
             <NotificationOptionSelect
@@ -155,11 +155,11 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
         )}
         {enabledTypes.length === 0 ? (
           <NoNotificationsEnabled
-            heightClassName="h-[340px]"
+            heightClassName="min-h-[15rem]"
             onOpenSettings={handleOpenSettings}
           />
         ) : visible.length === 0 ? (
-          <NoNotificationsFound heightClassName="h-[340px]" />
+          <NoNotificationsFound heightClassName="min-h-[15rem]" />
         ) : (
           <NotificationMenuList
             notifications={visible}

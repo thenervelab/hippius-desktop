@@ -1,191 +1,45 @@
-import type initSqlJsType from "sql.js/dist/sql-wasm.js";
-import { initHippiusDesktopDB, saveBytes } from "./hippiusDesktopDB";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { invoke } from "@tauri-apps/api/core";
 
-/* ── schemas ─────────────────────────────── */
+/* ── Notification Preferences ── */
 
-const NOTIFICATION_SCHEMA = `
-  CREATE TABLE IF NOT EXISTS notifications (
-    id                       INTEGER PRIMARY KEY,
-    userAddress              TEXT NOT NULL,
-    notificationType         TEXT,
-    notificationSubtype      TEXT,
-    notificationTitleText    TEXT,
-    notificationDescription  TEXT,
-    notificationLinkText     TEXT,
-    notificationLink         TEXT,
-    isUnread                 INTEGER DEFAULT 1,
-    notificationCreationTime INTEGER,
-    isDeleted                INTEGER DEFAULT 0,
-    deletedAt                INTEGER,
-    notificationReleaseNotes TEXT
-  );
-  CREATE INDEX IF NOT EXISTS idx_notifications_userAddress ON notifications(userAddress);
-  CREATE INDEX IF NOT EXISTS idx_notifications_userAddress_deleted ON notifications(userAddress, isDeleted);
-`;
-
-const APP_STATE_SCHEMA = `
-  CREATE TABLE IF NOT EXISTS app_state (
-    id                 INTEGER PRIMARY KEY CHECK (id = 1),
-    isFirstTime        INTEGER DEFAULT 1,
-    isAboveHalfCredit  INTEGER DEFAULT 0
-  );
-`;
-
-const NOTIFICATION_PREFERENCES_SCHEMA = `
-  CREATE TABLE IF NOT EXISTS notification_preferences (
-    id          TEXT PRIMARY KEY,
-    label       TEXT NOT NULL,
-    description TEXT NOT NULL,
-    enabled     INTEGER DEFAULT 1
-  );
-`;
-
-/* ── helpers ────────────────────────────── */
-
-async function getDb(): Promise<initSqlJsType.Database> {
-  const db = await initHippiusDesktopDB();
-
-  // Check if notifications table exists and has userAddress column
-  const tableExists = db.exec(
-    `SELECT name FROM sqlite_master WHERE type='table' AND name='notifications'`,
-  );
-
-  if (tableExists.length > 0) {
-    // Table exists, check if userAddress column exists
-    const columns = db.exec(`PRAGMA table_info(notifications)`);
-    const hasUserAddress = columns[0]?.values.some(
-      (col) => col[1] === "userAddress",
-    );
-
-    if (!hasUserAddress) {
-      // Old schema without userAddress - drop and recreate
-      console.log(
-        "[NotificationsDB] Old notifications table detected without userAddress column. Dropping and recreating...",
-      );
-      db.run(`DROP TABLE IF EXISTS notifications`);
-      await saveBytes(db.export());
-    }
-  }
-
-  // Create tables with correct schema
-  db.run(NOTIFICATION_SCHEMA);
-  db.run(APP_STATE_SCHEMA);
-  db.run(NOTIFICATION_PREFERENCES_SCHEMA);
-
-  // Migration for other columns (for users who have userAddress but missing these)
-  try {
-    db.run(`ALTER TABLE notifications ADD COLUMN isDeleted INTEGER DEFAULT 0`);
-  } catch {}
-  try {
-    db.run(`ALTER TABLE notifications ADD COLUMN deletedAt INTEGER`);
-  } catch {}
-  try {
-    db.run(
-      `ALTER TABLE notifications ADD COLUMN notificationReleaseNotes TEXT`,
-    );
-  } catch {}
-
-  const exists = db.exec(`SELECT 1 FROM app_state WHERE id = 1`);
-  if (!exists.length) {
-    db.run(`INSERT INTO app_state (id) VALUES (1)`);
-  }
-
-  await initNotificationPreferences(db); // may call saveBytes once
-
-  return db;
-}
-
-// Initialize notification preferences with default values
-async function initNotificationPreferences(db: initSqlJsType.Database) {
-  const defaultPrefs = [
-    {
-      id: "credits",
-      label: "Credits",
-      description:
-        "Sends an alert when fresh credits land in your account or when your balance falls near zero, giving you time to top up before uploads pause.",
-    },
-    {
-      id: "files",
-      label: "Files",
-      description:
-        "Pings you the moment a file sync completes, confirming your data is stored safely and ready whenever you need it.",
-    },
-  ];
-
-  // Check if preferences exist
-  const res = db.exec(`SELECT COUNT(*) FROM notification_preferences`);
-  const count = res[0]?.values[0][0] as number;
-
-  // Only initialize if no preferences exist
-  if (count === 0) {
-    for (const pref of defaultPrefs) {
-      db.run(
-        `INSERT INTO notification_preferences (id, label, description, enabled) 
-         VALUES (?, ?, ?, 1)`,
-        [pref.id, pref.label, pref.description],
-      );
-    }
-    await saveBytes(db.export());
-  }
-}
-
-// Get all notification preferences
 export async function getNotificationPreferences() {
-  const db = await getDb();
-  const res = db.exec(
-    `SELECT id, label, description, enabled FROM notification_preferences`,
-  );
-
-  if (!res.length) return [];
-
-  return res[0].values.map((row) => ({
-    id: row[0] as string,
-    label: row[1] as string,
-    description: row[2] as string,
-    enabled: (row[3] as number) === 1,
-  }));
+  try {
+    return await invoke<
+      Array<{ id: string; label: string; description: string; enabled: boolean }>
+    >("get_local_notification_preferences");
+  } catch (error) {
+    console.error("Failed to get notification preferences:", error);
+    return [];
+  }
 }
 
-// Update all notification preferences at once
 export async function updateAllNotificationPreferences(
   prefMap: Record<string, boolean>,
 ) {
-  const db = await getDb();
-
-  // Begin transaction for better performance
-  db.exec("BEGIN TRANSACTION");
-
   try {
-    for (const [id, enabled] of Object.entries(prefMap)) {
-      db.run(`UPDATE notification_preferences SET enabled = ? WHERE id = ?`, [
-        enabled ? 1 : 0,
-        id,
-      ]);
-    }
-
-    db.exec("COMMIT");
-    await saveBytes(db.export());
+    const preferences = Object.entries(prefMap).map(([id, enabled]) => ({
+      id,
+      enabled,
+    }));
+    await invoke("update_local_notification_preferences", { preferences });
     return true;
   } catch (error) {
-    db.exec("ROLLBACK");
     console.error("Failed to update notification preferences:", error);
     return false;
   }
 }
 
-// Get enabled notification types
 export async function getEnabledNotificationTypes(): Promise<string[]> {
-  const db = await getDb();
-  const res = db.exec(
-    `SELECT label FROM notification_preferences WHERE enabled = 1`,
-  );
-
-  if (!res.length) return [];
-
-  return res[0].values.map((row) => row[0] as string);
+  try {
+    return await invoke<string[]>("get_local_enabled_notification_types");
+  } catch (error) {
+    console.error("Failed to get enabled notification types:", error);
+    return [];
+  }
 }
 
-/* notifications CRUD */
+/* ── Notifications CRUD ── */
 
 export async function addNotification({
   userAddress,
@@ -206,247 +60,202 @@ export async function addNotification({
   notificationLink: string;
   notificationReleaseNotes?: string;
 }) {
-  const db = await getDb();
-
-  // Special check for welcome notification - prevent duplicates (including deleted ones)
-  if (notificationSubtype === "Welcome") {
-    const existing = db.exec(
-      `SELECT COUNT(*) FROM notifications
-       WHERE userAddress = ?
-       AND notificationSubtype = 'Welcome'`,
-      [userAddress],
-    );
-    const count = existing[0]?.values[0][0] as number;
-    if (count > 0) {
-      console.log(
-        `[NotificationsDB] Welcome notification already exists for ${userAddress} (including deleted), skipping`,
-      );
-      return;
-    }
-  }
-
-  db.run(
-    `INSERT INTO notifications
-       (userAddress, notificationType, notificationSubtype, notificationTitleText,
-        notificationDescription, notificationLinkText, notificationLink, notificationReleaseNotes,
-        isUnread, notificationCreationTime)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, strftime('%s','now')*1000)`,
-    [
+  try {
+    await invoke("add_notification", {
       userAddress,
       notificationType,
       notificationSubtype,
-      notificationTitleText,
-      notificationDescription,
-      notificationLinkText,
-      notificationLink,
-      notificationReleaseNotes,
-    ],
-  );
-  await saveBytes(db.export());
-  console.log(
-    `[NotificationsDB] Added notification for ${userAddress}: ${notificationSubtype || notificationType}`,
-  );
+      titleText: notificationTitleText,
+      description: notificationDescription,
+      linkText: notificationLinkText,
+      link: notificationLink,
+      releaseNotes: notificationReleaseNotes,
+    });
+    console.log(
+      `[NotificationsDB] Added notification for ${userAddress}: ${notificationSubtype || notificationType}`,
+    );
+  } catch (error) {
+    console.error("Failed to add notification:", error);
+  }
 }
 
-export async function isFirstTime(): Promise<boolean> {
-  const db = await getDb();
-  const res = db.exec("SELECT isFirstTime FROM app_state WHERE id = 1");
-  return (res[0].values[0][0] as number) === 1;
+export async function listNotifications(userAddress: string, limit = 50) {
+  try {
+    return await invoke<any[]>("list_notifications", { userAddress, limit });
+  } catch (error) {
+    console.error("Failed to list notifications:", error);
+    return [];
+  }
 }
-// notificationsDb.ts
+
+export async function markRead(id: number) {
+  try {
+    await invoke("mark_notification_read", { id });
+  } catch (error) {
+    console.error("Failed to mark notification as read:", error);
+  }
+}
+
+export async function markUnread(id: number) {
+  try {
+    await invoke("mark_notification_unread", { id });
+  } catch (error) {
+    console.error("Failed to mark notification as unread:", error);
+  }
+}
+
+export async function markAllRead(userAddress: string) {
+  try {
+    await invoke("mark_all_notifications_read", { userAddress });
+    return true;
+  } catch (error) {
+    console.error("Failed to mark all notifications as read:", error);
+    return false;
+  }
+}
+
+export async function unreadCount(userAddress: string): Promise<number> {
+  try {
+    return await invoke<number>("get_unread_count", { userAddress });
+  } catch (error) {
+    console.error("Failed to get unread count:", error);
+    return 0;
+  }
+}
+
+export async function deleteNotification(id: number) {
+  try {
+    await invoke("delete_notification", { id });
+    return true;
+  } catch (error) {
+    console.error("Failed to delete notification:", error);
+    return false;
+  }
+}
+
+export async function deleteAllNotifications(userAddress: string) {
+  try {
+    await invoke("delete_all_notifications", { userAddress });
+    return true;
+  } catch (error) {
+    console.error("Failed to delete all notifications:", error);
+    return false;
+  }
+}
+
+export async function deleteSystemNotificationByVersion(version: string) {
+  try {
+    await invoke("delete_system_notification_by_version", { version });
+    console.log(
+      `[NotificationsDB] System notification for version ${version} marked as deleted`,
+    );
+    return true;
+  } catch (error) {
+    console.error("Failed to delete system notification by version:", error);
+    return false;
+  }
+}
+
+export async function clearAllNotifications() {
+  try {
+    await invoke("clear_all_notifications");
+    console.log("[NotificationsDB] All notifications cleared from database");
+    return true;
+  } catch (error) {
+    console.error("Failed to clear all notifications:", error);
+    return false;
+  }
+}
+
+/* ── Credit notification helpers ── */
+
 export async function creditAlreadyNotified(ts: string): Promise<boolean> {
-  const db = await getDb();
-  const res = db.exec(
-    `SELECT COUNT(*) FROM notifications
-       WHERE notificationType = 'Credits'
-         AND notificationSubtype = ?
-         AND (isDeleted IS NULL OR isDeleted = 0)`,
-    [`MintedAccountCredits-${ts}`],
-  );
-  return (res[0]?.values[0][0] as number) > 0;
+  try {
+    return await invoke<boolean>("credit_already_notified", { timestamp: ts });
+  } catch (error) {
+    console.error("Failed to check credit notification:", error);
+    return false;
+  }
 }
 
 export async function lowCreditSubtypeExists(
   subtype: string,
 ): Promise<boolean> {
-  const db = await getDb();
-  const res = db.exec(
-    `SELECT COUNT(*) FROM notifications
-       WHERE notificationType = 'Credits'
-         AND notificationSubtype = ?
-         AND (isDeleted IS NULL OR isDeleted = 0)`,
-    [subtype],
-  );
-  return (res[0]?.values[0][0] as number) > 0;
+  try {
+    return await invoke<boolean>("low_credit_subtype_exists", { subtype });
+  } catch (error) {
+    console.error("Failed to check low credit subtype:", error);
+    return false;
+  }
+}
+
+export async function hasActiveLowCreditNotification(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("has_active_low_credit_notification");
+  } catch (error) {
+    console.error("Failed to check active low credit notification:", error);
+    return false;
+  }
 }
 
 export async function getLastDeletedLowCreditNotification(): Promise<{
   deletedAt: number;
 } | null> {
-  const db = await getDb();
-  const res = db.exec(
-    `SELECT deletedAt FROM notifications
-       WHERE notificationType = 'Credits'
-         AND notificationSubtype LIKE 'LowCreditWarning-%'
-         AND isDeleted = 1
-         AND deletedAt IS NOT NULL
-       ORDER BY deletedAt DESC
-       LIMIT 1`,
-  );
-
-  if (!res.length || !res[0].values.length) return null;
-
-  return {
-    deletedAt: res[0].values[0][0] as number,
-  };
-}
-
-export async function hasActiveLowCreditNotification(): Promise<boolean> {
-  const db = await getDb();
-  const res = db.exec(
-    `SELECT COUNT(*) FROM notifications
-       WHERE notificationType = 'Credits'
-         AND notificationSubtype LIKE 'LowCreditWarning-%'
-         AND (isDeleted IS NULL OR isDeleted = 0)`,
-  );
-  return (res[0]?.values[0][0] as number) > 0;
-}
-
-export async function markFirstTimeSeen() {
-  const db = await getDb();
-  db.run("UPDATE app_state SET isFirstTime = 0 WHERE id = 1");
-  await saveBytes(db.export());
-}
-export async function updateIsAboveHalfCredit(isAboveHalfCredit: boolean) {
-  const db = await getDb();
-  db.run("UPDATE app_state SET isAboveHalfCredit = ? WHERE id = 1", [
-    isAboveHalfCredit ? 1 : 0,
-  ]);
-  await saveBytes(db.export());
-}
-export async function listNotifications(userAddress: string, limit = 50) {
-  const db = await getDb();
-  // Merge user-specific notifications with system notifications (like updates)
-  const res = db.exec(
-    `SELECT *
-       FROM notifications
-      WHERE (userAddress = ? OR userAddress = 'system')
-        AND (isDeleted IS NULL OR isDeleted = 0)
-      ORDER BY notificationCreationTime DESC
-      LIMIT ?`,
-    [userAddress, limit],
-  );
-  return res[0]?.values ?? [];
-}
-
-export async function markRead(id: number) {
-  const db = await getDb();
-  db.run(`UPDATE notifications SET isUnread = 0 WHERE id = ?`, [id]);
-  await saveBytes(db.export());
-}
-
-export async function markUnread(id: number) {
-  const db = await getDb();
-  db.run(`UPDATE notifications SET isUnread = 1 WHERE id = ?`, [id]);
-  await saveBytes(db.export());
-}
-
-export async function markAllRead(userAddress: string) {
-  const db = await getDb();
-  // Mark both user-specific and system notifications as read
-  db.run(
-    `UPDATE notifications SET isUnread = 0 
-     WHERE (userAddress = ? OR userAddress = 'system') 
-     AND isUnread = 1 AND (isDeleted IS NULL OR isDeleted = 0)`,
-    [userAddress],
-  );
-  await saveBytes(db.export());
-  return true;
-}
-
-export async function unreadCount(userAddress: string): Promise<number> {
-  const db = await getDb();
-  // Count both user-specific and system notifications
-  const res = db.exec(
-    `SELECT COUNT(*) FROM notifications 
-     WHERE (userAddress = ? OR userAddress = 'system') 
-     AND isUnread = 1 AND (isDeleted IS NULL OR isDeleted = 0)`,
-    [userAddress],
-  );
-  return res[0]?.values[0][0] as number;
-}
-
-export async function isAboveHalfCredit(): Promise<boolean> {
-  const db = await getDb();
-  const res = db.exec("SELECT isAboveHalfCredit FROM app_state WHERE id = 1");
-  return (res[0].values[0][0] as number) === 1;
+  try {
+    const result = await invoke<number | null>("get_last_deleted_low_credit_time");
+    if (result === null) return null;
+    return { deletedAt: result };
+  } catch (error) {
+    console.error("Failed to get last deleted low credit notification:", error);
+    return null;
+  }
 }
 
 export async function hippusVersionNotificationExists(
   version: string,
 ): Promise<boolean> {
-  const db = await getDb();
-  // Check for system-wide update notifications
-  const res = db.exec(
-    `SELECT COUNT(*) FROM notifications
-       WHERE userAddress = 'system'
-         AND notificationType = 'Hippius'
-         AND notificationSubtype = ?
-         AND (isDeleted IS NULL OR isDeleted = 0)`,
-    [version],
-  );
-  return (res[0]?.values[0][0] as number) > 0;
+  try {
+    return await invoke<boolean>("hippius_version_notification_exists", {
+      version,
+    });
+  } catch (error) {
+    console.error("Failed to check hippius version notification:", error);
+    return false;
+  }
 }
 
-// Soft delete a single notification
-export async function deleteNotification(id: number) {
-  const db = await getDb();
-  const now = Date.now();
-  db.run(`UPDATE notifications SET isDeleted = 1, deletedAt = ? WHERE id = ?`, [
-    now,
-    id,
-  ]);
-  await saveBytes(db.export());
-  return true;
+/* ── App state ── */
+
+export async function isFirstTime(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("is_first_time");
+  } catch (error) {
+    console.error("Failed to check first time status:", error);
+    return true;
+  }
 }
 
-// Soft delete all notifications for a specific user
-export async function deleteAllNotifications(userAddress: string) {
-  const db = await getDb();
-  const now = Date.now();
-  db.run(
-    `UPDATE notifications SET isDeleted = 1, deletedAt = ? 
-     WHERE userAddress = ? AND (isDeleted IS NULL OR isDeleted = 0)`,
-    [now, userAddress],
-  );
-  await saveBytes(db.export());
-  return true;
+export async function markFirstTimeSeen() {
+  try {
+    await invoke("mark_first_time_seen");
+  } catch (error) {
+    console.error("Failed to mark first time seen:", error);
+  }
 }
 
-// Delete system notification for a specific version (e.g., after update is installed)
-export async function deleteSystemNotificationByVersion(version: string) {
-  const db = await getDb();
-  const now = Date.now();
-  db.run(
-    `UPDATE notifications SET isDeleted = 1, deletedAt = ? 
-     WHERE userAddress = 'system' 
-     AND notificationType = 'Hippius' 
-     AND notificationSubtype = ? 
-     AND (isDeleted IS NULL OR isDeleted = 0)`,
-    [now, version],
-  );
-  await saveBytes(db.export());
-  console.log(
-    `[NotificationsDB] System notification for version ${version} marked as deleted`,
-  );
-  return true;
+export async function isAboveHalfCredit(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("get_is_above_half_credit");
+  } catch (error) {
+    console.error("Failed to check above half credit status:", error);
+    return false;
+  }
 }
 
-// Clear all notifications from database (for testing/reset)
-export async function clearAllNotifications() {
-  const db = await getDb();
-  db.run(`DELETE FROM notifications`);
-  await saveBytes(db.export());
-  console.log("[NotificationsDB] All notifications cleared from database");
-  return true;
+export async function updateIsAboveHalfCredit(isAboveHalfCredit: boolean) {
+  try {
+    await invoke("update_is_above_half_credit", { value: isAboveHalfCredit });
+  } catch (error) {
+    console.error("Failed to update above half credit status:", error);
+  }
 }
