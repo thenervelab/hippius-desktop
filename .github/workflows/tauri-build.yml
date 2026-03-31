@@ -13,6 +13,9 @@ concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
 jobs:
   publish-tauri:
     strategy:
@@ -20,7 +23,7 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: "--target universal-apple-darwin" # One universal mac build
+            args: "--target universal-apple-darwin"
           - platform: ubuntu-22.04
             args: "--bundles deb"
           - platform: windows-latest
@@ -32,23 +35,83 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Fetch all history to get commit messages
+          fetch-depth: 0
 
-      # Get PR or commit details for the release notes
+      - name: Setup SSH for private Rust git deps
+        shell: bash
+        env:
+          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          # Decode private key from base64
+          echo "$PRIVATE_GIT_DEPLOY_KEY_B64" | python3 -c "
+          import sys, base64
+          data = sys.stdin.read().strip()
+          sys.stdout.buffer.write(base64.b64decode(data))
+          " > ~/.ssh/private_git_key
+          chmod 600 ~/.ssh/private_git_key
+
+          # Trust GitHub host key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+
+          # SSH config — git will use the key automatically (no ssh-agent needed)
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/private_git_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Force Cargo to use git CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: Verify SSH access to hcfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-remote ssh://git@github.com/thenervelab/hcfs.git HEAD
+
+      - name: Verify pinned hcfs commit is fetchable
+        shell: bash
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          set -euo pipefail
+          REV=$(grep -m1 'thenervelab/hcfs.git' src-tauri/Cargo.toml | sed 's/.*rev *= *"\([^"]*\)".*/\1/')
+          echo "Pinned hcfs rev: $REV"
+          if git ls-remote ssh://git@github.com/thenervelab/hcfs.git | grep -q "$REV"; then
+            echo "Commit $REV found at remote ref"
+          else
+            echo "Commit not at a ref tip, verifying via shallow clone..."
+            git clone --bare --filter=blob:none ssh://git@github.com/thenervelab/hcfs.git /tmp/hcfs-verify
+            git -C /tmp/hcfs-verify cat-file -t "$REV"
+          fi
+
       - name: Get release notes
         id: release_notes
         shell: bash
         run: |
           set -euo pipefail
-
-          # Commit data
           SHA="$(git rev-parse HEAD)"
-
-          # Try to read PR number from commit subject like "... (#123)"
           PR_NUMBER="$(git log -1 --pretty=format:'%s' | grep -oE '#[0-9]+' | tr -d '# ' || true)"
 
           if [[ -z "${PR_NUMBER:-}" ]]; then
-            # Better: ask GitHub which PR(s) are linked to this commit
             PR_NUMBER="$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
               "https://api.github.com/repos/${{ github.repository }}/commits/${SHA}/pulls" \
               | jq -r '.[0].number // empty')"
@@ -67,17 +130,14 @@ jobs:
             BODY="$(git log -1 --pretty=%b)"
           fi
 
-          # Normalize endings and guard empties
           TITLE="${TITLE//$'\r'/}"
           BODY="${BODY//$'\r'/}"
           if [[ -z "${BODY:-}" ]]; then
             BODY="See the assets to download this version and install."
           fi
 
-          # Optional: trim very large bodies (example: 30000 chars)
           BODY="$(printf '%s' "$BODY" | head -c 30000)"
 
-          # Write to $GITHUB_OUTPUT using multiline-safe heredoc
           {
             echo "title<<__TITLE__"
             echo "$TITLE"
@@ -86,6 +146,7 @@ jobs:
             echo "$BODY"
             echo "__BODY__"
           } >> "$GITHUB_OUTPUT"
+
       - name: Linux deps
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -95,7 +156,6 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:
-          # Needed so universal contains BOTH slices
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Rust cache
@@ -118,18 +178,24 @@ jobs:
         run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
 
       - name: PNPM cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ${{ env.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-pnpm-
 
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      - name: Create Tauri env
+      - name: Create src-tauri/.env
+        shell: bash
         run: |
-          echo "INDEXER_API_KEY=${{ secrets.INDEXER_API_KEY }}" > src-tauri/.env
+          set -euo pipefail
+          mkdir -p src-tauri
+          cat > src-tauri/.env << 'EOF'
+          ${{ secrets.TAURI_ENV_FILE }}
+          EOF
+          chmod 600 src-tauri/.env
 
       - name: Build frontend
         run: pnpm build
@@ -142,6 +208,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         with:
           tagName: v__VERSION__
           releaseName: "${{ steps.release_notes.outputs.title }}"
