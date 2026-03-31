@@ -175,6 +175,7 @@ jobs:
           run_install: false
 
       - name: PNPM store path
+        shell: bash
         run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
 
       - name: PNPM cache
