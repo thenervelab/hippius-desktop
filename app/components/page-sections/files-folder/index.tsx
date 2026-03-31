@@ -509,6 +509,7 @@ export default function FolderView({
                 hasMore={hasMore}
                 loadMore={loadMore}
                 isSyncPathEmpty={isSyncPathEmpty}
+                addButtonRef={addButtonRef}
               />
             )}
           </>
