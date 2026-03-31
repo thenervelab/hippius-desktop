@@ -25,7 +25,7 @@ const AuthLayout = ({ children, isVerify = false, hideHeader = false }: AuthLayo
         >
           <LeftCarouselPanel />
         </RevealTextLine>
-        <div className="flex flex-col items-start h-full overflow-y-auto">
+        <div className="flex flex-col items-start h-full overflow-y-auto no-scrollbar">
           <div className="my-auto flex flex-col items-start w-full">
             {!hideHeader && <HippiusHeader isVerify={isVerify} />}
             <Suspense

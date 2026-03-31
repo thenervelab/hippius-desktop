@@ -101,17 +101,17 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
 
   return (
     <div className="opacity-0 animate-fade-in-0.5 w-full">
-      <div className="space-y-4 text-grey-10 w-full">
+      <div className="space-y-[min(1rem,16px)] text-grey-10 w-full">
         {/* Back Button */}
         <BackButton onBack={onBack} text="Back" />
 
         <form onSubmit={handleLogin} className="space-y-6">
           {/* Title */}
           <div>
-            <h1 className="text-grey-10 text-[2rem] font-medium">
+            <h1 className="text-grey-10 text-[min(2rem,32px)] font-medium">
               Login with your access key
             </h1>
-            <p className="text-sm font-medium text-grey-70">
+            <p className="text-[min(0.875rem,14px)] font-medium text-grey-70">
               Please enter your access key to confirm and start creating your
               account
             </p>
@@ -170,9 +170,9 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
         </form>
       </div>
       {/* Footer Links */}
-      <div className="space-y-2 mt-2">
+      <div className="space-y-[min(0.5rem,8px)] mt-[min(0.5rem,8px)]">
         <div className="text-center">
-          <p className="text-xs text-grey-60 font-semibold">
+          <p className="text-[min(0.75rem,12px)] text-grey-60 font-semibold">
             By continuing, you agree to our{" "}
             <button
               type="button"
@@ -194,7 +194,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
           </p>
         </div>
 
-        <div className="text-center text-xs text-grey-70 font-medium">
+        <div className="text-center text-[min(0.75rem,12px)] text-grey-70 font-medium">
           <p>Version {version}</p>
         </div>
       </div>

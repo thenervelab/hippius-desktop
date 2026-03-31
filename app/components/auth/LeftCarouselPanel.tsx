@@ -51,7 +51,7 @@ const LeftCarouselPanel = () => {
                       className="delay-300 w-full"
                     >
                       <div
-                        className="hidden [@media(min-height:750px)]:block text-center xl:text-[2.5rem] text-[1.75rem] 
+                        className="hidden [@media(min-height:750px)]:block text-center xl:text-[min(2.5rem,40px)] text-[min(1.75rem,28px)] 
                       font-medium text-grey-100 [@media(min-height:750px)]:mb-[min(3rem,48px)]  "
                       >
                         {item.heading}
@@ -66,7 +66,7 @@ const LeftCarouselPanel = () => {
                         reveal={inView}
                         className="delay-300"
                       >
-                        <span className="text-[1.375rem] text-center text-grey-100">
+                        <span className="text-[min(1.375rem,22px)] text-center text-grey-100">
                           {item.text}
                         </span>
                       </RevealTextLine>
@@ -75,7 +75,7 @@ const LeftCarouselPanel = () => {
                         reveal={inView}
                         className="delay-500"
                       >
-                        <p className="text-sm text-center text-grey-80">
+                        <p className="text-[min(0.875rem,14px)] text-center text-grey-80">
                           {item.subText}
                         </p>
                       </RevealTextLine>

@@ -12,7 +12,7 @@ export const SWIPE_CONTENT = [
     text: "Global Reliability",
     subText:
       "Powered by a decentralized network of hardware providers, not a single point of failure.",
-    icon: <GlobalReliability className="xl:h-[16.875rem] h-[10rem] w-full" />,
+    icon: <GlobalReliability className="xl:h-[min(16.875rem,270px)] h-[min(10rem,160px)] w-full" />,
   },
   {
     heading: "Secure Your Files with Blockchain",
@@ -21,7 +21,7 @@ export const SWIPE_CONTENT = [
       "Your files are stored securely on our decentralized blockchain, with Arion Hash tracking ensuring traceability and preventing unauthorized access",
 
     icon: (
-      <SecureFilesWithBlockChain className="xl:h-[16.875rem] h-[10rem] w-full" />
+      <SecureFilesWithBlockChain className="xl:h-[min(16.875rem,270px)] h-[min(10rem,160px)] w-full" />
     ),
   },
   {
@@ -29,14 +29,14 @@ export const SWIPE_CONTENT = [
     text: "Pay Only for What You Use",
     subText:
       "Store your data with cost-effective rates and no hidden fees, powered by transparent blockchain technology",
-    icon: <SmartAffordableStorage className="xl:h-[16.875rem] h-[10rem] w-full" />,
+    icon: <SmartAffordableStorage className="xl:h-[min(16.875rem,270px)] h-[min(10rem,160px)] w-full" />,
   },
   {
     heading: "Earn Continuously with Referrals",
     text: "Share Your Unique Code",
     subText:
       "Generate a unique referral code and share it with anyone—earn ongoing rewards based on referred users’ usage, all tracked on the blockchain",
-    icon: <EarnWithRefferals className="xl:h-[16.875rem] h-[10rem] w-full" />,
+    icon: <EarnWithRefferals className="xl:h-[min(16.875rem,270px)] h-[min(10rem,160px)] w-full" />,
   },
   // {
   //   heading: "Your Secret Phrase: The Key to Your Account",
