@@ -445,6 +445,366 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Construct an `HcfsClientConfig` from the common connection parameters.
+fn build_hcfs_config(
+    server_url: &str,
+    bearer_token: &str,
+    account_id: &str,
+    folder_hash: &str,
+) -> HcfsClientConfig {
+    HcfsClientConfig {
+        base_url: server_url.to_string(),
+        api_key: "Arion".to_string(),
+        bearer_token: bearer_token.to_string(),
+        accept_invalid_certs: true,
+        billing_bypass_token: None,
+        ss58_address: account_id.to_string(),
+        folder_hash: folder_hash.to_string(),
+    }
+}
+
+/// Loaded sync configuration from the database for a single label.
+struct SyncConfig {
+    sync_path: String,
+    drive_password: String,
+    server_url: String,
+}
+
+/// Read the sync path, drive password, and server URL from the DB.
+async fn load_sync_config(
+    pool: &SqlitePool,
+    account_id: &str,
+    label: &str,
+) -> Result<SyncConfig, String> {
+    let sync_path = get_sync_path_for_label(pool, account_id, label).await?;
+    debug!("Sync path: {}, label: {}", sync_path, label);
+
+    let drive_password = get_drive_password(pool, account_id).await?;
+    let config = get_hcfs_config_internal(pool, account_id).await?;
+
+    let server_url = if config.server_url.is_empty() {
+        "https://arion.hippius.com".to_string()
+    } else {
+        config.server_url
+    };
+    debug!("Server URL: {}", server_url);
+
+    Ok(SyncConfig {
+        sync_path,
+        drive_password,
+        server_url,
+    })
+}
+
+/// Check if the sync directory was deleted by the user and handle cleanup.
+///
+/// If the config dir has sync state (was previously syncing) but the sync
+/// folder is completely gone, the user intentionally removed it. Removes
+/// the stale DB row and returns an error so `initialize_sync_inner` aborts.
+async fn check_deleted_sync_dir(
+    pool: &SqlitePool,
+    account_id: &str,
+    label: &str,
+    sync_path: &str,
+) -> Result<(), String> {
+    let sync_dir_existed = Path::new(sync_path).exists();
+    let folder_dir = config_dir_for_folder(account_id, label)?;
+    let had_sync_state = folder_dir.join("sync_state.json").exists();
+
+    if !sync_dir_existed && had_sync_state {
+        warn!(
+            "Sync folder '{}' was deleted but config still exists for '{}'. \
+             Removing stale sync path from DB to prevent remote file deletion.",
+            sync_path, label
+        );
+        if let Err(e) = crate::commands::substrate_tx::remove_sync_path_internal(
+            pool, account_id, label,
+        )
+        .await
+        {
+            warn!("Failed to remove stale sync path for '{}': {}", label, e);
+        }
+        let _ = std::fs::remove_file(folder_dir.join("sync_state.json"));
+        let _ = std::fs::remove_file(folder_dir.join("sync_state.json.bak"));
+        return Err(format!(
+            "Sync folder '{sync_path}' for '{label}' was removed. \
+             It has been unregistered from sync. \
+             Re-add it from Settings if this was unintentional."
+        ));
+    }
+    Ok(())
+}
+
+/// Compute config directories, run legacy migration, and reconcile the
+/// master mnemonic with the login mnemonic (if provided).
+fn prepare_config_dir(
+    account_id: &str,
+    label: &str,
+    sync_path: &str,
+    drive_password: &str,
+    existing_mnemonic: Option<&str>,
+) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    let acct_dir = account_dir(account_id)?;
+    let folder_dir = config_dir_for_folder(account_id, label)?;
+    let master_path = master_mnemonic_path(account_id)?;
+    run_migration(sync_path, &acct_dir, &folder_dir, &master_path)?;
+
+    // If the login mnemonic is available, ensure the stored master matches.
+    if let Some(imported) = existing_mnemonic
+        && master_path.exists()
+    {
+        use zeroize::Zeroize;
+        let stored = hcfs_client::auth::recover_mnemonic(&master_path, drive_password)
+            .map_err(|e| format!("Failed to recover master: {e}"))?;
+        let mut stored_str = stored.to_string();
+        if stored_str != *imported {
+            info!(
+                "Stored master differs from login mnemonic — \
+                 updating master before derivation check"
+            );
+            hcfs_client::auth::save_encrypted_mnemonic(
+                &master_path,
+                imported,
+                drive_password,
+            )
+            .map_err(|e| format!("Failed to update master: {e}"))?;
+        }
+        stored_str.zeroize();
+    }
+
+    ensure_derived_mnemonic(&folder_dir, &master_path, drive_password, label)?;
+
+    Ok((acct_dir, folder_dir, master_path))
+}
+
+/// Recover a drive after unlock failure: clean up corrupted config files,
+/// create a fresh `HcfsDriveManager`, re-derive the mnemonic, and unlock.
+///
+/// Returns `(user_id, optional_master_mnemonic)`.
+fn recover_drive(
+    manager: HcfsDriveManager,
+    sync_path: &str,
+    folder_dir: &Path,
+    master_path: &Path,
+    server_url: &str,
+    bearer_token: &str,
+    account_id: &str,
+    fhash: &str,
+    label: &str,
+    drive_password: &str,
+    existing_mnemonic: Option<&str>,
+) -> Result<(HcfsDriveManager, String, Option<String>), String> {
+    // Remove corrupted enc_mnemonic.json
+    let enc_path = folder_dir.join("enc_mnemonic.json");
+    if enc_path.exists() {
+        if let Err(rm_err) = std::fs::remove_file(&enc_path) {
+            warn!("Failed to remove enc_mnemonic.json: {}", rm_err);
+        } else {
+            debug!("Removed enc_mnemonic.json");
+        }
+    }
+
+    // Remove sync state and rekey marker to start fresh
+    let _ = std::fs::remove_file(folder_dir.join("sync_state.json"));
+    let _ = std::fs::remove_file(folder_dir.join("sync_state.json.bak"));
+    let _ = std::fs::remove_file(folder_dir.join(".needs_rekey"));
+    info!("Recovery cleanup complete. Retrying initialization...");
+
+    drop(manager);
+    let mut new_manager =
+        HcfsDriveManager::new(PathBuf::from(sync_path), folder_dir.to_path_buf());
+    new_manager.set_config(build_hcfs_config(
+        server_url,
+        bearer_token,
+        account_id,
+        fhash,
+    ))?;
+
+    debug!("Creating fresh drive after recovery...");
+
+    let master_str = if let Some(imported) = existing_mnemonic {
+        debug!("Using login mnemonic as master for recovery");
+        imported.to_string()
+    } else {
+        let master = bip39::Mnemonic::generate(24)
+            .map_err(|e| format!("Failed to generate mnemonic: {e}"))?;
+        warn!("Generated new random master for recovery (no login mnemonic available)");
+        master.to_string()
+    };
+    hcfs_client::auth::save_encrypted_mnemonic(master_path, &master_str, drive_password)
+        .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
+    let derived = derive_folder_mnemonic(&master_str, label)?;
+
+    let mut init_mnemonic = new_manager.init(drive_password, Some(&derived))?;
+    zeroize::Zeroize::zeroize(&mut init_mnemonic);
+
+    let uid = new_manager.unlock(drive_password)?;
+    info!("Drive re-initialized and unlocked, derived user_id: {}", uid);
+
+    Ok((new_manager, uid, Some(master_str)))
+}
+
+/// Initialize a brand-new folder: resolve the mnemonic source (imported
+/// login mnemonic, existing master on disk, or error), init the drive,
+/// and unlock it.
+///
+/// Returns `(user_id, optional_master_for_backup, is_new_master)`.
+fn init_new_drive(
+    manager: &mut HcfsDriveManager,
+    label: &str,
+    master_path: &Path,
+    drive_password: &str,
+    existing_mnemonic: Option<&str>,
+) -> Result<(String, Option<String>, bool), String> {
+    info!(
+        "Drive not initialized for '{}', creating... (existing_mnemonic={}, master_exists={})",
+        label,
+        existing_mnemonic.is_some(),
+        master_path.exists(),
+    );
+
+    let (folder_mnemonic, master_for_backup, generated_new) =
+        if let Some(imported) = existing_mnemonic {
+            use zeroize::Zeroize;
+            if master_path.exists() {
+                let stored =
+                    hcfs_client::auth::recover_mnemonic(master_path, drive_password)
+                        .map_err(|e| {
+                            format!("Failed to recover master mnemonic: {e}")
+                        })?;
+                let mut stored_str = stored.to_string();
+                if stored_str == *imported {
+                    debug!("Stored master matches login mnemonic");
+                } else {
+                    info!(
+                        "Stored master differs from login mnemonic — updating master"
+                    );
+                    hcfs_client::auth::save_encrypted_mnemonic(
+                        master_path,
+                        imported,
+                        drive_password,
+                    )
+                    .map_err(|e| format!("Failed to update master mnemonic: {e}"))?;
+                }
+                stored_str.zeroize();
+            } else {
+                hcfs_client::auth::save_encrypted_mnemonic(
+                    master_path,
+                    imported,
+                    drive_password,
+                )
+                .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
+                info!("Saved login mnemonic as master (new device)");
+            }
+            let derived = derive_folder_mnemonic(imported, label)?;
+            (derived, None, false)
+        } else if master_path.exists() {
+            let master =
+                hcfs_client::auth::recover_mnemonic(master_path, drive_password)
+                    .map_err(|e| {
+                        format!("Failed to recover master mnemonic: {e}")
+                    })?;
+            let mut master_str = master.to_string();
+            let derived = derive_folder_mnemonic(&master_str, label)?;
+            zeroize::Zeroize::zeroize(&mut master_str);
+            debug!("Derived folder mnemonic from existing master");
+            (derived, None, false)
+        } else {
+            return Err(
+                "No encryption key available. Please log out and log in \
+                 again with your mnemonic to enable sync."
+                    .to_string(),
+            );
+        };
+
+    let mut init_mnemonic = manager.init(drive_password, Some(&folder_mnemonic))?;
+    zeroize::Zeroize::zeroize(&mut init_mnemonic);
+    drop(init_mnemonic);
+    let mut folder_mnemonic = folder_mnemonic;
+    zeroize::Zeroize::zeroize(&mut folder_mnemonic);
+
+    let uid = manager.unlock(drive_password)?;
+    info!(
+        "Drive initialized and unlocked for '{}', derived user_id: {}",
+        label, uid
+    );
+
+    Ok((uid, master_for_backup, generated_new))
+}
+
+/// Fire-and-log a health check against the HCFS server.
+async fn check_init_server_health(server_url: &str) {
+    let test_url = format!("{server_url}/health");
+    debug!("Testing connectivity to: {}", test_url);
+    let test_result = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map(|c| c.get(&test_url).header("X-API-Key", "Arion").send());
+    let resp = match test_result {
+        Ok(fut) => fut.await,
+        Err(e) => {
+            warn!("Failed to build test client: {e}");
+            return;
+        }
+    };
+    match resp {
+        Ok(r) => debug!("Health check OK: status={}", r.status()),
+        Err(e) => {
+            let mut msg = format!("{e}");
+            let mut source: Option<&dyn std::error::Error> = e.source();
+            while let Some(cause) = source {
+                use std::fmt::Write;
+                let _ = write!(msg, "\n  caused by: {cause}");
+                source = cause.source();
+            }
+            warn!("Health check failed: {}", msg);
+        }
+    }
+}
+
+/// Spawn a background task to register the folder with the server for
+/// cross-device discovery.
+fn spawn_folder_registration(
+    server_url: &str,
+    bearer_token: &str,
+    label: &str,
+    account_id: &str,
+    fhash: &str,
+    pool: &SqlitePool,
+) {
+    let config = build_hcfs_config(server_url, bearer_token, account_id, fhash);
+    let reg_label = label.to_string();
+    let reg_ss58 = account_id.to_string();
+    let reg_fhash = fhash.to_string();
+    let reg_pool = pool.clone();
+    tokio::spawn(async move {
+        match hcfs_client::client::HcfsClient::new(config) {
+            Ok(client) => {
+                let dev_name = get_device_name_internal(&reg_pool).await.ok();
+                if let Err(e) = client
+                    .register_folder(
+                        &reg_ss58,
+                        &reg_fhash,
+                        &reg_label,
+                        dev_name.as_deref(),
+                    )
+                    .await
+                {
+                    warn!("Folder registration failed: {}", e);
+                } else {
+                    info!("Folder '{}' registered with server", reg_label);
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Could not create client for folder registration: {}",
+                    e
+                );
+            }
+        }
+    });
+}
+
 /// Initialize sync for a specific drive label by reading config from database,
 /// creating the HCFS Drive, and starting/updating the background sync loop.
 ///
@@ -471,7 +831,6 @@ async fn initialize_sync_inner(
     start_loop: bool,
 ) -> Result<InitSyncResult, String> {
     use tauri::Manager;
-    // Sanitize label early — before it's used for filesystem paths or DB lookups.
     let label = sanitize_label(&label)?;
 
     let app_state = app.state::<crate::app_state::AppState>();
@@ -481,11 +840,10 @@ async fn initialize_sync_inner(
 
     info!("initialize_sync called for account: {}, label: '{}'", account_id, label);
 
-    // 0. Stop only the drive with the matching label if it exists
+    // 0. Stop the existing drive with this label, if any
     {
         let mut drives_guard = sync.drives.lock().await;
         if let Some(old_slot) = drives_guard.remove(&label) {
-            // Cancel any in-progress sync for this drive
             old_slot.cancel_token.cancel();
             debug!("Dropped previous drive instance for label '{}'", label);
         }
@@ -493,10 +851,7 @@ async fn initialize_sync_inner(
         sync.remove_state(&label);
     }
 
-    // Remove only this label's files from the current session (if any)
-    // so a stale deferred-completion session doesn't interfere.
-    // We must NOT clear the entire session or reset the sync counter —
-    // other drives may be actively syncing with their files in progress.
+    // Remove stale files for this label from the current progress session
     {
         let mut state = sync.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(session) = state.current_session.as_mut() {
@@ -504,133 +859,53 @@ async fn initialize_sync_inner(
             session.files.retain(|_path, file| file.label != label);
             let removed = before - session.files.len();
             if removed > 0 {
-                info!(
-                    label = %label,
-                    removed,
-                    "Removed stale files for re-initializing label",
-                );
+                info!(label = %label, removed, "Removed stale files for re-initializing label");
             }
         }
     }
     sync.emit_snapshot(true);
 
-    // 1. Read sync path for the given label from database
-    let sync_path = get_sync_path_for_label(pool, &account_id, &label).await?;
-    debug!("Sync path: {}, label: {}", sync_path, label);
+    // 1-2. Load config from DB
+    let cfg = load_sync_config(pool, &account_id, &label).await?;
+    crate::commands::file_commands::allow_asset_directory(&app, &cfg.sync_path);
 
-    // Expand asset protocol scope so the frontend can preview files from this folder
-    crate::commands::file_commands::allow_asset_directory(&app, &sync_path);
+    // 3. Check if sync directory was deleted
+    check_deleted_sync_dir(pool, &account_id, &label, &cfg.sync_path).await?;
+    std::fs::create_dir_all(&cfg.sync_path)
+        .map_err(|e| format!("Failed to create sync directory: {e}"))?;
 
-    // 2. Read HCFS config from database
-    let drive_password = get_drive_password(pool, &account_id).await?;
-    let config = get_hcfs_config_internal(pool, &account_id).await?;
+    // 4. Prepare config dir, run migration, reconcile master mnemonic
+    let (_acct_dir, folder_dir, master_path) = prepare_config_dir(
+        &account_id,
+        &label,
+        &cfg.sync_path,
+        &cfg.drive_password,
+        existing_mnemonic.as_deref(),
+    )?;
 
-    let server_url = if config.server_url.is_empty() {
-        "https://arion.hippius.com".to_string()
-    } else {
-        config.server_url
-    };
-    debug!("Server URL: {}", server_url);
+    // 5. Create drive and set HCFS config
+    let mut manager =
+        HcfsDriveManager::new(PathBuf::from(&cfg.sync_path), folder_dir.clone());
 
-    // 3. Check if the sync directory was deleted by the user.
-    //    If the config dir has sync state (was previously syncing) but the sync
-    //    folder is completely gone, the user intentionally removed it. Do NOT
-    //    recreate it — that would create an empty folder + stale synced tree,
-    //    causing the three-tree algorithm to delete all remote files.
-    let sync_dir_existed = Path::new(&sync_path).exists();
-    {
-        let folder_dir_check = config_dir_for_folder(&account_id, &label)?;
-        let had_sync_state = folder_dir_check.join("sync_state.json").exists();
-        if !sync_dir_existed && had_sync_state {
-            warn!(
-                "Sync folder '{}' was deleted but config still exists for '{}'. \
-                 Removing stale sync path from DB to prevent remote file deletion.",
-                sync_path, label
-            );
-            // Remove the sync path so it doesn't auto-init on next startup
-            if let Err(e) = crate::commands::substrate_tx::remove_sync_path_internal(pool, &account_id, &label).await {
-                warn!("Failed to remove stale sync path for '{}': {}", label, e);
-            }
-            // Also wipe the stale sync state
-            let _ = std::fs::remove_file(folder_dir_check.join("sync_state.json"));
-            let _ = std::fs::remove_file(folder_dir_check.join("sync_state.json.bak"));
-            return Err(format!(
-                "Sync folder '{sync_path}' for '{label}' was removed. It has been unregistered from sync. \
-                 Re-add it from Settings if this was unintentional."
-            ));
-        }
-    }
-
-    std::fs::create_dir_all(&sync_path).map_err(|e| format!("Failed to create sync directory: {e}"))?;
-
-    // 4. Compute per-folder config directory and run migration
-    let acct_dir = account_dir(&account_id)?;
-    let folder_dir = config_dir_for_folder(&account_id, &label)?;
-    let master_path = master_mnemonic_path(&account_id)?;
-    run_migration(&sync_path, &acct_dir, &folder_dir, &master_path)?;
-
-    // 4b. If the login mnemonic is available, ensure the stored master matches.
-    //     A mismatch means the master was generated randomly (e.g. after an
-    //     app restart where the mnemonic was lost). Updating the master BEFORE
-    //     ensure_derived_mnemonic lets the derivation check detect the folder
-    //     key mismatch and trigger a rekey.
-    if let Some(ref imported) = existing_mnemonic
-        && master_path.exists()
-    {
-        use zeroize::Zeroize;
-        let stored = hcfs_client::auth::recover_mnemonic(&master_path, &drive_password).map_err(|e| format!("Failed to recover master: {e}"))?;
-        let mut stored_str = stored.to_string();
-        if stored_str != *imported {
-            info!(
-                "Stored master differs from login mnemonic — \
-                     updating master before derivation check"
-            );
-            hcfs_client::auth::save_encrypted_mnemonic(&master_path, imported, &drive_password)
-                .map_err(|e| format!("Failed to update master: {e}"))?;
-        }
-        stored_str.zeroize();
-    }
-
-    // 4c. Detect legacy mnemonic: if the folder's mnemonic matches the master,
-    //     it was migrated without derivation. Re-derive so all devices share
-    //     the same folder-specific key.
-    ensure_derived_mnemonic(&folder_dir, &master_path, &drive_password, &label)?;
-
-    // 5. Create HcfsDriveManager with per-folder config directory
-    let mut manager = HcfsDriveManager::new(PathBuf::from(&sync_path), folder_dir.clone());
-
-    // 6. Retrieve the auth token BEFORE unlock so we can set ss58_address first
     let bearer_token = get_api_token(pool, &account_id)
         .await
         .map_err(|e| format!("Failed to get auth token: {e}"))?
-        .ok_or_else(|| "No authentication token found. Please log in again.".to_string())?;
+        .ok_or_else(|| {
+            "No authentication token found. Please log in again.".to_string()
+        })?;
 
-    debug!("Retrieved auth token for account_id (SS58): {}", account_id);
-    debug!("This account_id will be used as user_id for sync requests.");
-
-    // Set HCFS client config BEFORE unlock so ss58_address is available
     let fhash = folder_hash(&label);
-    manager.set_config(HcfsClientConfig {
-        base_url: server_url.clone(),
-        api_key: "Arion".to_string(),
-        bearer_token: bearer_token.clone(),
-        accept_invalid_certs: true,
-        billing_bypass_token: None,
-        ss58_address: account_id.clone(),
-        folder_hash: fhash.clone(),
-    })?;
-    debug!(
-        "HCFS config set with ss58_address: {}, folder_hash: {} (before unlock)",
-        account_id, fhash
-    );
+    manager.set_config(build_hcfs_config(
+        &cfg.server_url,
+        &bearer_token,
+        &account_id,
+        &fhash,
+    ))?;
 
-    // 7. Init or unlock the drive (now ss58_address is set, so identity will be correct)
+    // 6. Init or unlock the drive
     let (user_id, mnemonic, is_new_setup) = if manager.is_initialized() {
-        // Existing folder — just unlock
         debug!("Drive already initialized for '{}', unlocking...", label);
-        debug!("Config dir: {:?}", folder_dir);
-
-        match manager.unlock(&drive_password) {
+        match manager.unlock(&cfg.drive_password) {
             Ok(uid) => {
                 info!("Drive unlocked, user_id: {}", uid);
                 (uid, None, false)
@@ -638,142 +913,35 @@ async fn initialize_sync_inner(
             Err(e) => {
                 error!("Unlock failed for '{}': {}", label, e);
                 info!("Attempting recovery: cleaning up encrypted files...");
-
-                // Remove the corrupted/mismatched enc_mnemonic.json
-                let enc_path = folder_dir.join("enc_mnemonic.json");
-                if enc_path.exists() {
-                    if let Err(rm_err) = std::fs::remove_file(&enc_path) {
-                        warn!("Failed to remove enc_mnemonic.json: {}", rm_err);
-                    } else {
-                        debug!("Removed enc_mnemonic.json");
-                    }
-                }
-
-                // Keep the master mnemonic — deleting it causes derivation
-                // mismatches on other folders and cascading rekey markers.
-                // Only the folder mnemonic is removed above.
-
-                // Also remove sync_state.json to start fresh
-                let state_path = folder_dir.join("sync_state.json");
-                let state_bak_path = folder_dir.join("sync_state.json.bak");
-                let _ = std::fs::remove_file(&state_path);
-                let _ = std::fs::remove_file(&state_bak_path);
-
-                // Clear any rekey marker — recovery generates a new key,
-                // so purging old remote files is pointless and would block init.
-                let _ = std::fs::remove_file(folder_dir.join(".needs_rekey"));
-
-                info!("Recovery cleanup complete. Retrying initialization...");
-
-                drop(manager);
-                manager = HcfsDriveManager::new(PathBuf::from(&sync_path), folder_dir.clone());
-                manager.set_config(HcfsClientConfig {
-                    base_url: server_url.clone(),
-                    api_key: "Arion".to_string(),
-                    bearer_token: bearer_token.clone(),
-                    accept_invalid_certs: true,
-                    billing_bypass_token: None,
-                    ss58_address: account_id.clone(),
-                    folder_hash: fhash.clone(),
-                })?;
-
-                debug!("Creating fresh drive after recovery...");
-
-                // Use the login mnemonic if available so recovery stays
-                // compatible with other devices. Only generate a random
-                // master as a last resort.
-                let master_str = if let Some(ref imported) = existing_mnemonic {
-                    debug!("Using login mnemonic as master for recovery");
-                    imported.clone()
-                } else {
-                    let master = bip39::Mnemonic::generate(24).map_err(|e| format!("Failed to generate mnemonic: {e}"))?;
-                    warn!("Generated new random master for recovery (no login mnemonic available)");
-                    master.to_string()
-                };
-                hcfs_client::auth::save_encrypted_mnemonic(&master_path, &master_str, &drive_password)
-                    .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
-                let derived = derive_folder_mnemonic(&master_str, &label)?;
-
-                let mut init_mnemonic = manager.init(&drive_password, Some(&derived))?;
-                zeroize::Zeroize::zeroize(&mut init_mnemonic);
-
-                let uid = manager.unlock(&drive_password)?;
-                info!("Drive re-initialized and unlocked, derived user_id: {}", uid);
-
-                (uid, Some(master_str), true)
+                let (new_mgr, uid, master) = recover_drive(
+                    manager,
+                    &cfg.sync_path,
+                    &folder_dir,
+                    &master_path,
+                    &cfg.server_url,
+                    &bearer_token,
+                    &account_id,
+                    &fhash,
+                    &label,
+                    &cfg.drive_password,
+                    existing_mnemonic.as_deref(),
+                )?;
+                manager = new_mgr;
+                (uid, master, true)
             }
         }
     } else {
-        // New folder — need to derive or generate mnemonic
-        info!(
-            "Drive not initialized for '{}', creating... (existing_mnemonic={}, master_exists={})",
-            label,
-            existing_mnemonic.is_some(),
-            master_path.exists(),
-        );
-
-        let (folder_mnemonic, master_for_backup, generated_new_master) = if let Some(ref imported) = existing_mnemonic {
-            // Always derive from the imported (login) mnemonic — this is the
-            // cross-device portable secret. If the stored master differs
-            // (e.g. legacy hcfs-client-generated mnemonic), replace it so
-            // all devices agree on the derivation root.
-            {
-                use zeroize::Zeroize;
-
-                if master_path.exists() {
-                    let stored = hcfs_client::auth::recover_mnemonic(&master_path, &drive_password)
-                        .map_err(|e| format!("Failed to recover master mnemonic: {e}"))?;
-                    let mut stored_str = stored.to_string();
-                    if stored_str == *imported {
-                        debug!("Stored master matches login mnemonic");
-                    } else {
-                        info!("Stored master differs from login mnemonic — updating master");
-                        hcfs_client::auth::save_encrypted_mnemonic(&master_path, imported, &drive_password)
-                            .map_err(|e| format!("Failed to update master mnemonic: {e}"))?;
-                    }
-                    stored_str.zeroize();
-                } else {
-                    hcfs_client::auth::save_encrypted_mnemonic(&master_path, imported, &drive_password)
-                        .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
-                    info!("Saved login mnemonic as master (new device)");
-                }
-                let derived = derive_folder_mnemonic(imported, &label)?;
-                (derived, None, false)
-            }
-        } else if master_path.exists() {
-            // Folder switch — read master, derive new folder mnemonic
-            let master =
-                hcfs_client::auth::recover_mnemonic(&master_path, &drive_password).map_err(|e| format!("Failed to recover master mnemonic: {e}"))?;
-            let mut master_str = master.to_string();
-            let derived = derive_folder_mnemonic(&master_str, &label)?;
-            zeroize::Zeroize::zeroize(&mut master_str);
-            debug!("Derived folder mnemonic from existing master");
-            (derived, None, false)
-        } else {
-            // No login mnemonic AND no master on disk. Generating a random
-            // master would silently encrypt files with a key that no other
-            // device can derive, causing "Chunk 0 decryption failed" on
-            // cross-device sync. Fail loudly so the user can re-login.
-            return Err("No encryption key available. Please log out and log in \
-                 again with your mnemonic to enable sync."
-                .to_string());
-        };
-
-        // Initialize drive with the folder-specific derived mnemonic
-        let mut init_mnemonic = manager.init(&drive_password, Some(&folder_mnemonic))?;
-        zeroize::Zeroize::zeroize(&mut init_mnemonic);
-        drop(init_mnemonic);
-        let mut folder_mnemonic = folder_mnemonic;
-        zeroize::Zeroize::zeroize(&mut folder_mnemonic);
-
-        let uid = manager.unlock(&drive_password)?;
-        info!("Drive initialized and unlocked for '{}', derived user_id: {}", label, uid);
-
-        (uid, master_for_backup, generated_new_master)
+        init_new_drive(
+            &mut manager,
+            &label,
+            &master_path,
+            &cfg.drive_password,
+            existing_mnemonic.as_deref(),
+        )?
     };
 
+    // 7. Validate user_id
     let expected_user_id = format!("{account_id}_{fhash}");
-    debug!("Drive user_id after unlock: {} (expected: {})", user_id, expected_user_id);
     if user_id != expected_user_id {
         return Err(format!(
             "Drive user_id mismatch: got '{user_id}', expected '{expected_user_id}'. \
@@ -782,44 +950,14 @@ async fn initialize_sync_inner(
         ));
     }
 
-    // 8. Test server connectivity
-    {
-        let test_url = format!("{}/health", &server_url);
-        debug!("Testing connectivity to: {}", test_url);
-        let test_result = reqwest::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .build()
-            .map_err(|e| format!("Failed to build test client: {e}"))?
-            .get(&test_url)
-            .header("X-API-Key", "Arion")
-            .send()
-            .await;
-        match test_result {
-            Ok(resp) => debug!("Health check OK: status={}", resp.status()),
-            Err(e) => {
-                let mut msg = format!("{e}");
-                let mut source: Option<&dyn std::error::Error> = e.source();
-                while let Some(cause) = source {
-                    use std::fmt::Write;
-                    let _ = write!(msg, "\n  caused by: {cause}");
-                    source = cause.source();
-                }
-                warn!("Health check failed: {}", msg);
-            }
-        }
-    }
+    // 8. Test server connectivity (fire-and-log)
+    check_init_server_health(&cfg.server_url).await;
 
-    // 9. Setup progress event handlers with label
+    // 9. Setup progress handlers and clear cancellation
     setup_progress_handlers(&app, &mut manager, &label, sync);
-
-    // 10. Clear any previous cancellation flag
     sync.clear_cancel();
 
-    // 11. If ensure_derived_mnemonic left a rekey marker, just consume it.
-    //     We intentionally do NOT delete remote files — doing so destroys
-    //     data on other devices. Stale remote files encrypted with the old
-    //     key will fail to decrypt and be skipped; local files will be
-    //     re-uploaded with the new key on the next sync cycle.
+    // 10. Consume rekey marker (no remote purge)
     {
         let marker = folder_dir.join(".needs_rekey");
         if marker.exists() {
@@ -828,12 +966,7 @@ async fn initialize_sync_inner(
         }
     }
 
-    // 12. Pre-populate the synced-paths cache BEFORE storing the drive in the
-    //     registry.  This ensures the file browser shows correct sync status
-    //     even if the first sync cycle locks the drive before the frontend
-    //     queries `list_sync_folder`.  Without this, the cache would be empty
-    //     and `synced_paths_for_label` would fall back to `None` (= "unknown")
-    //     or, after a recovery re-init, `Some(empty_map)` (= "pending").
+    // 11. Pre-populate synced-paths cache
     if let Ok(state) = manager.load_sync_state() {
         let paths = crate::sync_shared::build_synced_paths_from_state(&state);
         if !paths.is_empty() {
@@ -846,10 +979,9 @@ async fn initialize_sync_inner(
         sync.update_synced_paths_cache(&label, paths);
     }
 
-    // 13. Store the manager in the drives registry
+    // 12. Store manager in registry
     {
-        let sync_root = PathBuf::from(&sync_path);
-        sync.register_label_root(label.clone(), sync_root);
+        sync.register_label_root(label.clone(), PathBuf::from(&cfg.sync_path));
         let mut guard = sync.drives.lock().await;
         guard.insert(
             label.clone(),
@@ -860,7 +992,7 @@ async fn initialize_sync_inner(
         );
     }
 
-    // 14. Start (or restart) the background sync loop to pick up the new drive
+    // 13. Start sync loop
     if start_loop {
         start_sync_loop(app.clone()).await;
     }
@@ -870,39 +1002,15 @@ async fn initialize_sync_inner(
         label, user_id, is_new_setup
     );
 
-    // Register folder with server for cross-device discovery (best-effort)
-    {
-        let reg_server = server_url.clone();
-        let reg_token = bearer_token.clone();
-        let reg_label = label.clone();
-        let reg_ss58 = account_id.clone();
-        let reg_fhash = fhash.clone();
-        let reg_pool = pool.clone();
-        tokio::spawn(async move {
-            let config = HcfsClientConfig {
-                base_url: reg_server,
-                api_key: "Arion".to_string(),
-                bearer_token: reg_token,
-                accept_invalid_certs: true,
-                billing_bypass_token: None,
-                ss58_address: reg_ss58.clone(),
-                folder_hash: reg_fhash.clone(),
-            };
-            match hcfs_client::client::HcfsClient::new(config) {
-                Ok(client) => {
-                    let dev_name = get_device_name_internal(&reg_pool).await.ok();
-                    if let Err(e) = client.register_folder(&reg_ss58, &reg_fhash, &reg_label, dev_name.as_deref()).await {
-                        warn!("Folder registration failed: {}", e);
-                    } else {
-                        info!("Folder '{}' registered with server", reg_label);
-                    }
-                }
-                Err(e) => {
-                    warn!("Could not create client for folder registration: {}", e);
-                }
-            }
-        });
-    }
+    // 14. Register folder with server (background, best-effort)
+    spawn_folder_registration(
+        &cfg.server_url,
+        &bearer_token,
+        &label,
+        &account_id,
+        &fhash,
+        pool,
+    );
 
     Ok(InitSyncResult {
         user_id,
