@@ -604,6 +604,214 @@ const HEARTBEAT_SECS: u64 = 30;
 /// Debounce interval: wait 5 seconds after local changes before syncing
 const DEBOUNCE_SECS: u64 = 5;
 
+/// Proactively refresh the auth token if it expires within the refresh margin.
+async fn maybe_refresh_token(app: &AppHandle) {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    if let (Ok(pool), Ok(acct)) =
+        (app_state.pool(), crate::utils::sync::current_account_id(&app_state))
+        && crate::utils::auth_tokens::is_token_expiring(
+            pool,
+            &acct,
+            crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS,
+        )
+        .await
+    {
+        info!("Token expiring soon, proactively refreshing");
+        if let Err(e) =
+            crate::auth_service::refresh_auth_token_internal(pool, app, &acct).await
+        {
+            warn!(error = %e, "Proactive token refresh failed");
+        }
+    }
+}
+
+/// Process a single file-watcher event: filter internal paths, capture rename
+/// hints, flag pending changes, and notify the sync channel.
+fn handle_watcher_event(
+    event: notify::Event,
+    sync: &crate::sync_engine::SyncEngine,
+    pending: &std::sync::Arc<std::sync::Mutex<Option<crate::sync_logic::PendingRenameFrom>>>,
+    tx: &tokio::sync::mpsc::Sender<()>,
+) {
+    // Filter out internal metadata files (.hcfs/, sync_progress/) that
+    // would create a feedback loop: sync writes state -> watcher fires ->
+    // triggers another sync -> writes state -> ...
+    let dominated_by_internal = event.paths.iter().all(|p| {
+        let path_str = p.to_string_lossy();
+        path_str.contains("/.hcfs/")
+            || path_str.contains("\\.hcfs\\")
+            || path_str.contains("/sync_progress/")
+            || path_str.contains("\\sync_progress\\")
+    });
+    if dominated_by_internal {
+        return;
+    }
+
+    // Capture rename events as hints for efficient rename detection.
+    use notify::event::{ModifyKind, RenameMode};
+    if let notify::EventKind::Modify(ModifyKind::Name(mode)) = &event.kind {
+        let now = std::time::Instant::now();
+        let mut pending_guard = recover_mutex(pending);
+        let mut local_hints = Vec::new();
+
+        let rename_kind = match mode {
+            RenameMode::From => event.paths.first().map(|p| {
+                (crate::sync_logic::RenameEventKind::From, p)
+            }),
+            RenameMode::To => event.paths.first().map(|p| {
+                (crate::sync_logic::RenameEventKind::To, p)
+            }),
+            RenameMode::Both if event.paths.len() >= 2 => Some((
+                crate::sync_logic::RenameEventKind::Both {
+                    from: event.paths[0].clone(),
+                },
+                &event.paths[1],
+            )),
+            _ => event.paths.first().map(|p| {
+                (crate::sync_logic::RenameEventKind::Any, p)
+            }),
+        };
+
+        if let Some((kind, path)) = rename_kind {
+            crate::sync_logic::process_rename_event(
+                kind,
+                path,
+                now,
+                &mut pending_guard,
+                &mut local_hints,
+            );
+        }
+
+        for hint in local_hints {
+            tracing::debug!(
+                old = %hint.old_path.display(),
+                new = %hint.new_path.display(),
+                "Rename hint captured",
+            );
+            sync.push_rename_hint(hint);
+        }
+    }
+
+    if sync.is_any_sync_in_progress() {
+        sync.changes_pending.store(true, Ordering::Release);
+    }
+    let _ = tx.try_send(());
+}
+
+/// Run the fallback sync loop (used when the file watcher cannot be created).
+/// Polls on a heartbeat interval instead of reacting to FS events.
+async fn run_fallback_sync_loop(
+    app: AppHandle,
+    sync: std::sync::Arc<crate::sync_engine::SyncEngine>,
+) {
+    info!("Running initial sync (no file watcher)");
+    check_server_health(&app).await;
+    trigger_sync(&app).await;
+
+    let mut interval = tokio::time::interval(Duration::from_secs(HEARTBEAT_SECS));
+    loop {
+        let failures = sync.get_sync_failures();
+        let backoff_secs =
+            crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);
+        if failures > 0 {
+            tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+        } else {
+            interval.tick().await;
+        }
+        if sync.is_cancelled() {
+            break;
+        }
+        let health_status = check_server_health(&app).await;
+        if should_skip_sync(&sync, &health_status) {
+            warn!(status = ?health_status, "Skipping sync due to connectivity");
+        } else {
+            maybe_refresh_token(&app).await;
+            trigger_sync(&app).await;
+        }
+    }
+    info!("Sync loop exited (no file watcher)");
+}
+
+/// Run the main sync loop that reacts to FS watcher events and heartbeat ticks.
+async fn run_sync_loop(
+    app: AppHandle,
+    sync: std::sync::Arc<crate::sync_engine::SyncEngine>,
+    mut rx: tokio::sync::mpsc::Receiver<()>,
+) {
+    // Clean up any stale temp files from previous runs
+    {
+        let guard = sync.drives.lock().await;
+        for slot in guard.values() {
+            if let Ok(manager) = slot.manager.try_lock() {
+                manager.cleanup_temp();
+            }
+        }
+    }
+
+    info!("Running initial sync");
+    check_server_health(&app).await;
+    trigger_sync(&app).await;
+
+    let mut debounce = tokio::time::interval(Duration::from_secs(DEBOUNCE_SECS));
+    let mut has_changes = false;
+    let mut last_sync = Instant::now();
+
+    loop {
+        if sync.is_cancelled() {
+            break;
+        }
+
+        tokio::select! {
+            msg = rx.recv() => {
+                if msg.is_none() { break; }
+                has_changes = true;
+            }
+            _ = debounce.tick() => {
+                let failures = sync.get_sync_failures();
+                let backoff_secs =
+                    crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);
+                let heartbeat_due =
+                    last_sync.elapsed() >= Duration::from_secs(backoff_secs);
+                if has_changes || heartbeat_due {
+                    if heartbeat_due {
+                        let health_status = check_server_health(&app).await;
+                        if should_skip_sync(&sync, &health_status) {
+                            warn!(status = ?health_status, "Skipping sync due to connectivity");
+                            last_sync = Instant::now();
+                            continue;
+                        }
+                        maybe_refresh_token(&app).await;
+                    }
+
+                    let sync_ran = trigger_sync(&app).await;
+                    if sync_ran {
+                        has_changes = false;
+                        last_sync = Instant::now();
+
+                        // Drain watcher events that arrived during sync
+                        while rx.try_recv().is_ok() {}
+
+                        if sync.changes_pending.swap(false, Ordering::AcqRel) {
+                            has_changes = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Loop exited -- clear the watcher
+    {
+        let mut watcher_guard = sync.watcher.lock().unwrap_or_else(|p| {
+            warn!("Poisoned watcher mutex recovered in sync loop exit");
+            p.into_inner()
+        });
+        *watcher_guard = None;
+    }
+    info!("Sync loop exited");
+}
+
 /// Start or join the background sync loop.
 ///
 /// If no loop is running, creates a file watcher for all registered drives,
@@ -619,16 +827,9 @@ pub async fn start_sync_loop(app: AppHandle) {
     let sync = app.state::<crate::app_state::AppState>().sync.clone();
 
     // ── If a loop is already running, just hot-add new drives ────────
-    //
-    // Hold loop_handle for the entire hot-add to prevent concurrent calls
-    // from racing (TOCTOU). The work below is fast (no network I/O), so
-    // holding the lock is safe. trigger_sync is called after dropping the
-    // lock since it may take a while.
     {
         let handle_guard = sync.loop_handle.lock().await;
         if handle_guard.is_some() {
-            // Add all current drive paths to the existing watcher.
-            // `watch()` on an already-watched path is idempotent (updates mode).
             let drive_paths = collect_drive_paths(&sync).await;
             {
                 let mut watcher_guard = sync.watcher.lock().unwrap_or_else(|p| {
@@ -649,10 +850,6 @@ pub async fn start_sync_loop(app: AppHandle) {
             info!("Sync loop already running — hot-added drives, triggering sync");
             drop(handle_guard);
 
-            // Spawn sync in the background so the caller (restore_remote_folders)
-            // returns immediately to the frontend. trigger_sync awaits all drive
-            // sync cycles, which can take minutes for large downloads — blocking
-            // here would freeze the UI modal.
             let app_for_sync = app.clone();
             tokio::spawn(async move {
                 trigger_sync(&app_for_sync).await;
@@ -664,7 +861,6 @@ pub async fn start_sync_loop(app: AppHandle) {
     info!("Starting sync loop");
 
     // ── No loop running — start fresh ────────────────────────────────
-
     let drive_paths = collect_drive_paths(&sync).await;
     if drive_paths.is_empty() {
         info!("No drives registered, sync loop not started");
@@ -675,148 +871,32 @@ pub async fn start_sync_loop(app: AppHandle) {
         info!(label = %label, path = ?path, "Watching drive");
     }
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(256);
+    let (tx, rx) = tokio::sync::mpsc::channel::<()>(256);
 
-    // File watcher — forwards events to channel, filtering out internal
-    // metadata paths (.hcfs/, sync_progress/) that the sync engine writes.
-    // If sync is active, sets changes_pending for real user changes only.
+    // Create file watcher
     let tx_clone = tx.clone();
     let sync_for_watcher = sync.clone();
-    let pending_for_watcher: std::sync::Arc<std::sync::Mutex<Option<crate::sync_logic::PendingRenameFrom>>> =
-        std::sync::Arc::new(std::sync::Mutex::new(None));
-    let mut watcher: RecommendedWatcher = match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-        if let Ok(event) = res {
-            // Filter out internal metadata files that the sync engine writes.
-            // These would otherwise create a feedback loop: sync writes state →
-            // watcher fires → triggers another sync → writes state → ...
-            let dominated_by_internal = event.paths.iter().all(|p| {
-                let path_str = p.to_string_lossy();
-                path_str.contains("/.hcfs/")
-                    || path_str.contains("\\.hcfs\\")
-                    || path_str.contains("/sync_progress/")
-                    || path_str.contains("\\sync_progress\\")
-            });
-            if dominated_by_internal {
-                return;
+    let pending_for_watcher: std::sync::Arc<
+        std::sync::Mutex<Option<crate::sync_logic::PendingRenameFrom>>,
+    > = std::sync::Arc::new(std::sync::Mutex::new(None));
+
+    let mut watcher: RecommendedWatcher = match notify::recommended_watcher(
+        move |res: Result<notify::Event, notify::Error>| {
+            if let Ok(event) = res {
+                handle_watcher_event(
+                    event,
+                    &sync_for_watcher,
+                    &pending_for_watcher,
+                    &tx_clone,
+                );
             }
-
-            // Capture rename events as hints for efficient rename
-            // detection. Pairs From/To events within a 100ms window.
-            use notify::event::{ModifyKind, RenameMode};
-            if let notify::EventKind::Modify(ModifyKind::Name(mode)) = &event.kind {
-                let now = std::time::Instant::now();
-                let mut pending_guard = recover_mutex(&pending_for_watcher);
-                let mut local_hints = Vec::new();
-
-                match mode {
-                    RenameMode::From => {
-                        if let Some(path) = event.paths.first() {
-                            crate::sync_logic::process_rename_event(
-                                crate::sync_logic::RenameEventKind::From,
-                                path,
-                                now,
-                                &mut pending_guard,
-                                &mut local_hints,
-                            );
-                        }
-                    }
-                    RenameMode::To => {
-                        if let Some(path) = event.paths.first() {
-                            crate::sync_logic::process_rename_event(
-                                crate::sync_logic::RenameEventKind::To,
-                                path,
-                                now,
-                                &mut pending_guard,
-                                &mut local_hints,
-                            );
-                        }
-                    }
-                    RenameMode::Both => {
-                        if event.paths.len() >= 2 {
-                            crate::sync_logic::process_rename_event(
-                                crate::sync_logic::RenameEventKind::Both {
-                                    from: event.paths[0].clone(),
-                                },
-                                &event.paths[1],
-                                now,
-                                &mut pending_guard,
-                                &mut local_hints,
-                            );
-                        }
-                    }
-                    // macOS FSEvents sends RenameMode::Any — two
-                    // events in sequence (old path, then new path).
-                    _ => {
-                        if let Some(path) = event.paths.first() {
-                            crate::sync_logic::process_rename_event(
-                                crate::sync_logic::RenameEventKind::Any,
-                                path,
-                                now,
-                                &mut pending_guard,
-                                &mut local_hints,
-                            );
-                        }
-                    }
-                }
-
-                for hint in local_hints {
-                    tracing::debug!(
-                        old = %hint.old_path.display(),
-                        new = %hint.new_path.display(),
-                        "Rename hint captured",
-                    );
-                    sync_for_watcher.push_rename_hint(hint);
-                }
-            }
-
-            if sync_for_watcher.is_any_sync_in_progress() {
-                sync_for_watcher.changes_pending.store(true, Ordering::Release);
-            }
-            let _ = tx_clone.try_send(());
-        }
-    }) {
+        },
+    ) {
         Ok(w) => w,
         Err(e) => {
             error!(error = %e, "Failed to create file watcher, sync loop will run without file watching");
             let sync_fallback = sync.clone();
-            let handle = tokio::spawn(async move {
-                info!("Running initial sync (no file watcher)");
-                check_server_health(&app).await;
-                trigger_sync(&app).await;
-
-                let mut interval = tokio::time::interval(Duration::from_secs(HEARTBEAT_SECS));
-                loop {
-                    let failures = sync_fallback.get_sync_failures();
-                    let backoff_secs = crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);
-                    if failures > 0 {
-                        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
-                    } else {
-                        interval.tick().await;
-                    }
-                    if sync_fallback.is_cancelled() {
-                        break;
-                    }
-                    let health_status = check_server_health(&app).await;
-                    if should_skip_sync(&sync_fallback, &health_status) {
-                        warn!(status = ?health_status, "Skipping sync due to connectivity");
-                    } else {
-                        {
-                            let app_state = app.state::<crate::app_state::AppState>();
-                            if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state))
-                                && crate::utils::auth_tokens::is_token_expiring(pool, &acct, crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS)
-                                    .await
-                            {
-                                info!("Token expiring soon, proactively refreshing");
-                                if let Err(e) = crate::auth_service::refresh_auth_token_internal(pool, &app, &acct).await {
-                                    warn!(error = %e, "Proactive token refresh failed");
-                                }
-                            }
-                        }
-                        trigger_sync(&app).await;
-                    }
-                }
-                info!("Sync loop exited (no file watcher)");
-            });
+            let handle = tokio::spawn(run_fallback_sync_loop(app, sync_fallback));
             let mut handle_guard = sync.loop_handle.lock().await;
             *handle_guard = Some(handle);
             return;
@@ -840,118 +920,10 @@ pub async fn start_sync_loop(app: AppHandle) {
     }
 
     let sync_task = sync.clone();
-    let handle = tokio::spawn(async move {
-        // Watcher is kept alive in SyncEngine::watcher (not in this task)
+    let handle = tokio::spawn(run_sync_loop(app, sync_task, rx));
 
-        // Clean up any stale temp files from previous runs
-        {
-            let guard = sync_task.drives.lock().await;
-            for slot in guard.values() {
-                if let Ok(manager) = slot.manager.try_lock() {
-                    manager.cleanup_temp();
-                }
-            }
-        }
-
-        // Initial sync on startup — sync all drives
-        info!("Running initial sync");
-        check_server_health(&app).await;
-        trigger_sync(&app).await;
-
-        let mut debounce = tokio::time::interval(Duration::from_secs(DEBOUNCE_SECS));
-        let mut has_changes = false;
-        let mut last_sync = Instant::now();
-
-        loop {
-            if sync_task.is_cancelled() {
-                break;
-            }
-
-            tokio::select! {
-                msg = rx.recv() => {
-                    if msg.is_none() { break; }
-                    has_changes = true;
-                }
-                _ = debounce.tick() => {
-                    // Exponential backoff: after consecutive failures, extend the
-                    // heartbeat interval to avoid hammering the server.
-                    // 0 failures -> 30s, 1 -> 60s, 2 -> 120s, capped at 5 min.
-                    let failures = sync_task.get_sync_failures();
-                    let backoff_secs =
-                        crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);
-                    let heartbeat_due = last_sync.elapsed() >= Duration::from_secs(backoff_secs);
-                    if has_changes || heartbeat_due {
-                        // Run health check on heartbeat ticks
-                        if heartbeat_due {
-                            let health_status = check_server_health(&app).await;
-                            if should_skip_sync(&sync_task, &health_status) {
-                                warn!(status = ?health_status, "Skipping sync due to connectivity");
-                                last_sync = Instant::now();
-                                continue;
-                            }
-                        }
-
-                        // Proactively refresh the auth token if it's expiring
-                        // within the next hour, so the sync doesn't hit a 401.
-                        if heartbeat_due {
-                            let app_state = app.state::<crate::app_state::AppState>();
-                            if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state))
-                                && crate::utils::auth_tokens::is_token_expiring(
-                                    pool,
-                                    &acct,
-                                    crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS,
-                                ).await {
-                                    info!("Token expiring soon, proactively refreshing");
-                                    if let Err(e) = crate::auth_service::refresh_auth_token_internal(
-                                        pool, &app, &acct,
-                                    ).await {
-                                        warn!(error = %e, "Proactive token refresh failed");
-                                    }
-                                }
-                        }
-
-                        // Only clear has_changes if sync actually ran (not skipped)
-                        let sync_ran = trigger_sync(&app).await;
-                        if sync_ran {
-                            has_changes = false;
-                            last_sync = Instant::now();
-
-                            // Drain any watcher events that arrived during sync.
-                            // Sync writes internal files (sync_state.json, etc.)
-                            // which trigger the watcher after sync_in_progress
-                            // is cleared. Without this drain, the next debounce
-                            // tick would run a pointless "No changes" cycle.
-                            while rx.try_recv().is_ok() {}
-
-                            // If real user changes arrived during sync, schedule
-                            // an immediate re-sync on the next loop iteration.
-                            if sync_task.changes_pending.swap(false, Ordering::AcqRel) {
-                                has_changes = true;
-                            }
-                        }
-                        // If sync was skipped (already in progress), keep has_changes = true
-                        // so we retry on next debounce tick
-                    }
-                }
-            }
-        }
-
-        // Loop exited — clear the watcher
-        {
-            let mut watcher_guard = sync_task.watcher.lock().unwrap_or_else(|p| {
-                warn!("Poisoned watcher mutex recovered in sync loop exit");
-                p.into_inner()
-            });
-            *watcher_guard = None;
-        }
-        info!("Sync loop exited");
-    });
-
-    // Store the handle so we can abort it later
-    {
-        let mut handle_guard = sync.loop_handle.lock().await;
-        *handle_guard = Some(handle);
-    }
+    let mut handle_guard = sync.loop_handle.lock().await;
+    *handle_guard = Some(handle);
 }
 
 /// Collect (label, path) pairs from all registered drives.
