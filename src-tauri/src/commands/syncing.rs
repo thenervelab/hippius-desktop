@@ -1990,6 +1990,62 @@ fn sanitize_label(label: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
+/// Restore a single remote folder: create directory, set DB path, wipe stale
+/// state, and initialize sync (without starting the loop).
+async fn restore_single_folder(
+    app: &tauri::AppHandle,
+    pool: &SqlitePool,
+    account_id: &str,
+    base_path: &str,
+    label: &str,
+    existing_mnemonic: Option<&str>,
+) -> Result<(), String> {
+    let safe_label = sanitize_label(label)?;
+    let folder_path = PathBuf::from(base_path).join(&safe_label);
+
+    std::fs::create_dir_all(&folder_path)
+        .map_err(|e| format!("Failed to create directory: {e}"))?;
+
+    let path_str = folder_path.to_string_lossy().to_string();
+
+    crate::commands::substrate_tx::set_sync_path_internal(
+        pool,
+        account_id,
+        &path_str,
+        false,
+        Some(label),
+    )
+    .await
+    .map_err(|e| format!("Failed to set sync path: {e}"))?;
+
+    // Wipe stale sync state so the three-tree algorithm treats all remote
+    // files as RemoteCreate (download), not LocalDelete.
+    if let Ok(fd) = config_dir_for_folder(account_id, label) {
+        for name in &["sync_state.json", "sync_state.json.bak"] {
+            let p = fd.join(name);
+            if p.exists() {
+                info!(
+                    "Removing stale {} for '{}' to prevent remote deletions",
+                    name, label
+                );
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+
+    initialize_sync_inner(
+        app.clone(),
+        account_id.to_string(),
+        label.to_string(),
+        existing_mnemonic.map(String::from),
+        false,
+    )
+    .await?;
+
+    info!("Successfully restored remote folder '{}'", label);
+    Ok(())
+}
+
 /// Restore multiple remote folders by creating local sync paths and initializing sync.
 ///
 /// Initializes each folder without restarting the sync loop, then starts the
@@ -2014,61 +2070,18 @@ pub async fn restore_remote_folders(
     let mut any_success = false;
 
     for folder in &folders {
-        let safe_label = match sanitize_label(&folder.label) {
-            Ok(l) => l,
-            Err(e) => {
-                results.push(RestoreResult {
-                    label: folder.label.clone(),
-                    success: false,
-                    error: Some(e),
-                });
-                continue;
-            }
-        };
-        let folder_path = PathBuf::from(&base_path).join(&safe_label);
-
-        // Create the directory
-        if let Err(e) = std::fs::create_dir_all(&folder_path) {
-            results.push(RestoreResult {
-                label: folder.label.clone(),
-                success: false,
-                error: Some(format!("Failed to create directory: {e}")),
-            });
-            continue;
-        }
-
-        let path_str = folder_path.to_string_lossy().to_string();
-
-        // Set sync path in DB
-        if let Err(e) = crate::commands::substrate_tx::set_sync_path_internal(pool, &account_id, &path_str, false, Some(&folder.label)).await {
-            results.push(RestoreResult {
-                label: folder.label.clone(),
-                success: false,
-                error: Some(format!("Failed to set sync path: {e}")),
-            });
-            continue;
-        }
-
-        // Wipe stale sync state before restore so the three-tree algorithm
-        // treats all remote files as RemoteCreate (download), not LocalDelete
-        // (which would delete them from the server). This is critical: a leftover
-        // sync_state.json with a populated synced tree + empty local folder would
-        // cause the sync engine to propagate "local deletions" to the server.
-        if let Ok(fd) = config_dir_for_folder(&account_id, &folder.label) {
-            for name in &["sync_state.json", "sync_state.json.bak"] {
-                let p = fd.join(name);
-                if p.exists() {
-                    info!("Removing stale {} for '{}' to prevent remote deletions", name, folder.label);
-                    let _ = std::fs::remove_file(&p);
-                }
-            }
-        }
-
-        // Initialize sync without starting the loop (start_loop = false)
-        match initialize_sync_inner(app.clone(), account_id.clone(), folder.label.clone(), existing_mnemonic.clone(), false).await {
-            Ok(_) => {
+        match restore_single_folder(
+            &app,
+            pool,
+            &account_id,
+            &base_path,
+            &folder.label,
+            existing_mnemonic.as_deref(),
+        )
+        .await
+        {
+            Ok(()) => {
                 any_success = true;
-                info!("Successfully restored remote folder '{}'", folder.label);
                 results.push(RestoreResult {
                     label: folder.label.clone(),
                     success: true,
@@ -2077,9 +2090,18 @@ pub async fn restore_remote_folders(
             }
             Err(e) => {
                 error!("Failed to restore remote folder '{}': {e}", folder.label);
-                // Rollback: remove the sync path we just inserted
-                if let Err(rollback_err) = crate::commands::substrate_tx::remove_sync_path_internal(pool, &account_id, &folder.label).await {
-                    warn!("Failed to rollback sync path for '{}': {rollback_err}", folder.label);
+                if let Err(rollback_err) =
+                    crate::commands::substrate_tx::remove_sync_path_internal(
+                        pool,
+                        &account_id,
+                        &folder.label,
+                    )
+                    .await
+                {
+                    warn!(
+                        "Failed to rollback sync path for '{}': {rollback_err}",
+                        folder.label
+                    );
                 }
                 results.push(RestoreResult {
                     label: folder.label.clone(),
@@ -2090,7 +2112,6 @@ pub async fn restore_remote_folders(
         }
     }
 
-    // Start the sync loop once for all successfully restored drives
     if any_success {
         start_sync_loop(app.clone()).await;
     }
