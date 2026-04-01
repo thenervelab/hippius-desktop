@@ -658,6 +658,22 @@ async fn run_migration_download(
         }
     }
 
+    // Register post-sync hook for migration reporting.
+    // Runs after every successful sync cycle; the hook filters by label
+    // and the report function is idempotent.
+    {
+        let app_state = app.state::<crate::app_state::AppState>();
+        app_state.sync.register_post_sync_hook(Box::new(|app, label, account_id| {
+            Box::pin(async move {
+                if label == "migration"
+                    && let Err(e) = report_migrated_files(&app, &account_id).await
+                {
+                    tracing::error!(error = %e, "Migration report error");
+                }
+            })
+        }));
+    }
+
     Ok(())
 }
 

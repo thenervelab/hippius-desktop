@@ -98,6 +98,14 @@ impl std::fmt::Debug for SyncEngine {
     }
 }
 
+/// Async callback invoked after each successful sync cycle for a drive.
+/// Receives `(app_handle, label, account_id)`.
+pub type PostSyncHook = Box<
+    dyn Fn(AppHandle, String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
+
 pub struct SyncEngine {
     // ── Drive Registry (async-only access) ──────────────────────────────
     pub drives: TokioMutex<HashMap<String, DriveSlot>>,
@@ -144,6 +152,9 @@ pub struct SyncEngine {
     /// Populated when drives are registered, used by
     /// `apply_rename_to_activity` to convert absolute paths to relative.
     pub label_roots: StdMutex<HashMap<String, std::path::PathBuf>>,
+
+    // ── Post-Sync Hooks (decouples infrastructure from domain logic) ──
+    pub post_sync_hooks: StdMutex<Vec<PostSyncHook>>,
 }
 
 impl SyncEngine {
@@ -175,6 +186,7 @@ impl SyncEngine {
             watcher: StdMutex::new(None),
             rename_hints: StdMutex::new(Vec::new()),
             label_roots: StdMutex::new(HashMap::new()),
+            post_sync_hooks: StdMutex::new(Vec::new()),
         }
     }
 
@@ -785,6 +797,38 @@ impl SyncEngine {
             if let Some(app) = app {
                 let _ = app.emit(crate::sync_events::ACTIVITY_UPDATED, ());
             }
+        }
+    }
+
+    // ── Post-Sync Hooks ──────────────────────────────────────────────
+
+    /// Register a callback to run after each successful sync cycle.
+    pub fn register_post_sync_hook(&self, hook: PostSyncHook) {
+        let mut hooks = self.post_sync_hooks.lock().unwrap_or_else(|p| {
+            warn!("Poisoned post_sync_hooks mutex recovered");
+            p.into_inner()
+        });
+        hooks.push(hook);
+    }
+
+    /// Run all registered post-sync hooks for the given drive.
+    pub async fn run_post_sync_hooks(
+        &self,
+        app: &AppHandle,
+        label: &str,
+        account_id: &str,
+    ) {
+        let hooks: Vec<_> = {
+            let guard = self.post_sync_hooks.lock().unwrap_or_else(|p| {
+                warn!("Poisoned post_sync_hooks mutex recovered in run");
+                p.into_inner()
+            });
+            guard.iter().map(|h| {
+                h(app.clone(), label.to_string(), account_id.to_string())
+            }).collect()
+        };
+        for fut in hooks {
+            fut.await;
         }
     }
 

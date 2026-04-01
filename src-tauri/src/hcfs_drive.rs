@@ -1727,24 +1727,29 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 }
             }
 
-            // After a successful migration drive sync, report migrated files.
-            // Called on every sync (not just when files_uploaded > 0) so that
-            // server-side status is re-checked even after the initial report.
-            // The report function itself is idempotent and skips already-complete migrations.
-            if label_owned == "migration" {
+            // Run post-sync hooks (e.g. migration reporting).
+            // Hooks are registered by domain modules (commands/migration.rs) at
+            // startup, keeping hcfs_drive free of domain-specific imports.
+            {
                 use tauri::Manager;
                 let app_state = app.state::<crate::app_state::AppState>();
                 match crate::utils::sync::current_account_id(&app_state) {
                     Ok(active_account) => {
                         let app_clone = app.clone();
+                        let label_for_hook = label_owned.clone();
+                        let sync_clone = app_state.sync.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = crate::commands::migration::report_migrated_files(&app_clone, &active_account).await {
-                                error!(error = %e, "Migration report error");
-                            }
+                            sync_clone
+                                .run_post_sync_hooks(
+                                    &app_clone,
+                                    &label_for_hook,
+                                    &active_account,
+                                )
+                                .await;
                         });
                     }
                     Err(e) => {
-                        warn!(error = %e, "Migration cannot report: no active account");
+                        warn!(error = %e, "Post-sync hooks skipped: no active account");
                     }
                 }
             }
