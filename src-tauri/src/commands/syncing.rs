@@ -1289,242 +1289,247 @@ pub async fn trigger_sync_now(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, label: &str, sync: &Arc<crate::sync_engine::SyncEngine>) {
-    let a0 = app.clone();
-    let a1 = app.clone();
-    let a2 = app.clone();
-    let a5 = app.clone();
-    let a6 = app.clone();
+/// Direction of a file transfer for progress callbacks.
+enum TransferDirection {
+    Upload,
+    Download,
+}
 
-    let l0 = label.to_string();
-    let l1 = label.to_string();
-    let l2 = label.to_string();
-    let l3 = label.to_string();
-    let l4 = label.to_string();
-    let l5 = label.to_string();
-    let l6 = label.to_string();
-    let l7 = label.to_string();
+/// Handle per-chunk transfer progress: log first event, track in UI, emit
+/// Tauri event, and record completion activity. Shared between upload and
+/// download callbacks to avoid code duplication.
+fn handle_transfer_progress(
+    sync: &crate::sync_engine::SyncEngine,
+    app: &AppHandle,
+    label: &str,
+    started_set: &Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    bytes: u64,
+    total: u64,
+    path: Option<&str>,
+    direction: TransferDirection,
+) {
+    sync.touch_progress_time();
+    let (dir_name, event_name, file_action) = match direction {
+        TransferDirection::Upload => (
+            "Upload",
+            sync_events::UPLOAD_PROGRESS,
+            crate::sync_progress::FileAction::Upload,
+        ),
+        TransferDirection::Download => (
+            "Download",
+            sync_events::DOWNLOAD_PROGRESS,
+            crate::sync_progress::FileAction::Download,
+        ),
+    };
 
-    // Clone Arc<SyncEngine> for each callback that needs engine access
-    let sync_plan = sync.clone();
-    let sync_for_upload = sync.clone();
-    let sync_for_download = sync.clone();
-    let sync_encrypt = sync.clone();
-    let sync_decrypt = sync.clone();
-    let sync_scan = sync.clone();
-    let sync_fetch = sync.clone();
-    let sync_file_synced = sync.clone();
+    if let Some(path_str) = path {
+        let file_name = Path::new(path_str)
+            .file_name()
+            .map_or_else(|| path_str.to_string(), |f| f.to_string_lossy().to_string());
+        if let Ok(mut set) = started_set.lock()
+            && set.insert(path_str.to_string())
+        {
+            if bytes > 0 {
+                info!("{} resuming [{}]: {} from {} bytes ({} total)", dir_name, label, file_name, bytes, total);
+            } else {
+                info!("{} started [{}]: {} ({} bytes)", dir_name, label, file_name, total);
+            }
+        }
+        let _ = crate::sync_progress::update_file_progress(
+            sync,
+            path_str.to_string(),
+            bytes,
+            total,
+            file_action,
+            Some(label.to_string()),
+        );
+    }
+    debug!("{} [{}]: {}/{} bytes, path: {:?}", dir_name, label, bytes, total, path);
+    let _ = app.emit(
+        event_name,
+        sync_events::TransferProgressPayload {
+            label: label.to_string(),
+            bytes,
+            total,
+            path: path.map(String::from),
+        },
+    );
 
-    // Track first progress event per file for info-level "file started" logs
-    let upload_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+    if bytes == total
+        && total > 0
+        && let Some(path_str) = path
+    {
+        let display_name = Path::new(path_str)
+            .file_name()
+            .map_or_else(|| path_str.to_string(), |f| f.to_string_lossy().to_string());
+        let action_str = match direction {
+            TransferDirection::Upload => "uploaded",
+            TransferDirection::Download => "downloaded",
+        };
+        info!("{} complete [{}]: {} ({} bytes)", dir_name, label, display_name, total);
+        sync.add_pending_activity(SyncActivityItem {
+            file_name: path_str.to_string(),
+            action: action_str.to_string(),
+            timestamp: chrono::Utc::now().timestamp(),
+            size_bytes: total,
+            label: label.to_string(),
+        });
+    }
+}
+
+/// Build the `on_sync_plan_ready` callback that merges the sync plan into the
+/// progress session and emits the `SYNC_PLAN_READY` event.
+fn build_plan_ready_callback(
+    app: &AppHandle,
+    label: &str,
+    sync: &Arc<crate::sync_engine::SyncEngine>,
+) -> hcfs_client::sync::SyncPlanReadyFn {
+    let app = app.clone();
+    let label = label.to_string();
+    let sync = sync.clone();
+    Arc::new(move |uploads, downloads, local_deletes, remote_deletes, renames| {
+        sync.touch_progress_time();
+        let total = uploads.len() + downloads.len() + local_deletes.len()
+            + remote_deletes.len() + renames.len();
+        if total == 0 {
+            return;
+        }
+        info!(
+            "Sync plan ready [{}]: {} uploads, {} downloads, {} local_deletes, {} remote_deletes, {} renames",
+            label, uploads.len(), downloads.len(), local_deletes.len(), remote_deletes.len(), renames.len()
+        );
+
+        let upload_paths: Vec<String> = uploads.iter().map(|f| f.path.clone()).collect();
+        let download_paths: Vec<String> = downloads.iter().map(|f| f.path.clone()).collect();
+        let local_delete_paths: Vec<String> = local_deletes.iter().map(|f| f.path.clone()).collect();
+        let remote_delete_paths: Vec<String> = remote_deletes.iter().map(|f| f.path.clone()).collect();
+
+        let size_map: std::collections::HashMap<String, u64> = uploads
+            .iter()
+            .chain(downloads.iter())
+            .chain(local_deletes.iter())
+            .chain(remote_deletes.iter())
+            .filter(|f| f.size_bytes > 0)
+            .map(|f| (f.path.clone(), f.size_bytes))
+            .collect();
+
+        let file_list = crate::sync_progress::SessionFileList {
+            upload_files: Some(upload_paths.clone()),
+            download_files: Some(download_paths.clone()),
+            local_delete_files: Some(local_delete_paths.clone()),
+            remote_delete_files: Some(remote_delete_paths.clone()),
+        };
+        let _ = crate::sync_progress::merge_into_session(
+            &sync,
+            uploads.len() as u32,
+            downloads.len() as u32,
+            local_deletes.len() as u32,
+            remote_deletes.len() as u32,
+            Some(file_list),
+            Some(label.clone()),
+        );
+
+        if !size_map.is_empty() {
+            let mut progress_state = sync.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(session) = progress_state.current_session.as_mut() {
+                let mut patched = 0usize;
+                for (path, size) in &size_map {
+                    if let Some(file) = session.files.get_mut(path)
+                        && file.total_bytes == 0
+                    {
+                        file.total_bytes = *size;
+                        patched += 1;
+                    }
+                }
+                if patched > 0 {
+                    info!(patched, total, label = %label, "Patched file sizes from sync plan");
+                }
+            }
+            drop(progress_state);
+            sync.emit_snapshot(true);
+        }
+
+        let _ = app.emit(
+            sync_events::SYNC_PLAN_READY,
+            sync_events::SyncPlanReadyPayload {
+                label: label.clone(),
+                uploads: uploads.len(),
+                downloads: downloads.len(),
+                local_deletes: local_deletes.len(),
+                remote_deletes: remote_deletes.len(),
+                upload_files: upload_paths,
+                download_files: download_paths,
+                local_delete_files: local_delete_paths,
+                remote_delete_files: remote_delete_paths,
+            },
+        );
+    })
+}
+
+fn setup_progress_handlers(
+    app: &AppHandle,
+    manager: &mut HcfsDriveManager,
+    label: &str,
+    sync: &Arc<crate::sync_engine::SyncEngine>,
+) {
+    let upload_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
+        Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
     let download_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
         Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
-    let upload_started_cb = Arc::clone(&upload_started);
-    let download_started_cb = Arc::clone(&download_started);
+
+    // Upload callback
+    let sync_up = sync.clone();
+    let app_up = app.clone();
+    let label_up = label.to_string();
+    let started_up = Arc::clone(&upload_started);
+    let app_migration = app.clone();
+    let label_migration = label.to_string();
+
+    // Download callback
+    let sync_down = sync.clone();
+    let app_down = app.clone();
+    let label_down = label.to_string();
+    let started_down = Arc::clone(&download_started);
+
+    // Encrypt/decrypt callbacks
+    let sync_encrypt = sync.clone();
+    let l3 = label.to_string();
+    let sync_decrypt = sync.clone();
+    let l4 = label.to_string();
+
+    // Scan/fetch/synced callbacks
+    let sync_scan = sync.clone();
+    let a5 = app.clone();
+    let l5 = label.to_string();
+    let sync_fetch = sync.clone();
+    let a6 = app.clone();
+    let l6 = label.to_string();
+    let sync_file_synced = sync.clone();
+    let l7 = label.to_string();
 
     manager.set_progress(SyncProgress {
-        on_sync_plan_ready: Some(Arc::new(move |uploads, downloads, local_deletes, remote_deletes, renames| {
-            sync_plan.touch_progress_time();
-            let total = uploads.len() + downloads.len() + local_deletes.len() + remote_deletes.len() + renames.len();
-            if total == 0 {
-                return;
-            }
-            info!(
-                "Sync plan ready [{}]: {} uploads, {} downloads, {} local_deletes, {} remote_deletes, {} renames",
-                l0,
-                uploads.len(),
-                downloads.len(),
-                local_deletes.len(),
-                remote_deletes.len(),
-                renames.len()
-            );
-
-            // Extract paths and sizes from SyncPlanFile entries
-            let upload_paths: Vec<String> = uploads.iter().map(|f| f.path.clone()).collect();
-            let download_paths: Vec<String> = downloads.iter().map(|f| f.path.clone()).collect();
-            let local_delete_paths: Vec<String> = local_deletes.iter().map(|f| f.path.clone()).collect();
-            let remote_delete_paths: Vec<String> = remote_deletes.iter().map(|f| f.path.clone()).collect();
-
-            // Build file size map for all plan entries so register_files
-            // can set total_bytes upfront (including download sizes from
-            // the fresh remote tree in hcfs-client's memory).
-            let size_map: std::collections::HashMap<String, u64> = uploads
-                .iter()
-                .chain(downloads.iter())
-                .chain(local_deletes.iter())
-                .chain(remote_deletes.iter())
-                .filter(|f| f.size_bytes > 0)
-                .map(|f| (f.path.clone(), f.size_bytes))
-                .collect();
-
-            // Merge real file counts into the empty session created before sync started
-            let file_list = crate::sync_progress::SessionFileList {
-                upload_files: Some(upload_paths.clone()),
-                download_files: Some(download_paths.clone()),
-                local_delete_files: Some(local_delete_paths.clone()),
-                remote_delete_files: Some(remote_delete_paths.clone()),
-            };
-            let _ = crate::sync_progress::merge_into_session(
-                &sync_plan,
-                uploads.len() as u32,
-                downloads.len() as u32,
-                local_deletes.len() as u32,
-                remote_deletes.len() as u32,
-                Some(file_list),
-                Some(l0.clone()),
-            );
-
-            // Patch file sizes from the plan into the session entries.
-            // This gives accurate byte totals immediately — no need to
-            // wait for each file's first progress callback.
-            if !size_map.is_empty() {
-                let mut progress_state = sync_plan.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                if let Some(session) = progress_state.current_session.as_mut() {
-                    let mut patched = 0usize;
-                    for (path, size) in &size_map {
-                        if let Some(file) = session.files.get_mut(path)
-                            && file.total_bytes == 0
-                        {
-                            file.total_bytes = *size;
-                            patched += 1;
-                        }
-                    }
-                    if patched > 0 {
-                        info!(patched, total, label = %l0, "Patched file sizes from sync plan");
-                    }
-                }
-                drop(progress_state);
-                sync_plan.emit_snapshot(true);
-            }
-
-            let _ = a0.emit(
-                sync_events::SYNC_PLAN_READY,
-                sync_events::SyncPlanReadyPayload {
-                    label: l0.clone(),
-                    uploads: uploads.len(),
-                    downloads: downloads.len(),
-                    local_deletes: local_deletes.len(),
-                    remote_deletes: remote_deletes.len(),
-                    upload_files: upload_paths,
-                    download_files: download_paths,
-                    local_delete_files: local_delete_paths,
-                    remote_delete_files: remote_delete_paths,
-                },
-            );
-        })),
+        on_sync_plan_ready: Some(build_plan_ready_callback(app, label, sync)),
         on_upload_progress: Some(Arc::new(move |b, t, p| {
-            sync_for_upload.touch_progress_time();
-            // Log first progress event for each file at info level
-            if let Some(path_str) = p {
-                let file_name = Path::new(path_str)
-                    .file_name()
-                    .map_or_else(|| path_str.to_string(), |f| f.to_string_lossy().to_string());
-                if let Ok(mut set) = upload_started_cb.lock()
-                    && set.insert(path_str.to_string())
-                {
-                    if b > 0 {
-                        info!("Upload resuming [{}]: {} from {} bytes ({} total)", l1, file_name, b, t);
-                    } else {
-                        info!("Upload started [{}]: {} ({} bytes)", l1, file_name, t);
-                    }
-                }
-                // Track per-file progress for the sync progress UI
-                let _ = crate::sync_progress::update_file_progress(
-                    &sync_for_upload,
-                    path_str.to_string(),
-                    b,
-                    t,
-                    crate::sync_progress::FileAction::Upload,
-                    Some(l1.clone()),
-                );
-            }
-            debug!("Upload [{}]: {}/{} bytes, path: {:?}", l1, b, t, p);
-            let _ = a1.emit(
-                sync_events::UPLOAD_PROGRESS,
-                sync_events::TransferProgressPayload {
-                    label: l1.clone(),
-                    bytes: b,
-                    total: t,
-                    path: p.map(String::from),
-                },
+            handle_transfer_progress(
+                &sync_up, &app_up, &label_up, &started_up,
+                b, t, p, TransferDirection::Upload,
             );
             if b == t
                 && t > 0
                 && let Some(path_str) = p
+                && label_migration == "migration"
             {
-                // Use the full relative path (e.g. "bucket/photo.jpg")
-                // so recent-files can resolve the correct on-disk location.
-                let file_name = path_str.to_string();
-                info!("Upload complete [{}]: {} ({} bytes)", l1, file_name, t);
-                sync_for_upload.add_pending_activity(SyncActivityItem {
-                    file_name,
-                    action: "uploaded".to_string(),
-                    timestamp: chrono::Utc::now().timestamp(),
-                    size_bytes: t,
-                    label: l1.clone(),
-                });
-                if l1 == "migration" {
-                    crate::commands::migration::record_migration_upload(&a1, path_str.to_string());
-                }
+                crate::commands::migration::record_migration_upload(
+                    &app_migration,
+                    path_str.to_string(),
+                );
             }
         })),
         on_download_progress: Some(Arc::new(move |b, t, p| {
-            sync_for_download.touch_progress_time();
-            // Log first progress event for each file at info level
-            if let Some(path_str) = p {
-                let file_name = Path::new(path_str)
-                    .file_name()
-                    .map_or_else(|| path_str.to_string(), |f| f.to_string_lossy().to_string());
-                if let Ok(mut set) = download_started_cb.lock()
-                    && set.insert(path_str.to_string())
-                {
-                    if b > 0 {
-                        info!("Download resuming [{}]: {} from {} bytes ({} total)", l2, file_name, b, t);
-                    } else {
-                        info!("Download started [{}]: {} ({} bytes)", l2, file_name, t);
-                    }
-                }
-                // Track per-file progress for the sync progress UI
-                let _ = crate::sync_progress::update_file_progress(
-                    &sync_for_download,
-                    path_str.to_string(),
-                    b,
-                    t,
-                    crate::sync_progress::FileAction::Download,
-                    Some(l2.clone()),
-                );
-            }
-            debug!("Download [{}]: {}/{} bytes, path: {:?}", l2, b, t, p);
-            let _ = a2.emit(
-                sync_events::DOWNLOAD_PROGRESS,
-                sync_events::TransferProgressPayload {
-                    label: l2.clone(),
-                    bytes: b,
-                    total: t,
-                    path: p.map(String::from),
-                },
+            handle_transfer_progress(
+                &sync_down, &app_down, &label_down, &started_down,
+                b, t, p, TransferDirection::Download,
             );
-            // Record download completion. The path from hcfs-client may be
-            // the full relative path (e.g. "deps/photo.jpg") if the
-            // path_index resolved it, or an encrypted name like
-            // "file_09977d01...".  Keep the full string so recent-files
-            // can build the correct on-disk location for subfolder files.
-            if b == t
-                && t > 0
-                && let Some(path_str) = p
-            {
-                let display_name = Path::new(path_str)
-                    .file_name()
-                    .map_or_else(|| path_str.to_string(), |f| f.to_string_lossy().to_string());
-                info!("Download complete [{}]: {} ({} bytes)", l2, display_name, t);
-                sync_for_download.add_pending_activity(SyncActivityItem {
-                    file_name: path_str.to_string(),
-                    action: "downloaded".to_string(),
-                    timestamp: chrono::Utc::now().timestamp(),
-                    size_bytes: t,
-                    label: l2.clone(),
-                });
-            }
         })),
         on_encrypt_progress: Some(Arc::new(move |b, t, p| {
             sync_encrypt.touch_progress_time();
@@ -1533,8 +1538,6 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
             } else if b == t && t > 0 {
                 info!("Encrypt complete [{}]: {:?} ({} bytes)", l3, p, t);
             }
-            // Track encrypt progress for UI (no per-chunk Tauri emit — that
-            // was the main encryption bottleneck at ~1333 emits per 341MB).
             if let Some(path_str) = p {
                 let _ = crate::sync_progress::update_file_progress(
                     &sync_encrypt,
@@ -1553,7 +1556,6 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
             } else if b == t && t > 0 {
                 info!("Decrypt complete [{}]: {:?} ({} bytes)", l4, p, t);
             }
-            // Track decrypt progress for UI (no per-chunk Tauri emit).
             if let Some(path_str) = p {
                 let _ = crate::sync_progress::update_file_progress(
                     &sync_decrypt,
@@ -1591,11 +1593,11 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
         })),
         on_file_synced: Some(Arc::new(move |rel_path: &str, path_hash_hex: &str, arion_cid: &str, action: &str| {
             debug!("File synced [{}]: {} ({}) cid={}", l7, rel_path, action, arion_cid);
-            // Update the synced-paths cache incrementally so the frontend
-            // can show arion hashes for files that completed during sync,
-            // without waiting for the full cycle to finish.
             if !rel_path.is_empty() {
-                let info = crate::sync_shared::SyncedFileInfo::new(path_hash_hex.to_string(), arion_cid.to_string());
+                let info = crate::sync_shared::SyncedFileInfo::new(
+                    path_hash_hex.to_string(),
+                    arion_cid.to_string(),
+                );
                 sync_file_synced.upsert_synced_path(&l7, rel_path.to_string(), info);
             }
         })),
