@@ -66,6 +66,8 @@ impl std::fmt::Display for ApiError {
     }
 }
 
+impl std::error::Error for ApiError {}
+
 impl From<ApiError> for String {
     fn from(e: ApiError) -> String {
         e.to_string()

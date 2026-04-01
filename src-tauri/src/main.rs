@@ -17,6 +17,7 @@ mod block_subscription;
 mod builder_blocks;
 mod commands;
 mod constants;
+pub mod error;
 mod hcfs_drive;
 mod macos_bookmarks;
 mod substrate_client;
