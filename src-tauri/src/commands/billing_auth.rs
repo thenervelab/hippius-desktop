@@ -4,6 +4,10 @@
 //! mnemonic never needs to be stored in plaintext in the browser DB. The
 //! mnemonic is retrieved from the encrypted HCFS Drive on disk, used
 //! transiently to derive signing keys, then zeroized.
+//!
+//! Unlike [`super::auth`] which persists a full session, this module returns
+//! only a short-lived token for billing API calls. It also retries up to
+//! [`MAX_ATTEMPTS`] times to handle transient network failures.
 
 use alloy_signer::SignerSync;
 use alloy_signer_local::coins_bip39::English;
@@ -23,6 +27,10 @@ fn base_url() -> String {
     std::env::var("HIPPIUS_API_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
 }
 
+/// Short-lived billing auth result containing only the token and user info.
+///
+/// Unlike [`super::auth::LoginResult`], this omits addresses and session
+/// metadata since billing auth is a one-shot operation.
 #[derive(serde::Serialize, Clone)]
 pub struct BillingAuthResult {
     pub token: String,
@@ -43,6 +51,10 @@ struct VerifyResponse {
     username: String,
 }
 
+/// Derive Substrate address and Ethereum signer from a mnemonic.
+///
+/// Returns only what billing auth needs (no sr25519 pair, since we don't
+/// sign blockchain transactions in this flow).
 fn derive_keys(mnemonic: &str) -> Result<(String, PrivateKeySigner, String), String> {
     let (sr25519_pair, _) =
         sp_core::sr25519::Pair::from_phrase(mnemonic, None).map_err(|e| format!("{e:?}"))?;
@@ -82,9 +94,6 @@ pub async fn billing_auth(
         _ => get_mnemonic_for_account(&state, &account_id).await?,
     };
 
-    // Derive keys from the mnemonic, then zeroize it immediately.
-    // Using a scope + explicit zeroize (no catch_unwind / AssertUnwindSafe)
-    // to avoid unsound assumptions about panic safety of third-party code.
     let derive_result = derive_keys(&mnemonic);
     mnemonic.zeroize();
     let (substrate_address, eth_signer, eth_address) = derive_result?;
@@ -118,6 +127,7 @@ pub async fn billing_auth(
     Err(last_err)
 }
 
+/// Execute a single challenge-response attempt against the billing API.
 async fn attempt(
     client: &reqwest::Client,
     challenge_url: &str,
@@ -126,7 +136,6 @@ async fn attempt(
     eth_address: &str,
     substrate_address: &str,
 ) -> Result<BillingAuthResult, String> {
-    // Request challenge
     let challenge_res = client
         .post(challenge_url)
         .header("Content-Type", "application/json")
@@ -154,13 +163,11 @@ async fn attempt(
         .await
         .map_err(|e| format!("Failed to parse challenge: {e}"))?;
 
-    // Sign the message (EIP-191 personal_sign)
     let sig = eth_signer
         .sign_message_sync(cr.message.as_bytes())
         .map_err(|e| format!("Signing failed: {e}"))?;
     let formatted_sig = format!("{sig}");
 
-    // Verify signature
     let verify_res = client
         .post(verify_url)
         .header("Content-Type", "application/json")

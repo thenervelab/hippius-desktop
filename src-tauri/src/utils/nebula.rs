@@ -1,3 +1,10 @@
+//! Nebula VPN management — download, install, configure, and lifecycle.
+//!
+//! Handles the full VPN lifecycle: downloading the Nebula binary from the
+//! API, installing it with correct permissions, fetching certificates from
+//! the CA, and starting/stopping the Nebula process. Permission escalation
+//! (macOS osascript / Linux pkexec) only happens on explicit user toggle.
+
 use crate::utils::auth_tokens::get_api_token;
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};

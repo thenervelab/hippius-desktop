@@ -1,10 +1,17 @@
+//! macOS security-scoped bookmark persistence.
+//!
+//! On macOS, the app sandbox requires bookmarks to retain access to
+//! user-chosen directories across app restarts. This module stores
+//! those bookmarks in SQLite. On other platforms, all functions are
+//! no-ops.
+
 use sqlx::sqlite::SqlitePool;
 use tracing::debug;
 
 #[cfg(target_os = "macos")]
 use crate::macos_bookmarks::create_security_scoped_bookmark;
 
-/// Stores a security-scoped bookmark for a path in the database
+/// Stores a security-scoped bookmark for a path in the database.
 #[cfg(target_os = "macos")]
 pub async fn store_bookmark(pool: &SqlitePool, path: &str, scope_type: &str) -> Result<(), String> {
     let bookmark_data = create_security_scoped_bookmark(path)?;

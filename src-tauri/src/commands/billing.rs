@@ -1,4 +1,10 @@
 //! Billing, credits, and subscription commands.
+//!
+//! Thin IPC wrappers that delegate to [`crate::api_client::ApiClient`] (for
+//! authenticated Hippius API calls) and [`crate::api_client::IndexerClient`]
+//! (for public blockchain indexer queries). Each command maps 1:1 to a
+//! frontend billing page feature — credit balance, transaction history,
+//! Stripe subscriptions, deposit addresses, storage metrics, and node locations.
 
 use crate::api_client::{ApiClient, IndexerClient};
 use tracing::info;
@@ -7,6 +13,7 @@ use tracing::info;
 // Credits & transactions (API)
 // ---------------------------------------------------------------------------
 
+/// Fetch the current marketplace credit balance for an account.
 #[tauri::command]
 pub async fn get_user_credits_balance(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -19,6 +26,7 @@ pub async fn get_user_credits_balance(
         .map_err(|e| e.to_string())
 }
 
+/// Fetch paginated billing transaction history for an account.
 #[tauri::command]
 pub async fn get_billing_transactions(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -40,6 +48,7 @@ pub async fn get_billing_transactions(
 // Stripe subscription
 // ---------------------------------------------------------------------------
 
+/// Fetch available Stripe subscription plans.
 #[tauri::command]
 pub async fn get_subscription_plans(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -52,6 +61,7 @@ pub async fn get_subscription_plans(
         .map_err(|e| e.to_string())
 }
 
+/// Fetch the user's currently active Stripe subscription, if any.
 #[tauri::command]
 pub async fn get_active_subscription(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -64,6 +74,9 @@ pub async fn get_active_subscription(
         .map_err(|e| e.to_string())
 }
 
+/// Initiate a Stripe checkout session for a new subscription.
+///
+/// Returns a Stripe checkout URL that the frontend opens in the system browser.
 #[tauri::command]
 pub async fn create_subscription(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -89,6 +102,7 @@ pub async fn create_subscription(
         .map_err(|e| e.to_string())
 }
 
+/// Get a Stripe Customer Portal URL for managing an existing subscription.
 #[tauri::command]
 pub async fn get_customer_portal_url(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -103,6 +117,7 @@ pub async fn get_customer_portal_url(
         .map_err(|e| e.to_string())
 }
 
+/// Fetch the on-chain deposit address for adding credits via Substrate transfer.
 #[tauri::command]
 pub async fn get_deposit_address(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -119,6 +134,7 @@ pub async fn get_deposit_address(
 // Indexer queries (credits, marketplace, balance history, events)
 // ---------------------------------------------------------------------------
 
+/// Fetch free credit allocations from the blockchain indexer.
 #[tauri::command]
 pub async fn get_indexer_credits(
     account_id: String,
@@ -139,6 +155,7 @@ pub async fn get_indexer_credits(
         .map_err(|e| e.to_string())
 }
 
+/// Fetch marketplace credit consumption events (`CreditsConsumed`) from the indexer.
 #[tauri::command]
 pub async fn get_marketplace_credits(
     account_id: String,
@@ -160,6 +177,7 @@ pub async fn get_marketplace_credits(
         .map_err(|e| e.to_string())
 }
 
+/// Fetch historical system account balance snapshots for charting.
 #[tauri::command]
 pub async fn get_system_balance_history(
     account_id: String,
@@ -180,6 +198,7 @@ pub async fn get_system_balance_history(
         .map_err(|e| e.to_string())
 }
 
+/// Fetch balance transfer events (both sent and received) from the indexer.
 #[tauri::command]
 pub async fn get_balance_transfers(
     account_id: String,
@@ -200,6 +219,7 @@ pub async fn get_balance_transfers(
         .map_err(|e| e.to_string())
 }
 
+/// Fetch `MintedAccountCredits` events (credit top-ups) from the indexer.
 #[tauri::command]
 pub async fn get_add_credit_events(
     account_id: String,
@@ -221,6 +241,7 @@ pub async fn get_add_credit_events(
         .map_err(|e| e.to_string())
 }
 
+/// Fetch total file size stored by an account over a time window.
 #[tauri::command]
 pub async fn get_files_size(
     account_id: String,
@@ -238,6 +259,7 @@ pub async fn get_files_size(
         .map_err(|e| e.to_string())
 }
 
+/// Fetch total file count for an account over a time window.
 #[tauri::command]
 pub async fn get_files_count(
     account_id: String,
@@ -255,6 +277,7 @@ pub async fn get_files_count(
         .map_err(|e| e.to_string())
 }
 
+/// Look up which storage miner nodes hold a specific CID.
 #[tauri::command]
 pub async fn get_file_nodes(cid: String) -> Result<serde_json::Value, String> {
     let indexer = IndexerClient::from_env().map_err(|e| e.to_string())?;
@@ -265,6 +288,7 @@ pub async fn get_file_nodes(cid: String) -> Result<serde_json::Value, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Fetch node metric data (location, uptime) for the network map.
 #[tauri::command]
 pub async fn get_node_locations(
     page: Option<i64>,

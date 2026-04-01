@@ -6,10 +6,12 @@
 use serde::Serialize;
 use std::collections::VecDeque;
 
-// === Connectivity Health ===
-
 pub use crate::sync_logic::ConnectivityStatus;
 
+/// Health snapshot of the sync engine's connection to the HCFS server.
+///
+/// Emitted to the frontend via `hcfs_connectivity_changed` events so the
+/// UI can show connection status indicators and retry countdowns.
 #[derive(Clone, Debug, Serialize)]
 pub struct SyncEngineHealth {
     pub status: ConnectivityStatus,
@@ -33,10 +35,14 @@ impl Default for SyncEngineHealth {
     }
 }
 
-// === Sync State Types ===
-
+/// Maximum recent activity items retained per drive.
 const MAX_ACTIVITY: usize = 100;
 
+/// Per-drive sync state including review mode and recent activity log.
+///
+/// Stored in `SyncEngine::drives_state` keyed by drive label. The
+/// `in_review` flag blocks auto-sync for this drive only, allowing
+/// the user to review conflicts without affecting other drives.
 #[derive(Default, Clone, Serialize)]
 pub struct HcfsSyncState {
     pub is_syncing: bool,
@@ -56,6 +62,8 @@ pub struct HcfsSyncState {
     pub review_cooldown_until: i64,
 }
 
+/// A single entry in the drive's recent activity log, shown in the UI's
+/// activity feed. Includes the human-readable filename and action verb.
 #[derive(Clone, Serialize)]
 pub struct SyncActivityItem {
     pub file_name: String,
@@ -72,8 +80,9 @@ impl HcfsSyncState {
     }
 }
 
-// === Combined Sync State ===
-
+/// Aggregated sync state across all drives, returned by `get_sync_status`.
+///
+/// Merges per-drive states into a single view for the frontend status bar.
 #[derive(Default, Clone, Serialize)]
 pub struct CombinedSyncState {
     pub is_syncing: bool,

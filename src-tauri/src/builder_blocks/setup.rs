@@ -1,3 +1,9 @@
+//! App setup — database initialization, schema migration, and plugin registration.
+//!
+//! Called once during `Builder::setup()`. Creates the SQLite database at
+//! `~/.hippius/hippius.db`, runs schema migrations via `ensure_table_schema()`,
+//! registers deep-link handlers, and initializes the system tray.
+
 use crate::constants::substrate::WSS_ENDPOINT;
 use dirs;
 use sqlx::Row;

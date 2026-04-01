@@ -32,12 +32,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
+/// HCFS server configuration returned by `get_hcfs_config`.
 #[derive(serde::Serialize, Clone)]
 pub struct HcfsConfigResult {
     pub server_url: String,
     pub has_password: bool,
 }
 
+/// Result of `initialize_sync` — contains the derived user ID and
+/// whether this is a fresh setup (no existing drive metadata found).
 #[derive(serde::Serialize, Clone)]
 pub struct InitSyncResult {
     pub user_id: String,

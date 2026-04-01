@@ -14,8 +14,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex, OnceLock};
 
-// ── Auth ────────────────────────────────────────────────────────────────
-
+/// Cryptographic identity derived from the user's BIP-39 mnemonic at login.
+///
+/// Populated by `login_with_mnemonic` and cleared on logout. The sr25519
+/// keypair is used to sign Substrate extrinsics; the addresses are
+/// displayed in the UI and used for API authentication.
 #[derive(Default)]
 pub struct AuthInfo {
     pub sr25519_pair: Option<sr25519::Pair>,
@@ -23,8 +26,11 @@ pub struct AuthInfo {
     pub eth_address: Option<String>,
 }
 
-// ── Blockchain (Substrate RPC client) ───────────────────────────────────
-
+/// Lazily-initialized Substrate RPC client connection.
+///
+/// The client is created on first use and reconnected if the WebSocket
+/// endpoint changes. Protected by `RwLock` for concurrent read access
+/// from multiple command handlers.
 pub struct BlockchainState {
     pub client: std::sync::RwLock<Option<Arc<subxt::OnlineClient<subxt::PolkadotConfig>>>>,
 }
@@ -37,8 +43,10 @@ impl BlockchainState {
     }
 }
 
-// ── Block Subscription ──────────────────────────────────────────────────
-
+/// Tracks a background task that subscribes to new finalized blocks.
+///
+/// Used by the frontend to display the latest block number and
+/// connection status indicator.
 pub struct BlockSubscriptionState {
     pub running: AtomicBool,
     pub latest_block: AtomicU64,
@@ -57,8 +65,11 @@ impl BlockSubscriptionState {
     }
 }
 
-// ── OAuth ───────────────────────────────────────────────────────────────
-
+/// In-flight OAuth PKCE states, keyed by the `state` parameter.
+///
+/// Each entry is created when an OAuth flow starts and consumed when
+/// the callback arrives. Entries expire naturally if the user abandons
+/// the flow.
 pub struct OAuthState {
     pub pkce_states: Mutex<HashMap<String, crate::commands::oauth::PkceState>>,
 }
@@ -71,8 +82,7 @@ impl OAuthState {
     }
 }
 
-// ── Nebula VPN ──────────────────────────────────────────────────────────
-
+/// Nebula VPN runtime state — setup progress and background ping task.
 pub struct NebulaState {
     pub setup: Mutex<crate::utils::nebula::NebulaSetupState>,
     pub ping_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -86,8 +96,6 @@ impl NebulaState {
         }
     }
 }
-
-// ── Migration ───────────────────────────────────────────────────────────
 
 /// State for the S3-to-HCFS migration workflow.
 ///
@@ -110,38 +118,25 @@ impl MigrationState {
     }
 }
 
-// ── AppState (the single top-level container) ───────────────────────────
-
+/// The single top-level state container for the entire Tauri backend.
+///
+/// Registered once at startup via `app.manage(AppState::new())`. Command
+/// handlers access it through `tauri::State<'_, AppState>`; background
+/// tasks use `app.state::<AppState>()`. All sub-states use interior
+/// mutability so `&AppState` suffices everywhere.
 pub struct AppState {
-    // Database
     db: OnceLock<SqlitePool>,
-
-    // Authentication
     pub auth: Mutex<AuthInfo>,
     pub active_account_id: Mutex<Option<String>>,
-
-    // Sync Engine (file sync, progress tracking, drive registry)
     pub sync: Arc<SyncEngine>,
-
-    // Blockchain / Substrate RPC
     pub blockchain: BlockchainState,
-
-    // Block Subscription
     pub block_sub: BlockSubscriptionState,
-
-    // OAuth
     pub oauth: OAuthState,
-
-    // Nebula VPN
     pub nebula: NebulaState,
-
-    // Migration (S3 → HCFS)
     pub migration: MigrationState,
-
-    // Shared HTTP client for health checks (connection pool reuse)
+    /// HTTP client for HCFS health checks (accepts self-signed certs).
     pub health_client: reqwest::Client,
-
-    /// Shared HTTP client for API calls (reuses connection pool + TLS cache).
+    /// HTTP client for Hippius API calls (reuses connection pool + TLS cache).
     pub api_client: reqwest::Client,
 }
 

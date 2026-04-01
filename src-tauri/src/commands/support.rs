@@ -1,9 +1,14 @@
 //! Support ticket commands.
+//!
+//! Proxies the Hippius support API so users can create, view, and reply
+//! to tickets without leaving the desktop app. All requests are
+//! authenticated via the account's stored API token.
 
 use crate::api_client::ApiClient;
 use serde::Deserialize;
 use tracing::info;
 
+/// List support tickets with optional search, ordering, and pagination.
 #[tauri::command]
 pub async fn list_support_tickets(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -31,6 +36,7 @@ pub async fn list_support_tickets(
         .map_err(|e| e.to_string())
 }
 
+/// Fetch the message thread for a specific support ticket.
 #[tauri::command]
 pub async fn get_support_ticket_messages(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -58,6 +64,7 @@ pub async fn get_support_ticket_messages(
         .map_err(|e| e.to_string())
 }
 
+/// Frontend payload for creating a new support ticket.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateTicketParams {
@@ -69,6 +76,7 @@ pub struct CreateTicketParams {
     pub description: String,
 }
 
+/// Open a new support ticket with a subject, priority, and description.
 #[tauri::command]
 pub async fn create_support_ticket(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -95,6 +103,7 @@ pub async fn create_support_ticket(
         .map_err(|e| e.to_string())
 }
 
+/// Append a reply message to an existing support ticket thread.
 #[tauri::command]
 pub async fn post_ticket_message(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -116,6 +125,7 @@ pub async fn post_ticket_message(
         .map_err(|e| e.to_string())
 }
 
+/// Partially update a support ticket (e.g. change status or priority).
 #[tauri::command]
 pub async fn update_support_ticket(
     state: tauri::State<'_, crate::app_state::AppState>,

@@ -1,6 +1,12 @@
-//! Notification settings commands.
+//! Remote notification settings commands.
+//!
+//! These manage the server-side notification preferences (email, push)
+//! via the Hippius API. For local in-app notification preferences, see
+//! [`super::local_db`].
 
 use crate::api_client::ApiClient;
+
+/// Fetch the user's current remote notification settings from the API.
 #[tauri::command]
 pub async fn get_notification_settings(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -13,6 +19,7 @@ pub async fn get_notification_settings(
         .map_err(|e| e.to_string())
 }
 
+/// Patch the user's remote notification settings on the API.
 #[tauri::command]
 pub async fn update_notification_settings(
     state: tauri::State<'_, crate::app_state::AppState>,

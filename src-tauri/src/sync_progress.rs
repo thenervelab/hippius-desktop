@@ -15,11 +15,13 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use tracing::warn;
 
-// ── Constants ──────────────────────────────────────────────────────────
+/// How long recently-completed files are kept before pruning (1 hour).
+const RECENT_FILES_RETENTION_MS: i64 = 60 * 60 * 1000;
 
-const RECENT_FILES_RETENTION_MS: i64 = 60 * 60 * 1000; // 1 hour
-// ── Types ──────────────────────────────────────────────────────────────
-
+/// Coarse lifecycle phase of a file within a sync session.
+///
+/// Drives the progress indicator in the frontend — each status maps to a
+/// distinct visual state in the sync widget.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum FileStatus {
@@ -33,6 +35,10 @@ pub enum FileStatus {
     Error,
 }
 
+/// The type of operation being performed on a file.
+///
+/// Determines which expected-count bucket the file falls into when
+/// computing overall progress percentages.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum FileAction {
@@ -44,6 +50,10 @@ pub enum FileAction {
     RemoteDelete,
 }
 
+/// Full progress state for a single file within an active sync session.
+///
+/// Serialized to the frontend via `SyncSnapshot` so the UI can render
+/// per-file progress bars and status labels.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncFile {
@@ -63,6 +73,11 @@ pub struct SyncFile {
     pub error: Option<String>,
 }
 
+/// Represents one sync cycle from plan creation through completion.
+///
+/// A new session is created each time the sync loop detects changes to
+/// process. Expected counts are set up-front from the sync plan so the
+/// frontend can show "X of Y" progress before any file completes.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncSession {
@@ -77,6 +92,9 @@ pub struct SyncSession {
     pub files: HashMap<String, SyncFile>,
 }
 
+/// A completed file kept for display in the "recent activity" list.
+///
+/// Pruned after [`RECENT_FILES_RETENTION_MS`] to avoid unbounded growth.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentFile {
@@ -90,6 +108,10 @@ pub struct RecentFile {
     pub session_id: String,
 }
 
+/// Top-level container for all in-memory sync progress.
+///
+/// Stored in `SyncEngine::progress` behind a `std::sync::Mutex`. One
+/// instance per app process — not persisted across restarts.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncProgressState {
@@ -98,6 +120,9 @@ pub struct SyncProgressState {
     pub last_updated: i64,
 }
 
+/// Aggregate progress across all files in the current session.
+///
+/// Consumed by the system tray menu to show a compact sync summary.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverallProgress {
@@ -112,6 +137,10 @@ pub struct OverallProgress {
     pub current_file: Option<SyncFile>,
 }
 
+/// File lists received from the frontend when starting a new session.
+///
+/// Each field is optional so the frontend can omit categories that
+/// have no files (e.g. a download-only session sends no upload list).
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionFileList {
@@ -121,6 +150,10 @@ pub struct SessionFileList {
     pub remote_delete_files: Option<Vec<String>>,
 }
 
+/// Fine-grained progress phase for individual file tracking.
+///
+/// More granular than [`FileStatus`] — distinguishes `InProgress`
+/// (transfer) from `Encrypting`/`Decrypting` (crypto) phases.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FileProgressStatus {
@@ -132,6 +165,10 @@ pub enum FileProgressStatus {
     Error,
 }
 
+/// Per-file progress included in [`SyncSnapshot`] for frontend rendering.
+///
+/// Contains both byte-level transfer progress and the crypto phase, so
+/// the UI can show accurate progress bars even during encryption.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileProgress {
@@ -148,6 +185,11 @@ pub struct FileProgress {
     pub error: Option<String>,
 }
 
+/// Point-in-time snapshot of sync progress, emitted to the frontend.
+///
+/// This is the primary data shape consumed by the sync status widget.
+/// Built by [`build_snapshot`] from the current [`SyncProgressState`] and
+/// emitted via `SyncEngine::emit_snapshot` after every state change.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncSnapshot {
@@ -179,11 +221,7 @@ pub struct SyncSnapshot {
     pub files: Vec<FileProgress>,
 }
 
-// Global state is stored in `SyncEngine` (see `sync_engine.rs`).
-// Tauri commands access it via `AppState::sync`; Rust callers pass `&SyncEngine` directly.
-
-// ── Helper Functions ───────────────────────────────────────────────────
-
+/// Returns the current UTC time as epoch milliseconds.
 pub(crate) fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -343,8 +381,6 @@ fn move_completed_to_recent(state: &mut SyncProgressState) {
     clean_expired(state);
 }
 
-// ── Snapshot Builder ──────────────────────────────────────────────────
-
 /// Build a sorted snapshot from the current state.
 ///
 /// Pure function: no side effects, no Tauri dependency. Unit tests call this
@@ -498,8 +534,6 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
     }
 }
 
-// ── Inner Functions (business logic, callable from Rust and tests) ─────
-
 /// Count the expected uploads and downloads for a specific drive label.
 ///
 /// Used by `hcfs_drive.rs` to compare a single drive's actual sync counts
@@ -570,8 +604,7 @@ pub fn start_session(
     Ok(result)
 }
 
-// ── Tauri Commands (thin wrappers delegating to inner functions) ───────
-
+/// IPC wrapper for [`start_session`] — delegates to the inner function.
 #[tauri::command]
 pub fn sp_start_session(
     state: tauri::State<'_, crate::app_state::AppState>,

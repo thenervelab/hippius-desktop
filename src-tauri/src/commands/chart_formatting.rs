@@ -1,17 +1,22 @@
 //! Chart data formatting commands.
 //!
-//! Provides three Tauri commands that convert raw `Account` data into
-//! `ChartPoint` vectors suitable for frontend chart rendering. This replaces
+//! Provides Tauri commands that convert raw account/indexer data into
+//! [`ChartPoint`] vectors suitable for frontend chart rendering. This replaces
 //! the TypeScript formatters in `getFormatDataForCreditsUsageChart.tsx`,
 //! `getFormatDataForStorageUsageChart.tsx`, and `getFormatDataForAccountsChart.tsx`.
+//!
+//! All three chart types share the same core logic ([`build_chart`]):
+//! 1. Parse timestamped balance data into dated points
+//! 2. Generate an inclusive date range for the requested period
+//! 3. Carry-forward fill: days without data inherit the last known balance
+//!
+//! Also includes [`transform_marketplace_credits`] (cumulative daily running
+//! totals) and [`calculate_storage_cost`] (pricing model computation).
 
 use chrono::{Datelike, NaiveDate, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
+/// Raw account snapshot from the indexer, used as input for all chart types.
 #[derive(Deserialize, Clone, Debug)]
 pub struct AccountInput {
     pub total_balance: String,
@@ -19,6 +24,11 @@ pub struct AccountInput {
     pub credit: Option<String>,
 }
 
+/// Single data point for frontend chart rendering.
+///
+/// The `x` field is an ISO 8601 date string used as the chart axis value.
+/// Optional fields (`band_label`, `credit`, `formatted_credit`) are only
+/// populated for chart types that need them.
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartPoint {
@@ -35,10 +45,6 @@ pub struct ChartPoint {
     pub formatted_credit: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 const WEEKDAYS_FULL: [&str; 7] = [
     "Sunday",
     "Monday",
@@ -53,16 +59,12 @@ const MONTHS_SHORT: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-/// Hippius creation date (March 11, 2025).
+/// Hippius creation date (March 11, 2025) — lower bound for "max" range.
 fn hippius_creation_date() -> NaiveDate {
     NaiveDate::from_ymd_opt(2025, 3, 11).unwrap()
 }
 
-// ---------------------------------------------------------------------------
-// Helper functions
-// ---------------------------------------------------------------------------
-
-/// Divide a raw balance string (representing value × 10^18) by 10^18 and
+/// Divide a raw balance string (representing value * 10^18) by 10^18 and
 /// format with up to `decimals` fractional digits, trimming trailing zeros.
 /// Adds comma grouping to the integer part (matching JS `toLocaleString`).
 fn format_balance(raw: &str, decimals: usize) -> String {
@@ -71,7 +73,6 @@ fn format_balance(raw: &str, decimals: usize) -> String {
     if value == 0.0 {
         return "0".to_string();
     }
-    // Format with fixed decimal places then trim trailing zeros.
     let fixed = format!("{:.prec$}", value, prec = decimals);
     let trimmed = trim_trailing_zeros(&fixed);
     add_commas(trimmed)
@@ -102,23 +103,21 @@ fn get_all_dates_in_range(start: NaiveDate, end: NaiveDate) -> Vec<NaiveDate> {
         dates.push(cur);
         cur = cur.succ_opt().unwrap_or(cur);
         if cur == start && dates.len() > 1 {
-            break; // safety: avoid infinite loop on overflow
+            break;
         }
     }
     dates
 }
 
-/// Format a `NaiveDate` as `YYYY-MM-DD`.
 fn normalize_date(date: NaiveDate) -> String {
     date.format("%Y-%m-%d").to_string()
 }
 
-/// Format a `NaiveDate` as an ISO 8601 string with `T00:00:00.000Z` suffix.
 fn date_to_iso(date: NaiveDate) -> String {
     format!("{}T00:00:00.000Z", normalize_date(date))
 }
 
-/// Trim trailing zeros from a decimal string. Also removes a trailing dot.
+/// Trim trailing zeros from a decimal string, also removing a trailing dot.
 fn trim_trailing_zeros(s: &str) -> &str {
     if !s.contains('.') {
         return s;
@@ -161,13 +160,11 @@ fn add_commas_to_int(s: &str) -> String {
     }
 }
 
-/// Parse an ISO timestamp string to a `NaiveDate`, extracting the UTC date.
+/// Parse an ISO timestamp string to a `NaiveDate`, trying multiple formats.
 fn parse_timestamp_to_date(ts: &str) -> Option<NaiveDate> {
-    // Try full ISO 8601 datetime first
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
         return Some(dt.date_naive());
     }
-    // Try `YYYY-MM-DDTHH:MM:SS.sssZ` (common JS format)
     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S%.fZ") {
         return Some(dt.date());
     }
@@ -177,7 +174,6 @@ fn parse_timestamp_to_date(ts: &str) -> Option<NaiveDate> {
     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S%.f") {
         return Some(dt.date());
     }
-    // Try plain date
     if let Ok(d) = NaiveDate::parse_from_str(ts, "%Y-%m-%d") {
         return Some(d);
     }
@@ -201,12 +197,11 @@ fn weekday_name(d: NaiveDate) -> &'static str {
     WEEKDAYS_FULL[weekday_index(d)]
 }
 
-/// "DD Mon" label, e.g. "5 Mar".
 fn dd_mon_label(d: NaiveDate) -> String {
     format!("{} {}", d.day(), MONTHS_SHORT[d.month0() as usize])
 }
 
-/// Compute the start date for a given range.
+/// Compute the start date for a given range keyword.
 fn range_start(range: &str, today: NaiveDate) -> Option<NaiveDate> {
     match range {
         "last7days" => today.checked_sub_signed(chrono::Duration::days(6)),
@@ -218,11 +213,6 @@ fn range_start(range: &str, today: NaiveDate) -> Option<NaiveDate> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Core chart logic (shared between commands)
-// ---------------------------------------------------------------------------
-
-/// Internal chart point used during computation.
 struct RawPoint {
     date: NaiveDate,
     balance: f64,
@@ -256,6 +246,10 @@ fn accounts_to_raw_points(accounts: &[AccountInput], divide_by_1e18: bool) -> Ve
 }
 
 /// Map data to a date range with carry-forward fill (cumulative).
+///
+/// For each day in the range, uses the last known balance if no data point
+/// exists for that day. This produces a smooth step-chart suitable for
+/// displaying cumulative metrics like balance or storage usage.
 fn map_to_range_carry_forward(
     points: &[RawPoint],
     date_range: &[NaiveDate],
@@ -267,13 +261,11 @@ fn map_to_range_carry_forward(
         return Vec::new();
     }
 
-    // Build a map of date -> last point on that date
     let mut by_date = std::collections::HashMap::new();
     for p in points {
         by_date.insert(normalize_date(p.date), p);
     }
 
-    // Find the last known balance before or on the first date in range
     let first_key = normalize_date(date_range[0]);
     let mut last_balance: f64 = 0.0;
     let mut last_credit: Option<f64> = if include_credit { Some(0.0) } else { None };
@@ -349,7 +341,7 @@ fn map_to_range_carry_forward(
         .collect()
 }
 
-/// Build chart points for a given range (shared logic).
+/// Build chart points for a given range (shared logic for all chart types).
 fn build_chart(
     accounts: &[AccountInput],
     range: &str,
@@ -381,8 +373,8 @@ fn build_chart(
 
 /// Format account data for a credits usage chart.
 ///
-/// - Divides `total_balance` by 10^18 to get credit values.
-/// - Uses carry-forward fill for missing days.
+/// Divides `total_balance` by 10^18 to get credit values.
+/// Uses carry-forward fill for missing days.
 #[tauri::command]
 pub fn format_credits_chart(
     accounts: Vec<AccountInput>,
@@ -393,8 +385,8 @@ pub fn format_credits_chart(
 
 /// Format account data for a storage usage chart.
 ///
-/// - `total_balance` represents bytes (no division).
-/// - Uses carry-forward fill for missing days.
+/// `total_balance` represents raw bytes (no division).
+/// Uses carry-forward fill for missing days.
 #[tauri::command]
 pub fn format_storage_chart(
     accounts: Vec<AccountInput>,
@@ -405,8 +397,8 @@ pub fn format_storage_chart(
 
 /// Format account data for a balance chart (includes credit field).
 ///
-/// - Divides `total_balance` and `credit` by 10^18.
-/// - Uses carry-forward fill for missing days.
+/// Divides both `total_balance` and `credit` by 10^18.
+/// Uses carry-forward fill for missing days.
 #[tauri::command]
 pub fn format_balance_chart(
     accounts: Vec<AccountInput>,
@@ -419,13 +411,15 @@ pub fn format_balance_chart(
 // Marketplace credits transformation
 // ---------------------------------------------------------------------------
 
+/// Raw marketplace credit event from the indexer.
 #[derive(Deserialize, Clone, Debug)]
 pub struct MarketplaceCreditInput {
     pub amount: String,
     pub date: String,
 }
 
-/// Output matches the `Account` shape the frontend charts expect.
+/// Cumulative daily credit total, shaped to match the `Account` struct
+/// the frontend chart components expect.
 #[derive(Serialize, Clone, Debug)]
 pub struct MarketplaceCreditOutput {
     pub account_id: String,
@@ -445,7 +439,8 @@ pub struct MarketplaceCreditOutput {
 /// Transform marketplace credits into cumulative daily running totals.
 ///
 /// Groups credits by date, fills date gaps, and computes cumulative sums.
-/// Returns an `Account`-shaped vec for the frontend chart components.
+/// Returns an `Account`-shaped vec so the result can be fed directly into
+/// the same chart components as balance data.
 #[tauri::command]
 pub fn transform_marketplace_credits(
     credits: Vec<MarketplaceCreditInput>,
@@ -454,7 +449,6 @@ pub fn transform_marketplace_credits(
         return Ok(vec![]);
     }
 
-    // Group and sum by date key (YYYY-MM-DD)
     let mut daily: std::collections::BTreeMap<String, (u128, String)> =
         std::collections::BTreeMap::new();
 
@@ -513,14 +507,12 @@ pub fn transform_marketplace_credits(
 }
 
 fn parse_date_key(date_str: &str) -> String {
-    // Try ISO datetime first, then plain date
     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S%.fZ") {
         return dt.format("%Y-%m-%d").to_string();
     }
     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S") {
         return dt.format("%Y-%m-%d").to_string();
     }
-    // Already YYYY-MM-DD or close enough
     date_str.chars().take(10).collect()
 }
 
@@ -530,14 +522,15 @@ fn parse_date_key(date_str: &str) -> String {
 
 /// Calculate storage cost for a given storage type, timeframe, and number of GB.
 ///
-/// Embeds the pricing constants from pricing-cfg.json.
+/// Embeds the pricing constants from `pricing-cfg.json`. The cost model
+/// charges a flat first-hour rate plus per-block charges for the remainder
+/// of the timeframe (block time = 6 seconds).
 #[tauri::command]
 pub fn calculate_storage_cost(
     storage_type: String,
     timeframe: String,
     num_of_gb: f64,
 ) -> Result<f64, String> {
-    // Pricing constants (from pricing-cfg.json)
     let per_block_time: f64 = 6.0;
     let (per_block_charge, first_hour_charge) = match storage_type.as_str() {
         "s3" | "ipfs" => (6.7878e-9, 0.0000315),
@@ -678,10 +671,6 @@ mod tests {
         assert_eq!(d2, Some(NaiveDate::from_ymd_opt(2025, 3, 15).unwrap()));
     }
 
-    // -----------------------------------------------------------------------
-    // transform_marketplace_credits
-    // -----------------------------------------------------------------------
-
     #[test]
     fn transform_empty_input() {
         let result = transform_marketplace_credits(vec![]).unwrap();
@@ -712,12 +701,11 @@ mod tests {
             },
         ];
         let result = transform_marketplace_credits(credits).unwrap();
-        // 4 days: Mar 10, 11, 12, 13
         assert_eq!(result.len(), 4);
-        assert_eq!(result[0].total_balance, "100"); // Day 1
-        assert_eq!(result[1].total_balance, "100"); // Gap filled
-        assert_eq!(result[2].total_balance, "100"); // Gap filled
-        assert_eq!(result[3].total_balance, "300"); // Cumulative
+        assert_eq!(result[0].total_balance, "100");
+        assert_eq!(result[1].total_balance, "100");
+        assert_eq!(result[2].total_balance, "100");
+        assert_eq!(result[3].total_balance, "300");
     }
 
     #[test]
@@ -746,10 +734,6 @@ mod tests {
         let result = transform_marketplace_credits(credits).unwrap();
         assert_eq!(result[0].total_balance, "999999999999999999999");
     }
-
-    // -----------------------------------------------------------------------
-    // calculate_storage_cost
-    // -----------------------------------------------------------------------
 
     #[test]
     fn storage_cost_per_month() {
@@ -782,7 +766,6 @@ mod tests {
     #[test]
     fn storage_cost_first_hour() {
         let cost = calculate_storage_cost("ipfs".into(), "first-hour".into(), 1.0).unwrap();
-        // First hour: just first_hour_charge * 1 GB, no subsequent blocks
         assert!((cost - 0.0000315).abs() < 1e-10);
     }
 }

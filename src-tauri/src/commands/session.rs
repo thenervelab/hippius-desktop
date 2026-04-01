@@ -3,12 +3,21 @@
 //! These commands replace the frontend's IndexedDB-based `hippiusDesktopDB.ts`
 //! and `sessionStore.ts` — all sensitive credential storage now lives in the
 //! Rust-managed SQLite database at `~/.hippius/hippius.db`.
+//!
+//! Two tables back this module:
+//! - **`wallet_store`** — AES-encrypted mnemonic + passcode hash (one row per account)
+//! - **`auth_session`** — API token, expiry, provider, and user metadata
+//!
+//! The frontend calls these via Tauri IPC; no credential material ever resides
+//! in browser storage.
 
 use crate::utils::account_key::account_key;
 use tracing::info;
 
-// ── Types ──────────────────────────────────────────────────────────────
-
+/// Encrypted wallet record for a single account.
+///
+/// The `encrypted_mnemonic` is CryptoJS-compatible AES ciphertext (base64),
+/// and `passcode_hash` is the SHA-256 hex digest of the user's passcode.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WalletRecord {
@@ -16,6 +25,10 @@ pub struct WalletRecord {
     pub passcode_hash: String,
 }
 
+/// Persisted auth session for one account, restored at app boot.
+///
+/// All fields are optional because a logged-out session retains only
+/// the `logout_time_minutes` preference (the rest are NULLed on logout).
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthSession {
@@ -29,6 +42,10 @@ pub struct AuthSession {
     pub last_login_at: Option<String>,
 }
 
+/// Minimal token payload returned by [`get_auth_token`].
+///
+/// Includes only what the frontend needs for authenticated API requests,
+/// omitting session metadata like provider or logout preferences.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiAuth {
@@ -37,8 +54,6 @@ pub struct ApiAuth {
     pub user_id: Option<i64>,
     pub username: Option<String>,
 }
-
-// ── Wallet Commands ────────────────────────────────────────────────────
 
 /// Store an AES-encrypted mnemonic + passcode hash for the given account.
 #[tauri::command]
@@ -131,8 +146,6 @@ pub async fn clear_wallet(
 
     Ok(())
 }
-
-// ── Auth Session Commands ──────────────────────────────────────────────
 
 /// Persist auth session (token, expiry, provider, etc.) for the given account.
 ///
@@ -271,7 +284,6 @@ pub async fn get_auth_token(
         return Ok(None);
     };
 
-    // Check expiry
     let now_ms = chrono::Utc::now().timestamp_millis();
     if expiry > 0 && expiry < now_ms {
         return Ok(None);
@@ -430,8 +442,6 @@ pub async fn update_logout_time(
 
     Ok(())
 }
-
-// ── API Token ─────────────────────────────────────────────────────────
 
 /// Save the API auth token for an account. Called by the frontend after login
 /// so that Rust subsystems (sync, VPN) can retrieve it via `get_api_token`.

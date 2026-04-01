@@ -8,10 +8,10 @@ use crate::utils::account_key::account_key;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
-// ---------------------------------------------------------------------------
-// PKCE state (in-memory, keyed by provider to prevent race conditions)
-// ---------------------------------------------------------------------------
-
+/// Transient PKCE state for an in-flight OAuth authorization.
+///
+/// Keyed by provider name in `OAuthState.pkce_states` to prevent
+/// cross-provider confusion when multiple flows overlap.
 pub struct PkceState {
     provider: String,
     #[allow(dead_code)] // stored for future nonce validation in complete_oauth_flow
@@ -25,10 +25,8 @@ fn api_base_url() -> String {
     std::env::var("HIPPIUS_API_BASE_URL").unwrap_or_else(|_| API_BASE_URL.to_string())
 }
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
+/// The authorization URL and provider name returned to the frontend
+/// so it can open the browser to the correct OAuth endpoint.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuthUrlResult {
@@ -36,6 +34,11 @@ pub struct OAuthUrlResult {
     pub provider: String,
 }
 
+/// Parameters received from the OAuth callback deep-link.
+///
+/// Either `token` (direct grant) or `code` (authorization code) will be
+/// present, but never both. Error fields are populated when the provider
+/// rejects the request.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuthCallbackParams {
@@ -49,6 +52,8 @@ pub struct OAuthCallbackParams {
     pub substrate_address: Option<String>,
 }
 
+/// Authenticated session data returned to the frontend after a
+/// successful OAuth flow, also persisted in the local SQLite DB.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuthSessionResult {
@@ -75,10 +80,6 @@ struct ExchangeUser {
     substrate_address: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Commands
-// ---------------------------------------------------------------------------
-
 /// Build the OAuth authorization URL for the given provider and return it.
 /// The frontend opens this URL in the external browser.
 #[tauri::command]
@@ -96,7 +97,6 @@ pub async fn start_oauth_flow(
         _ => return Err(format!("Unsupported OAuth provider: {provider}")),
     };
 
-    // Store PKCE state keyed by provider (with nonce to prevent replay)
     let nonce = uuid::Uuid::new_v4().to_string();
     {
         let mut states = state
@@ -113,7 +113,6 @@ pub async fn start_oauth_flow(
         );
     }
 
-    // Build auth URL: /accounts/<provider>/login/?next=/get-token/?callback_url=<callback>
     let callback = format!("{CALLBACK_URL}?source=desktop");
     let next = format!(
         "/get-token/?callback_url={}",
@@ -138,7 +137,6 @@ pub async fn complete_oauth_flow(
     state: tauri::State<'_, crate::app_state::AppState>,
     params: OAuthCallbackParams,
 ) -> Result<OAuthSessionResult, String> {
-    // Check for errors — sanitize before returning to frontend
     if let Some(ref err) = params.error {
         let desc = params.error_description.as_deref().unwrap_or("");
         error!("OAuth error from provider: {err} {desc}");
@@ -146,7 +144,6 @@ pub async fn complete_oauth_flow(
     }
 
     let (token, user_id, username, email, substrate_address) = if let Some(ref t) = params.token {
-        // Token returned directly by backend — clear all PKCE state
         {
             let mut states = state
                 .oauth
@@ -163,8 +160,6 @@ pub async fn complete_oauth_flow(
             params.substrate_address.clone().unwrap_or_default(),
         )
     } else if let Some(ref code) = params.code {
-        // Exchange code for token — look up PKCE state.
-        // Validate there's exactly one pending flow to prevent ambiguity.
         let provider = {
             let states = state
                 .oauth
@@ -209,7 +204,6 @@ pub async fn complete_oauth_flow(
             .await
             .map_err(|e| format!("Token exchange parse error: {e}"))?;
 
-        // Remove only the matching provider's PKCE state (not all entries)
         {
             let mut states = state
                 .oauth
@@ -230,7 +224,6 @@ pub async fn complete_oauth_flow(
         return Err("Missing both token and authorization code".into());
     };
 
-    // Session expires in 30 days
     let expires_at = {
         let now = chrono::Utc::now();
         let expiry = now + chrono::Duration::days(30);
@@ -238,7 +231,6 @@ pub async fn complete_oauth_flow(
     };
     let token_expiry_ms = chrono::Utc::now().timestamp_millis() + 30 * 24 * 60 * 60 * 1000;
 
-    // Retrieve provider from PKCE state (already cleared, use param)
     let provider_name = params
         .token
         .as_ref()
@@ -246,7 +238,6 @@ pub async fn complete_oauth_flow(
         .unwrap_or("oauth")
         .to_string();
 
-    // Persist auth session in the DB
     if !substrate_address.is_empty() {
         let pool = state.pool()?;
         let owner = account_key(&substrate_address);
@@ -274,7 +265,6 @@ pub async fn complete_oauth_flow(
         .await
         .map_err(|e| format!("DB error: {e}"))?;
 
-        // Persist API auth token (used by sync engine, VPN, and API calls)
         sqlx::query(
             "INSERT INTO objectstore_auth_scoped (owner, temp_auth_key)
              VALUES (?, ?)

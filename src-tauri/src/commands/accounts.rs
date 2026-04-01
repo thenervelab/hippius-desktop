@@ -1,3 +1,9 @@
+//! Account management commands for import, export, and app reset.
+//!
+//! Provides data portability (sync paths, sub-accounts) so users can
+//! migrate between devices, and a full reset path that restores the
+//! app to a clean state while preserving the default WSS endpoint.
+
 use crate::constants::substrate::WSS_ENDPOINT;
 use chrono::Utc;
 use sp_core::Pair;
@@ -6,24 +12,29 @@ use sp_core::sr25519;
 use sqlx::Row;
 use tracing::{error, info, warn};
 
+/// A sync path entry for import/export serialization.
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct SyncPathExport {
     pub path: String,
     pub label: String,
 }
 
+/// Combined export bundle containing all portable app data.
 #[derive(serde::Serialize)]
 pub struct ExportDataResult {
     pub sync_paths: Vec<SyncPathExport>,
     pub sub_accounts: Vec<SubAccountExport>,
 }
 
+/// Payload for the import command; each section is optional so users
+/// can selectively restore only sync paths or only sub-accounts.
 #[derive(serde::Deserialize)]
 pub struct ImportDataParams {
     pub sync_paths: Option<Vec<SyncPathExport>>,
     pub sub_accounts: Option<Vec<SubAccountExport>>,
 }
 
+/// A sub-account's seed phrase for cross-device backup/restore.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct SubAccountExport {
     pub account_id: String,
@@ -31,6 +42,11 @@ pub struct SubAccountExport {
     pub created_at: Option<String>,
 }
 
+/// Import sync paths and sub-accounts from an export bundle.
+///
+/// Runs in a single transaction so partial failures roll back cleanly.
+/// Duplicates are skipped (not overwritten) and reported in the result
+/// message so the user knows what was already present.
 #[tauri::command]
 pub async fn import_app_data(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -157,6 +173,7 @@ pub async fn import_app_data(
     Ok(success_message)
 }
 
+/// Export all sync paths and sub-accounts as a portable JSON bundle.
 #[tauri::command]
 pub async fn export_app_data(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -214,13 +231,15 @@ pub async fn export_app_data(
     })
 }
 
+/// Wipe user data (sync paths, sub-accounts) and restore the default
+/// WSS endpoint. Non-fatal table-clear errors are logged but do not
+/// abort the reset so the app reaches a usable state regardless.
 #[tauri::command]
 pub async fn reset_app(state: tauri::State<'_, crate::app_state::AppState>) -> Result<(), String> {
     info!("[Reset App] Starting app reset...");
 
     let pool = state.pool()?;
 
-    // Use explicit SQL per table to avoid dynamic table name injection
     for (table, query) in [
         ("sync_paths", "DELETE FROM sync_paths"),
         ("wss_endpoint", "DELETE FROM wss_endpoint"),
@@ -244,6 +263,10 @@ pub async fn reset_app(state: tauri::State<'_, crate::app_state::AppState>) -> R
     Ok(())
 }
 
+/// Derive SS58 addresses from all stored sub-account seed phrases.
+///
+/// Returns `(account_id, ss58_address)` pairs. Sub-accounts with
+/// invalid mnemonics are logged and silently skipped.
 #[tauri::command]
 pub async fn get_all_subaccount_addresses(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -260,7 +283,6 @@ pub async fn get_all_subaccount_addresses(
     let mut result = Vec::new();
 
     for (account_id, phrase) in sub_accounts {
-        // Convert mnemonic to keypair and get SS58 address
         if let Ok((pair, _seed)) = sr25519::Pair::from_phrase(&phrase, None) {
             let ss58 = pair.public().to_ss58check();
             result.push((account_id, ss58));

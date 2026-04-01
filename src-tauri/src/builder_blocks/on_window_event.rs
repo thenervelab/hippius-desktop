@@ -1,6 +1,15 @@
+//! Window close handler — graceful shutdown with VPN cleanup.
+//!
+//! Intercepts the close event to stop the Nebula VPN process before
+//! the app exits. Without this, the VPN tunnel would remain active
+//! as an orphaned process.
+
 use tauri::{Builder, Manager, Wry};
 use tracing::{debug, info, warn};
 
+/// Register the window close handler on the Tauri builder.
+///
+/// Prevents the default close, stops Nebula, then exits cleanly.
 pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     builder.on_window_event(|window, event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {

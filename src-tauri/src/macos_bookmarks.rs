@@ -1,3 +1,9 @@
+//! macOS security-scoped bookmark creation via Objective-C FFI.
+//!
+//! Security-scoped bookmarks allow the sandboxed app to retain access to
+//! user-chosen directories across app restarts. The bookmark data is
+//! persisted by [`crate::utils::bookmark_db`].
+
 #[cfg(target_os = "macos")]
 use cocoa::base::id;
 #[cfg(target_os = "macos")]

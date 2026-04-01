@@ -1,3 +1,13 @@
+//! S3-to-HCFS migration commands.
+//!
+//! Handles the one-time migration of files from legacy S3/CAS storage to the
+//! new HCFS encrypted drive system. The migration runs in the background,
+//! downloading files from S3 and writing them into the user's sync folder
+//! so the next HCFS sync cycle picks them up.
+//!
+//! The flow is: `check_migration` → `start_migration` → progress events →
+//! `complete_migration_transition` (atomic dismiss + stop + reinit).
+
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client as S3Client;
 use serde::{Deserialize, Serialize};
@@ -18,6 +28,7 @@ struct MigrationError {
 // Types
 // ---------------------------------------------------------------------------
 
+/// A file discovered in the user's legacy S3 bucket that needs migration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationFile {
     pub user_id: String,
@@ -28,6 +39,8 @@ pub struct MigrationFile {
     pub status: String,
 }
 
+/// Result of `check_migration` — tells the frontend whether migration is
+/// needed and provides the file inventory for the migration dialog.
 #[derive(Debug, Serialize)]
 pub struct MigrationCheckResult {
     pub needs_migration: bool,
@@ -38,6 +51,7 @@ pub struct MigrationCheckResult {
     pub is_resuming: bool,
 }
 
+/// Progress update emitted during migration via `migration_progress` events.
 #[derive(Debug, Clone, Serialize)]
 pub struct MigrationProgress {
     pub phase: String,
@@ -47,6 +61,7 @@ pub struct MigrationProgress {
     pub failed: u64,
 }
 
+/// Reported when a single file fails during migration (non-fatal).
 #[derive(Debug, Clone, Serialize)]
 pub struct MigrationFileError {
     pub file_name: String,
@@ -54,6 +69,7 @@ pub struct MigrationFileError {
     pub error: String,
 }
 
+/// Final summary emitted when migration finishes.
 #[derive(Debug, Clone, Serialize)]
 pub struct MigrationComplete {
     pub total_migrated: u64,

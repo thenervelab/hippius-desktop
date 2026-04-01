@@ -1,3 +1,13 @@
+//! Substrate transaction helpers, runtime type bindings, and sync path management.
+//!
+//! Houses the `subxt`-generated [`custom_runtime`] module (from `metadata.scale`)
+//! which provides type-safe access to all Hippius chain pallets. This module is
+//! re-exported and used by [`super::blockchain`] for staking and balance queries.
+//!
+//! Also contains sync path CRUD commands (set, get, remove, pause) that manage
+//! the `sync_paths` SQLite table. Sync paths map a local directory to a labeled
+//! drive slot, with overlap validation to prevent conflicting folder hierarchies.
+
 use crate::substrate_client::{
     get_current_wss_endpoint, get_substrate_client, update_wss_endpoint,
 };
@@ -16,12 +26,15 @@ use custom_runtime::marketplace::calls::types::storage_unpin_request::FileHash;
 use custom_runtime::runtime_types::bounded_collections::bounded_vec::BoundedVec;
 use custom_runtime::runtime_types::ipfs_pallet::types::FileInput;
 
+/// Frontend-friendly wrapper for file pin requests, converted to the
+/// Substrate runtime's [`FileInput`] type before submission.
 #[derive(Deserialize, Debug)]
 pub struct FileInputWrapper {
     pub file_hash: Vec<u8>,
     pub file_name: Vec<u8>,
 }
 
+/// Frontend-friendly wrapper for file unpin requests.
 #[derive(Deserialize, Debug)]
 pub struct FileHashWrapper {
     pub file_hash: Vec<u8>,
@@ -51,6 +64,7 @@ impl From<FileInputWrapper> for FileInput {
     }
 }
 
+/// Parameters for registering or updating a sync folder via IPC.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetSyncPathParams {
@@ -60,6 +74,7 @@ pub struct SetSyncPathParams {
     pub label: Option<String>,
 }
 
+/// Parameters for querying sync paths via IPC.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetSyncPathParams {
@@ -67,6 +82,7 @@ pub struct GetSyncPathParams {
     pub account_id: Option<String>,
 }
 
+/// A configured sync path with its label and pause state.
 #[derive(Serialize, Debug)]
 pub struct SyncPathResult {
     pub path: String,
@@ -76,16 +92,20 @@ pub struct SyncPathResult {
 }
 
 /// Reject a new sync path if it overlaps (is a parent or child of) any existing sync path.
+///
+/// Prevents data duplication and conflict: syncing `/Documents` and
+/// `/Documents/Work` simultaneously would cause the same files to be
+/// tracked by two drives.
 fn validate_no_path_overlap(
     new_path: &Path,
     new_label: &str,
-    existing: &[(String, String)], // (label, path) pairs
+    existing: &[(String, String)],
 ) -> Result<(), String> {
     let canonical_new = std::fs::canonicalize(new_path).unwrap_or_else(|_| new_path.to_path_buf());
 
     for (label, path_str) in existing {
         if label == new_label {
-            continue; // skip self on update
+            continue;
         }
         let existing_path = Path::new(path_str);
         let canonical_existing =
@@ -109,6 +129,9 @@ fn validate_no_path_overlap(
 }
 
 /// Core DB upsert + macOS bookmark logic, shared by `set_sync_path` and `restore_remote_folders`.
+///
+/// On macOS, also creates a security-scoped bookmark so the app retains
+/// access to the directory across restarts without re-prompting the user.
 pub(crate) async fn set_sync_path_internal(
     pool: &SqlitePool,
     account_id: &str,
@@ -121,7 +144,6 @@ pub(crate) async fn set_sync_path_internal(
     let timestamp = Utc::now().timestamp();
     let owner = account_key(account_id);
 
-    // Check for overlapping sync paths before inserting
     let rows = sqlx::query("SELECT label, path FROM sync_paths WHERE owner = ?")
         .bind(&owner)
         .fetch_all(pool)
@@ -195,6 +217,7 @@ pub(crate) async fn set_sync_path_internal(
     }
 }
 
+/// Set or update a sync path for an account, expanding the asset protocol scope.
 #[tauri::command]
 pub async fn set_sync_path(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -218,7 +241,6 @@ pub async fn set_sync_path(
     )
     .await?;
 
-    // Expand asset protocol scope so the frontend can display files from this path
     crate::commands::file_commands::allow_asset_directory(&app_handle, &params.path);
 
     info!(
@@ -228,6 +250,10 @@ pub async fn set_sync_path(
     Ok(result)
 }
 
+/// Legacy transfer command that accepts a raw seed phrase.
+///
+/// Prefer [`super::blockchain::transfer_balance`] which uses the in-memory
+/// keypair instead of requiring the seed to be passed over IPC.
 #[tauri::command]
 pub async fn transfer_balance_tauri(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -275,6 +301,10 @@ pub async fn transfer_balance_tauri(
     ))
 }
 
+/// Fetch a single sync path by type for the given account.
+///
+/// Falls back to migrating a legacy (ownerless) row if no scoped row exists
+/// and no other scoped rows are present for this account.
 pub async fn get_sync_path_internal(
     pool: &SqlitePool,
     is_public: bool,
@@ -282,7 +312,6 @@ pub async fn get_sync_path_internal(
 ) -> Result<SyncPathResult, String> {
     let path_type = if is_public { "public" } else { "private" };
     {
-        // Try scoped entry first
         let rec_row =
             sqlx::query("SELECT path, label FROM sync_paths WHERE owner = ? AND type = ?")
                 .bind(owner)
@@ -291,7 +320,6 @@ pub async fn get_sync_path_internal(
                 .await
                 .map_err(|e| format!("DB error: {}", e))?;
 
-        // If not found, migrate a legacy (owner='') row only when no scoped rows exist yet.
         let path_label_opt: Option<(String, String)> = if let Some(row) = rec_row {
             let label: String = row
                 .try_get("label")
@@ -369,6 +397,7 @@ pub async fn get_sync_path_internal(
     }
 }
 
+/// Fetch a single sync path by public/private type for the current account.
 #[tauri::command]
 pub async fn get_sync_path(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -392,6 +421,7 @@ pub async fn get_sync_path(
     get_sync_path_internal(state.pool()?, params.is_public, &owner).await
 }
 
+/// Fetch all sync paths for the current account.
 #[tauri::command]
 pub async fn get_all_sync_paths(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -466,6 +496,7 @@ pub(crate) async fn set_sync_path_paused(
 }
 
 /// Delete a sync path row from the DB without stopping the drive.
+///
 /// Used for rollback when `initialize_sync` fails after the path was inserted.
 pub(crate) async fn remove_sync_path_internal(
     pool: &SqlitePool,
@@ -484,6 +515,7 @@ pub(crate) async fn remove_sync_path_internal(
     Ok(())
 }
 
+/// Remove a sync path and stop the corresponding drive.
 #[tauri::command]
 pub async fn remove_sync_path(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -508,13 +540,13 @@ pub async fn remove_sync_path(
             format!("Failed to remove sync path: {}", e)
         })?;
 
-    // Stop the corresponding drive
     crate::commands::syncing::stop_drive(app, label.clone()).await?;
 
     info!("Sync path removed and drive stopped for label '{}'", label);
     Ok(())
 }
 
+/// Fetch the current WSS endpoint (from user preferences or default).
 #[tauri::command]
 pub async fn get_wss_endpoint(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -522,6 +554,7 @@ pub async fn get_wss_endpoint(
     get_current_wss_endpoint(state.pool()?).await
 }
 
+/// Update the WSS endpoint used for Substrate RPC connections.
 #[tauri::command]
 pub async fn update_wss_endpoint_command(
     state: tauri::State<'_, crate::app_state::AppState>,

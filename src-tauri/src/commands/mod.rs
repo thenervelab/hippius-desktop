@@ -1,3 +1,10 @@
+//! Tauri IPC command modules.
+//!
+//! Each sub-module exposes `#[tauri::command]` functions registered in
+//! `main.rs` via `tauri::generate_handler![]`. The modules are grouped
+//! by domain: authentication, blockchain, file sync, infrastructure
+//! (VMs, VPN, SSH keys), billing, and local persistence.
+
 pub mod accounts;
 pub mod auth;
 pub mod billing;

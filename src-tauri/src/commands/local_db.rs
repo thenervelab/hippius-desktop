@@ -10,6 +10,10 @@ use tracing::info;
 
 // ── Notification Types ──────────────────────────────────────────────────
 
+/// A single in-app notification record, serialized to the frontend.
+///
+/// Notifications use soft-delete semantics: `is_deleted` hides them from
+/// the UI while preserving the row for analytics and undo.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Notification {
@@ -48,7 +52,6 @@ pub async fn add_notification(
 ) -> Result<i64, String> {
     let pool = state.pool()?;
 
-    // Prevent duplicate welcome notifications
     if notification_type.as_deref() == Some("Hippius") {
         if let Some(ref subtype) = notification_subtype {
             if subtype.starts_with("Welcome-") {
@@ -451,6 +454,11 @@ pub async fn clear_all_notifications(state: tauri::State<'_, AppState>) -> Resul
 
 // ── Notification Preferences ────────────────────────────────────────────
 
+/// A user-configurable notification category toggle (e.g. "Credits").
+///
+/// Enabled preferences gate which `notification_type` values appear in the
+/// unread badge count and notification list. "Hippius" system notifications
+/// bypass this filter and are always shown.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationPreference {
@@ -460,6 +468,7 @@ pub struct NotificationPreference {
     pub enabled: bool,
 }
 
+/// Payload for a single preference toggle update from the frontend.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreferenceUpdate {
@@ -601,6 +610,7 @@ pub async fn update_is_above_half_credit(
 
 // ── Address Book ────────────────────────────────────────────────────────
 
+/// A saved wallet contact for quick transfers and staking operations.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Contact {

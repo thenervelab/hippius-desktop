@@ -3,6 +3,13 @@
 //! Moves all Polkadot RPC queries and staking transaction signing to Rust.
 //! Queries read on-chain state via `subxt`. Transactions sign with the
 //! keypair stored in `AppState.auth` (populated by login/unlock).
+//!
+//! This module covers:
+//! - **Balance queries** — free/reserved/frozen via `system.account`
+//! - **Staking lifecycle** — bond, unbond, withdraw, claim rewards
+//! - **Transfers** — `balances.transfer_keep_alive`
+//! - **Referral codes** — iterating `credits.referral_codes` storage
+//! - **Unit conversion** — planck <-> human-readable (18 decimals)
 
 use crate::substrate_client::get_substrate_client;
 use serde::Serialize;
@@ -10,28 +17,28 @@ use sp_core::crypto::Ss58Codec;
 use subxt::tx::PairSigner;
 use tracing::info;
 
-// Re-use the generated runtime types from substrate_tx.
 use crate::commands::substrate_tx::custom_runtime;
 
-// ---------------------------------------------------------------------------
-// Response types
-// ---------------------------------------------------------------------------
-
+/// On-chain referral code with its accumulated reward.
 #[derive(Serialize, Clone)]
 pub struct ReferralLink {
     pub code: String,
     pub reward: String,
 }
 
+/// Account balance breakdown returned by [`get_account_balance`].
+///
+/// All values are in planck (10^-18 HIP) serialized as strings to avoid
+/// JavaScript number precision loss at values above 2^53.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountBalance {
-    /// Free balance in planck (string to avoid JS precision loss).
     pub free: String,
     pub reserved: String,
     pub frozen: String,
 }
 
+/// A single unbonding chunk with its target era and remaining wait time.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct UnbondingPeriod {
@@ -40,6 +47,10 @@ pub struct UnbondingPeriod {
     pub remaining_eras: u32,
 }
 
+/// Full staking state for the authenticated user, combining ledger and balance data.
+///
+/// The frontend renders this directly in the stake/unstake page without
+/// needing additional RPC calls.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct StakingInfo {
@@ -57,6 +68,7 @@ pub struct StakingInfo {
     pub unbonding_periods: Vec<UnbondingPeriod>,
 }
 
+/// Result of a submitted extrinsic, returned to the frontend after finalization.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TxResult {
@@ -64,6 +76,7 @@ pub struct TxResult {
     pub success: bool,
 }
 
+/// On-chain timestamp for a specific block number.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockTimestampResult {
@@ -71,10 +84,9 @@ pub struct BlockTimestampResult {
     pub timestamp: u64,
 }
 
-// ---------------------------------------------------------------------------
-// Helper: get signer from AppState.auth
-// ---------------------------------------------------------------------------
-
+/// Build a `PairSigner` from the sr25519 keypair in `AppState.auth`.
+///
+/// Fails if the user is not authenticated (no keypair stored).
 fn get_signer(
     app_state: &crate::app_state::AppState,
 ) -> Result<PairSigner<subxt::PolkadotConfig, sp_core::sr25519::Pair>, String> {
@@ -89,6 +101,7 @@ fn get_signer(
     Ok(PairSigner::new(pair))
 }
 
+/// Read the SS58 address from the in-memory auth state.
 fn get_substrate_address(app_state: &crate::app_state::AppState) -> Result<String, String> {
     let auth = app_state
         .auth
@@ -103,7 +116,7 @@ fn get_substrate_address(app_state: &crate::app_state::AppState) -> Result<Strin
 // Queries
 // ---------------------------------------------------------------------------
 
-/// Query `system.account(address)` → free/reserved/frozen balance.
+/// Query `system.account(address)` for free/reserved/frozen balance.
 #[tauri::command]
 pub async fn get_account_balance(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -140,6 +153,9 @@ pub async fn get_account_balance(
 }
 
 /// Query staking state for the current authenticated user.
+///
+/// Combines `staking.ledger`, `staking.currentEra`, and `system.account`
+/// into a single response to minimize frontend round-trips.
 #[tauri::command]
 pub async fn get_staking_info(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -151,7 +167,6 @@ pub async fn get_staking_info(
         .parse()
         .map_err(|_| format!("Invalid SS58 address: {address}"))?;
 
-    // --- Free balance ---
     let balance_query = custom_runtime::storage().system().account(&account_id);
     let balance_info = client
         .storage()
@@ -165,13 +180,11 @@ pub async fn get_staking_info(
         .map(|info| info.data.free.to_string())
         .unwrap_or_else(|| "0".to_string());
 
-    // --- Bonded amount via staking.ledger ---
     let mut bonded = "0".to_string();
     let mut unbonding_total: u128 = 0;
     let mut withdrawable_total: u128 = 0;
     let mut unbonding_periods = Vec::new();
 
-    // Get current era for unbonding calculations.
     let current_era_query = custom_runtime::storage().staking().current_era();
     let current_era: u32 = client
         .storage()
@@ -183,7 +196,6 @@ pub async fn get_staking_info(
         .map_err(|e| format!("Era query failed: {e}"))?
         .unwrap_or(0);
 
-    // Try staking.ledger(address) — on newer runtimes the controller == stash.
     let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
     if let Ok(Some(ledger)) = client
         .storage()
@@ -213,10 +225,9 @@ pub async fn get_staking_info(
         }
     }
 
-    // --- Rewards ---
-    // We return "0" for rewards — accurate reward computation requires
-    // era-specific exposure data that is complex to query via subxt.
-    // The frontend can query the indexer for pending rewards if needed.
+    // Accurate reward computation requires era-specific exposure data
+    // that is complex to query via subxt; the frontend can query the
+    // indexer for pending rewards if needed.
     let rewards = "0".to_string();
 
     Ok(StakingInfo {
@@ -240,7 +251,6 @@ pub async fn get_block_timestamp(
 
     let client = get_substrate_client(&state).await?;
 
-    // Build LegacyRpcMethods from the same RPC client to get block hash by number.
     let rpc_url = crate::substrate_client::get_current_wss_endpoint(state.pool()?)
         .await
         .unwrap_or_else(|_| crate::constants::substrate::WSS_ENDPOINT.to_string());
@@ -255,7 +265,6 @@ pub async fn get_block_timestamp(
         .map_err(|e| format!("Block hash query failed: {e}"))?
         .ok_or_else(|| format!("Block {block_number} not found"))?;
 
-    // Query timestamp.now at that block.
     let timestamp_query = custom_runtime::storage().timestamp().now();
     let timestamp: u64 = client
         .storage()
@@ -269,6 +278,9 @@ pub async fn get_block_timestamp(
 }
 
 /// Fetch referral links (codes + rewards) for the given address.
+///
+/// Iterates all on-chain referral codes and filters to those owned by
+/// the target account. Rewards are converted from planck to whole units.
 #[tauri::command]
 pub async fn get_referral_links(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -284,7 +296,6 @@ pub async fn get_referral_links(
         .await
         .map_err(|e| format!("Storage error: {e}"))?;
 
-    // Iterate all referral codes and find ones owned by this address.
     let query = custom_runtime::storage().credits().referral_codes_iter();
     let mut entries = storage
         .iter(query)
@@ -295,9 +306,7 @@ pub async fn get_referral_links(
     let mut links = Vec::new();
 
     while let Some(Ok(entry)) = entries.next().await {
-        // entry.value is AccountId32 — only keep codes owned by this user
         if entry.value == target_account {
-            // Extract the code bytes from the storage key.
             let code_bytes = &entry.key_bytes[entry.key_bytes.len().saturating_sub(32)..];
             let code = String::from_utf8_lossy(
                 code_bytes
@@ -309,7 +318,6 @@ pub async fn get_referral_links(
             )
             .to_string();
 
-            // Fetch the reward for this code.
             let reward_query = custom_runtime::storage()
                 .credits()
                 .referral_code_rewards(code_bytes);
@@ -340,6 +348,8 @@ pub fn validate_address(address: String) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Bond tokens for staking. If already bonded, calls `bond_extra` instead.
+///
+/// Rewards are auto-staked (`RewardDestination::Staked`) for initial bonds.
 #[tauri::command]
 pub async fn stake_bond(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -354,7 +364,6 @@ pub async fn stake_bond(
     let account_id: subxt::utils::AccountId32 =
         address.parse().map_err(|_| "Invalid address".to_string())?;
 
-    // Check if already bonded.
     let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
     let already_bonded = client
         .storage()
@@ -402,7 +411,7 @@ pub async fn stake_bond(
     })
 }
 
-/// Unbond tokens (schedule for withdrawal after unbonding period).
+/// Unbond tokens (schedule for withdrawal after the unbonding period).
 #[tauri::command]
 pub async fn stake_unbond(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -432,7 +441,9 @@ pub async fn stake_unbond(
     })
 }
 
-/// Withdraw unbonded tokens (after unbonding period completes).
+/// Withdraw unbonded tokens (after the unbonding period completes).
+///
+/// Automatically queries slashing spans to pass the correct parameter.
 #[tauri::command]
 pub async fn stake_withdraw_unbonded(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -444,7 +455,6 @@ pub async fn stake_withdraw_unbonded(
     let account_id: subxt::utils::AccountId32 =
         address.parse().map_err(|_| "Invalid address".to_string())?;
 
-    // Get slashing spans count for the withdrawal parameter.
     let spans_query = custom_runtime::storage()
         .staking()
         .slashing_spans(&account_id);
@@ -482,7 +492,7 @@ pub async fn stake_withdraw_unbonded(
     })
 }
 
-/// Claim staking rewards (payout_stakers for previous era).
+/// Claim staking rewards via `payout_stakers` for the previous era.
 #[tauri::command]
 pub async fn stake_claim_rewards(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -494,7 +504,6 @@ pub async fn stake_claim_rewards(
     let account_id: subxt::utils::AccountId32 =
         address.parse().map_err(|_| "Invalid address".to_string())?;
 
-    // Get current era.
     let era_query = custom_runtime::storage().staking().current_era();
     let current_era = client
         .storage()
@@ -531,7 +540,9 @@ pub async fn stake_claim_rewards(
     })
 }
 
-/// Transfer balance using the keypair from AppState.auth (no seed phrase needed).
+/// Transfer balance using the keypair from `AppState.auth`.
+///
+/// Uses `transfer_keep_alive` to prevent the sender's account from being reaped.
 #[tauri::command]
 pub async fn transfer_balance(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -581,7 +592,6 @@ pub fn to_plancks(amount: String) -> Result<String, String> {
     if amount.is_empty() {
         return Err("Invalid amount".to_string());
     }
-    // Validate the input is a valid number
     amount
         .parse::<f64>()
         .map_err(|_| "Invalid amount".to_string())?;
@@ -591,7 +601,6 @@ pub fn to_plancks(amount: String) -> Result<String, String> {
         None => (amount.as_str(), ""),
     };
 
-    // Pad or truncate fraction to 18 digits
     let fraction_padded = if fraction.len() >= DECIMALS as usize {
         &fraction[..DECIMALS as usize]
     } else {
@@ -599,7 +608,6 @@ pub fn to_plancks(amount: String) -> Result<String, String> {
     };
 
     let combined = format!("{}{}", whole, fraction_padded);
-    // Remove leading zeros
     let trimmed = combined.trim_start_matches('0');
     if trimmed.is_empty() {
         Ok("0".to_string())
@@ -653,7 +661,6 @@ mod tests {
 
     #[test]
     fn to_plancks_many_decimals_truncates() {
-        // More than 18 decimals — truncate
         assert_eq!(
             to_plancks("0.1234567890123456789999".into()).unwrap(),
             "123456789012345678"

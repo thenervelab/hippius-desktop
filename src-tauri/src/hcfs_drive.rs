@@ -28,14 +28,14 @@ use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-// --- Serializable types for staged changes ---
-
+/// A file identified for sync during the staging phase.
 #[derive(Debug, Serialize, Clone)]
 pub struct StagedFile {
     pub file_id: String,
     pub path: String,
 }
 
+/// A file with conflicting local and remote versions requiring resolution.
 #[derive(Debug, Serialize, Clone)]
 pub struct StagedConflict {
     pub file_id: String,
@@ -45,6 +45,8 @@ pub struct StagedConflict {
     pub has_remote: bool,
 }
 
+/// Complete sync plan produced by staging — everything the next sync
+/// cycle will upload, download, delete, or ask the user to resolve.
 #[derive(Debug, Serialize, Clone)]
 pub struct StagedChanges {
     pub uploads: Vec<StagedFile>,
