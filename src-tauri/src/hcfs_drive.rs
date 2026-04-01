@@ -807,7 +807,7 @@ pub async fn start_sync_loop(app: AppHandle) {
                                     .await
                             {
                                 info!("Token expiring soon, proactively refreshing");
-                                if let Err(e) = crate::commands::auth::refresh_auth_token_internal(pool, &app, &acct).await {
+                                if let Err(e) = crate::auth_service::refresh_auth_token_internal(pool, &app, &acct).await {
                                     warn!(error = %e, "Proactive token refresh failed");
                                 }
                             }
@@ -902,7 +902,7 @@ pub async fn start_sync_loop(app: AppHandle) {
                                     crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS,
                                 ).await {
                                     info!("Token expiring soon, proactively refreshing");
-                                    if let Err(e) = crate::commands::auth::refresh_auth_token_internal(
+                                    if let Err(e) = crate::auth_service::refresh_auth_token_internal(
                                         pool, &app, &acct,
                                     ).await {
                                         warn!(error = %e, "Proactive token refresh failed");
@@ -1840,7 +1840,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         let pool = pool.clone();
                         let app_clone = app.clone();
                         tokio::spawn(async move {
-                            match crate::commands::auth::refresh_auth_token_internal(&pool, &app_clone, &acct).await {
+                            match crate::auth_service::refresh_auth_token_internal(&pool, &app_clone, &acct).await {
                                 Ok(()) => info!("Auto token refresh succeeded, next sync will use fresh token"),
                                 Err(e) => warn!(error = %e, "Auto token refresh failed"),
                             }

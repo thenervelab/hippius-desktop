@@ -13,6 +13,7 @@
 mod api_client;
 mod api_client_logic;
 mod app_state;
+mod auth_service;
 mod block_subscription;
 mod builder_blocks;
 mod commands;
