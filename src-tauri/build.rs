@@ -4,5 +4,5 @@ fn main() {
     // a known cfg value so the compiler doesn't emit warnings.
     println!("cargo::rustc-check-cfg=cfg(feature, values(\"cargo-clippy\"))");
 
-    tauri_build::build()
+    tauri_build::build();
 }
