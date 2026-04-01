@@ -105,39 +105,6 @@ pub async fn update_hcfs_server_url(
     Ok(())
 }
 
-/// Internal implementation for updating bearer token.
-///
-/// Takes `&crate::app_state::AppState` to access both the DB pool and the
-/// live drive registry without relying on global state.
-pub(crate) async fn update_sync_bearer_token_internal(
-    app_state: &crate::app_state::AppState,
-    account_id: &str,
-    bearer_token: &str,
-) -> Result<(), String> {
-    let pool = app_state.pool()?;
-
-    // 1. Persist to DB so future initialize_sync calls use the fresh token
-    crate::utils::auth_tokens::save_api_token(pool, account_id, bearer_token)
-        .await
-        .map_err(|e| format!("Failed to persist auth token: {e}"))?;
-
-    // 2. Update all live drives in-memory
-    let drive_arcs: Vec<(String, std::sync::Arc<TokioMutex<HcfsDriveManager>>)> = {
-        let guard = app_state.sync.drives.lock().await;
-        guard.iter().map(|(k, slot)| (k.clone(), slot.manager.clone())).collect()
-    };
-    for (label, drive_arc) in drive_arcs {
-        let mut manager = drive_arc.lock().await;
-        if let Err(e) = manager.update_bearer_token(bearer_token.to_string()) {
-            error!("Failed to update bearer token for drive '{}': {}", label, e);
-        } else {
-            debug!("Updated bearer token for drive '{}'", label);
-        }
-    }
-
-    Ok(())
-}
-
 /// Update the bearer token on all live drives and persist it in the DB.
 ///
 /// Called by the frontend after re-authenticating when the server returns
@@ -148,7 +115,8 @@ pub async fn update_sync_bearer_token(
     account_id: String,
     bearer_token: String,
 ) -> Result<(), String> {
-    update_sync_bearer_token_internal(&state, &account_id, &bearer_token).await
+    let pool = state.pool()?;
+    state.sync.update_bearer_token(pool, &account_id, &bearer_token).await
 }
 
 /// Internal helper that accepts a pool reference directly.

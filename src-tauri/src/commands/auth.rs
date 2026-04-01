@@ -510,7 +510,7 @@ pub async fn refresh_auth_token_internal(pool: &SqlitePool, app: &tauri::AppHand
         .await
         .map_err(|e| format!("Failed to persist API token: {e}"))?;
 
-    if let Err(e) = crate::commands::syncing::update_sync_bearer_token_internal(&app_state, account_id, &token).await {
+    if let Err(e) = app_state.sync.update_bearer_token(pool, account_id, &token).await {
         warn!("Could not update live drive token: {e}");
     }
 

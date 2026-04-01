@@ -787,6 +787,43 @@ impl SyncEngine {
             }
         }
     }
+
+    // ── Bearer Token (update all live drives) ───────────────────────
+
+    /// Persist the bearer token in the DB and update all live drives
+    /// in-memory so ongoing sync cycles use the fresh token.
+    pub async fn update_bearer_token(
+        &self,
+        pool: &sqlx::sqlite::SqlitePool,
+        account_id: &str,
+        bearer_token: &str,
+    ) -> Result<(), String> {
+        crate::utils::auth_tokens::save_api_token(pool, account_id, bearer_token)
+            .await
+            .map_err(|e| format!("Failed to persist auth token: {e}"))?;
+
+        let drive_arcs: Vec<(String, Arc<TokioMutex<HcfsDriveManager>>)> = {
+            let guard = self.drives.lock().await;
+            guard
+                .iter()
+                .map(|(k, slot)| (k.clone(), slot.manager.clone()))
+                .collect()
+        };
+        for (label, drive_arc) in drive_arcs {
+            let mut manager = drive_arc.lock().await;
+            if let Err(e) = manager.update_bearer_token(bearer_token.to_string()) {
+                tracing::error!(
+                    "Failed to update bearer token for drive '{}': {}",
+                    label,
+                    e
+                );
+            } else {
+                tracing::debug!("Updated bearer token for drive '{}'", label);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
