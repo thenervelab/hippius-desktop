@@ -27,84 +27,60 @@ mod sync_progress;
 mod sync_shared;
 mod utils;
 
-use crate::commands::sync_status::{
-    app_close, get_sync_activity, get_sync_engine_health, get_sync_status,
-};
+use crate::commands::sync_status::{app_close, get_sync_activity, get_sync_engine_health, get_sync_status};
 use crate::commands::syncing::{
-    delete_remote_folder, get_device_name, get_drive_mnemonic,
-    initialize_sync, is_drive_active, list_remote_folders, persist_master_mnemonic,
-    pause_drive, reset_sync_data, restore_remote_folders, resume_drive, set_device_name,
-    stop_drive, stop_sync, trigger_sync_now,
+    delete_remote_folder, get_device_name, get_drive_mnemonic, initialize_sync, is_drive_active, list_remote_folders, pause_drive,
+    persist_master_mnemonic, reset_sync_data, restore_remote_folders, resume_drive, set_device_name, stop_drive, stop_sync, trigger_sync_now,
 };
 use crate::sync_progress::{
-    sp_clear_all_data, sp_complete_pending_files, sp_complete_session, sp_get_overall_progress,
-    sp_get_snapshot, sp_mark_all_pending_files_as_failed, sp_mark_file_error,
-    sp_mark_pending_files_as_failed, sp_merge_into_session, sp_record_deleted_file,
-    sp_remove_files_for_label, sp_start_session, sp_stop_session, sp_update_file_progress,
+    sp_clear_all_data, sp_complete_pending_files, sp_complete_session, sp_get_overall_progress, sp_get_snapshot, sp_mark_all_pending_files_as_failed,
+    sp_mark_file_error, sp_mark_pending_files_as_failed, sp_merge_into_session, sp_record_deleted_file, sp_remove_files_for_label, sp_start_session,
+    sp_stop_session, sp_update_file_progress,
 };
-use block_subscription::{
-    get_current_block_number, start_block_subscription, stop_block_subscription,
-};
+use block_subscription::{get_current_block_number, start_block_subscription, stop_block_subscription};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
-use commands::accounts::{
-    export_app_data, get_all_subaccount_addresses, import_app_data, reset_app,
-};
+use commands::accounts::{export_app_data, get_all_subaccount_addresses, import_app_data, reset_app};
 use commands::auth::{
-    auth_logout, generate_mnemonic, get_eth_address, get_polkadot_address, login_with_mnemonic,
-    refresh_auth_token, set_passcode, unlock_with_passcode, validate_mnemonic,
+    auth_logout, generate_mnemonic, get_eth_address, get_polkadot_address, login_with_mnemonic, refresh_auth_token, set_passcode,
+    unlock_with_passcode, validate_mnemonic,
 };
 use commands::billing::{
-    create_subscription, get_active_subscription, get_add_credit_events, get_balance_transfers,
-    get_billing_transactions, get_customer_portal_url, get_deposit_address, get_file_nodes,
-    get_files_count, get_files_size, get_indexer_credits, get_marketplace_credits,
-    get_node_locations,
+    create_subscription, get_active_subscription, get_add_credit_events, get_balance_transfers, get_billing_transactions, get_customer_portal_url,
+    get_deposit_address, get_file_nodes, get_files_count, get_files_size, get_indexer_credits, get_marketplace_credits, get_node_locations,
     get_subscription_plans, get_system_balance_history, get_user_credits_balance,
 };
 use commands::blockchain::{
-    from_plancks, get_account_balance, get_block_timestamp, get_explorer_url, get_referral_links,
-    get_staking_info, stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded,
-    to_plancks, transfer_balance, validate_address,
+    from_plancks, get_account_balance, get_block_timestamp, get_explorer_url, get_referral_links, get_staking_info, stake_bond, stake_claim_rewards,
+    stake_unbond, stake_withdraw_unbonded, to_plancks, transfer_balance, validate_address,
 };
 use commands::chart_formatting::{
-    calculate_storage_cost, format_balance_chart, format_credits_chart, format_storage_chart,
-    transform_marketplace_credits,
+    calculate_storage_cost, format_balance_chart, format_credits_chart, format_storage_chart, transform_marketplace_credits,
 };
 use commands::file_commands::{
-    add_file, add_folder, allow_asset_scope, export_file, get_synced_file_metadata,
-    list_sync_folder, remove_file, resolve_file_path,
+    add_file, add_folder, allow_asset_scope, export_file, get_synced_file_metadata, list_sync_folder, remove_file, resolve_file_path,
 };
 use commands::local_db::{
-    add_contact, add_notification, clear_all_notifications, credit_already_notified,
-    delete_all_notifications, delete_contact, delete_notification,
-    delete_system_notification_by_version, get_contacts, get_is_above_half_credit,
-    get_last_deleted_low_credit_time, get_local_enabled_notification_types,
-    get_local_notification_preferences, get_unread_count, get_user_preference,
-    has_active_low_credit_notification, hippius_version_notification_exists, is_first_time,
-    is_onboarding_done, list_notifications, low_credit_subtype_exists, mark_all_notifications_read,
-    mark_first_time_seen, mark_notification_read, mark_notification_unread, save_user_preference,
-    set_onboarding_done, update_contact, update_is_above_half_credit,
-    update_local_notification_preferences,
+    add_contact, add_notification, clear_all_notifications, credit_already_notified, delete_all_notifications, delete_contact, delete_notification,
+    delete_system_notification_by_version, get_contacts, get_is_above_half_credit, get_last_deleted_low_credit_time,
+    get_local_enabled_notification_types, get_local_notification_preferences, get_unread_count, get_user_preference,
+    has_active_low_credit_notification, hippius_version_notification_exists, is_first_time, is_onboarding_done, list_notifications,
+    low_credit_subtype_exists, mark_all_notifications_read, mark_first_time_seen, mark_notification_read, mark_notification_unread,
+    save_user_preference, set_onboarding_done, update_contact, update_is_above_half_credit, update_local_notification_preferences,
 };
 use commands::notifications::{get_notification_settings, update_notification_settings};
 use commands::oauth::{complete_oauth_flow, start_oauth_flow};
 use commands::remote_browse::{download_remote_file, list_remote_folder_files};
 use commands::session::{
-    clear_auth_session, clear_wallet, get_auth_session, get_auth_token, get_last_auth_session,
-    get_wallet, has_wallet, is_token_valid, save_api_token_command, save_auth_session, save_wallet,
-    update_logout_time,
+    clear_auth_session, clear_wallet, get_auth_session, get_auth_token, get_last_auth_session, get_wallet, has_wallet, is_token_valid,
+    save_api_token_command, save_auth_session, save_wallet, update_logout_time,
 };
 use commands::ssh_keys::{create_ssh_key, delete_ssh_key, list_ssh_keys};
 use commands::substrate_tx::{
-    get_all_sync_paths, get_sync_path, get_wss_endpoint, remove_sync_path, set_sync_path,
-    transfer_balance_tauri, update_wss_endpoint_command,
+    get_all_sync_paths, get_sync_path, get_wss_endpoint, remove_sync_path, set_sync_path, transfer_balance_tauri, update_wss_endpoint_command,
 };
-use commands::support::{
-    create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message,
-    update_support_ticket,
-};
+use commands::support::{create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message, update_support_ticket};
 use commands::vm::{
-    create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images,
-    list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
+    create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
 use tauri::{Builder, Emitter, Manager};
 use tracing::{debug, info};
@@ -114,7 +90,7 @@ use tracing::{debug, info};
 fn load_env() {
     let _ = dotenvy::dotenv();
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let env_path = format!("{}/.env", manifest_dir);
+    let env_path = format!("{manifest_dir}/.env");
     let _ = dotenvy::from_filename(env_path);
 }
 
@@ -125,15 +101,9 @@ fn main() {
     // Filter to show WARN and ERROR from hcfs-client, INFO and above from our code.
     // Set RUST_LOG env var to customize (e.g., RUST_LOG=hcfs_client=debug).
     use tracing_subscriber::{EnvFilter, fmt, prelude::*};
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("warn,hcfs_client=info,Hippius=info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,hcfs_client=info,Hippius=info"));
     tracing_subscriber::registry()
-        .with(
-            fmt::layer()
-                .with_target(true)
-                .with_file(false)
-                .with_line_number(false),
-        )
+        .with(fmt::layer().with_target(true).with_file(false).with_line_number(false))
         .with(filter)
         .init();
 
@@ -412,7 +382,5 @@ fn main() {
     let builder = on_window_event(builder);
 
     info!("Running Tauri application...");
-    builder
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    builder.run(tauri::generate_context!()).expect("error while running tauri application");
 }

@@ -68,14 +68,14 @@ pub async fn save_wallet(
     let owner = account_key(&account_id);
 
     sqlx::query(
-        r#"
+        r"
         INSERT INTO wallet_store (owner, encrypted_mnemonic, passcode_hash, updated_at)
         VALUES (?, ?, ?, datetime('now'))
         ON CONFLICT(owner) DO UPDATE SET
             encrypted_mnemonic = excluded.encrypted_mnemonic,
             passcode_hash = excluded.passcode_hash,
             updated_at = datetime('now')
-        "#,
+        ",
     )
     .bind(&owner)
     .bind(&encrypted_mnemonic)
@@ -89,20 +89,15 @@ pub async fn save_wallet(
 
 /// Retrieve the encrypted wallet record for the given account.
 #[tauri::command]
-pub async fn get_wallet(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<Option<WalletRecord>, String> {
+pub async fn get_wallet(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Option<WalletRecord>, String> {
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
-    let row = sqlx::query_as::<_, (String, String)>(
-        "SELECT encrypted_mnemonic, passcode_hash FROM wallet_store WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to get wallet: {e}"))?;
+    let row = sqlx::query_as::<_, (String, String)>("SELECT encrypted_mnemonic, passcode_hash FROM wallet_store WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to get wallet: {e}"))?;
 
     Ok(row.map(|(encrypted_mnemonic, passcode_hash)| WalletRecord {
         encrypted_mnemonic,
@@ -112,10 +107,7 @@ pub async fn get_wallet(
 
 /// Check whether a wallet/passcode record exists for the given account.
 #[tauri::command]
-pub async fn has_wallet(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<bool, String> {
+pub async fn has_wallet(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<bool, String> {
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -130,10 +122,7 @@ pub async fn has_wallet(
 
 /// Remove the wallet record for the given account.
 #[tauri::command]
-pub async fn clear_wallet(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<(), String> {
+pub async fn clear_wallet(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), String> {
     info!("Clearing wallet credentials");
     let pool = state.pool()?;
     let owner = account_key(&account_id);
@@ -152,6 +141,7 @@ pub async fn clear_wallet(
 /// This is the Rust equivalent of `sessionStore.setApiAuth()` + `saveSession()`.
 /// Token is persisted immediately so the frontend can reference it right away.
 #[tauri::command]
+#[expect(clippy::too_many_arguments)] // Tauri IPC commands take individual params from frontend
 pub async fn save_auth_session(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
@@ -168,7 +158,7 @@ pub async fn save_auth_session(
     let owner = account_key(&account_id);
 
     sqlx::query(
-        r#"
+        r"
         INSERT INTO auth_session (
             owner, auth_token, token_expiry, user_id, username,
             provider, substrate_address, logout_time_minutes,
@@ -185,7 +175,7 @@ pub async fn save_auth_session(
             logout_time_minutes = COALESCE(excluded.logout_time_minutes, auth_session.logout_time_minutes),
             last_login_at = excluded.last_login_at,
             updated_at = datetime('now')
-        "#,
+        ",
     )
     .bind(&owner)
     .bind(&auth_token)
@@ -204,10 +194,7 @@ pub async fn save_auth_session(
 
 /// Retrieve the current auth session for the given account.
 #[tauri::command]
-pub async fn get_auth_session(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<Option<AuthSession>, String> {
+pub async fn get_auth_session(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Option<AuthSession>, String> {
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -224,12 +211,12 @@ pub async fn get_auth_session(
             Option<String>,
         ),
     >(
-        r#"
+        r"
         SELECT auth_token, token_expiry, user_id, username,
                provider, substrate_address, logout_time_minutes, last_login_at
         FROM auth_session
         WHERE owner = ?
-        "#,
+        ",
     )
     .bind(&owner)
     .fetch_optional(pool)
@@ -237,7 +224,7 @@ pub async fn get_auth_session(
     .map_err(|e| format!("Failed to get auth session: {e}"))?;
 
     Ok(row.map(
-        |(
+        |(auth_token, token_expiry, user_id, username, provider, substrate_address, logout_time_minutes, last_login_at)| AuthSession {
             auth_token,
             token_expiry,
             user_id,
@@ -246,17 +233,6 @@ pub async fn get_auth_session(
             substrate_address,
             logout_time_minutes,
             last_login_at,
-        )| {
-            AuthSession {
-                auth_token,
-                token_expiry,
-                user_id,
-                username,
-                provider,
-                substrate_address,
-                logout_time_minutes,
-                last_login_at,
-            }
         },
     ))
 }
@@ -265,10 +241,7 @@ pub async fn get_auth_session(
 ///
 /// Replaces `sessionStore.getApiAuth()` — the frontend no longer checks expiry itself.
 #[tauri::command]
-pub async fn get_auth_token(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<Option<ApiAuth>, String> {
+pub async fn get_auth_token(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Option<ApiAuth>, String> {
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -299,16 +272,13 @@ pub async fn get_auth_token(
 
 /// Wipe the auth session on logout. Preserves `logout_time_minutes` preference.
 #[tauri::command]
-pub async fn clear_auth_session(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<(), String> {
+pub async fn clear_auth_session(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), String> {
     info!("Clearing auth session");
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
     sqlx::query(
-        r#"
+        r"
         UPDATE auth_session SET
             auth_token = NULL,
             token_expiry = NULL,
@@ -319,7 +289,7 @@ pub async fn clear_auth_session(
             last_login_at = NULL,
             updated_at = datetime('now')
         WHERE owner = ?
-        "#,
+        ",
     )
     .bind(&owner)
     .execute(pool)
@@ -331,20 +301,15 @@ pub async fn clear_auth_session(
 
 /// Server-side token expiry check. Returns `true` if the token exists and hasn't expired.
 #[tauri::command]
-pub async fn is_token_valid(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<bool, String> {
+pub async fn is_token_valid(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<bool, String> {
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
-    let row = sqlx::query_as::<_, (Option<String>, Option<i64>)>(
-        "SELECT auth_token, token_expiry FROM auth_session WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to check token validity: {e}"))?;
+    let row = sqlx::query_as::<_, (Option<String>, Option<i64>)>("SELECT auth_token, token_expiry FROM auth_session WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to check token validity: {e}"))?;
 
     let result = match row {
         Some((Some(_token), Some(expiry))) => {
@@ -361,9 +326,7 @@ pub async fn is_token_valid(
 /// Used at app boot when we don't yet know which account was active.
 /// Returns the session with the latest `updated_at` timestamp.
 #[tauri::command]
-pub async fn get_last_auth_session(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<Option<AuthSession>, String> {
+pub async fn get_last_auth_session(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Option<AuthSession>, String> {
     let pool = state.pool()?;
 
     let row = sqlx::query_as::<
@@ -379,20 +342,20 @@ pub async fn get_last_auth_session(
             Option<String>,
         ),
     >(
-        r#"
+        r"
         SELECT auth_token, token_expiry, user_id, username,
                provider, substrate_address, logout_time_minutes, last_login_at
         FROM auth_session
         ORDER BY updated_at DESC
         LIMIT 1
-        "#,
+        ",
     )
     .fetch_optional(pool)
     .await
     .map_err(|e| format!("Failed to get last auth session: {e}"))?;
 
     Ok(row.map(
-        |(
+        |(auth_token, token_expiry, user_id, username, provider, substrate_address, logout_time_minutes, last_login_at)| AuthSession {
             auth_token,
             token_expiry,
             user_id,
@@ -401,17 +364,6 @@ pub async fn get_last_auth_session(
             substrate_address,
             logout_time_minutes,
             last_login_at,
-        )| {
-            AuthSession {
-                auth_token,
-                token_expiry,
-                user_id,
-                username,
-                provider,
-                substrate_address,
-                logout_time_minutes,
-                last_login_at,
-            }
         },
     ))
 }
@@ -427,12 +379,12 @@ pub async fn update_logout_time(
     let owner = account_key(&account_id);
 
     sqlx::query(
-        r#"
+        r"
         UPDATE auth_session SET
             logout_time_minutes = ?,
             updated_at = datetime('now')
         WHERE owner = ?
-        "#,
+        ",
     )
     .bind(logout_time_minutes)
     .bind(&owner)
@@ -446,11 +398,7 @@ pub async fn update_logout_time(
 /// Save the API auth token for an account. Called by the frontend after login
 /// so that Rust subsystems (sync, VPN) can retrieve it via `get_api_token`.
 #[tauri::command]
-pub async fn save_api_token_command(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    token: String,
-) -> Result<(), String> {
+pub async fn save_api_token_command(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, token: String) -> Result<(), String> {
     info!("Saving API token");
     crate::utils::auth_tokens::save_api_token(state.pool()?, &account_id, &token).await
 }

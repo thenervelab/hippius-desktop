@@ -40,24 +40,18 @@ fn indexer_base_url() -> String {
 // ---------------------------------------------------------------------------
 
 /// Read the auth token for an account from the `auth_session` DB table.
-pub async fn get_auth_token_for_account(
-    pool: &SqlitePool,
-    account_id: &str,
-) -> Result<String, ApiError> {
+pub async fn get_auth_token_for_account(pool: &SqlitePool, account_id: &str) -> Result<String, ApiError> {
     let owner = account_key(account_id);
 
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT auth_token FROM auth_session WHERE owner = ?")
-            .bind(&owner)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| ApiError::Other(format!("DB error: {e}")))?;
+    let row: Option<(String,)> = sqlx::query_as("SELECT auth_token FROM auth_session WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ApiError::Other(format!("DB error: {e}")))?;
 
     match row {
         Some((token,)) if !token.is_empty() => Ok(token),
-        _ => Err(ApiError::Other(
-            "No auth token found — please log in".into(),
-        )),
+        _ => Err(ApiError::Other("No auth token found — please log in".into())),
     }
 }
 
@@ -83,11 +77,7 @@ impl ApiClient {
     }
 
     /// GET request with auth.
-    pub async fn get<T: DeserializeOwned>(
-        &self,
-        path: &str,
-        account_id: &str,
-    ) -> Result<T, ApiError> {
+    pub async fn get<T: DeserializeOwned>(&self, path: &str, account_id: &str) -> Result<T, ApiError> {
         let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = format!("{}{}", self.base_url, path);
 
@@ -104,12 +94,7 @@ impl ApiClient {
     }
 
     /// GET request with auth and query parameters.
-    pub async fn get_with_params<T: DeserializeOwned>(
-        &self,
-        path: &str,
-        params: &[(&str, &str)],
-        account_id: &str,
-    ) -> Result<T, ApiError> {
+    pub async fn get_with_params<T: DeserializeOwned>(&self, path: &str, params: &[(&str, &str)], account_id: &str) -> Result<T, ApiError> {
         let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = url_with_params(&self.base_url, path, params);
 
@@ -126,12 +111,7 @@ impl ApiClient {
     }
 
     /// POST request with auth and JSON body.
-    pub async fn post<T: DeserializeOwned, B: Serialize>(
-        &self,
-        path: &str,
-        body: &B,
-        account_id: &str,
-    ) -> Result<T, ApiError> {
+    pub async fn post<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B, account_id: &str) -> Result<T, ApiError> {
         let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = format!("{}{}", self.base_url, path);
 
@@ -150,12 +130,7 @@ impl ApiClient {
     }
 
     /// PATCH request with auth and JSON body.
-    pub async fn patch<T: DeserializeOwned, B: Serialize>(
-        &self,
-        path: &str,
-        body: &B,
-        account_id: &str,
-    ) -> Result<T, ApiError> {
+    pub async fn patch<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B, account_id: &str) -> Result<T, ApiError> {
         let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = format!("{}{}", self.base_url, path);
 
@@ -201,9 +176,7 @@ impl ApiClient {
         let status = resp.status();
         let url = resp.url().path().to_string();
         if status.is_success() {
-            resp.json::<T>()
-                .await
-                .map_err(|e| ApiError::Other(format!("JSON parse error: {e}")))
+            resp.json::<T>().await.map_err(|e| ApiError::Other(format!("JSON parse error: {e}")))
         } else {
             let body = resp.text().await.unwrap_or_default();
             warn!(
@@ -242,17 +215,12 @@ impl IndexerClient {
 
     /// Create from the env var (same source as the Tauri `get_indexer_api_key` command).
     pub fn from_env() -> Result<Self, ApiError> {
-        let api_key = std::env::var("INDEXER_API_KEY")
-            .map_err(|_| ApiError::Other("INDEXER_API_KEY not set".into()))?;
+        let api_key = std::env::var("INDEXER_API_KEY").map_err(|_| ApiError::Other("INDEXER_API_KEY not set".into()))?;
         Ok(Self::new(api_key))
     }
 
     /// GET with query parameters.
-    pub async fn get<T: DeserializeOwned>(
-        &self,
-        path: &str,
-        params: &[(&str, &str)],
-    ) -> Result<T, ApiError> {
+    pub async fn get<T: DeserializeOwned>(&self, path: &str, params: &[(&str, &str)]) -> Result<T, ApiError> {
         let url = url_with_params(&self.base_url, path, params);
 
         let resp = self
@@ -266,9 +234,7 @@ impl IndexerClient {
 
         let status = resp.status();
         if status.is_success() {
-            resp.json::<T>()
-                .await
-                .map_err(|e| ApiError::Other(format!("JSON parse error: {e}")))
+            resp.json::<T>().await.map_err(|e| ApiError::Other(format!("JSON parse error: {e}")))
         } else {
             let body = resp.text().await.unwrap_or_default();
             Err(ApiError::Http {

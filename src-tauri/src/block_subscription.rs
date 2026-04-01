@@ -83,10 +83,7 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let client = get_substrate_client(&app_state).await?;
-    app_state
-        .block_sub
-        .is_connected
-        .store(true, Ordering::SeqCst);
+    app_state.block_sub.is_connected.store(true, Ordering::SeqCst);
 
     let mut blocks = client
         .blocks()
@@ -104,10 +101,7 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
 
         let block = result.map_err(|e| format!("Block error: {e}"))?;
         let number = block.number() as u64;
-        app_state
-            .block_sub
-            .latest_block
-            .store(number, Ordering::SeqCst);
+        app_state.block_sub.latest_block.store(number, Ordering::SeqCst);
 
         let _ = app.emit(
             "block_number_updated",
@@ -137,9 +131,7 @@ pub async fn stop_block_subscription(app: tauri::AppHandle) {
 
 /// Get the latest cached block number (0 if not yet subscribed).
 #[tauri::command]
-pub fn get_current_block_number(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> BlockUpdate {
+pub fn get_current_block_number(state: tauri::State<'_, crate::app_state::AppState>) -> BlockUpdate {
     let bsub = &state.block_sub;
     BlockUpdate {
         block_number: bsub.latest_block.load(Ordering::SeqCst),

@@ -87,26 +87,15 @@ pub struct BlockTimestampResult {
 /// Build a `PairSigner` from the sr25519 keypair in `AppState.auth`.
 ///
 /// Fails if the user is not authenticated (no keypair stored).
-fn get_signer(
-    app_state: &crate::app_state::AppState,
-) -> Result<PairSigner<subxt::PolkadotConfig, sp_core::sr25519::Pair>, String> {
-    let auth = app_state
-        .auth
-        .lock()
-        .map_err(|e| format!("Lock error: {e}"))?;
-    let pair = auth
-        .sr25519_pair
-        .clone()
-        .ok_or("Not authenticated — please log in first")?;
+fn get_signer(app_state: &crate::app_state::AppState) -> Result<PairSigner<subxt::PolkadotConfig, sp_core::sr25519::Pair>, String> {
+    let auth = app_state.auth.lock().map_err(|e| format!("Lock error: {e}"))?;
+    let pair = auth.sr25519_pair.clone().ok_or("Not authenticated — please log in first")?;
     Ok(PairSigner::new(pair))
 }
 
 /// Read the SS58 address from the in-memory auth state.
 fn get_substrate_address(app_state: &crate::app_state::AppState) -> Result<String, String> {
-    let auth = app_state
-        .auth
-        .lock()
-        .map_err(|e| format!("Lock error: {e}"))?;
+    let auth = app_state.auth.lock().map_err(|e| format!("Lock error: {e}"))?;
     auth.substrate_address
         .clone()
         .ok_or("Not authenticated — please log in first".to_string())
@@ -118,15 +107,10 @@ fn get_substrate_address(app_state: &crate::app_state::AppState) -> Result<Strin
 
 /// Query `system.account(address)` for free/reserved/frozen balance.
 #[tauri::command]
-pub async fn get_account_balance(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    address: String,
-) -> Result<AccountBalance, String> {
+pub async fn get_account_balance(state: tauri::State<'_, crate::app_state::AppState>, address: String) -> Result<AccountBalance, String> {
     let client = get_substrate_client(&state).await?;
 
-    let account_id: subxt::utils::AccountId32 = address
-        .parse()
-        .map_err(|_| format!("Invalid SS58 address: {address}"))?;
+    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| format!("Invalid SS58 address: {address}"))?;
 
     let storage_query = custom_runtime::storage().system().account(&account_id);
     let account_info = client
@@ -157,15 +141,11 @@ pub async fn get_account_balance(
 /// Combines `staking.ledger`, `staking.currentEra`, and `system.account`
 /// into a single response to minimize frontend round-trips.
 #[tauri::command]
-pub async fn get_staking_info(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<StakingInfo, String> {
+pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState>) -> Result<StakingInfo, String> {
     let address = get_substrate_address(&state)?;
     let client = get_substrate_client(&state).await?;
 
-    let account_id: subxt::utils::AccountId32 = address
-        .parse()
-        .map_err(|_| format!("Invalid SS58 address: {address}"))?;
+    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| format!("Invalid SS58 address: {address}"))?;
 
     let balance_query = custom_runtime::storage().system().account(&account_id);
     let balance_info = client
@@ -176,9 +156,7 @@ pub async fn get_staking_info(
         .fetch(&balance_query)
         .await
         .map_err(|e| format!("Balance query failed: {e}"))?;
-    let free_balance = balance_info
-        .map(|info| info.data.free.to_string())
-        .unwrap_or_else(|| "0".to_string());
+    let free_balance = balance_info.map_or_else(|| "0".to_string(), |info| info.data.free.to_string());
 
     let mut bonded = "0".to_string();
     let mut unbonding_total: u128 = 0;
@@ -207,7 +185,7 @@ pub async fn get_staking_info(
     {
         bonded = ledger.active.to_string();
 
-        for chunk in ledger.unlocking.0.iter() {
+        for chunk in &ledger.unlocking.0 {
             let unlock_era = chunk.era;
             let amount = chunk.value;
             let remaining = unlock_era.saturating_sub(current_era);
@@ -242,10 +220,7 @@ pub async fn get_staking_info(
 
 /// Query the on-chain timestamp for a given block number.
 #[tauri::command]
-pub async fn get_block_timestamp(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    block_number: u64,
-) -> Result<BlockTimestampResult, String> {
+pub async fn get_block_timestamp(state: tauri::State<'_, crate::app_state::AppState>, block_number: u64) -> Result<BlockTimestampResult, String> {
     use subxt::backend::legacy::LegacyRpcMethods;
     use subxt::backend::rpc::RpcClient;
 
@@ -254,9 +229,7 @@ pub async fn get_block_timestamp(
     let rpc_url = crate::substrate_client::get_current_wss_endpoint(state.pool()?)
         .await
         .unwrap_or_else(|_| crate::constants::substrate::WSS_ENDPOINT.to_string());
-    let rpc_client = RpcClient::from_url(&rpc_url)
-        .await
-        .map_err(|e| format!("RPC connect failed: {e}"))?;
+    let rpc_client = RpcClient::from_url(&rpc_url).await.map_err(|e| format!("RPC connect failed: {e}"))?;
     let legacy: LegacyRpcMethods<subxt::PolkadotConfig> = LegacyRpcMethods::new(rpc_client);
 
     let block_hash = legacy
@@ -282,25 +255,14 @@ pub async fn get_block_timestamp(
 /// Iterates all on-chain referral codes and filters to those owned by
 /// the target account. Rewards are converted from planck to whole units.
 #[tauri::command]
-pub async fn get_referral_links(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    address: String,
-) -> Result<Vec<ReferralLink>, String> {
+pub async fn get_referral_links(state: tauri::State<'_, crate::app_state::AppState>, address: String) -> Result<Vec<ReferralLink>, String> {
     let client = get_substrate_client(&state).await?;
-    let target_account: subxt::utils::AccountId32 =
-        address.parse().map_err(|_| "Invalid address".to_string())?;
+    let target_account: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
 
-    let storage = client
-        .storage()
-        .at_latest()
-        .await
-        .map_err(|e| format!("Storage error: {e}"))?;
+    let storage = client.storage().at_latest().await.map_err(|e| format!("Storage error: {e}"))?;
 
     let query = custom_runtime::storage().credits().referral_codes_iter();
-    let mut entries = storage
-        .iter(query)
-        .await
-        .map_err(|e| format!("ReferralCodes query failed: {e}"))?;
+    let mut entries = storage.iter(query).await.map_err(|e| format!("ReferralCodes query failed: {e}"))?;
 
     let decimals = 10u128.pow(18);
     let mut links = Vec::new();
@@ -308,19 +270,9 @@ pub async fn get_referral_links(
     while let Some(Ok(entry)) = entries.next().await {
         if entry.value == target_account {
             let code_bytes = &entry.key_bytes[entry.key_bytes.len().saturating_sub(32)..];
-            let code = String::from_utf8_lossy(
-                code_bytes
-                    .iter()
-                    .copied()
-                    .skip_while(|b| *b == 0)
-                    .collect::<Vec<u8>>()
-                    .as_slice(),
-            )
-            .to_string();
+            let code = String::from_utf8_lossy(code_bytes.iter().copied().skip_while(|b| *b == 0).collect::<Vec<u8>>().as_slice()).to_string();
 
-            let reward_query = custom_runtime::storage()
-                .credits()
-                .referral_code_rewards(code_bytes);
+            let reward_query = custom_runtime::storage().credits().referral_code_rewards(code_bytes);
             let reward_raw = storage
                 .fetch(&reward_query)
                 .await
@@ -351,18 +303,14 @@ pub fn validate_address(address: String) -> bool {
 ///
 /// Rewards are auto-staked (`RewardDestination::Staked`) for initial bonds.
 #[tauri::command]
-pub async fn stake_bond(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    amount: String,
-) -> Result<TxResult, String> {
+pub async fn stake_bond(state: tauri::State<'_, crate::app_state::AppState>, amount: String) -> Result<TxResult, String> {
     let signer = get_signer(&state)?;
     let client = get_substrate_client(&state).await?;
     let address = get_substrate_address(&state)?;
 
     let amount: u128 = amount.parse().map_err(|e| format!("Invalid amount: {e}"))?;
 
-    let account_id: subxt::utils::AccountId32 =
-        address.parse().map_err(|_| "Invalid address".to_string())?;
+    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
 
     let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
     let already_bonded = client
@@ -389,10 +337,9 @@ pub async fn stake_bond(
             .extrinsic_hash()
     } else {
         info!("Submitting bond transaction...");
-        let tx = custom_runtime::tx().staking().bond(
-            amount,
-            custom_runtime::runtime_types::pallet_staking::RewardDestination::Staked,
-        );
+        let tx = custom_runtime::tx()
+            .staking()
+            .bond(amount, custom_runtime::runtime_types::pallet_staking::RewardDestination::Staked);
         client
             .tx()
             .sign_and_submit_then_watch_default(&tx, &signer)
@@ -413,10 +360,7 @@ pub async fn stake_bond(
 
 /// Unbond tokens (schedule for withdrawal after the unbonding period).
 #[tauri::command]
-pub async fn stake_unbond(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    amount: String,
-) -> Result<TxResult, String> {
+pub async fn stake_unbond(state: tauri::State<'_, crate::app_state::AppState>, amount: String) -> Result<TxResult, String> {
     let signer = get_signer(&state)?;
     let client = get_substrate_client(&state).await?;
 
@@ -445,19 +389,14 @@ pub async fn stake_unbond(
 ///
 /// Automatically queries slashing spans to pass the correct parameter.
 #[tauri::command]
-pub async fn stake_withdraw_unbonded(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<TxResult, String> {
+pub async fn stake_withdraw_unbonded(state: tauri::State<'_, crate::app_state::AppState>) -> Result<TxResult, String> {
     let signer = get_signer(&state)?;
     let client = get_substrate_client(&state).await?;
     let address = get_substrate_address(&state)?;
 
-    let account_id: subxt::utils::AccountId32 =
-        address.parse().map_err(|_| "Invalid address".to_string())?;
+    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
 
-    let spans_query = custom_runtime::storage()
-        .staking()
-        .slashing_spans(&account_id);
+    let spans_query = custom_runtime::storage().staking().slashing_spans(&account_id);
     let num_slashing_spans = match client
         .storage()
         .at_latest()
@@ -472,9 +411,7 @@ pub async fn stake_withdraw_unbonded(
     };
 
     info!("Submitting withdraw_unbonded transaction (spans={num_slashing_spans})...");
-    let tx = custom_runtime::tx()
-        .staking()
-        .withdraw_unbonded(num_slashing_spans);
+    let tx = custom_runtime::tx().staking().withdraw_unbonded(num_slashing_spans);
     let tx_hash = client
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
@@ -494,15 +431,12 @@ pub async fn stake_withdraw_unbonded(
 
 /// Claim staking rewards via `payout_stakers` for the previous era.
 #[tauri::command]
-pub async fn stake_claim_rewards(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<TxResult, String> {
+pub async fn stake_claim_rewards(state: tauri::State<'_, crate::app_state::AppState>) -> Result<TxResult, String> {
     let signer = get_signer(&state)?;
     let client = get_substrate_client(&state).await?;
     let address = get_substrate_address(&state)?;
 
-    let account_id: subxt::utils::AccountId32 =
-        address.parse().map_err(|_| "Invalid address".to_string())?;
+    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
 
     let era_query = custom_runtime::storage().staking().current_era();
     let current_era = client
@@ -520,9 +454,7 @@ pub async fn stake_claim_rewards(
     }
 
     info!("Submitting payout_stakers for era {}...", current_era - 1);
-    let tx = custom_runtime::tx()
-        .staking()
-        .payout_stakers(account_id, current_era - 1);
+    let tx = custom_runtime::tx().staking().payout_stakers(account_id, current_era - 1);
     let tx_hash = client
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
@@ -554,13 +486,11 @@ pub async fn transfer_balance(
 
     let amount: u128 = amount.parse().map_err(|e| format!("Invalid amount: {e}"))?;
 
-    let recipient = <sp_core::crypto::AccountId32 as Ss58Codec>::from_ss58check(&recipient_address)
-        .map_err(|e| format!("Invalid recipient address: {e:?}"))?;
+    let recipient =
+        <sp_core::crypto::AccountId32 as Ss58Codec>::from_ss58check(&recipient_address).map_err(|e| format!("Invalid recipient address: {e:?}"))?;
 
     info!("Submitting transfer_keep_alive transaction...");
-    let tx = custom_runtime::tx()
-        .balances()
-        .transfer_keep_alive(recipient.into(), amount);
+    let tx = custom_runtime::tx().balances().transfer_keep_alive(recipient.into(), amount);
 
     let tx_hash = client
         .tx()
@@ -592,9 +522,7 @@ pub fn to_plancks(amount: String) -> Result<String, String> {
     if amount.is_empty() {
         return Err("Invalid amount".to_string());
     }
-    amount
-        .parse::<f64>()
-        .map_err(|_| "Invalid amount".to_string())?;
+    amount.parse::<f64>().map_err(|_| "Invalid amount".to_string())?;
 
     let (whole, fraction) = match amount.split_once('.') {
         Some((w, f)) => (w, f),
@@ -607,7 +535,7 @@ pub fn to_plancks(amount: String) -> Result<String, String> {
         &format!("{:0<width$}", fraction, width = DECIMALS as usize)
     };
 
-    let combined = format!("{}{}", whole, fraction_padded);
+    let combined = format!("{whole}{fraction_padded}");
     let trimmed = combined.trim_start_matches('0');
     if trimmed.is_empty() {
         Ok("0".to_string())
@@ -619,16 +547,14 @@ pub fn to_plancks(amount: String) -> Result<String, String> {
 /// Convert a planck string to human-readable f64 (divide by 10^18).
 #[tauri::command]
 pub fn from_plancks(plancks: String) -> Result<f64, String> {
-    let value: f64 = plancks
-        .parse()
-        .map_err(|_| "Invalid planck value".to_string())?;
+    let value: f64 = plancks.parse().map_err(|_| "Invalid planck value".to_string())?;
     Ok(value / 1e18)
 }
 
 /// Return the explorer URL for an address.
 #[tauri::command]
 pub fn get_explorer_url(address: String) -> String {
-    format!("{}/accounts/{}", EXPLORER_BASE, address)
+    format!("{EXPLORER_BASE}/accounts/{address}")
 }
 
 // ---------------------------------------------------------------------------
@@ -661,16 +587,13 @@ mod tests {
 
     #[test]
     fn to_plancks_many_decimals_truncates() {
-        assert_eq!(
-            to_plancks("0.1234567890123456789999".into()).unwrap(),
-            "123456789012345678"
-        );
+        assert_eq!(to_plancks("0.1234567890123456789999".into()).unwrap(), "123456789012345678");
     }
 
     #[test]
     fn to_plancks_invalid() {
         assert!(to_plancks("abc".into()).is_err());
-        assert!(to_plancks("".into()).is_err());
+        assert!(to_plancks(String::new()).is_err());
     }
 
     #[test]

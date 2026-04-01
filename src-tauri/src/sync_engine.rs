@@ -15,9 +15,9 @@ use crate::sync_progress::SyncProgressState;
 use crate::sync_shared::{HcfsSyncState, SyncActivityItem, SyncEngineHealth};
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex as TokioMutex;
@@ -131,8 +131,7 @@ pub struct SyncEngine {
     pub session_counter: AtomicU64,
 
     // ── Synced Paths Cache (fallback when drives lock unavailable) ────
-    pub synced_paths_cache:
-        StdMutex<HashMap<String, HashMap<String, crate::commands::file_commands::SyncedFileInfo>>>,
+    pub synced_paths_cache: StdMutex<HashMap<String, HashMap<String, crate::commands::file_commands::SyncedFileInfo>>>,
 
     // ── File Watcher (shared so new drives can be added dynamically) ──
     pub watcher: StdMutex<Option<notify::RecommendedWatcher>>,
@@ -227,14 +226,12 @@ impl SyncEngine {
     /// Record that forward progress was just made (called from every
     /// progress callback).
     pub fn touch_progress_time(&self) {
-        self.last_progress_time
-            .store(chrono::Utc::now().timestamp(), Ordering::Release);
+        self.last_progress_time.store(chrono::Utc::now().timestamp(), Ordering::Release);
     }
 
     /// Reset the progress clock at the start of a sync cycle.
     pub fn reset_progress_time(&self) {
-        self.last_progress_time
-            .store(chrono::Utc::now().timestamp(), Ordering::Release);
+        self.last_progress_time.store(chrono::Utc::now().timestamp(), Ordering::Release);
     }
 
     /// Returns `true` when no progress callback has fired for 3 minutes,
@@ -253,7 +250,7 @@ impl SyncEngine {
     /// Returns true if review mode was entered, false if cooldown is active.
     pub fn set_drive_review(&self, label: &str) -> bool {
         let now = chrono::Utc::now().timestamp_millis();
-        let mut states = self.states.lock().unwrap_or_else(|p| p.into_inner());
+        let mut states = self.states.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let s = states.entry(label.to_string()).or_default();
         if s.review_cooldown_until > now {
             return false;
@@ -265,8 +262,8 @@ impl SyncEngine {
 
     /// Check if a specific drive is in review mode.
     pub fn is_drive_in_review(&self, label: &str) -> bool {
-        let states = self.states.lock().unwrap_or_else(|p| p.into_inner());
-        states.get(label).map_or(false, |s| s.in_review)
+        let states = self.states.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        states.get(label).is_some_and(|s| s.in_review)
     }
 
     /// Exit review mode for a specific drive and start a 60-second cooldown
@@ -274,7 +271,7 @@ impl SyncEngine {
     pub fn clear_drive_review(&self, label: &str) {
         let cooldown_ms = 60_000; // 60 seconds
         let now = chrono::Utc::now().timestamp_millis();
-        let mut states = self.states.lock().unwrap_or_else(|p| p.into_inner());
+        let mut states = self.states.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(s) = states.get_mut(label) {
             s.in_review = false;
             s.review_entered_at = 0;
@@ -286,7 +283,7 @@ impl SyncEngine {
     pub fn clear_all_reviews(&self) {
         let cooldown_ms = 60_000;
         let now = chrono::Utc::now().timestamp_millis();
-        let mut states = self.states.lock().unwrap_or_else(|p| p.into_inner());
+        let mut states = self.states.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for s in states.values_mut() {
             s.in_review = false;
             s.review_entered_at = 0;
@@ -401,17 +398,12 @@ impl SyncEngine {
                 warn!("Poisoned mutex recovered in commit_pending_activity_for_label");
                 p.into_inner()
             });
-            let (matching, remaining): (Vec<_>, Vec<_>) =
-                pending.drain(..).partition(|item| item.label == label);
+            let (matching, remaining): (Vec<_>, Vec<_>) = pending.drain(..).partition(|item| item.label == label);
             *pending = remaining;
             matching
         };
         if !items.is_empty() {
-            info!(
-                "[Sync] Committing {} activity items for label '{}' to recent files",
-                items.len(),
-                label
-            );
+            info!("[Sync] Committing {} activity items for label '{}' to recent files", items.len(), label);
             self.update_state(label, |state| {
                 for item in &items {
                     info!("[Sync] -> {} ({})", item.file_name, item.action);
@@ -445,10 +437,7 @@ impl SyncEngine {
             p.into_inner()
         });
         if !pending.is_empty() {
-            info!(
-                "[Sync] Discarding all {} pending activity items",
-                pending.len()
-            );
+            info!("[Sync] Discarding all {} pending activity items", pending.len());
         }
         pending.clear();
     }
@@ -464,10 +453,7 @@ impl SyncEngine {
         let is_syncing = states.values().any(|s| s.is_syncing);
         let last_sync_time = states.values().filter_map(|s| s.last_sync_time).max();
 
-        let mut all_activity: Vec<SyncActivityItem> = states
-            .values()
-            .flat_map(|s| s.recent_activity.iter().cloned())
-            .collect();
+        let mut all_activity: Vec<SyncActivityItem> = states.values().flat_map(|s| s.recent_activity.iter().cloned()).collect();
         all_activity.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
         all_activity.truncate(MAX_ACTIVITY);
 
@@ -478,11 +464,7 @@ impl SyncEngine {
         }
     }
 
-    pub fn get_sync_activity(
-        &self,
-        limit: Option<usize>,
-        label: Option<String>,
-    ) -> Vec<SyncActivityItem> {
+    pub fn get_sync_activity(&self, limit: Option<usize>, label: Option<String>) -> Vec<SyncActivityItem> {
         let max = limit.unwrap_or(50);
 
         // Committed activity from previous sync cycles
@@ -492,15 +474,9 @@ impl SyncEngine {
         });
 
         let mut all: Vec<SyncActivityItem> = if let Some(ref lbl) = label {
-            states
-                .get(lbl)
-                .map(|s| s.recent_activity.iter().cloned().collect())
-                .unwrap_or_default()
+            states.get(lbl).map(|s| s.recent_activity.iter().cloned().collect()).unwrap_or_default()
         } else {
-            states
-                .values()
-                .flat_map(|s| s.recent_activity.iter().cloned())
-                .collect()
+            states.values().flat_map(|s| s.recent_activity.iter().cloned()).collect()
         };
         drop(states);
 
@@ -564,11 +540,7 @@ impl SyncEngine {
         }
 
         // Throttled path
-        let should_emit = self
-            .last_emit_time
-            .lock()
-            .ok()
-            .map_or(true, |t| t.elapsed().as_millis() >= 250);
+        let should_emit = self.last_emit_time.lock().ok().is_none_or(|t| t.elapsed().as_millis() >= 250);
 
         if should_emit {
             if let Ok(mut t) = self.last_emit_time.lock() {
@@ -615,21 +587,14 @@ impl SyncEngine {
     /// Update the cached synced-paths map for a given drive label.
     /// Called after each successful sync so the file browser can fall back
     /// to this snapshot when the drives lock is unavailable.
-    pub fn update_synced_paths_cache(
-        &self,
-        label: &str,
-        paths: HashMap<String, crate::commands::file_commands::SyncedFileInfo>,
-    ) {
+    pub fn update_synced_paths_cache(&self, label: &str, paths: HashMap<String, crate::commands::file_commands::SyncedFileInfo>) {
         if let Ok(mut cache) = self.synced_paths_cache.lock() {
             cache.insert(label.to_string(), paths);
         }
     }
 
     /// Return a clone of the cached synced-paths for `label`, if available.
-    pub fn get_cached_synced_paths(
-        &self,
-        label: &str,
-    ) -> Option<HashMap<String, crate::commands::file_commands::SyncedFileInfo>> {
+    pub fn get_cached_synced_paths(&self, label: &str) -> Option<HashMap<String, crate::commands::file_commands::SyncedFileInfo>> {
         let cache = self.synced_paths_cache.lock().ok()?;
         cache.get(label).cloned()
     }
@@ -637,17 +602,9 @@ impl SyncEngine {
     /// Insert or update a single file entry in the synced-paths cache.
     /// Called from the `on_file_synced` progress callback to make arion
     /// hashes available to the frontend before the full sync cycle ends.
-    pub fn upsert_synced_path(
-        &self,
-        label: &str,
-        rel_path: String,
-        info: crate::commands::file_commands::SyncedFileInfo,
-    ) {
+    pub fn upsert_synced_path(&self, label: &str, rel_path: String, info: crate::commands::file_commands::SyncedFileInfo) {
         if let Ok(mut cache) = self.synced_paths_cache.lock() {
-            cache
-                .entry(label.to_string())
-                .or_default()
-                .insert(rel_path, info);
+            cache.entry(label.to_string()).or_default().insert(rel_path, info);
         }
     }
 
@@ -679,10 +636,7 @@ impl SyncEngine {
     /// Drain rename hints whose paths fall under `sync_root`.
     /// Hints for other drives remain in the buffer. This prevents
     /// concurrent drives from stealing each other's hints.
-    pub fn drain_rename_hints_for_root(
-        &self,
-        sync_root: &std::path::Path,
-    ) -> Vec<crate::sync_logic::RenameHint> {
+    pub fn drain_rename_hints_for_root(&self, sync_root: &std::path::Path) -> Vec<crate::sync_logic::RenameHint> {
         let mut guard = self.rename_hints.lock().unwrap_or_else(|p| {
             warn!("Poisoned rename_hints mutex recovered in drain");
             p.into_inner()
@@ -690,9 +644,7 @@ impl SyncEngine {
         let mut matched = Vec::new();
         let mut remaining = Vec::new();
         for hint in guard.drain(..) {
-            if hint.old_path.starts_with(sync_root)
-                || hint.new_path.starts_with(sync_root)
-            {
+            if hint.old_path.starts_with(sync_root) || hint.new_path.starts_with(sync_root) {
                 matched.push(hint);
             } else {
                 remaining.push(hint);
@@ -705,11 +657,7 @@ impl SyncEngine {
     // ── Label Roots (for rename → activity mapping) ──────────────────
 
     /// Register the sync folder root for a drive label.
-    pub fn register_label_root(
-        &self,
-        label: String,
-        root: std::path::PathBuf,
-    ) {
+    pub fn register_label_root(&self, label: String, root: std::path::PathBuf) {
         let mut guard = self.label_roots.lock().unwrap_or_else(|p| {
             warn!("Poisoned label_roots mutex recovered");
             p.into_inner()
@@ -738,10 +686,7 @@ impl SyncEngine {
     /// Update file_name in committed and pending activity items when
     /// a file is renamed on disk. Emits `hcfs_activity_updated` so
     /// the frontend can refresh the recent-files list.
-    fn apply_rename_to_activity(
-        &self,
-        hint: &crate::sync_logic::RenameHint,
-    ) {
+    fn apply_rename_to_activity(&self, hint: &crate::sync_logic::RenameHint) {
         // Find the label and relative paths for this rename hint
         let label_roots = self.label_roots.lock().unwrap_or_else(|p| {
             warn!("Poisoned label_roots mutex in apply_rename");
@@ -753,31 +698,27 @@ impl SyncEngine {
         let mut new_relative = None;
 
         for (label, root) in label_roots.iter() {
-            if hint.old_path.starts_with(root) {
-                if let Ok(old_rel) = hint.old_path.strip_prefix(root) {
-                    let new_rel = if hint.new_path.starts_with(root) {
-                        hint.new_path.strip_prefix(root).ok()
-                    } else {
-                        None
-                    };
-                    if let Some(nr) = new_rel {
-                        matched_label = Some(label.clone());
-                        old_relative =
-                            Some(old_rel.to_string_lossy().to_string());
-                        new_relative =
-                            Some(nr.to_string_lossy().to_string());
-                        break;
-                    }
+            if hint.old_path.starts_with(root)
+                && let Ok(old_rel) = hint.old_path.strip_prefix(root)
+            {
+                let new_rel = if hint.new_path.starts_with(root) {
+                    hint.new_path.strip_prefix(root).ok()
+                } else {
+                    None
+                };
+                if let Some(nr) = new_rel {
+                    matched_label = Some(label.clone());
+                    old_relative = Some(old_rel.to_string_lossy().to_string());
+                    new_relative = Some(nr.to_string_lossy().to_string());
+                    break;
                 }
             }
         }
         drop(label_roots);
 
-        let (label, old_rel, new_rel) =
-            match (matched_label, old_relative, new_relative) {
-                (Some(l), Some(o), Some(n)) => (l, o, n),
-                _ => return,
-            };
+        let (Some(label), Some(old_rel), Some(new_rel)) = (matched_label, old_relative, new_relative) else {
+            return;
+        };
 
         let mut updated = false;
 
@@ -805,11 +746,10 @@ impl SyncEngine {
 
         // Update pending activity (current sync cycle)
         {
-            let mut pending =
-                self.pending_activity.lock().unwrap_or_else(|p| {
-                    warn!("Poisoned pending mutex in apply_rename");
-                    p.into_inner()
-                });
+            let mut pending = self.pending_activity.lock().unwrap_or_else(|p| {
+                warn!("Poisoned pending mutex in apply_rename");
+                p.into_inner()
+            });
             for item in pending.iter_mut() {
                 if item.file_name == old_rel && item.label == label {
                     info!(
@@ -827,31 +767,23 @@ impl SyncEngine {
         // Also update the synced_paths_cache so get_synced_file_metadata
         // returns the new name before the next sync cycle
         {
-            let mut cache =
-                self.synced_paths_cache.lock().unwrap_or_else(|p| {
-                    warn!("Poisoned synced_paths_cache in apply_rename");
-                    p.into_inner()
-                });
-            if let Some(drive_cache) = cache.get_mut(&label) {
-                if let Some(info) = drive_cache.remove(&old_rel) {
-                    drive_cache.insert(new_rel.clone(), info);
-                    updated = true;
-                }
+            let mut cache = self.synced_paths_cache.lock().unwrap_or_else(|p| {
+                warn!("Poisoned synced_paths_cache in apply_rename");
+                p.into_inner()
+            });
+            if let Some(drive_cache) = cache.get_mut(&label)
+                && let Some(info) = drive_cache.remove(&old_rel)
+            {
+                drive_cache.insert(new_rel.clone(), info);
+                updated = true;
             }
         }
 
         if updated {
             // Emit event so frontend refreshes recent files
-            let app = self
-                .app_handle
-                .lock()
-                .ok()
-                .and_then(|g| g.clone());
+            let app = self.app_handle.lock().ok().and_then(|g| g.clone());
             if let Some(app) = app {
-                let _ = app.emit(
-                    crate::sync_events::ACTIVITY_UPDATED,
-                    (),
-                );
+                let _ = app.emit(crate::sync_events::ACTIVITY_UPDATED, ());
             }
         }
     }
@@ -956,12 +888,7 @@ mod tests {
         let eng = SyncEngine::new();
         for i in 0..120 {
             eng.update_state("docs", |state| {
-                state.add_activity(activity(
-                    &format!("file_{i}.txt"),
-                    "uploaded",
-                    "docs",
-                    i as u64,
-                ));
+                state.add_activity(activity(&format!("file_{i}.txt"), "uploaded", "docs", i as u64));
             });
         }
         let states = eng.states.lock().unwrap();
@@ -1069,12 +996,7 @@ mod tests {
         let eng = SyncEngine::new();
         eng.update_state("docs", |s| {
             for i in 0..10 {
-                s.add_activity(activity(
-                    &format!("file_{i}.txt"),
-                    "uploaded",
-                    "docs",
-                    i as u64,
-                ));
+                s.add_activity(activity(&format!("file_{i}.txt"), "uploaded", "docs", i as u64));
             }
         });
         let result = eng.get_sync_activity(Some(3), Some("docs".to_string()));
@@ -1094,75 +1016,57 @@ mod tests {
     #[test]
     fn push_and_drain_rename_hints_by_root() {
         let engine = SyncEngine::new();
-        let now = std::time::Instant::now();
 
         engine.push_rename_hint(crate::sync_logic::RenameHint {
             old_path: std::path::PathBuf::from("/drive_a/old.txt"),
             new_path: std::path::PathBuf::from("/drive_a/new.txt"),
-            captured_at: now,
         });
         engine.push_rename_hint(crate::sync_logic::RenameHint {
             old_path: std::path::PathBuf::from("/drive_b/old.txt"),
             new_path: std::path::PathBuf::from("/drive_b/new.txt"),
-            captured_at: now,
         });
 
         // Drain only drive_a hints
-        let a_hints = engine.drain_rename_hints_for_root(
-            std::path::Path::new("/drive_a"),
-        );
+        let a_hints = engine.drain_rename_hints_for_root(std::path::Path::new("/drive_a"));
         assert_eq!(a_hints.len(), 1);
         assert_eq!(a_hints[0].old_path, std::path::PathBuf::from("/drive_a/old.txt"));
 
         // drive_b hint is still in the buffer
-        let b_hints = engine.drain_rename_hints_for_root(
-            std::path::Path::new("/drive_b"),
-        );
+        let b_hints = engine.drain_rename_hints_for_root(std::path::Path::new("/drive_b"));
         assert_eq!(b_hints.len(), 1);
         assert_eq!(b_hints[0].old_path, std::path::PathBuf::from("/drive_b/old.txt"));
 
         // Buffer is now empty
-        let empty = engine.drain_rename_hints_for_root(
-            std::path::Path::new("/drive_a"),
-        );
+        let empty = engine.drain_rename_hints_for_root(std::path::Path::new("/drive_a"));
         assert!(empty.is_empty());
     }
 
     #[test]
     fn rename_hints_capped_at_10000() {
         let engine = SyncEngine::new();
-        let now = std::time::Instant::now();
 
         for i in 0..10_001 {
             engine.push_rename_hint(crate::sync_logic::RenameHint {
                 old_path: std::path::PathBuf::from(format!("/sync/old_{i}.txt")),
                 new_path: std::path::PathBuf::from(format!("/sync/new_{i}.txt")),
-                captured_at: now,
             });
         }
 
-        let drained = engine.drain_rename_hints_for_root(
-            std::path::Path::new("/sync"),
-        );
+        let drained = engine.drain_rename_hints_for_root(std::path::Path::new("/sync"));
         assert_eq!(drained.len(), 10_000);
     }
 
     #[test]
     fn drain_rename_hints_empty_by_default() {
         let engine = SyncEngine::new();
-        let drained = engine.drain_rename_hints_for_root(
-            std::path::Path::new("/sync"),
-        );
+        let drained = engine.drain_rename_hints_for_root(std::path::Path::new("/sync"));
         assert!(drained.is_empty());
     }
 
     #[test]
     fn rename_updates_committed_activity() {
         let eng = SyncEngine::new();
-        eng.register_label_root(
-            "docs".to_string(),
-            std::path::PathBuf::from("/sync/docs"),
-        );
+        eng.register_label_root("docs".to_string(), std::path::PathBuf::from("/sync/docs"));
         eng.update_state("docs", |s| {
             s.add_activity(activity("report.txt", "uploaded", "docs", 100));
         });
@@ -1170,7 +1074,6 @@ mod tests {
         eng.push_rename_hint(crate::sync_logic::RenameHint {
             old_path: std::path::PathBuf::from("/sync/docs/report.txt"),
             new_path: std::path::PathBuf::from("/sync/docs/report_v2.txt"),
-            captured_at: std::time::Instant::now(),
         });
 
         let result = eng.get_sync_activity(None, Some("docs".to_string()));
@@ -1181,16 +1084,12 @@ mod tests {
     #[test]
     fn rename_updates_pending_activity() {
         let eng = SyncEngine::new();
-        eng.register_label_root(
-            "docs".to_string(),
-            std::path::PathBuf::from("/sync/docs"),
-        );
+        eng.register_label_root("docs".to_string(), std::path::PathBuf::from("/sync/docs"));
         eng.add_pending_activity(activity("draft.md", "uploaded", "docs", 50));
 
         eng.push_rename_hint(crate::sync_logic::RenameHint {
             old_path: std::path::PathBuf::from("/sync/docs/draft.md"),
             new_path: std::path::PathBuf::from("/sync/docs/final.md"),
-            captured_at: std::time::Instant::now(),
         });
 
         let result = eng.get_sync_activity(None, Some("docs".to_string()));
@@ -1209,7 +1108,6 @@ mod tests {
         eng.push_rename_hint(crate::sync_logic::RenameHint {
             old_path: std::path::PathBuf::from("/sync/docs/report.txt"),
             new_path: std::path::PathBuf::from("/sync/docs/report_v2.txt"),
-            captured_at: std::time::Instant::now(),
         });
 
         let result = eng.get_sync_activity(None, Some("docs".to_string()));
@@ -1219,14 +1117,8 @@ mod tests {
     #[test]
     fn rename_only_affects_matching_label() {
         let eng = SyncEngine::new();
-        eng.register_label_root(
-            "docs".to_string(),
-            std::path::PathBuf::from("/sync/docs"),
-        );
-        eng.register_label_root(
-            "photos".to_string(),
-            std::path::PathBuf::from("/sync/photos"),
-        );
+        eng.register_label_root("docs".to_string(), std::path::PathBuf::from("/sync/docs"));
+        eng.register_label_root("photos".to_string(), std::path::PathBuf::from("/sync/photos"));
         eng.update_state("docs", |s| {
             s.add_activity(activity("file.txt", "uploaded", "docs", 10));
         });
@@ -1237,7 +1129,6 @@ mod tests {
         eng.push_rename_hint(crate::sync_logic::RenameHint {
             old_path: std::path::PathBuf::from("/sync/docs/file.txt"),
             new_path: std::path::PathBuf::from("/sync/docs/renamed.txt"),
-            captured_at: std::time::Instant::now(),
         });
 
         let docs = eng.get_sync_activity(None, Some("docs".to_string()));
@@ -1249,23 +1140,14 @@ mod tests {
     #[test]
     fn rename_in_subfolder_uses_relative_path() {
         let eng = SyncEngine::new();
-        eng.register_label_root(
-            "docs".to_string(),
-            std::path::PathBuf::from("/sync/docs"),
-        );
+        eng.register_label_root("docs".to_string(), std::path::PathBuf::from("/sync/docs"));
         eng.update_state("docs", |s| {
-            s.add_activity(activity(
-                "sub/deep/file.txt",
-                "uploaded",
-                "docs",
-                100,
-            ));
+            s.add_activity(activity("sub/deep/file.txt", "uploaded", "docs", 100));
         });
 
         eng.push_rename_hint(crate::sync_logic::RenameHint {
             old_path: std::path::PathBuf::from("/sync/docs/sub/deep/file.txt"),
             new_path: std::path::PathBuf::from("/sync/docs/sub/deep/renamed.txt"),
-            captured_at: std::time::Instant::now(),
         });
 
         let result = eng.get_sync_activity(None, Some("docs".to_string()));
@@ -1279,18 +1161,8 @@ mod tests {
         // commit, not just the basename. This is critical for
         // recent-files to construct the correct on-disk source path.
         let eng = SyncEngine::new();
-        eng.add_pending_activity(activity(
-            "deps/librust_plugin.rmeta",
-            "downloaded",
-            "march-09",
-            48,
-        ));
-        eng.add_pending_activity(activity(
-            "branch-cleanup.md",
-            "uploaded",
-            "march-09",
-            4186,
-        ));
+        eng.add_pending_activity(activity("deps/librust_plugin.rmeta", "downloaded", "march-09", 48));
+        eng.add_pending_activity(activity("branch-cleanup.md", "uploaded", "march-09", 4186));
         eng.commit_pending_activity_for_label("march-09");
 
         let result = eng.get_sync_activity(None, Some("march-09".to_string()));
@@ -1308,12 +1180,7 @@ mod tests {
     #[test]
     fn deeply_nested_subfolder_path_preserved() {
         let eng = SyncEngine::new();
-        eng.add_pending_activity(activity(
-            "a/b/c/deep-file.txt",
-            "uploaded",
-            "sync-folder",
-            100,
-        ));
+        eng.add_pending_activity(activity("a/b/c/deep-file.txt", "uploaded", "sync-folder", 100));
         eng.commit_pending_activity_for_label("sync-folder");
 
         let result = eng.get_sync_activity(None, Some("sync-folder".to_string()));

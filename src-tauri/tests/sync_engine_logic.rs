@@ -1,7 +1,7 @@
 use hcfs_shared::network::RemoteFolderInfo;
 use tauri_project_lib::sync_logic::{
-    ConnectivityStatus, compute_backoff, folder_needs_recovery, is_failed_download_artifact,
-    should_emit_health_change, should_register_after_upload, should_skip_sync_check,
+    ConnectivityStatus, compute_backoff, folder_needs_recovery, is_failed_download_artifact, should_emit_health_change, should_register_after_upload,
+    should_skip_sync_check,
 };
 
 // === compute_backoff ===
@@ -125,59 +125,33 @@ fn health_different_unhealthy_statuses_emit() {
 
 #[test]
 fn skip_auth_expired_always_skips() {
-    assert!(should_skip_sync_check(
-        &ConnectivityStatus::AuthExpired,
-        0,
-        2
-    ));
+    assert!(should_skip_sync_check(&ConnectivityStatus::AuthExpired, 0, 2));
 }
 
 #[test]
 fn skip_connected_never_skips() {
-    assert!(!should_skip_sync_check(
-        &ConnectivityStatus::Connected,
-        0,
-        2
-    ));
-    assert!(!should_skip_sync_check(
-        &ConnectivityStatus::Connected,
-        10,
-        2
-    ));
+    assert!(!should_skip_sync_check(&ConnectivityStatus::Connected, 0, 2));
+    assert!(!should_skip_sync_check(&ConnectivityStatus::Connected, 10, 2));
 }
 
 #[test]
 fn skip_degraded_above_threshold_skips() {
     assert!(should_skip_sync_check(&ConnectivityStatus::Degraded, 2, 2));
-    assert!(should_skip_sync_check(
-        &ConnectivityStatus::ServerUnreachable,
-        5,
-        2
-    ));
+    assert!(should_skip_sync_check(&ConnectivityStatus::ServerUnreachable, 5, 2));
 }
 
 #[test]
 fn skip_degraded_below_threshold_does_not_skip() {
     assert!(!should_skip_sync_check(&ConnectivityStatus::Degraded, 1, 2));
-    assert!(!should_skip_sync_check(
-        &ConnectivityStatus::NetworkOffline,
-        0,
-        2
-    ));
+    assert!(!should_skip_sync_check(&ConnectivityStatus::NetworkOffline, 0, 2));
 }
 
 // === is_failed_download_artifact ===
 
 #[test]
 fn artifact_valid_hex_detected() {
-    assert_eq!(
-        is_failed_download_artifact("downloaded_a1b2c3d4"),
-        Some("a1b2c3d4")
-    );
-    assert_eq!(
-        is_failed_download_artifact("downloaded_ABCDEF0123456789"),
-        Some("ABCDEF0123456789"),
-    );
+    assert_eq!(is_failed_download_artifact("downloaded_a1b2c3d4"), Some("a1b2c3d4"));
+    assert_eq!(is_failed_download_artifact("downloaded_ABCDEF0123456789"), Some("ABCDEF0123456789"),);
 }
 
 #[test]

@@ -67,12 +67,8 @@ pub struct FileEntry {
 /// Verify that `child` is contained within `parent` after canonicalization.
 /// Prevents path traversal attacks via `../` in user-supplied file names.
 fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf, String> {
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|e| format!("Invalid sync path: {e}"))?;
-    let canonical_child = child
-        .canonicalize()
-        .map_err(|e| format!("Path not found: {e}"))?;
+    let canonical_parent = parent.canonicalize().map_err(|e| format!("Invalid sync path: {e}"))?;
+    let canonical_child = child.canonicalize().map_err(|e| format!("Path not found: {e}"))?;
     if !canonical_child.starts_with(&canonical_parent) {
         return Err("Path escapes sync folder".to_string());
     }
@@ -83,11 +79,7 @@ fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf, String> {
 #[tauri::command]
 pub async fn add_file(sync_path: String, file_path: String) -> Result<String, String> {
     let source = Path::new(&file_path);
-    let name = source
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or("Invalid file name")?
-        .to_string();
+    let name = source.file_name().and_then(|n| n.to_str()).ok_or("Invalid file name")?.to_string();
 
     // Reject names containing path separators or traversal components
     if name.contains('/') || name.contains('\\') || name == ".." || name == "." {
@@ -99,17 +91,13 @@ pub async fn add_file(sync_path: String, file_path: String) -> Result<String, St
 
     // Validate destination is within the sync folder BEFORE writing
     // (canonicalize parent only — dest doesn't exist yet)
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|e| format!("Invalid sync path: {e}"))?;
+    let canonical_parent = parent.canonicalize().map_err(|e| format!("Invalid sync path: {e}"))?;
     let canonical_dest = canonical_parent.join(&name);
     if !canonical_dest.starts_with(&canonical_parent) {
         return Err("Path escapes sync folder".to_string());
     }
 
-    tokio::fs::copy(source, &dest)
-        .await
-        .map_err(|e| format!("Copy failed: {e}"))?;
+    tokio::fs::copy(source, &dest).await.map_err(|e| format!("Copy failed: {e}"))?;
 
     Ok(name)
 }
@@ -118,11 +106,7 @@ pub async fn add_file(sync_path: String, file_path: String) -> Result<String, St
 #[tauri::command]
 pub async fn add_folder(sync_path: String, folder_path: String) -> Result<String, String> {
     let source = Path::new(&folder_path);
-    let name = source
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or("Invalid folder name")?
-        .to_string();
+    let name = source.file_name().and_then(|n| n.to_str()).ok_or("Invalid folder name")?.to_string();
 
     // Reject names containing path separators or traversal components
     if name.contains('/') || name.contains('\\') || name == ".." || name == "." {
@@ -133,9 +117,7 @@ pub async fn add_folder(sync_path: String, folder_path: String) -> Result<String
     let dest = parent.join(&name);
 
     // Validate destination is within the sync folder BEFORE writing
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|e| format!("Invalid sync path: {e}"))?;
+    let canonical_parent = parent.canonicalize().map_err(|e| format!("Invalid sync path: {e}"))?;
     let canonical_dest = canonical_parent.join(&name);
     if !canonical_dest.starts_with(&canonical_parent) {
         return Err("Path escapes sync folder".to_string());
@@ -165,20 +147,13 @@ pub async fn remove_file(
     let size_bytes = if target.is_dir() {
         0
     } else {
-        tokio::fs::metadata(&target)
-            .await
-            .map(|m| m.len())
-            .unwrap_or(0)
+        tokio::fs::metadata(&target).await.map(|m| m.len()).unwrap_or(0)
     };
 
     if target.is_dir() {
-        tokio::fs::remove_dir_all(&target)
-            .await
-            .map_err(|e| format!("Remove failed: {e}"))?;
+        tokio::fs::remove_dir_all(&target).await.map_err(|e| format!("Remove failed: {e}"))?;
     } else if target.exists() {
-        tokio::fs::remove_file(&target)
-            .await
-            .map_err(|e| format!("Remove failed: {e}"))?;
+        tokio::fs::remove_file(&target).await.map_err(|e| format!("Remove failed: {e}"))?;
     }
 
     // Record "deleted" activity so recent-files filtering works immediately.
@@ -223,9 +198,7 @@ impl SyncedFileInfo {
 
 /// Build a map of relative paths → sync info from a loaded `SyncState`.
 /// Extracted so it can be reused from the cache-update path in `hcfs_drive.rs`.
-pub(crate) fn build_synced_paths_from_state(
-    state: &hcfs_client::sync::SyncState,
-) -> HashMap<String, SyncedFileInfo> {
+pub(crate) fn build_synced_paths_from_state(state: &hcfs_client::sync::SyncState) -> HashMap<String, SyncedFileInfo> {
     let mut paths = HashMap::new();
     for (hash, rel_path) in &state.path_index {
         if state.synced.files.contains_key(hash) {
@@ -233,12 +206,7 @@ pub(crate) fn build_synced_paths_from_state(
                 .remote_arion_hashes
                 .get(hash)
                 .cloned()
-                .or_else(|| {
-                    state
-                        .remote_chunk_hashes
-                        .get(hash)
-                        .and_then(|c| c.first().cloned())
-                })
+                .or_else(|| state.remote_chunk_hashes.get(hash).and_then(|c| c.first().cloned()))
                 .unwrap_or_default();
             let timestamps = state.remote_timestamps.get(hash);
             paths.insert(
@@ -264,10 +232,7 @@ pub(crate) fn build_synced_paths_from_state(
 /// is also refreshed. When the lock is unavailable (sync in progress),
 /// falls back to the last cached snapshot so the file browser still
 /// shows accurate sync status instead of "unknown".
-async fn synced_paths_for_label(
-    sync: &crate::sync_engine::SyncEngine,
-    label: &str,
-) -> Option<HashMap<String, SyncedFileInfo>> {
+async fn synced_paths_for_label(sync: &crate::sync_engine::SyncEngine, label: &str) -> Option<HashMap<String, SyncedFileInfo>> {
     // Get the per-drive Arc from the map (brief outer lock).
     let drive_arc = {
         match sync.drives.try_lock() {
@@ -313,9 +278,7 @@ pub struct SyncedFileMetadata {
 /// files across all drives. Used by the recent-files view to look up
 /// arion hashes without needing to list every subfolder from disk.
 #[tauri::command]
-pub async fn get_synced_file_metadata(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<Vec<SyncedFileMetadata>, String> {
+pub async fn get_synced_file_metadata(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Vec<SyncedFileMetadata>, String> {
     let sync = &state.sync;
     let mut result = Vec::new();
 
@@ -323,14 +286,18 @@ pub async fn get_synced_file_metadata(
     let label_maps: Vec<(String, HashMap<String, SyncedFileInfo>)> = {
         let drive_arcs: Vec<(String, std::sync::Arc<tokio::sync::Mutex<crate::hcfs_drive::HcfsDriveManager>>)> = {
             match sync.drives.try_lock() {
-                Ok(guard) => guard
-                    .iter()
-                    .map(|(k, slot)| (k.clone(), slot.manager.clone()))
-                    .collect(),
+                Ok(guard) => guard.iter().map(|(k, slot)| (k.clone(), slot.manager.clone())).collect(),
                 Err(_) => Vec::new(),
             }
         };
-        if !drive_arcs.is_empty() {
+        if drive_arcs.is_empty() {
+            // All locks held by sync — use cached data
+            if let Ok(cache) = sync.synced_paths_cache.lock() {
+                cache.iter().map(|(l, m)| (l.clone(), m.clone())).collect()
+            } else {
+                Vec::new()
+            }
+        } else {
             let mut out = Vec::new();
             for (label, arc) in &drive_arcs {
                 if let Ok(manager) = arc.try_lock() {
@@ -346,16 +313,6 @@ pub async fn get_synced_file_metadata(
                 }
             }
             out
-        } else {
-            // All locks held by sync — use cached data
-            if let Ok(cache) = sync.synced_paths_cache.lock() {
-                cache
-                    .iter()
-                    .map(|(l, m)| (l.clone(), m.clone()))
-                    .collect()
-            } else {
-                Vec::new()
-            }
         }
     };
 
@@ -457,9 +414,7 @@ pub async fn list_sync_folder(
     };
 
     let mut entries = Vec::new();
-    let mut dir = tokio::fs::read_dir(&target)
-        .await
-        .map_err(|e| format!("Read dir failed: {e}"))?;
+    let mut dir = tokio::fs::read_dir(&target).await.map_err(|e| format!("Read dir failed: {e}"))?;
 
     while let Some(entry) = dir.next_entry().await.map_err(|e| e.to_string())? {
         let name = entry.file_name().to_string_lossy().to_string();
@@ -494,13 +449,12 @@ pub async fn list_sync_folder(
         // Build relative path matching hcfs-client convention:
         // BLAKE3 is computed over relative_path.to_string_lossy()
         let relative_path = match subfolder {
-            Some(ref sub) => format!("{}/{}", sub, name),
+            Some(ref sub) => format!("{sub}/{name}"),
             None => name.clone(),
         };
 
         // Folders don't have server-side entries — their children do
-        let is_excluded = !excluded_patterns.is_empty()
-            && excluded_patterns.iter().any(|p| p == &relative_path);
+        let is_excluded = !excluded_patterns.is_empty() && excluded_patterns.iter().any(|p| p == &relative_path);
         let (sync_status, info) = if is_excluded {
             ("excluded", None)
         } else if is_folder {
@@ -544,11 +498,7 @@ pub async fn list_sync_folder(
 
 /// Export file or folder from sync folder to arbitrary location
 #[tauri::command]
-pub async fn export_file(
-    sync_path: String,
-    file_name: String,
-    output_path: String,
-) -> Result<(), String> {
+pub async fn export_file(sync_path: String, file_name: String, output_path: String) -> Result<(), String> {
     let parent = Path::new(&sync_path);
     let source = parent.join(&file_name);
     let source = ensure_within(parent, &source)?;
@@ -556,9 +506,7 @@ pub async fn export_file(
     if source.is_dir() {
         copy_dir_recursive(&source, Path::new(&output_path), 0).await?;
     } else {
-        tokio::fs::copy(&source, &output_path)
-            .await
-            .map_err(|e| format!("Export failed: {e}"))?;
+        tokio::fs::copy(&source, &output_path).await.map_err(|e| format!("Export failed: {e}"))?;
     }
     Ok(())
 }
@@ -584,13 +532,12 @@ pub async fn resolve_file_path(
     let db = state.pool()?;
     let owner = account_key(&account_id);
 
-    let result: Option<(String,)> =
-        sqlx::query_as("SELECT path FROM sync_paths WHERE owner = ? AND label = ?")
-            .bind(&owner)
-            .bind(&label)
-            .fetch_optional(db)
-            .await
-            .map_err(|e| format!("Failed to look up sync path: {e}"))?;
+    let result: Option<(String,)> = sqlx::query_as("SELECT path FROM sync_paths WHERE owner = ? AND label = ?")
+        .bind(&owner)
+        .bind(&label)
+        .fetch_optional(db)
+        .await
+        .map_err(|e| format!("Failed to look up sync path: {e}"))?;
 
     let sync_path = result
         .map(|(p,)| p)
@@ -599,12 +546,8 @@ pub async fn resolve_file_path(
     let full_path = Path::new(&sync_path).join(&file_name);
 
     // Validate the resolved path stays within the sync folder
-    let canonical_parent = Path::new(&sync_path)
-        .canonicalize()
-        .map_err(|e| format!("Invalid sync path: {e}"))?;
-    let canonical_file = full_path
-        .canonicalize()
-        .map_err(|_| format!("File not found: {file_name}"))?;
+    let canonical_parent = Path::new(&sync_path).canonicalize().map_err(|e| format!("Invalid sync path: {e}"))?;
+    let canonical_file = full_path.canonicalize().map_err(|_| format!("File not found: {file_name}"))?;
     if !canonical_file.starts_with(&canonical_parent) {
         return Err("Path escapes sync folder".to_string());
     }
@@ -617,23 +560,17 @@ const MAX_COPY_DEPTH: u32 = 64;
 
 async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<(), String> {
     if depth > MAX_COPY_DEPTH {
-        return Err(format!(
-            "Directory nesting exceeds maximum depth ({MAX_COPY_DEPTH})"
-        ));
+        return Err(format!("Directory nesting exceeds maximum depth ({MAX_COPY_DEPTH})"));
     }
 
-    tokio::fs::create_dir_all(dst)
-        .await
-        .map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(dst).await.map_err(|e| e.to_string())?;
     let mut dir = tokio::fs::read_dir(src).await.map_err(|e| e.to_string())?;
     while let Some(entry) = dir.next_entry().await.map_err(|e| e.to_string())? {
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
 
         // Use symlink_metadata to detect symlinks without following them
-        let meta = tokio::fs::symlink_metadata(&src_path)
-            .await
-            .map_err(|e| e.to_string())?;
+        let meta = tokio::fs::symlink_metadata(&src_path).await.map_err(|e| e.to_string())?;
 
         // Skip symlinks to prevent traversal loops and escaping the source tree
         if meta.is_symlink() {
@@ -643,9 +580,7 @@ async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<(), St
         if meta.is_dir() {
             Box::pin(copy_dir_recursive(&src_path, &dst_path, depth + 1)).await?;
         } else {
-            tokio::fs::copy(&src_path, &dst_path)
-                .await
-                .map_err(|e| e.to_string())?;
+            tokio::fs::copy(&src_path, &dst_path).await.map_err(|e| e.to_string())?;
         }
     }
     Ok(())

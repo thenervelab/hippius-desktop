@@ -73,11 +73,8 @@ struct VerifyResponse {
 
 /// Derive both Substrate (sr25519) and Ethereum (secp256k1) keypairs from a
 /// BIP-39 mnemonic. Returns both keypairs and their formatted addresses.
-fn derive_keys(
-    mnemonic: &str,
-) -> Result<(sp_core::sr25519::Pair, String, PrivateKeySigner, String), String> {
-    let (sr25519_pair, _) =
-        sp_core::sr25519::Pair::from_phrase(mnemonic, None).map_err(|e| format!("{e:?}"))?;
+fn derive_keys(mnemonic: &str) -> Result<(sp_core::sr25519::Pair, String, PrivateKeySigner, String), String> {
+    let (sr25519_pair, _) = sp_core::sr25519::Pair::from_phrase(mnemonic, None).map_err(|e| format!("{e:?}"))?;
     let substrate_address = sr25519_pair.public().to_ss58check();
 
     let eth_signer: PrivateKeySigner = MnemonicBuilder::<English>::default()
@@ -122,15 +119,10 @@ async fn challenge_response(
         let status = challenge_res.status();
         let body = challenge_res.text().await.unwrap_or_default();
         warn!(status = %status, "Challenge request failed: {body}");
-        return Err(format!(
-            "Authentication failed (HTTP {status}). Please try again."
-        ));
+        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
     }
 
-    let cr: ChallengeResponse = challenge_res
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse challenge: {e}"))?;
+    let cr: ChallengeResponse = challenge_res.json().await.map_err(|e| format!("Failed to parse challenge: {e}"))?;
 
     let sig = eth_signer
         .sign_message_sync(cr.message.as_bytes())
@@ -161,15 +153,10 @@ async fn challenge_response(
         let status = verify_res.status();
         let body = verify_res.text().await.unwrap_or_default();
         warn!(status = %status, "Verify request failed: {body}");
-        return Err(format!(
-            "Authentication failed (HTTP {status}). Please try again."
-        ));
+        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
     }
 
-    let vr: VerifyResponse = verify_res
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse verify response: {e}"))?;
+    let vr: VerifyResponse = verify_res.json().await.map_err(|e| format!("Failed to parse verify response: {e}"))?;
 
     // Token expires in 30 days (matching frontend authService behavior)
     let token_expiry = chrono::Utc::now().timestamp_millis() + 30 * 24 * 60 * 60 * 1000;
@@ -182,6 +169,7 @@ async fn challenge_response(
 /// Uses `ON CONFLICT` to update existing sessions. The `logout_time_minutes`
 /// field is preserved via `COALESCE` when the new value is NULL, so a
 /// token refresh does not reset the user's timeout preference.
+#[expect(clippy::too_many_arguments)] // bundling into struct deferred to Phase 4
 async fn persist_session(
     pool: &SqlitePool,
     substrate_address: &str,
@@ -197,7 +185,7 @@ async fn persist_session(
     let user_id_i64 = user_id.as_i64();
 
     sqlx::query(
-        r#"
+        r"
         INSERT INTO auth_session (
             owner, auth_token, token_expiry, user_id, username,
             provider, substrate_address, logout_time_minutes,
@@ -214,7 +202,7 @@ async fn persist_session(
             logout_time_minutes = COALESCE(excluded.logout_time_minutes, auth_session.logout_time_minutes),
             last_login_at = excluded.last_login_at,
             updated_at = datetime('now')
-        "#,
+        ",
     )
     .bind(&owner)
     .bind(token)
@@ -247,20 +235,11 @@ pub async fn login_with_mnemonic(
 
     let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
 
-    let (token, user_id, username, is_new, token_expiry) = challenge_response(
-        &state.api_client,
-        &eth_signer,
-        &eth_address,
-        &substrate_address,
-        referral_code.as_deref(),
-    )
-    .await?;
+    let (token, user_id, username, is_new, token_expiry) =
+        challenge_response(&state.api_client, &eth_signer, &eth_address, &substrate_address, referral_code.as_deref()).await?;
 
     {
-        let mut auth = state
-            .auth
-            .lock()
-            .map_err(|e| format!("Auth state lock failed: {e}"))?;
+        let mut auth = state.auth.lock().map_err(|e| format!("Auth state lock failed: {e}"))?;
         auth.sr25519_pair = Some(sr25519_pair);
         auth.substrate_address = Some(substrate_address.clone());
         auth.eth_address = Some(eth_address.clone());
@@ -268,17 +247,7 @@ pub async fn login_with_mnemonic(
 
     let pool = state.pool()?;
     let ltm = logout_time_minutes.unwrap_or(-1);
-    persist_session(
-        pool,
-        &substrate_address,
-        &token,
-        token_expiry,
-        &user_id,
-        &username,
-        "mnemonic",
-        ltm,
-    )
-    .await?;
+    persist_session(pool, &substrate_address, &token, token_expiry, &user_id, &username, "mnemonic", ltm).await?;
 
     save_api_token(pool, &substrate_address, &token)
         .await
@@ -312,8 +281,7 @@ pub fn validate_mnemonic(mnemonic: String) -> bool {
 #[tauri::command]
 pub fn generate_mnemonic() -> Result<String, String> {
     use bip39::{Language, Mnemonic};
-    let mnemonic = Mnemonic::generate_in(Language::English, 12)
-        .map_err(|e| format!("Failed to generate mnemonic: {e}"))?;
+    let mnemonic = Mnemonic::generate_in(Language::English, 12).map_err(|e| format!("Failed to generate mnemonic: {e}"))?;
     Ok(mnemonic.to_string())
 }
 
@@ -369,14 +337,14 @@ pub async fn set_passcode(
     let owner = account_key(&account_id);
 
     sqlx::query(
-        r#"
+        r"
         INSERT INTO wallet_store (owner, encrypted_mnemonic, passcode_hash, updated_at)
         VALUES (?, ?, ?, datetime('now'))
         ON CONFLICT(owner) DO UPDATE SET
             encrypted_mnemonic = excluded.encrypted_mnemonic,
             passcode_hash = excluded.passcode_hash,
             updated_at = datetime('now')
-        "#,
+        ",
     )
     .bind(&owner)
     .bind(&encrypted)
@@ -464,14 +432,12 @@ pub async fn unlock_with_passcode(
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
-    let row = sqlx::query_as::<_, (String, String)>(
-        "SELECT encrypted_mnemonic, passcode_hash FROM wallet_store WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch wallet: {e}"))?
-    .ok_or("No wallet record found")?;
+    let row = sqlx::query_as::<_, (String, String)>("SELECT encrypted_mnemonic, passcode_hash FROM wallet_store WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch wallet: {e}"))?
+        .ok_or("No wallet record found")?;
 
     let (encrypted_mnemonic, stored_hash) = row;
 
@@ -488,37 +454,18 @@ pub async fn unlock_with_passcode(
 
     let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
 
-    let (token, user_id, username, is_new, token_expiry) = challenge_response(
-        &state.api_client,
-        &eth_signer,
-        &eth_address,
-        &substrate_address,
-        None,
-    )
-    .await?;
+    let (token, user_id, username, is_new, token_expiry) =
+        challenge_response(&state.api_client, &eth_signer, &eth_address, &substrate_address, None).await?;
 
     {
-        let mut auth = state
-            .auth
-            .lock()
-            .map_err(|e| format!("Auth state lock failed: {e}"))?;
+        let mut auth = state.auth.lock().map_err(|e| format!("Auth state lock failed: {e}"))?;
         auth.sr25519_pair = Some(sr25519_pair);
         auth.substrate_address = Some(substrate_address.clone());
         auth.eth_address = Some(eth_address.clone());
     }
 
     let ltm = logout_time_minutes.unwrap_or(1440);
-    persist_session(
-        pool,
-        &substrate_address,
-        &token,
-        token_expiry,
-        &user_id,
-        &username,
-        "mnemonic",
-        ltm,
-    )
-    .await?;
+    persist_session(pool, &substrate_address, &token, token_expiry, &user_id, &username, "mnemonic", ltm).await?;
 
     save_api_token(pool, &substrate_address, &token)
         .await
@@ -543,11 +490,7 @@ pub async fn unlock_with_passcode(
 ///
 /// Acquires a [`crate::sync_engine::TokenRefreshGuard`] to pause sync while
 /// the token is being replaced, preventing 401 races.
-pub async fn refresh_auth_token_internal(
-    pool: &SqlitePool,
-    app: &tauri::AppHandle,
-    account_id: &str,
-) -> Result<(), String> {
+pub async fn refresh_auth_token_internal(pool: &SqlitePool, app: &tauri::AppHandle, account_id: &str) -> Result<(), String> {
     info!(account_id = %account_id, "Auth token refresh started");
     use tauri::Manager;
     let sync = app.state::<crate::app_state::AppState>().sync.clone();
@@ -558,35 +501,16 @@ pub async fn refresh_auth_token_internal(
 
     let (_sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
 
-    let (token, user_id, username, _is_new, token_expiry) = challenge_response(
-        &app_state.api_client,
-        &eth_signer,
-        &eth_address,
-        &substrate_address,
-        None,
-    )
-    .await?;
+    let (token, user_id, username, _is_new, token_expiry) =
+        challenge_response(&app_state.api_client, &eth_signer, &eth_address, &substrate_address, None).await?;
 
-    persist_session(
-        pool,
-        &substrate_address,
-        &token,
-        token_expiry,
-        &user_id,
-        &username,
-        "mnemonic",
-        -1,
-    )
-    .await?;
+    persist_session(pool, &substrate_address, &token, token_expiry, &user_id, &username, "mnemonic", -1).await?;
 
     save_api_token(pool, &substrate_address, &token)
         .await
         .map_err(|e| format!("Failed to persist API token: {e}"))?;
 
-    if let Err(e) =
-        crate::commands::syncing::update_sync_bearer_token_internal(&app_state, account_id, &token)
-            .await
-    {
+    if let Err(e) = crate::commands::syncing::update_sync_bearer_token_internal(&app_state, account_id, &token).await {
         warn!("Could not update live drive token: {e}");
     }
 
@@ -621,17 +545,11 @@ pub async fn refresh_auth_token(
 ///
 /// Note: the frontend should call `stop_sync` separately before calling this.
 #[tauri::command]
-pub async fn auth_logout(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<(), String> {
+pub async fn auth_logout(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), String> {
     info!(account_id = %account_id, "Logout initiated");
 
     {
-        let mut auth = state
-            .auth
-            .lock()
-            .map_err(|e| format!("Auth state lock failed: {e}"))?;
+        let mut auth = state.auth.lock().map_err(|e| format!("Auth state lock failed: {e}"))?;
         auth.sr25519_pair = None;
         auth.substrate_address = None;
         auth.eth_address = None;
@@ -641,7 +559,7 @@ pub async fn auth_logout(
     let owner = account_key(&account_id);
 
     sqlx::query(
-        r#"
+        r"
         UPDATE auth_session SET
             auth_token = NULL,
             token_expiry = NULL,
@@ -652,7 +570,7 @@ pub async fn auth_logout(
             last_login_at = NULL,
             updated_at = datetime('now')
         WHERE owner = ?
-        "#,
+        ",
     )
     .bind(&owner)
     .execute(pool)
@@ -665,24 +583,14 @@ pub async fn auth_logout(
 
 /// Return the SS58 address for the currently authenticated session.
 #[tauri::command]
-pub fn get_polkadot_address(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<Option<String>, String> {
-    let auth = state
-        .auth
-        .lock()
-        .map_err(|e| format!("Auth state lock failed: {e}"))?;
+pub fn get_polkadot_address(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Option<String>, String> {
+    let auth = state.auth.lock().map_err(|e| format!("Auth state lock failed: {e}"))?;
     Ok(auth.substrate_address.clone())
 }
 
 /// Return the Ethereum address for the currently authenticated session.
 #[tauri::command]
-pub fn get_eth_address(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<Option<String>, String> {
-    let auth = state
-        .auth
-        .lock()
-        .map_err(|e| format!("Auth state lock failed: {e}"))?;
+pub fn get_eth_address(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Option<String>, String> {
+    let auth = state.auth.lock().map_err(|e| format!("Auth state lock failed: {e}"))?;
     Ok(auth.eth_address.clone())
 }

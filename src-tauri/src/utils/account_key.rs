@@ -6,7 +6,7 @@ pub fn account_key(account_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(account_id.as_bytes());
     let digest = hasher.finalize();
-    hex::encode(&digest)[..16].to_string()
+    hex::encode(digest)[..16].to_string()
 }
 
 /// Legacy 8-char account key format (32 bits). Used only for migration
@@ -15,7 +15,7 @@ pub fn account_key_legacy(account_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(account_id.as_bytes());
     let digest = hasher.finalize();
-    hex::encode(&digest)[..8].to_string()
+    hex::encode(digest)[..8].to_string()
 }
 
 #[cfg(test)]

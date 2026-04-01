@@ -16,6 +16,7 @@ use tracing::info;
 /// the UI while preserving the row for analytics and undo.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[expect(clippy::struct_field_names)] // field names match the DB schema and frontend API
 pub struct Notification {
     pub id: i64,
     pub user_address: String,
@@ -38,6 +39,7 @@ pub struct Notification {
 /// matches "Welcome-*", skip if one already exists (prevents welcome duplicates).
 /// Returns the new row id.
 #[tauri::command]
+#[expect(clippy::too_many_arguments)] // Tauri IPC commands take individual params from frontend
 pub async fn add_notification(
     state: tauri::State<'_, AppState>,
     user_address: String,
@@ -52,33 +54,31 @@ pub async fn add_notification(
 ) -> Result<i64, String> {
     let pool = state.pool()?;
 
-    if notification_type.as_deref() == Some("Hippius") {
-        if let Some(ref subtype) = notification_subtype {
-            if subtype.starts_with("Welcome-") {
-                let existing = sqlx::query_as::<_, (i64,)>(
-                    "SELECT COUNT(*) FROM notifications WHERE notification_type = 'Hippius' AND notification_subtype = ?",
-                )
+    if notification_type.as_deref() == Some("Hippius")
+        && let Some(ref subtype) = notification_subtype
+        && subtype.starts_with("Welcome-")
+    {
+        let existing =
+            sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications WHERE notification_type = 'Hippius' AND notification_subtype = ?")
                 .bind(subtype)
                 .fetch_one(pool)
                 .await
                 .map_err(|e| format!("Failed to check welcome notification: {e}"))?;
 
-                if existing.0 > 0 {
-                    return Ok(0);
-                }
-            }
+        if existing.0 > 0 {
+            return Ok(0);
         }
     }
 
     let result = sqlx::query(
-        r#"
+        r"
         INSERT INTO notifications (
             user_address, notification_type, notification_subtype,
             title_text, description, link_text, link,
             is_unread, creation_time, is_deleted, release_notes
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, 1, COALESCE(?, CAST(strftime('%s','now') * 1000 AS INTEGER)), 0, ?)
-        "#,
+        ",
     )
     .bind(&user_address)
     .bind(&notification_type)
@@ -99,11 +99,7 @@ pub async fn add_notification(
 /// List notifications for a user (includes system notifications).
 /// Soft-deleted notifications are excluded. Default limit is 50.
 #[tauri::command]
-pub async fn list_notifications(
-    state: tauri::State<'_, AppState>,
-    user_address: String,
-    limit: Option<i64>,
-) -> Result<Vec<Notification>, String> {
+pub async fn list_notifications(state: tauri::State<'_, AppState>, user_address: String, limit: Option<i64>) -> Result<Vec<Notification>, String> {
     let pool = state.pool()?;
     let limit = limit.unwrap_or(50);
 
@@ -125,7 +121,7 @@ pub async fn list_notifications(
             Option<String>,
         ),
     >(
-        r#"
+        r"
         SELECT id, user_address, notification_type, notification_subtype,
                title_text, description, link_text, link,
                is_unread, creation_time, is_deleted, deleted_at, release_notes
@@ -133,7 +129,7 @@ pub async fn list_notifications(
         WHERE (user_address = ? OR user_address = 'system') AND is_deleted = 0
         ORDER BY creation_time DESC
         LIMIT ?
-        "#,
+        ",
     )
     .bind(&user_address)
     .bind(limit)
@@ -179,10 +175,7 @@ pub async fn list_notifications(
 
 /// Mark a single notification as read.
 #[tauri::command]
-pub async fn mark_notification_read(
-    state: tauri::State<'_, AppState>,
-    id: i64,
-) -> Result<(), String> {
+pub async fn mark_notification_read(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
     let pool = state.pool()?;
 
     sqlx::query("UPDATE notifications SET is_unread = 0 WHERE id = ?")
@@ -196,10 +189,7 @@ pub async fn mark_notification_read(
 
 /// Mark a single notification as unread.
 #[tauri::command]
-pub async fn mark_notification_unread(
-    state: tauri::State<'_, AppState>,
-    id: i64,
-) -> Result<(), String> {
+pub async fn mark_notification_unread(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
     let pool = state.pool()?;
 
     sqlx::query("UPDATE notifications SET is_unread = 1 WHERE id = ?")
@@ -213,19 +203,14 @@ pub async fn mark_notification_unread(
 
 /// Mark all non-deleted notifications as read for a user (includes system).
 #[tauri::command]
-pub async fn mark_all_notifications_read(
-    state: tauri::State<'_, AppState>,
-    user_address: String,
-) -> Result<(), String> {
+pub async fn mark_all_notifications_read(state: tauri::State<'_, AppState>, user_address: String) -> Result<(), String> {
     let pool = state.pool()?;
 
-    sqlx::query(
-        "UPDATE notifications SET is_unread = 0 WHERE (user_address = ? OR user_address = 'system') AND is_deleted = 0",
-    )
-    .bind(&user_address)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to mark all notifications read: {e}"))?;
+    sqlx::query("UPDATE notifications SET is_unread = 0 WHERE (user_address = ? OR user_address = 'system') AND is_deleted = 0")
+        .bind(&user_address)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to mark all notifications read: {e}"))?;
 
     Ok(())
 }
@@ -235,42 +220,32 @@ pub async fn mark_all_notifications_read(
 pub async fn delete_notification(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
     let pool = state.pool()?;
 
-    sqlx::query(
-        "UPDATE notifications SET is_deleted = 1, deleted_at = CAST(strftime('%s','now') * 1000 AS INTEGER) WHERE id = ?",
-    )
-    .bind(id)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to delete notification: {e}"))?;
+    sqlx::query("UPDATE notifications SET is_deleted = 1, deleted_at = CAST(strftime('%s','now') * 1000 AS INTEGER) WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to delete notification: {e}"))?;
 
     Ok(())
 }
 
 /// Soft-delete all notifications for a user.
 #[tauri::command]
-pub async fn delete_all_notifications(
-    state: tauri::State<'_, AppState>,
-    user_address: String,
-) -> Result<(), String> {
+pub async fn delete_all_notifications(state: tauri::State<'_, AppState>, user_address: String) -> Result<(), String> {
     let pool = state.pool()?;
 
-    sqlx::query(
-        "UPDATE notifications SET is_deleted = 1, deleted_at = CAST(strftime('%s','now') * 1000 AS INTEGER) WHERE user_address = ?",
-    )
-    .bind(&user_address)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to delete all notifications: {e}"))?;
+    sqlx::query("UPDATE notifications SET is_deleted = 1, deleted_at = CAST(strftime('%s','now') * 1000 AS INTEGER) WHERE user_address = ?")
+        .bind(&user_address)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to delete all notifications: {e}"))?;
 
     Ok(())
 }
 
 /// Soft-delete a system notification by its version (notification_subtype).
 #[tauri::command]
-pub async fn delete_system_notification_by_version(
-    state: tauri::State<'_, AppState>,
-    version: String,
-) -> Result<(), String> {
+pub async fn delete_system_notification_by_version(state: tauri::State<'_, AppState>, version: String) -> Result<(), String> {
     let pool = state.pool()?;
 
     sqlx::query(
@@ -290,22 +265,17 @@ pub async fn delete_system_notification_by_version(
 /// preference label, plus any "Hippius" system notifications which are
 /// always shown regardless of preferences.
 #[tauri::command]
-pub async fn get_unread_count(
-    state: tauri::State<'_, AppState>,
-    user_address: String,
-) -> Result<i64, String> {
+pub async fn get_unread_count(state: tauri::State<'_, AppState>, user_address: String) -> Result<i64, String> {
     let pool = state.pool()?;
 
     // Fetch enabled notification type labels (e.g. ["Credits"])
-    let enabled: Vec<String> = sqlx::query_as::<_, (String,)>(
-        "SELECT label FROM notification_preferences WHERE enabled = 1",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to get enabled types: {e}"))?
-    .into_iter()
-    .map(|(l,)| l)
-    .collect();
+    let enabled: Vec<String> = sqlx::query_as::<_, (String,)>("SELECT label FROM notification_preferences WHERE enabled = 1")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to get enabled types: {e}"))?
+        .into_iter()
+        .map(|(l,)| l)
+        .collect();
 
     if enabled.is_empty() {
         // Only count system ("Hippius") notifications when no types enabled
@@ -329,8 +299,7 @@ pub async fn get_unread_count(
         "SELECT COUNT(*) FROM notifications \
          WHERE (user_address = ? OR user_address = 'system') \
          AND is_unread = 1 AND is_deleted = 0 \
-         AND (notification_type IN ({}) OR notification_type = 'Hippius')",
-        in_clause
+         AND (notification_type IN ({in_clause}) OR notification_type = 'Hippius')"
     );
 
     let mut q = sqlx::query_as::<_, (i64,)>(&query).bind(&user_address);
@@ -338,58 +307,43 @@ pub async fn get_unread_count(
         q = q.bind(label);
     }
 
-    let row = q
-        .fetch_one(pool)
-        .await
-        .map_err(|e| format!("Failed to get unread count: {e}"))?;
+    let row = q.fetch_one(pool).await.map_err(|e| format!("Failed to get unread count: {e}"))?;
 
     Ok(row.0)
 }
 
 /// Check if a credit notification with the given timestamp already exists.
 #[tauri::command]
-pub async fn credit_already_notified(
-    state: tauri::State<'_, AppState>,
-    timestamp: String,
-) -> Result<bool, String> {
+pub async fn credit_already_notified(state: tauri::State<'_, AppState>, timestamp: String) -> Result<bool, String> {
     let pool = state.pool()?;
-    let subtype = format!("MintedAccountCredits-{}", timestamp);
+    let subtype = format!("MintedAccountCredits-{timestamp}");
 
-    let row = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM notifications WHERE notification_type = 'Credits' AND notification_subtype = ?",
-    )
-    .bind(&subtype)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to check credit notification: {e}"))?;
+    let row = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications WHERE notification_type = 'Credits' AND notification_subtype = ?")
+        .bind(&subtype)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to check credit notification: {e}"))?;
 
     Ok(row.0 > 0)
 }
 
 /// Check if a low-credit notification with the given subtype exists.
 #[tauri::command]
-pub async fn low_credit_subtype_exists(
-    state: tauri::State<'_, AppState>,
-    subtype: String,
-) -> Result<bool, String> {
+pub async fn low_credit_subtype_exists(state: tauri::State<'_, AppState>, subtype: String) -> Result<bool, String> {
     let pool = state.pool()?;
 
-    let row = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM notifications WHERE notification_type = 'Credits' AND notification_subtype = ?",
-    )
-    .bind(&subtype)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to check low credit subtype: {e}"))?;
+    let row = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications WHERE notification_type = 'Credits' AND notification_subtype = ?")
+        .bind(&subtype)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to check low credit subtype: {e}"))?;
 
     Ok(row.0 > 0)
 }
 
 /// Check if there is any active (non-deleted) low-credit warning notification.
 #[tauri::command]
-pub async fn has_active_low_credit_notification(
-    state: tauri::State<'_, AppState>,
-) -> Result<bool, String> {
+pub async fn has_active_low_credit_notification(state: tauri::State<'_, AppState>) -> Result<bool, String> {
     let pool = state.pool()?;
 
     let row = sqlx::query_as::<_, (i64,)>(
@@ -404,9 +358,7 @@ pub async fn has_active_low_credit_notification(
 
 /// Get the deleted_at timestamp of the most recently deleted low-credit warning.
 #[tauri::command]
-pub async fn get_last_deleted_low_credit_time(
-    state: tauri::State<'_, AppState>,
-) -> Result<Option<i64>, String> {
+pub async fn get_last_deleted_low_credit_time(state: tauri::State<'_, AppState>) -> Result<Option<i64>, String> {
     let pool = state.pool()?;
 
     let row = sqlx::query_as::<_, (Option<i64>,)>(
@@ -421,10 +373,7 @@ pub async fn get_last_deleted_low_credit_time(
 
 /// Check if a Hippius system notification with the given version already exists.
 #[tauri::command]
-pub async fn hippius_version_notification_exists(
-    state: tauri::State<'_, AppState>,
-    version: String,
-) -> Result<bool, String> {
+pub async fn hippius_version_notification_exists(state: tauri::State<'_, AppState>, version: String) -> Result<bool, String> {
     let pool = state.pool()?;
 
     let row = sqlx::query_as::<_, (i64,)>(
@@ -478,17 +427,13 @@ pub struct PreferenceUpdate {
 
 /// Get all notification preference entries.
 #[tauri::command]
-pub async fn get_local_notification_preferences(
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<NotificationPreference>, String> {
+pub async fn get_local_notification_preferences(state: tauri::State<'_, AppState>) -> Result<Vec<NotificationPreference>, String> {
     let pool = state.pool()?;
 
-    let rows = sqlx::query_as::<_, (String, String, String, i32)>(
-        "SELECT id, label, description, enabled FROM notification_preferences",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to get notification preferences: {e}"))?;
+    let rows = sqlx::query_as::<_, (String, String, String, i32)>("SELECT id, label, description, enabled FROM notification_preferences")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to get notification preferences: {e}"))?;
 
     Ok(rows
         .into_iter()
@@ -503,19 +448,13 @@ pub async fn get_local_notification_preferences(
 
 /// Update notification preferences in a transaction.
 #[tauri::command]
-pub async fn update_local_notification_preferences(
-    state: tauri::State<'_, AppState>,
-    preferences: Vec<PreferenceUpdate>,
-) -> Result<(), String> {
+pub async fn update_local_notification_preferences(state: tauri::State<'_, AppState>, preferences: Vec<PreferenceUpdate>) -> Result<(), String> {
     let pool = state.pool()?;
 
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+    let mut tx = pool.begin().await.map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
     for pref in &preferences {
-        let enabled_val: i32 = if pref.enabled { 1 } else { 0 };
+        let enabled_val: i32 = i32::from(pref.enabled);
         sqlx::query("UPDATE notification_preferences SET enabled = ? WHERE id = ?")
             .bind(enabled_val)
             .bind(&pref.id)
@@ -524,26 +463,20 @@ pub async fn update_local_notification_preferences(
             .map_err(|e| format!("Failed to update preference '{}': {e}", pref.id))?;
     }
 
-    tx.commit()
-        .await
-        .map_err(|e| format!("Failed to commit transaction: {e}"))?;
+    tx.commit().await.map_err(|e| format!("Failed to commit transaction: {e}"))?;
 
     Ok(())
 }
 
 /// Get the labels of all enabled notification types.
 #[tauri::command]
-pub async fn get_local_enabled_notification_types(
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<String>, String> {
+pub async fn get_local_enabled_notification_types(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
     let pool = state.pool()?;
 
-    let rows = sqlx::query_as::<_, (String,)>(
-        "SELECT label FROM notification_preferences WHERE enabled = 1",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to get enabled notification types: {e}"))?;
+    let rows = sqlx::query_as::<_, (String,)>("SELECT label FROM notification_preferences WHERE enabled = 1")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to get enabled notification types: {e}"))?;
 
     Ok(rows.into_iter().map(|(label,)| label).collect())
 }
@@ -560,7 +493,7 @@ pub async fn is_first_time(state: tauri::State<'_, AppState>) -> Result<bool, St
         .await
         .map_err(|e| format!("Failed to check first time: {e}"))?;
 
-    Ok(row.map(|(v,)| v != 0).unwrap_or(true))
+    Ok(row.is_none_or(|(v,)| v != 0))
 }
 
 /// Mark the first-time flag as seen (set to 0).
@@ -581,23 +514,19 @@ pub async fn mark_first_time_seen(state: tauri::State<'_, AppState>) -> Result<(
 pub async fn get_is_above_half_credit(state: tauri::State<'_, AppState>) -> Result<bool, String> {
     let pool = state.pool()?;
 
-    let row =
-        sqlx::query_as::<_, (i32,)>("SELECT is_above_half_credit FROM app_state WHERE id = 1")
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to get is_above_half_credit: {e}"))?;
+    let row = sqlx::query_as::<_, (i32,)>("SELECT is_above_half_credit FROM app_state WHERE id = 1")
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to get is_above_half_credit: {e}"))?;
 
-    Ok(row.map(|(v,)| v != 0).unwrap_or(false))
+    Ok(row.is_some_and(|(v,)| v != 0))
 }
 
 /// Update the is_above_half_credit flag.
 #[tauri::command]
-pub async fn update_is_above_half_credit(
-    state: tauri::State<'_, AppState>,
-    value: bool,
-) -> Result<(), String> {
+pub async fn update_is_above_half_credit(state: tauri::State<'_, AppState>, value: bool) -> Result<(), String> {
     let pool = state.pool()?;
-    let val: i32 = if value { 1 } else { 0 };
+    let val: i32 = i32::from(value);
 
     sqlx::query("UPDATE app_state SET is_above_half_credit = ? WHERE id = 1")
         .bind(val)
@@ -622,11 +551,7 @@ pub struct Contact {
 
 /// Add a contact to the address book.
 #[tauri::command]
-pub async fn add_contact(
-    state: tauri::State<'_, AppState>,
-    name: String,
-    wallet_address: String,
-) -> Result<i64, String> {
+pub async fn add_contact(state: tauri::State<'_, AppState>, name: String, wallet_address: String) -> Result<i64, String> {
     let pool = state.pool()?;
 
     info!(name = %name, "Adding contact");
@@ -645,12 +570,10 @@ pub async fn add_contact(
 pub async fn get_contacts(state: tauri::State<'_, AppState>) -> Result<Vec<Contact>, String> {
     let pool = state.pool()?;
 
-    let rows = sqlx::query_as::<_, (i64, String, String, i64)>(
-        "SELECT id, name, wallet_address, date_added FROM address_book ORDER BY name ASC",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to get contacts: {e}"))?;
+    let rows = sqlx::query_as::<_, (i64, String, String, i64)>("SELECT id, name, wallet_address, date_added FROM address_book ORDER BY name ASC")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to get contacts: {e}"))?;
 
     Ok(rows
         .into_iter()
@@ -665,12 +588,7 @@ pub async fn get_contacts(state: tauri::State<'_, AppState>) -> Result<Vec<Conta
 
 /// Update a contact's name and wallet address.
 #[tauri::command]
-pub async fn update_contact(
-    state: tauri::State<'_, AppState>,
-    id: i64,
-    name: String,
-    wallet_address: String,
-) -> Result<(), String> {
+pub async fn update_contact(state: tauri::State<'_, AppState>, id: i64, name: String, wallet_address: String) -> Result<(), String> {
     let pool = state.pool()?;
 
     sqlx::query("UPDATE address_book SET name = ?, wallet_address = ? WHERE id = ?")
@@ -711,26 +629,21 @@ pub async fn is_onboarding_done(state: tauri::State<'_, AppState>) -> Result<boo
         .await
         .map_err(|e| format!("Failed to check onboarding: {e}"))?;
 
-    Ok(row.map(|(v,)| v != 0).unwrap_or(false))
+    Ok(row.is_some_and(|(v,)| v != 0))
 }
 
 /// Set the onboarding done flag. Inserts if no row exists.
 #[tauri::command]
-pub async fn set_onboarding_done(
-    state: tauri::State<'_, AppState>,
-    done: bool,
-) -> Result<(), String> {
+pub async fn set_onboarding_done(state: tauri::State<'_, AppState>, done: bool) -> Result<(), String> {
     info!(done = done, "Onboarding status updated");
     let pool = state.pool()?;
-    let val: i32 = if done { 1 } else { 0 };
+    let val: i32 = i32::from(done);
 
-    sqlx::query(
-        "INSERT INTO onboarding (id, is_done) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET is_done = excluded.is_done",
-    )
-    .bind(val)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to set onboarding done: {e}"))?;
+    sqlx::query("INSERT INTO onboarding (id, is_done) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET is_done = excluded.is_done")
+        .bind(val)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to set onboarding done: {e}"))?;
 
     Ok(())
 }
@@ -739,30 +652,21 @@ pub async fn set_onboarding_done(
 
 /// Get a user preference value by key. Returns None if the key doesn't exist.
 #[tauri::command]
-pub async fn get_user_preference(
-    state: tauri::State<'_, AppState>,
-    key: String,
-) -> Result<Option<String>, String> {
+pub async fn get_user_preference(state: tauri::State<'_, AppState>, key: String) -> Result<Option<String>, String> {
     let pool = state.pool()?;
 
-    let row = sqlx::query_as::<_, (String,)>(
-        "SELECT preference_value FROM user_preferences WHERE preference_key = ?",
-    )
-    .bind(&key)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to get user preference: {e}"))?;
+    let row = sqlx::query_as::<_, (String,)>("SELECT preference_value FROM user_preferences WHERE preference_key = ?")
+        .bind(&key)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to get user preference: {e}"))?;
 
     Ok(row.map(|(v,)| v))
 }
 
 /// Save a user preference (upsert). Timestamps with current epoch millis.
 #[tauri::command]
-pub async fn save_user_preference(
-    state: tauri::State<'_, AppState>,
-    key: String,
-    value: String,
-) -> Result<(), String> {
+pub async fn save_user_preference(state: tauri::State<'_, AppState>, key: String, value: String) -> Result<(), String> {
     let pool = state.pool()?;
 
     sqlx::query(

@@ -14,10 +14,7 @@ use tracing::{debug, error};
 #[cfg(target_os = "macos")]
 pub fn create_security_scoped_bookmark(path: &str) -> Result<Vec<u8>, String> {
     unsafe {
-        debug!(
-            "Attempting to create security-scoped bookmark for: {}",
-            path
-        );
+        debug!("Attempting to create security-scoped bookmark for: {}", path);
 
         let ns_string_class = class!(NSString);
         let ns_url_class = class!(NSURL);
@@ -51,14 +48,9 @@ pub fn create_security_scoped_bookmark(path: &str) -> Result<Vec<u8>, String> {
                 let error_desc: id = msg_send![error, localizedDescription];
                 let error_cstr: *const i8 = msg_send![error_desc, UTF8String];
                 if !error_cstr.is_null() {
-                    let error_str = std::ffi::CStr::from_ptr(error_cstr)
-                        .to_string_lossy()
-                        .into_owned();
+                    let error_str = std::ffi::CStr::from_ptr(error_cstr).to_string_lossy().into_owned();
                     error!("Failed to create bookmark: {}", error_str);
-                    return Err(format!(
-                        "Failed to create security-scoped bookmark: {}",
-                        error_str
-                    ));
+                    return Err(format!("Failed to create security-scoped bookmark: {error_str}"));
                 }
             }
             error!("Failed to create security-scoped bookmark (unknown error)");

@@ -48,10 +48,7 @@ pub struct SubAccountExport {
 /// Duplicates are skipped (not overwritten) and reported in the result
 /// message so the user knows what was already present.
 #[tauri::command]
-pub async fn import_app_data(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    params: ImportDataParams,
-) -> Result<String, String> {
+pub async fn import_app_data(state: tauri::State<'_, crate::app_state::AppState>, params: ImportDataParams) -> Result<String, String> {
     info!("[Import] Starting app data import...");
 
     let pool = state.pool()?;
@@ -60,10 +57,7 @@ pub async fn import_app_data(
     let mut skipped_items = Vec::new();
     let timestamp = Utc::now().timestamp();
 
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|e| format!("Failed to start transaction: {}", e))?;
+    let mut tx = pool.begin().await.map_err(|e| format!("Failed to start transaction: {e}"))?;
 
     // Import sync paths
     if let Some(sync_paths) = params.sync_paths {
@@ -73,12 +67,11 @@ pub async fn import_app_data(
                 continue;
             }
             info!("Importing sync path: {}, label: {}", sp.path, sp.label);
-            let existing: Option<(String,)> =
-                sqlx::query_as("SELECT path FROM sync_paths WHERE owner = '' AND label = ?")
-                    .bind(&sp.label)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(|e| format!("Failed to check existing sync path: {}", e))?;
+            let existing: Option<(String,)> = sqlx::query_as("SELECT path FROM sync_paths WHERE owner = '' AND label = ?")
+                .bind(&sp.label)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| format!("Failed to check existing sync path: {e}"))?;
 
             if existing.as_ref().map(|p| &p.0) == Some(&sp.path) {
                 skipped_items.push(format!("sync path '{}' (duplicate)", sp.label));
@@ -94,12 +87,12 @@ pub async fn import_app_data(
             .bind(timestamp)
             .execute(&mut *tx)
             .await
-            .map_err(|e| format!("Failed to import sync path: {}", e))?;
+            .map_err(|e| format!("Failed to import sync path: {e}"))?;
 
             imported_count += 1;
         }
         if imported_count > 0 {
-            imported_items.push(format!("{} sync path(s)", imported_count));
+            imported_items.push(format!("{imported_count} sync path(s)"));
         }
     }
 
@@ -114,12 +107,11 @@ pub async fn import_app_data(
             }
 
             // Check if sub-account already exists
-            let exists: Option<(i64,)> =
-                sqlx::query_as("SELECT 1 FROM sub_accounts WHERE account_id = ?")
-                    .bind(&account.account_id)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(|e| format!("Failed to check for existing sub-account: {}", e))?;
+            let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM sub_accounts WHERE account_id = ?")
+                .bind(&account.account_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| format!("Failed to check for existing sub-account: {e}"))?;
 
             if exists.is_some() {
                 skipped_items.push(format!("sub-account {} (duplicate)", account.account_id));
@@ -135,31 +127,21 @@ pub async fn import_app_data(
             .bind(account.created_at)
             .execute(&mut *tx)
             .await
-            .map_err(|e| {
-                format!(
-                    "Failed to import sub-account for account ID {}: {}",
-                    account.account_id, e
-                )
-            })?;
+            .map_err(|e| format!("Failed to import sub-account for account ID {}: {}", account.account_id, e))?;
 
             imported_count += 1;
         }
 
         if imported_count > 0 {
-            imported_items.push(format!("{} sub-account(s)", imported_count));
+            imported_items.push(format!("{imported_count} sub-account(s)"));
         }
     }
 
-    tx.commit()
-        .await
-        .map_err(|e| format!("Failed to commit transaction: {}", e))?;
+    tx.commit().await.map_err(|e| format!("Failed to commit transaction: {e}"))?;
 
     let mut message_parts = Vec::new();
     if !imported_items.is_empty() {
-        message_parts.push(format!(
-            "Successfully imported {}",
-            imported_items.join(", ")
-        ));
+        message_parts.push(format!("Successfully imported {}", imported_items.join(", ")));
     }
     if !skipped_items.is_empty() {
         message_parts.push(format!("Skipped {}", skipped_items.join(", ")));
@@ -175,9 +157,7 @@ pub async fn import_app_data(
 
 /// Export all sync paths and sub-accounts as a portable JSON bundle.
 #[tauri::command]
-pub async fn export_app_data(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<ExportDataResult, String> {
+pub async fn export_app_data(state: tauri::State<'_, crate::app_state::AppState>) -> Result<ExportDataResult, String> {
     info!("[Export] Starting app data export...");
 
     let pool = state.pool()?;
@@ -186,23 +166,20 @@ pub async fn export_app_data(
     let sync_rows = sqlx::query("SELECT path, label FROM sync_paths")
         .fetch_all(pool)
         .await
-        .map_err(|e| format!("Failed to fetch sync paths: {}", e))?;
+        .map_err(|e| format!("Failed to fetch sync paths: {e}"))?;
     let sync_paths: Vec<SyncPathExport> = sync_rows
         .iter()
         .map(|row| SyncPathExport {
             path: row.get("path"),
-            label: row
-                .try_get("label")
-                .unwrap_or_else(|_| "default".to_string()),
+            label: row.try_get("label").unwrap_or_else(|_| "default".to_string()),
         })
         .collect();
 
     // Get sub-accounts
-    let sub_accounts_rows =
-        sqlx::query("SELECT account_id, sub_account_seed_phrase, created_at FROM sub_accounts")
-            .fetch_all(pool)
-            .await
-            .map_err(|e| format!("Failed to fetch sub-accounts: {}", e))?;
+    let sub_accounts_rows = sqlx::query("SELECT account_id, sub_account_seed_phrase, created_at FROM sub_accounts")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch sub-accounts: {e}"))?;
 
     let sub_accounts = sub_accounts_rows
         .into_iter()
@@ -219,16 +196,9 @@ pub async fn export_app_data(
         })
         .collect::<Vec<_>>();
 
-    info!(
-        "Exported {} sub-accounts, {} sync paths",
-        sub_accounts.len(),
-        sync_paths.len(),
-    );
+    info!("Exported {} sub-accounts, {} sync paths", sub_accounts.len(), sync_paths.len(),);
 
-    Ok(ExportDataResult {
-        sync_paths,
-        sub_accounts,
-    })
+    Ok(ExportDataResult { sync_paths, sub_accounts })
 }
 
 /// Wipe user data (sync paths, sub-accounts) and restore the default
@@ -268,17 +238,13 @@ pub async fn reset_app(state: tauri::State<'_, crate::app_state::AppState>) -> R
 /// Returns `(account_id, ss58_address)` pairs. Sub-accounts with
 /// invalid mnemonics are logged and silently skipped.
 #[tauri::command]
-pub async fn get_all_subaccount_addresses(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<Vec<(String, String)>, String> {
+pub async fn get_all_subaccount_addresses(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Vec<(String, String)>, String> {
     let pool = state.pool()?;
 
-    let sub_accounts = sqlx::query_as::<_, (String, String)>(
-        "SELECT account_id, sub_account_seed_phrase FROM sub_accounts",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch sub-accounts: {}", e))?;
+    let sub_accounts = sqlx::query_as::<_, (String, String)>("SELECT account_id, sub_account_seed_phrase FROM sub_accounts")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch sub-accounts: {e}"))?;
 
     let mut result = Vec::new();
 
@@ -287,10 +253,7 @@ pub async fn get_all_subaccount_addresses(
             let ss58 = pair.public().to_ss58check();
             result.push((account_id, ss58));
         } else {
-            warn!(
-                "Failed to create keypair from phrase for account_id: {}",
-                account_id
-            );
+            warn!("Failed to create keypair from phrase for account_id: {}", account_id);
         }
     }
 

@@ -140,7 +140,7 @@ struct CertificateResponse {
     ca: String,
     cert: String,
     key: String,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     ip: String,
     config: String,
     is_active: Option<bool>,
@@ -150,10 +150,9 @@ struct CertificateResponse {
 
 /// Get the current account ID from the database
 async fn get_current_account_id(pool: &sqlx::SqlitePool) -> Result<String> {
-    let account_row =
-        sqlx::query("SELECT owner FROM objectstore_auth_scoped ORDER BY updated_at DESC LIMIT 1")
-            .fetch_optional(pool)
-            .await?;
+    let account_row = sqlx::query("SELECT owner FROM objectstore_auth_scoped ORDER BY updated_at DESC LIMIT 1")
+        .fetch_optional(pool)
+        .await?;
 
     if let Some(row) = account_row {
         Ok(row.get::<String, _>("owner"))
@@ -171,11 +170,7 @@ fn get_nebula_dir() -> Result<PathBuf> {
 /// Get the Nebula config directory for a specific account
 fn get_nebula_config_dir(account_id: &str) -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
-    Ok(home
-        .join(".hippius")
-        .join("nebula")
-        .join("config")
-        .join(account_id))
+    Ok(home.join(".hippius").join("nebula").join("config").join(account_id))
 }
 
 /// Get the path to the Nebula binary
@@ -231,7 +226,7 @@ fn get_asset_name() -> Result<String> {
         ("freebsd", "x86_64") => "nebula-freebsd-amd64.tar.gz",
         ("freebsd", "aarch64") => "nebula-freebsd-arm64.tar.gz",
 
-        _ => return Err(anyhow!("Unsupported OS/architecture: {}/{}", os, arch)),
+        _ => return Err(anyhow!("Unsupported OS/architecture: {os}/{arch}")),
     };
 
     Ok(asset_name.to_string())
@@ -268,18 +263,12 @@ pub async fn check_nebula_installation() -> Result<Option<String>> {
 
 /// Fetch the latest Nebula release information from GitHub
 async fn fetch_latest_release() -> Result<GitHubRelease> {
-    let client = Client::builder()
-        .user_agent("hippius-desktop")
-        .timeout(Duration::from_secs(30))
-        .build()?;
+    let client = Client::builder().user_agent("hippius-desktop").timeout(Duration::from_secs(30)).build()?;
 
     let response = client.get(NEBULA_GITHUB_API).send().await?;
 
     if !response.status().is_success() {
-        return Err(anyhow!(
-            "Failed to fetch latest release: HTTP {}",
-            response.status()
-        ));
+        return Err(anyhow!("Failed to fetch latest release: HTTP {}", response.status()));
     }
 
     let release: GitHubRelease = response.json().await?;
@@ -353,9 +342,7 @@ pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
     info!("Checking requirements...");
 
     // Check current installation
-    let installed_version = check_nebula_installation()
-        .await
-        .map_err(|e| e.to_string())?;
+    let installed_version = check_nebula_installation().await.map_err(|e| e.to_string())?;
 
     // Fetch latest release
     let latest_release = fetch_latest_release().await.map_err(|e| e.to_string())?;
@@ -369,9 +356,7 @@ pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
         info!("Not installed, will install");
         needs_install = true;
     } else if let Some(ref installed) = installed_version {
-        let cert_binary_exists = get_nebula_cert_binary_path()
-            .map(|p| p.exists())
-            .unwrap_or(false);
+        let cert_binary_exists = get_nebula_cert_binary_path().map(|p| p.exists()).unwrap_or(false);
 
         if installed != &latest_version {
             info!("Update available: {} -> {}", installed, latest_version);
@@ -392,7 +377,7 @@ pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
             .assets
             .iter()
             .find(|a| a.name == asset_name)
-            .ok_or_else(|| format!("Asset not found: {}", asset_name))?;
+            .ok_or_else(|| format!("Asset not found: {asset_name}"))?;
         download_url = Some(asset.browser_download_url.clone());
     }
 
@@ -419,56 +404,40 @@ pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
             tracing::warn!("Poisoned mutex recovered in nebula setup");
             p.into_inner()
         });
-        (
-            setup.needs_update,
-            setup.download_url.clone(),
-            setup.latest_version.clone(),
-        )
+        (setup.needs_update, setup.download_url.clone(), setup.latest_version.clone())
     };
 
-    if needs_update {
-        if let (Some(url), Some(version)) = (download_url, latest_version) {
-            info!("Downloading Nebula version {}", version);
-            // Check if temp file already exists (maybe from previous run?)
-            // But we should re-download to be safe or check size.
-            // For now, just download.
+    if needs_update && let (Some(url), Some(version)) = (download_url, latest_version) {
+        info!("Downloading Nebula version {}", version);
+        // Check if temp file already exists (maybe from previous run?)
+        // But we should re-download to be safe or check size.
+        // For now, just download.
 
-            let nebula_dir = get_nebula_dir().map_err(|e| e.to_string())?;
-            fs::create_dir_all(&nebula_dir)
-                .await
-                .map_err(|e| e.to_string())?;
-            let temp_path = nebula_dir.join("temp_download.file");
+        let nebula_dir = get_nebula_dir().map_err(|e| e.to_string())?;
+        fs::create_dir_all(&nebula_dir).await.map_err(|e| e.to_string())?;
+        let temp_path = nebula_dir.join("temp_download.file");
 
-            debug!("Downloading to temp file: {}", temp_path.display());
+        debug!("Downloading to temp file: {}", temp_path.display());
 
-            let client = Client::builder()
-                .timeout(Duration::from_secs(300))
-                .build()
-                .map_err(|e| e.to_string())?;
+        let client = Client::builder().timeout(Duration::from_secs(300)).build().map_err(|e| e.to_string())?;
 
-            let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
+        let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
 
-            if !response.status().is_success() {
-                return Err(format!("Download failed: HTTP {}", response.status()));
-            }
-
-            let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-            fs::write(&temp_path, bytes)
-                .await
-                .map_err(|e| e.to_string())?;
-
-            info!("Download complete");
+        if !response.status().is_success() {
+            return Err(format!("Download failed: HTTP {}", response.status()));
         }
+
+        let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+        fs::write(&temp_path, bytes).await.map_err(|e| e.to_string())?;
+
+        info!("Download complete");
     }
 
     Ok(())
 }
 
 #[tauri::command]
-pub async fn install_nebula(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    _app: AppHandle,
-) -> Result<(), String> {
+pub async fn install_nebula(state: tauri::State<'_, crate::app_state::AppState>, _app: AppHandle) -> Result<(), String> {
     let pool = state.pool()?;
     let (needs_update, latest_version) = {
         let setup = state.nebula.setup.lock().unwrap_or_else(|p| {
@@ -495,14 +464,11 @@ pub async fn install_nebula(
             // Determine archive type from asset name
             let asset_name = get_asset_name().map_err(|e| e.to_string())?;
 
-            if asset_name.ends_with(".zip") {
-                extract_zip(&bytes, &nebula_dir)
-                    .await
-                    .map_err(|e| e.to_string())?;
-            } else if asset_name.ends_with(".tar.gz") {
-                extract_tar_gz(&bytes, &nebula_dir)
-                    .await
-                    .map_err(|e| e.to_string())?;
+            let asset_path = std::path::Path::new(&asset_name);
+            if asset_path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("zip")) {
+                extract_zip(&bytes, &nebula_dir).await.map_err(|e| e.to_string())?;
+            } else if asset_name.to_ascii_lowercase().ends_with(".tar.gz") {
+                extract_tar_gz(&bytes, &nebula_dir).await.map_err(|e| e.to_string())?;
             }
 
             // Cleanup
@@ -513,43 +479,31 @@ pub async fn install_nebula(
             {
                 let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
                 if binary_path.exists() {
-                    let mut perms = fs::metadata(&binary_path)
-                        .await
-                        .map_err(|e| e.to_string())?
-                        .permissions();
+                    let mut perms = fs::metadata(&binary_path).await.map_err(|e| e.to_string())?.permissions();
                     perms.set_mode(0o755);
-                    fs::set_permissions(&binary_path, perms)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                    fs::set_permissions(&binary_path, perms).await.map_err(|e| e.to_string())?;
                 }
 
                 let cert_binary_path = get_nebula_cert_binary_path().map_err(|e| e.to_string())?;
                 if cert_binary_path.exists() {
-                    let mut perms = fs::metadata(&cert_binary_path)
-                        .await
-                        .map_err(|e| e.to_string())?
-                        .permissions();
+                    let mut perms = fs::metadata(&cert_binary_path).await.map_err(|e| e.to_string())?.permissions();
                     perms.set_mode(0o755);
-                    fs::set_permissions(&cert_binary_path, perms)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                    fs::set_permissions(&cert_binary_path, perms).await.map_err(|e| e.to_string())?;
                 }
             }
 
             if let Some(v) = latest_version {
-                save_installed_version(&v)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                save_installed_version(&v).await.map_err(|e| e.to_string())?;
             }
 
             debug!("Binary installed with user permissions (0o755). Elevated permissions will be requested when VPN is enabled.");
 
             // Update database to mark binary as installed
-            if let Err(e) = sqlx::query(
-                "UPDATE nebula_binary_status SET is_nebula_binary_installed = TRUE, last_updated = CURRENT_TIMESTAMP WHERE id = 1"
-            )
-            .execute(pool)
-            .await {
+            if let Err(e) =
+                sqlx::query("UPDATE nebula_binary_status SET is_nebula_binary_installed = TRUE, last_updated = CURRENT_TIMESTAMP WHERE id = 1")
+                    .execute(pool)
+                    .await
+            {
                 error!("Failed to update binary installation status: {}", e);
             } else {
                 debug!("Binary installation status updated in database");
@@ -559,11 +513,11 @@ pub async fn install_nebula(
         }
     } else {
         // Binary is already installed, update database status
-        if let Err(e) = sqlx::query(
-            "UPDATE nebula_binary_status SET is_nebula_binary_installed = TRUE, last_updated = CURRENT_TIMESTAMP WHERE id = 1"
-        )
-        .execute(pool)
-        .await {
+        if let Err(e) =
+            sqlx::query("UPDATE nebula_binary_status SET is_nebula_binary_installed = TRUE, last_updated = CURRENT_TIMESTAMP WHERE id = 1")
+                .execute(pool)
+                .await
+        {
             error!("Failed to update binary installation status: {}", e);
         } else {
             debug!("Binary already installed, status updated in database");
@@ -587,13 +541,10 @@ pub async fn verify_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), Strin
         .fetch_optional(pool)
         .await
         .map_err(|e| e.to_string())?
-        .map(|row| row.get("is_enabled"))
-        .unwrap_or(false);
+        .is_some_and(|row| row.get("is_enabled"));
 
     if !is_enabled {
-        debug!(
-            "VPN is disabled in settings. Checking if we need to renew an existing certificate..."
-        );
+        debug!("VPN is disabled in settings. Checking if we need to renew an existing certificate...");
 
         // Only renew if we already have a certificate locally.
         // We don't want to generate a new one if the user hasn't enabled VPN yet.
@@ -605,13 +556,9 @@ pub async fn verify_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), Strin
 
         if cert_exists {
             info!("Found existing certificate, checking validity...");
-            check_and_update_certificate(pool)
-                .await
-                .map_err(|e| e.to_string())?;
+            check_and_update_certificate(pool).await.map_err(|e| e.to_string())?;
         } else {
-            debug!(
-                "No existing certificate found and VPN is disabled. Skipping certificate generation."
-            );
+            debug!("No existing certificate found and VPN is disabled. Skipping certificate generation.");
         }
 
         return Ok(());
@@ -621,10 +568,10 @@ pub async fn verify_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), Strin
     // Elevated permissions are requested when the user enables VPN.
     match check_permissions(&binary_path).await {
         Ok(has_perms) => {
-            if !has_perms {
-                info!("Binary lacks elevated permissions. Will be requested when VPN is enabled.");
-            } else {
+            if has_perms {
                 debug!("Binary has required permissions");
+            } else {
+                info!("Binary lacks elevated permissions. Will be requested when VPN is enabled.");
             }
         }
         Err(e) => {
@@ -634,18 +581,13 @@ pub async fn verify_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), Strin
 
     // Setup certificates from API
     info!("Checking certificate status...");
-    check_and_update_certificate(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    check_and_update_certificate(pool).await.map_err(|e| e.to_string())?;
 
     Ok(())
 }
 
 #[tauri::command]
-pub async fn verify_nebula(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    _app: AppHandle,
-) -> Result<(), String> {
+pub async fn verify_nebula(state: tauri::State<'_, crate::app_state::AppState>, _app: AppHandle) -> Result<(), String> {
     verify_nebula_internal(state.pool()?).await
 }
 
@@ -655,15 +597,12 @@ pub async fn verify_nebula(
 /// Returns Err if the user cancels the authorization dialog.
 #[tauri::command]
 pub async fn ensure_vpn_permissions() -> Result<(), String> {
-    let binary_path =
-        get_nebula_binary_path().map_err(|e| e.to_string())?;
+    let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
 
     if !binary_path.exists() {
-        return Err(
-            "Nebula binary not found. Please restart the app \
+        return Err("Nebula binary not found. Please restart the app \
              to install it."
-                .to_string(),
-        );
+            .to_string());
     }
 
     let has_perms = check_permissions(&binary_path)
@@ -676,9 +615,7 @@ pub async fn ensure_vpn_permissions() -> Result<(), String> {
     }
 
     info!("Requesting elevated permissions for VPN...");
-    grant_permissions(&binary_path)
-        .await
-        .map_err(|e| format!("{e}"))?;
+    grant_permissions(&binary_path).await.map_err(|e| format!("{e}"))?;
 
     info!("VPN permissions granted successfully");
     Ok(())
@@ -702,10 +639,10 @@ async fn get_api_auth_header(pool: &sqlx::SqlitePool) -> Result<(String, String)
         })?
         .ok_or_else(|| {
             error!("No API token found for account {}", account_id);
-            anyhow!("No API token found for account {}", account_id)
+            anyhow!("No API token found for account {account_id}")
         })?;
 
-    let auth_header = format!("Token {}", api_token);
+    let auth_header = format!("Token {api_token}");
     debug!("Got API token (length: {})", api_token.len());
     debug!("Auth header set (length: {})", auth_header.len());
     Ok((auth_header, account_id))
@@ -713,21 +650,14 @@ async fn get_api_auth_header(pool: &sqlx::SqlitePool) -> Result<(String, String)
 
 async fn fetch_certificate_from_api(auth_header: &str) -> Result<Option<CertificateResponse>> {
     let client = Client::new();
-    let url = format!("{}/infrastructure/certificates/", HIPPIUS_API_BASE);
-    let response = client
-        .get(&url)
-        .header(AUTHORIZATION, auth_header)
-        .send()
-        .await?;
+    let url = format!("{HIPPIUS_API_BASE}/infrastructure/certificates/");
+    let response = client.get(&url).header(AUTHORIZATION, auth_header).send().await?;
     if response.status() == 404 {
         return Ok(None);
     }
 
     if !response.status().is_success() {
-        return Err(anyhow!(
-            "Failed to fetch certificate: {}",
-            response.status()
-        ));
+        return Err(anyhow!("Failed to fetch certificate: {}", response.status()));
     }
 
     // The API might return a list or a single object?
@@ -740,11 +670,7 @@ async fn fetch_certificate_from_api(auth_header: &str) -> Result<Option<Certific
 
     let resp_status = response.status();
     let text = response.text().await?;
-    debug!(
-        "Fetch certificate response: status={}, body_len={}",
-        resp_status,
-        text.len()
-    );
+    debug!("Fetch certificate response: status={}, body_len={}", resp_status, text.len());
 
     if let Ok(cert) = serde_json::from_str::<CertificateResponse>(&text) {
         return Ok(Some(cert));
@@ -755,88 +681,58 @@ async fn fetch_certificate_from_api(auth_header: &str) -> Result<Option<Certific
         return Ok(certs.into_iter().next());
     }
 
-    Err(anyhow!("Failed to parse certificate response: {}", text))
+    Err(anyhow!("Failed to parse certificate response: {text}"))
 }
 
 async fn request_certificate_from_api(auth_header: &str) -> Result<CertificateResponse> {
     let client = Client::new();
-    let url = format!("{}/infrastructure/certificates/request/", HIPPIUS_API_BASE);
+    let url = format!("{HIPPIUS_API_BASE}/infrastructure/certificates/request/");
 
-    let response = client
-        .post(&url)
-        .header(AUTHORIZATION, auth_header)
-        .send()
-        .await?;
+    let response = client.post(&url).header(AUTHORIZATION, auth_header).send().await?;
 
     let status = response.status();
     debug!("Request certificate status: {}", status);
 
     if !status.is_success() {
-        let error_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Could not read error body".to_string());
-        let error_msg = format!(
-            "Failed to request certificate (status {}): {}",
-            status, error_body
-        );
+        let error_body = response.text().await.unwrap_or_else(|_| "Could not read error body".to_string());
+        let error_msg = format!("Failed to request certificate (status {status}): {error_body}");
         error!("{}", error_msg);
         return Err(anyhow!(error_msg));
     }
 
     let resp_status = status;
     let text = response.text().await?;
-    debug!(
-        "Request certificate response: status={}, body_len={}",
-        resp_status,
-        text.len()
-    );
+    debug!("Request certificate response: status={}, body_len={}", resp_status, text.len());
 
-    let cert: CertificateResponse =
-        serde_json::from_str(&text).map_err(|e| anyhow!("Failed to parse JSON: {}", e))?;
+    let cert: CertificateResponse = serde_json::from_str(&text).map_err(|e| anyhow!("Failed to parse JSON: {e}"))?;
     info!("Certificate request successful");
     Ok(cert)
 }
 
 async fn renew_certificate_from_api(auth_header: &str) -> Result<CertificateResponse> {
     let client = Client::new();
-    let url = format!("{}/infrastructure/certificates/renew/", HIPPIUS_API_BASE);
+    let url = format!("{HIPPIUS_API_BASE}/infrastructure/certificates/renew/");
 
     debug!("Renewing certificate from: {}", url);
 
     // Make POST request directly with auth header (same pattern as request_certificate_from_api)
-    let response = client
-        .post(&url)
-        .header(AUTHORIZATION, auth_header)
-        .send()
-        .await?;
+    let response = client.post(&url).header(AUTHORIZATION, auth_header).send().await?;
 
     let status = response.status();
     debug!("Renew certificate status: {}", status);
 
     if !status.is_success() {
-        let error_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Could not read error body".to_string());
-        let error_msg = format!(
-            "Failed to renew certificate (status {}): {}",
-            status, error_body
-        );
+        let error_body = response.text().await.unwrap_or_else(|_| "Could not read error body".to_string());
+        let error_msg = format!("Failed to renew certificate (status {status}): {error_body}");
         error!("{}", error_msg);
         return Err(anyhow!(error_msg));
     }
 
     let resp_status = status;
     let text = response.text().await?;
-    debug!(
-        "Renew certificate response: status={}, body_len={}",
-        resp_status,
-        text.len()
-    );
+    debug!("Renew certificate response: status={}, body_len={}", resp_status, text.len());
 
-    let cert: CertificateResponse =
-        serde_json::from_str(&text).map_err(|e| anyhow!("Failed to parse JSON: {}", e))?;
+    let cert: CertificateResponse = serde_json::from_str(&text).map_err(|e| anyhow!("Failed to parse JSON: {e}"))?;
     info!("Certificate renewal successful");
     Ok(cert)
 }
@@ -855,22 +751,17 @@ async fn save_certificate_files(cert: &CertificateResponse, account_id: &str) ->
     fs::write(&key_path, &cert.key).await?;
 
     // Parse the config to update paths
-    let mut config: serde_yaml::Value = serde_yaml::from_str(&cert.config)
-        .map_err(|e| anyhow!("Failed to parse config YAML: {}", e))?;
+    let mut config: serde_yaml::Value = serde_yaml::from_str(&cert.config).map_err(|e| anyhow!("Failed to parse config YAML: {e}"))?;
 
     // Update the pki paths in the config
     if let Some(pki) = config.get_mut("pki").and_then(|p| p.as_mapping_mut()) {
         pki.insert("ca".into(), ca_path.to_string_lossy().into_owned().into());
-        pki.insert(
-            "cert".into(),
-            cert_path.to_string_lossy().into_owned().into(),
-        );
+        pki.insert("cert".into(), cert_path.to_string_lossy().into_owned().into());
         pki.insert("key".into(), key_path.to_string_lossy().into_owned().into());
     }
 
     // Save the updated config
-    let updated_config = serde_yaml::to_string(&config)
-        .map_err(|e| anyhow!("Failed to serialize updated config: {}", e))?;
+    let updated_config = serde_yaml::to_string(&config).map_err(|e| anyhow!("Failed to serialize updated config: {e}"))?;
 
     fs::write(config_dir.join("config.yml"), updated_config).await?;
 
@@ -881,7 +772,7 @@ async fn save_certificate_files(cert: &CertificateResponse, account_id: &str) ->
 async fn update_certificate_db(pool: &sqlx::SqlitePool, cert: &CertificateResponse) -> Result<()> {
     // We assume there's only one active certificate for the VPN
     sqlx::query(
-        r#"
+        r"
         INSERT INTO nebula_certificate (id, certificate_id, expires_at, is_active, created_at, updated_at)
         VALUES (1, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(id) DO UPDATE SET
@@ -890,7 +781,7 @@ async fn update_certificate_db(pool: &sqlx::SqlitePool, cert: &CertificateRespon
             is_active = excluded.is_active,
             created_at = excluded.created_at,
             updated_at = CURRENT_TIMESTAMP
-        "#
+        ",
     )
     .bind(cert.certificate_id)
     .bind(&cert.expires_at)
@@ -947,13 +838,12 @@ pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()>
                 save_certificate_files(&cert, &account_id).await?;
                 update_certificate_db(pool, &cert).await?;
 
-                if let Some(expires_at_str) = &cert.expires_at {
-                    if let Ok(expires_at) = DateTime::parse_from_rfc3339(expires_at_str) {
-                        if Utc::now() > expires_at {
-                            info!("Fetched certificate is expired, renewing...");
-                            should_renew = true;
-                        }
-                    }
+                if let Some(expires_at_str) = &cert.expires_at
+                    && let Ok(expires_at) = DateTime::parse_from_rfc3339(expires_at_str)
+                    && Utc::now() > expires_at
+                {
+                    info!("Fetched certificate is expired, renewing...");
+                    should_renew = true;
                 }
             } else {
                 warn!("Could not fetch certificate details from API. Renewing...");
@@ -971,13 +861,12 @@ pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()>
             // recursive check to ensure it's not expired?
             // The fetch response should have expires_at.
             // If it's expired, we'll catch it on next run or we can check now.
-            if let Some(expires_at_str) = &cert.expires_at {
-                if let Ok(expires_at) = DateTime::parse_from_rfc3339(expires_at_str) {
-                    if Utc::now() > expires_at {
-                        info!("Fetched certificate is expired, renewing...");
-                        should_renew = true;
-                    }
-                }
+            if let Some(expires_at_str) = &cert.expires_at
+                && let Ok(expires_at) = DateTime::parse_from_rfc3339(expires_at_str)
+                && Utc::now() > expires_at
+            {
+                info!("Fetched certificate is expired, renewing...");
+                should_renew = true;
             }
         } else {
             info!("No certificate in API, requesting new one...");
@@ -985,10 +874,7 @@ pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()>
         }
     }
 
-    debug!(
-        "Status check complete. Renew: {}, Request: {}",
-        should_renew, should_request
-    );
+    debug!("Status check complete. Renew: {}, Request: {}", should_renew, should_request);
 
     if should_renew {
         debug!("Calling renew_certificate_from_api...");
@@ -1000,10 +886,7 @@ pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()>
         let cert = match cert_result {
             Ok(c) => c,
             Err(e) => {
-                warn!(
-                    "Renewal failed: {}. Attempting to request a new certificate...",
-                    e
-                );
+                warn!("Renewal failed: {}. Attempting to request a new certificate...", e);
                 request_certificate_from_api(&auth_header).await?
             }
         };
@@ -1041,9 +924,7 @@ pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()>
 }
 
 #[tauri::command]
-pub async fn finish_setup(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<(), String> {
+pub async fn finish_setup(state: tauri::State<'_, crate::app_state::AppState>) -> Result<(), String> {
     // Try to start Nebula if enabled
     if let Err(e) = start_nebula_internal(&state.nebula, state.pool()?).await {
         warn!("Failed to auto-start in finish_setup: {}", e);
@@ -1054,16 +935,11 @@ pub async fn finish_setup(
 }
 
 #[tauri::command]
-pub async fn start_nebula(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<(), String> {
+pub async fn start_nebula(state: tauri::State<'_, crate::app_state::AppState>) -> Result<(), String> {
     start_nebula_internal(&state.nebula, state.pool()?).await
 }
 
-pub async fn start_nebula_internal(
-    nebula_state: &crate::app_state::NebulaState,
-    pool: &sqlx::SqlitePool,
-) -> Result<(), String> {
+pub async fn start_nebula_internal(nebula_state: &crate::app_state::NebulaState, pool: &sqlx::SqlitePool) -> Result<(), String> {
     info!("Attempting to start Nebula...");
 
     // Check DB status
@@ -1071,8 +947,7 @@ pub async fn start_nebula_internal(
         .fetch_optional(pool)
         .await
         .map_err(|e| e.to_string())?
-        .map(|row| row.get("is_enabled"))
-        .unwrap_or(false);
+        .is_some_and(|row| row.get("is_enabled"));
 
     if !is_enabled {
         debug!("VPN is disabled in settings, skipping startup");
@@ -1088,26 +963,17 @@ pub async fn start_nebula_internal(
 
     let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
 
-    let account_id = get_current_account_id(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    let account_id = get_current_account_id(pool).await.map_err(|e| e.to_string())?;
     let config_dir = get_nebula_config_dir(&account_id).map_err(|e| e.to_string())?;
 
     // Use config.yml (from API) instead of hostname-based config
     let config_file = config_dir.join("config.yml");
 
     if !config_file.exists() {
-        return Err(format!(
-            "Config file not found: {}. Run verify_nebula first.",
-            config_file.display()
-        ));
+        return Err(format!("Config file not found: {}. Run verify_nebula first.", config_file.display()));
     }
 
-    debug!(
-        "Starting process: {} -config {}",
-        binary_path.display(),
-        config_file.display()
-    );
+    debug!("Starting process: {} -config {}", binary_path.display(), config_file.display());
 
     // Spawn the process using setsid to detach it from our process tree
     // This prevents zombie processes when we kill it
@@ -1142,7 +1008,7 @@ pub async fn start_nebula_internal(
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("Failed to spawn nebula: {}", e))?;
+            .map_err(|e| format!("Failed to spawn nebula: {e}"))?;
 
         info!("Started with PID: {}", child.id());
     }
@@ -1190,10 +1056,7 @@ async fn remove_existing_binaries(nebula_dir: &Path) {
         }
 
         // Normal removal failed (likely root-owned), try elevated removal
-        debug!(
-            "Binary {} is not user-writable, requesting elevated removal...",
-            name
-        );
+        debug!("Binary {} is not user-writable, requesting elevated removal...", name);
         let path_str = path.to_string_lossy().to_string();
 
         #[cfg(target_os = "macos")]
@@ -1205,10 +1068,7 @@ async fn remove_existing_binaries(nebula_dir: &Path) {
                  installation to complete the update.",
             ) {
                 Ok(()) => {
-                    debug!(
-                        "Removed root-owned binary via elevated privileges: {}",
-                        name
-                    );
+                    debug!("Removed root-owned binary via elevated privileges: {}", name);
                 }
                 Err(e) => {
                     warn!("Could not authorize removal of {}: {}", name, e);
@@ -1218,12 +1078,7 @@ async fn remove_existing_binaries(nebula_dir: &Path) {
 
         #[cfg(target_os = "linux")]
         {
-            match std::process::Command::new("pkexec")
-                .arg("rm")
-                .arg("-f")
-                .arg(&path_str)
-                .status()
-            {
+            match std::process::Command::new("pkexec").arg("rm").arg("-f").arg(&path_str).status() {
                 Ok(status) if status.success() => {
                     debug!("Removed root-owned binary via pkexec: {}", name);
                 }
@@ -1242,10 +1097,7 @@ pub async fn check_permissions(binary_path: &Path) -> Result<bool> {
     #[cfg(target_os = "linux")]
     {
         // Check for cap_net_admin using getcap
-        let output = tokio::process::Command::new("getcap")
-            .arg(binary_path)
-            .output()
-            .await;
+        let output = tokio::process::Command::new("getcap").arg(binary_path).output().await;
 
         match output {
             Ok(out) => {
@@ -1296,9 +1148,7 @@ pub async fn grant_permissions(binary_path: &Path) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         debug!("Requesting setuid via native authorization...");
-        let path_str = binary_path
-            .to_str()
-            .ok_or_else(|| anyhow!("Invalid path"))?;
+        let path_str = binary_path.to_str().ok_or_else(|| anyhow!("Invalid path"))?;
 
         let cmd = format!(
             "/usr/sbin/chown root '{}' && /bin/chmod u+s '{}'",
@@ -1324,10 +1174,7 @@ pub async fn check_nebula_running() -> Result<bool> {
     {
         // Use ps to check if nebula is running and NOT a zombie
         // This is more reliable than pgrep for detecting actual running processes
-        let output = tokio::process::Command::new("ps")
-            .args(&["-C", "nebula", "-o", "stat="])
-            .output()
-            .await?;
+        let output = tokio::process::Command::new("ps").args(["-C", "nebula", "-o", "stat="]).output().await?;
 
         if !output.status.success() {
             // No process found
@@ -1371,7 +1218,7 @@ pub async fn stop_nebula(nebula_state: &crate::app_state::NebulaState) -> Result
             .arg("nebula")
             .output()
             .await
-            .map_err(|e| format!("Failed to execute pkill: {}", e))?;
+            .map_err(|e| format!("Failed to execute pkill: {e}"))?;
 
         if output.status.success() {
             debug!("Termination signal sent, waiting for process to stop...");
@@ -1475,10 +1322,7 @@ fn start_ping_task(nebula_state: &crate::app_state::NebulaState, pool: sqlx::Sql
     stop_ping_task(nebula_state);
 
     let handle = tokio::spawn(async move {
-        debug!(
-            "Starting background ping task (interval: {}s)",
-            PING_INTERVAL_SECS
-        );
+        debug!("Starting background ping task (interval: {}s)", PING_INTERVAL_SECS);
 
         // Wait a bit for Nebula to fully initialize
         tokio::time::sleep(Duration::from_secs(3)).await;
@@ -1491,11 +1335,7 @@ fn start_ping_task(nebula_state: &crate::app_state::NebulaState, pool: sqlx::Sql
             return;
         }
 
-        debug!(
-            "Loaded {} lighthouse IPs from config: {:?}",
-            lighthouse_ips.len(),
-            lighthouse_ips
-        );
+        debug!("Loaded {} lighthouse IPs from config: {:?}", lighthouse_ips.len(), lighthouse_ips);
 
         let mut lighthouse_index = 0;
 
@@ -1508,7 +1348,7 @@ fn start_ping_task(nebula_state: &crate::app_state::NebulaState, pool: sqlx::Sql
             #[cfg(unix)]
             {
                 let _ = tokio::process::Command::new("ping")
-                    .args(&["-c", "1", "-W", "2", target_ip])
+                    .args(["-c", "1", "-W", "2", target_ip])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .status()
@@ -1539,11 +1379,11 @@ fn start_ping_task(nebula_state: &crate::app_state::NebulaState, pool: sqlx::Sql
 
 /// Stop the background ping task
 fn stop_ping_task(nebula_state: &crate::app_state::NebulaState) {
-    if let Ok(mut guard) = nebula_state.ping_handle.lock() {
-        if let Some(handle) = guard.take() {
-            handle.abort();
-            debug!("Background ping task stopped");
-        }
+    if let Ok(mut guard) = nebula_state.ping_handle.lock()
+        && let Some(handle) = guard.take()
+    {
+        handle.abort();
+        debug!("Background ping task stopped");
     }
 }
 
@@ -1568,31 +1408,23 @@ pub async fn get_nebula_ip_internal(pool: &sqlx::SqlitePool) -> Result<String> {
     let nebula_cert_binary = get_nebula_cert_binary_path()?;
 
     let output = tokio::process::Command::new(&nebula_cert_binary)
-        .args(&[
+        .args([
             "print",
             "-json",
             "-path",
-            crt_path
-                .to_str()
-                .ok_or_else(|| anyhow!("Certificate path contains invalid UTF-8"))?,
+            crt_path.to_str().ok_or_else(|| anyhow!("Certificate path contains invalid UTF-8"))?,
         ])
         .output()
         .await?;
 
     if !output.status.success() {
-        return Err(anyhow!(
-            "Failed to read certificate: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        return Err(anyhow!("Failed to read certificate: {}", String::from_utf8_lossy(&output.stderr)));
     }
 
     // The output is an array of certificates
-    let certs: Vec<NebulaCert> = serde_json::from_slice(&output.stdout)
-        .map_err(|e| anyhow!("Failed to parse certificate JSON: {}", e))?;
+    let certs: Vec<NebulaCert> = serde_json::from_slice(&output.stdout).map_err(|e| anyhow!("Failed to parse certificate JSON: {e}"))?;
 
-    let cert = certs
-        .first()
-        .ok_or_else(|| anyhow!("No certificate found in output"))?;
+    let cert = certs.first().ok_or_else(|| anyhow!("No certificate found in output"))?;
 
     // Try networks first (newer format), then fall back to ips (older format)
     let ip_cidr = cert
@@ -1603,21 +1435,14 @@ pub async fn get_nebula_ip_internal(pool: &sqlx::SqlitePool) -> Result<String> {
         .ok_or_else(|| anyhow!("No IP found in certificate"))?;
 
     // Extract IP from CIDR notation (e.g., "100.64.0.31/10" -> "100.64.0.31")
-    let ip = ip_cidr
-        .split('/')
-        .next()
-        .ok_or_else(|| anyhow!("Invalid IP format in certificate"))?;
+    let ip = ip_cidr.split('/').next().ok_or_else(|| anyhow!("Invalid IP format in certificate"))?;
 
     Ok(ip.to_string())
 }
 
 #[tauri::command]
-pub async fn get_nebula_ip(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<String, String> {
-    get_nebula_ip_internal(state.pool()?)
-        .await
-        .map_err(|e| e.to_string())
+pub async fn get_nebula_ip(state: tauri::State<'_, crate::app_state::AppState>) -> Result<String, String> {
+    get_nebula_ip_internal(state.pool()?).await.map_err(|e| e.to_string())
 }
 
 /// Tries to find the Nebula network interface by checking common names and IP ranges
@@ -1645,10 +1470,7 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
         use std::process::Command;
 
         // Run ip -o -4 addr show to find interfaces with Nebula IPs
-        if let Ok(output) = Command::new("ip")
-            .args(["-o", "-4", "addr", "show"])
-            .output()
-        {
+        if let Ok(output) = Command::new("ip").args(["-o", "-4", "addr", "show"]).output() {
             let output_str = String::from_utf8_lossy(&output.stdout);
             for line in output_str.lines() {
                 if line.contains(target_ip) {
@@ -1680,11 +1502,11 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
                     current_iface = Some(line.split(':').next().unwrap_or("").trim());
                 }
                 // Check for Nebula IP in the interface details
-                else if let Some(iface) = current_iface {
-                    if line.contains(target_ip) {
-                        debug!("Found interface by ifconfig: {}", iface);
-                        return Some(iface.to_string());
-                    }
+                else if let Some(iface) = current_iface
+                    && line.contains(target_ip)
+                {
+                    debug!("Found interface by ifconfig: {}", iface);
+                    return Some(iface.to_string());
                 }
             }
         }
@@ -1692,10 +1514,7 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
         // Method 2: netstat -rn (Routing table)
         // This is often more reliable for finding which interface hosts an IP
         debug!("Trying netstat -rn...");
-        if let Ok(output) = Command::new("netstat")
-            .args(&["-rn", "-f", "inet"])
-            .output()
-        {
+        if let Ok(output) = Command::new("netstat").args(["-rn", "-f", "inet"]).output() {
             let output_str = String::from_utf8_lossy(&output.stdout);
             // Look for lines containing the IP
             // Example: 100.64.0.1/32      link#15            UCS             utun4
@@ -1704,11 +1523,11 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
                 if line.contains(target_ip) {
                     // The interface is usually the last column or one of the last
                     let parts: Vec<&str> = line.split_whitespace().collect();
-                    if let Some(last) = parts.last() {
-                        if last.starts_with("utun") || last.starts_with("tun") {
-                            debug!("Found interface by netstat: {}", last);
-                            return Some(last.to_string());
-                        }
+                    if let Some(last) = parts.last()
+                        && (last.starts_with("utun") || last.starts_with("tun"))
+                    {
+                        debug!("Found interface by netstat: {}", last);
+                        return Some(last.to_string());
                     }
                     // Sometimes it's the second to last if there are flags
                     if parts.len() > 1 {
@@ -1727,9 +1546,7 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
 }
 
 #[tauri::command]
-pub async fn get_nebula_stats(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<NebulaStats, String> {
+pub async fn get_nebula_stats(state: tauri::State<'_, crate::app_state::AppState>) -> Result<NebulaStats, String> {
     let pool = state.pool()?;
     // Try to get the Nebula IP from the certificate to help find the interface
     let nebula_ip = get_nebula_ip_internal(pool).await.ok();
@@ -1748,10 +1565,7 @@ pub async fn get_nebula_stats(
         // Try to read stats from the detected interface
         #[cfg(target_os = "linux")]
         {
-            if let (Ok(tx_bytes), Ok(rx_bytes)) = tokio::join!(
-                read_sys_net_stat(&iface, "tx_bytes"),
-                read_sys_net_stat(&iface, "rx_bytes")
-            ) {
+            if let (Ok(tx_bytes), Ok(rx_bytes)) = tokio::join!(read_sys_net_stat(&iface, "tx_bytes"), read_sys_net_stat(&iface, "rx_bytes")) {
                 let mb_tx = tx_bytes as f64 / (1024.0 * 1024.0);
                 let mb_rx = rx_bytes as f64 / (1024.0 * 1024.0);
 
@@ -1760,10 +1574,7 @@ pub async fn get_nebula_stats(
                     udp_rx_bytes: mb_rx,
                 };
 
-                debug!(
-                    "{} - TX: {:.3} MB, RX: {:.3} MB",
-                    iface, stats.udp_tx_bytes, stats.udp_rx_bytes
-                );
+                debug!("{} - TX: {:.3} MB, RX: {:.3} MB", iface, stats.udp_tx_bytes, stats.udp_rx_bytes);
 
                 return Ok(stats);
             }
@@ -1780,10 +1591,7 @@ pub async fn get_nebula_stats(
                     udp_rx_bytes: mb_rx,
                 };
 
-                debug!(
-                    "{} - TX: {:.3} MB, RX: {:.3} MB",
-                    iface, stats.udp_tx_bytes, stats.udp_rx_bytes
-                );
+                debug!("{} - TX: {:.3} MB, RX: {:.3} MB", iface, stats.udp_tx_bytes, stats.udp_rx_bytes);
 
                 return Ok(stats);
             }
@@ -1832,10 +1640,7 @@ async fn read_sys_net_stat(interface: &str, stat: &str) -> Result<u64, String> {
     let path = format!("/sys/class/net/{}/statistics/{}", interface, stat);
 
     match tokio::fs::read_to_string(&path).await {
-        Ok(content) => content
-            .trim()
-            .parse::<u64>()
-            .map_err(|e| format!("Failed to parse {}: {}", stat, e)),
+        Ok(content) => content.trim().parse::<u64>().map_err(|e| format!("Failed to parse {}: {}", stat, e)),
         Err(e) => {
             // Interface might not exist yet
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -1849,16 +1654,13 @@ async fn read_sys_net_stat(interface: &str, stat: &str) -> Result<u64, String> {
 
 /// Get interface stats on macOS using netstat
 #[cfg(target_os = "macos")]
-async fn get_macos_interface_stats(
-    interface_prefix: &str,
-    search_ip: Option<&str>,
-) -> Result<(u64, u64), String> {
+async fn get_macos_interface_stats(interface_prefix: &str, search_ip: Option<&str>) -> Result<(u64, u64), String> {
     // Run netstat -ibn to get interface statistics
     let output = tokio::process::Command::new("netstat")
-        .args(&["-ibn"])
+        .args(["-ibn"])
         .output()
         .await
-        .map_err(|e| format!("Failed to run netstat: {}", e))?;
+        .map_err(|e| format!("Failed to run netstat: {e}"))?;
 
     if !output.status.success() {
         return Err("netstat command failed".to_string());
@@ -1901,10 +1703,7 @@ async fn get_macos_interface_stats(
                     let obytes_res = parts[9].parse::<u64>();
 
                     if let (Ok(ibytes), Ok(obytes)) = (ibytes_res, obytes_res) {
-                        debug!(
-                            "Found interface stats: {}, IP: {}, TX: {}, RX: {}",
-                            parts[0], target_ip, obytes, ibytes
-                        );
+                        debug!("Found interface stats: {}, IP: {}, TX: {}, RX: {}", parts[0], target_ip, obytes, ibytes);
                         return Ok((obytes, ibytes)); // TX, RX
                     }
                 }
@@ -1939,14 +1738,9 @@ pub async fn get_nebula_status() -> Result<NebulaStatus, String> {
 
 #[tauri::command]
 pub async fn check_nebula_update() -> Result<Option<String>, String> {
-    let installed = check_nebula_installation()
-        .await
-        .map_err(|e| e.to_string())?;
+    let installed = check_nebula_installation().await.map_err(|e| e.to_string())?;
 
-    let latest = fetch_latest_release()
-        .await
-        .map_err(|e| e.to_string())?
-        .tag_name;
+    let latest = fetch_latest_release().await.map_err(|e| e.to_string())?.tag_name;
 
     match installed {
         Some(ref v) if v != &latest => Ok(Some(latest)),
@@ -1955,30 +1749,25 @@ pub async fn check_nebula_update() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub async fn get_nebula_binary_installed_status(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<bool, String> {
+pub async fn get_nebula_binary_installed_status(state: tauri::State<'_, crate::app_state::AppState>) -> Result<bool, String> {
     let pool = state.pool()?;
 
     // First check if binary is installed
-    let is_installed: bool =
-        sqlx::query("SELECT is_nebula_binary_installed FROM nebula_binary_status WHERE id = 1")
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| e.to_string())?
-            .map(|row| row.get("is_nebula_binary_installed"))
-            .unwrap_or(false);
+    let is_installed: bool = sqlx::query("SELECT is_nebula_binary_installed FROM nebula_binary_status WHERE id = 1")
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .is_some_and(|row| row.get("is_nebula_binary_installed"));
 
     if !is_installed {
         return Ok(false);
     }
 
     // Check if we have a valid certificate
-    let cert_status =
-        sqlx::query("SELECT expires_at, is_active FROM nebula_certificate WHERE id = 1")
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| e.to_string())?;
+    let cert_status = sqlx::query("SELECT expires_at, is_active FROM nebula_certificate WHERE id = 1")
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
     if let Some(row) = cert_status {
         let expires_at_str: Option<String> = row.get("expires_at");
@@ -2027,11 +1816,7 @@ mod tests {
     #[test]
     fn nebula_binary_path_ends_with_nebula() {
         let path = get_nebula_binary_path().unwrap();
-        let file_name = path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
+        let file_name = path.file_name().unwrap().to_string_lossy().to_string();
         assert!(
             file_name == "nebula" || file_name == "nebula.exe",
             "Expected 'nebula' or 'nebula.exe', got '{file_name}'"
@@ -2042,10 +1827,7 @@ mod tests {
     fn nebula_dir_is_under_hippius() {
         let dir = get_nebula_dir().unwrap();
         let dir_str = dir.to_string_lossy().to_string();
-        assert!(
-            dir_str.contains(".hippius"),
-            "Expected path to contain '.hippius', got '{dir_str}'"
-        );
+        assert!(dir_str.contains(".hippius"), "Expected path to contain '.hippius', got '{dir_str}'");
     }
 
     #[test]
@@ -2061,13 +1843,10 @@ mod tests {
     #[test]
     fn asset_name_is_valid_for_current_platform() {
         let name = get_asset_name().unwrap();
-        assert!(
-            name.starts_with("nebula-"),
-            "Expected asset name to start with 'nebula-', got '{name}'"
-        );
-        assert!(
-            name.ends_with(".zip") || name.ends_with(".tar.gz"),
-            "Expected .zip or .tar.gz, got '{name}'"
-        );
+        assert!(name.starts_with("nebula-"), "Expected asset name to start with 'nebula-', got '{name}'");
+        let p = std::path::Path::new(&name);
+        let is_zip = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("zip"));
+        let is_tar_gz = name.to_ascii_lowercase().ends_with(".tar.gz");
+        assert!(is_zip || is_tar_gz, "Expected .zip or .tar.gz, got '{name}'");
     }
 }

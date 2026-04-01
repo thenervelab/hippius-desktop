@@ -15,10 +15,7 @@ use tracing::info;
 
 /// Fetch the current marketplace credit balance for an account.
 #[tauri::command]
-pub async fn get_user_credits_balance(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<serde_json::Value, String> {
+pub async fn get_user_credits_balance(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<serde_json::Value, String> {
     let client = ApiClient::new(state.pool()?.clone());
     client
         .get::<serde_json::Value>("/api/billing/credits/balance/", &account_id)
@@ -50,10 +47,7 @@ pub async fn get_billing_transactions(
 
 /// Fetch available Stripe subscription plans.
 #[tauri::command]
-pub async fn get_subscription_plans(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<serde_json::Value, String> {
+pub async fn get_subscription_plans(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<serde_json::Value, String> {
     let client = ApiClient::new(state.pool()?.clone());
     client
         .get::<serde_json::Value>("/api/billing/stripe/subscription-plans/", &account_id)
@@ -63,10 +57,7 @@ pub async fn get_subscription_plans(
 
 /// Fetch the user's currently active Stripe subscription, if any.
 #[tauri::command]
-pub async fn get_active_subscription(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<serde_json::Value, String> {
+pub async fn get_active_subscription(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<serde_json::Value, String> {
     let client = ApiClient::new(state.pool()?.clone());
     client
         .get::<serde_json::Value>("/api/billing/stripe/active-subscription/", &account_id)
@@ -93,11 +84,7 @@ pub async fn create_subscription(
         "cancel_url": cancel_url,
     });
     client
-        .post::<serde_json::Value, _>(
-            "/api/billing/stripe/create-subscription/",
-            &body,
-            &account_id,
-        )
+        .post::<serde_json::Value, _>("/api/billing/stripe/create-subscription/", &body, &account_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -119,10 +106,7 @@ pub async fn get_customer_portal_url(
 
 /// Fetch the on-chain deposit address for adding credits via Substrate transfer.
 #[tauri::command]
-pub async fn get_deposit_address(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<serde_json::Value, String> {
+pub async fn get_deposit_address(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<serde_json::Value, String> {
     let client = ApiClient::new(state.pool()?.clone());
     client
         .get::<serde_json::Value>("/api/billing/substrate-address/", &account_id)
@@ -136,11 +120,7 @@ pub async fn get_deposit_address(
 
 /// Fetch free credit allocations from the blockchain indexer.
 #[tauri::command]
-pub async fn get_indexer_credits(
-    account_id: String,
-    page: Option<i64>,
-    limit: Option<i64>,
-) -> Result<serde_json::Value, String> {
+pub async fn get_indexer_credits(account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, String> {
     let indexer = IndexerClient::from_env().map_err(|e| e.to_string())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
@@ -157,11 +137,7 @@ pub async fn get_indexer_credits(
 
 /// Fetch marketplace credit consumption events (`CreditsConsumed`) from the indexer.
 #[tauri::command]
-pub async fn get_marketplace_credits(
-    account_id: String,
-    page: Option<i64>,
-    limit: Option<i64>,
-) -> Result<serde_json::Value, String> {
+pub async fn get_marketplace_credits(account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, String> {
     let indexer = IndexerClient::from_env().map_err(|e| e.to_string())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
@@ -179,11 +155,7 @@ pub async fn get_marketplace_credits(
 
 /// Fetch historical system account balance snapshots for charting.
 #[tauri::command]
-pub async fn get_system_balance_history(
-    account_id: String,
-    page: Option<i64>,
-    limit: Option<i64>,
-) -> Result<serde_json::Value, String> {
+pub async fn get_system_balance_history(account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, String> {
     let indexer = IndexerClient::from_env().map_err(|e| e.to_string())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(30).to_string();
@@ -200,11 +172,7 @@ pub async fn get_system_balance_history(
 
 /// Fetch balance transfer events (both sent and received) from the indexer.
 #[tauri::command]
-pub async fn get_balance_transfers(
-    account_id: String,
-    page: Option<i64>,
-    limit: Option<i64>,
-) -> Result<serde_json::Value, String> {
+pub async fn get_balance_transfers(account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, String> {
     let indexer = IndexerClient::from_env().map_err(|e| e.to_string())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
@@ -221,11 +189,7 @@ pub async fn get_balance_transfers(
 
 /// Fetch `MintedAccountCredits` events (credit top-ups) from the indexer.
 #[tauri::command]
-pub async fn get_add_credit_events(
-    account_id: String,
-    page: Option<i64>,
-    limit: Option<i64>,
-) -> Result<serde_json::Value, String> {
+pub async fn get_add_credit_events(account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, String> {
     let indexer = IndexerClient::from_env().map_err(|e| e.to_string())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
@@ -235,24 +199,15 @@ pub async fn get_add_credit_events(
         ("page", page_str.as_str()),
         ("limit", limit_str.as_str()),
     ];
-    indexer
-        .get::<serde_json::Value>("/events", &params)
-        .await
-        .map_err(|e| e.to_string())
+    indexer.get::<serde_json::Value>("/events", &params).await.map_err(|e| e.to_string())
 }
 
 /// Fetch total file size stored by an account over a time window.
 #[tauri::command]
-pub async fn get_files_size(
-    account_id: String,
-    days_ago: Option<i64>,
-) -> Result<serde_json::Value, String> {
+pub async fn get_files_size(account_id: String, days_ago: Option<i64>) -> Result<serde_json::Value, String> {
     let indexer = IndexerClient::from_env().map_err(|e| e.to_string())?;
     let days_str = days_ago.unwrap_or(30).to_string();
-    let params = vec![
-        ("account_id", account_id.as_str()),
-        ("days_ago", days_str.as_str()),
-    ];
+    let params = vec![("account_id", account_id.as_str()), ("days_ago", days_str.as_str())];
     indexer
         .get::<serde_json::Value>("/user-total-file-size", &params)
         .await
@@ -261,16 +216,10 @@ pub async fn get_files_size(
 
 /// Fetch total file count for an account over a time window.
 #[tauri::command]
-pub async fn get_files_count(
-    account_id: String,
-    days_ago: Option<i64>,
-) -> Result<serde_json::Value, String> {
+pub async fn get_files_count(account_id: String, days_ago: Option<i64>) -> Result<serde_json::Value, String> {
     let indexer = IndexerClient::from_env().map_err(|e| e.to_string())?;
     let days_str = days_ago.unwrap_or(30).to_string();
-    let params = vec![
-        ("account_id", account_id.as_str()),
-        ("days_ago", days_str.as_str()),
-    ];
+    let params = vec![("account_id", account_id.as_str()), ("days_ago", days_str.as_str())];
     indexer
         .get::<serde_json::Value>("/user-total-files-count", &params)
         .await
@@ -282,19 +231,12 @@ pub async fn get_files_count(
 pub async fn get_file_nodes(cid: String) -> Result<serde_json::Value, String> {
     let indexer = IndexerClient::from_env().map_err(|e| e.to_string())?;
     let params = vec![("cid", cid.as_str())];
-    indexer
-        .get::<serde_json::Value>("/files", &params)
-        .await
-        .map_err(|e| e.to_string())
+    indexer.get::<serde_json::Value>("/files", &params).await.map_err(|e| e.to_string())
 }
 
 /// Fetch node metric data (location, uptime) for the network map.
 #[tauri::command]
-pub async fn get_node_locations(
-    page: Option<i64>,
-    limit: Option<i64>,
-    miner_id: Option<String>,
-) -> Result<serde_json::Value, String> {
+pub async fn get_node_locations(page: Option<i64>, limit: Option<i64>, miner_id: Option<String>) -> Result<serde_json::Value, String> {
     let indexer = IndexerClient::from_env().map_err(|e| e.to_string())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(1).to_string();

@@ -15,9 +15,7 @@ use crate::sync_events;
 use crate::sync_shared::{ConnectivityStatus, SyncActivityItem, SyncEngineHealth};
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::drive::{Drive, ExcludeRules};
-use hcfs_client::sync::{
-    SyncConflict, SyncConflictResolution, SyncConflictType, SyncMode, SyncOutcome, SyncProgress,
-};
+use hcfs_client::sync::{SyncConflict, SyncConflictResolution, SyncConflictType, SyncMode, SyncOutcome, SyncProgress};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -77,17 +75,12 @@ impl HcfsDriveManager {
     }
 
     pub fn init(&mut self, password: &str, mnemonic: Option<&str>) -> Result<String, String> {
-        self.drive
-            .init(password, mnemonic)
-            .map_err(|e| e.to_string())
+        self.drive.init(password, mnemonic).map_err(|e| e.to_string())
     }
 
     pub fn unlock(&mut self, password: &str) -> Result<String, String> {
         self.drive.unlock(password).map_err(|e| e.to_string())?;
-        self.drive
-            .user_id()
-            .map(|s| s.to_string())
-            .ok_or_else(|| "Failed to get user_id after unlock".to_string())
+        self.drive.user_id().ok_or_else(|| "Failed to get user_id after unlock".to_string())
     }
 
     pub fn is_unlocked(&self) -> bool {
@@ -96,7 +89,7 @@ impl HcfsDriveManager {
     pub fn is_initialized(&self) -> bool {
         self.drive.is_initialized()
     }
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub fn user_id(&self) -> Option<String> {
         self.drive.user_id()
     }
@@ -117,24 +110,14 @@ impl HcfsDriveManager {
 
     /// Add an exclusion pattern. Returns `true` if added, `false` if
     /// already present.
-    pub fn add_exclude_pattern(
-        &self,
-        pattern: &str,
-    ) -> Result<bool, String> {
-        self.drive
-            .add_exclude_pattern(pattern)
-            .map_err(|e| e.to_string())
+    pub fn add_exclude_pattern(&self, pattern: &str) -> Result<bool, String> {
+        self.drive.add_exclude_pattern(pattern).map_err(|e| e.to_string())
     }
 
     /// Remove an exclusion pattern. Returns `true` if removed, `false` if
     /// not found.
-    pub fn remove_exclude_pattern(
-        &self,
-        pattern: &str,
-    ) -> Result<bool, String> {
-        self.drive
-            .remove_exclude_pattern(pattern)
-            .map_err(|e| e.to_string())
+    pub fn remove_exclude_pattern(&self, pattern: &str) -> Result<bool, String> {
+        self.drive.remove_exclude_pattern(pattern).map_err(|e| e.to_string())
     }
 
     /// Check whether a relative path is excluded by the current rules.
@@ -161,10 +144,7 @@ impl HcfsDriveManager {
 
     /// Update only the bearer token on a live drive, preserving all other config.
     pub fn update_bearer_token(&mut self, token: String) -> Result<(), String> {
-        let mut config = self
-            .client_config
-            .clone()
-            .ok_or("Drive has no config set")?;
+        let mut config = self.client_config.clone().ok_or("Drive has no config set")?;
         config.bearer_token = token;
         self.set_config(config)
     }
@@ -212,8 +192,7 @@ impl HcfsDriveManager {
             let path = state
                 .path_index
                 .get(&c.path_hash)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| hex::encode(c.path_hash));
+                .map_or_else(|| hex::encode(c.path_hash), |p| p.to_string_lossy().to_string());
             debug!(
                 conflict_type = conflict_type,
                 path = %path,
@@ -227,8 +206,7 @@ impl HcfsDriveManager {
             state
                 .path_index
                 .get(file_id)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| hex::encode(file_id))
+                .map_or_else(|| hex::encode(file_id), |p| p.to_string_lossy().to_string())
         };
 
         let resolve_file = |file_id: &[u8; 32]| -> StagedFile {
@@ -276,10 +254,7 @@ impl HcfsDriveManager {
 
     /// Sync with pre-collected conflict resolutions.
     /// The `resolutions` map keys are hex-encoded FileIds, values are resolution strings.
-    pub async fn sync_with_resolutions(
-        &mut self,
-        resolutions: HashMap<String, String>,
-    ) -> Result<SyncOutcome, String> {
+    pub async fn sync_with_resolutions(&mut self, resolutions: HashMap<String, String>) -> Result<SyncOutcome, String> {
         self.drive
             .sync_with_resolver(SyncMode::NonInteractive, Self::build_resolver(&resolutions))
             .await
@@ -294,40 +269,30 @@ impl HcfsDriveManager {
         cancel_token: CancellationToken,
     ) -> Result<SyncOutcome, String> {
         self.drive
-            .sync_with_resolver_cancellable(
-                SyncMode::NonInteractive,
-                Self::build_resolver(&resolutions),
-                cancel_token,
-            )
+            .sync_with_resolver_cancellable(SyncMode::NonInteractive, Self::build_resolver(&resolutions), cancel_token)
             .await
             .map_err(|e| e.to_string())
     }
 
-    fn build_resolver(
-        resolutions: &HashMap<String, String>,
-    ) -> impl Fn(&SyncConflict) -> SyncConflictResolution + '_ {
+    fn build_resolver(resolutions: &HashMap<String, String>) -> impl Fn(&SyncConflict) -> SyncConflictResolution + '_ {
         |conflict| {
             let file_id_hex = match conflict {
                 SyncConflict::Plan(c) => hex::encode(c.file_id),
                 SyncConflict::Upload(c) => hex::encode(c.file_id),
             };
-            resolutions
-                .get(&file_id_hex)
-                .map(|r| match r.as_str() {
-                    "keep_local" => SyncConflictResolution::KeepLocal,
-                    "accept_remote" => SyncConflictResolution::AcceptRemote,
-                    "keep_both" => SyncConflictResolution::KeepBoth,
-                    _ => SyncConflictResolution::Skip,
-                })
-                .unwrap_or(SyncConflictResolution::Skip)
+            resolutions.get(&file_id_hex).map_or(SyncConflictResolution::Skip, |r| match r.as_str() {
+                "keep_local" => SyncConflictResolution::KeepLocal,
+                "accept_remote" => SyncConflictResolution::AcceptRemote,
+                "keep_both" => SyncConflictResolution::KeepBoth,
+                _ => SyncConflictResolution::Skip,
+            })
         }
     }
 
     /// Decrypt and return the Drive's actual BIP-39 mnemonic.
     pub fn export_mnemonic(&self, password: &str) -> Result<String, String> {
         let enc_path = self.config_dir.join("enc_mnemonic.json");
-        let mnemonic =
-            hcfs_client::auth::recover_mnemonic(&enc_path, password).map_err(|e| e.to_string())?;
+        let mnemonic = hcfs_client::auth::recover_mnemonic(&enc_path, password).map_err(|e| e.to_string())?;
         Ok(mnemonic.to_string())
     }
 
@@ -356,10 +321,7 @@ impl HcfsDriveManager {
         );
         // Log each remote file's path_hash prefix for cross-referencing
         for file_id in state.remote.files.keys() {
-            let known_path = state
-                .path_index
-                .get(file_id)
-                .map(|p| p.display().to_string());
+            let known_path = state.path_index.get(file_id).map(|p| p.display().to_string());
             let enc_path = state.remote_encrypted_paths.contains_key(file_id);
             debug!(
                 file_id = %hex::encode(&file_id[..8]),
@@ -383,60 +345,8 @@ impl HcfsDriveManager {
     /// server.
     pub fn cleanup_failed_downloads(&self) -> Vec<String> {
         let mut failed_ids = Vec::new();
-        self.cleanup_failed_downloads_recursive(&self.sync_path, &mut failed_ids);
+        cleanup_failed_downloads_recursive(&self.sync_path, &mut failed_ids);
         failed_ids
-    }
-
-    fn cleanup_failed_downloads_recursive(
-        &self,
-        dir: &std::path::Path,
-        failed_ids: &mut Vec<String>,
-    ) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-
-            // Use file_type() (not is_dir()) to avoid following symlinks,
-            // which could escape the sync folder or cause infinite loops.
-            let Ok(ft) = entry.file_type() else { continue };
-            if ft.is_symlink() {
-                continue;
-            }
-            if ft.is_dir() {
-                self.cleanup_failed_downloads_recursive(&path, failed_ids);
-                continue;
-            }
-
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-
-            // Pattern 1: `downloaded_<hex>` — raw encrypted content artifact
-            if let Some(hex_part) = crate::sync_logic::is_failed_download_artifact(&name_str) {
-                info!(artifact = %name_str, "Removing failed download artifact");
-                if let Err(e) = std::fs::remove_file(&path) {
-                    warn!(artifact = %name_str, error = %e, "Failed to remove download artifact");
-                }
-                failed_ids.push(hex_part.to_string());
-                continue;
-            }
-
-            // Pattern 2: `file_<hex>` with 0 bytes — encrypted-name stub
-            // from a decryption failure. The full name (including `file_`
-            // prefix) is pushed to `failed_ids` to match how pending
-            // activity entries store encrypted filenames.
-            if crate::sync_logic::is_encrypted_name_stub(&name_str).is_some() {
-                let is_empty = entry.metadata().map(|m| m.len() == 0).unwrap_or(false);
-                if is_empty {
-                    info!(stub = %name_str, "Removing 0-byte encrypted-name stub");
-                    if let Err(e) = std::fs::remove_file(&path) {
-                        warn!(stub = %name_str, error = %e, "Failed to remove encrypted-name stub");
-                    }
-                    failed_ids.push(name_str.to_string());
-                }
-            }
-        }
     }
 
     /// Build a path_index from the current sync state + local scan,
@@ -472,6 +382,55 @@ impl HcfsDriveManager {
     }
 }
 
+/// Recursively walk `dir` to find and remove failed download artifacts.
+fn cleanup_failed_downloads_recursive(dir: &std::path::Path, failed_ids: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        // Use file_type() (not is_dir()) to avoid following symlinks,
+        // which could escape the sync folder or cause infinite loops.
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_symlink() {
+            continue;
+        }
+        if ft.is_dir() {
+            cleanup_failed_downloads_recursive(&path, failed_ids);
+            continue;
+        }
+
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+
+        // Pattern 1: `downloaded_<hex>` — raw encrypted content artifact
+        if let Some(hex_part) = crate::sync_logic::is_failed_download_artifact(&name_str) {
+            info!(artifact = %name_str, "Removing failed download artifact");
+            if let Err(e) = std::fs::remove_file(&path) {
+                warn!(artifact = %name_str, error = %e, "Failed to remove download artifact");
+            }
+            failed_ids.push(hex_part.to_string());
+            continue;
+        }
+
+        // Pattern 2: `file_<hex>` with 0 bytes — encrypted-name stub
+        // from a decryption failure. The full name (including `file_`
+        // prefix) is pushed to `failed_ids` to match how pending
+        // activity entries store encrypted filenames.
+        if crate::sync_logic::is_encrypted_name_stub(&name_str).is_some() {
+            let is_empty = entry.metadata().map(|m| m.len() == 0).unwrap_or(false);
+            if is_empty {
+                info!(stub = %name_str, "Removing 0-byte encrypted-name stub");
+                if let Err(e) = std::fs::remove_file(&path) {
+                    warn!(stub = %name_str, error = %e, "Failed to remove encrypted-name stub");
+                }
+                failed_ids.push(name_str.to_string());
+            }
+        }
+    }
+}
+
 /// Number of consecutive health check failures before alerting the user.
 /// Auth expired (401/403) bypasses this and alerts immediately.
 const HEALTH_FAILURE_THRESHOLD: u32 = 2;
@@ -493,11 +452,11 @@ async fn check_server_health(app: &AppHandle) -> ConnectivityStatus {
         // Uses try_lock to avoid blocking if a drive is syncing.
         let mut url = None;
         for slot in guard.values() {
-            if let Ok(m) = slot.manager.try_lock() {
-                if let Some(c) = m.client_config() {
-                    url = Some(c.base_url.clone());
-                    break;
-                }
+            if let Ok(m) = slot.manager.try_lock()
+                && let Some(c) = m.client_config()
+            {
+                url = Some(c.base_url.clone());
+                break;
             }
         }
         url
@@ -507,33 +466,30 @@ async fn check_server_health(app: &AppHandle) -> ConnectivityStatus {
         return ConnectivityStatus::Connected;
     };
 
-    let health_url = format!("{}/health", server_url);
+    let health_url = format!("{server_url}/health");
     let now = chrono::Utc::now().timestamp();
 
-    let result = health_client
-        .get(&health_url)
-        .header("X-API-Key", "Arion")
-        .send()
-        .await;
+    let result = health_client.get(&health_url).header("X-API-Key", "Arion").send().await;
 
     match result {
         Ok(resp) => {
             let status_code = resp.status().as_u16();
             match status_code {
                 200 => {
-                    let version =
-                        resp.json::<serde_json::Value>().await.ok().and_then(|v| {
-                            v.get("version").and_then(|s| s.as_str()).map(String::from)
-                        });
+                    let version = resp
+                        .json::<serde_json::Value>()
+                        .await
+                        .ok()
+                        .and_then(|v| v.get("version").and_then(|s| s.as_str()).map(String::from));
                     record_health_success(sync, app, version, now)
                 }
                 401 | 403 => {
-                    let msg = format!("Auth failed (HTTP {})", status_code);
+                    let msg = format!("Auth failed (HTTP {status_code})");
                     warn!("{}", msg);
                     record_health_failure(sync, app, ConnectivityStatus::AuthExpired, msg, now)
                 }
                 _ => {
-                    let msg = format!("Server returned HTTP {}", status_code);
+                    let msg = format!("Server returned HTTP {status_code}");
                     warn!("{}", msg);
                     record_health_failure(sync, app, ConnectivityStatus::Degraded, msg, now)
                 }
@@ -551,42 +507,22 @@ async fn check_server_health(app: &AppHandle) -> ConnectivityStatus {
 fn classify_request_error(e: &reqwest::Error) -> (ConnectivityStatus, String) {
     let msg = format!("{e}");
     if e.is_timeout() {
-        (
-            ConnectivityStatus::Degraded,
-            format!("Request timed out: {msg}"),
-        )
+        (ConnectivityStatus::Degraded, format!("Request timed out: {msg}"))
     } else if e.is_connect() {
         if msg.contains("dns") || msg.contains("resolve") || msg.contains("lookup") {
-            (
-                ConnectivityStatus::NetworkOffline,
-                format!("DNS resolution failed: {msg}"),
-            )
+            (ConnectivityStatus::NetworkOffline, format!("DNS resolution failed: {msg}"))
         } else {
-            (
-                ConnectivityStatus::ServerUnreachable,
-                format!("Connection failed: {msg}"),
-            )
+            (ConnectivityStatus::ServerUnreachable, format!("Connection failed: {msg}"))
         }
     } else if e.is_request() {
-        (
-            ConnectivityStatus::NetworkOffline,
-            format!("Request failed: {msg}"),
-        )
+        (ConnectivityStatus::NetworkOffline, format!("Request failed: {msg}"))
     } else {
-        (
-            ConnectivityStatus::ServerUnreachable,
-            format!("Unknown error: {msg}"),
-        )
+        (ConnectivityStatus::ServerUnreachable, format!("Unknown error: {msg}"))
     }
 }
 
 /// Record a successful health check. Emits event if status was previously unhealthy.
-fn record_health_success(
-    sync: &crate::sync_engine::SyncEngine,
-    app: &AppHandle,
-    version: Option<String>,
-    now: i64,
-) -> ConnectivityStatus {
+fn record_health_success(sync: &crate::sync_engine::SyncEngine, app: &AppHandle, version: Option<String>, now: i64) -> ConnectivityStatus {
     let should_emit = update_health_atomic(sync, |h| {
         let was_unhealthy = h.status != ConnectivityStatus::Connected;
         if was_unhealthy {
@@ -622,12 +558,7 @@ fn record_health_failure(
         h.consecutive_failures = new_failures;
         h.error_message = Some(error_msg);
 
-        crate::sync_logic::should_emit_health_change(
-            &previous_status,
-            &new_status,
-            new_failures,
-            HEALTH_FAILURE_THRESHOLD,
-        )
+        crate::sync_logic::should_emit_health_change(&previous_status, &new_status, new_failures, HEALTH_FAILURE_THRESHOLD)
     });
 
     if should_emit {
@@ -664,11 +595,7 @@ fn emit_health_event(sync: &crate::sync_engine::SyncEngine, app: &AppHandle) {
 
 /// Check if sync should be skipped based on health status.
 fn should_skip_sync(sync: &crate::sync_engine::SyncEngine, status: &ConnectivityStatus) -> bool {
-    crate::sync_logic::should_skip_sync_check(
-        status,
-        sync.get_health().consecutive_failures,
-        HEALTH_FAILURE_THRESHOLD,
-    )
+    crate::sync_logic::should_skip_sync_check(status, sync.get_health().consecutive_failures, HEALTH_FAILURE_THRESHOLD)
 }
 
 /// Heartbeat interval: sync every 30 seconds regardless of local changes
@@ -757,103 +684,97 @@ pub async fn start_sync_loop(app: AppHandle) {
     let sync_for_watcher = sync.clone();
     let pending_for_watcher: std::sync::Arc<std::sync::Mutex<Option<crate::sync_logic::PendingRenameFrom>>> =
         std::sync::Arc::new(std::sync::Mutex::new(None));
-    let mut watcher: RecommendedWatcher = match notify::recommended_watcher(
-        move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = res {
-                // Filter out internal metadata files that the sync engine writes.
-                // These would otherwise create a feedback loop: sync writes state →
-                // watcher fires → triggers another sync → writes state → ...
-                let dominated_by_internal = event.paths.iter().all(|p| {
-                    let path_str = p.to_string_lossy();
-                    path_str.contains("/.hcfs/")
-                        || path_str.contains("\\.hcfs\\")
-                        || path_str.contains("/sync_progress/")
-                        || path_str.contains("\\sync_progress\\")
-                });
-                if dominated_by_internal {
-                    return;
-                }
-
-                // Capture rename events as hints for efficient rename
-                // detection. Pairs From/To events within a 100ms window.
-                use notify::event::{ModifyKind, RenameMode};
-                if let notify::EventKind::Modify(ModifyKind::Name(mode)) = &event.kind {
-                    let now = std::time::Instant::now();
-                    let mut pending_guard = pending_for_watcher
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner());
-                    let mut local_hints = Vec::new();
-
-                    match mode {
-                        RenameMode::From => {
-                            if let Some(path) = event.paths.first() {
-                                crate::sync_logic::process_rename_event(
-                                    crate::sync_logic::RenameEventKind::From,
-                                    path,
-                                    now,
-                                    &mut pending_guard,
-                                    &mut local_hints,
-                                );
-                            }
-                        }
-                        RenameMode::To => {
-                            if let Some(path) = event.paths.first() {
-                                crate::sync_logic::process_rename_event(
-                                    crate::sync_logic::RenameEventKind::To,
-                                    path,
-                                    now,
-                                    &mut pending_guard,
-                                    &mut local_hints,
-                                );
-                            }
-                        }
-                        RenameMode::Both => {
-                            if event.paths.len() >= 2 {
-                                crate::sync_logic::process_rename_event(
-                                    crate::sync_logic::RenameEventKind::Both {
-                                        from: event.paths[0].clone(),
-                                    },
-                                    &event.paths[1],
-                                    now,
-                                    &mut pending_guard,
-                                    &mut local_hints,
-                                );
-                            }
-                        }
-                        // macOS FSEvents sends RenameMode::Any — two
-                        // events in sequence (old path, then new path).
-                        _ => {
-                            if let Some(path) = event.paths.first() {
-                                crate::sync_logic::process_rename_event(
-                                    crate::sync_logic::RenameEventKind::Any,
-                                    path,
-                                    now,
-                                    &mut pending_guard,
-                                    &mut local_hints,
-                                );
-                            }
-                        }
-                    }
-
-                    for hint in local_hints {
-                        tracing::debug!(
-                            old = %hint.old_path.display(),
-                            new = %hint.new_path.display(),
-                            "Rename hint captured",
-                        );
-                        sync_for_watcher.push_rename_hint(hint);
-                    }
-                }
-
-                if sync_for_watcher.is_any_sync_in_progress() {
-                    sync_for_watcher
-                        .changes_pending
-                        .store(true, Ordering::Release);
-                }
-                let _ = tx_clone.try_send(());
+    let mut watcher: RecommendedWatcher = match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+        if let Ok(event) = res {
+            // Filter out internal metadata files that the sync engine writes.
+            // These would otherwise create a feedback loop: sync writes state →
+            // watcher fires → triggers another sync → writes state → ...
+            let dominated_by_internal = event.paths.iter().all(|p| {
+                let path_str = p.to_string_lossy();
+                path_str.contains("/.hcfs/")
+                    || path_str.contains("\\.hcfs\\")
+                    || path_str.contains("/sync_progress/")
+                    || path_str.contains("\\sync_progress\\")
+            });
+            if dominated_by_internal {
+                return;
             }
-        },
-    ) {
+
+            // Capture rename events as hints for efficient rename
+            // detection. Pairs From/To events within a 100ms window.
+            use notify::event::{ModifyKind, RenameMode};
+            if let notify::EventKind::Modify(ModifyKind::Name(mode)) = &event.kind {
+                let now = std::time::Instant::now();
+                let mut pending_guard = pending_for_watcher.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut local_hints = Vec::new();
+
+                match mode {
+                    RenameMode::From => {
+                        if let Some(path) = event.paths.first() {
+                            crate::sync_logic::process_rename_event(
+                                crate::sync_logic::RenameEventKind::From,
+                                path,
+                                now,
+                                &mut pending_guard,
+                                &mut local_hints,
+                            );
+                        }
+                    }
+                    RenameMode::To => {
+                        if let Some(path) = event.paths.first() {
+                            crate::sync_logic::process_rename_event(
+                                crate::sync_logic::RenameEventKind::To,
+                                path,
+                                now,
+                                &mut pending_guard,
+                                &mut local_hints,
+                            );
+                        }
+                    }
+                    RenameMode::Both => {
+                        if event.paths.len() >= 2 {
+                            crate::sync_logic::process_rename_event(
+                                crate::sync_logic::RenameEventKind::Both {
+                                    from: event.paths[0].clone(),
+                                },
+                                &event.paths[1],
+                                now,
+                                &mut pending_guard,
+                                &mut local_hints,
+                            );
+                        }
+                    }
+                    // macOS FSEvents sends RenameMode::Any — two
+                    // events in sequence (old path, then new path).
+                    _ => {
+                        if let Some(path) = event.paths.first() {
+                            crate::sync_logic::process_rename_event(
+                                crate::sync_logic::RenameEventKind::Any,
+                                path,
+                                now,
+                                &mut pending_guard,
+                                &mut local_hints,
+                            );
+                        }
+                    }
+                }
+
+                for hint in local_hints {
+                    tracing::debug!(
+                        old = %hint.old_path.display(),
+                        new = %hint.new_path.display(),
+                        "Rename hint captured",
+                    );
+                    sync_for_watcher.push_rename_hint(hint);
+                }
+            }
+
+            if sync_for_watcher.is_any_sync_in_progress() {
+                sync_for_watcher.changes_pending.store(true, Ordering::Release);
+            }
+            let _ = tx_clone.try_send(());
+        }
+    }) {
         Ok(w) => w,
         Err(e) => {
             error!(error = %e, "Failed to create file watcher, sync loop will run without file watching");
@@ -881,26 +802,13 @@ pub async fn start_sync_loop(app: AppHandle) {
                     } else {
                         {
                             let app_state = app.state::<crate::app_state::AppState>();
-                            if let (Ok(pool), Ok(acct)) = (
-                                app_state.pool(),
-                                crate::utils::sync::current_account_id(&app_state),
-                            ) {
-                                if crate::utils::auth_tokens::is_token_expiring(
-                                    pool,
-                                    &acct,
-                                    crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS,
-                                )
-                                .await
-                                {
-                                    info!("Token expiring soon, proactively refreshing");
-                                    if let Err(e) =
-                                        crate::commands::auth::refresh_auth_token_internal(
-                                            pool, &app, &acct,
-                                        )
-                                        .await
-                                    {
-                                        warn!(error = %e, "Proactive token refresh failed");
-                                    }
+                            if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state))
+                                && crate::utils::auth_tokens::is_token_expiring(pool, &acct, crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS)
+                                    .await
+                            {
+                                info!("Token expiring soon, proactively refreshing");
+                                if let Err(e) = crate::commands::auth::refresh_auth_token_internal(pool, &app, &acct).await {
+                                    warn!(error = %e, "Proactive token refresh failed");
                                 }
                             }
                         }
@@ -987,8 +895,8 @@ pub async fn start_sync_loop(app: AppHandle) {
                         // within the next hour, so the sync doesn't hit a 401.
                         if heartbeat_due {
                             let app_state = app.state::<crate::app_state::AppState>();
-                            if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state)) {
-                                if crate::utils::auth_tokens::is_token_expiring(
+                            if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state))
+                                && crate::utils::auth_tokens::is_token_expiring(
                                     pool,
                                     &acct,
                                     crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS,
@@ -1000,7 +908,6 @@ pub async fn start_sync_loop(app: AppHandle) {
                                         warn!(error = %e, "Proactive token refresh failed");
                                     }
                                 }
-                            }
                         }
 
                         // Only clear has_changes if sync actually ran (not skipped)
@@ -1052,9 +959,7 @@ pub async fn start_sync_loop(app: AppHandle) {
 /// Uses `try_lock` on each drive manager — drives currently mid-sync will
 /// be skipped. This is fine for watcher registration since those drives
 /// were already watched when first registered.
-async fn collect_drive_paths(
-    sync: &crate::sync_engine::SyncEngine,
-) -> Vec<(String, PathBuf)> {
+async fn collect_drive_paths(sync: &crate::sync_engine::SyncEngine) -> Vec<(String, PathBuf)> {
     let guard = sync.drives.lock().await;
     let mut paths = Vec::new();
     for (label, slot) in guard.iter() {
@@ -1130,8 +1035,7 @@ async fn check_and_recover_remote_folder(
         folder_hash: String::new(),
         ..config.clone()
     };
-    let client = hcfs_client::client::HcfsClient::new(list_config)
-        .map_err(|e| format!("Failed to create HCFS client: {e}"))?;
+    let client = hcfs_client::client::HcfsClient::new(list_config).map_err(|e| format!("Failed to create HCFS client: {e}"))?;
 
     let folders = client
         .list_remote_folders(&ss58)
@@ -1176,25 +1080,19 @@ async fn check_and_recover_remote_folder(
 /// This is critical because the server's upload endpoint does NOT check folder
 /// registration: files can be uploaded to a folder that isn't in the registry,
 /// making the folder invisible to `list_remote_folders` on other devices.
-async fn ensure_folder_registered(
-    config: &HcfsClientConfig,
-    label: &str,
-    pool: &sqlx::SqlitePool,
-) -> Result<(), String> {
+async fn ensure_folder_registered(config: &HcfsClientConfig, label: &str, pool: &sqlx::SqlitePool) -> Result<(), String> {
     let folder_hash = &config.folder_hash;
     let ss58 = &config.ss58_address;
 
-    let register_client = hcfs_client::client::HcfsClient::new(config.clone())
-        .map_err(|e| format!("Failed to create HCFS client for registration: {e}"))?;
+    let register_client =
+        hcfs_client::client::HcfsClient::new(config.clone()).map_err(|e| format!("Failed to create HCFS client for registration: {e}"))?;
 
-    let dev_name: Option<String> = sqlx::query_scalar::<_, String>(
-        "SELECT device_name FROM device_settings WHERE id = 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to read device name: {e}"))
-    .ok()
-    .flatten();
+    let dev_name: Option<String> = sqlx::query_scalar::<_, String>("SELECT device_name FROM device_settings WHERE id = 1")
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to read device name: {e}"))
+        .ok()
+        .flatten();
 
     register_client
         .register_folder(ss58, folder_hash, label, dev_name.as_deref())
@@ -1233,44 +1131,38 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         }
 
         // Check per-drive review mode (only blocks THIS drive, not others)
-        if let Some(s) = states.get(label) {
-            if s.in_review {
-                const REVIEW_TIMEOUT_SECS: i64 = 300;
-                let timed_out = s.review_entered_at > 0 && {
-                    let now = chrono::Utc::now().timestamp_millis();
-                    (now - s.review_entered_at) > REVIEW_TIMEOUT_SECS * 1000
-                };
-                if timed_out {
-                    warn!(
-                        timeout_secs = REVIEW_TIMEOUT_SECS,
-                        label = label,
-                        "Review mode timed out, auto-skipping conflicts and resuming sync"
-                    );
-                    // Clear in-place (we hold the lock)
-                    if let Some(s) = states.get_mut(label) {
-                        s.in_review = false;
-                        s.review_entered_at = 0;
-                    }
-                    if let Err(e) = app.emit(
-                        sync_events::REVIEW_MODE_TIMEOUT,
-                        sync_events::LabelPayload { label: label.to_string() },
-                    ) {
-                        warn!(error = %e, "Failed to emit review_mode_timeout");
-                    }
-                } else {
-                    debug!(label = label, "Review mode active, skipping auto-sync");
-                    return false;
+        if let Some(s) = states.get(label)
+            && s.in_review
+        {
+            const REVIEW_TIMEOUT_SECS: i64 = 300;
+            let timed_out = s.review_entered_at > 0 && {
+                let now = chrono::Utc::now().timestamp_millis();
+                (now - s.review_entered_at) > REVIEW_TIMEOUT_SECS * 1000
+            };
+            if timed_out {
+                warn!(
+                    timeout_secs = REVIEW_TIMEOUT_SECS,
+                    label = label,
+                    "Review mode timed out, auto-skipping conflicts and resuming sync"
+                );
+                // Clear in-place (we hold the lock)
+                if let Some(s) = states.get_mut(label) {
+                    s.in_review = false;
+                    s.review_entered_at = 0;
                 }
+                if let Err(e) = app.emit(sync_events::REVIEW_MODE_TIMEOUT, sync_events::LabelPayload { label: label.to_string() }) {
+                    warn!(error = %e, "Failed to emit review_mode_timeout");
+                }
+            } else {
+                debug!(label = label, "Review mode active, skipping auto-sync");
+                return false;
             }
         }
 
         // Atomic check-and-set: check is_syncing and set it true in a single lock scope
         match states.get_mut(label) {
             Some(s) if s.is_syncing => {
-                debug!(
-                    label = label,
-                    "Sync already in progress, will retry on next cycle"
-                );
+                debug!(label = label, "Sync already in progress, will retry on next cycle");
                 return false;
             }
             Some(s) => {
@@ -1317,41 +1209,30 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         };
 
         if let Some((config, config_dir)) = drive_info
-            && let (Ok(pool), Ok(acct)) = (
-                app_state.pool(),
-                crate::utils::sync::current_account_id(&app_state),
-            )
+            && let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state))
         {
-                match check_and_recover_remote_folder(&config, &config_dir, label, pool, &acct)
-                    .await
-                {
-                    Ok(true) => {
-                        // Sync state has been wiped and the folder re-registered.
-                        // The drive is still unlocked, so sync_with_resolutions
-                        // will see an empty synced tree, fetch fresh remote state,
-                        // and upload all local files as new.
-                        info!(
-                            label = label,
-                            "Remote folder recovered — sync will re-upload local files",
-                        );
-                        if let Err(e) = app.emit(
-                            sync_events::FOLDER_RECOVERED,
-                            sync_events::LabelPayload { label: label.to_string() },
-                        ) {
-                            warn!(error = %e, "Failed to emit folder_recovered");
-                        }
+            match check_and_recover_remote_folder(&config, &config_dir, label, pool, &acct).await {
+                Ok(true) => {
+                    // Sync state has been wiped and the folder re-registered.
+                    // The drive is still unlocked, so sync_with_resolutions
+                    // will see an empty synced tree, fetch fresh remote state,
+                    // and upload all local files as new.
+                    info!(label = label, "Remote folder recovered — sync will re-upload local files",);
+                    if let Err(e) = app.emit(sync_events::FOLDER_RECOVERED, sync_events::LabelPayload { label: label.to_string() }) {
+                        warn!(error = %e, "Failed to emit folder_recovered");
                     }
-                    Ok(false) => {} // folder exists, no recovery needed
-                    Err(e) => {
-                        warn!(
-                            label = label,
-                            error = %e,
-                            "Pre-sync folder check failed, continuing with sync",
-                        );
-                    }
+                }
+                Ok(false) => {} // folder exists, no recovery needed
+                Err(e) => {
+                    warn!(
+                        label = label,
+                        error = %e,
+                        "Pre-sync folder check failed, continuing with sync",
+                    );
                 }
             }
         }
+    }
 
     // Tri-state result: synced, conflicts pending (user must resolve), or not available.
     // Carries staged file lists so we can record activity with real file names
@@ -1363,7 +1244,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             sync_path: PathBuf,
         },
         ConflictsPending,
-        #[allow(dead_code)]
+        #[expect(dead_code)]
         NoChanges,
         NotAvailable,
     }
@@ -1371,29 +1252,23 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
     // Get the per-drive Arc and a fresh cancel token (microsecond outer lock).
     let (drive_arc, cancel_token) = {
         let mut guard = sync.drives.lock().await;
-        match guard.get_mut(label) {
-            Some(slot) => {
-                // Fresh token for this sync cycle (old one may be stale)
-                let new_token = CancellationToken::new();
-                slot.cancel_token = new_token.clone();
-                (slot.manager.clone(), new_token)
-            }
-            None => {
-                warn!(label = label, "Drive not found in registry");
-                sync.end_sync();
-                sync.update_state(label, |s| s.is_syncing = false);
-                return false;
-            }
+        if let Some(slot) = guard.get_mut(label) {
+            // Fresh token for this sync cycle (old one may be stale)
+            let new_token = CancellationToken::new();
+            slot.cancel_token = new_token.clone();
+            (slot.manager.clone(), new_token)
+        } else {
+            warn!(label = label, "Drive not found in registry");
+            sync.end_sync();
+            sync.update_state(label, |s| s.is_syncing = false);
+            return false;
         }
     }; // outer map lock released
 
     // Lock the per-drive mutex.  Only blocks THIS drive, not others.
     let result = {
         let mut m = drive_arc.lock().await;
-        if !m.is_unlocked() {
-            warn!(label = label, "Drive exists but is not unlocked");
-            SyncResult::NotAvailable
-        } else {
+        if m.is_unlocked() {
             let drive_sync_path = m.sync_path().to_path_buf();
             debug!(label = label, "Drive is unlocked, syncing directly");
             m.log_sync_diagnostics(label);
@@ -1405,32 +1280,22 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             if !raw_hints.is_empty() {
                 let known_from_cache: Vec<std::path::PathBuf> = sync
                     .get_cached_synced_paths(label)
-                    .map_or_else(Vec::new, |cache| {
-                        cache.keys().map(std::path::PathBuf::from).collect()
-                    });
+                    .map_or_else(Vec::new, |cache| cache.keys().map(std::path::PathBuf::from).collect());
 
                 let mut file_hints = Vec::new();
                 for hint in &raw_hints {
-                    let Some(rel_hint) = crate::sync_logic::hint_to_relative_pair(
-                        hint,
-                        &drive_sync_path,
-                    ) else {
+                    let Some(rel_hint) = crate::sync_logic::hint_to_relative_pair(hint, &drive_sync_path) else {
                         continue;
                     };
 
                     // Detect directory renames via cache: if any OTHER
                     // cached path starts with the old prefix, expand.
-                    let has_children = known_from_cache.iter().any(|p| {
-                        p.starts_with(&rel_hint.old_relative_path)
-                            && *p != rel_hint.old_relative_path
-                    });
+                    let has_children = known_from_cache
+                        .iter()
+                        .any(|p| p.starts_with(&rel_hint.old_relative_path) && *p != rel_hint.old_relative_path);
 
                     if has_children {
-                        let expanded = crate::sync_logic::expand_directory_hint(
-                            hint,
-                            &drive_sync_path,
-                            &known_from_cache,
-                        );
+                        let expanded = crate::sync_logic::expand_directory_hint(hint, &drive_sync_path, &known_from_cache);
                         info!(
                             label = label,
                             dir_old = %hint.old_path.display(),
@@ -1457,10 +1322,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             // Emit sync_started with zero counts — real counts arrive
             // via the on_sync_plan_ready callback once the live sync
             // fetches fresh remote state.
-            if let Err(e) = app.emit(
-                sync_events::SYNC_STARTED,
-                sync_events::SyncStartedPayload::empty(label),
-            ) {
+            if let Err(e) = app.emit(sync_events::SYNC_STARTED, sync_events::SyncStartedPayload::empty(label)) {
                 warn!(error = %e, "Failed to emit sync_started");
             }
             emitted_sync_started = true;
@@ -1496,16 +1358,10 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 }
             });
 
-            let outcome = m
-                .sync_with_resolutions_cancellable(HashMap::new(), cancel_token)
-                .await;
+            let outcome = m.sync_with_resolutions_cancellable(HashMap::new(), cancel_token).await;
             stall_handle.abort();
 
-            info!(
-                label = label,
-                success = outcome.is_ok(),
-                "sync_with_resolutions returned",
-            );
+            info!(label = label, success = outcome.is_ok(), "sync_with_resolutions returned",);
 
             match &outcome {
                 Ok(o) if o.conflicts_skipped > 0 => {
@@ -1522,17 +1378,16 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         let up = o.files_uploaded as u32;
                         let down = o.files_downloaded as u32;
                         let label_expected = {
-                            let state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
-                            state.current_session.as_ref().map(|s| {
-                                crate::sync_progress::count_expected_for_label(s, label)
-                            })
+                            let state = sync.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                            state
+                                .current_session
+                                .as_ref()
+                                .map(|s| crate::sync_progress::count_expected_for_label(s, label))
                         };
                         if let Some((exp_up, exp_down)) = label_expected {
                             let has_failures = up < exp_up || down < exp_down;
                             if has_failures {
-                                let _ = crate::sync_progress::mark_pending_files_as_failed(
-                                    sync, up, down, label,
-                                );
+                                let _ = crate::sync_progress::mark_pending_files_as_failed(sync, up, down, label);
                             } else {
                                 let _ = crate::sync_progress::complete_pending_files(sync, label);
                             }
@@ -1544,9 +1399,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         // Also defer completion when new files are pending, so the
                         // follow-up cycle can merge into the same session.
                         let has_pending = sync.changes_pending.load(Ordering::Acquire);
-                        if !sync.other_syncs_in_progress()
-                            && !crate::sync_logic::should_defer_completion(has_pending)
-                        {
+                        if !sync.other_syncs_in_progress() && !crate::sync_logic::should_defer_completion(has_pending) {
                             let _ = crate::sync_progress::complete_session(sync, up, down);
                         } else if has_pending {
                             info!(
@@ -1556,10 +1409,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         }
                     }
 
-                    if let Err(e) = app.emit(
-                        sync_events::SYNC_COMPLETED,
-                        sync_events::SyncCompletedPayload::from_outcome(label, o),
-                    ) {
+                    if let Err(e) = app.emit(sync_events::SYNC_COMPLETED, sync_events::SyncCompletedPayload::from_outcome(label, o)) {
                         warn!(error = %e, "Failed to emit sync_completed");
                     }
 
@@ -1580,10 +1430,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                                     warn!(error = %e, "Failed to emit conflicts_pending");
                                 }
                             } else {
-                                info!(
-                                    label = label,
-                                    "Conflicts found but review cooldown active, skipping banner",
-                                );
+                                info!(label = label, "Conflicts found but review cooldown active, skipping banner",);
                             }
                         }
                         _ => {
@@ -1598,6 +1445,9 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     sync_path: drive_sync_path,
                 },
             }
+        } else {
+            warn!(label = label, "Drive exists but is not unlocked");
+            SyncResult::NotAvailable
         }
     }; // per-drive lock released
 
@@ -1640,10 +1490,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             );
             // Remove pending activity entries for cleaned-up files so
             // they don't appear in recent activity.
-            let mut pending = sync
-                .pending_activity
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let mut pending = sync.pending_activity.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let before = pending.len();
             pending.retain(|item| {
                 if item.label != label || item.action != "downloaded" {
@@ -1653,11 +1500,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             });
             let removed = before - pending.len();
             if removed > 0 {
-                info!(
-                    removed,
-                    label = label,
-                    "Removed pending activity for failed downloads",
-                );
+                info!(removed, label = label, "Removed pending activity for failed downloads",);
             }
         }
 
@@ -1688,9 +1531,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 "Sync completed",
             );
 
-            if outcome.files_uploaded > 0 || outcome.files_downloaded > 0
-                || outcome.files_deleted_locally > 0 || outcome.files_deleted_remotely > 0
-            {
+            if outcome.files_uploaded > 0 || outcome.files_downloaded > 0 || outcome.files_deleted_locally > 0 || outcome.files_deleted_remotely > 0 {
                 // Download progress callbacks now record entries with the
                 // full relative path when the path_index resolves the file,
                 // or encrypted names (e.g. "file_a7339456c25845c2") when
@@ -1720,13 +1561,8 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                             })
                             .collect();
                         {
-                            let mut pending = sync
-                                .pending_activity
-                                .lock()
-                                .unwrap_or_else(|p| p.into_inner());
-                            pending.retain(|item| {
-                                !(item.label == label_owned && item.action == "downloaded")
-                            });
+                            let mut pending = sync.pending_activity.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                            pending.retain(|item| !(item.label == label_owned && item.action == "downloaded"));
                             pending.extend(new_items);
                         }
                     } else if outcome.files_downloaded > 0 {
@@ -1737,40 +1573,25 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                             m.build_path_index().ok()
                         };
 
-                        let mut pending = sync
-                            .pending_activity
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner());
+                        let mut pending = sync.pending_activity.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         for item in pending.iter_mut() {
-                            if item.label == label_owned
-                                && item.action == "downloaded"
-                                && item.file_name.starts_with("file_")
-                            {
+                            if item.label == label_owned && item.action == "downloaded" && item.file_name.starts_with("file_") {
                                 let hash_prefix = item.file_name.trim_start_matches("file_");
-                                let resolved = path_index
-                                    .as_ref()
-                                    .and_then(|idx| idx.get(hash_prefix).cloned());
-                                match resolved {
-                                    Some(real_name) => {
-                                        debug!(
-                                            from = %item.file_name,
-                                            to = %real_name,
-                                            "Resolved download name",
-                                        );
-                                        item.file_name = real_name;
-                                    }
-                                    None => {
-                                        debug!(
-                                            encrypted_name = %item.file_name,
-                                            "Could not resolve encrypted name",
-                                        );
-                                        let short_hash = if hash_prefix.len() >= 6 {
-                                            &hash_prefix[..6]
-                                        } else {
-                                            hash_prefix
-                                        };
-                                        item.file_name = format!("file ({})", short_hash);
-                                    }
+                                let resolved = path_index.as_ref().and_then(|idx| idx.get(hash_prefix).cloned());
+                                if let Some(real_name) = resolved {
+                                    debug!(
+                                        from = %item.file_name,
+                                        to = %real_name,
+                                        "Resolved download name",
+                                    );
+                                    item.file_name = real_name;
+                                } else {
+                                    debug!(
+                                        encrypted_name = %item.file_name,
+                                        "Could not resolve encrypted name",
+                                    );
+                                    let short_hash = if hash_prefix.len() >= 6 { &hash_prefix[..6] } else { hash_prefix };
+                                    item.file_name = format!("file ({short_hash})");
                                 }
                             }
                         }
@@ -1783,7 +1604,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 if outcome.files_deleted_locally > 0 || outcome.files_deleted_remotely > 0 {
                     let now = chrono::Utc::now().timestamp();
                     let delete_items: Vec<SyncActivityItem> = {
-                        let state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
+                        let state = sync.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         state
                             .current_session
                             .as_ref()
@@ -1808,10 +1629,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                             .unwrap_or_default()
                     };
                     if !delete_items.is_empty() {
-                        let mut pending = sync
-                            .pending_activity
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner());
+                        let mut pending = sync.pending_activity.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         pending.extend(delete_items);
                     }
                 }
@@ -1836,29 +1654,26 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             // that cause UI flicker (even though nothing actually changes).
             {
                 let session_is_active = {
-                    let state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
-                    state.current_session.as_ref().map_or(false, |s| s.is_active)
+                    let state = sync.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    state.current_session.as_ref().is_some_and(|s| s.is_active)
                 };
 
                 if crate::sync_logic::should_finalize_session(session_is_active) {
                     let label_expected = {
-                        let state = sync.progress.lock().unwrap_or_else(|p| p.into_inner());
-                        state.current_session.as_ref().map(|s| {
-                            crate::sync_progress::count_expected_for_label(s, &label_owned)
-                        })
+                        let state = sync.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        state
+                            .current_session
+                            .as_ref()
+                            .map(|s| crate::sync_progress::count_expected_for_label(s, &label_owned))
                     };
                     let up = outcome.files_uploaded as u32;
                     let down = outcome.files_downloaded as u32;
                     if let Some((exp_up, exp_down)) = label_expected {
                         let has_failures = up < exp_up || down < exp_down;
                         if has_failures {
-                            let _ = crate::sync_progress::mark_pending_files_as_failed(
-                                sync, up, down, &label_owned,
-                            );
+                            let _ = crate::sync_progress::mark_pending_files_as_failed(sync, up, down, &label_owned);
                         } else {
-                            let _ = crate::sync_progress::complete_pending_files(
-                                sync, &label_owned,
-                            );
+                            let _ = crate::sync_progress::complete_pending_files(sync, &label_owned);
                         }
                     }
                     // Only complete the session when no other drives are still
@@ -1871,9 +1686,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     // merge_into_session, giving users continuous progress
                     // ("6/10 synced") instead of a jarring reset ("0/4 syncing").
                     let has_pending_changes = sync.changes_pending.load(Ordering::Acquire);
-                    if !sync.is_any_sync_in_progress()
-                        && !crate::sync_logic::should_defer_completion(has_pending_changes)
-                    {
+                    if !sync.is_any_sync_in_progress() && !crate::sync_logic::should_defer_completion(has_pending_changes) {
                         let _ = crate::sync_progress::complete_session(sync, up, down);
                     } else if has_pending_changes {
                         info!(
@@ -1884,13 +1697,13 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 }
             }
 
-            if emitted_sync_started {
-                if let Err(e) = app.emit(
+            if emitted_sync_started
+                && let Err(e) = app.emit(
                     sync_events::SYNC_COMPLETED,
                     sync_events::SyncCompletedPayload::from_outcome(&label_owned, &outcome),
-                ) {
-                    warn!(error = %e, "Failed to emit sync_completed");
-                }
+                )
+            {
+                warn!(error = %e, "Failed to emit sync_completed");
             }
 
             // After uploading files, ensure the folder is registered in the
@@ -1903,16 +1716,14 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     let m = drive_arc.lock().await;
                     m.client_config().cloned().zip(app_state.pool().ok())
                 };
-                if let Some((config, pool)) = maybe_config_and_pool {
-                    if let Err(e) =
-                        ensure_folder_registered(&config, &label_owned, pool).await
-                    {
-                        warn!(
-                            label = %label_owned,
-                            error = %e,
-                            "Post-upload folder registration failed",
-                        );
-                    }
+                if let Some((config, pool)) = maybe_config_and_pool
+                    && let Err(e) = ensure_folder_registered(&config, &label_owned, pool).await
+                {
+                    warn!(
+                        label = %label_owned,
+                        error = %e,
+                        "Post-upload folder registration failed",
+                    );
                 }
             }
 
@@ -1927,12 +1738,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     Ok(active_account) => {
                         let app_clone = app.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = crate::commands::migration::report_migrated_files(
-                                &app_clone,
-                                &active_account,
-                            )
-                            .await
-                            {
+                            if let Err(e) = crate::commands::migration::report_migrated_files(&app_clone, &active_account).await {
                                 error!(error = %e, "Migration report error");
                             }
                         });
@@ -1950,7 +1756,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         } => {
             let failures = sync.record_sync_failure();
             sync.discard_pending_activity_for_label(&label_owned);
-            let err_str = e.to_string();
+            let err_str = e.clone();
             error!(
                 label = %label_owned,
                 consecutive_failure = failures,
@@ -1972,24 +1778,14 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 // Extract data from the drive without holding the lock during network I/O
                 let drive_info = {
                     let m = drive_arc.lock().await;
-                    m.client_config()
-                        .map(|c| (c.clone(), m.config_dir().to_path_buf()))
+                    m.client_config().map(|c| (c.clone(), m.config_dir().to_path_buf()))
                 };
 
                 let recovered = if let Some((config, config_dir)) = drive_info {
-                    if let (Ok(pool), Ok(acct)) = (
-                        app_state.pool(),
-                        crate::utils::sync::current_account_id(&app_state),
-                    ) {
-                        check_and_recover_remote_folder(
-                            &config,
-                            &config_dir,
-                            &label_owned,
-                            pool,
-                            &acct,
-                        )
-                        .await
-                        .unwrap_or(false)
+                    if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state)) {
+                        check_and_recover_remote_folder(&config, &config_dir, &label_owned, pool, &acct)
+                            .await
+                            .unwrap_or(false)
                     } else {
                         false
                     }
@@ -2003,10 +1799,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     // an empty synced tree, fetch fresh remote state, and upload
                     // all local files as new.
                     info!(label = %label_owned, "Remote folder recovered via error handler — next sync will re-upload");
-                    if let Err(e) = app.emit(
-                        sync_events::FOLDER_RECOVERED,
-                        sync_events::LabelPayload { label: label_owned.clone() },
-                    ) {
+                    if let Err(e) = app.emit(sync_events::FOLDER_RECOVERED, sync_events::LabelPayload { label: label_owned.clone() }) {
                         warn!(error = %e, "Failed to emit folder_recovered");
                     }
                 }
@@ -2027,10 +1820,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            sync.retry_at.store(
-                now_epoch + backoff_secs as i64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
+            sync.retry_at.store(now_epoch + backoff_secs as i64, std::sync::atomic::Ordering::Relaxed);
             if let Ok(mut guard) = sync.last_error.lock() {
                 *guard = Some(err_str.clone());
             }
@@ -2039,31 +1829,19 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             // the next sync cycle uses a valid token without frontend round-trip.
             if err_str.contains("401") || err_str.contains("Unauthorized") {
                 warn!(label = %label_owned, "Auth token expired, attempting automatic refresh");
-                if let Err(e) = app.emit(
-                    sync_events::AUTH_TOKEN_EXPIRED,
-                    sync_events::LabelPayload { label: label_owned.clone() },
-                ) {
+                if let Err(e) = app.emit(sync_events::AUTH_TOKEN_EXPIRED, sync_events::LabelPayload { label: label_owned.clone() }) {
                     warn!(error = %e, "Failed to emit auth_token_expired");
                 }
 
                 // Try to refresh the token automatically using the stored mnemonic.
                 // This avoids requiring the frontend to manually call refresh_auth_token.
                 {
-                    if let (Ok(pool), Ok(acct)) = (
-                        app_state.pool(),
-                        crate::utils::sync::current_account_id(&app_state),
-                    ) {
+                    if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state)) {
                         let pool = pool.clone();
                         let app_clone = app.clone();
                         tokio::spawn(async move {
-                            match crate::commands::auth::refresh_auth_token_internal(
-                                &pool, &app_clone, &acct,
-                            )
-                            .await
-                            {
-                                Ok(()) => info!(
-                                    "Auto token refresh succeeded, next sync will use fresh token"
-                                ),
+                            match crate::commands::auth::refresh_auth_token_internal(&pool, &app_clone, &acct).await {
+                                Ok(()) => info!("Auto token refresh succeeded, next sync will use fresh token"),
                                 Err(e) => warn!(error = %e, "Auto token refresh failed"),
                             }
                         });
@@ -2072,10 +1850,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             }
 
             // Mark all pending files as failed and finalize session in Rust
-            let _ = crate::sync_progress::mark_all_pending_files_as_failed(
-                sync,
-                err_str.clone(),
-            );
+            let _ = crate::sync_progress::mark_all_pending_files_as_failed(sync, err_str.clone());
 
             // Always emit sync error to frontend — even if sync_started
             // was never emitted (e.g. early failure during staging).
@@ -2108,13 +1883,11 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             // (e.g. permanent decryption failures that increment
             // conflicts_skipped but aren't user-resolvable), review mode
             // is not set and the widget needs SYNC_COMPLETED to transition.
-            if emitted_sync_started && !sync.is_drive_in_review(&label_owned) {
-                if let Err(e) = app.emit(
-                    sync_events::SYNC_COMPLETED,
-                    sync_events::SyncCompletedPayload::zeros(&label_owned),
-                ) {
-                    warn!(error = %e, "Failed to emit sync_completed");
-                }
+            if emitted_sync_started
+                && !sync.is_drive_in_review(&label_owned)
+                && let Err(e) = app.emit(sync_events::SYNC_COMPLETED, sync_events::SyncCompletedPayload::zeros(&label_owned))
+            {
+                warn!(error = %e, "Failed to emit sync_completed");
             }
         }
         SyncResult::NotAvailable => {

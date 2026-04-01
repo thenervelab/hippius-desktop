@@ -18,14 +18,14 @@ pub async fn store_bookmark(pool: &SqlitePool, path: &str, scope_type: &str) -> 
 
     sqlx::query(
         "INSERT OR REPLACE INTO security_scoped_bookmarks (path, bookmark_data, scope_type, last_accessed)
-         VALUES (?, ?, ?, CURRENT_TIMESTAMP)"
+         VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
     )
     .bind(path)
     .bind(&bookmark_data)
     .bind(scope_type)
     .execute(pool)
     .await
-    .map_err(|e| format!("Failed to store bookmark: {}", e))?;
+    .map_err(|e| format!("Failed to store bookmark: {e}"))?;
 
     debug!("Stored security-scoped bookmark for: {}", path);
     Ok(())
@@ -33,10 +33,6 @@ pub async fn store_bookmark(pool: &SqlitePool, path: &str, scope_type: &str) -> 
 
 // Non-macOS stubs
 #[cfg(not(target_os = "macos"))]
-pub async fn store_bookmark(
-    _pool: &SqlitePool,
-    _path: &str,
-    _scope_type: &str,
-) -> Result<(), String> {
+pub async fn store_bookmark(_pool: &SqlitePool, _path: &str, _scope_type: &str) -> Result<(), String> {
     Ok(())
 }

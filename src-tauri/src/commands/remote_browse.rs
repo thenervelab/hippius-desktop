@@ -58,8 +58,7 @@ fn derive_encryption_key(master_mnemonic: &str, label: &str) -> Result<[u8; 32],
     use std::str::FromStr;
 
     // Step 1: derive folder mnemonic (same as syncing.rs::derive_folder_mnemonic)
-    let master =
-        Mnemonic::from_str(master_mnemonic).map_err(|e| format!("Invalid master mnemonic: {e}"))?;
+    let master = Mnemonic::from_str(master_mnemonic).map_err(|e| format!("Invalid master mnemonic: {e}"))?;
     let mut master_seed = master.to_seed("");
 
     let mut hasher = Sha256::new();
@@ -86,7 +85,7 @@ fn derive_encryption_key(master_mnemonic: &str, label: &str) -> Result<[u8; 32],
 /// Deterministic 16-char hex hash of a folder label (same as syncing.rs::folder_hash).
 fn folder_hash(label: &str) -> String {
     let digest = Sha256::digest(label.as_bytes());
-    hex::encode(&digest)[..16].to_string()
+    hex::encode(digest)[..16].to_string()
 }
 
 /// Path to `~/.hippius/drives/<account_key>/master_enc_mnemonic.json`.
@@ -99,12 +98,11 @@ fn master_mnemonic_path(account_id: &str) -> Result<PathBuf, String> {
 /// Read the HCFS server URL from DB, falling back to the default.
 async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String, String> {
     let owner = account_key(account_id);
-    let result: Option<(String,)> =
-        sqlx::query_as("SELECT server_url FROM hcfs_config WHERE owner = ?")
-            .bind(&owner)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to get HCFS config: {e}"))?;
+    let result: Option<(String,)> = sqlx::query_as("SELECT server_url FROM hcfs_config WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to get HCFS config: {e}"))?;
     match result {
         Some((url,)) if !url.is_empty() => Ok(url),
         _ => Ok("https://arion.hippius.com".to_string()),
@@ -114,23 +112,18 @@ async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String, S
 /// Read the drive password from DB.
 async fn get_password(pool: &SqlitePool, account_id: &str) -> Result<String, String> {
     let owner = account_key(account_id);
-    let result: Option<(String,)> =
-        sqlx::query_as("SELECT drive_password FROM hcfs_config WHERE owner = ?")
-            .bind(&owner)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("Failed to get drive password: {e}"))?;
+    let result: Option<(String,)> = sqlx::query_as("SELECT drive_password FROM hcfs_config WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to get drive password: {e}"))?;
     result
         .map(|(p,)| p)
         .ok_or_else(|| "HCFS config not found. Please set up sync first.".to_string())
 }
 
 /// Recover the master mnemonic and derive the encryption key for `label`.
-async fn encryption_key_for_label(
-    pool: &SqlitePool,
-    account_id: &str,
-    label: &str,
-) -> Result<[u8; 32], String> {
+async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &str) -> Result<[u8; 32], String> {
     let password = get_password(pool, account_id).await?;
     let master_path = master_mnemonic_path(account_id)?;
 
@@ -144,11 +137,7 @@ async fn encryption_key_for_label(
 }
 
 /// Build an `HcfsClient` for the given account + folder label.
-async fn build_client(
-    pool: &SqlitePool,
-    account_id: &str,
-    label: &str,
-) -> Result<hcfs_client::client::HcfsClient, String> {
+async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Result<hcfs_client::client::HcfsClient, String> {
     let server_url = get_server_url(pool, account_id).await?;
     let bearer_token = get_api_token(pool, account_id)
         .await
@@ -166,8 +155,7 @@ async fn build_client(
         folder_hash: fhash,
     };
 
-    hcfs_client::client::HcfsClient::new(config)
-        .map_err(|e| format!("Failed to create HCFS client: {e}"))
+    hcfs_client::client::HcfsClient::new(config).map_err(|e| format!("Failed to create HCFS client: {e}"))
 }
 
 // ─── Commands ───────────────────────────────────────────────────────────────
@@ -177,11 +165,7 @@ async fn build_client(
 /// Returns a flat list of `RemoteFileInfo`; the frontend builds the tree
 /// by splitting on `/`.
 #[tauri::command]
-pub async fn list_remote_folder_files(
-    state: tauri::State<'_, AppState>,
-    account_id: String,
-    label: String,
-) -> Result<Vec<RemoteFileInfo>, String> {
+pub async fn list_remote_folder_files(state: tauri::State<'_, AppState>, account_id: String, label: String) -> Result<Vec<RemoteFileInfo>, String> {
     info!(
         account_id = %account_id,
         label = %label,
@@ -193,13 +177,10 @@ pub async fn list_remote_folder_files(
     let client = build_client(pool, &account_id, &label).await?;
     let fhash = folder_hash(&label);
 
-    let remote_files = client
-        .get_all_files(&account_id, &fhash, None::<fn(u64, u64)>)
-        .await
-        .map_err(|e| {
-            error!(label = %label, "Failed to fetch remote files: {e}");
-            format!("Failed to fetch remote files: {e}")
-        })?;
+    let remote_files = client.get_all_files(&account_id, &fhash, None::<fn(u64, u64)>).await.map_err(|e| {
+        error!(label = %label, "Failed to fetch remote files: {e}");
+        format!("Failed to fetch remote files: {e}")
+    })?;
 
     info!(
         label = %label,
@@ -212,7 +193,9 @@ pub async fn list_remote_folder_files(
         let file_id = hex::encode(entry.path_hash);
 
         // Try to decrypt the encrypted path
-        let decrypted_path = if !entry.encrypted_path.is_empty() {
+        let decrypted_path = if entry.encrypted_path.is_empty() {
+            None
+        } else {
             match hcfs_client::crypto::decrypt_small(&entry.encrypted_path, &encryption_key) {
                 Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(path) => {
@@ -230,26 +213,15 @@ pub async fn list_remote_folder_files(
                     None
                 }
             }
-        } else {
-            None
         };
 
         // Use decrypted path, fall back to plaintext file_name, fall back to file_id
-        let (path, name) = match decrypted_path {
-            Some(ref p) => {
-                let basename = p
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(p)
-                    .to_string();
-                (p.clone(), basename)
-            }
-            None => {
-                let fallback_name = entry
-                    .file_name
-                    .unwrap_or_else(|| format!("file_{}", &file_id[..16]));
-                (fallback_name.clone(), fallback_name)
-            }
+        let (path, name) = if let Some(ref p) = decrypted_path {
+            let basename = p.rsplit('/').next().unwrap_or(p).to_string();
+            (p.clone(), basename)
+        } else {
+            let fallback_name = entry.file_name.unwrap_or_else(|| format!("file_{}", &file_id[..16]));
+            (fallback_name.clone(), fallback_name)
         };
 
         files.push(RemoteFileInfo {
@@ -318,11 +290,14 @@ pub async fn download_remote_file(
             &file_id,
             &temp_path,
             Some(move |bytes: u64, total: u64| {
-                let _ = progress_app.emit("oneoff_download_progress", DownloadProgressPayload {
-                    file_id: progress_file_id.clone(),
-                    bytes_downloaded: bytes,
-                    total_bytes: total,
-                });
+                let _ = progress_app.emit(
+                    "oneoff_download_progress",
+                    DownloadProgressPayload {
+                        file_id: progress_file_id.clone(),
+                        bytes_downloaded: bytes,
+                        total_bytes: total,
+                    },
+                );
             }),
             0, // resume_offset: start from beginning
         )
@@ -341,18 +316,10 @@ pub async fn download_remote_file(
 
     // Decrypt the downloaded file
     let decrypt_result = {
-        let mut input = std::fs::File::open(&temp_path)
-            .map_err(|e| format!("Failed to open downloaded file: {e}"))?;
-        let mut output_file = std::fs::File::create(&output)
-            .map_err(|e| format!("Failed to create output file: {e}"))?;
+        let mut input = std::fs::File::open(&temp_path).map_err(|e| format!("Failed to open downloaded file: {e}"))?;
+        let mut output_file = std::fs::File::create(&output).map_err(|e| format!("Failed to create output file: {e}"))?;
 
-        hcfs_client::crypto::decrypt_stream(
-            &mut input,
-            &mut output_file,
-            &encryption_key,
-            None,
-            None::<fn(u64, u64)>,
-        )
+        hcfs_client::crypto::decrypt_stream(&mut input, &mut output_file, &encryption_key, None, None::<fn(u64, u64)>)
     };
 
     // Always clean up the temp file
@@ -425,8 +392,8 @@ mod tests {
             name: "beach.jpg".to_string(),
             size_bytes: 4200,
             arion_hash: Some("deadbeef".to_string()),
-            created_at: 1700000000,
-            updated_at: 1700000100,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_100,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("photos/beach.jpg"));

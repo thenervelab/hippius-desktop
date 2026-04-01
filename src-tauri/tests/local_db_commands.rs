@@ -101,10 +101,10 @@ async fn insert_notification(
 ) -> i64 {
     let now = chrono::Utc::now().timestamp_millis();
     let result = sqlx::query(
-        r#"INSERT INTO notifications (
+        r"INSERT INTO notifications (
             user_address, notification_type, notification_subtype,
             title_text, is_unread, creation_time, is_deleted
-        ) VALUES (?, ?, ?, ?, 1, ?, 0)"#,
+        ) VALUES (?, ?, ?, ?, 1, ?, 0)",
     )
     .bind(user_address)
     .bind(notification_type)
@@ -335,14 +335,7 @@ async fn welcome_notification_is_deduplicated() {
 async fn version_notification_exists_check() {
     let pool = setup_db().await;
 
-    insert_notification(
-        &pool,
-        "system",
-        Some("Hippius"),
-        Some("v2.1.0"),
-        "New version",
-    )
-    .await;
+    insert_notification(&pool, "system", Some("Hippius"), Some("v2.1.0"), "New version").await;
 
     // hippius_version_notification_exists query
     let (count,) = sqlx::query_as::<_, (i64,)>(
@@ -392,14 +385,7 @@ async fn low_credit_subtype_detection() {
 async fn active_low_credit_excludes_deleted() {
     let pool = setup_db().await;
 
-    let id = insert_notification(
-        &pool,
-        "alice",
-        Some("Credits"),
-        Some("LowCreditWarning-50"),
-        "Low",
-    )
-    .await;
+    let id = insert_notification(&pool, "alice", Some("Credits"), Some("LowCreditWarning-50"), "Low").await;
 
     // Active before deletion
     let (active,) = sqlx::query_as::<_, (i64,)>(
@@ -450,22 +436,8 @@ async fn last_deleted_low_credit_time() {
     assert!(row.is_none());
 
     // Insert and soft-delete two low-credit warnings with known timestamps
-    let id1 = insert_notification(
-        &pool,
-        "alice",
-        Some("Credits"),
-        Some("LowCreditWarning-1"),
-        "Low 1",
-    )
-    .await;
-    let id2 = insert_notification(
-        &pool,
-        "alice",
-        Some("Credits"),
-        Some("LowCreditWarning-2"),
-        "Low 2",
-    )
-    .await;
+    let id1 = insert_notification(&pool, "alice", Some("Credits"), Some("LowCreditWarning-1"), "Low 1").await;
+    let id2 = insert_notification(&pool, "alice", Some("Credits"), Some("LowCreditWarning-2"), "Low 2").await;
 
     let earlier = 1_000_000_i64;
     let later = 2_000_000_i64;
@@ -521,12 +493,11 @@ async fn update_preference_disables_type() {
         .await
         .unwrap();
 
-    let (enabled,) =
-        sqlx::query_as::<_, (i32,)>("SELECT enabled FROM notification_preferences WHERE id = ?")
-            .bind("credits")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (enabled,) = sqlx::query_as::<_, (i32,)>("SELECT enabled FROM notification_preferences WHERE id = ?")
+        .bind("credits")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(enabled, 0);
 }
@@ -541,12 +512,10 @@ async fn get_enabled_types_only() {
         .await
         .unwrap();
 
-    let rows = sqlx::query_as::<_, (String,)>(
-        "SELECT label FROM notification_preferences WHERE enabled = 1",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let rows = sqlx::query_as::<_, (String,)>("SELECT label FROM notification_preferences WHERE enabled = 1")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
 
     let labels: Vec<String> = rows.into_iter().map(|(l,)| l).collect();
     assert_eq!(labels.len(), 1);
@@ -589,11 +558,10 @@ async fn above_half_credit_toggle() {
     let pool = setup_db().await;
 
     // Default is 0
-    let (val,) =
-        sqlx::query_as::<_, (i32,)>("SELECT is_above_half_credit FROM app_state WHERE id = 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (val,) = sqlx::query_as::<_, (i32,)>("SELECT is_above_half_credit FROM app_state WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(val, 0);
 
     // Set to 1
@@ -602,11 +570,10 @@ async fn above_half_credit_toggle() {
         .await
         .unwrap();
 
-    let (val,) =
-        sqlx::query_as::<_, (i32,)>("SELECT is_above_half_credit FROM app_state WHERE id = 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (val,) = sqlx::query_as::<_, (i32,)>("SELECT is_above_half_credit FROM app_state WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(val, 1);
 }
 
@@ -759,10 +726,7 @@ async fn hard_delete_clears_all() {
     insert_notification(&pool, "bob", None, None, "n2").await;
     insert_notification(&pool, "system", None, None, "n3").await;
 
-    sqlx::query("DELETE FROM notifications")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query("DELETE FROM notifications").execute(&pool).await.unwrap();
 
     let (count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications")
         .fetch_one(&pool)
@@ -777,15 +741,13 @@ async fn hard_delete_clears_all() {
 /// Helper: mirrors the updated `get_unread_count` logic that filters by enabled
 /// notification preferences and always includes "Hippius" system notifications.
 async fn preference_filtered_unread_count(pool: &SqlitePool, user_address: &str) -> i64 {
-    let enabled: Vec<String> = sqlx::query_as::<_, (String,)>(
-        "SELECT label FROM notification_preferences WHERE enabled = 1",
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap()
-    .into_iter()
-    .map(|(l,)| l)
-    .collect();
+    let enabled: Vec<String> = sqlx::query_as::<_, (String,)>("SELECT label FROM notification_preferences WHERE enabled = 1")
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(l,)| l)
+        .collect();
 
     if enabled.is_empty() {
         let (count,) = sqlx::query_as::<_, (i64,)>(
@@ -807,8 +769,7 @@ async fn preference_filtered_unread_count(pool: &SqlitePool, user_address: &str)
         "SELECT COUNT(*) FROM notifications \
          WHERE (user_address = ? OR user_address = 'system') \
          AND is_unread = 1 AND is_deleted = 0 \
-         AND (notification_type IN ({}) OR notification_type = 'Hippius')",
-        in_clause
+         AND (notification_type IN ({in_clause}) OR notification_type = 'Hippius')"
     );
     let mut q = sqlx::query_as::<_, (i64,)>(&query).bind(user_address);
     for label in &enabled {

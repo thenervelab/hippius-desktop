@@ -45,19 +45,9 @@ pub struct ChartPoint {
     pub formatted_credit: Option<String>,
 }
 
-const WEEKDAYS_FULL: [&str; 7] = [
-    "Sunday",
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-];
+const WEEKDAYS_FULL: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-const MONTHS_SHORT: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
+const MONTHS_SHORT: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /// Hippius creation date (March 11, 2025) — lower bound for "max" range.
 fn hippius_creation_date() -> NaiveDate {
@@ -73,7 +63,7 @@ fn format_balance(raw: &str, decimals: usize) -> String {
     if value == 0.0 {
         return "0".to_string();
     }
-    let fixed = format!("{:.prec$}", value, prec = decimals);
+    let fixed = format!("{value:.decimals$}");
     let trimmed = trim_trailing_zeros(&fixed);
     add_commas(trimmed)
 }
@@ -85,12 +75,9 @@ fn format_bytes(bytes: f64) -> String {
     }
     let units = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
     let k: f64 = 1000.0;
-    let i = (bytes.ln() / k.ln())
-        .floor()
-        .max(0.0)
-        .min((units.len() - 1) as f64) as usize;
+    let i = (bytes.ln() / k.ln()).floor().max(0.0).min((units.len() - 1) as f64) as usize;
     let val = bytes / k.powi(i as i32);
-    let formatted = format!("{:.2}", val);
+    let formatted = format!("{val:.2}");
     let trimmed = trim_trailing_zeros(&formatted);
     format!("{} {}", trimmed, units[i])
 }
@@ -134,14 +121,14 @@ fn add_commas(s: &str) -> String {
     };
     let int_with_commas = add_commas_to_int(int_part);
     match frac_part {
-        Some(f) => format!("{}{}", int_with_commas, f),
+        Some(f) => format!("{int_with_commas}{f}"),
         None => int_with_commas,
     }
 }
 
 fn add_commas_to_int(s: &str) -> String {
-    let (neg, digits) = if s.starts_with('-') {
-        (true, &s[1..])
+    let (neg, digits) = if let Some(stripped) = s.strip_prefix('-') {
+        (true, stripped)
     } else {
         (false, s)
     };
@@ -153,11 +140,7 @@ fn add_commas_to_int(s: &str) -> String {
         result.push(ch);
     }
     let ordered: String = result.chars().rev().collect();
-    if neg {
-        format!("-{}", ordered)
-    } else {
-        ordered
-    }
+    if neg { format!("-{ordered}") } else { ordered }
 }
 
 /// Parse an ISO timestamp string to a `NaiveDate`, trying multiple formats.
@@ -225,20 +208,12 @@ fn accounts_to_raw_points(accounts: &[AccountInput], divide_by_1e18: bool) -> Ve
         .filter_map(|acc| {
             let date = parse_timestamp_to_date(&acc.processed_timestamp)?;
             let raw_val: f64 = acc.total_balance.parse().unwrap_or(0.0);
-            let balance = if divide_by_1e18 {
-                raw_val / 1e18
-            } else {
-                raw_val
-            };
+            let balance = if divide_by_1e18 { raw_val / 1e18 } else { raw_val };
             let credit = acc.credit.as_ref().map(|c| {
                 let v: f64 = c.parse().unwrap_or(0.0);
                 if divide_by_1e18 { v / 1e18 } else { v }
             });
-            Some(RawPoint {
-                date,
-                balance,
-                credit,
-            })
+            Some(RawPoint { date, balance, credit })
         })
         .collect();
     points.sort_by_key(|p| p.date);
@@ -275,10 +250,8 @@ fn map_to_range_carry_forward(
             if p.balance > last_balance {
                 last_balance = p.balance;
             }
-            if include_credit {
-                if let Some(c) = p.credit {
-                    last_credit = Some(c);
-                }
+            if include_credit && let Some(c) = p.credit {
+                last_credit = Some(c);
             }
         }
     }
@@ -294,24 +267,14 @@ fn map_to_range_carry_forward(
             if has_data {
                 let p = by_date[&key];
                 last_balance = p.balance;
-                if include_credit {
-                    if let Some(c) = p.credit {
-                        last_credit = Some(c);
-                    }
+                if include_credit && let Some(c) = p.credit {
+                    last_credit = Some(c);
                 }
             }
 
-            let day_label = if is_last7 {
-                weekday_name(date).to_string()
-            } else {
-                dd_mon_label(date)
-            };
+            let day_label = if is_last7 { weekday_name(date).to_string() } else { dd_mon_label(date) };
 
-            let band_label = if is_last7 {
-                Some(weekday_name(date).to_string())
-            } else {
-                None
-            };
+            let band_label = if is_last7 { Some(weekday_name(date).to_string()) } else { None };
 
             let formatted_balance = if divide_by_1e18 {
                 format_balance(&format!("{}", (last_balance * 1e18) as u128), 6)
@@ -342,12 +305,7 @@ fn map_to_range_carry_forward(
 }
 
 /// Build chart points for a given range (shared logic for all chart types).
-fn build_chart(
-    accounts: &[AccountInput],
-    range: &str,
-    divide_by_1e18: bool,
-    include_credit: bool,
-) -> Vec<ChartPoint> {
+fn build_chart(accounts: &[AccountInput], range: &str, divide_by_1e18: bool, include_credit: bool) -> Vec<ChartPoint> {
     if accounts.is_empty() {
         return Vec::new();
     }
@@ -358,9 +316,8 @@ fn build_chart(
     }
 
     let today = Utc::now().date_naive();
-    let start = match range_start(range, today) {
-        Some(s) => s,
-        None => return Vec::new(),
+    let Some(start) = range_start(range, today) else {
+        return Vec::new();
     };
 
     let date_range = get_all_dates_in_range(start, today);
@@ -376,10 +333,7 @@ fn build_chart(
 /// Divides `total_balance` by 10^18 to get credit values.
 /// Uses carry-forward fill for missing days.
 #[tauri::command]
-pub fn format_credits_chart(
-    accounts: Vec<AccountInput>,
-    range: String,
-) -> Result<Vec<ChartPoint>, String> {
+pub fn format_credits_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, String> {
     Ok(build_chart(&accounts, &range, true, false))
 }
 
@@ -388,10 +342,7 @@ pub fn format_credits_chart(
 /// `total_balance` represents raw bytes (no division).
 /// Uses carry-forward fill for missing days.
 #[tauri::command]
-pub fn format_storage_chart(
-    accounts: Vec<AccountInput>,
-    range: String,
-) -> Result<Vec<ChartPoint>, String> {
+pub fn format_storage_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, String> {
     Ok(build_chart(&accounts, &range, false, false))
 }
 
@@ -400,10 +351,7 @@ pub fn format_storage_chart(
 /// Divides both `total_balance` and `credit` by 10^18.
 /// Uses carry-forward fill for missing days.
 #[tauri::command]
-pub fn format_balance_chart(
-    accounts: Vec<AccountInput>,
-    range: String,
-) -> Result<Vec<ChartPoint>, String> {
+pub fn format_balance_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, String> {
     Ok(build_chart(&accounts, &range, true, true))
 }
 
@@ -442,15 +390,12 @@ pub struct MarketplaceCreditOutput {
 /// Returns an `Account`-shaped vec so the result can be fed directly into
 /// the same chart components as balance data.
 #[tauri::command]
-pub fn transform_marketplace_credits(
-    credits: Vec<MarketplaceCreditInput>,
-) -> Result<Vec<MarketplaceCreditOutput>, String> {
+pub fn transform_marketplace_credits(credits: Vec<MarketplaceCreditInput>) -> Result<Vec<MarketplaceCreditOutput>, String> {
     if credits.is_empty() {
         return Ok(vec![]);
     }
 
-    let mut daily: std::collections::BTreeMap<String, (u128, String)> =
-        std::collections::BTreeMap::new();
+    let mut daily: std::collections::BTreeMap<String, (u128, String)> = std::collections::BTreeMap::new();
 
     for credit in &credits {
         let date_key = parse_date_key(&credit.date);
@@ -466,10 +411,8 @@ pub fn transform_marketplace_credits(
     let first_key = daily.keys().next().unwrap().clone();
     let last_key = daily.keys().last().unwrap().clone();
 
-    let start_date = NaiveDate::parse_from_str(&first_key, "%Y-%m-%d")
-        .map_err(|e| format!("Invalid start date: {e}"))?;
-    let end_date = NaiveDate::parse_from_str(&last_key, "%Y-%m-%d")
-        .map_err(|e| format!("Invalid end date: {e}"))?;
+    let start_date = NaiveDate::parse_from_str(&first_key, "%Y-%m-%d").map_err(|e| format!("Invalid start date: {e}"))?;
+    let end_date = NaiveDate::parse_from_str(&last_key, "%Y-%m-%d").map_err(|e| format!("Invalid end date: {e}"))?;
 
     let mut results = Vec::new();
     let mut cumulative: u128 = 0;
@@ -526,14 +469,10 @@ fn parse_date_key(date_str: &str) -> String {
 /// charges a flat first-hour rate plus per-block charges for the remainder
 /// of the timeframe (block time = 6 seconds).
 #[tauri::command]
-pub fn calculate_storage_cost(
-    storage_type: String,
-    timeframe: String,
-    num_of_gb: f64,
-) -> Result<f64, String> {
+pub fn calculate_storage_cost(storage_type: String, timeframe: String, num_of_gb: f64) -> Result<f64, String> {
     let per_block_time: f64 = 6.0;
     let (per_block_charge, first_hour_charge) = match storage_type.as_str() {
-        "s3" | "ipfs" => (6.7878e-9, 0.0000315),
+        "s3" | "ipfs" => (6.7878e-9, 0.000_031_5),
         _ => return Err(format!("Unknown storage type: {storage_type}")),
     };
 
@@ -766,6 +705,6 @@ mod tests {
     #[test]
     fn storage_cost_first_hour() {
         let cost = calculate_storage_cost("ipfs".into(), "first-hour".into(), 1.0).unwrap();
-        assert!((cost - 0.0000315).abs() < 1e-10);
+        assert!((cost - 0.000_031_5).abs() < 1e-10);
     }
 }

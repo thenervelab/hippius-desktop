@@ -143,6 +143,7 @@ pub struct OverallProgress {
 /// have no files (e.g. a download-only session sends no upload list).
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[expect(clippy::struct_field_names)] // field names mirror the hcfs-client JSON schema
 pub struct SessionFileList {
     pub upload_files: Option<Vec<String>>,
     pub download_files: Option<Vec<String>>,
@@ -235,19 +236,12 @@ fn generate_file_id(path: &str) -> String {
 }
 
 fn generate_session_id(sync: &crate::sync_engine::SyncEngine) -> String {
-    format!(
-        "session_{}_{}",
-        now_ms(),
-        sync.session_counter.fetch_add(1, Ordering::Relaxed)
-    )
+    format!("session_{}_{}", now_ms(), sync.session_counter.fetch_add(1, Ordering::Relaxed))
 }
 
 fn is_encrypted_file_id(file_name: &str) -> bool {
     // Pattern 1: Starts with "file_" followed by hex
-    if file_name.starts_with("file_")
-        && file_name.len() > 5
-        && file_name[5..].chars().all(|c| c.is_ascii_hexdigit())
-    {
+    if file_name.starts_with("file_") && file_name.len() > 5 && file_name[5..].chars().all(|c| c.is_ascii_hexdigit()) {
         return true;
     }
     // Pattern 2: Pure hex string 20+ chars
@@ -255,30 +249,19 @@ fn is_encrypted_file_id(file_name: &str) -> bool {
         return true;
     }
     // Pattern 3: Hex 16+ chars, no dot
-    if file_name.len() >= 16
-        && !file_name.contains('.')
-        && file_name.chars().all(|c| c.is_ascii_hexdigit())
-    {
+    if file_name.len() >= 16 && !file_name.contains('.') && file_name.chars().all(|c| c.is_ascii_hexdigit()) {
         return true;
     }
     false
 }
 
 fn should_hide_file(path: &str) -> bool {
-    let file_name = path
-        .rsplit('/')
-        .next()
-        .or_else(|| path.rsplit('\\').next())
-        .unwrap_or(path);
+    let file_name = path.rsplit('/').next().or_else(|| path.rsplit('\\').next()).unwrap_or(path);
     is_encrypted_file_id(file_name)
 }
 
 fn extract_file_name(path: &str) -> String {
-    let raw_name = path
-        .rsplit('/')
-        .next()
-        .or_else(|| path.rsplit('\\').next())
-        .unwrap_or(path);
+    let raw_name = path.rsplit('/').next().or_else(|| path.rsplit('\\').next()).unwrap_or(path);
     if is_encrypted_file_id(raw_name) {
         "Encrypted file".to_string()
     } else {
@@ -289,9 +272,7 @@ fn extract_file_name(path: &str) -> String {
 /// Remove expired recent files from state (call within lock).
 fn clean_expired(state: &mut SyncProgressState) {
     let now = now_ms();
-    state
-        .recent_files
-        .retain(|f| now - f.completed_at < RECENT_FILES_RETENTION_MS);
+    state.recent_files.retain(|f| now - f.completed_at < RECENT_FILES_RETENTION_MS);
 }
 
 /// Register files from a file list into the session.
@@ -315,9 +296,7 @@ fn register_files(session: &mut SyncSession, file_list: &SessionFileList, label:
                     // Works for uploads (local files) and local deletes;
                     // returns 0 for downloads (remote identifiers) which
                     // gets filled in by the first progress callback.
-                    let total_bytes = std::fs::metadata(path)
-                        .map(|m| m.len())
-                        .unwrap_or(0);
+                    let total_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                     let file = SyncFile {
                         id: generate_file_id(path),
                         path: path.clone(),
@@ -346,19 +325,14 @@ fn register_files(session: &mut SyncSession, file_list: &SessionFileList, label:
 /// (identified by path + session_id) to prevent duplicates when
 /// this function is called multiple times for the same session.
 fn move_completed_to_recent(state: &mut SyncProgressState) {
-    let session = match &state.current_session {
-        Some(s) => s,
-        None => return,
+    let Some(session) = &state.current_session else {
+        return;
     };
     let session_id = session.session_id.clone();
     let now = now_ms();
 
     // Build a set of (path, session_id) already in recent to avoid duplicates
-    let existing: std::collections::HashSet<(&str, &str)> = state
-        .recent_files
-        .iter()
-        .map(|r| (r.path.as_str(), r.session_id.as_str()))
-        .collect();
+    let existing: std::collections::HashSet<(&str, &str)> = state.recent_files.iter().map(|r| (r.path.as_str(), r.session_id.as_str())).collect();
 
     let new_completed: Vec<RecentFile> = session
         .files
@@ -386,28 +360,25 @@ fn move_completed_to_recent(state: &mut SyncProgressState) {
 /// Pure function: no side effects, no Tauri dependency. Unit tests call this
 /// directly with constructed state.
 pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
-    let session = match &state.current_session {
-        Some(s) => s,
-        None => {
-            return SyncSnapshot {
-                is_active: false,
-                overall_percent: 0,
-                progress_bytes: 0,
-                bytes_expected: 0,
-                total_files: 0,
-                completed_files: 0,
-                failed_files: 0,
-                retry_in_secs: 0,
-                last_error: None,
-                expected_uploads: 0,
-                expected_downloads: 0,
-                expected_local_deletes: 0,
-                expected_remote_deletes: 0,
-                started_at: None,
-                completed_at: None,
-                files: Vec::new(),
-            };
-        }
+    let Some(session) = &state.current_session else {
+        return SyncSnapshot {
+            is_active: false,
+            overall_percent: 0,
+            progress_bytes: 0,
+            bytes_expected: 0,
+            total_files: 0,
+            completed_files: 0,
+            failed_files: 0,
+            retry_in_secs: 0,
+            last_error: None,
+            expected_uploads: 0,
+            expected_downloads: 0,
+            expected_local_deletes: 0,
+            expected_remote_deletes: 0,
+            started_at: None,
+            completed_at: None,
+            files: Vec::new(),
+        };
     };
 
     let mut files: Vec<FileProgress> = session
@@ -416,9 +387,7 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
         .map(|f| {
             let status = match f.status {
                 FileStatus::Pending => FileProgressStatus::Pending,
-                FileStatus::Uploading | FileStatus::Downloading | FileStatus::Deleting => {
-                    FileProgressStatus::InProgress
-                }
+                FileStatus::Uploading | FileStatus::Downloading | FileStatus::Deleting => FileProgressStatus::InProgress,
                 FileStatus::Encrypting => FileProgressStatus::Encrypting,
                 FileStatus::Decrypting => FileProgressStatus::Decrypting,
                 FileStatus::Completed => FileProgressStatus::Completed,
@@ -445,9 +414,7 @@ pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
     let status_rank = |s: &FileProgressStatus| -> u8 {
         match s {
             FileProgressStatus::Error => 0,
-            FileProgressStatus::InProgress
-            | FileProgressStatus::Encrypting
-            | FileProgressStatus::Decrypting => 1,
+            FileProgressStatus::InProgress | FileProgressStatus::Encrypting | FileProgressStatus::Decrypting => 1,
             FileProgressStatus::Pending => 2,
             FileProgressStatus::Completed => 3,
         }
@@ -548,10 +515,7 @@ pub fn count_expected_for_label(session: &SyncSession, label: &str) -> (u32, u32
     let downloads = session
         .files
         .values()
-        .filter(|f| {
-            f.label == label
-                && matches!(f.action, FileAction::Download | FileAction::Decrypt)
-        })
+        .filter(|f| f.label == label && matches!(f.action, FileAction::Download | FileAction::Decrypt))
         .count() as u32;
     (uploads, downloads)
 }
@@ -703,11 +667,7 @@ pub fn sp_merge_into_session(
 }
 
 /// Complete the current session, marking remaining files as done if counts match.
-pub fn complete_session(
-    sync: &crate::sync_engine::SyncEngine,
-    files_uploaded: u32,
-    files_downloaded: u32,
-) -> Result<(), String> {
+pub fn complete_session(sync: &crate::sync_engine::SyncEngine, files_uploaded: u32, files_downloaded: u32) -> Result<(), String> {
     let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
         warn!("Poisoned mutex recovered in complete_session");
         poisoned.into_inner()
@@ -730,9 +690,7 @@ pub fn complete_session(
             .values()
             .filter(|f| {
                 f.action == FileAction::Upload
-                    && (f.status == FileStatus::Pending
-                        || f.status == FileStatus::Uploading
-                        || f.status == FileStatus::Encrypting)
+                    && (f.status == FileStatus::Pending || f.status == FileStatus::Uploading || f.status == FileStatus::Encrypting)
             })
             .count() as u32;
         let pending_downloads = session
@@ -740,9 +698,7 @@ pub fn complete_session(
             .values()
             .filter(|f| {
                 f.action == FileAction::Download
-                    && (f.status == FileStatus::Pending
-                        || f.status == FileStatus::Downloading
-                        || f.status == FileStatus::Decrypting)
+                    && (f.status == FileStatus::Pending || f.status == FileStatus::Downloading || f.status == FileStatus::Decrypting)
             })
             .count() as u32;
         let pending_deletes = session
@@ -755,9 +711,7 @@ pub fn complete_session(
             .count() as u32;
 
         // If actual counts exceed expected, complete all pending files
-        if files_uploaded >= session.expected_uploads
-            && files_downloaded >= session.expected_downloads
-        {
+        if files_uploaded >= session.expected_uploads && files_downloaded >= session.expected_downloads {
             for file in session.files.values_mut() {
                 if file.status == FileStatus::Pending
                     || file.status == FileStatus::Uploading
@@ -780,8 +734,7 @@ pub fn complete_session(
 
         // If no more pending work (including deletes), finalize
         if (pending_uploads == 0 && pending_downloads == 0 && pending_deletes == 0)
-            || (files_uploaded >= session.expected_uploads
-                && files_downloaded >= session.expected_downloads)
+            || (files_uploaded >= session.expected_uploads && files_downloaded >= session.expected_downloads)
         {
             session.completed_at = Some(now);
             session.is_active = false;
@@ -803,11 +756,7 @@ pub fn complete_session(
 }
 
 #[tauri::command]
-pub fn sp_complete_session(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    files_uploaded: u32,
-    files_downloaded: u32,
-) -> Result<(), String> {
+pub fn sp_complete_session(state: tauri::State<'_, crate::app_state::AppState>, files_uploaded: u32, files_downloaded: u32) -> Result<(), String> {
     complete_session(&state.sync, files_uploaded, files_downloaded)
 }
 
@@ -850,9 +799,8 @@ pub fn update_file_progress(
 
     let now = now_ms();
 
-    let session = match state.current_session.as_mut() {
-        Some(s) => s,
-        None => return Ok(None),
+    let Some(session) = state.current_session.as_mut() else {
+        return Ok(None);
     };
 
     let lbl = label.unwrap_or_else(|| "default".to_string());
@@ -862,37 +810,29 @@ pub fn update_file_progress(
     // path (e.g. "subdir/Air.dmg").  Resolve the mismatch by looking up
     // an existing entry whose path ends with the callback path, so we
     // update the original entry instead of creating a duplicate.
-    let resolved_key = if !session.files.contains_key(&path) {
-        let suffix = format!("/{}", path);
-        session
-            .files
-            .keys()
-            .find(|k| k.ends_with(&suffix))
-            .cloned()
-            .unwrap_or(path.clone())
-    } else {
+    let resolved_key = if session.files.contains_key(&path) {
         path.clone()
+    } else {
+        let suffix = format!("/{path}");
+        session.files.keys().find(|k| k.ends_with(&suffix)).cloned().unwrap_or(path.clone())
     };
 
-    let file = session
-        .files
-        .entry(resolved_key.clone())
-        .or_insert_with(|| SyncFile {
-            id: generate_file_id(&path),
-            path: path.clone(),
-            file_name: extract_file_name(&path),
-            label: lbl.clone(),
-            action: action.clone(),
-            status: FileStatus::Pending,
-            progress: 0,
-            bytes_encrypted: 0,
-            bytes_transferred: 0,
-            total_bytes,
-            resumed_from_bytes: None,
-            started_at: now,
-            completed_at: None,
-            error: None,
-        });
+    let file = session.files.entry(resolved_key.clone()).or_insert_with(|| SyncFile {
+        id: generate_file_id(&path),
+        path: path.clone(),
+        file_name: extract_file_name(&path),
+        label: lbl.clone(),
+        action: action.clone(),
+        status: FileStatus::Pending,
+        progress: 0,
+        bytes_encrypted: 0,
+        bytes_transferred: 0,
+        total_bytes,
+        resumed_from_bytes: None,
+        started_at: now,
+        completed_at: None,
+        error: None,
+    });
 
     // Set total_bytes once — file size doesn't change.
     if file.total_bytes == 0 && total_bytes > 0 {
@@ -925,10 +865,7 @@ pub fn update_file_progress(
             // already "done" once the transfer finishes.  Decrypt is local
             // post-processing and shouldn't reset the completed count.
             if file.status != FileStatus::Completed {
-                if action == FileAction::Encrypt
-                    && bytes_transferred >= total_bytes
-                    && total_bytes > 0
-                {
+                if action == FileAction::Encrypt && bytes_transferred >= total_bytes && total_bytes > 0 {
                     // Encryption done → next phase is upload. Transition
                     // immediately so the widget shows "Uploading 0%" even
                     // when chunked-upload progress callbacks are delayed.
@@ -964,9 +901,7 @@ pub fn update_file_progress(
     // (transfer hasn't started); during decryption it shows ~100%
     // (download already finished).  No backward drops.
     if file.status != FileStatus::Completed && file.total_bytes > 0 {
-        file.progress = ((file.bytes_transferred as f64 / file.total_bytes as f64) * 100.0)
-            .round()
-            .min(100.0) as u32;
+        file.progress = ((file.bytes_transferred as f64 / file.total_bytes as f64) * 100.0).round().min(100.0) as u32;
     }
 
     let result = file.clone();
@@ -986,22 +921,12 @@ pub fn sp_update_file_progress(
     action: FileAction,
     label: Option<String>,
 ) -> Result<Option<SyncFile>, String> {
-    update_file_progress(
-        &state.sync,
-        path,
-        bytes_transferred,
-        total_bytes,
-        action,
-        label,
-    )
+    update_file_progress(&state.sync, path, bytes_transferred, total_bytes, action, label)
 }
 
 /// Force-complete all pending files. Stalled files (0 bytes) become errors,
 /// except delete actions which never transfer bytes.
-pub fn complete_pending_files(
-    sync: &crate::sync_engine::SyncEngine,
-    label: &str,
-) -> Result<(), String> {
+pub fn complete_pending_files(sync: &crate::sync_engine::SyncEngine, label: &str) -> Result<(), String> {
     let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
         warn!("Poisoned mutex recovered in complete_pending_files");
         poisoned.into_inner()
@@ -1021,8 +946,7 @@ pub fn complete_pending_files(
                 || file.status == FileStatus::Decrypting
                 || file.status == FileStatus::Deleting
             {
-                let is_delete = file.action == FileAction::LocalDelete
-                    || file.action == FileAction::RemoteDelete;
+                let is_delete = file.action == FileAction::LocalDelete || file.action == FileAction::RemoteDelete;
 
                 // Files that never received any progress data (0 bytes
                 // encrypted or transferred) are stalled — mark them as
@@ -1052,10 +976,7 @@ pub fn complete_pending_files(
 }
 
 #[tauri::command]
-pub fn sp_complete_pending_files(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    label: Option<String>,
-) -> Result<(), String> {
+pub fn sp_complete_pending_files(state: tauri::State<'_, crate::app_state::AppState>, label: Option<String>) -> Result<(), String> {
     complete_pending_files(&state.sync, label.as_deref().unwrap_or("default"))
 }
 
@@ -1087,16 +1008,8 @@ pub fn mark_pending_files_as_failed(
             .count() as u32;
 
         // If we have more pending than actual, mark the excess as failed
-        let excess_uploads = if actual_uploads < label_expected_uploads {
-            label_expected_uploads - actual_uploads
-        } else {
-            0
-        };
-        let excess_downloads = if actual_downloads < label_expected_downloads {
-            label_expected_downloads - actual_downloads
-        } else {
-            0
-        };
+        let excess_uploads = label_expected_uploads.saturating_sub(actual_uploads);
+        let excess_downloads = label_expected_downloads.saturating_sub(actual_downloads);
 
         let mut failed_uploads = 0u32;
         let mut failed_downloads = 0u32;
@@ -1109,9 +1022,7 @@ pub fn mark_pending_files_as_failed(
                     continue;
                 }
                 if file.action == FileAction::Upload
-                    && (file.status == FileStatus::Pending
-                        || file.status == FileStatus::Uploading
-                        || file.status == FileStatus::Encrypting)
+                    && (file.status == FileStatus::Pending || file.status == FileStatus::Uploading || file.status == FileStatus::Encrypting)
                     && failed_uploads < excess_uploads
                 {
                     file.status = FileStatus::Error;
@@ -1119,9 +1030,7 @@ pub fn mark_pending_files_as_failed(
                     file.completed_at = Some(now);
                     failed_uploads += 1;
                 } else if matches!(file.action, FileAction::Download | FileAction::Decrypt)
-                    && (file.status == FileStatus::Pending
-                        || file.status == FileStatus::Downloading
-                        || file.status == FileStatus::Decrypting)
+                    && (file.status == FileStatus::Pending || file.status == FileStatus::Downloading || file.status == FileStatus::Decrypting)
                     && failed_downloads < excess_downloads
                 {
                     file.status = FileStatus::Error;
@@ -1140,17 +1049,11 @@ pub fn mark_pending_files_as_failed(
                 continue;
             }
             let is_pending_transfer = (file.action == FileAction::Upload
-                && (file.status == FileStatus::Pending
-                    || file.status == FileStatus::Uploading
-                    || file.status == FileStatus::Encrypting))
+                && (file.status == FileStatus::Pending || file.status == FileStatus::Uploading || file.status == FileStatus::Encrypting))
                 || (file.action == FileAction::Download
-                    && (file.status == FileStatus::Pending
-                        || file.status == FileStatus::Downloading
-                        || file.status == FileStatus::Decrypting));
-            let is_pending_delete = (file.action == FileAction::LocalDelete
-                || file.action == FileAction::RemoteDelete)
-                && (file.status == FileStatus::Pending
-                    || file.status == FileStatus::Deleting);
+                    && (file.status == FileStatus::Pending || file.status == FileStatus::Downloading || file.status == FileStatus::Decrypting));
+            let is_pending_delete = (file.action == FileAction::LocalDelete || file.action == FileAction::RemoteDelete)
+                && (file.status == FileStatus::Pending || file.status == FileStatus::Deleting);
 
             if is_pending_transfer || is_pending_delete {
                 file.status = FileStatus::Completed;
@@ -1177,19 +1080,11 @@ pub fn sp_mark_pending_files_as_failed(
     actual_downloads: u32,
     label: Option<String>,
 ) -> Result<(), String> {
-    mark_pending_files_as_failed(
-        &state.sync,
-        actual_uploads,
-        actual_downloads,
-        label.as_deref().unwrap_or("default"),
-    )
+    mark_pending_files_as_failed(&state.sync, actual_uploads, actual_downloads, label.as_deref().unwrap_or("default"))
 }
 
 /// Mark every pending/in-progress file as failed with the given error message.
-pub fn mark_all_pending_files_as_failed(
-    sync: &crate::sync_engine::SyncEngine,
-    error_message: String,
-) -> Result<(), String> {
+pub fn mark_all_pending_files_as_failed(sync: &crate::sync_engine::SyncEngine, error_message: String) -> Result<(), String> {
     let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
         warn!("Poisoned mutex recovered in mark_all_pending_files_as_failed");
         poisoned.into_inner()
@@ -1226,19 +1121,12 @@ pub fn mark_all_pending_files_as_failed(
 }
 
 #[tauri::command]
-pub fn sp_mark_all_pending_files_as_failed(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    error_message: String,
-) -> Result<(), String> {
+pub fn sp_mark_all_pending_files_as_failed(state: tauri::State<'_, crate::app_state::AppState>, error_message: String) -> Result<(), String> {
     mark_all_pending_files_as_failed(&state.sync, error_message)
 }
 
 /// Mark a specific file as having encountered an error.
-pub fn mark_file_error(
-    sync: &crate::sync_engine::SyncEngine,
-    path: String,
-    error: String,
-) -> Result<(), String> {
+pub fn mark_file_error(sync: &crate::sync_engine::SyncEngine, path: String, error: String) -> Result<(), String> {
     let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
         warn!("Poisoned mutex recovered in mark_file_error");
         poisoned.into_inner()
@@ -1246,14 +1134,14 @@ pub fn mark_file_error(
 
     let now = now_ms();
 
-    if let Some(session) = state.current_session.as_mut() {
-        if let Some(file) = session.files.get_mut(&path) {
-            file.status = FileStatus::Error;
-            file.error = Some(error);
-            file.completed_at = Some(now);
-            file.bytes_transferred = 0;
-            file.progress = 0;
-        }
+    if let Some(session) = state.current_session.as_mut()
+        && let Some(file) = session.files.get_mut(&path)
+    {
+        file.status = FileStatus::Error;
+        file.error = Some(error);
+        file.completed_at = Some(now);
+        file.bytes_transferred = 0;
+        file.progress = 0;
     }
 
     state.last_updated = now;
@@ -1263,38 +1151,29 @@ pub fn mark_file_error(
 }
 
 #[tauri::command]
-pub fn sp_mark_file_error(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    path: String,
-    error: String,
-) -> Result<(), String> {
+pub fn sp_mark_file_error(state: tauri::State<'_, crate::app_state::AppState>, path: String, error: String) -> Result<(), String> {
     mark_file_error(&state.sync, path, error)
 }
 
 /// Compute overall progress from the current session.
-pub fn get_overall_progress(
-    sync: &crate::sync_engine::SyncEngine,
-) -> Result<OverallProgress, String> {
+pub fn get_overall_progress(sync: &crate::sync_engine::SyncEngine) -> Result<OverallProgress, String> {
     let state = sync.progress.lock().unwrap_or_else(|poisoned| {
         warn!("Poisoned mutex recovered in get_overall_progress");
         poisoned.into_inner()
     });
 
-    let session = match state.current_session.as_ref() {
-        Some(s) => s,
-        None => {
-            return Ok(OverallProgress {
-                is_active: false,
-                total_files: 0,
-                completed_files: 0,
-                in_progress_files: 0,
-                failed_files: 0,
-                overall_percent: 0,
-                progress_bytes: 0,
-                total_bytes_expected: 0,
-                current_file: None,
-            });
-        }
+    let Some(session) = state.current_session.as_ref() else {
+        return Ok(OverallProgress {
+            is_active: false,
+            total_files: 0,
+            completed_files: 0,
+            in_progress_files: 0,
+            failed_files: 0,
+            overall_percent: 0,
+            progress_bytes: 0,
+            total_bytes_expected: 0,
+            current_file: None,
+        });
     };
 
     // Single pass over all files to collect counts, byte totals, and
@@ -1316,16 +1195,10 @@ pub fn get_overall_progress(
                     total_progress_bytes += f.total_bytes;
                 }
             }
-            FileStatus::Encrypting
-            | FileStatus::Decrypting
-            | FileStatus::Uploading
-            | FileStatus::Downloading
-            | FileStatus::Deleting => {
+            FileStatus::Encrypting | FileStatus::Decrypting | FileStatus::Uploading | FileStatus::Downloading | FileStatus::Deleting => {
                 in_progress_files += 1;
                 if !should_hide_file(&f.path) {
-                    let dominated = current_file
-                        .as_ref()
-                        .map_or(true, |cur| f.started_at > cur.started_at);
+                    let dominated = current_file.as_ref().is_none_or(|cur| f.started_at > cur.started_at);
                     if dominated {
                         current_file = Some(f.clone());
                     }
@@ -1347,7 +1220,7 @@ pub fn get_overall_progress(
                     total_bytes_expected += f.total_bytes;
                 }
             }
-            _ => {
+            FileStatus::Pending => {
                 if f.total_bytes > 0 {
                     total_bytes_expected += f.total_bytes;
                 }
@@ -1383,18 +1256,12 @@ pub fn get_overall_progress(
 }
 
 #[tauri::command]
-pub fn sp_get_overall_progress(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<OverallProgress, String> {
+pub fn sp_get_overall_progress(state: tauri::State<'_, crate::app_state::AppState>) -> Result<OverallProgress, String> {
     get_overall_progress(&state.sync)
 }
 
 /// Record a deleted file in the recent files list.
-pub fn record_deleted_file(
-    sync: &crate::sync_engine::SyncEngine,
-    file_name: String,
-    size_bytes: u64,
-) -> Result<(), String> {
+pub fn record_deleted_file(sync: &crate::sync_engine::SyncEngine, file_name: String, size_bytes: u64) -> Result<(), String> {
     let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
         warn!("Poisoned mutex recovered in record_deleted_file");
         poisoned.into_inner()
@@ -1404,8 +1271,7 @@ pub fn record_deleted_file(
     let session_id = state
         .current_session
         .as_ref()
-        .map(|s| s.session_id.clone())
-        .unwrap_or_else(|| "no_session".to_string());
+        .map_or_else(|| "no_session".to_string(), |s| s.session_id.clone());
 
     let display_name = if is_encrypted_file_id(&file_name) {
         "Encrypted file".to_string()
@@ -1434,20 +1300,13 @@ pub fn record_deleted_file(
 }
 
 #[tauri::command]
-pub fn sp_record_deleted_file(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    file_name: String,
-    size_bytes: u64,
-) -> Result<(), String> {
+pub fn sp_record_deleted_file(state: tauri::State<'_, crate::app_state::AppState>, file_name: String, size_bytes: u64) -> Result<(), String> {
     record_deleted_file(&state.sync, file_name, size_bytes)
 }
 
 /// Remove all files for a given drive label from the current session.
 /// Completed files are moved to recent; remaining files are dropped.
-pub fn remove_files_for_label(
-    sync: &crate::sync_engine::SyncEngine,
-    label: String,
-) -> Result<(), String> {
+pub fn remove_files_for_label(sync: &crate::sync_engine::SyncEngine, label: String) -> Result<(), String> {
     let mut state = sync.progress.lock().unwrap_or_else(|poisoned| {
         warn!("Poisoned mutex recovered in remove_files_for_label");
         poisoned.into_inner()
@@ -1459,11 +1318,7 @@ pub fn remove_files_for_label(
     let new_recent: Vec<RecentFile> = if let Some(session) = &state.current_session {
         let session_id = &session.session_id;
 
-        let existing: std::collections::HashSet<(&str, &str)> = state
-            .recent_files
-            .iter()
-            .map(|r| (r.path.as_str(), r.session_id.as_str()))
-            .collect();
+        let existing: std::collections::HashSet<(&str, &str)> = state.recent_files.iter().map(|r| (r.path.as_str(), r.session_id.as_str())).collect();
 
         session
             .files
@@ -1501,10 +1356,7 @@ pub fn remove_files_for_label(
 }
 
 #[tauri::command]
-pub fn sp_remove_files_for_label(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    label: String,
-) -> Result<(), String> {
+pub fn sp_remove_files_for_label(state: tauri::State<'_, crate::app_state::AppState>, label: String) -> Result<(), String> {
     remove_files_for_label(&state.sync, label)
 }
 
@@ -1525,9 +1377,7 @@ pub fn clear_all_data(sync: &crate::sync_engine::SyncEngine) -> Result<(), Strin
 }
 
 #[tauri::command]
-pub fn sp_clear_all_data(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<(), String> {
+pub fn sp_clear_all_data(state: tauri::State<'_, crate::app_state::AppState>) -> Result<(), String> {
     clear_all_data(&state.sync)
 }
 
@@ -1554,9 +1404,7 @@ pub fn get_snapshot(sync: &crate::sync_engine::SyncEngine) -> Result<SyncSnapsho
 }
 
 #[tauri::command]
-pub fn sp_get_snapshot(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<SyncSnapshot, String> {
+pub fn sp_get_snapshot(state: tauri::State<'_, crate::app_state::AppState>) -> Result<SyncSnapshot, String> {
     get_snapshot(&state.sync)
 }
 
@@ -1581,9 +1429,9 @@ mod tests {
     /// Helper: reset shared engine state before each test.
     /// Returns a guard that serializes access — hold it for the test's lifetime.
     fn reset_state() -> MutexGuard<'static, ()> {
-        let guard = TEST_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let guard = TEST_MUTEX.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let eng = test_sync();
-        let mut state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = eng.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.current_session = None;
         state.recent_files.clear();
         state.last_updated = now_ms();
@@ -1591,13 +1439,7 @@ mod tests {
     }
 
     /// Create a SyncFile for testing with common defaults.
-    fn make_file(
-        path: &str,
-        total_bytes: u64,
-        action: FileAction,
-        status: FileStatus,
-        bytes_transferred: u64,
-    ) -> SyncFile {
+    fn make_file(path: &str, total_bytes: u64, action: FileAction, status: FileStatus, bytes_transferred: u64) -> SyncFile {
         SyncFile {
             id: generate_file_id(path),
             path: path.to_string(),
@@ -1615,11 +1457,7 @@ mod tests {
             total_bytes,
             resumed_from_bytes: None,
             started_at: now_ms(),
-            completed_at: if status == FileStatus::Completed {
-                Some(now_ms())
-            } else {
-                None
-            },
+            completed_at: if status == FileStatus::Completed { Some(now_ms()) } else { None },
             error: None,
         }
     }
@@ -1652,27 +1490,9 @@ mod tests {
     #[test]
     fn snapshot_sorts_biggest_first() {
         let state = state_with_files(vec![
-            make_file(
-                "/small.txt",
-                100,
-                FileAction::Upload,
-                FileStatus::Pending,
-                0,
-            ),
-            make_file(
-                "/big.zip",
-                50_000,
-                FileAction::Upload,
-                FileStatus::Pending,
-                0,
-            ),
-            make_file(
-                "/medium.pdf",
-                5_000,
-                FileAction::Download,
-                FileStatus::Pending,
-                0,
-            ),
+            make_file("/small.txt", 100, FileAction::Upload, FileStatus::Pending, 0),
+            make_file("/big.zip", 50_000, FileAction::Upload, FileStatus::Pending, 0),
+            make_file("/medium.pdf", 5_000, FileAction::Download, FileStatus::Pending, 0),
         ]);
         let snapshot = build_snapshot(&state);
         assert_eq!(snapshot.files.len(), 3);
@@ -1684,27 +1504,9 @@ mod tests {
     #[test]
     fn snapshot_unknown_size_files_last() {
         let state = state_with_files(vec![
-            make_file(
-                "/known.txt",
-                500,
-                FileAction::Upload,
-                FileStatus::Pending,
-                0,
-            ),
-            make_file(
-                "/unknown.dat",
-                0,
-                FileAction::Download,
-                FileStatus::Pending,
-                0,
-            ),
-            make_file(
-                "/also_known.pdf",
-                200,
-                FileAction::Upload,
-                FileStatus::Pending,
-                0,
-            ),
+            make_file("/known.txt", 500, FileAction::Upload, FileStatus::Pending, 0),
+            make_file("/unknown.dat", 0, FileAction::Download, FileStatus::Pending, 0),
+            make_file("/also_known.pdf", 200, FileAction::Upload, FileStatus::Pending, 0),
         ]);
         let snapshot = build_snapshot(&state);
         assert_eq!(snapshot.files[0].file_name, "known.txt");
@@ -1715,20 +1517,8 @@ mod tests {
     #[test]
     fn snapshot_overall_percent_byte_weighted() {
         let state = state_with_files(vec![
-            make_file(
-                "/a.txt",
-                1000,
-                FileAction::Upload,
-                FileStatus::Uploading,
-                800,
-            ),
-            make_file(
-                "/b.txt",
-                4000,
-                FileAction::Upload,
-                FileStatus::Uploading,
-                200,
-            ),
+            make_file("/a.txt", 1000, FileAction::Upload, FileStatus::Uploading, 800),
+            make_file("/b.txt", 4000, FileAction::Upload, FileStatus::Uploading, 200),
         ]);
         let snapshot = build_snapshot(&state);
         assert_eq!(snapshot.progress_bytes, 1000);
@@ -1739,20 +1529,8 @@ mod tests {
     #[test]
     fn snapshot_100_when_all_completed() {
         let state = state_with_files(vec![
-            make_file(
-                "/a.txt",
-                1000,
-                FileAction::Upload,
-                FileStatus::Completed,
-                1000,
-            ),
-            make_file(
-                "/b.txt",
-                2000,
-                FileAction::Download,
-                FileStatus::Completed,
-                2000,
-            ),
+            make_file("/a.txt", 1000, FileAction::Upload, FileStatus::Completed, 1000),
+            make_file("/b.txt", 2000, FileAction::Download, FileStatus::Completed, 2000),
         ]);
         let snapshot = build_snapshot(&state);
         assert_eq!(snapshot.overall_percent, 100);
@@ -1763,13 +1541,7 @@ mod tests {
     #[test]
     fn snapshot_with_completed_and_failed() {
         let state = state_with_files(vec![
-            make_file(
-                "/a.txt",
-                1000,
-                FileAction::Upload,
-                FileStatus::Completed,
-                1000,
-            ),
+            make_file("/a.txt", 1000, FileAction::Upload, FileStatus::Completed, 1000),
             make_file("/b.txt", 2000, FileAction::Upload, FileStatus::Error, 500),
         ]);
         let snapshot = build_snapshot(&state);
@@ -1798,51 +1570,18 @@ mod tests {
     #[test]
     fn snapshot_maps_status_correctly() {
         let state = state_with_files(vec![
-            make_file(
-                "/pending.txt",
-                100,
-                FileAction::Upload,
-                FileStatus::Pending,
-                0,
-            ),
-            make_file(
-                "/uploading.txt",
-                100,
-                FileAction::Upload,
-                FileStatus::Uploading,
-                50,
-            ),
-            make_file(
-                "/downloading.txt",
-                100,
-                FileAction::Download,
-                FileStatus::Downloading,
-                50,
-            ),
-            make_file(
-                "/deleting.txt",
-                100,
-                FileAction::LocalDelete,
-                FileStatus::Deleting,
-                0,
-            ),
-            make_file(
-                "/completed.txt",
-                100,
-                FileAction::Upload,
-                FileStatus::Completed,
-                100,
-            ),
+            make_file("/pending.txt", 100, FileAction::Upload, FileStatus::Pending, 0),
+            make_file("/uploading.txt", 100, FileAction::Upload, FileStatus::Uploading, 50),
+            make_file("/downloading.txt", 100, FileAction::Download, FileStatus::Downloading, 50),
+            make_file("/deleting.txt", 100, FileAction::LocalDelete, FileStatus::Deleting, 0),
+            make_file("/completed.txt", 100, FileAction::Upload, FileStatus::Completed, 100),
             make_file("/error.txt", 100, FileAction::Upload, FileStatus::Error, 0),
         ]);
         let snapshot = build_snapshot(&state);
         let find = |name: &str| snapshot.files.iter().find(|f| f.file_name == name).unwrap();
         assert_eq!(find("pending.txt").status, FileProgressStatus::Pending);
         assert_eq!(find("uploading.txt").status, FileProgressStatus::InProgress);
-        assert_eq!(
-            find("downloading.txt").status,
-            FileProgressStatus::InProgress
-        );
+        assert_eq!(find("downloading.txt").status, FileProgressStatus::InProgress);
         assert_eq!(find("deleting.txt").status, FileProgressStatus::InProgress);
         assert_eq!(find("completed.txt").status, FileProgressStatus::Completed);
         assert_eq!(find("error.txt").status, FileProgressStatus::Error);
@@ -1892,17 +1631,11 @@ mod tests {
         // Session should still exist (inactive) so the UI can show
         // completed state via overallProgress. It gets replaced on
         // the next start_session call.
-        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
-        let session = state
-            .current_session
-            .as_ref()
-            .expect("Session should be kept");
+        let state = eng.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let session = state.current_session.as_ref().expect("Session should be kept");
         assert!(!session.is_active, "Session should be inactive");
         assert!(
-            session
-                .files
-                .values()
-                .all(|f| f.status == FileStatus::Completed),
+            session.files.values().all(|f| f.status == FileStatus::Completed),
             "All files should be completed"
         );
         // File should also be in recent
@@ -1922,15 +1655,7 @@ mod tests {
             remote_delete_files: None,
         };
         start_session(eng, 1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
-        update_file_progress(
-            eng,
-            "/test/old.txt".to_string(),
-            50,
-            50,
-            FileAction::Upload,
-            Some("d1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/test/old.txt".to_string(), 50, 50, FileAction::Upload, Some("d1".to_string())).unwrap();
         complete_session(eng, 1, 0).unwrap();
 
         // Start a new session — old completed files should move to recent
@@ -1942,7 +1667,7 @@ mod tests {
         };
         start_session(eng, 1, 0, 0, 0, Some(new_list), Some("d1".to_string())).unwrap();
 
-        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let state = eng.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let session = state.current_session.as_ref().unwrap();
         assert!(session.is_active);
         assert!(session.files.contains_key("/test/new.txt"));
@@ -1963,23 +1688,12 @@ mod tests {
             remote_delete_files: None,
         };
         start_session(eng, 1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
-        update_file_progress(
-            eng,
-            "/test/a.txt".to_string(),
-            50,
-            50,
-            FileAction::Upload,
-            Some("d1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/test/a.txt".to_string(), 50, 50, FileAction::Upload, Some("d1".to_string())).unwrap();
         complete_session(eng, 1, 0).unwrap();
 
         // Session is kept (inactive) so snapshot should still show files
         let snapshot = get_snapshot(eng).unwrap();
-        assert!(
-            snapshot.total_files > 0,
-            "Completed session should still report files"
-        );
+        assert!(snapshot.total_files > 0, "Completed session should still report files");
 
         // After clearing all data, snapshot should be empty
         clear_all_data(eng).unwrap();
@@ -2007,32 +1721,15 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        merge_into_session(
-            eng,
-            1,
-            0,
-            0,
-            0,
-            Some(file_list2),
-            Some("drive2".to_string()),
-        )
-        .unwrap();
+        merge_into_session(eng, 1, 0, 0, 0, Some(file_list2), Some("drive2".to_string())).unwrap();
 
         // Complete drive1's file
-        update_file_progress(
-            eng,
-            "/drive1/a.txt".to_string(),
-            100,
-            100,
-            FileAction::Upload,
-            Some("drive1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/drive1/a.txt".to_string(), 100, 100, FileAction::Upload, Some("drive1".to_string())).unwrap();
 
         // Remove drive1 files
         remove_files_for_label(eng, "drive1".to_string()).unwrap();
 
-        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let state = eng.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let session = state.current_session.as_ref().unwrap();
 
         // drive2's file should still exist
@@ -2056,7 +1753,7 @@ mod tests {
         };
         start_session(eng, 1, 0, 0, 0, Some(file_list), Some("photos".to_string())).unwrap();
 
-        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let state = eng.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let session = state.current_session.as_ref().unwrap();
         let file = session.files.get("/myfile.txt").unwrap();
         assert_eq!(file.label, "photos");
@@ -2074,23 +1771,11 @@ mod tests {
             remote_delete_files: None,
         };
         start_session(eng, 1, 0, 0, 0, Some(file_list), Some("docs".to_string())).unwrap();
-        update_file_progress(
-            eng,
-            "/myfile.txt".to_string(),
-            100,
-            100,
-            FileAction::Upload,
-            Some("docs".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/myfile.txt".to_string(), 100, 100, FileAction::Upload, Some("docs".to_string())).unwrap();
         complete_session(eng, 1, 0).unwrap();
 
-        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
-        let recent = state
-            .recent_files
-            .iter()
-            .find(|r| r.path == "/myfile.txt")
-            .unwrap();
+        let state = eng.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let recent = state.recent_files.iter().find(|r| r.path == "/myfile.txt").unwrap();
         assert_eq!(recent.label, "docs");
     }
 
@@ -2109,15 +1794,7 @@ mod tests {
         start_session(eng, 1, 1, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
         // Upload is 50% done
-        update_file_progress(
-            eng,
-            "/photo.jpg".to_string(),
-            500,
-            1000,
-            FileAction::Upload,
-            Some("d1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/photo.jpg".to_string(), 500, 1000, FileAction::Upload, Some("d1".to_string())).unwrap();
 
         let progress = get_overall_progress(eng).unwrap();
         // Both files should be counted (including the encrypted download)
@@ -2162,26 +1839,10 @@ mod tests {
         start_session(eng, 2, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
         // File A reports partial progress
-        update_file_progress(
-            eng,
-            "/a.txt".to_string(),
-            500,
-            1000,
-            FileAction::Upload,
-            Some("d1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/a.txt".to_string(), 500, 1000, FileAction::Upload, Some("d1".to_string())).unwrap();
 
         // File B reports partial progress too
-        update_file_progress(
-            eng,
-            "/b.txt".to_string(),
-            200,
-            400,
-            FileAction::Upload,
-            Some("d1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/b.txt".to_string(), 200, 400, FileAction::Upload, Some("d1".to_string())).unwrap();
 
         // Force-complete all pending files
         complete_pending_files(eng, "d1").unwrap();
@@ -2200,11 +1861,7 @@ mod tests {
         // Register 3 files: one completes, one has partial progress,
         // one never receives any progress data (stalled).
         let file_list = SessionFileList {
-            upload_files: Some(vec![
-                "/completed.txt".to_string(),
-                "/partial.txt".to_string(),
-                "/stalled.txt".to_string(),
-            ]),
+            upload_files: Some(vec!["/completed.txt".to_string(), "/partial.txt".to_string(), "/stalled.txt".to_string()]),
             download_files: None,
             local_delete_files: None,
             remote_delete_files: None,
@@ -2212,26 +1869,10 @@ mod tests {
         start_session(eng, 3, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
         // File 1: fully transferred (auto-completes in update)
-        update_file_progress(
-            eng,
-            "/completed.txt".to_string(),
-            1000,
-            1000,
-            FileAction::Upload,
-            Some("d1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/completed.txt".to_string(), 1000, 1000, FileAction::Upload, Some("d1".to_string())).unwrap();
 
         // File 2: partial progress (bytes_transferred > 0)
-        update_file_progress(
-            eng,
-            "/partial.txt".to_string(),
-            500,
-            1000,
-            FileAction::Upload,
-            Some("d1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/partial.txt".to_string(), 500, 1000, FileAction::Upload, Some("d1".to_string())).unwrap();
 
         // File 3 (/stalled.txt): never receives progress — stays Pending
         // with bytes_transferred == 0.
@@ -2239,7 +1880,7 @@ mod tests {
         // Force-complete all pending files
         complete_pending_files(eng, "d1").unwrap();
 
-        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let state = eng.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let session = state.current_session.as_ref().unwrap();
 
         // Completed file stays Completed
@@ -2340,15 +1981,7 @@ mod tests {
         };
         start_session(eng, 1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
-        update_file_progress(
-            eng,
-            "/a.txt".to_string(),
-            800,
-            1000,
-            FileAction::Upload,
-            Some("d1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/a.txt".to_string(), 800, 1000, FileAction::Upload, Some("d1".to_string())).unwrap();
 
         let p1 = get_overall_progress(eng).unwrap();
         assert_eq!(p1.overall_percent, 80);
@@ -2364,15 +1997,7 @@ mod tests {
         };
         merge_into_session(eng, 1, 0, 0, 0, Some(merge_list), Some("d1".to_string())).unwrap();
 
-        update_file_progress(
-            eng,
-            "/big.bin".to_string(),
-            0,
-            10000,
-            FileAction::Upload,
-            Some("d1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/big.bin".to_string(), 0, 10000, FileAction::Upload, Some("d1".to_string())).unwrap();
 
         let p2 = get_overall_progress(eng).unwrap();
         assert_eq!(p2.total_files, 2);
@@ -2390,11 +2015,7 @@ mod tests {
 
         // 3 files: all completed → must be exactly 100, not 99
         let file_list = SessionFileList {
-            upload_files: Some(vec![
-                "/a.txt".to_string(),
-                "/b.txt".to_string(),
-                "/c.txt".to_string(),
-            ]),
+            upload_files: Some(vec!["/a.txt".to_string(), "/b.txt".to_string(), "/c.txt".to_string()]),
             download_files: None,
             local_delete_files: None,
             remote_delete_files: None,
@@ -2402,15 +2023,7 @@ mod tests {
         start_session(eng, 3, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
         for path in ["/a.txt", "/b.txt", "/c.txt"] {
-            update_file_progress(
-                eng,
-                path.to_string(),
-                1000,
-                1000,
-                FileAction::Upload,
-                Some("d1".to_string()),
-            )
-            .unwrap();
+            update_file_progress(eng, path.to_string(), 1000, 1000, FileAction::Upload, Some("d1".to_string())).unwrap();
         }
 
         let p = get_overall_progress(eng).unwrap();
@@ -2433,15 +2046,7 @@ mod tests {
         start_session(eng, 2, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
         // Only update one file — the other stays Pending
-        update_file_progress(
-            eng,
-            "/a.txt".to_string(),
-            1000,
-            1000,
-            FileAction::Upload,
-            Some("d1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/a.txt".to_string(), 1000, 1000, FileAction::Upload, Some("d1".to_string())).unwrap();
 
         let p = get_overall_progress(eng).unwrap();
         // /a.txt auto-completed (1000/1000), /b.txt still Pending (no bytes).
@@ -2469,16 +2074,9 @@ mod tests {
 
         for step in 1..=20 {
             let bytes = (total / 20) * step;
-            let result = update_file_progress(
-                eng,
-                "/big.bin".to_string(),
-                bytes,
-                total,
-                FileAction::Upload,
-                Some("d1".to_string()),
-            )
-            .unwrap()
-            .expect("file should exist");
+            let result = update_file_progress(eng, "/big.bin".to_string(), bytes, total, FileAction::Upload, Some("d1".to_string()))
+                .unwrap()
+                .expect("file should exist");
 
             assert!(
                 result.bytes_transferred >= prev_bytes,
@@ -2503,10 +2101,7 @@ mod tests {
         )
         .unwrap()
         .expect("file should exist");
-        assert_eq!(
-            stale.bytes_transferred, total,
-            "stale callback must not regress bytes"
-        );
+        assert_eq!(stale.bytes_transferred, total, "stale callback must not regress bytes");
     }
 
     /// Encrypt→Upload transition: bytes_encrypted tracks encrypt phase,
@@ -2529,21 +2124,11 @@ mod tests {
         // Encrypt phase: bytes_encrypted climbs, bytes_transferred stays 0
         for pct in &[25, 50, 75, 100] {
             let bytes = total * pct / 100;
-            let r = update_file_progress(
-                eng,
-                "/doc.pdf".to_string(),
-                bytes,
-                total,
-                FileAction::Encrypt,
-                Some("d1".to_string()),
-            )
-            .unwrap()
-            .expect("file should exist");
+            let r = update_file_progress(eng, "/doc.pdf".to_string(), bytes, total, FileAction::Encrypt, Some("d1".to_string()))
+                .unwrap()
+                .expect("file should exist");
 
-            assert_eq!(
-                r.bytes_transferred, 0,
-                "encrypt must not touch bytes_transferred"
-            );
+            assert_eq!(r.bytes_transferred, 0, "encrypt must not touch bytes_transferred");
             assert_eq!(r.bytes_encrypted, bytes);
             if *pct == 100 {
                 // When encryption completes, the file transitions to Uploading
@@ -2563,33 +2148,17 @@ mod tests {
         // Upload phase starts: bytes_transferred climbs, bytes_encrypted stays at total
         for pct in &[10, 50, 100] {
             let bytes = total * pct / 100;
-            let r = update_file_progress(
-                eng,
-                "/doc.pdf".to_string(),
-                bytes,
-                total,
-                FileAction::Upload,
-                Some("d1".to_string()),
-            )
-            .unwrap()
-            .expect("file should exist");
+            let r = update_file_progress(eng, "/doc.pdf".to_string(), bytes, total, FileAction::Upload, Some("d1".to_string()))
+                .unwrap()
+                .expect("file should exist");
 
-            assert_eq!(
-                r.bytes_encrypted, total,
-                "encrypt bytes must not change during upload"
-            );
+            assert_eq!(r.bytes_encrypted, total, "encrypt bytes must not change during upload");
             assert_eq!(r.bytes_transferred, bytes);
         }
 
         // File should be completed after upload reaches 100%
         let state = eng.progress.lock().unwrap();
-        let file = state
-            .current_session
-            .as_ref()
-            .unwrap()
-            .files
-            .get("/doc.pdf")
-            .unwrap();
+        let file = state.current_session.as_ref().unwrap().files.get("/doc.pdf").unwrap();
         assert_eq!(file.status, FileStatus::Completed);
         assert_eq!(file.progress, 100);
     }
@@ -2609,49 +2178,16 @@ mod tests {
         start_session(eng, 1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
         // First callback sets total_bytes
-        update_file_progress(
-            eng,
-            "/f.txt".to_string(),
-            0,
-            5000,
-            FileAction::Encrypt,
-            Some("d1".to_string()),
-        )
-        .unwrap();
-        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
-        assert_eq!(
-            state
-                .current_session
-                .as_ref()
-                .unwrap()
-                .files
-                .get("/f.txt")
-                .unwrap()
-                .total_bytes,
-            5000
-        );
+        update_file_progress(eng, "/f.txt".to_string(), 0, 5000, FileAction::Encrypt, Some("d1".to_string())).unwrap();
+        let state = eng.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(state.current_session.as_ref().unwrap().files.get("/f.txt").unwrap().total_bytes, 5000);
         drop(state);
 
         // Subsequent callback with different total must not overwrite
-        update_file_progress(
-            eng,
-            "/f.txt".to_string(),
-            100,
-            9999,
-            FileAction::Upload,
-            Some("d1".to_string()),
-        )
-        .unwrap();
-        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        update_file_progress(eng, "/f.txt".to_string(), 100, 9999, FileAction::Upload, Some("d1".to_string())).unwrap();
+        let state = eng.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(
-            state
-                .current_session
-                .as_ref()
-                .unwrap()
-                .files
-                .get("/f.txt")
-                .unwrap()
-                .total_bytes,
+            state.current_session.as_ref().unwrap().files.get("/f.txt").unwrap().total_bytes,
             5000,
             "total_bytes must not change after initial set"
         );
@@ -2731,16 +2267,9 @@ mod tests {
         start_session(eng, 0, 1, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
         // First callback starts from 0
-        let result = update_file_progress(
-            eng,
-            "/new_file.txt".to_string(),
-            0,
-            500_000,
-            FileAction::Download,
-            Some("d1".to_string()),
-        )
-        .unwrap()
-        .expect("file should exist");
+        let result = update_file_progress(eng, "/new_file.txt".to_string(), 0, 500_000, FileAction::Download, Some("d1".to_string()))
+            .unwrap()
+            .expect("file should exist");
 
         assert_eq!(result.resumed_from_bytes, None);
     }
@@ -2802,24 +2331,10 @@ mod tests {
         start_session(eng, 1, 0, 0, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
         // No encrypt callbacks — upload starts directly (cache hit)
-        update_file_progress(
-            eng,
-            "/cached.pdf".to_string(),
-            500,
-            1000,
-            FileAction::Upload,
-            Some("d1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/cached.pdf".to_string(), 500, 1000, FileAction::Upload, Some("d1".to_string())).unwrap();
 
-        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
-        let file = state
-            .current_session
-            .as_ref()
-            .unwrap()
-            .files
-            .get("/cached.pdf")
-            .unwrap();
+        let state = eng.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let file = state.current_session.as_ref().unwrap().files.get("/cached.pdf").unwrap();
 
         assert_eq!(file.status, FileStatus::Uploading);
         assert_eq!(file.bytes_encrypted, 0, "no encrypt callbacks fired");
@@ -2828,16 +2343,9 @@ mod tests {
         drop(state);
 
         // Complete the upload
-        let result = update_file_progress(
-            eng,
-            "/cached.pdf".to_string(),
-            1000,
-            1000,
-            FileAction::Upload,
-            Some("d1".to_string()),
-        )
-        .unwrap()
-        .expect("file should exist");
+        let result = update_file_progress(eng, "/cached.pdf".to_string(), 1000, 1000, FileAction::Upload, Some("d1".to_string()))
+            .unwrap()
+            .expect("file should exist");
 
         assert_eq!(result.status, FileStatus::Completed);
         assert_eq!(result.progress, 100);
@@ -2868,21 +2376,12 @@ mod tests {
         .unwrap()
         .expect("file should exist");
 
-        assert_eq!(
-            result.resumed_from_bytes, None,
-            "encrypt progress must not trigger resume detection"
-        );
+        assert_eq!(result.resumed_from_bytes, None, "encrypt progress must not trigger resume detection");
     }
 
     #[test]
     fn resumed_from_bytes_in_snapshot() {
-        let mut file = make_file(
-            "/resumed.bin",
-            1_000_000,
-            FileAction::Download,
-            FileStatus::Downloading,
-            500_000,
-        );
+        let mut file = make_file("/resumed.bin", 1_000_000, FileAction::Download, FileStatus::Downloading, 500_000);
         file.resumed_from_bytes = Some(200_000);
         let state = state_with_files(vec![file]);
 
@@ -2899,16 +2398,11 @@ mod tests {
         // Drive A: 3 downloads
         let drive_a_files = SessionFileList {
             upload_files: None,
-            download_files: Some(vec![
-                "file_a1.mp3".to_string(),
-                "file_a2.mp3".to_string(),
-                "file_a3.json".to_string(),
-            ]),
+            download_files: Some(vec!["file_a1.mp3".to_string(), "file_a2.mp3".to_string(), "file_a3.json".to_string()]),
             local_delete_files: None,
             remote_delete_files: None,
         };
-        merge_into_session(eng, 0, 3, 0, 0, Some(drive_a_files), Some("drive-a".to_string()))
-            .unwrap();
+        merge_into_session(eng, 0, 3, 0, 0, Some(drive_a_files), Some("drive-a".to_string())).unwrap();
 
         // Drive B: 4 downloads
         let drive_b_files = SessionFileList {
@@ -2922,8 +2416,7 @@ mod tests {
             local_delete_files: None,
             remote_delete_files: None,
         };
-        merge_into_session(eng, 0, 4, 0, 0, Some(drive_b_files), Some("drive-b".to_string()))
-            .unwrap();
+        merge_into_session(eng, 0, 4, 0, 0, Some(drive_b_files), Some("drive-b".to_string())).unwrap();
 
         // Verify merged session has 7 files total
         {
@@ -2968,10 +2461,7 @@ mod tests {
                 .values()
                 .filter(|f| f.label == "drive-b" && f.status == FileStatus::Pending)
                 .count();
-            assert_eq!(
-                drive_b_pending, 4,
-                "Drive-b files should remain pending, not be marked as failed"
-            );
+            assert_eq!(drive_b_pending, 4, "Drive-b files should remain pending, not be marked as failed");
 
             // Session should still be active
             assert!(session.is_active, "Session should still be active");
@@ -2986,29 +2476,20 @@ mod tests {
         // Drive A: 2 downloads
         let drive_a_files = SessionFileList {
             upload_files: None,
-            download_files: Some(vec![
-                "file_a1.mp3".to_string(),
-                "file_a2.mp3".to_string(),
-            ]),
+            download_files: Some(vec!["file_a1.mp3".to_string(), "file_a2.mp3".to_string()]),
             local_delete_files: None,
             remote_delete_files: None,
         };
-        merge_into_session(eng, 0, 2, 0, 0, Some(drive_a_files), Some("drive-a".to_string()))
-            .unwrap();
+        merge_into_session(eng, 0, 2, 0, 0, Some(drive_a_files), Some("drive-a".to_string())).unwrap();
 
         // Drive B: 3 downloads
         let drive_b_files = SessionFileList {
             upload_files: None,
-            download_files: Some(vec![
-                "file_b1.mp3".to_string(),
-                "file_b2.zip".to_string(),
-                "file_b3.dmg".to_string(),
-            ]),
+            download_files: Some(vec!["file_b1.mp3".to_string(), "file_b2.zip".to_string(), "file_b3.dmg".to_string()]),
             local_delete_files: None,
             remote_delete_files: None,
         };
-        merge_into_session(eng, 0, 3, 0, 0, Some(drive_b_files), Some("drive-b".to_string()))
-            .unwrap();
+        merge_into_session(eng, 0, 3, 0, 0, Some(drive_b_files), Some("drive-b".to_string())).unwrap();
 
         // Drive A: only 1 out of 2 downloaded (1 failed)
         mark_pending_files_as_failed(eng, 0, 1, "drive-a").unwrap();
@@ -3037,10 +2518,7 @@ mod tests {
                 .values()
                 .filter(|f| f.label == "drive-b" && f.status == FileStatus::Pending)
                 .count();
-            assert_eq!(
-                drive_b_pending, 3,
-                "Drive-b files should remain pending when drive-a has failures"
-            );
+            assert_eq!(drive_b_pending, 3, "Drive-b files should remain pending when drive-a has failures");
         }
     }
 
@@ -3064,7 +2542,7 @@ mod tests {
         // complete_pending_files should still mark them Completed (not Error).
         complete_pending_files(eng, "d1").unwrap();
 
-        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let state = eng.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let session = state.current_session.as_ref().unwrap();
 
         let local_del = session.files.get("/local_del.txt").unwrap();
@@ -3109,16 +2587,10 @@ mod tests {
         // complete_session with 0 uploads, 0 downloads
         complete_session(eng, 0, 0).unwrap();
 
-        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let state = eng.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let session = state.current_session.as_ref().unwrap();
-        assert!(
-            !session.is_active,
-            "Session should be finalized (inactive) after delete-only cycle"
-        );
-        assert!(
-            session.completed_at.is_some(),
-            "Session should have completed_at set"
-        );
+        assert!(!session.is_active, "Session should be finalized (inactive) after delete-only cycle");
+        assert!(session.completed_at.is_some(), "Session should have completed_at set");
     }
 
     #[test]
@@ -3138,7 +2610,7 @@ mod tests {
         // Upload fails (0 actual vs 1 expected)
         mark_pending_files_as_failed(eng, 0, 0, "d1").unwrap();
 
-        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let state = eng.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let session = state.current_session.as_ref().unwrap();
 
         // Upload should be marked as failed
@@ -3169,15 +2641,7 @@ mod tests {
         start_session(eng, 1, 0, 1, 0, Some(file_list), Some("d1".to_string())).unwrap();
 
         // Simulate upload progress
-        update_file_progress(
-            eng,
-            "/upload.txt".to_string(),
-            1000,
-            1000,
-            FileAction::Upload,
-            Some("d1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/upload.txt".to_string(), 1000, 1000, FileAction::Upload, Some("d1".to_string())).unwrap();
 
         // complete_pending_files marks remaining (delete) as completed
         complete_pending_files(eng, "d1").unwrap();
@@ -3185,7 +2649,7 @@ mod tests {
         // complete_session should finalize
         complete_session(eng, 1, 0).unwrap();
 
-        let state = eng.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let state = eng.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let session = state.current_session.as_ref().unwrap();
 
         assert!(!session.is_active, "Session should be finalized");
@@ -3210,15 +2674,7 @@ mod tests {
             remote_delete_files: None,
         };
         merge_into_session(eng, 1, 0, 0, 0, Some(file_list), Some("drive1".to_string())).unwrap();
-        update_file_progress(
-            eng,
-            "/doc.txt".to_string(),
-            500,
-            500,
-            FileAction::Upload,
-            Some("drive1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/doc.txt".to_string(), 500, 500, FileAction::Upload, Some("drive1".to_string())).unwrap();
         complete_session(eng, 1, 0).unwrap();
 
         // Capture the completed session's timestamp
@@ -3262,15 +2718,7 @@ mod tests {
             remote_delete_files: None,
         };
         merge_into_session(eng, 1, 0, 0, 0, Some(file_list), Some("cam".to_string())).unwrap();
-        update_file_progress(
-            eng,
-            "/photo.jpg".to_string(),
-            1000,
-            1000,
-            FileAction::Upload,
-            Some("cam".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/photo.jpg".to_string(), 1000, 1000, FileAction::Upload, Some("cam".to_string())).unwrap();
         complete_session(eng, 1, 0).unwrap();
 
         // Session is now inactive with 1 completed file
@@ -3294,10 +2742,7 @@ mod tests {
             FileStatus::Completed,
             "Completed file must remain Completed after no-op mark_pending_files_as_failed"
         );
-        assert!(
-            f.error.is_none(),
-            "No error should be set on already-completed file"
-        );
+        assert!(f.error.is_none(), "No error should be set on already-completed file");
     }
 
     #[test]
@@ -3315,15 +2760,7 @@ mod tests {
         merge_into_session(eng, 1, 0, 0, 0, Some(file_list), Some("drive1".to_string())).unwrap();
 
         // Simulate upload completing
-        update_file_progress(
-            eng,
-            "/video.mkv".to_string(),
-            1000,
-            1000,
-            FileAction::Upload,
-            Some("drive1".to_string()),
-        )
-        .unwrap();
+        update_file_progress(eng, "/video.mkv".to_string(), 1000, 1000, FileAction::Upload, Some("drive1".to_string())).unwrap();
 
         // Complete session
         complete_session(eng, 1, 0).unwrap();
@@ -3349,45 +2786,20 @@ mod tests {
 
         // Cycle 1: 6 files planned
         let cycle1_files = SessionFileList {
-            upload_files: Some(vec![
-                "a.txt".into(),
-                "b.txt".into(),
-                "c.txt".into(),
-            ]),
-            download_files: Some(vec![
-                "d.txt".into(),
-                "e.txt".into(),
-                "f.txt".into(),
-            ]),
+            upload_files: Some(vec!["a.txt".into(), "b.txt".into(), "c.txt".into()]),
+            download_files: Some(vec!["d.txt".into(), "e.txt".into(), "f.txt".into()]),
             local_delete_files: None,
             remote_delete_files: None,
         };
-        merge_into_session(eng, 3, 3, 0, 0, Some(cycle1_files), Some("drive1".to_string()))
-            .unwrap();
+        merge_into_session(eng, 3, 3, 0, 0, Some(cycle1_files), Some("drive1".to_string())).unwrap();
 
         // Simulate progress on each file so complete_pending_files marks
         // them as Completed (files with 0 bytes are marked as stalled/Error).
         for path in &["a.txt", "b.txt", "c.txt"] {
-            update_file_progress(
-                eng,
-                path.to_string(),
-                100,
-                100,
-                FileAction::Upload,
-                Some("drive1".to_string()),
-            )
-            .unwrap();
+            update_file_progress(eng, path.to_string(), 100, 100, FileAction::Upload, Some("drive1".to_string())).unwrap();
         }
         for path in &["d.txt", "e.txt", "f.txt"] {
-            update_file_progress(
-                eng,
-                path.to_string(),
-                100,
-                100,
-                FileAction::Download,
-                Some("drive1".to_string()),
-            )
-            .unwrap();
+            update_file_progress(eng, path.to_string(), 100, 100, FileAction::Download, Some("drive1".to_string())).unwrap();
         }
 
         // Simulate cycle 1 completing: all 6 files finished
@@ -3404,28 +2816,19 @@ mod tests {
             assert!(session.is_active, "Session should still be active (deferred)");
             assert_eq!(session.files.len(), 6, "Should have 6 files from cycle 1");
             assert!(
-                session
-                    .files
-                    .values()
-                    .all(|f| f.status == FileStatus::Completed),
+                session.files.values().all(|f| f.status == FileStatus::Completed),
                 "All cycle 1 files should be completed"
             );
         }
 
         // Cycle 2: 4 new files planned, merged into the still-active session
         let cycle2_files = SessionFileList {
-            upload_files: Some(vec![
-                "g.txt".into(),
-                "h.txt".into(),
-                "i.txt".into(),
-                "j.txt".into(),
-            ]),
+            upload_files: Some(vec!["g.txt".into(), "h.txt".into(), "i.txt".into(), "j.txt".into()]),
             download_files: None,
             local_delete_files: None,
             remote_delete_files: None,
         };
-        merge_into_session(eng, 4, 0, 0, 0, Some(cycle2_files), Some("drive1".to_string()))
-            .unwrap();
+        merge_into_session(eng, 4, 0, 0, 0, Some(cycle2_files), Some("drive1".to_string())).unwrap();
 
         // Verify merged session has 10 files: 6 completed + 4 pending
         let state = eng.progress.lock().unwrap();
@@ -3433,16 +2836,8 @@ mod tests {
         assert!(session.is_active, "Session should remain active");
         assert_eq!(session.files.len(), 10, "Should have 10 files total");
 
-        let completed_count = session
-            .files
-            .values()
-            .filter(|f| f.status == FileStatus::Completed)
-            .count();
-        let pending_count = session
-            .files
-            .values()
-            .filter(|f| f.status == FileStatus::Pending)
-            .count();
+        let completed_count = session.files.values().filter(|f| f.status == FileStatus::Completed).count();
+        let pending_count = session.files.values().filter(|f| f.status == FileStatus::Pending).count();
         assert_eq!(completed_count, 6, "6 files from cycle 1 should be completed");
         assert_eq!(pending_count, 4, "4 files from cycle 2 should be pending");
 

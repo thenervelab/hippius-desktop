@@ -18,9 +18,7 @@ fn validate_pattern(pattern: &str) -> Result<String, String> {
         return Err("Pattern cannot be empty".to_string());
     }
     if trimmed.contains("../") {
-        return Err(
-            "Pattern cannot contain '../' (path traversal)".to_string(),
-        );
+        return Err("Pattern cannot contain '../' (path traversal)".to_string());
     }
     Ok(trimmed)
 }
@@ -31,10 +29,7 @@ fn validate_pattern(pattern: &str) -> Result<String, String> {
 /// then locks the manager to read patterns. Returns an empty list if the
 /// drive does not exist.
 #[tauri::command]
-pub async fn list_exclude_patterns(
-    label: String,
-    app_state: tauri::State<'_, AppState>,
-) -> Result<Vec<String>, String> {
+pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
     let drive_arc = {
         let guard = app_state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
@@ -61,11 +56,7 @@ pub async fn list_exclude_patterns(
 /// patterns), then delegates to `Drive::add_exclude_pattern`. Returns `true`
 /// if the pattern was added, `false` if it already existed.
 #[tauri::command]
-pub async fn add_exclude_pattern(
-    label: String,
-    pattern: String,
-    app_state: tauri::State<'_, AppState>,
-) -> Result<bool, String> {
+pub async fn add_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>) -> Result<bool, String> {
     let trimmed = validate_pattern(&pattern)?;
 
     let drive_arc = {
@@ -96,11 +87,7 @@ pub async fn add_exclude_pattern(
 /// Delegates to `Drive::remove_exclude_pattern`. Returns `true` if the
 /// pattern was removed, `false` if it was not found.
 #[tauri::command]
-pub async fn remove_exclude_pattern(
-    label: String,
-    pattern: String,
-    app_state: tauri::State<'_, AppState>,
-) -> Result<bool, String> {
+pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>) -> Result<bool, String> {
     let drive_arc = {
         let guard = app_state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
@@ -126,12 +113,7 @@ pub async fn remove_exclude_pattern(
 
 /// Check whether a relative path is excluded by the drive's current rules.
 #[tauri::command]
-pub async fn is_file_excluded(
-    label: String,
-    path: String,
-    is_dir: bool,
-    app_state: tauri::State<'_, AppState>,
-) -> Result<bool, String> {
+pub async fn is_file_excluded(label: String, path: String, is_dir: bool, app_state: tauri::State<'_, AppState>) -> Result<bool, String> {
     let drive_arc = {
         let guard = app_state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
@@ -161,30 +143,21 @@ mod tests {
     fn test_validate_empty_pattern_rejected() {
         let result = validate_pattern("");
         assert!(result.is_err());
-        assert!(
-            result.unwrap_err().contains("empty"),
-            "Error should mention 'empty'",
-        );
+        assert!(result.unwrap_err().contains("empty"), "Error should mention 'empty'",);
     }
 
     #[test]
     fn test_validate_whitespace_only_rejected() {
         let result = validate_pattern("   ");
         assert!(result.is_err());
-        assert!(
-            result.unwrap_err().contains("empty"),
-            "Whitespace-only should be treated as empty",
-        );
+        assert!(result.unwrap_err().contains("empty"), "Whitespace-only should be treated as empty",);
     }
 
     #[test]
     fn test_validate_traversal_pattern_rejected() {
         let result = validate_pattern("../secret");
         assert!(result.is_err());
-        assert!(
-            result.unwrap_err().contains("../"),
-            "Error should mention path traversal",
-        );
+        assert!(result.unwrap_err().contains("../"), "Error should mention path traversal",);
 
         let nested = validate_pattern("foo/../bar");
         assert!(nested.is_err());

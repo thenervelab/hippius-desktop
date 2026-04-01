@@ -85,10 +85,7 @@ async fn save_and_get_token_from_scoped_table() {
         .await
         .unwrap();
 
-    assert_eq!(
-        row.get::<Option<String>, _>("api_token").unwrap(),
-        "scoped-token-abc"
-    );
+    assert_eq!(row.get::<Option<String>, _>("api_token").unwrap(), "scoped-token-abc");
 }
 
 #[tokio::test]
@@ -116,10 +113,7 @@ async fn fallback_to_legacy_single_row() {
         .await
         .unwrap();
 
-    assert_eq!(
-        legacy.get::<Option<String>, _>("api_token").unwrap(),
-        "legacy-token-xyz"
-    );
+    assert_eq!(legacy.get::<Option<String>, _>("api_token").unwrap(), "legacy-token-xyz");
 }
 
 // ── Token Fallback ───────────────────────────────────────────────────
@@ -157,10 +151,7 @@ async fn fallback_to_auth_session() {
         .await
         .unwrap();
 
-    assert_eq!(
-        session.get::<Option<String>, _>("auth_token").unwrap(),
-        "session-fallback-token"
-    );
+    assert_eq!(session.get::<Option<String>, _>("auth_token").unwrap(), "session-fallback-token");
 }
 
 // ── Token Expiry ─────────────────────────────────────────────────────
@@ -201,10 +192,7 @@ async fn token_not_expiring_when_far_future() {
         .unwrap();
 
     let expiry = row.get::<Option<i64>, _>("token_expiry");
-    assert!(
-        !is_expiring(expiry),
-        "Token 2 hours out should not be expiring with 1-hour margin"
-    );
+    assert!(!is_expiring(expiry), "Token 2 hours out should not be expiring with 1-hour margin");
 }
 
 #[tokio::test]
@@ -231,10 +219,7 @@ async fn token_expiring_when_within_margin() {
         .unwrap();
 
     let expiry = row.get::<Option<i64>, _>("token_expiry");
-    assert!(
-        is_expiring(expiry),
-        "Token 10 min out should be expiring with 1-hour margin"
-    );
+    assert!(is_expiring(expiry), "Token 10 min out should be expiring with 1-hour margin");
 }
 
 #[tokio::test]
@@ -284,10 +269,7 @@ async fn token_expiring_when_no_expiry_set() {
 
     let expiry = row.get::<Option<i64>, _>("token_expiry");
     assert!(expiry.is_none(), "token_expiry should be NULL");
-    assert!(
-        is_expiring(expiry),
-        "NULL expiry should be treated as expiring"
-    );
+    assert!(is_expiring(expiry), "NULL expiry should be treated as expiring");
 }
 
 #[tokio::test]
@@ -304,10 +286,7 @@ async fn token_expiring_when_no_session_row() {
     assert!(row.is_none(), "No session row should exist");
     // No row means no expiry — treat as expiring
     let expiry: Option<i64> = None;
-    assert!(
-        is_expiring(expiry),
-        "Missing session should be treated as expiring"
-    );
+    assert!(is_expiring(expiry), "Missing session should be treated as expiring");
 }
 
 // ── S3 Credentials ───────────────────────────────────────────────────
@@ -338,11 +317,7 @@ async fn save_and_get_s3_credentials() {
     .await
     .unwrap();
 
-    assert_eq!(
-        row.get::<Option<String>, _>("master_access_key_id")
-            .unwrap(),
-        "AKIAIOSFODNN7EXAMPLE"
-    );
+    assert_eq!(row.get::<Option<String>, _>("master_access_key_id").unwrap(), "AKIAIOSFODNN7EXAMPLE");
     assert_eq!(
         row.get::<Option<String>, _>("master_secret").unwrap(),
         "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
@@ -370,13 +345,13 @@ async fn upsert_token_preserves_s3_credentials() {
 
     // Upsert only the api_token, preserving S3 credentials
     sqlx::query(
-        r#"
+        r"
         INSERT INTO objectstore_auth_scoped (owner, api_token)
         VALUES (?, ?)
         ON CONFLICT(owner) DO UPDATE SET
             api_token = excluded.api_token,
             updated_at = datetime('now')
-        "#,
+        ",
     )
     .bind(&owner)
     .bind("new-api-token")
@@ -399,8 +374,7 @@ async fn upsert_token_preserves_s3_credentials() {
         "api_token should be updated"
     );
     assert_eq!(
-        row.get::<Option<String>, _>("master_access_key_id")
-            .unwrap(),
+        row.get::<Option<String>, _>("master_access_key_id").unwrap(),
         "AKID_KEEP",
         "S3 access key should be preserved after token upsert"
     );
@@ -411,11 +385,10 @@ async fn upsert_token_preserves_s3_credentials() {
     );
 
     // Verify only one row exists
-    let (count,) =
-        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM objectstore_auth_scoped WHERE owner = ?")
-            .bind(&owner)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM objectstore_auth_scoped WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(count, 1);
 }

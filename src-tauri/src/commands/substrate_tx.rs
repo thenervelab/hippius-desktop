@@ -8,9 +8,7 @@
 //! the `sync_paths` SQLite table. Sync paths map a local directory to a labeled
 //! drive slot, with overlap validation to prevent conflicting folder hierarchies.
 
-use crate::substrate_client::{
-    get_current_wss_endpoint, get_substrate_client, update_wss_endpoint,
-};
+use crate::substrate_client::{get_current_wss_endpoint, get_substrate_client, update_wss_endpoint};
 use crate::utils::account_key::account_key;
 use chrono::Utc;
 use serde::Deserialize;
@@ -96,11 +94,7 @@ pub struct SyncPathResult {
 /// Prevents data duplication and conflict: syncing `/Documents` and
 /// `/Documents/Work` simultaneously would cause the same files to be
 /// tracked by two drives.
-fn validate_no_path_overlap(
-    new_path: &Path,
-    new_label: &str,
-    existing: &[(String, String)],
-) -> Result<(), String> {
+fn validate_no_path_overlap(new_path: &Path, new_label: &str, existing: &[(String, String)]) -> Result<(), String> {
     let canonical_new = std::fs::canonicalize(new_path).unwrap_or_else(|_| new_path.to_path_buf());
 
     for (label, path_str) in existing {
@@ -108,20 +102,15 @@ fn validate_no_path_overlap(
             continue;
         }
         let existing_path = Path::new(path_str);
-        let canonical_existing =
-            std::fs::canonicalize(existing_path).unwrap_or_else(|_| existing_path.to_path_buf());
+        let canonical_existing = std::fs::canonicalize(existing_path).unwrap_or_else(|_| existing_path.to_path_buf());
 
         if canonical_new.starts_with(&canonical_existing) {
-            return Err(format!(
-                "This folder is already being synced as part of '{}'",
-                label
-            ));
+            return Err(format!("This folder is already being synced as part of '{label}'"));
         }
         if canonical_existing.starts_with(&canonical_new) {
             return Err(format!(
-                "This folder contains '{}' which is already being synced separately. \
-                 Remove it first if you want to sync the parent folder instead.",
-                label
+                "This folder contains '{label}' which is already being synced separately. \
+                 Remove it first if you want to sync the parent folder instead."
             ));
         }
     }
@@ -150,35 +139,26 @@ pub(crate) async fn set_sync_path_internal(
         .await
         .map_err(|e| format!("DB error checking path overlap: {e}"))?;
 
-    let existing: Vec<(String, String)> = rows
-        .iter()
-        .map(|r| (r.get("label"), r.get("path")))
-        .collect();
+    let existing: Vec<(String, String)> = rows.iter().map(|r| (r.get("label"), r.get("path"))).collect();
 
     validate_no_path_overlap(Path::new(path), label, &existing)?;
 
     // Legacy cleanup: if a pre-owner row exists (owner is empty) with the same type, replace it once.
-    if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>(
-        "SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1",
-    )
-    .bind(path_type)
-    .fetch_optional(pool)
-    .await
-    {
-        if let Err(e) = sqlx::query(
-            "REPLACE INTO sync_paths (id, owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(legacy_id)
-        .bind(&owner)
-        .bind(path)
+    if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>("SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1")
         .bind(path_type)
-        .bind(label)
-        .bind(timestamp)
-        .execute(pool)
+        .fetch_optional(pool)
         .await
-        {
-            warn!("Failed to replace legacy sync_paths row: {e}");
-        }
+        && let Err(e) = sqlx::query("REPLACE INTO sync_paths (id, owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(legacy_id)
+            .bind(&owner)
+            .bind(path)
+            .bind(path_type)
+            .bind(label)
+            .bind(timestamp)
+            .execute(pool)
+            .await
+    {
+        warn!("Failed to replace legacy sync_paths row: {e}");
     }
 
     let res = sqlx::query(
@@ -205,14 +185,11 @@ pub(crate) async fn set_sync_path_internal(
                 }
             }
 
-            Ok(format!("Sync path for '{}' set successfully.", path_type))
+            Ok(format!("Sync path for '{path_type}' set successfully."))
         }
         Err(e) => {
-            warn!(
-                "DB write failed for owner {} type {}: {}",
-                owner, path_type, e
-            );
-            Err(format!("Failed to set sync path: {}", e))
+            warn!("DB write failed for owner {} type {}: {}", owner, path_type, e);
+            Err(format!("Failed to set sync path: {e}"))
         }
     }
 }
@@ -230,23 +207,13 @@ pub async fn set_sync_path(
         params.path,
         params.is_public
     );
-    crate::utils::sync::set_active_account(&*state, &params.account_id);
+    crate::utils::sync::set_active_account(&state, &params.account_id);
     let pool = state.pool()?;
-    let result = set_sync_path_internal(
-        pool,
-        &params.account_id,
-        &params.path,
-        params.is_public,
-        params.label.as_deref(),
-    )
-    .await?;
+    let result = set_sync_path_internal(pool, &params.account_id, &params.path, params.is_public, params.label.as_deref()).await?;
 
     crate::commands::file_commands::allow_asset_directory(&app_handle, &params.path);
 
-    info!(
-        "Sync path set successfully for label '{}'",
-        params.label.as_deref().unwrap_or("default")
-    );
+    info!("Sync path set successfully for label '{}'", params.label.as_deref().unwrap_or("default"));
     Ok(result)
 }
 
@@ -264,116 +231,89 @@ pub async fn transfer_balance_tauri(
     use sp_core::{Pair, crypto::Ss58Codec, sr25519};
     use subxt::tx::PairSigner;
 
-    let amount: u128 = amount
-        .parse()
-        .map_err(|e| format!("Invalid amount: {}", e))?;
+    let amount: u128 = amount.parse().map_err(|e| format!("Invalid amount: {e}"))?;
 
-    let pair = sr25519::Pair::from_string(&sender_seed, None)
-        .map_err(|e| format!("Failed to create signer pair: {e:?}"))?;
+    let pair = sr25519::Pair::from_string(&sender_seed, None).map_err(|e| format!("Failed to create signer pair: {e:?}"))?;
     let signer = PairSigner::new(pair);
 
-    let recipient = sp_core::crypto::AccountId32::from_ss58check(&recipient_address)
-        .map_err(|e| format!("Invalid recipient address: {e:?}"))?;
+    let recipient = sp_core::crypto::AccountId32::from_ss58check(&recipient_address).map_err(|e| format!("Invalid recipient address: {e:?}"))?;
 
     let api = get_substrate_client(&state)
         .await
         .map_err(|e| format!("Failed to connect to Substrate node: {e}"))?;
 
-    let tx = custom_runtime::tx()
-        .balances()
-        .transfer_keep_alive(recipient.into(), amount);
+    let tx = custom_runtime::tx().balances().transfer_keep_alive(recipient.into(), amount);
 
     info!("Submitting balance transfer transaction...");
     let tx_hash = api
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
-        .map_err(|e| format!("Failed to submit transaction: {}", e))?
+        .map_err(|e| format!("Failed to submit transaction: {e}"))?
         .wait_for_finalized_success()
         .await
-        .map_err(|e| format!("Transaction failed: {}", e))?
+        .map_err(|e| format!("Transaction failed: {e}"))?
         .extrinsic_hash();
 
     info!("Transfer submitted with hash: {:?}", tx_hash);
 
-    Ok(format!(
-        "Transfer submitted successfully! Finalized in block: {tx_hash}"
-    ))
+    Ok(format!("Transfer submitted successfully! Finalized in block: {tx_hash}"))
 }
 
 /// Fetch a single sync path by type for the given account.
 ///
 /// Falls back to migrating a legacy (ownerless) row if no scoped row exists
 /// and no other scoped rows are present for this account.
-pub async fn get_sync_path_internal(
-    pool: &SqlitePool,
-    is_public: bool,
-    owner: &str,
-) -> Result<SyncPathResult, String> {
+pub async fn get_sync_path_internal(pool: &SqlitePool, is_public: bool, owner: &str) -> Result<SyncPathResult, String> {
     let path_type = if is_public { "public" } else { "private" };
     {
-        let rec_row =
-            sqlx::query("SELECT path, label FROM sync_paths WHERE owner = ? AND type = ?")
-                .bind(owner)
-                .bind(path_type)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| format!("DB error: {}", e))?;
+        let rec_row = sqlx::query("SELECT path, label FROM sync_paths WHERE owner = ? AND type = ?")
+            .bind(owner)
+            .bind(path_type)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("DB error: {e}"))?;
 
         let path_label_opt: Option<(String, String)> = if let Some(row) = rec_row {
-            let label: String = row
-                .try_get("label")
-                .unwrap_or_else(|_| "default".to_string());
+            let label: String = row.try_get("label").unwrap_or_else(|_| "default".to_string());
             Some((row.get::<String, _>("path"), label))
         } else {
-            let scoped_count: i64 =
-                sqlx::query_scalar("SELECT COUNT(1) FROM sync_paths WHERE owner = ?")
-                    .bind(owner)
-                    .fetch_one(pool)
-                    .await
-                    .unwrap_or(0);
+            let scoped_count: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM sync_paths WHERE owner = ?")
+                .bind(owner)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
 
             if scoped_count == 0 {
-                let mut tx = pool
-                    .begin()
-                    .await
-                    .map_err(|e| format!("DB error (tx begin): {}", e))?;
+                let mut tx = pool.begin().await.map_err(|e| format!("DB error (tx begin): {e}"))?;
 
-                let legacy = sqlx::query_as::<_, (i64, String)>(
-                    "SELECT id, path FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1",
-                )
-                .bind(path_type)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| format!("DB error: {}", e))?;
+                let legacy = sqlx::query_as::<_, (i64, String)>("SELECT id, path FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1")
+                    .bind(path_type)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(|e| format!("DB error: {e}"))?;
 
                 if let Some((legacy_id, legacy_path)) = legacy {
-                    if let Err(e) =
-                        sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND type = ?")
-                            .bind(owner)
-                            .bind(path_type)
-                            .execute(&mut *tx)
-                            .await
+                    if let Err(e) = sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND type = ?")
+                        .bind(owner)
+                        .bind(path_type)
+                        .execute(&mut *tx)
+                        .await
                     {
                         warn!("Failed to delete scoped sync_paths during migration: {e}");
                     }
 
-                    let _ =
-                        sqlx::query("UPDATE sync_paths SET owner = ? WHERE id = ? AND owner = ''")
-                            .bind(owner)
-                            .bind(legacy_id)
-                            .execute(&mut *tx)
-                            .await
-                            .map_err(|e| format!("DB error updating legacy row: {}", e))?;
-
-                    tx.commit()
+                    let _ = sqlx::query("UPDATE sync_paths SET owner = ? WHERE id = ? AND owner = ''")
+                        .bind(owner)
+                        .bind(legacy_id)
+                        .execute(&mut *tx)
                         .await
-                        .map_err(|e| format!("DB error (commit): {}", e))?;
+                        .map_err(|e| format!("DB error updating legacy row: {e}"))?;
+
+                    tx.commit().await.map_err(|e| format!("DB error (commit): {e}"))?;
                     Some((legacy_path, "default".to_string()))
                 } else {
-                    tx.commit()
-                        .await
-                        .map_err(|e| format!("DB error (commit): {}", e))?;
+                    tx.commit().await.map_err(|e| format!("DB error (commit): {e}"))?;
                     None
                 }
             } else {
@@ -389,33 +329,21 @@ pub async fn get_sync_path_internal(
                 is_paused: false,
             })
         } else {
-            Err(format!(
-                "Sync path for {} not set yet. Please configure it first.",
-                path_type
-            ))
+            Err(format!("Sync path for {path_type} not set yet. Please configure it first."))
         }
     }
 }
 
 /// Fetch a single sync path by public/private type for the current account.
 #[tauri::command]
-pub async fn get_sync_path(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    params: GetSyncPathParams,
-) -> Result<SyncPathResult, String> {
-    let account_id = match params
-        .account_id
-        .or_else(|| crate::utils::sync::current_account_id(&*state).ok())
-    {
-        Some(id) => id,
-        None => {
-            return Ok(SyncPathResult {
-                path: "".to_string(),
-                is_public: params.is_public,
-                label: "default".to_string(),
-                is_paused: false,
-            });
-        }
+pub async fn get_sync_path(state: tauri::State<'_, crate::app_state::AppState>, params: GetSyncPathParams) -> Result<SyncPathResult, String> {
+    let Some(account_id) = params.account_id.or_else(|| crate::utils::sync::current_account_id(&state).ok()) else {
+        return Ok(SyncPathResult {
+            path: String::new(),
+            is_public: params.is_public,
+            label: "default".to_string(),
+            is_paused: false,
+        });
     };
     let owner = account_key(&account_id);
     get_sync_path_internal(state.pool()?, params.is_public, &owner).await
@@ -427,12 +355,8 @@ pub async fn get_all_sync_paths(
     state: tauri::State<'_, crate::app_state::AppState>,
     params: GetSyncPathParams,
 ) -> Result<Vec<SyncPathResult>, String> {
-    let account_id = match params
-        .account_id
-        .or_else(|| crate::utils::sync::current_account_id(&*state).ok())
-    {
-        Some(id) => id,
-        None => return Ok(Vec::new()),
+    let Some(account_id) = params.account_id.or_else(|| crate::utils::sync::current_account_id(&state).ok()) else {
+        return Ok(Vec::new());
     };
     let owner = account_key(&account_id);
 
@@ -441,7 +365,7 @@ pub async fn get_all_sync_paths(
         .bind(&owner)
         .fetch_all(pool)
         .await
-        .map_err(|e| format!("DB error: {}", e))?;
+        .map_err(|e| format!("DB error: {e}"))?;
 
     let results: Vec<SyncPathResult> = rows
         .iter()
@@ -451,38 +375,24 @@ pub async fn get_all_sync_paths(
             SyncPathResult {
                 path: row.get("path"),
                 is_public: path_type == "public",
-                label: row
-                    .try_get("label")
-                    .unwrap_or_else(|_| "default".to_string()),
+                label: row.try_get("label").unwrap_or_else(|_| "default".to_string()),
                 is_paused: paused_int != 0,
             }
         })
         .collect();
 
-    info!(
-        "Retrieved {} sync path(s) for account '{}'",
-        results.len(),
-        account_id
-    );
+    info!("Retrieved {} sync path(s) for account '{}'", results.len(), account_id);
     for sp in &results {
-        debug!(
-            "  Sync path: label='{}', path='{}', is_public={}",
-            sp.label, sp.path, sp.is_public
-        );
+        debug!("  Sync path: label='{}', path='{}', is_public={}", sp.label, sp.path, sp.is_public);
     }
 
     Ok(results)
 }
 
 /// Set the `is_paused` flag for a sync path in the DB.
-pub(crate) async fn set_sync_path_paused(
-    pool: &SqlitePool,
-    account_id: &str,
-    label: &str,
-    paused: bool,
-) -> Result<(), String> {
+pub(crate) async fn set_sync_path_paused(pool: &SqlitePool, account_id: &str, label: &str, paused: bool) -> Result<(), String> {
     let owner = account_key(account_id);
-    let val: i32 = if paused { 1 } else { 0 };
+    let val: i32 = i32::from(paused);
 
     sqlx::query("UPDATE sync_paths SET is_paused = ? WHERE owner = ? AND label = ?")
         .bind(val)
@@ -498,11 +408,7 @@ pub(crate) async fn set_sync_path_paused(
 /// Delete a sync path row from the DB without stopping the drive.
 ///
 /// Used for rollback when `initialize_sync` fails after the path was inserted.
-pub(crate) async fn remove_sync_path_internal(
-    pool: &SqlitePool,
-    account_id: &str,
-    label: &str,
-) -> Result<(), String> {
+pub(crate) async fn remove_sync_path_internal(pool: &SqlitePool, account_id: &str, label: &str) -> Result<(), String> {
     let owner = account_key(account_id);
 
     sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND label = ?")
@@ -510,7 +416,7 @@ pub(crate) async fn remove_sync_path_internal(
         .bind(label)
         .execute(pool)
         .await
-        .map_err(|e| format!("Failed to remove sync path: {}", e))?;
+        .map_err(|e| format!("Failed to remove sync path: {e}"))?;
 
     Ok(())
 }
@@ -523,10 +429,7 @@ pub async fn remove_sync_path(
     account_id: String,
     label: String,
 ) -> Result<(), String> {
-    info!(
-        "Removing sync path for label '{}', account '{}'",
-        label, account_id
-    );
+    info!("Removing sync path for label '{}', account '{}'", label, account_id);
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -537,7 +440,7 @@ pub async fn remove_sync_path(
         .await
         .map_err(|e| {
             error!("Failed to remove sync path for label '{}': {}", label, e);
-            format!("Failed to remove sync path: {}", e)
+            format!("Failed to remove sync path: {e}")
         })?;
 
     crate::commands::syncing::stop_drive(app, label.clone()).await?;
@@ -548,20 +451,15 @@ pub async fn remove_sync_path(
 
 /// Fetch the current WSS endpoint (from user preferences or default).
 #[tauri::command]
-pub async fn get_wss_endpoint(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<String, String> {
+pub async fn get_wss_endpoint(state: tauri::State<'_, crate::app_state::AppState>) -> Result<String, String> {
     get_current_wss_endpoint(state.pool()?).await
 }
 
 /// Update the WSS endpoint used for Substrate RPC connections.
 #[tauri::command]
-pub async fn update_wss_endpoint_command(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    endpoint: String,
-) -> Result<String, String> {
+pub async fn update_wss_endpoint_command(state: tauri::State<'_, crate::app_state::AppState>, endpoint: String) -> Result<String, String> {
     update_wss_endpoint(&state, endpoint.clone()).await?;
-    Ok(format!("WSS endpoint updated to: {}", endpoint))
+    Ok(format!("WSS endpoint updated to: {endpoint}"))
 }
 
 #[cfg(test)]
@@ -569,31 +467,21 @@ mod tests {
     use super::*;
 
     fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
-        items
-            .iter()
-            .map(|(l, p)| (l.to_string(), p.to_string()))
-            .collect()
+        items.iter().map(|(l, p)| (l.to_string(), p.to_string())).collect()
     }
 
     #[test]
     fn sibling_paths_are_allowed() {
         let existing = pairs(&[("photos", "/home/user/Photos")]);
-        assert!(
-            validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing).is_ok()
-        );
+        assert!(validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing).is_ok());
     }
 
     #[test]
     fn child_of_existing_path_is_rejected() {
         let existing = pairs(&[("docs", "/home/user/Documents")]);
-        let result =
-            validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "work", &existing);
+        let result = validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "work", &existing);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .contains("already being synced as part of")
-        );
+        assert!(result.unwrap_err().contains("already being synced as part of"));
     }
 
     #[test]
@@ -601,28 +489,20 @@ mod tests {
         let existing = pairs(&[("work", "/home/user/Documents/Work")]);
         let result = validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .contains("already being synced separately")
-        );
+        assert!(result.unwrap_err().contains("already being synced separately"));
     }
 
     #[test]
     fn same_label_skips_self() {
         let existing = pairs(&[("docs", "/home/user/Documents")]);
         // Re-setting the same label to a child path should be allowed (it's an update)
-        assert!(
-            validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "docs", &existing)
-                .is_ok()
-        );
+        assert!(validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "docs", &existing).is_ok());
     }
 
     #[test]
     fn exact_same_path_different_label_is_rejected() {
         let existing = pairs(&[("docs", "/home/user/Documents")]);
-        let result =
-            validate_no_path_overlap(Path::new("/home/user/Documents"), "docs2", &existing);
+        let result = validate_no_path_overlap(Path::new("/home/user/Documents"), "docs2", &existing);
         // starts_with returns true for equal paths, so this is caught as child-of-existing
         assert!(result.is_err());
     }
@@ -635,8 +515,7 @@ mod tests {
             ("docs", "/home/user/Documents"),
         ]);
         // Child of third entry
-        let result =
-            validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "work", &existing);
+        let result = validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "work", &existing);
         assert!(result.is_err());
     }
 
@@ -648,11 +527,7 @@ mod tests {
     #[test]
     fn error_message_includes_conflicting_label() {
         let existing = pairs(&[("my-photos", "/home/user/Photos")]);
-        let result = validate_no_path_overlap(
-            Path::new("/home/user/Photos/Vacation"),
-            "vacation",
-            &existing,
-        );
+        let result = validate_no_path_overlap(Path::new("/home/user/Photos/Vacation"), "vacation", &existing);
         assert!(result.unwrap_err().contains("my-photos"));
     }
 }

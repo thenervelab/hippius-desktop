@@ -17,16 +17,12 @@ use tracing::{info, warn};
 const MAX_RETRIES: usize = 10;
 
 /// Get or create the shared Substrate RPC client from `AppState.blockchain.client`.
-pub async fn get_substrate_client(
-    app_state: &crate::app_state::AppState,
-) -> Result<Arc<OnlineClient<PolkadotConfig>>, String> {
+pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Result<Arc<OnlineClient<PolkadotConfig>>, String> {
     let lock = &app_state.blockchain.client;
 
     // Check if we have an existing client
     let existing_client = {
-        let client = lock
-            .read()
-            .map_err(|e| format!("Substrate client lock failed: {e}"))?;
+        let client = lock.read().map_err(|e| format!("Substrate client lock failed: {e}"))?;
         client.clone()
     };
 
@@ -37,9 +33,7 @@ pub async fn get_substrate_client(
     let pool = app_state.pool()?;
 
     // Get the current WSS endpoint from database, fallback to default constant
-    let wss_endpoint = get_current_wss_endpoint(pool)
-        .await
-        .unwrap_or_else(|_| WSS_ENDPOINT.to_string());
+    let wss_endpoint = get_current_wss_endpoint(pool).await.unwrap_or_else(|_| WSS_ENDPOINT.to_string());
 
     let mut attempt = 0;
     loop {
@@ -47,9 +41,7 @@ pub async fn get_substrate_client(
         match OnlineClient::<PolkadotConfig>::from_url(&wss_endpoint).await {
             Ok(client) => {
                 let arc = Arc::new(client);
-                let mut client_lock = lock
-                    .write()
-                    .map_err(|e| format!("Substrate client lock failed: {e}"))?;
+                let mut client_lock = lock.write().map_err(|e| format!("Substrate client lock failed: {e}"))?;
                 *client_lock = Some(arc.clone());
                 info!(
                     attempt,
@@ -66,10 +58,7 @@ pub async fn get_substrate_client(
                     "Failed to connect to Substrate node"
                 );
                 if attempt >= MAX_RETRIES {
-                    return Err(format!(
-                        "Failed to connect to Substrate node after {} attempts: {}",
-                        MAX_RETRIES, e
-                    ));
+                    return Err(format!("Failed to connect to Substrate node after {MAX_RETRIES} attempts: {e}"));
                 }
                 // Exponential backoff: 2^min(attempt,5) seconds + random jitter (0-1s)
                 let base_delay = 2u64.pow(attempt.min(5) as u32);
@@ -97,7 +86,7 @@ pub async fn get_current_wss_endpoint(pool: &SqlitePool) -> Result<String, Strin
     let row = sqlx::query("SELECT endpoint FROM wss_endpoint WHERE id = 1")
         .fetch_optional(pool)
         .await
-        .map_err(|e| format!("Failed to query WSS endpoint: {}", e))?;
+        .map_err(|e| format!("Failed to query WSS endpoint: {e}"))?;
 
     match row {
         Some(row) => {
@@ -109,10 +98,7 @@ pub async fn get_current_wss_endpoint(pool: &SqlitePool) -> Result<String, Strin
 }
 
 /// Update the WSS endpoint in database and clear the current client.
-pub async fn update_wss_endpoint(
-    app_state: &crate::app_state::AppState,
-    new_endpoint: String,
-) -> Result<(), String> {
+pub async fn update_wss_endpoint(app_state: &crate::app_state::AppState, new_endpoint: String) -> Result<(), String> {
     // Validate the endpoint format (basic check)
     if !new_endpoint.starts_with("ws://") && !new_endpoint.starts_with("wss://") {
         return Err("Invalid WSS endpoint format. Must start with ws:// or wss://".to_string());
@@ -121,13 +107,11 @@ pub async fn update_wss_endpoint(
     let pool = app_state.pool()?;
 
     // Update or insert the endpoint
-    let result = sqlx::query(
-        "INSERT OR REPLACE INTO wss_endpoint (id, endpoint, updated_at) VALUES (1, ?, CURRENT_TIMESTAMP)"
-    )
-    .bind(&new_endpoint)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to update WSS endpoint: {}", e))?;
+    let result = sqlx::query("INSERT OR REPLACE INTO wss_endpoint (id, endpoint, updated_at) VALUES (1, ?, CURRENT_TIMESTAMP)")
+        .bind(&new_endpoint)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update WSS endpoint: {e}"))?;
 
     if result.rows_affected() > 0 {
         // Clear the current client so it will reconnect with new endpoint

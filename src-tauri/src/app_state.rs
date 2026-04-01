@@ -157,23 +157,17 @@ impl AppState {
                 .timeout(std::time::Duration::from_secs(10))
                 .build()
                 .expect("Failed to build health HTTP client"),
-            api_client: reqwest::Client::builder()
-                .build()
-                .expect("Failed to build API HTTP client"),
+            api_client: reqwest::Client::builder().build().expect("Failed to build API HTTP client"),
         }
     }
 
     /// Set the database pool. Called once during async setup.
     pub fn set_pool(&self, pool: SqlitePool) {
-        self.db
-            .set(pool)
-            .expect("AppState pool already initialized");
+        self.db.set(pool).expect("AppState pool already initialized");
     }
 
     /// Get a reference to the database pool.
     pub fn pool(&self) -> Result<&SqlitePool, String> {
-        self.db
-            .get()
-            .ok_or_else(|| "Database not initialized".to_string())
+        self.db.get().ok_or_else(|| "Database not initialized".to_string())
     }
 }

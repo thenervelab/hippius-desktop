@@ -49,9 +49,7 @@ fn encrypt_mnemonic(mnemonic: &str, passcode: &str) -> String {
     let plaintext = mnemonic.as_bytes();
     let mut buf = vec![0u8; plaintext.len() + 16];
     buf[..plaintext.len()].copy_from_slice(plaintext);
-    let ciphertext = encryptor
-        .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
-        .unwrap();
+    let ciphertext = encryptor.encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len()).unwrap();
 
     let mut output = Vec::with_capacity(16 + ciphertext.len());
     output.extend_from_slice(b"Salted__");
@@ -112,10 +110,7 @@ fn test_mnemonic_validation_valid() {
 
 #[test]
 fn test_mnemonic_validation_invalid() {
-    assert!(
-        bip39::Mnemonic::parse_in_normalized(bip39::Language::English, "not a valid mnemonic")
-            .is_err()
-    );
+    assert!(bip39::Mnemonic::parse_in_normalized(bip39::Language::English, "not a valid mnemonic").is_err());
     assert!(bip39::Mnemonic::parse_in_normalized(bip39::Language::English, "").is_err());
 }
 
@@ -138,12 +133,7 @@ fn test_key_derivation() {
     use alloy_signer_local::MnemonicBuilder;
     use alloy_signer_local::coins_bip39::English;
 
-    let eth_signer: alloy_signer_local::PrivateKeySigner = MnemonicBuilder::<English>::default()
-        .phrase(mnemonic)
-        .index(0)
-        .unwrap()
-        .build()
-        .unwrap();
+    let eth_signer: alloy_signer_local::PrivateKeySigner = MnemonicBuilder::<English>::default().phrase(mnemonic).index(0).unwrap().build().unwrap();
     let eth_address = format!("{}", eth_signer.address());
 
     // Should produce a valid Ethereum address
@@ -195,10 +185,7 @@ fn test_aes_different_encryptions_differ() {
     let enc1 = encrypt_mnemonic(mnemonic, passcode);
     let enc2 = encrypt_mnemonic(mnemonic, passcode);
 
-    assert_ne!(
-        enc1, enc2,
-        "Different salts should produce different ciphertexts"
-    );
+    assert_ne!(enc1, enc2, "Different salts should produce different ciphertexts");
 
     // But both should decrypt to the same value
     assert_eq!(decrypt_mnemonic(&enc1, passcode).unwrap(), mnemonic);

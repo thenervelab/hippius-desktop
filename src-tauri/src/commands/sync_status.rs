@@ -13,19 +13,13 @@ pub fn get_sync_status(state: tauri::State<'_, crate::app_state::AppState>) -> C
 
 /// Return recent sync activity, optionally filtered by drive label.
 #[tauri::command]
-pub fn get_sync_activity(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    limit: Option<usize>,
-    label: Option<String>,
-) -> Vec<SyncActivityItem> {
+pub fn get_sync_activity(state: tauri::State<'_, crate::app_state::AppState>, limit: Option<usize>, label: Option<String>) -> Vec<SyncActivityItem> {
     state.sync.get_sync_activity(limit, label)
 }
 
 /// Return the current server connectivity health status.
 #[tauri::command]
-pub fn get_sync_engine_health(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> SyncEngineHealth {
+pub fn get_sync_engine_health(state: tauri::State<'_, crate::app_state::AppState>) -> SyncEngineHealth {
     state.sync.get_health()
 }
 

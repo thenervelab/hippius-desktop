@@ -76,13 +76,14 @@ pub struct MigrationComplete {
 }
 
 /// Server response from GET /migration/{user_id}
+///
+/// Fields match the server JSON schema. Only `files` is accessed in Rust;
+/// the rest exist so serde can deserialize the full response.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // fields exist for serde deserialization, not direct access
 struct ServerMigrationResponse {
-    #[allow(dead_code)]
     needs_migration: bool,
-    #[allow(dead_code)]
     file_count: u64,
-    #[allow(dead_code)]
     total_size: u64,
     files: Vec<MigrationFile>,
 }
@@ -110,10 +111,7 @@ fn clear_migration_uploads(migration: &crate::app_state::MigrationState) {
 // DB helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn get_migration_status_db(
-    pool: &SqlitePool,
-    account_id: &str,
-) -> Result<Option<(String, i64, i64, String, String)>, String> {
+pub(crate) async fn get_migration_status_db(pool: &SqlitePool, account_id: &str) -> Result<Option<(String, i64, i64, String, String)>, String> {
     let row = sqlx::query(
         "SELECT status, total_files, completed_files, sync_path, server_url \
          FROM migration_status WHERE account_id = ?",
@@ -135,6 +133,7 @@ pub(crate) async fn get_migration_status_db(
     }
 }
 
+#[expect(clippy::too_many_arguments)] // bundling into struct deferred to Phase 4
 pub(crate) async fn upsert_migration_status(
     pool: &SqlitePool,
     account_id: &str,
@@ -146,7 +145,7 @@ pub(crate) async fn upsert_migration_status(
     server_url: &str,
 ) -> Result<(), String> {
     sqlx::query(
-        r#"
+        r"
         INSERT INTO migration_status
             (account_id, status, total_files, completed_files,
              failed_files, sync_path, server_url, updated_at)
@@ -159,7 +158,7 @@ pub(crate) async fn upsert_migration_status(
             sync_path = excluded.sync_path,
             server_url = excluded.server_url,
             updated_at = CURRENT_TIMESTAMP
-        "#,
+        ",
     )
     .bind(account_id)
     .bind(status)
@@ -198,10 +197,7 @@ pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Resul
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn fetch_migration_files(
-    server_url: &str,
-    user_id: &str,
-) -> Result<Vec<MigrationFile>, String> {
+pub(crate) async fn fetch_migration_files(server_url: &str, user_id: &str) -> Result<Vec<MigrationFile>, String> {
     let url = format!("{}/migration/{}", server_url.trim_end_matches('/'), user_id);
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
@@ -220,16 +216,9 @@ pub(crate) async fn fetch_migration_files(
         return Err(format!("Migration check failed (status {status}): {text}"));
     }
 
-    let parsed: ServerMigrationResponse = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse migration response: {e}"))?;
+    let parsed: ServerMigrationResponse = resp.json().await.map_err(|e| format!("Failed to parse migration response: {e}"))?;
 
-    Ok(parsed
-        .files
-        .into_iter()
-        .filter(|f| !should_skip_key(&f.key))
-        .collect())
+    Ok(parsed.files.into_iter().filter(|f| !should_skip_key(&f.key)).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -237,22 +226,14 @@ pub(crate) async fn fetch_migration_files(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn check_migration(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<MigrationCheckResult, String> {
+pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<MigrationCheckResult, String> {
     let pool = state.pool()?;
     // 1. Check local DB for existing migration
-    if let Some((status, _total, _completed, sync_path, _server_url)) =
-        get_migration_status_db(pool, &account_id).await?
-    {
+    if let Some((status, _total, _completed, sync_path, _server_url)) = get_migration_status_db(pool, &account_id).await? {
         // If the user already dismissed (skipped, cancelled, or completed)
         // the migration, never show the prompt again.
         let terminal_statuses = ["dismissed", "skipped", "cancelled", "complete"];
-        if terminal_statuses
-            .iter()
-            .any(|s| status.eq_ignore_ascii_case(s))
-        {
+        if terminal_statuses.iter().any(|s| status.eq_ignore_ascii_case(s)) {
             return Ok(MigrationCheckResult {
                 needs_migration: false,
                 file_count: 0,
@@ -266,25 +247,11 @@ pub async fn check_migration(
         // Status is "in_progress" — verify with the server
         let server_url = get_server_url(pool, &account_id).await?;
         let files = fetch_migration_files(&server_url, &account_id).await?;
-        let pending: Vec<MigrationFile> = files
-            .into_iter()
-            .filter(|f| f.status.eq_ignore_ascii_case("pending"))
-            .collect();
+        let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
 
         if pending.is_empty() {
             // Server confirms everything is migrated
-            if let Err(e) = upsert_migration_status(
-                pool,
-                &account_id,
-                "complete",
-                0,
-                0,
-                "[]",
-                &sync_path,
-                &server_url,
-            )
-            .await
-            {
+            if let Err(e) = upsert_migration_status(pool, &account_id, "complete", 0, 0, "[]", &sync_path, &server_url).await {
                 warn!("Failed to update migration status to complete: {e}");
             }
             return Ok(MigrationCheckResult {
@@ -312,10 +279,7 @@ pub async fn check_migration(
     // 2. No local state -- check server
     let server_url = get_server_url(pool, &account_id).await?;
     let files = fetch_migration_files(&server_url, &account_id).await?;
-    let pending: Vec<MigrationFile> = files
-        .into_iter()
-        .filter(|f| f.status.eq_ignore_ascii_case("pending"))
-        .collect();
+    let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
     let total_size: u64 = pending.iter().map(|f| f.size_bytes).sum();
 
     Ok(MigrationCheckResult {
@@ -360,13 +324,11 @@ async fn build_s3_client(pool: &SqlitePool, account_id: &str) -> Result<S3Client
 
 #[cfg(unix)]
 fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> Result<(), String> {
-    let stat =
-        nix::sys::statvfs::statvfs(path).map_err(|e| format!("Failed to check disk space: {e}"))?;
+    let stat = nix::sys::statvfs::statvfs(path).map_err(|e| format!("Failed to check disk space: {e}"))?;
     let available = stat.block_size() as u64 * stat.blocks_available() as u64;
     if available < required_bytes {
         return Err(format!(
-            "Not enough disk space. Need {} bytes but only {} available.",
-            required_bytes, available
+            "Not enough disk space. Need {required_bytes} bytes but only {available} available."
         ));
     }
     Ok(())
@@ -378,12 +340,7 @@ fn check_disk_space(_path: &std::path::Path, _required_bytes: u64) -> Result<(),
     Ok(())
 }
 
-async fn download_file_with_retry(
-    client: &S3Client,
-    bucket: &str,
-    key: &str,
-    dest: &std::path::Path,
-) -> Result<(), String> {
+async fn download_file_with_retry(client: &S3Client, bucket: &str, key: &str, dest: &std::path::Path) -> Result<(), String> {
     let mut last_err = String::new();
     for attempt in 1..=MAX_RETRIES {
         match download_file_once(client, bucket, key, dest).await {
@@ -400,12 +357,7 @@ async fn download_file_with_retry(
     Err(format!("Failed after {MAX_RETRIES} attempts: {last_err}"))
 }
 
-async fn download_file_once(
-    client: &S3Client,
-    bucket: &str,
-    key: &str,
-    dest: &std::path::Path,
-) -> Result<(), String> {
+async fn download_file_once(client: &S3Client, bucket: &str, key: &str, dest: &std::path::Path) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -420,15 +372,9 @@ async fn download_file_once(
         .await
         .map_err(|e| format!("S3 get_object failed: {e}"))?;
 
-    let data = resp
-        .body
-        .collect()
-        .await
-        .map_err(|e| format!("Failed to read S3 body: {e}"))?;
+    let data = resp.body.collect().await.map_err(|e| format!("Failed to read S3 body: {e}"))?;
 
-    let mut file = tokio::fs::File::create(dest)
-        .await
-        .map_err(|e| format!("Failed to create file: {e}"))?;
+    let mut file = tokio::fs::File::create(dest).await.map_err(|e| format!("Failed to create file: {e}"))?;
     file.write_all(&data.into_bytes())
         .await
         .map_err(|e| format!("Failed to write file: {e}"))?;
@@ -454,10 +400,7 @@ pub async fn start_migration(
     let pool = state.pool()?;
 
     // Verify HCFS config exists — the frontend must prompt for a password first
-    if crate::commands::syncing::get_drive_password(pool, &account_id)
-        .await
-        .is_err()
-    {
+    if crate::commands::syncing::get_drive_password(pool, &account_id).await.is_err() {
         return Err("NEEDS_SYNC_SETUP".to_string());
     }
 
@@ -467,10 +410,7 @@ pub async fn start_migration(
     // Fetch pending files from server
     let server_url = get_server_url(pool, &account_id).await?;
     let all_files = fetch_migration_files(&server_url, &account_id).await?;
-    let pending: Vec<MigrationFile> = all_files
-        .into_iter()
-        .filter(|f| f.status.eq_ignore_ascii_case("pending"))
-        .collect();
+    let pending: Vec<MigrationFile> = all_files.into_iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
 
     if pending.is_empty() {
         return Err("No files to migrate".to_string());
@@ -487,17 +427,7 @@ pub async fn start_migration(
     check_disk_space(sync_dir, total_size)?;
 
     // Save state to DB
-    upsert_migration_status(
-        pool,
-        &account_id,
-        "in_progress",
-        total as i64,
-        0,
-        "[]",
-        &sync_path,
-        &server_url,
-    )
-    .await?;
+    upsert_migration_status(pool, &account_id, "in_progress", total as i64, 0, "[]", &sync_path, &server_url).await?;
 
     // Build S3 client
     let s3_client = build_s3_client(pool, &account_id).await?;
@@ -537,6 +467,7 @@ pub async fn start_migration(
     Ok(())
 }
 
+#[expect(clippy::too_many_arguments)] // bundling into struct deferred to Phase 4
 async fn run_migration_download(
     app: &AppHandle,
     s3_client: &S3Client,
@@ -556,9 +487,7 @@ async fn run_migration_download(
     // even when sync_path contains symlinks (e.g. /tmp → /private/tmp
     // on macOS).
     let raw_sync_dir = std::path::Path::new(sync_path);
-    let sync_dir = raw_sync_dir
-        .canonicalize()
-        .unwrap_or_else(|_| raw_sync_dir.to_path_buf());
+    let sync_dir = raw_sync_dir.canonicalize().unwrap_or_else(|_| raw_sync_dir.to_path_buf());
 
     let migration_state = &app.state::<crate::app_state::AppState>().migration;
 
@@ -580,14 +509,9 @@ async fn run_migration_download(
             // File doesn't exist yet — canonicalize parent
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent).ok();
-                parent
-                    .canonicalize()
-                    .map(|p| p.join(dest.file_name().unwrap_or_default()))
+                parent.canonicalize().map(|p| p.join(dest.file_name().unwrap_or_default()))
             } else {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "no parent",
-                ))
+                Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "no parent"))
             }
         });
         match canonical {
@@ -701,16 +625,16 @@ async fn run_migration_download(
     // Register the sync path for the "migration" label
     let owner = crate::utils::account_key::account_key(account_id);
     if let Err(e) = sqlx::query(
-        r#"
+        r"
         INSERT INTO sync_paths (owner, path, type, label, timestamp)
         VALUES (?, ?, 'private', 'migration', strftime('%s', 'now'))
         ON CONFLICT(owner, label) DO UPDATE SET
             path = excluded.path,
             timestamp = excluded.timestamp
-        "#,
+        ",
     )
     .bind(&owner)
-    .bind(&sync_path)
+    .bind(sync_path)
     .execute(pool)
     .await
     {
@@ -725,14 +649,7 @@ async fn run_migration_download(
     }
 
     // Initialize the migration drive
-    match crate::commands::syncing::initialize_sync(
-        app.clone(),
-        account_id.to_string(),
-        "migration".to_string(),
-        mnemonic,
-    )
-    .await
-    {
+    match crate::commands::syncing::initialize_sync(app.clone(), account_id.to_string(), "migration".to_string(), mnemonic).await {
         Ok(result) => {
             info!("Migration drive initialized, user_id: {}", result.user_id);
         }
@@ -745,10 +662,7 @@ async fn run_migration_download(
 }
 
 #[tauri::command]
-pub async fn cancel_migration(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<(), String> {
+pub async fn cancel_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), String> {
     let pool = state.pool()?;
     state.migration.cancel.store(true, Ordering::SeqCst);
     clear_migration_uploads(&state.migration);
@@ -756,10 +670,7 @@ pub async fn cancel_migration(
     // Persist cancelled state so the migration dialog won't reappear
     if !account_id.is_empty() {
         let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
-        if let Err(e) =
-            upsert_migration_status(pool, &account_id, "cancelled", 0, 0, "[]", "", &server_url)
-                .await
-        {
+        if let Err(e) = upsert_migration_status(pool, &account_id, "cancelled", 0, 0, "[]", "", &server_url).await {
             warn!("Failed to persist cancelled migration status: {e}");
         }
     }
@@ -772,19 +683,11 @@ pub async fn cancel_migration(
 /// For completed migrations, use `complete_migration_transition` instead —
 /// it handles label promotion, drive stop, and default drive init atomically.
 #[tauri::command]
-pub async fn dismiss_migration(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    reason: String,
-) -> Result<(), String> {
+pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, reason: String) -> Result<(), String> {
     let pool = state.pool()?;
     clear_migration_uploads(&state.migration);
     let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
-    let status = if reason.is_empty() {
-        "dismissed"
-    } else {
-        &reason
-    };
+    let status = if reason.is_empty() { "dismissed" } else { &reason };
 
     upsert_migration_status(pool, &account_id, status, 0, 0, "[]", "", &server_url).await?;
     info!("Migration dismissed for account {account_id} with reason: {status}");
@@ -811,12 +714,12 @@ pub async fn complete_migration_transition(
 
     let owner = crate::utils::account_key::account_key(&account_id);
     if let Err(e) = sqlx::query(
-        r#"
+        r"
         UPDATE sync_paths
         SET label = 'default',
             timestamp = strftime('%s', 'now')
         WHERE owner = ? AND label = 'migration'
-        "#,
+        ",
     )
     .bind(&owner)
     .execute(pool)
@@ -834,13 +737,7 @@ pub async fn complete_migration_transition(
     stop_migration_drive(&app).await;
 
     // 3. Initialize the "default" drive and start the sync loop.
-    crate::commands::syncing::initialize_sync(
-        app,
-        account_id,
-        "default".to_string(),
-        existing_mnemonic,
-    )
-    .await
+    crate::commands::syncing::initialize_sync(app, account_id, "default".to_string(), existing_mnemonic).await
 }
 
 /// Stop the migration drive and clean up its state.
@@ -886,9 +783,7 @@ fn is_uploaded(uploaded_set: &HashSet<String>, relative: &str) -> bool {
         return true;
     }
     let relative_path = std::path::Path::new(relative);
-    uploaded_set
-        .iter()
-        .any(|p| std::path::Path::new(p).ends_with(relative_path))
+    uploaded_set.iter().any(|p| std::path::Path::new(p).ends_with(relative_path))
 }
 
 /// Report successfully synced files to the server.
@@ -906,10 +801,7 @@ pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<
 
     // Fetch current state from server
     let files = fetch_migration_files(&server_url, account_id).await?;
-    let pending: Vec<&MigrationFile> = files
-        .iter()
-        .filter(|f| f.status.eq_ignore_ascii_case("pending"))
-        .collect();
+    let pending: Vec<&MigrationFile> = files.iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
 
     if pending.is_empty() {
         // All files migrated
@@ -925,24 +817,14 @@ pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<
             &server_url,
         )
         .await?;
-        let _ = app.emit(
-            "migration_complete",
-            MigrationComplete {
-                total_migrated: migrated,
-            },
-        );
+        let _ = app.emit("migration_complete", MigrationComplete { total_migrated: migrated });
         return Ok(());
     }
 
     // Only report files confirmed uploaded to HCFS (not just on disk).
     // The upload progress handler records relative paths in
     // migration.uploaded when each file finishes uploading.
-    let uploaded_set = app_state
-        .migration
-        .uploaded
-        .lock()
-        .map(|s| s.clone())
-        .unwrap_or_default();
+    let uploaded_set = app_state.migration.uploaded.lock().map(|s| s.clone()).unwrap_or_default();
 
     info!(
         pending_count = pending.len(),
@@ -950,16 +832,12 @@ pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<
         "Migration report: checking pending files against uploaded set"
     );
 
-    let mut bucket_keys: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
+    let mut bucket_keys: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
 
     for file in &pending {
         let relative = format!("{}/{}", file.bucket_name, file.key);
         if is_uploaded(&uploaded_set, &relative) {
-            bucket_keys
-                .entry(file.bucket_name.clone())
-                .or_default()
-                .push(file.key.clone());
+            bucket_keys.entry(file.bucket_name.clone()).or_default().push(file.key.clone());
         } else {
             debug!(
                 expected = %relative,
@@ -995,13 +873,7 @@ pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<
             keys: keys.clone(),
         };
 
-        match client
-            .post(&url)
-            .header("X-API-Key", "Arion")
-            .json(&body)
-            .send()
-            .await
-        {
+        match client.post(&url).header("X-API-Key", "Arion").json(&body).send().await {
             Ok(r) if r.status().is_success() => {
                 info!("Reported {} files for bucket '{}'", keys.len(), bucket_name);
             }
@@ -1017,14 +889,8 @@ pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<
 
     // Re-check completion after reporting
     let files_after = fetch_migration_files(&server_url, account_id).await?;
-    let still_pending = files_after
-        .iter()
-        .filter(|f| f.status.eq_ignore_ascii_case("pending"))
-        .count() as u64;
-    let migrated = files_after
-        .iter()
-        .filter(|f| f.status.eq_ignore_ascii_case("migrated"))
-        .count() as u64;
+    let still_pending = files_after.iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).count() as u64;
+    let migrated = files_after.iter().filter(|f| f.status.eq_ignore_ascii_case("migrated")).count() as u64;
 
     if still_pending == 0 {
         clear_migration_uploads(&app_state.migration);
@@ -1039,12 +905,7 @@ pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<
             &server_url,
         )
         .await?;
-        let _ = app.emit(
-            "migration_complete",
-            MigrationComplete {
-                total_migrated: migrated,
-            },
-        );
+        let _ = app.emit("migration_complete", MigrationComplete { total_migrated: migrated });
     } else {
         upsert_migration_status(
             pool,
@@ -1131,18 +992,13 @@ mod tests {
 
         // Canonicalize parent, same as run_migration_download
         let dest_parent = dest.parent().unwrap();
-        let canonical = dest_parent
-            .canonicalize()
-            .map(|p| p.join(dest.file_name().unwrap_or_default()))
-            .unwrap();
+        let canonical = dest_parent.canonicalize().map(|p| p.join(dest.file_name().unwrap_or_default())).unwrap();
 
-        assert!(
-            !canonical.starts_with(&sync_dir),
-            "path {canonical:?} should escape {sync_dir:?}"
-        );
+        assert!(!canonical.starts_with(&sync_dir), "path {canonical:?} should escape {sync_dir:?}");
     }
 
     #[test]
+    #[expect(clippy::join_absolute_paths)] // intentionally testing path traversal with absolute key
     fn path_traversal_detected_for_absolute_key() {
         let sync_dir = tempfile::tempdir().expect("create temp dir");
         let base = sync_dir.path().canonicalize().unwrap();
@@ -1152,10 +1008,7 @@ mod tests {
         let malicious_key = "/etc/passwd";
         let dest = base.join("files").join(malicious_key);
         // On macOS/Linux, joining an absolute path replaces the base
-        assert!(
-            !dest.starts_with(&base),
-            "joining absolute path should escape base: {dest:?}"
-        );
+        assert!(!dest.starts_with(&base), "joining absolute path should escape base: {dest:?}");
     }
 
     #[test]
@@ -1175,10 +1028,7 @@ mod tests {
             .map(|p| p.join(dest.file_name().unwrap_or_default()))
             .unwrap();
 
-        assert!(
-            !canonical.starts_with(&sync_dir),
-            "traversal via bucket should escape: {canonical:?}"
-        );
+        assert!(!canonical.starts_with(&sync_dir), "traversal via bucket should escape: {canonical:?}");
     }
 
     #[test]
@@ -1189,15 +1039,9 @@ mod tests {
 
         let dest = base.join("files").join("documents/report.pdf");
         let parent = dest.parent().unwrap();
-        let canonical = parent
-            .canonicalize()
-            .map(|p| p.join(dest.file_name().unwrap_or_default()))
-            .unwrap();
+        let canonical = parent.canonicalize().map(|p| p.join(dest.file_name().unwrap_or_default())).unwrap();
 
-        assert!(
-            canonical.starts_with(&base),
-            "path {canonical:?} should stay within {base:?}"
-        );
+        assert!(canonical.starts_with(&base), "path {canonical:?} should stay within {base:?}");
     }
 
     // -----------------------------------------------------------------------
@@ -1252,10 +1096,7 @@ mod tests {
             },
         ];
 
-        let filtered: Vec<MigrationFile> = files
-            .into_iter()
-            .filter(|f| !should_skip_key(&f.key))
-            .collect();
+        let filtered: Vec<MigrationFile> = files.into_iter().filter(|f| !should_skip_key(&f.key)).collect();
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].key, "photo.jpg");
@@ -1282,10 +1123,7 @@ mod tests {
             },
         ];
 
-        let pending: Vec<MigrationFile> = files
-            .into_iter()
-            .filter(|f| f.status == "Pending")
-            .collect();
+        let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status == "Pending").collect();
 
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].key, "a.txt");
@@ -1390,10 +1228,7 @@ mod tests {
             },
         ];
 
-        let pending: Vec<MigrationFile> = files
-            .into_iter()
-            .filter(|f| f.status == "Pending")
-            .collect();
+        let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status == "Pending").collect();
 
         assert!(pending.is_empty());
     }
@@ -1401,16 +1236,13 @@ mod tests {
     #[test]
     fn filter_empty_input_yields_empty() {
         let files: Vec<MigrationFile> = vec![];
-        let pending: Vec<MigrationFile> = files
-            .into_iter()
-            .filter(|f| f.status == "Pending")
-            .collect();
+        let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status == "Pending").collect();
         assert!(pending.is_empty());
     }
 
     #[test]
     fn total_size_with_zero_byte_files() {
-        let files = vec![
+        let files = [
             MigrationFile {
                 user_id: "u1".into(),
                 bucket_name: "b1".into(),
@@ -1466,8 +1298,7 @@ mod tests {
             ]
         }"#;
 
-        let resp: ServerMigrationResponse =
-            serde_json::from_str(json).expect("deserialization failed");
+        let resp: ServerMigrationResponse = serde_json::from_str(json).expect("deserialization failed");
         assert!(resp.needs_migration);
         assert_eq!(resp.files.len(), 2);
         assert_eq!(resp.files[0].status, "Pending");
@@ -1482,14 +1313,8 @@ mod tests {
     fn record_and_clear_migration_uploads() {
         let ms = crate::app_state::MigrationState::new();
 
-        ms.uploaded
-            .lock()
-            .unwrap()
-            .insert("bucket/file1.txt".to_string());
-        ms.uploaded
-            .lock()
-            .unwrap()
-            .insert("bucket/file2.txt".to_string());
+        ms.uploaded.lock().unwrap().insert("bucket/file1.txt".to_string());
+        ms.uploaded.lock().unwrap().insert("bucket/file2.txt".to_string());
 
         {
             let set = ms.uploaded.lock().unwrap();
@@ -1510,14 +1335,8 @@ mod tests {
     fn duplicate_upload_records_are_deduplicated() {
         let ms = crate::app_state::MigrationState::new();
 
-        ms.uploaded
-            .lock()
-            .unwrap()
-            .insert("bucket/same.txt".to_string());
-        ms.uploaded
-            .lock()
-            .unwrap()
-            .insert("bucket/same.txt".to_string());
+        ms.uploaded.lock().unwrap().insert("bucket/same.txt".to_string());
+        ms.uploaded.lock().unwrap().insert("bucket/same.txt".to_string());
 
         let set = ms.uploaded.lock().unwrap();
         assert_eq!(set.len(), 1);
@@ -1540,19 +1359,14 @@ mod tests {
         std::os::unix::fs::symlink(&real_dir, &link_path).unwrap();
 
         // Simulate the fixed code: canonicalize sync_dir first
-        let sync_dir = link_path
-            .canonicalize()
-            .unwrap_or_else(|_| link_path.clone());
+        let sync_dir = link_path.canonicalize().unwrap_or_else(|_| link_path.clone());
 
         std::fs::create_dir_all(sync_dir.join("bucket")).unwrap();
         let dest = sync_dir.join("bucket").join("file.txt");
         std::fs::write(&dest, "test").unwrap();
 
         let canonical = dest.canonicalize().unwrap();
-        assert!(
-            canonical.starts_with(&sync_dir),
-            "canonical {canonical:?} should start with {sync_dir:?}"
-        );
+        assert!(canonical.starts_with(&sync_dir), "canonical {canonical:?} should start with {sync_dir:?}");
     }
 
     // -----------------------------------------------------------------------

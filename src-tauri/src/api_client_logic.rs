@@ -18,8 +18,9 @@ pub fn urlencoding(s: &str) -> String {
             }
             ' ' => result.push_str("%20"),
             _ => {
+                use std::fmt::Write;
                 for b in c.to_string().as_bytes() {
-                    result.push_str(&format!("%{b:02X}"));
+                    let _ = write!(result, "%{b:02X}");
                 }
             }
         }
@@ -139,21 +140,13 @@ mod tests {
 
     #[test]
     fn url_single_param() {
-        let url = url_with_params(
-            "https://api.example.com",
-            "/search",
-            &[("q", "hello world")],
-        );
+        let url = url_with_params("https://api.example.com", "/search", &[("q", "hello world")]);
         assert_eq!(url, "https://api.example.com/search?q=hello%20world");
     }
 
     #[test]
     fn url_multiple_params() {
-        let url = url_with_params(
-            "https://api.example.com",
-            "/search",
-            &[("q", "rust"), ("page", "2")],
-        );
+        let url = url_with_params("https://api.example.com", "/search", &[("q", "rust"), ("page", "2")]);
         assert_eq!(url, "https://api.example.com/search?q=rust&page=2");
     }
 

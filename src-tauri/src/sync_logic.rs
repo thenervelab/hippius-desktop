@@ -35,7 +35,7 @@ pub enum ConnectivityStatus {
 /// - 4 failures, 30s heartbeat -> 300 (capped)
 pub fn compute_backoff(failures: i64, heartbeat_secs: u64) -> u64 {
     if failures > 0 {
-        let shift = failures.min(4) as u64;
+        let shift = failures.min(4).cast_unsigned();
         let backed_off = heartbeat_secs.saturating_mul(1u64 << shift);
         backed_off.min(300)
     } else {
@@ -49,17 +49,11 @@ pub fn compute_backoff(failures: i64, heartbeat_secs: u64) -> u64 {
 /// - Otherwise, emit only when the failure count reaches the threshold
 ///   AND the status actually changed (was previously `Connected`, or
 ///   transitioned between different unhealthy states).
-pub fn should_emit_health_change(
-    previous: &ConnectivityStatus,
-    new: &ConnectivityStatus,
-    new_failure_count: u32,
-    threshold: u32,
-) -> bool {
+pub fn should_emit_health_change(previous: &ConnectivityStatus, new: &ConnectivityStatus, new_failure_count: u32, threshold: u32) -> bool {
     if *new == ConnectivityStatus::AuthExpired {
         return true;
     }
-    new_failure_count >= threshold
-        && (*previous == ConnectivityStatus::Connected || previous != new)
+    new_failure_count >= threshold && (*previous == ConnectivityStatus::Connected || previous != new)
 }
 
 /// Decide whether the sync loop should skip syncing based on health.
@@ -67,13 +61,8 @@ pub fn should_emit_health_change(
 /// Skips when auth is expired (nothing will succeed) or when the server
 /// has been unreachable for enough consecutive checks to exceed the
 /// threshold.
-pub fn should_skip_sync_check(
-    status: &ConnectivityStatus,
-    consecutive_failures: u32,
-    threshold: u32,
-) -> bool {
-    *status == ConnectivityStatus::AuthExpired
-        || (*status != ConnectivityStatus::Connected && consecutive_failures >= threshold)
+pub fn should_skip_sync_check(status: &ConnectivityStatus, consecutive_failures: u32, threshold: u32) -> bool {
+    *status == ConnectivityStatus::AuthExpired || (*status != ConnectivityStatus::Connected && consecutive_failures >= threshold)
 }
 
 /// Check if a filename is a failed-download artifact left by hcfs-client.
@@ -87,11 +76,7 @@ pub fn is_failed_download_artifact(name: &str) -> Option<&str> {
     if rest.is_empty() {
         return None;
     }
-    if rest.chars().all(|c| c.is_ascii_hexdigit()) {
-        Some(rest)
-    } else {
-        None
-    }
+    if rest.chars().all(|c| c.is_ascii_hexdigit()) { Some(rest) } else { None }
 }
 
 /// Check if a filename is an encrypted-name stub left by hcfs-client
@@ -195,7 +180,6 @@ const RENAME_PAIR_WINDOW: Duration = Duration::from_millis(100);
 pub struct RenameHint {
     pub old_path: PathBuf,
     pub new_path: PathBuf,
-    pub captured_at: Instant,
 }
 
 /// Intermediate state: a `RenameFrom` event waiting for its `RenameTo` pair.
@@ -210,7 +194,9 @@ pub struct PendingRenameFrom {
 pub enum RenameEventKind {
     From,
     To,
-    Both { from: PathBuf },
+    Both {
+        from: PathBuf,
+    },
     /// macOS FSEvents emits `RenameMode::Any` — two events in
     /// sequence, first for old path then for new path. We treat
     /// the first as `From` and the second as `To`.
@@ -228,13 +214,7 @@ pub struct RelativeRenameHint {
 ///
 /// Maintains `pending` state across calls to pair From/To events.
 /// Completed pairs are pushed to `hints`.
-pub fn process_rename_event(
-    kind: RenameEventKind,
-    path: &Path,
-    now: Instant,
-    pending: &mut Option<PendingRenameFrom>,
-    hints: &mut Vec<RenameHint>,
-) {
+pub fn process_rename_event(kind: RenameEventKind, path: &Path, now: Instant, pending: &mut Option<PendingRenameFrom>, hints: &mut Vec<RenameHint>) {
     match kind {
         RenameEventKind::From => {
             *pending = Some(PendingRenameFrom {
@@ -250,7 +230,6 @@ pub fn process_rename_event(
                 hints.push(RenameHint {
                     old_path: from.path,
                     new_path: path.to_path_buf(),
-                    captured_at: now,
                 });
             }
         }
@@ -258,7 +237,6 @@ pub fn process_rename_event(
             hints.push(RenameHint {
                 old_path: from,
                 new_path: path.to_path_buf(),
-                captured_at: now,
             });
         }
         RenameEventKind::Any => {
@@ -270,7 +248,6 @@ pub fn process_rename_event(
                     hints.push(RenameHint {
                         old_path: from.path,
                         new_path: path.to_path_buf(),
-                        captured_at: now,
                     });
                 } else {
                     // Window expired — treat this as a new "from"
@@ -292,10 +269,7 @@ pub fn process_rename_event(
 /// Convert an absolute-path hint to relative paths within a sync root.
 ///
 /// Returns `None` if either path is outside the sync root.
-pub fn hint_to_relative_pair(
-    hint: &RenameHint,
-    sync_root: &Path,
-) -> Option<RelativeRenameHint> {
+pub fn hint_to_relative_pair(hint: &RenameHint, sync_root: &Path) -> Option<RelativeRenameHint> {
     let old_rel = hint.old_path.strip_prefix(sync_root).ok()?;
     let new_rel = hint.new_path.strip_prefix(sync_root).ok()?;
     Some(RelativeRenameHint {
@@ -305,11 +279,7 @@ pub fn hint_to_relative_pair(
 }
 
 /// Expand a directory-level rename hint into per-file hints.
-pub fn expand_directory_hint(
-    hint: &RenameHint,
-    sync_root: &Path,
-    known_relative_paths: &[PathBuf],
-) -> Vec<RelativeRenameHint> {
+pub fn expand_directory_hint(hint: &RenameHint, sync_root: &Path, known_relative_paths: &[PathBuf]) -> Vec<RelativeRenameHint> {
     let Some(old_prefix) = hint.old_path.strip_prefix(sync_root).ok() else {
         return Vec::new();
     };
@@ -452,59 +422,33 @@ mod tests {
 
     #[test]
     fn skip_auth_expired_always_skips() {
-        assert!(should_skip_sync_check(
-            &ConnectivityStatus::AuthExpired,
-            0,
-            2,
-        ));
+        assert!(should_skip_sync_check(&ConnectivityStatus::AuthExpired, 0, 2,));
     }
 
     #[test]
     fn skip_connected_never_skips() {
-        assert!(!should_skip_sync_check(
-            &ConnectivityStatus::Connected,
-            0,
-            2,
-        ));
-        assert!(!should_skip_sync_check(
-            &ConnectivityStatus::Connected,
-            10,
-            2,
-        ));
+        assert!(!should_skip_sync_check(&ConnectivityStatus::Connected, 0, 2,));
+        assert!(!should_skip_sync_check(&ConnectivityStatus::Connected, 10, 2,));
     }
 
     #[test]
     fn skip_degraded_above_threshold_skips() {
         assert!(should_skip_sync_check(&ConnectivityStatus::Degraded, 2, 2,));
-        assert!(should_skip_sync_check(
-            &ConnectivityStatus::ServerUnreachable,
-            5,
-            2,
-        ));
+        assert!(should_skip_sync_check(&ConnectivityStatus::ServerUnreachable, 5, 2,));
     }
 
     #[test]
     fn skip_degraded_below_threshold_does_not_skip() {
         assert!(!should_skip_sync_check(&ConnectivityStatus::Degraded, 1, 2,));
-        assert!(!should_skip_sync_check(
-            &ConnectivityStatus::NetworkOffline,
-            0,
-            2,
-        ));
+        assert!(!should_skip_sync_check(&ConnectivityStatus::NetworkOffline, 0, 2,));
     }
 
     // --- is_failed_download_artifact ---
 
     #[test]
     fn artifact_valid_hex() {
-        assert_eq!(
-            is_failed_download_artifact("downloaded_a1b2c3d4"),
-            Some("a1b2c3d4"),
-        );
-        assert_eq!(
-            is_failed_download_artifact("downloaded_ABCDEF0123456789"),
-            Some("ABCDEF0123456789"),
-        );
+        assert_eq!(is_failed_download_artifact("downloaded_a1b2c3d4"), Some("a1b2c3d4"),);
+        assert_eq!(is_failed_download_artifact("downloaded_ABCDEF0123456789"), Some("ABCDEF0123456789"),);
     }
 
     #[test]
@@ -540,18 +484,12 @@ mod tests {
 
     #[test]
     fn encrypted_stub_valid_long_hex() {
-        assert_eq!(
-            is_encrypted_name_stub("file_a7339456c25845c2abcdef01"),
-            Some("a7339456c25845c2abcdef01"),
-        );
+        assert_eq!(is_encrypted_name_stub("file_a7339456c25845c2abcdef01"), Some("a7339456c25845c2abcdef01"),);
     }
 
     #[test]
     fn encrypted_stub_exactly_16_hex_chars() {
-        assert_eq!(
-            is_encrypted_name_stub("file_0123456789abcdef"),
-            Some("0123456789abcdef"),
-        );
+        assert_eq!(is_encrypted_name_stub("file_0123456789abcdef"), Some("0123456789abcdef"),);
     }
 
     #[test]
@@ -588,25 +526,17 @@ mod tests {
     #[test]
     fn remote_removed_404_not_found() {
         assert!(is_remote_folder_removed_error("HTTP 404 Not Found"));
-        assert!(is_remote_folder_removed_error(
-            "Server returned 404: resource not_found"
-        ));
-        assert!(is_remote_folder_removed_error(
-            "Request failed with status 404 - not found"
-        ));
+        assert!(is_remote_folder_removed_error("Server returned 404: resource not_found"));
+        assert!(is_remote_folder_removed_error("Request failed with status 404 - not found"));
     }
 
     #[test]
     fn remote_removed_explicit_messages() {
         assert!(is_remote_folder_removed_error("folder not found"));
         assert!(is_remote_folder_removed_error("Folder not registered"));
-        assert!(is_remote_folder_removed_error(
-            "The folder does not exist on the server"
-        ));
+        assert!(is_remote_folder_removed_error("The folder does not exist on the server"));
         assert!(is_remote_folder_removed_error("folder has been deleted"));
-        assert!(is_remote_folder_removed_error(
-            "Your folder was removed by another device"
-        ));
+        assert!(is_remote_folder_removed_error("Your folder was removed by another device"));
         assert!(is_remote_folder_removed_error("no such folder"));
     }
 
@@ -621,9 +551,7 @@ mod tests {
         assert!(!is_remote_folder_removed_error("Connection timeout"));
         assert!(!is_remote_folder_removed_error("401 Unauthorized"));
         assert!(!is_remote_folder_removed_error("500 Internal Server Error"));
-        assert!(!is_remote_folder_removed_error(
-            "Sync stalled — no progress for 3 minutes"
-        ));
+        assert!(!is_remote_folder_removed_error("Sync stalled — no progress for 3 minutes"));
         assert!(!is_remote_folder_removed_error("Network offline"));
         assert!(!is_remote_folder_removed_error(""));
     }
@@ -728,6 +656,7 @@ mod tests {
 }
 
 #[cfg(test)]
+#[expect(clippy::expect_used, clippy::unchecked_time_subtraction)]
 mod rename_hint_tests {
     use super::*;
     use std::path::PathBuf;
@@ -739,23 +668,11 @@ mod rename_hint_tests {
         let mut hints: Vec<RenameHint> = Vec::new();
         let now = Instant::now();
 
-        process_rename_event(
-            RenameEventKind::From,
-            &PathBuf::from("/sync/old.txt"),
-            now,
-            &mut pending,
-            &mut hints,
-        );
+        process_rename_event(RenameEventKind::From, &PathBuf::from("/sync/old.txt"), now, &mut pending, &mut hints);
         assert!(pending.is_some());
         assert!(hints.is_empty());
 
-        process_rename_event(
-            RenameEventKind::To,
-            &PathBuf::from("/sync/new.txt"),
-            now,
-            &mut pending,
-            &mut hints,
-        );
+        process_rename_event(RenameEventKind::To, &PathBuf::from("/sync/new.txt"), now, &mut pending, &mut hints);
         assert!(pending.is_none());
         assert_eq!(hints.len(), 1);
         assert_eq!(hints[0].old_path, PathBuf::from("/sync/old.txt"));
@@ -779,10 +696,7 @@ mod rename_hint_tests {
             &mut hints,
         );
         assert!(hints.is_empty());
-        assert_eq!(
-            pending.as_ref().expect("should have pending").path,
-            PathBuf::from("/sync/real_old.txt")
-        );
+        assert_eq!(pending.as_ref().expect("should have pending").path, PathBuf::from("/sync/real_old.txt"));
     }
 
     #[test]
@@ -845,7 +759,6 @@ mod rename_hint_tests {
         let hint = RenameHint {
             old_path: PathBuf::from("/sync/projects"),
             new_path: PathBuf::from("/sync/work"),
-            captured_at: Instant::now(),
         };
         let sync_root = PathBuf::from("/sync");
 
@@ -857,22 +770,10 @@ mod rename_hint_tests {
 
         let expanded = expand_directory_hint(&hint, &sync_root, &known_paths);
         assert_eq!(expanded.len(), 2);
-        assert_eq!(
-            expanded[0].old_relative_path,
-            PathBuf::from("projects/a.txt")
-        );
-        assert_eq!(
-            expanded[0].new_relative_path,
-            PathBuf::from("work/a.txt")
-        );
-        assert_eq!(
-            expanded[1].old_relative_path,
-            PathBuf::from("projects/sub/b.txt")
-        );
-        assert_eq!(
-            expanded[1].new_relative_path,
-            PathBuf::from("work/sub/b.txt")
-        );
+        assert_eq!(expanded[0].old_relative_path, PathBuf::from("projects/a.txt"));
+        assert_eq!(expanded[0].new_relative_path, PathBuf::from("work/a.txt"));
+        assert_eq!(expanded[1].old_relative_path, PathBuf::from("projects/sub/b.txt"));
+        assert_eq!(expanded[1].new_relative_path, PathBuf::from("work/sub/b.txt"));
     }
 
     #[test]
@@ -880,7 +781,6 @@ mod rename_hint_tests {
         let hint = RenameHint {
             old_path: PathBuf::from("/sync/old.txt"),
             new_path: PathBuf::from("/sync/new.txt"),
-            captured_at: Instant::now(),
         };
         let sync_root = PathBuf::from("/sync");
 
@@ -899,7 +799,6 @@ mod rename_hint_tests {
         let hint = RenameHint {
             old_path: PathBuf::from("/other/old.txt"),
             new_path: PathBuf::from("/sync/new.txt"),
-            captured_at: Instant::now(),
         };
         let sync_root = PathBuf::from("/sync");
 
@@ -916,24 +815,12 @@ mod rename_hint_tests {
         let now = Instant::now();
 
         // First Any → stored as pending
-        process_rename_event(
-            RenameEventKind::Any,
-            &PathBuf::from("/sync/old.txt"),
-            now,
-            &mut pending,
-            &mut hints,
-        );
+        process_rename_event(RenameEventKind::Any, &PathBuf::from("/sync/old.txt"), now, &mut pending, &mut hints);
         assert!(pending.is_some());
         assert!(hints.is_empty());
 
         // Second Any → paired with pending
-        process_rename_event(
-            RenameEventKind::Any,
-            &PathBuf::from("/sync/new.txt"),
-            now,
-            &mut pending,
-            &mut hints,
-        );
+        process_rename_event(RenameEventKind::Any, &PathBuf::from("/sync/new.txt"), now, &mut pending, &mut hints);
         assert!(pending.is_none());
         assert_eq!(hints.len(), 1);
         assert_eq!(hints[0].old_path, PathBuf::from("/sync/old.txt"));
@@ -958,10 +845,7 @@ mod rename_hint_tests {
             &mut hints,
         );
         assert!(hints.is_empty());
-        assert_eq!(
-            pending.as_ref().expect("should have pending").path,
-            PathBuf::from("/sync/fresh.txt"),
-        );
+        assert_eq!(pending.as_ref().expect("should have pending").path, PathBuf::from("/sync/fresh.txt"),);
     }
 
     #[test]

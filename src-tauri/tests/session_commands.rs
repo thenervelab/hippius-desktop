@@ -48,7 +48,7 @@ fn account_key(account_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(account_id.as_bytes());
     let digest = hasher.finalize();
-    hex::encode(&digest)[..8].to_string()
+    hex::encode(digest)[..8].to_string()
 }
 
 // ── Wallet Store Tests ─────────────────────────────────────────────────
@@ -60,14 +60,14 @@ async fn test_save_and_get_wallet() {
 
     // Save wallet
     sqlx::query(
-        r#"
+        r"
         INSERT INTO wallet_store (owner, encrypted_mnemonic, passcode_hash, updated_at)
         VALUES (?, ?, ?, datetime('now'))
         ON CONFLICT(owner) DO UPDATE SET
             encrypted_mnemonic = excluded.encrypted_mnemonic,
             passcode_hash = excluded.passcode_hash,
             updated_at = datetime('now')
-        "#,
+        ",
     )
     .bind(&owner)
     .bind("encrypted-data-abc")
@@ -77,13 +77,11 @@ async fn test_save_and_get_wallet() {
     .unwrap();
 
     // Get wallet
-    let row = sqlx::query_as::<_, (String, String)>(
-        "SELECT encrypted_mnemonic, passcode_hash FROM wallet_store WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
+    let row = sqlx::query_as::<_, (String, String)>("SELECT encrypted_mnemonic, passcode_hash FROM wallet_store WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
 
     let (mnemonic, hash) = row.unwrap();
     assert_eq!(mnemonic, "encrypted-data-abc");
@@ -97,14 +95,14 @@ async fn test_upsert_wallet() {
 
     // Initial insert
     sqlx::query(
-        r#"
+        r"
         INSERT INTO wallet_store (owner, encrypted_mnemonic, passcode_hash, updated_at)
         VALUES (?, ?, ?, datetime('now'))
         ON CONFLICT(owner) DO UPDATE SET
             encrypted_mnemonic = excluded.encrypted_mnemonic,
             passcode_hash = excluded.passcode_hash,
             updated_at = datetime('now')
-        "#,
+        ",
     )
     .bind(&owner)
     .bind("old-data")
@@ -115,14 +113,14 @@ async fn test_upsert_wallet() {
 
     // Upsert (update)
     sqlx::query(
-        r#"
+        r"
         INSERT INTO wallet_store (owner, encrypted_mnemonic, passcode_hash, updated_at)
         VALUES (?, ?, ?, datetime('now'))
         ON CONFLICT(owner) DO UPDATE SET
             encrypted_mnemonic = excluded.encrypted_mnemonic,
             passcode_hash = excluded.passcode_hash,
             updated_at = datetime('now')
-        "#,
+        ",
     )
     .bind(&owner)
     .bind("new-data")
@@ -131,13 +129,11 @@ async fn test_upsert_wallet() {
     .await
     .unwrap();
 
-    let (mnemonic, hash) = sqlx::query_as::<_, (String, String)>(
-        "SELECT encrypted_mnemonic, passcode_hash FROM wallet_store WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (mnemonic, hash) = sqlx::query_as::<_, (String, String)>("SELECT encrypted_mnemonic, passcode_hash FROM wallet_store WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(mnemonic, "new-data");
     assert_eq!(hash, "new-hash");
@@ -165,15 +161,13 @@ async fn test_has_wallet() {
     assert_eq!(count, 0);
 
     // Insert
-    sqlx::query(
-        "INSERT INTO wallet_store (owner, encrypted_mnemonic, passcode_hash) VALUES (?, ?, ?)",
-    )
-    .bind(&owner)
-    .bind("data")
-    .bind("hash")
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO wallet_store (owner, encrypted_mnemonic, passcode_hash) VALUES (?, ?, ?)")
+        .bind(&owner)
+        .bind("data")
+        .bind("hash")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     // Should exist
     let (count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM wallet_store WHERE owner = ?")
@@ -189,15 +183,13 @@ async fn test_clear_wallet() {
     let pool = setup_db().await;
     let owner = account_key("test-account-4");
 
-    sqlx::query(
-        "INSERT INTO wallet_store (owner, encrypted_mnemonic, passcode_hash) VALUES (?, ?, ?)",
-    )
-    .bind(&owner)
-    .bind("data")
-    .bind("hash")
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO wallet_store (owner, encrypted_mnemonic, passcode_hash) VALUES (?, ?, ?)")
+        .bind(&owner)
+        .bind("data")
+        .bind("hash")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     sqlx::query("DELETE FROM wallet_store WHERE owner = ?")
         .bind(&owner)
@@ -205,13 +197,11 @@ async fn test_clear_wallet() {
         .await
         .unwrap();
 
-    let row = sqlx::query_as::<_, (String,)>(
-        "SELECT encrypted_mnemonic FROM wallet_store WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
+    let row = sqlx::query_as::<_, (String,)>("SELECT encrypted_mnemonic FROM wallet_store WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
 
     assert!(row.is_none());
 }
@@ -225,7 +215,7 @@ async fn test_save_and_get_auth_session() {
     let future_expiry: i64 = chrono::Utc::now().timestamp_millis() + 86_400_000; // +24h
 
     sqlx::query(
-        r#"
+        r"
         INSERT INTO auth_session (
             owner, auth_token, token_expiry, user_id, username,
             provider, substrate_address, logout_time_minutes,
@@ -242,7 +232,7 @@ async fn test_save_and_get_auth_session() {
             logout_time_minutes = COALESCE(excluded.logout_time_minutes, auth_session.logout_time_minutes),
             last_login_at = excluded.last_login_at,
             updated_at = datetime('now')
-        "#,
+        ",
     )
     .bind(&owner)
     .bind("test-token-123")
@@ -257,42 +247,27 @@ async fn test_save_and_get_auth_session() {
     .unwrap();
 
     let row = sqlx::query(
-        r#"
+        r"
         SELECT auth_token, token_expiry, user_id, username,
                provider, substrate_address, logout_time_minutes
         FROM auth_session WHERE owner = ?
-        "#,
+        ",
     )
     .bind(&owner)
     .fetch_one(&pool)
     .await
     .unwrap();
 
-    assert_eq!(
-        row.get::<Option<String>, _>("auth_token").unwrap(),
-        "test-token-123"
-    );
-    assert_eq!(
-        row.get::<Option<i64>, _>("token_expiry").unwrap(),
-        future_expiry
-    );
+    assert_eq!(row.get::<Option<String>, _>("auth_token").unwrap(), "test-token-123");
+    assert_eq!(row.get::<Option<i64>, _>("token_expiry").unwrap(), future_expiry);
     assert_eq!(row.get::<Option<i64>, _>("user_id").unwrap(), 42);
-    assert_eq!(
-        row.get::<Option<String>, _>("username").unwrap(),
-        "testuser"
-    );
-    assert_eq!(
-        row.get::<Option<String>, _>("provider").unwrap(),
-        "mnemonic"
-    );
+    assert_eq!(row.get::<Option<String>, _>("username").unwrap(), "testuser");
+    assert_eq!(row.get::<Option<String>, _>("provider").unwrap(), "mnemonic");
     assert_eq!(
         row.get::<Option<String>, _>("substrate_address").unwrap(),
         "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
     );
-    assert_eq!(
-        row.get::<Option<i64>, _>("logout_time_minutes").unwrap(),
-        1440
-    );
+    assert_eq!(row.get::<Option<i64>, _>("logout_time_minutes").unwrap(), 1440);
 }
 
 #[tokio::test]
@@ -301,17 +276,15 @@ async fn test_get_auth_token_valid() {
     let owner = account_key("test-account-6");
     let future_expiry: i64 = chrono::Utc::now().timestamp_millis() + 86_400_000;
 
-    sqlx::query(
-        "INSERT INTO auth_session (owner, auth_token, token_expiry, user_id, username) VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&owner)
-    .bind("valid-token")
-    .bind(future_expiry)
-    .bind(99_i64)
-    .bind("alice")
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO auth_session (owner, auth_token, token_expiry, user_id, username) VALUES (?, ?, ?, ?, ?)")
+        .bind(&owner)
+        .bind("valid-token")
+        .bind(future_expiry)
+        .bind(99_i64)
+        .bind("alice")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let row = sqlx::query_as::<_, (Option<String>, Option<i64>, Option<i64>, Option<String>)>(
         "SELECT auth_token, token_expiry, user_id, username FROM auth_session WHERE owner = ?",
@@ -343,21 +316,16 @@ async fn test_get_auth_token_expired() {
         .await
         .unwrap();
 
-    let row = sqlx::query_as::<_, (Option<String>, Option<i64>)>(
-        "SELECT auth_token, token_expiry FROM auth_session WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
+    let row = sqlx::query_as::<_, (Option<String>, Option<i64>)>("SELECT auth_token, token_expiry FROM auth_session WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
 
     let (token, expiry) = row.unwrap();
     assert!(token.is_some(), "Token should exist in DB");
     let now_ms = chrono::Utc::now().timestamp_millis();
-    assert!(
-        expiry.unwrap() < now_ms,
-        "Token expiry should be in the past"
-    );
+    assert!(expiry.unwrap() < now_ms, "Token expiry should be in the past");
 }
 
 #[tokio::test]
@@ -367,18 +335,18 @@ async fn test_clear_auth_session_preserves_logout_minutes() {
 
     // Create session with custom logout time
     sqlx::query(
-        r#"
+        r"
         INSERT INTO auth_session (
             owner, auth_token, token_expiry, user_id, username,
             provider, substrate_address, logout_time_minutes,
             last_login_at, updated_at
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-        "#,
+        ",
     )
     .bind(&owner)
     .bind("token")
-    .bind(9999999999_i64)
+    .bind(9_999_999_999_i64)
     .bind(1_i64)
     .bind("bob")
     .bind("mnemonic")
@@ -390,7 +358,7 @@ async fn test_clear_auth_session_preserves_logout_minutes() {
 
     // Clear session (simulates logout)
     sqlx::query(
-        r#"
+        r"
         UPDATE auth_session SET
             auth_token = NULL,
             token_expiry = NULL,
@@ -401,7 +369,7 @@ async fn test_clear_auth_session_preserves_logout_minutes() {
             last_login_at = NULL,
             updated_at = datetime('now')
         WHERE owner = ?
-        "#,
+        ",
     )
     .bind(&owner)
     .execute(&pool)
@@ -409,18 +377,14 @@ async fn test_clear_auth_session_preserves_logout_minutes() {
     .unwrap();
 
     // Verify logout_time_minutes is preserved
-    let row =
-        sqlx::query("SELECT auth_token, logout_time_minutes FROM auth_session WHERE owner = ?")
-            .bind(&owner)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let row = sqlx::query("SELECT auth_token, logout_time_minutes FROM auth_session WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert!(row.get::<Option<String>, _>("auth_token").is_none());
-    assert_eq!(
-        row.get::<Option<i64>, _>("logout_time_minutes").unwrap(),
-        60
-    );
+    assert_eq!(row.get::<Option<i64>, _>("logout_time_minutes").unwrap(), 60);
 }
 
 #[tokio::test]
@@ -430,44 +394,36 @@ async fn test_multi_account_isolation() {
     let owner_b = account_key("account-bob");
 
     // Save wallet for Alice
-    sqlx::query(
-        "INSERT INTO wallet_store (owner, encrypted_mnemonic, passcode_hash) VALUES (?, ?, ?)",
-    )
-    .bind(&owner_a)
-    .bind("alice-mnemonic")
-    .bind("alice-hash")
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO wallet_store (owner, encrypted_mnemonic, passcode_hash) VALUES (?, ?, ?)")
+        .bind(&owner_a)
+        .bind("alice-mnemonic")
+        .bind("alice-hash")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     // Save wallet for Bob
-    sqlx::query(
-        "INSERT INTO wallet_store (owner, encrypted_mnemonic, passcode_hash) VALUES (?, ?, ?)",
-    )
-    .bind(&owner_b)
-    .bind("bob-mnemonic")
-    .bind("bob-hash")
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO wallet_store (owner, encrypted_mnemonic, passcode_hash) VALUES (?, ?, ?)")
+        .bind(&owner_b)
+        .bind("bob-mnemonic")
+        .bind("bob-hash")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     // Verify isolation
-    let alice = sqlx::query_as::<_, (String,)>(
-        "SELECT encrypted_mnemonic FROM wallet_store WHERE owner = ?",
-    )
-    .bind(&owner_a)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let alice = sqlx::query_as::<_, (String,)>("SELECT encrypted_mnemonic FROM wallet_store WHERE owner = ?")
+        .bind(&owner_a)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(alice.0, "alice-mnemonic");
 
-    let bob = sqlx::query_as::<_, (String,)>(
-        "SELECT encrypted_mnemonic FROM wallet_store WHERE owner = ?",
-    )
-    .bind(&owner_b)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let bob = sqlx::query_as::<_, (String,)>("SELECT encrypted_mnemonic FROM wallet_store WHERE owner = ?")
+        .bind(&owner_b)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(bob.0, "bob-mnemonic");
 
     // Delete Alice doesn't affect Bob
@@ -477,13 +433,11 @@ async fn test_multi_account_isolation() {
         .await
         .unwrap();
 
-    let bob_still = sqlx::query_as::<_, (String,)>(
-        "SELECT encrypted_mnemonic FROM wallet_store WHERE owner = ?",
-    )
-    .bind(&owner_b)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
+    let bob_still = sqlx::query_as::<_, (String,)>("SELECT encrypted_mnemonic FROM wallet_store WHERE owner = ?")
+        .bind(&owner_b)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
     assert!(bob_still.is_some());
 }
 
@@ -494,12 +448,12 @@ async fn test_session_upsert_preserves_logout_minutes_when_null() {
 
     // First insert with explicit logout_time_minutes
     sqlx::query(
-        r#"
+        r"
         INSERT INTO auth_session (
             owner, auth_token, logout_time_minutes, updated_at
         )
         VALUES (?, ?, ?, datetime('now'))
-        "#,
+        ",
     )
     .bind(&owner)
     .bind("token-1")
@@ -510,7 +464,7 @@ async fn test_session_upsert_preserves_logout_minutes_when_null() {
 
     // Upsert with NULL logout_time_minutes — should preserve 60
     sqlx::query(
-        r#"
+        r"
         INSERT INTO auth_session (
             owner, auth_token, token_expiry, user_id, username,
             provider, substrate_address, logout_time_minutes,
@@ -527,7 +481,7 @@ async fn test_session_upsert_preserves_logout_minutes_when_null() {
             logout_time_minutes = COALESCE(excluded.logout_time_minutes, auth_session.logout_time_minutes),
             last_login_at = excluded.last_login_at,
             updated_at = datetime('now')
-        "#,
+        ",
     )
     .bind(&owner)
     .bind("token-2")
@@ -541,17 +495,13 @@ async fn test_session_upsert_preserves_logout_minutes_when_null() {
     .await
     .unwrap();
 
-    let row =
-        sqlx::query("SELECT auth_token, logout_time_minutes FROM auth_session WHERE owner = ?")
-            .bind(&owner)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let row = sqlx::query("SELECT auth_token, logout_time_minutes FROM auth_session WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
-    assert_eq!(
-        row.get::<Option<String>, _>("auth_token").unwrap(),
-        "token-2"
-    );
+    assert_eq!(row.get::<Option<String>, _>("auth_token").unwrap(), "token-2");
     assert_eq!(
         row.get::<Option<i64>, _>("logout_time_minutes").unwrap(),
         60,

@@ -28,10 +28,7 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             "nebula_binary_status",
             &[
                 ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
-                (
-                    "is_nebula_binary_installed",
-                    "BOOLEAN NOT NULL DEFAULT FALSE",
-                ),
+                ("is_nebula_binary_installed", "BOOLEAN NOT NULL DEFAULT FALSE"),
                 ("last_updated", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ],
         ),
@@ -70,16 +67,12 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         let create_table = format!(
             "CREATE TABLE IF NOT EXISTS {} ({})",
             table_name,
-            columns
-                .iter()
-                .map(|(name, typ)| format!("{} {}", name, typ))
-                .collect::<Vec<_>>()
-                .join(", ")
+            columns.iter().map(|(name, typ)| format!("{name} {typ}")).collect::<Vec<_>>().join(", ")
         );
         sqlx::query(&create_table).execute(pool).await?;
 
         // Check and add any missing columns
-        let pragma_sql = format!("PRAGMA table_info({})", table_name);
+        let pragma_sql = format!("PRAGMA table_info({table_name})");
         let columns_info = sqlx::query(&pragma_sql).fetch_all(pool).await?;
 
         for (column_name, column_type) in *columns {
@@ -90,12 +83,9 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
             if !column_exists {
                 info!("Adding column {} to table {}", column_name, table_name);
-                sqlx::query(&format!(
-                    "ALTER TABLE {} ADD COLUMN {} {}",
-                    table_name, column_name, column_type
-                ))
-                .execute(pool)
-                .await?;
+                sqlx::query(&format!("ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+                    .execute(pool)
+                    .await?;
             }
         }
     }
@@ -118,12 +108,8 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
     // Migration: add label column if missing (existing dev databases)
     {
-        let columns_info = sqlx::query("PRAGMA table_info(sync_paths)")
-            .fetch_all(pool)
-            .await?;
-        let has_label = columns_info
-            .iter()
-            .any(|row| row.get::<String, _>("name") == "label");
+        let columns_info = sqlx::query("PRAGMA table_info(sync_paths)").fetch_all(pool).await?;
+        let has_label = columns_info.iter().any(|row| row.get::<String, _>("name") == "label");
         if !has_label {
             info!("Adding label column to sync_paths");
             sqlx::query("ALTER TABLE sync_paths ADD COLUMN label TEXT NOT NULL DEFAULT 'default'")
@@ -134,19 +120,13 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
     // Migration: add is_paused column if missing (existing databases)
     {
-        let columns_info = sqlx::query("PRAGMA table_info(sync_paths)")
-            .fetch_all(pool)
-            .await?;
-        let has_is_paused = columns_info
-            .iter()
-            .any(|row| row.get::<String, _>("name") == "is_paused");
+        let columns_info = sqlx::query("PRAGMA table_info(sync_paths)").fetch_all(pool).await?;
+        let has_is_paused = columns_info.iter().any(|row| row.get::<String, _>("name") == "is_paused");
         if !has_is_paused {
             info!("Adding is_paused column to sync_paths");
-            sqlx::query(
-                "ALTER TABLE sync_paths ADD COLUMN is_paused INTEGER NOT NULL DEFAULT 0",
-            )
-            .execute(pool)
-            .await?;
+            sqlx::query("ALTER TABLE sync_paths ADD COLUMN is_paused INTEGER NOT NULL DEFAULT 0")
+                .execute(pool)
+                .await?;
         }
     }
 
@@ -157,22 +137,20 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // SQLite doesn't support ALTER TABLE DROP CONSTRAINT, so we recreate.
     // Wrapped in a transaction so the table is never left in a broken state.
     {
-        let table_sql =
-            sqlx::query("SELECT sql FROM sqlite_master WHERE type='table' AND name='sync_paths'")
-                .fetch_optional(pool)
-                .await?;
+        let table_sql = sqlx::query("SELECT sql FROM sqlite_master WHERE type='table' AND name='sync_paths'")
+            .fetch_optional(pool)
+            .await?;
         let has_correct_constraint = table_sql
             .as_ref()
             .and_then(|row| row.try_get::<String, _>("sql").ok())
-            .map(|sql| sql.contains("UNIQUE(owner, label)") || sql.contains("UNIQUE (owner, label)"))
-            .unwrap_or(false);
+            .is_some_and(|sql| sql.contains("UNIQUE(owner, label)") || sql.contains("UNIQUE (owner, label)"));
 
-        if !has_correct_constraint {
+        if has_correct_constraint {
+            debug!("sync_paths already has UNIQUE(owner, label), skipping migration");
+        } else {
             info!("Migrating sync_paths to add UNIQUE(owner, label) constraint");
             // Clean up any leftover temp table from a previous failed attempt
-            sqlx::query("DROP TABLE IF EXISTS sync_paths_new")
-                .execute(pool)
-                .await?;
+            sqlx::query("DROP TABLE IF EXISTS sync_paths_new").execute(pool).await?;
 
             // Run the entire swap inside a transaction
             let mut tx = pool.begin().await?;
@@ -206,18 +184,12 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             .execute(&mut *tx)
             .await?;
 
-            sqlx::query("DROP TABLE sync_paths")
-                .execute(&mut *tx)
-                .await?;
+            sqlx::query("DROP TABLE sync_paths").execute(&mut *tx).await?;
 
-            sqlx::query("ALTER TABLE sync_paths_new RENAME TO sync_paths")
-                .execute(&mut *tx)
-                .await?;
+            sqlx::query("ALTER TABLE sync_paths_new RENAME TO sync_paths").execute(&mut *tx).await?;
 
             tx.commit().await?;
             info!("sync_paths constraint migration completed");
-        } else {
-            debug!("sync_paths already has UNIQUE(owner, label), skipping migration");
         }
     }
 
@@ -328,13 +300,9 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
     // Seed with OS hostname if no row exists yet
     {
-        let existing = sqlx::query("SELECT id FROM device_settings WHERE id = 1")
-            .fetch_optional(pool)
-            .await?;
+        let existing = sqlx::query("SELECT id FROM device_settings WHERE id = 1").fetch_optional(pool).await?;
         if existing.is_none() {
-            let hostname = hostname::get()
-                .map(|h| h.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| "My Device".to_string());
+            let hostname = hostname::get().map_or_else(|_| "My Device".to_string(), |h| h.to_string_lossy().into_owned());
             sqlx::query("INSERT INTO device_settings (id, device_name) VALUES (1, ?)")
                 .bind(&hostname)
                 .execute(pool)
@@ -344,7 +312,7 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     }
 
     sqlx::query(
-        r#"
+        r"
         CREATE TABLE IF NOT EXISTS migration_status (
             account_id TEXT PRIMARY KEY,
             status TEXT NOT NULL DEFAULT 'in_progress',
@@ -355,7 +323,7 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             server_url TEXT NOT NULL DEFAULT '',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-        "#,
+        ",
     )
     .execute(pool)
     .await?;
@@ -385,11 +353,9 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
 
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_notifications_user_deleted ON notifications(user_address, is_deleted)",
-    )
-    .execute(pool)
-    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_notifications_user_deleted ON notifications(user_address, is_deleted)")
+        .execute(pool)
+        .await?;
 
     // App state (singleton, replaces frontend app_state table)
     sqlx::query(
@@ -479,11 +445,10 @@ async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     use crate::utils::account_key::{account_key, account_key_legacy};
 
     // Find sessions that still use the legacy 8-char owner format
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT owner, substrate_address FROM auth_session WHERE substrate_address IS NOT NULL AND substrate_address != ''"
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT owner, substrate_address FROM auth_session WHERE substrate_address IS NOT NULL AND substrate_address != ''")
+            .fetch_all(pool)
+            .await?;
 
     for (owner, substrate_address) in &rows {
         let legacy = account_key_legacy(substrate_address);
@@ -514,12 +479,8 @@ async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
             for table in tables {
                 // Use explicit per-table queries to avoid SQL injection
-                let query = format!("UPDATE {} SET owner = ? WHERE owner = ?", table);
-                let result = sqlx::query(&query)
-                    .bind(&new_key)
-                    .bind(&legacy)
-                    .execute(&mut *tx)
-                    .await;
+                let query = format!("UPDATE {table} SET owner = ? WHERE owner = ?");
+                let result = sqlx::query(&query).bind(&new_key).bind(&legacy).execute(&mut *tx).await;
                 match result {
                     Ok(r) if r.rows_affected() > 0 => {
                         info!("Updated {} row(s) in {}", r.rows_affected(), table);
@@ -541,219 +502,202 @@ async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
-            debug!(".setup() closure called in setup.rs");
+        debug!(".setup() closure called in setup.rs");
 
-            if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
-                let _ = dotenvy::from_filename(env_path);
+        if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
+            let _ = dotenvy::from_filename(env_path);
+        }
+
+        // Register deep links for Linux at runtime (required for dev)
+        #[cfg(target_os = "linux")]
+        {
+            debug!("Registering deep links for Linux...");
+            match app.deep_link().register_all() {
+                Ok(_) => info!("Deep links registered successfully for Linux"),
+                Err(e) => error!("Failed to register deep links: {}", e),
+            }
+        }
+
+        let app_handle = app.handle().clone();
+
+        // Single AppState holds all mutable state — zero statics.
+        let app_state = crate::app_state::AppState::new();
+        app_state.sync.set_app_handle(app_handle.clone());
+        app_handle.manage(app_state);
+        let win = app.get_webview_window("main").expect("main window not found");
+
+        if let Some(m) = win.current_monitor()? {
+            let phys = m.size();
+            let origin = m.position();
+
+            let w = (phys.width as f64 * 0.8) as u32;
+            let h = (phys.height as f64 * 0.9) as u32;
+
+            let pos_x = origin.x + ((phys.width as i32 - w as i32) / 2);
+            let pos_y = origin.y + ((phys.height as i32 - h as i32) / 2);
+
+            win.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: w, height: h }))?;
+            win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }))?;
+            win.show()?;
+        }
+        // Spawn async task for database initialization and Nebula setup
+        tauri::async_runtime::spawn(async move {
+            debug!("Async block started in setup.rs");
+
+            // Database initialization
+            let home_dir = dirs::home_dir().expect("Failed to get home directory");
+            let db_dir = home_dir.join(".hippius");
+            let db_path = db_dir.join("hippius.db");
+            debug!("DB path: {}", db_path.display());
+
+            std::fs::create_dir_all(&db_dir).expect("Failed to create .hippius directory");
+
+            if !db_path.exists() {
+                std::fs::File::create(&db_path).expect("Failed to create database file");
             }
 
-            // Register deep links for Linux at runtime (required for dev)
-            #[cfg(target_os = "linux")]
-            {
-                debug!("Registering deep links for Linux...");
-                match app.deep_link().register_all() {
-                    Ok(_) => info!("Deep links registered successfully for Linux"),
-                    Err(e) => error!("Failed to register deep links: {}", e),
+            let db_url = format!("sqlite:{}", db_path.display());
+            let pool = match SqlitePool::connect(&db_url).await {
+                Ok(pool) => pool,
+                Err(e) => {
+                    error!("FATAL: Failed to open database at {}: {e}", db_path.display());
+                    return; // cannot propagate from spawned task; error is logged
                 }
+            };
+            app_handle.state::<crate::app_state::AppState>().set_pool(pool.clone());
+
+            // Ensure all tables and columns exist
+            if let Err(e) = ensure_table_schema(&pool).await {
+                error!("FATAL: Failed to ensure table schema: {}", e);
+                return;
             }
 
-            let app_handle = app.handle().clone();
-
-            // Single AppState holds all mutable state — zero statics.
-            let app_state = crate::app_state::AppState::new();
-            app_state.sync.set_app_handle(app_handle.clone());
-            app_handle.manage(app_state);
-            let win = app.get_webview_window("main").expect("main window not found");
-
-            if let Some(m) = win.current_monitor()? {
-                let phys   = m.size();
-                let origin = m.position();
-
-                let w = (phys.width as f64 * 0.8) as u32;
-                let h = (phys.height as f64 * 0.9) as u32;
-
-                let pos_x = origin.x + ((phys.width  as i32 - w as i32) / 2);
-                let pos_y = origin.y + ((phys.height as i32 - h as i32) / 2);
-
-                win.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: w, height: h }))?;
-                win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }))?;
-                win.show()?;
+            // Migrate account keys from 8-char to 16-char format
+            if let Err(e) = migrate_account_keys(&pool).await {
+                warn!("Account key migration failed (non-fatal): {}", e);
             }
-            // Spawn async task for database initialization and Nebula setup
-            tauri::async_runtime::spawn(async move {
-                debug!("Async block started in setup.rs");
 
-                // Database initialization
-                let home_dir = dirs::home_dir().expect("Failed to get home directory");
-                let db_dir = home_dir.join(".hippius");
-                let db_path = db_dir.join("hippius.db");
-                debug!("DB path: {}", db_path.display());
-
-                std::fs::create_dir_all(&db_dir).expect("Failed to create .hippius directory");
-
-                if !db_path.exists() {
-                    std::fs::File::create(&db_path).expect("Failed to create database file");
-                }
-
-                let db_url = format!("sqlite:{}", db_path.display());
-                let pool = match SqlitePool::connect(&db_url).await {
-                    Ok(pool) => pool,
-                    Err(e) => {
-                        error!("FATAL: Failed to open database at {}: {e}", db_path.display());
-                        return; // cannot propagate from spawned task; error is logged
-                    }
-                };
-                app_handle.state::<crate::app_state::AppState>().set_pool(pool.clone());
-
-                // Ensure all tables and columns exist
-                if let Err(e) = ensure_table_schema(&pool).await {
-                    error!("FATAL: Failed to ensure table schema: {}", e);
-                    return;
-                }
-
-                // Migrate account keys from 8-char to 16-char format
-                if let Err(e) = migrate_account_keys(&pool).await {
-                    warn!("Account key migration failed (non-fatal): {}", e);
-                }
-
-                // Initialize WSS endpoint if it doesn't exist
-                let endpoint_exists: Option<(i64,)> = sqlx::query_as(
-                    "SELECT COUNT(*) as count FROM wss_endpoint"
-                )
+            // Initialize WSS endpoint if it doesn't exist
+            let endpoint_exists: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) as count FROM wss_endpoint")
                 .fetch_optional(&pool)
                 .await
                 .unwrap_or(Some((0,)));
 
-                if let Some((count,)) = endpoint_exists {
-                    if count == 0 {
-                        info!("No WSS endpoint found, creating default endpoint...");
-                        if let Err(e) = sqlx::query(
-                            "INSERT INTO wss_endpoint (id, endpoint) VALUES (1, ?)"
-                        )
+            if let Some((count,)) = endpoint_exists {
+                if count == 0 {
+                    info!("No WSS endpoint found, creating default endpoint...");
+                    if let Err(e) = sqlx::query("INSERT INTO wss_endpoint (id, endpoint) VALUES (1, ?)")
                         .bind(WSS_ENDPOINT)
                         .execute(&pool)
-                        .await {
-                            error!("Failed to create default WSS endpoint: {}", e);
-                        } else {
-                            info!("Default WSS endpoint created successfully");
-                        }
+                        .await
+                    {
+                        error!("Failed to create default WSS endpoint: {}", e);
                     } else {
-                        debug!("WSS endpoint already exists");
-                    }
-                }
-
-                // Initialize VPN status if it doesn't exist
-                let vpn_status_exists: Option<(i64,)> = sqlx::query_as(
-                    "SELECT COUNT(*) as count FROM vpn_status"
-                )
-                .fetch_optional(&pool)
-                .await
-                .unwrap_or(Some((0,)));
-
-                if let Some((count,)) = vpn_status_exists {
-                    if count == 0 {
-                        info!("No VPN status found, creating default entry...");
-                        if let Err(e) = sqlx::query(
-                            "INSERT INTO vpn_status (id, is_enabled) VALUES (1, FALSE)"
-                        )
-                        .execute(&pool)
-                        .await {
-                            error!("Failed to create default VPN status: {}", e);
-                        } else {
-                            info!("Default VPN status created successfully");
-                        }
-                    } else {
-                        debug!("VPN status entry already exists");
-                    }
-                }
-
-                // Check if autoconnect is enabled
-                let autoconnect_enabled: bool = sqlx::query("SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1")
-                    .fetch_optional(&pool)
-                    .await
-                    .unwrap_or(None)
-                    .map(|row| row.get("is_enabled"))
-                    .unwrap_or(false);
-
-                if !autoconnect_enabled {
-                    debug!("Resetting VPN status to FALSE on startup...");
-                    if let Err(e) = sqlx::query(
-                        "UPDATE vpn_status SET is_enabled = FALSE WHERE id = 1"
-                    )
-                    .execute(&pool)
-                    .await {
-                        error!("Failed to reset VPN status: {}", e);
-                    }
-
-                    debug!("Ensuring Nebula is stopped on startup...");
-                    let nebula_st = &app_handle.state::<crate::app_state::AppState>().nebula;
-                    if let Err(e) = crate::utils::nebula::stop_nebula(nebula_st).await {
-                        warn!("Failed to stop Nebula: {}", e);
+                        info!("Default WSS endpoint created successfully");
                     }
                 } else {
-                    debug!("Autoconnect enabled, skipping VPN status reset");
+                    debug!("WSS endpoint already exists");
                 }
+            }
 
-                // Initialize Nebula binary status if it doesn't exist
-                let nebula_binary_status_exists: Option<(i64,)> = sqlx::query_as(
-                    "SELECT COUNT(*) as count FROM nebula_binary_status"
-                )
+            // Initialize VPN status if it doesn't exist
+            let vpn_status_exists: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) as count FROM vpn_status")
                 .fetch_optional(&pool)
                 .await
                 .unwrap_or(Some((0,)));
 
-                if let Some((count,)) = nebula_binary_status_exists {
-                    if count == 0 {
-                        info!("No Nebula binary status found, creating default entry...");
-                        if let Err(e) = sqlx::query(
-                            "INSERT INTO nebula_binary_status (id, is_nebula_binary_installed) VALUES (1, FALSE)"
-                        )
+            if let Some((count,)) = vpn_status_exists {
+                if count == 0 {
+                    info!("No VPN status found, creating default entry...");
+                    if let Err(e) = sqlx::query("INSERT INTO vpn_status (id, is_enabled) VALUES (1, FALSE)")
                         .execute(&pool)
-                        .await {
-                            error!("Failed to create default Nebula binary status: {}", e);
-                        } else {
-                            info!("Default Nebula binary status created successfully");
-                        }
+                        .await
+                    {
+                        error!("Failed to create default VPN status: {}", e);
                     } else {
-                        debug!("Nebula binary status entry already exists");
+                        info!("Default VPN status created successfully");
                     }
+                } else {
+                    debug!("VPN status entry already exists");
+                }
+            }
+
+            // Check if autoconnect is enabled
+            let autoconnect_enabled: bool = sqlx::query("SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1")
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(None)
+                .is_some_and(|row| row.get("is_enabled"));
+
+            if autoconnect_enabled {
+                debug!("Autoconnect enabled, skipping VPN status reset");
+            } else {
+                debug!("Resetting VPN status to FALSE on startup...");
+                if let Err(e) = sqlx::query("UPDATE vpn_status SET is_enabled = FALSE WHERE id = 1").execute(&pool).await {
+                    error!("Failed to reset VPN status: {}", e);
                 }
 
-                // Initialize autoconnect VPN status if it doesn't exist
-                let autoconnect_exists: Option<(i64,)> = sqlx::query_as(
-                    "SELECT COUNT(*) as count FROM autoconnect_vpn_enabled"
-                )
+                debug!("Ensuring Nebula is stopped on startup...");
+                let nebula_st = &app_handle.state::<crate::app_state::AppState>().nebula;
+                if let Err(e) = crate::utils::nebula::stop_nebula(nebula_st).await {
+                    warn!("Failed to stop Nebula: {}", e);
+                }
+            }
+
+            // Initialize Nebula binary status if it doesn't exist
+            let nebula_binary_status_exists: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) as count FROM nebula_binary_status")
                 .fetch_optional(&pool)
                 .await
                 .unwrap_or(Some((0,)));
 
-                if let Some((count,)) = autoconnect_exists {
-                    if count == 0 {
-                        info!("No autoconnect VPN status found, creating default entry...");
-                        if let Err(e) = sqlx::query(
-                            "INSERT INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)"
-                        )
+            if let Some((count,)) = nebula_binary_status_exists {
+                if count == 0 {
+                    info!("No Nebula binary status found, creating default entry...");
+                    if let Err(e) = sqlx::query("INSERT INTO nebula_binary_status (id, is_nebula_binary_installed) VALUES (1, FALSE)")
                         .execute(&pool)
-                        .await {
-                            error!("Failed to create default autoconnect VPN status: {}", e);
-                        } else {
-                            info!("Default autoconnect VPN status created successfully");
-                        }
+                        .await
+                    {
+                        error!("Failed to create default Nebula binary status: {}", e);
                     } else {
-                        debug!("Autoconnect VPN status entry already exists");
+                        info!("Default Nebula binary status created successfully");
                     }
+                } else {
+                    debug!("Nebula binary status entry already exists");
                 }
+            }
 
-                info!("Database initialized successfully");
+            // Initialize autoconnect VPN status if it doesn't exist
+            let autoconnect_exists: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) as count FROM autoconnect_vpn_enabled")
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(Some((0,)));
 
-                // Verify Nebula setup and certificates
-                debug!("Verifying Nebula setup...");
-                if let Err(e) = verify_nebula_setup(app_handle).await {
-                    warn!("{}", e);
+            if let Some((count,)) = autoconnect_exists {
+                if count == 0 {
+                    info!("No autoconnect VPN status found, creating default entry...");
+                    if let Err(e) = sqlx::query("INSERT INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)")
+                        .execute(&pool)
+                        .await
+                    {
+                        error!("Failed to create default autoconnect VPN status: {}", e);
+                    } else {
+                        info!("Default autoconnect VPN status created successfully");
+                    }
+                } else {
+                    debug!("Autoconnect VPN status entry already exists");
                 }
-            });
-            Ok(())
-        })
+            }
+
+            info!("Database initialized successfully");
+
+            // Verify Nebula setup and certificates
+            debug!("Verifying Nebula setup...");
+            if let Err(e) = verify_nebula_setup(app_handle).await {
+                warn!("{}", e);
+            }
+        });
+        Ok(())
+    })
 }
 
 async fn verify_nebula_setup(app: tauri::AppHandle) -> Result<(), String> {
@@ -768,7 +712,7 @@ async fn verify_nebula_setup(app: tauri::AppHandle) -> Result<(), String> {
     // Verify Nebula (this will check and renew certificates if needed)
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
-    let pool = app_state.pool().map_err(|e| format!("{e}"))?;
+    let pool = app_state.pool().map_err(|e| e.clone())?;
     if let Err(e) = nebula::verify_nebula_internal(pool).await {
         warn!("Nebula verification failed: {}", e);
         return Err("Nebula verification failed".into());

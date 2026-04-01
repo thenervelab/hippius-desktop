@@ -56,8 +56,7 @@ struct VerifyResponse {
 /// Returns only what billing auth needs (no sr25519 pair, since we don't
 /// sign blockchain transactions in this flow).
 fn derive_keys(mnemonic: &str) -> Result<(String, PrivateKeySigner, String), String> {
-    let (sr25519_pair, _) =
-        sp_core::sr25519::Pair::from_phrase(mnemonic, None).map_err(|e| format!("{e:?}"))?;
+    let (sr25519_pair, _) = sp_core::sr25519::Pair::from_phrase(mnemonic, None).map_err(|e| format!("{e:?}"))?;
     let substrate_address = sp_core::crypto::Ss58Codec::to_ss58check(&sr25519_pair.public());
 
     let eth_signer: PrivateKeySigner = MnemonicBuilder::<English>::default()
@@ -106,16 +105,7 @@ pub async fn billing_auth(
     let mut last_err = String::from("Billing auth failed");
 
     for _ in 0..MAX_ATTEMPTS {
-        match attempt(
-            &client,
-            &challenge_url,
-            &verify_url,
-            &eth_signer,
-            &eth_address,
-            &substrate_address,
-        )
-        .await
-        {
+        match attempt(&client, &challenge_url, &verify_url, &eth_signer, &eth_address, &substrate_address).await {
             Ok(result) => {
                 info!("Billing auth successful");
                 return Ok(result);
@@ -153,15 +143,10 @@ async fn attempt(
         let status = challenge_res.status();
         let body = challenge_res.text().await.unwrap_or_default();
         warn!(status = %status, "Challenge request failed: {body}");
-        return Err(format!(
-            "Authentication failed (HTTP {status}). Please try again."
-        ));
+        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
     }
 
-    let cr: ChallengeResponse = challenge_res
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse challenge: {e}"))?;
+    let cr: ChallengeResponse = challenge_res.json().await.map_err(|e| format!("Failed to parse challenge: {e}"))?;
 
     let sig = eth_signer
         .sign_message_sync(cr.message.as_bytes())
@@ -192,15 +177,10 @@ async fn attempt(
         let status = verify_res.status();
         let body = verify_res.text().await.unwrap_or_default();
         warn!(status = %status, "Verify request failed: {body}");
-        return Err(format!(
-            "Authentication failed (HTTP {status}). Please try again."
-        ));
+        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
     }
 
-    let vr: VerifyResponse = verify_res
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse verify response: {e}"))?;
+    let vr: VerifyResponse = verify_res.json().await.map_err(|e| format!("Failed to parse verify response: {e}"))?;
 
     Ok(BillingAuthResult {
         token: vr.token,

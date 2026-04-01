@@ -14,7 +14,7 @@ use tracing::{error, info};
 /// cross-provider confusion when multiple flows overlap.
 pub struct PkceState {
     provider: String,
-    #[allow(dead_code)] // stored for future nonce validation in complete_oauth_flow
+    #[expect(dead_code)] // stored for future nonce validation in complete_oauth_flow
     nonce: String,
 }
 
@@ -83,10 +83,7 @@ struct ExchangeUser {
 /// Build the OAuth authorization URL for the given provider and return it.
 /// The frontend opens this URL in the external browser.
 #[tauri::command]
-pub async fn start_oauth_flow(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    provider: String,
-) -> Result<OAuthUrlResult, String> {
+pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState>, provider: String) -> Result<OAuthUrlResult, String> {
     info!(provider = %provider, "OAuth flow started");
     let base = api_base_url();
 
@@ -99,11 +96,7 @@ pub async fn start_oauth_flow(
 
     let nonce = uuid::Uuid::new_v4().to_string();
     {
-        let mut states = state
-            .oauth
-            .pkce_states
-            .lock()
-            .map_err(|e| format!("Lock error: {e}"))?;
+        let mut states = state.oauth.pkce_states.lock().map_err(|e| format!("Lock error: {e}"))?;
         states.insert(
             provider.clone(),
             PkceState {
@@ -114,15 +107,9 @@ pub async fn start_oauth_flow(
     }
 
     let callback = format!("{CALLBACK_URL}?source=desktop");
-    let next = format!(
-        "/get-token/?callback_url={}",
-        crate::api_client::urlencoding_pub(&callback)
-    );
+    let next = format!("/get-token/?callback_url={}", crate::api_client::urlencoding_pub(&callback));
 
-    let url = format!(
-        "{base}{auth_path}?next={}",
-        crate::api_client::urlencoding_pub(&next)
-    );
+    let url = format!("{base}{auth_path}?next={}", crate::api_client::urlencoding_pub(&next));
 
     Ok(OAuthUrlResult { url, provider })
 }
@@ -145,11 +132,7 @@ pub async fn complete_oauth_flow(
 
     let (token, user_id, username, email, substrate_address) = if let Some(ref t) = params.token {
         {
-            let mut states = state
-                .oauth
-                .pkce_states
-                .lock()
-                .map_err(|e| format!("Lock error: {e}"))?;
+            let mut states = state.oauth.pkce_states.lock().map_err(|e| format!("Lock error: {e}"))?;
             states.clear();
         }
         (
@@ -161,11 +144,7 @@ pub async fn complete_oauth_flow(
         )
     } else if let Some(ref code) = params.code {
         let provider = {
-            let states = state
-                .oauth
-                .pkce_states
-                .lock()
-                .map_err(|e| format!("Lock error: {e}"))?;
+            let states = state.oauth.pkce_states.lock().map_err(|e| format!("Lock error: {e}"))?;
             if states.is_empty() {
                 return Err("No pending OAuth flow found".to_string());
             }
@@ -199,17 +178,10 @@ pub async fn complete_oauth_flow(
             return Err(format!("Token exchange failed: HTTP {status}: {body}"));
         }
 
-        let data: ExchangeResponse = resp
-            .json()
-            .await
-            .map_err(|e| format!("Token exchange parse error: {e}"))?;
+        let data: ExchangeResponse = resp.json().await.map_err(|e| format!("Token exchange parse error: {e}"))?;
 
         {
-            let mut states = state
-                .oauth
-                .pkce_states
-                .lock()
-                .map_err(|e| format!("Lock error: {e}"))?;
+            let mut states = state.oauth.pkce_states.lock().map_err(|e| format!("Lock error: {e}"))?;
             states.remove(&provider);
         }
 
@@ -231,12 +203,7 @@ pub async fn complete_oauth_flow(
     };
     let token_expiry_ms = chrono::Utc::now().timestamp_millis() + 30 * 24 * 60 * 60 * 1000;
 
-    let provider_name = params
-        .token
-        .as_ref()
-        .map(|_| "oauth")
-        .unwrap_or("oauth")
-        .to_string();
+    let provider_name = params.token.as_ref().map_or("oauth", |_| "oauth").to_string();
 
     if !substrate_address.is_empty() {
         let pool = state.pool()?;
@@ -252,7 +219,7 @@ pub async fn complete_oauth_flow(
                username = excluded.username,
                provider = excluded.provider,
                substrate_address = excluded.substrate_address,
-               updated_at = datetime('now')"
+               updated_at = datetime('now')",
         )
         .bind(&owner)
         .bind(&token)
