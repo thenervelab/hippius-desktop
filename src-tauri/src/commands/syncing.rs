@@ -577,25 +577,30 @@ fn prepare_config_dir(
     Ok((acct_dir, folder_dir, master_path))
 }
 
+/// Parameters for drive recovery that group connection and identity info.
+struct RecoveryContext<'a> {
+    sync_path: &'a str,
+    folder_dir: &'a Path,
+    master_path: &'a Path,
+    server_url: &'a str,
+    bearer_token: &'a str,
+    account_id: &'a str,
+    fhash: &'a str,
+    label: &'a str,
+    drive_password: &'a str,
+    existing_mnemonic: Option<&'a str>,
+}
+
 /// Recover a drive after unlock failure: clean up corrupted config files,
 /// create a fresh `HcfsDriveManager`, re-derive the mnemonic, and unlock.
 ///
-/// Returns `(user_id, optional_master_mnemonic)`.
+/// Returns `(new_manager, user_id, optional_master_mnemonic)`.
 fn recover_drive(
     manager: HcfsDriveManager,
-    sync_path: &str,
-    folder_dir: &Path,
-    master_path: &Path,
-    server_url: &str,
-    bearer_token: &str,
-    account_id: &str,
-    fhash: &str,
-    label: &str,
-    drive_password: &str,
-    existing_mnemonic: Option<&str>,
+    ctx: &RecoveryContext<'_>,
 ) -> Result<(HcfsDriveManager, String, Option<String>), String> {
     // Remove corrupted enc_mnemonic.json
-    let enc_path = folder_dir.join("enc_mnemonic.json");
+    let enc_path = ctx.folder_dir.join("enc_mnemonic.json");
     if enc_path.exists() {
         if let Err(rm_err) = std::fs::remove_file(&enc_path) {
             warn!("Failed to remove enc_mnemonic.json: {}", rm_err);
@@ -605,24 +610,26 @@ fn recover_drive(
     }
 
     // Remove sync state and rekey marker to start fresh
-    let _ = std::fs::remove_file(folder_dir.join("sync_state.json"));
-    let _ = std::fs::remove_file(folder_dir.join("sync_state.json.bak"));
-    let _ = std::fs::remove_file(folder_dir.join(".needs_rekey"));
+    let _ = std::fs::remove_file(ctx.folder_dir.join("sync_state.json"));
+    let _ = std::fs::remove_file(ctx.folder_dir.join("sync_state.json.bak"));
+    let _ = std::fs::remove_file(ctx.folder_dir.join(".needs_rekey"));
     info!("Recovery cleanup complete. Retrying initialization...");
 
     drop(manager);
-    let mut new_manager =
-        HcfsDriveManager::new(PathBuf::from(sync_path), folder_dir.to_path_buf());
+    let mut new_manager = HcfsDriveManager::new(
+        PathBuf::from(ctx.sync_path),
+        ctx.folder_dir.to_path_buf(),
+    );
     new_manager.set_config(build_hcfs_config(
-        server_url,
-        bearer_token,
-        account_id,
-        fhash,
+        ctx.server_url,
+        ctx.bearer_token,
+        ctx.account_id,
+        ctx.fhash,
     ))?;
 
     debug!("Creating fresh drive after recovery...");
 
-    let master_str = if let Some(imported) = existing_mnemonic {
+    let master_str = if let Some(imported) = ctx.existing_mnemonic {
         debug!("Using login mnemonic as master for recovery");
         imported.to_string()
     } else {
@@ -631,14 +638,19 @@ fn recover_drive(
         warn!("Generated new random master for recovery (no login mnemonic available)");
         master.to_string()
     };
-    hcfs_client::auth::save_encrypted_mnemonic(master_path, &master_str, drive_password)
-        .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
-    let derived = derive_folder_mnemonic(&master_str, label)?;
+    hcfs_client::auth::save_encrypted_mnemonic(
+        ctx.master_path,
+        &master_str,
+        ctx.drive_password,
+    )
+    .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
+    let derived = derive_folder_mnemonic(&master_str, ctx.label)?;
 
-    let mut init_mnemonic = new_manager.init(drive_password, Some(&derived))?;
+    let mut init_mnemonic =
+        new_manager.init(ctx.drive_password, Some(&derived))?;
     zeroize::Zeroize::zeroize(&mut init_mnemonic);
 
-    let uid = new_manager.unlock(drive_password)?;
+    let uid = new_manager.unlock(ctx.drive_password)?;
     info!("Drive re-initialized and unlocked, derived user_id: {}", uid);
 
     Ok((new_manager, uid, Some(master_str)))
@@ -913,19 +925,20 @@ async fn initialize_sync_inner(
             Err(e) => {
                 error!("Unlock failed for '{}': {}", label, e);
                 info!("Attempting recovery: cleaning up encrypted files...");
-                let (new_mgr, uid, master) = recover_drive(
-                    manager,
-                    &cfg.sync_path,
-                    &folder_dir,
-                    &master_path,
-                    &cfg.server_url,
-                    &bearer_token,
-                    &account_id,
-                    &fhash,
-                    &label,
-                    &cfg.drive_password,
-                    existing_mnemonic.as_deref(),
-                )?;
+                let recovery_ctx = RecoveryContext {
+                    sync_path: &cfg.sync_path,
+                    folder_dir: &folder_dir,
+                    master_path: &master_path,
+                    server_url: &cfg.server_url,
+                    bearer_token: &bearer_token,
+                    account_id: &account_id,
+                    fhash: &fhash,
+                    label: &label,
+                    drive_password: &cfg.drive_password,
+                    existing_mnemonic: existing_mnemonic.as_deref(),
+                };
+                let (new_mgr, uid, master) =
+                    recover_drive(manager, &recovery_ctx)?;
                 manager = new_mgr;
                 (uid, master, true)
             }
@@ -1295,21 +1308,26 @@ enum TransferDirection {
     Download,
 }
 
+/// Shared state for a transfer progress callback.
+struct TransferContext {
+    sync: Arc<crate::sync_engine::SyncEngine>,
+    app: AppHandle,
+    label: String,
+    started_set: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    direction: TransferDirection,
+}
+
 /// Handle per-chunk transfer progress: log first event, track in UI, emit
 /// Tauri event, and record completion activity. Shared between upload and
 /// download callbacks to avoid code duplication.
 fn handle_transfer_progress(
-    sync: &crate::sync_engine::SyncEngine,
-    app: &AppHandle,
-    label: &str,
-    started_set: &Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    ctx: &TransferContext,
     bytes: u64,
     total: u64,
     path: Option<&str>,
-    direction: TransferDirection,
 ) {
-    sync.touch_progress_time();
-    let (dir_name, event_name, file_action) = match direction {
+    ctx.sync.touch_progress_time();
+    let (dir_name, event_name, file_action) = match ctx.direction {
         TransferDirection::Upload => (
             "Upload",
             sync_events::UPLOAD_PROGRESS,
@@ -1326,29 +1344,29 @@ fn handle_transfer_progress(
         let file_name = Path::new(path_str)
             .file_name()
             .map_or_else(|| path_str.to_string(), |f| f.to_string_lossy().to_string());
-        if let Ok(mut set) = started_set.lock()
+        if let Ok(mut set) = ctx.started_set.lock()
             && set.insert(path_str.to_string())
         {
             if bytes > 0 {
-                info!("{} resuming [{}]: {} from {} bytes ({} total)", dir_name, label, file_name, bytes, total);
+                info!("{} resuming [{}]: {} from {} bytes ({} total)", dir_name, ctx.label, file_name, bytes, total);
             } else {
-                info!("{} started [{}]: {} ({} bytes)", dir_name, label, file_name, total);
+                info!("{} started [{}]: {} ({} bytes)", dir_name, ctx.label, file_name, total);
             }
         }
         let _ = crate::sync_progress::update_file_progress(
-            sync,
+            &ctx.sync,
             path_str.to_string(),
             bytes,
             total,
             file_action,
-            Some(label.to_string()),
+            Some(ctx.label.clone()),
         );
     }
-    debug!("{} [{}]: {}/{} bytes, path: {:?}", dir_name, label, bytes, total, path);
-    let _ = app.emit(
+    debug!("{} [{}]: {}/{} bytes, path: {:?}", dir_name, ctx.label, bytes, total, path);
+    let _ = ctx.app.emit(
         event_name,
         sync_events::TransferProgressPayload {
-            label: label.to_string(),
+            label: ctx.label.clone(),
             bytes,
             total,
             path: path.map(String::from),
@@ -1362,17 +1380,17 @@ fn handle_transfer_progress(
         let display_name = Path::new(path_str)
             .file_name()
             .map_or_else(|| path_str.to_string(), |f| f.to_string_lossy().to_string());
-        let action_str = match direction {
+        let action_str = match ctx.direction {
             TransferDirection::Upload => "uploaded",
             TransferDirection::Download => "downloaded",
         };
-        info!("{} complete [{}]: {} ({} bytes)", dir_name, label, display_name, total);
-        sync.add_pending_activity(SyncActivityItem {
+        info!("{} complete [{}]: {} ({} bytes)", dir_name, ctx.label, display_name, total);
+        ctx.sync.add_pending_activity(SyncActivityItem {
             file_name: path_str.to_string(),
             action: action_str.to_string(),
             timestamp: chrono::Utc::now().timestamp(),
             size_bytes: total,
-            label: label.to_string(),
+            label: ctx.label.clone(),
         });
     }
 }
@@ -1478,18 +1496,24 @@ fn setup_progress_handlers(
         Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
 
     // Upload callback
-    let sync_up = sync.clone();
-    let app_up = app.clone();
-    let label_up = label.to_string();
-    let started_up = Arc::clone(&upload_started);
+    let upload_ctx = Arc::new(TransferContext {
+        sync: sync.clone(),
+        app: app.clone(),
+        label: label.to_string(),
+        started_set: Arc::clone(&upload_started),
+        direction: TransferDirection::Upload,
+    });
     let app_migration = app.clone();
     let label_migration = label.to_string();
 
     // Download callback
-    let sync_down = sync.clone();
-    let app_down = app.clone();
-    let label_down = label.to_string();
-    let started_down = Arc::clone(&download_started);
+    let download_ctx = Arc::new(TransferContext {
+        sync: sync.clone(),
+        app: app.clone(),
+        label: label.to_string(),
+        started_set: Arc::clone(&download_started),
+        direction: TransferDirection::Download,
+    });
 
     // Encrypt/decrypt callbacks
     let sync_encrypt = sync.clone();
@@ -1510,10 +1534,7 @@ fn setup_progress_handlers(
     manager.set_progress(SyncProgress {
         on_sync_plan_ready: Some(build_plan_ready_callback(app, label, sync)),
         on_upload_progress: Some(Arc::new(move |b, t, p| {
-            handle_transfer_progress(
-                &sync_up, &app_up, &label_up, &started_up,
-                b, t, p, TransferDirection::Upload,
-            );
+            handle_transfer_progress(&upload_ctx, b, t, p);
             if b == t
                 && t > 0
                 && let Some(path_str) = p
@@ -1526,10 +1547,7 @@ fn setup_progress_handlers(
             }
         })),
         on_download_progress: Some(Arc::new(move |b, t, p| {
-            handle_transfer_progress(
-                &sync_down, &app_down, &label_down, &started_down,
-                b, t, p, TransferDirection::Download,
-            );
+            handle_transfer_progress(&download_ctx, b, t, p);
         })),
         on_encrypt_progress: Some(Arc::new(move |b, t, p| {
             sync_encrypt.touch_progress_time();
