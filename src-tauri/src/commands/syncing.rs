@@ -867,7 +867,7 @@ async fn initialize_sync_inner(
     //     and `synced_paths_for_label` would fall back to `None` (= "unknown")
     //     or, after a recovery re-init, `Some(empty_map)` (= "pending").
     if let Ok(state) = manager.load_sync_state() {
-        let paths = crate::commands::file_commands::build_synced_paths_from_state(&state);
+        let paths = crate::sync_shared::build_synced_paths_from_state(&state);
         if !paths.is_empty() {
             info!(
                 label = %label,
@@ -1519,7 +1519,7 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
             // can show arion hashes for files that completed during sync,
             // without waiting for the full cycle to finish.
             if !rel_path.is_empty() {
-                let info = crate::commands::file_commands::SyncedFileInfo::new(path_hash_hex.to_string(), arion_cid.to_string());
+                let info = crate::sync_shared::SyncedFileInfo::new(path_hash_hex.to_string(), arion_cid.to_string());
                 sync_file_synced.upsert_synced_path(&l7, rel_path.to_string(), info);
             }
         })),

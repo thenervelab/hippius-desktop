@@ -131,7 +131,7 @@ pub struct SyncEngine {
     pub session_counter: AtomicU64,
 
     // ── Synced Paths Cache (fallback when drives lock unavailable) ────
-    pub synced_paths_cache: StdMutex<HashMap<String, HashMap<String, crate::commands::file_commands::SyncedFileInfo>>>,
+    pub synced_paths_cache: StdMutex<HashMap<String, HashMap<String, crate::sync_shared::SyncedFileInfo>>>,
 
     // ── File Watcher (shared so new drives can be added dynamically) ──
     pub watcher: StdMutex<Option<notify::RecommendedWatcher>>,
@@ -587,14 +587,14 @@ impl SyncEngine {
     /// Update the cached synced-paths map for a given drive label.
     /// Called after each successful sync so the file browser can fall back
     /// to this snapshot when the drives lock is unavailable.
-    pub fn update_synced_paths_cache(&self, label: &str, paths: HashMap<String, crate::commands::file_commands::SyncedFileInfo>) {
+    pub fn update_synced_paths_cache(&self, label: &str, paths: HashMap<String, crate::sync_shared::SyncedFileInfo>) {
         if let Ok(mut cache) = self.synced_paths_cache.lock() {
             cache.insert(label.to_string(), paths);
         }
     }
 
     /// Return a clone of the cached synced-paths for `label`, if available.
-    pub fn get_cached_synced_paths(&self, label: &str) -> Option<HashMap<String, crate::commands::file_commands::SyncedFileInfo>> {
+    pub fn get_cached_synced_paths(&self, label: &str) -> Option<HashMap<String, crate::sync_shared::SyncedFileInfo>> {
         let cache = self.synced_paths_cache.lock().ok()?;
         cache.get(label).cloned()
     }
@@ -602,7 +602,7 @@ impl SyncEngine {
     /// Insert or update a single file entry in the synced-paths cache.
     /// Called from the `on_file_synced` progress callback to make arion
     /// hashes available to the frontend before the full sync cycle ends.
-    pub fn upsert_synced_path(&self, label: &str, rel_path: String, info: crate::commands::file_commands::SyncedFileInfo) {
+    pub fn upsert_synced_path(&self, label: &str, rel_path: String, info: crate::sync_shared::SyncedFileInfo) {
         if let Ok(mut cache) = self.synced_paths_cache.lock() {
             cache.entry(label.to_string()).or_default().insert(rel_path, info);
         }

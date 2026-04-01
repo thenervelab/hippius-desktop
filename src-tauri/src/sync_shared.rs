@@ -90,4 +90,57 @@ pub struct CombinedSyncState {
     pub recent_activity: VecDeque<SyncActivityItem>,
 }
 
+/// Sync info for a single file: path_hash (hex), optional Arion CID,
+/// and server-side timestamps.
+#[derive(Clone)]
+pub(crate) struct SyncedFileInfo {
+    pub(crate) path_hash_hex: String,
+    pub(crate) arion_cid: String,
+    /// Unix timestamp when file was first uploaded (0 if unknown)
+    pub(crate) uploaded_at: i64,
+    /// Unix timestamp when file was last updated (0 if unknown)
+    pub(crate) updated_at: i64,
+}
+
+impl SyncedFileInfo {
+    /// Create a new entry with just the hash and CID (timestamps unknown).
+    pub(crate) fn new(path_hash_hex: String, arion_cid: String) -> Self {
+        Self {
+            path_hash_hex,
+            arion_cid,
+            uploaded_at: 0,
+            updated_at: 0,
+        }
+    }
+}
+
+/// Build a map of relative paths to sync info from a loaded `SyncState`.
+/// Extracted so it can be reused from the cache-update path in `hcfs_drive.rs`.
+pub(crate) fn build_synced_paths_from_state(
+    state: &hcfs_client::sync::SyncState,
+) -> std::collections::HashMap<String, SyncedFileInfo> {
+    let mut paths = std::collections::HashMap::new();
+    for (hash, rel_path) in &state.path_index {
+        if state.synced.files.contains_key(hash) {
+            let arion_cid = state
+                .remote_arion_hashes
+                .get(hash)
+                .cloned()
+                .or_else(|| state.remote_chunk_hashes.get(hash).and_then(|c| c.first().cloned()))
+                .unwrap_or_default();
+            let timestamps = state.remote_timestamps.get(hash);
+            paths.insert(
+                rel_path.to_string_lossy().to_string(),
+                SyncedFileInfo {
+                    path_hash_hex: hex::encode(hash),
+                    arion_cid,
+                    uploaded_at: timestamps.map_or(0, |t| t.created_at),
+                    updated_at: timestamps.map_or(0, |t| t.updated_at),
+                },
+            );
+        }
+    }
+    paths
+}
+
 // Tauri commands for sync status are in commands/sync_status.rs (binary-only).

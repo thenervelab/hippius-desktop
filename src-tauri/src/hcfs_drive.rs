@@ -1507,7 +1507,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         // Refresh the synced-paths cache so the file browser shows accurate
         // sync status even when the per-drive lock is held by the next cycle.
         if let Ok(state) = m.load_sync_state() {
-            let paths = crate::commands::file_commands::build_synced_paths_from_state(&state);
+            let paths = crate::sync_shared::build_synced_paths_from_state(&state);
             sync.update_synced_paths_cache(label, paths);
         }
     }
