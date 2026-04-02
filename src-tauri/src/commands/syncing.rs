@@ -195,7 +195,7 @@ fn account_dir(account_id: &str) -> Result<PathBuf, crate::error::AppError> {
 
 /// Deterministic 16-char hex hash of a folder label, used as subdirectory name
 /// and server namespace suffix.
-fn folder_hash(label: &str) -> String {
+pub(crate) fn folder_hash(label: &str) -> String {
     let digest = Sha256::digest(label.as_bytes());
     hex::encode(digest)[..16].to_string()
 }
@@ -823,6 +823,19 @@ async fn initialize_sync_inner(
     use tauri::Manager;
     let label = sanitize_label(&label)?;
     let app_state = app.state::<crate::app_state::AppState>();
+
+    // Block non-migration sync init while a migration is running
+    if label != "migration"
+        && app_state
+            .migration
+            .in_progress
+            .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(crate::error::AppError::Other(
+            "Migration in progress — sync blocked until migration completes".into(),
+        ));
+    }
+
     let sync = &app_state.sync;
     let pool_owned = app_state.pool()?.clone();
     let pool = &pool_owned;

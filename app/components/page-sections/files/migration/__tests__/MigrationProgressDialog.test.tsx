@@ -142,27 +142,14 @@ describe("MigrationProgressDialog", () => {
     expect(screen.getByText("Total: 2 GB")).toBeInTheDocument();
   });
 
-  it("shows file count progress during download phase", () => {
+  it("shows file count progress", () => {
     render(
       <MigrationProgressDialog
         {...defaultProps}
-        phase="downloading"
       />,
     );
 
-    expect(screen.getByText("0 / 3 downloaded")).toBeInTheDocument();
-  });
-
-  it("shows upload count progress during syncing phase", () => {
-    render(
-      <MigrationProgressDialog
-        {...defaultProps}
-        phase="syncing"
-        uploadedCount={1}
-      />,
-    );
-
-    expect(screen.getByText("1 / 3 uploaded")).toBeInTheDocument();
+    expect(screen.getByText("0 / 3 migrated")).toBeInTheDocument();
   });
 
   it("shows progress percentage", () => {

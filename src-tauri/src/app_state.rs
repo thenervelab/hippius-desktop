@@ -102,18 +102,32 @@ impl NebulaState {
 /// - `cancel`: cancellation flag for the download loop
 /// - `task`: handle to the background migration tokio task
 /// - `uploaded`: set of relative paths confirmed uploaded to HCFS
+/// - `in_progress`: true while a migration is running (blocks non-migration sync init)
+/// - `client`: shared HTTP client for migration API calls
 pub struct MigrationState {
     pub cancel: AtomicBool,
+    pub in_progress: AtomicBool,
     pub task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub uploaded: Mutex<HashSet<String>>,
+    pub client: reqwest::Client,
 }
 
 impl MigrationState {
     pub fn new() -> Self {
+        let client = {
+            let mut builder = reqwest::Client::builder();
+            #[cfg(debug_assertions)]
+            {
+                builder = builder.danger_accept_invalid_certs(true);
+            }
+            builder.build().expect("Failed to build migration HTTP client")
+        };
         Self {
             cancel: AtomicBool::new(false),
+            in_progress: AtomicBool::new(false),
             task: tokio::sync::Mutex::new(None),
             uploaded: Mutex::new(HashSet::new()),
+            client,
         }
     }
 }

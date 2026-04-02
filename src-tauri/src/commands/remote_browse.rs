@@ -83,11 +83,7 @@ fn derive_encryption_key(master_mnemonic: &str, label: &str) -> Result<[u8; 32],
     Ok(key)
 }
 
-/// Deterministic 16-char hex hash of a folder label (same as syncing.rs::folder_hash).
-fn folder_hash(label: &str) -> String {
-    let digest = Sha256::digest(label.as_bytes());
-    hex::encode(digest)[..16].to_string()
-}
+use super::syncing::folder_hash;
 
 /// Path to `~/.hippius/drives/<account_key>/master_enc_mnemonic.json`.
 fn master_mnemonic_path(account_id: &str) -> Result<PathBuf, crate::error::AppError> {

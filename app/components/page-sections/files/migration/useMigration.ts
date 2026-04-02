@@ -48,9 +48,6 @@ export interface UseMigrationReturn {
   failedFiles: Array<{ name: string; error: string }>;
   totalSize: number;
   isResuming: boolean;
-  phase: "downloading" | "syncing";
-  uploadedCount: number;
-  currentUploadFile: string;
   checkMigration: (accountId: string) => Promise<boolean>;
   startMigration: (accountId: string) => Promise<void>;
   onSetupComplete: (result: { serverUrl: string; password: string }) => Promise<void>;
@@ -61,6 +58,8 @@ export interface UseMigrationReturn {
 }
 
 const POLL_INTERVAL_MS = 3000;
+const MAX_CONSECUTIVE_POLL_FAILURES = 10;
+const WARN_AFTER_POLL_FAILURES = 3;
 
 export function useMigration(
   getMnemonic?: () => Promise<string | null>
@@ -78,6 +77,7 @@ export function useMigration(
 
   const activeAccountIdRef = useRef<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollFailuresRef = useRef(0);
 
   const [successCount, setSuccessCount] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
@@ -113,6 +113,7 @@ export function useMigration(
             { accountId }
           );
 
+          pollFailuresRef.current = 0;
           setSuccessCount(result.completed);
           setFailedCount(result.failed);
           setCurrentFileIndex(result.completed);
@@ -122,17 +123,20 @@ export function useMigration(
           }
 
           if (result.current_file) {
-            setFiles((prev) =>
-              prev.map((f) => {
-                if (f.name === result.current_file) {
-                  return { ...f, status: "migrating" as const };
-                }
-                return f;
-              })
-            );
+            setFiles((prev) => {
+              const needsUpdate = prev.some(
+                (f) => f.name === result.current_file && f.status !== "migrating"
+              );
+              if (!needsUpdate) return prev;
+              return prev.map((f) =>
+                f.name === result.current_file
+                  ? { ...f, status: "migrating" as const }
+                  : f
+              );
+            });
           }
 
-          // Mark completed/failed files
+          // Server returns cumulative failed_files list, so overwriting is correct
           if (result.failed_files.length > 0) {
             setFailedFiles(
               result.failed_files.map((name) => ({
@@ -149,7 +153,22 @@ export function useMigration(
             appStore.set(migrationLockAtom, false);
           }
         } catch (err) {
-          console.error("[Migration] Poll failed:", err);
+          pollFailuresRef.current += 1;
+          console.error(
+            `[Migration] Poll failed (${pollFailuresRef.current}/${MAX_CONSECUTIVE_POLL_FAILURES}):`,
+            err
+          );
+
+          if (pollFailuresRef.current === WARN_AFTER_POLL_FAILURES) {
+            toast.warning("Having trouble checking migration status. Retrying...");
+          }
+
+          if (pollFailuresRef.current >= MAX_CONSECUTIVE_POLL_FAILURES) {
+            stopPolling();
+            toast.error("Lost connection to migration server. Please check your network and try again.");
+            appStore.set(migrationLockAtom, false);
+            setCurrentStep("complete");
+          }
         }
       };
 
@@ -320,17 +339,10 @@ export function useMigration(
     stopPolling();
     try {
       if (accountId) {
-        // Dismiss migration status
-        await invoke("dismiss_migration", {
+        const existingMnemonic = getMnemonic ? await getMnemonic() : null;
+        await invoke("complete_migration_transition", {
           accountId,
-          reason: "completed",
-        });
-        // Start normal sync — three-tree engine will download migrated files
-        const mnemonic = getMnemonic ? await getMnemonic() : null;
-        await invoke("initialize_sync", {
-          accountId,
-          label: "default",
-          mnemonic: mnemonic ?? null,
+          existingMnemonic: existingMnemonic ?? null,
         });
         appStore.set(syncEngineStatusAtom, "active");
         appStore.set(isSyncConfiguredAtom, true);
@@ -372,10 +384,6 @@ export function useMigration(
     failedFiles,
     totalSize,
     isResuming,
-    // Kept for backward compatibility with MigrationProgressDialog
-    phase: "downloading",
-    uploadedCount: 0,
-    currentUploadFile: "",
     checkMigration,
     startMigration,
     onSetupComplete,

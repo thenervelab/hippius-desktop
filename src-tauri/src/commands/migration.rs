@@ -200,10 +200,13 @@ pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Resul
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn fetch_migration_files(server_url: &str, user_id: &str) -> Result<Vec<MigrationFile>, crate::error::AppError> {
+pub(crate) async fn fetch_migration_files(
+    client: &reqwest::Client,
+    server_url: &str,
+    user_id: &str,
+) -> Result<Vec<MigrationFile>, crate::error::AppError> {
     let url = format!("{}/migration/{}", server_url.trim_end_matches('/'), user_id);
-    let client = reqwest::Client::builder().danger_accept_invalid_certs(true).build()?;
-    let resp = client.get(&url).header("X-API-Key", "Arion").send().await?;
+    let resp = client.get(&url).header("X-API-Key", MIGRATION_API_KEY).send().await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -244,7 +247,7 @@ pub async fn check_migration(
 
         // Status is "in_progress" — verify with the server
         let server_url = get_server_url(pool, &account_id).await?;
-        let files = fetch_migration_files(&server_url, &account_id).await?;
+        let files = fetch_migration_files(&state.migration.client, &server_url, &account_id).await?;
         let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
 
         if pending.is_empty() {
@@ -276,7 +279,7 @@ pub async fn check_migration(
 
     // 2. No local state -- check server
     let server_url = get_server_url(pool, &account_id).await?;
-    let files = fetch_migration_files(&server_url, &account_id).await?;
+    let files = fetch_migration_files(&state.migration.client, &server_url, &account_id).await?;
     let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
     let total_size: u64 = pending.iter().map(|f| f.size_bytes).sum();
 
@@ -298,9 +301,19 @@ const S3_ENDPOINT: &str = "https://s3.hippius.com";
 const S3_REGION: &str = "decentralized";
 const MANIFEST_PREFIX: &str = ".hippius_manifest_v1";
 const MAX_RETRIES: u32 = 3;
+const MIGRATION_API_KEY: &str = "Arion";
 
 fn should_skip_key(key: &str) -> bool {
     key == MANIFEST_PREFIX || key.starts_with(&format!("{MANIFEST_PREFIX}/"))
+}
+
+/// Derive the path prefix (bucket name) from the first migration file.
+/// Returns empty string if no files are provided.
+fn derive_path_prefix(files: &[MigrationFile]) -> String {
+    files
+        .first()
+        .map(|f| f.bucket_name.clone())
+        .unwrap_or_default()
 }
 
 async fn build_s3_client(pool: &SqlitePool, account_id: &str) -> Result<S3Client, crate::error::AppError> {
@@ -389,6 +402,7 @@ pub async fn start_migration(
     mnemonic: Option<String>,
 ) -> Result<(), crate::error::AppError> {
     state.migration.cancel.store(false, Ordering::SeqCst);
+    state.migration.in_progress.store(true, Ordering::SeqCst);
     clear_migration_uploads(&state.migration);
 
     let pool = state.pool()?;
@@ -403,7 +417,7 @@ pub async fn start_migration(
 
     // Fetch pending files from server
     let server_url = get_server_url(pool, &account_id).await?;
-    let all_files = fetch_migration_files(&server_url, &account_id).await?;
+    let all_files = fetch_migration_files(&state.migration.client, &server_url, &account_id).await?;
     let pending: Vec<MigrationFile> = all_files.into_iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
 
     if pending.is_empty() {
@@ -674,6 +688,7 @@ async fn run_migration_download(
 pub async fn cancel_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), crate::error::AppError> {
     let pool = state.pool()?;
     state.migration.cancel.store(true, Ordering::SeqCst);
+    state.migration.in_progress.store(false, Ordering::SeqCst);
     clear_migration_uploads(&state.migration);
 
     // Persist cancelled state so the migration dialog won't reappear
@@ -722,6 +737,7 @@ pub async fn complete_migration_transition(
     let pool = state.pool()?;
 
     // 1. Dismiss migration and promote sync path label to "default".
+    state.migration.in_progress.store(false, Ordering::SeqCst);
     clear_migration_uploads(&state.migration);
     let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
 
@@ -814,7 +830,8 @@ pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<
     }
 
     // Fetch current state from server
-    let files = fetch_migration_files(&server_url, account_id).await?;
+    let client = &app_state.migration.client;
+    let files = fetch_migration_files(client, &server_url, account_id).await?;
     let pending: Vec<&MigrationFile> = files.iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
 
     if pending.is_empty() {
@@ -865,9 +882,6 @@ pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<
         return Ok(());
     }
 
-    // Report each bucket to the server
-    let client = reqwest::Client::builder().danger_accept_invalid_certs(true).build()?;
-
     for (bucket_name, keys) in &bucket_keys {
         let url = format!("{}/migration", server_url.trim_end_matches('/'));
 
@@ -884,7 +898,7 @@ pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<
             keys: keys.clone(),
         };
 
-        match client.post(&url).header("X-API-Key", "Arion").json(&body).send().await {
+        match client.post(&url).header("X-API-Key", MIGRATION_API_KEY).json(&body).send().await {
             Ok(r) if r.status().is_success() => {
                 info!("Reported {} files for bucket '{}'", keys.len(), bucket_name);
             }
@@ -899,7 +913,7 @@ pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<
     }
 
     // Re-check completion after reporting
-    let files_after = fetch_migration_files(&server_url, account_id).await?;
+    let files_after = fetch_migration_files(client, &server_url, account_id).await?;
     let still_pending = files_after.iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).count() as u64;
     let migrated = files_after.iter().filter(|f| f.status.eq_ignore_ascii_case("migrated")).count() as u64;
 
@@ -958,16 +972,27 @@ pub struct ServerMigrationStatus {
 pub async fn start_server_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
-    path_prefix: String,
+    path_prefix: Option<String>,
     total_size: u64,
 ) -> Result<StartServerMigrationResult, crate::error::AppError> {
-    // Compute folder_hash from the "default" label (same as syncing.rs::folder_hash)
-    let digest = {
-        use sha2::Digest;
-        sha2::Sha256::digest(b"default")
-    };
-    let folder_hash = hex::encode(digest)[..16].to_string();
+    state.migration.in_progress.store(true, Ordering::SeqCst);
+
+    let folder_hash = crate::commands::syncing::folder_hash("default");
     let pool = state.pool()?;
+
+    // Resolve path_prefix: use provided value, or derive from migration files
+    let path_prefix = if let Some(p) = path_prefix.filter(|p| !p.is_empty()) {
+        p
+    } else {
+        let server_url = get_server_url(pool, &account_id).await?;
+        let files = fetch_migration_files(
+            &state.migration.client,
+            &server_url,
+            &account_id,
+        )
+        .await?;
+        derive_path_prefix(&files)
+    };
 
     // Check disk space — files will be downloaded locally after server migration
     let sync_path = crate::commands::syncing::get_sync_path_for_label(
@@ -1010,13 +1035,9 @@ pub async fn start_server_migration(
         server_url.trim_end_matches('/')
     );
 
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .build()?;
-
-    let resp = client
+    let resp = state.migration.client
         .post(&url)
-        .header("X-API-Key", "Arion")
+        .header("X-API-Key", MIGRATION_API_KEY)
         .json(&serde_json::json!({
             "ss58_address": account_id,
             "folder_hash": folder_hash,
@@ -1050,13 +1071,9 @@ pub async fn poll_migration_status(
         account_id
     );
 
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .build()?;
-
-    let resp = client
+    let resp = state.migration.client
         .get(&url)
-        .header("X-API-Key", "Arion")
+        .header("X-API-Key", MIGRATION_API_KEY)
         .send()
         .await?;
 
@@ -1076,6 +1093,7 @@ pub async fn cancel_server_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
 ) -> Result<(), crate::error::AppError> {
+    state.migration.in_progress.store(false, Ordering::SeqCst);
     let pool = state.pool()?;
     let server_url = get_server_url(pool, &account_id).await?;
     let url = format!(
@@ -1083,13 +1101,9 @@ pub async fn cancel_server_migration(
         server_url.trim_end_matches('/')
     );
 
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .build()?;
-
-    let resp = client
+    let resp = state.migration.client
         .post(&url)
-        .header("X-API-Key", "Arion")
+        .header("X-API-Key", MIGRATION_API_KEY)
         .json(&serde_json::json!({
             "ss58_address": account_id,
         }))
@@ -1593,5 +1607,100 @@ mod tests {
     fn is_uploaded_suffix_match_deep_prefix() {
         let set: HashSet<String> = ["a/b/c/mybucket/deep/file.txt".to_string()].into();
         assert!(is_uploaded(&set, "mybucket/deep/file.txt"));
+    }
+
+    // -----------------------------------------------------------------------
+    // derive_path_prefix
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn derive_path_prefix_from_first_file() {
+        let files = vec![MigrationFile {
+            user_id: "u1".into(),
+            bucket_name: "my-bucket".into(),
+            key: "file.txt".into(),
+            size_bytes: 100,
+            is_public: false,
+            status: "Pending".into(),
+        }];
+        assert_eq!(derive_path_prefix(&files), "my-bucket");
+    }
+
+    #[test]
+    fn derive_path_prefix_empty_files() {
+        let files: Vec<MigrationFile> = vec![];
+        assert_eq!(derive_path_prefix(&files), "");
+    }
+
+    #[test]
+    fn derive_path_prefix_uses_first_file_only() {
+        let files = vec![
+            MigrationFile {
+                user_id: "u1".into(),
+                bucket_name: "first-bucket".into(),
+                key: "a.txt".into(),
+                size_bytes: 100,
+                is_public: false,
+                status: "Pending".into(),
+            },
+            MigrationFile {
+                user_id: "u1".into(),
+                bucket_name: "second-bucket".into(),
+                key: "b.txt".into(),
+                size_bytes: 200,
+                is_public: false,
+                status: "Pending".into(),
+            },
+        ];
+        assert_eq!(derive_path_prefix(&files), "first-bucket");
+    }
+
+    // -----------------------------------------------------------------------
+    // folder_hash (shared from syncing.rs)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn folder_hash_is_deterministic() {
+        let h1 = crate::commands::syncing::folder_hash("default");
+        let h2 = crate::commands::syncing::folder_hash("default");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn folder_hash_is_16_chars() {
+        let hash = crate::commands::syncing::folder_hash("default");
+        assert_eq!(hash.len(), 16);
+    }
+
+    #[test]
+    fn folder_hash_differs_by_label() {
+        let h1 = crate::commands::syncing::folder_hash("default");
+        let h2 = crate::commands::syncing::folder_hash("migration");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn folder_hash_empty_label() {
+        let hash = crate::commands::syncing::folder_hash("");
+        assert_eq!(hash.len(), 16);
+    }
+
+    // -----------------------------------------------------------------------
+    // in_progress flag
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn in_progress_defaults_to_false() {
+        let ms = crate::app_state::MigrationState::new();
+        assert!(!ms.in_progress.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn in_progress_can_be_toggled() {
+        let ms = crate::app_state::MigrationState::new();
+        ms.in_progress.store(true, Ordering::SeqCst);
+        assert!(ms.in_progress.load(Ordering::SeqCst));
+        ms.in_progress.store(false, Ordering::SeqCst);
+        assert!(!ms.in_progress.load(Ordering::SeqCst));
     }
 }

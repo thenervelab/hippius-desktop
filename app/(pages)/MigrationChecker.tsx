@@ -79,9 +79,6 @@ const MigrationChecker: React.FC = () => {
             migration.files[migration.currentFileIndex]?.name || ""
           }
           isCancelling={migration.isCancelling}
-          phase={migration.phase}
-          uploadedCount={migration.uploadedCount}
-          currentUploadFile={migration.currentUploadFile}
           totalSize={migration.totalSize}
         />
       )}
