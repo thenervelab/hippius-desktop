@@ -13,6 +13,7 @@ use tauri::{Builder, Manager, Wry, path::BaseDirectory};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tracing::{debug, error, info, warn};
 
+#[expect(clippy::too_many_lines, reason = "sequential DDL statements; splitting would scatter related schema")]
 async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Define the expected table schemas (only tables still needed)
     const TABLE_SCHEMAS: &[(&str, &[(&str, &str)])] = &[
@@ -500,6 +501,7 @@ async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+#[expect(clippy::too_many_lines, reason = "Tauri app setup: plugin registration must stay together")]
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");

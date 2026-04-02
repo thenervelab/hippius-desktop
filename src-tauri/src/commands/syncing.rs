@@ -1345,6 +1345,7 @@ fn build_plan_ready_callback(app: &AppHandle, label: &str, sync: &Arc<crate::syn
     })
 }
 
+#[expect(clippy::too_many_lines, reason = "closure-heavy callback setup; splitting breaks capture context")]
 fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, label: &str, sync: &Arc<crate::sync_engine::SyncEngine>) {
     let upload_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
     let download_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =

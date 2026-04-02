@@ -793,6 +793,7 @@ async fn update_certificate_db(pool: &sqlx::SqlitePool, cert: &CertificateRespon
     Ok(())
 }
 
+#[expect(clippy::too_many_lines, reason = "certificate renewal flow with HTTP + DB + file I/O")]
 pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()> {
     let (auth_header, account_id) = get_api_auth_header(pool).await?;
 

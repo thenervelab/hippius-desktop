@@ -359,6 +359,7 @@ fn move_completed_to_recent(state: &mut SyncProgressState) {
 ///
 /// Pure function: no side effects, no Tauri dependency. Unit tests call this
 /// directly with constructed state.
+#[expect(clippy::too_many_lines, reason = "single snapshot builder; fields are tightly coupled")]
 pub fn build_snapshot(state: &SyncProgressState) -> SyncSnapshot {
     let Some(session) = &state.current_session else {
         return SyncSnapshot {

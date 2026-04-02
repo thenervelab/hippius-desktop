@@ -133,7 +133,6 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 return_self_not_must_use = "allow"
 struct_excessive_bools = "allow"
-too_many_lines = "allow"
 doc_markdown = "allow"
 # Tauri commands take String by value (IPC deserialization); fixing is not practical
 needless_pass_by_value = "allow"

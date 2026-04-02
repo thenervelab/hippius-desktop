@@ -121,6 +121,7 @@ pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState
 /// - Store the resulting session in the DB.
 /// Returns the session data for the frontend to update React state.
 #[tauri::command]
+#[expect(clippy::too_many_lines, reason = "OAuth protocol flow; splitting loses coherence")]
 pub async fn complete_oauth_flow(
     state: tauri::State<'_, crate::app_state::AppState>,
     params: OAuthCallbackParams,

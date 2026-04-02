@@ -96,6 +96,7 @@ fn load_env() {
     let _ = dotenvy::from_filename(env_path);
 }
 
+#[expect(clippy::too_many_lines, reason = "Tauri builder chain: handler registration must stay together")]
 fn main() {
     load_env();
 

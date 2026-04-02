@@ -340,6 +340,7 @@ async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
 
 /// List contents of sync folder
 #[tauri::command]
+#[expect(clippy::too_many_lines, reason = "1 line over; extracting hurts readability")]
 pub async fn list_sync_folder(
     state: tauri::State<'_, crate::app_state::AppState>,
     sync_path: String,
