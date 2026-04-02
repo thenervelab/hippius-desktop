@@ -1848,3 +1848,315 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
 
     dispatch_sync_result(app, &app_state, sync, &drive_arc, result, emitted_sync_started, label).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync_progress::{FileAction, FileStatus, SyncFile, SyncSession};
+    use std::collections::HashMap;
+
+    /// Helper: build a `SyncEngine` for tests (no Tauri app needed).
+    fn test_engine() -> crate::sync_engine::SyncEngine {
+        crate::sync_engine::SyncEngine::new()
+    }
+
+    /// Helper: insert a `SyncSession` with specific files into the engine's
+    /// progress state.
+    fn seed_session(
+        engine: &crate::sync_engine::SyncEngine,
+        label: &str,
+        files: Vec<(&str, FileAction)>,
+        is_active: bool,
+    ) {
+        let mut state = engine.progress.lock().unwrap();
+        let mut file_map = HashMap::new();
+        for (path, action) in files {
+            file_map.insert(
+                path.to_string(),
+                SyncFile {
+                    id: format!("id_{path}"),
+                    path: path.to_string(),
+                    file_name: path.to_string(),
+                    label: label.to_string(),
+                    action,
+                    status: FileStatus::Pending,
+                    progress: 0,
+                    bytes_encrypted: 0,
+                    bytes_transferred: 0,
+                    total_bytes: 100,
+                    resumed_from_bytes: None,
+                    started_at: 0,
+                    completed_at: None,
+                    error: None,
+                },
+            );
+        }
+        state.current_session = Some(SyncSession {
+            session_id: "test-session".to_string(),
+            started_at: 0,
+            completed_at: None,
+            is_active,
+            expected_uploads: file_map
+                .values()
+                .filter(|f| f.action == FileAction::Upload)
+                .count() as u32,
+            expected_downloads: file_map
+                .values()
+                .filter(|f| f.action == FileAction::Download)
+                .count() as u32,
+            expected_local_deletes: file_map
+                .values()
+                .filter(|f| f.action == FileAction::LocalDelete)
+                .count() as u32,
+            expected_remote_deletes: file_map
+                .values()
+                .filter(|f| f.action == FileAction::RemoteDelete)
+                .count() as u32,
+            files: file_map,
+        });
+    }
+
+    // ── recover_mutex ───────────────────────────────────────────────
+
+    #[test]
+    fn recover_mutex_returns_guard_on_healthy_mutex() {
+        let m = std::sync::Mutex::new(42);
+        let guard = recover_mutex(&m);
+        assert_eq!(*guard, 42);
+    }
+
+    #[test]
+    fn recover_mutex_recovers_poisoned_mutex() {
+        let m = std::sync::Mutex::new(7);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = m.lock().unwrap();
+            panic!("intentional");
+        }));
+        assert!(m.lock().is_err(), "mutex should be poisoned");
+        let guard = recover_mutex(&m);
+        assert_eq!(*guard, 7);
+    }
+
+    #[test]
+    fn recover_mutex_allows_mutation_after_recovery() {
+        let m = std::sync::Mutex::new(0);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = m.lock().unwrap();
+            panic!("poison");
+        }));
+        {
+            let mut guard = recover_mutex(&m);
+            *guard = 99;
+        }
+        let guard = recover_mutex(&m);
+        assert_eq!(*guard, 99);
+    }
+
+    // ── build_delete_activity ───────────────────────────────────────
+
+    #[test]
+    fn build_delete_activity_creates_entries_for_delete_actions() {
+        let engine = test_engine();
+        seed_session(
+            &engine,
+            "docs",
+            vec![
+                ("file_a.txt", FileAction::LocalDelete),
+                ("file_b.txt", FileAction::RemoteDelete),
+                ("file_c.txt", FileAction::Upload),
+            ],
+            true,
+        );
+
+        build_delete_activity(&engine, "docs");
+
+        let pending = engine.pending_activity.lock().unwrap();
+        assert_eq!(pending.len(), 2, "should have 2 delete items");
+        assert!(pending.iter().all(|i| i.action == "deleted"));
+        assert!(pending.iter().all(|i| i.label == "docs"));
+        let names: Vec<&str> =
+            pending.iter().map(|i| i.file_name.as_str()).collect();
+        assert!(names.contains(&"file_a.txt"));
+        assert!(names.contains(&"file_b.txt"));
+    }
+
+    #[test]
+    fn build_delete_activity_skips_non_delete_actions() {
+        let engine = test_engine();
+        seed_session(
+            &engine,
+            "photos",
+            vec![
+                ("pic.jpg", FileAction::Upload),
+                ("doc.pdf", FileAction::Download),
+            ],
+            true,
+        );
+
+        build_delete_activity(&engine, "photos");
+
+        let pending = engine.pending_activity.lock().unwrap();
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn build_delete_activity_filters_by_label() {
+        let engine = test_engine();
+        seed_session(
+            &engine,
+            "work",
+            vec![("a.txt", FileAction::LocalDelete)],
+            true,
+        );
+
+        // Query for a different label — should find nothing.
+        build_delete_activity(&engine, "personal");
+
+        let pending = engine.pending_activity.lock().unwrap();
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn build_delete_activity_no_session_does_nothing() {
+        let engine = test_engine();
+        // No session seeded
+        build_delete_activity(&engine, "any");
+        let pending = engine.pending_activity.lock().unwrap();
+        assert!(pending.is_empty());
+    }
+
+    // ── finalize_session_for_label ──────────────────────────────────
+
+    #[test]
+    fn finalize_skips_when_session_inactive_and_require_active() {
+        let engine = test_engine();
+        seed_session(
+            &engine,
+            "docs",
+            vec![("file.txt", FileAction::Upload)],
+            false, // inactive
+        );
+
+        finalize_session_for_label(&engine, "docs", 1, 0, true, false);
+
+        // Session should remain unchanged (not finalized).
+        let state = engine.progress.lock().unwrap();
+        let session = state.current_session.as_ref().unwrap();
+        assert!(
+            session.completed_at.is_none(),
+            "inactive session should not be finalized"
+        );
+    }
+
+    #[test]
+    fn finalize_runs_when_session_active_and_require_active() {
+        let engine = test_engine();
+        seed_session(
+            &engine,
+            "docs",
+            vec![("file.txt", FileAction::Upload)],
+            true, // active
+        );
+
+        finalize_session_for_label(&engine, "docs", 1, 0, true, false);
+
+        let state = engine.progress.lock().unwrap();
+        let session = state.current_session.as_ref().unwrap();
+        // Session should be marked completed (is_active = false).
+        assert!(!session.is_active);
+    }
+
+    #[test]
+    fn finalize_always_runs_when_require_active_false() {
+        let engine = test_engine();
+        seed_session(
+            &engine,
+            "docs",
+            vec![("file.txt", FileAction::Upload)],
+            false, // inactive
+        );
+
+        // require_active_session = false bypasses the active check.
+        finalize_session_for_label(&engine, "docs", 1, 0, false, false);
+
+        let state = engine.progress.lock().unwrap();
+        let session = state.current_session.as_ref().unwrap();
+        assert!(!session.is_active);
+    }
+
+    #[test]
+    fn finalize_marks_excess_files_as_failed() {
+        let engine = test_engine();
+        seed_session(
+            &engine,
+            "docs",
+            vec![
+                ("a.txt", FileAction::Upload),
+                ("b.txt", FileAction::Upload),
+            ],
+            true,
+        );
+
+        // Only 1 of 2 expected uploads succeeded.
+        finalize_session_for_label(&engine, "docs", 1, 0, true, false);
+
+        let state = engine.progress.lock().unwrap();
+        let session = state.current_session.as_ref().unwrap();
+        let failed_count = session
+            .files
+            .values()
+            .filter(|f| f.status == FileStatus::Error)
+            .count();
+        assert_eq!(failed_count, 1, "one file should be marked failed");
+    }
+
+    #[test]
+    fn finalize_defers_when_changes_pending() {
+        let engine = test_engine();
+        seed_session(
+            &engine,
+            "docs",
+            vec![("file.txt", FileAction::Upload)],
+            true,
+        );
+
+        finalize_session_for_label(
+            &engine, "docs", 1, 0, true, true, // changes_pending
+        );
+
+        let state = engine.progress.lock().unwrap();
+        let session = state.current_session.as_ref().unwrap();
+        // Session should still be active because completion was deferred.
+        assert!(
+            session.is_active,
+            "session should remain active when changes are pending"
+        );
+    }
+
+    #[test]
+    fn finalize_completes_all_pending_when_counts_match() {
+        let engine = test_engine();
+        seed_session(
+            &engine,
+            "docs",
+            vec![
+                ("a.txt", FileAction::Upload),
+                ("b.txt", FileAction::Download),
+            ],
+            true,
+        );
+
+        finalize_session_for_label(&engine, "docs", 1, 1, true, false);
+
+        let state = engine.progress.lock().unwrap();
+        let session = state.current_session.as_ref().unwrap();
+        assert!(!session.is_active);
+        // All files for this label should have been processed.
+        let still_pending = session
+            .files
+            .values()
+            .filter(|f| f.status == FileStatus::Pending)
+            .count();
+        assert_eq!(still_pending, 0);
+    }
+}

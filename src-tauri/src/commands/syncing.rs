@@ -2068,3 +2068,227 @@ pub async fn set_device_name(state: tauri::State<'_, crate::app_state::AppState>
     info!("Device name updated: {}", name);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── build_hcfs_config ───────────────────────────────────────────
+
+    #[test]
+    fn build_hcfs_config_sets_all_fields() {
+        let cfg = build_hcfs_config(
+            "https://example.com",
+            "tok123",
+            "5GrwvaEF",
+            "abcd1234",
+        );
+        assert_eq!(cfg.base_url, "https://example.com");
+        assert_eq!(cfg.bearer_token, "tok123");
+        assert_eq!(cfg.ss58_address, "5GrwvaEF");
+        assert_eq!(cfg.folder_hash, "abcd1234");
+        assert_eq!(cfg.api_key, "Arion");
+        assert!(cfg.accept_invalid_certs);
+        assert!(cfg.billing_bypass_token.is_none());
+    }
+
+    #[test]
+    fn build_hcfs_config_preserves_empty_strings() {
+        let cfg = build_hcfs_config("", "", "", "");
+        assert_eq!(cfg.base_url, "");
+        assert_eq!(cfg.bearer_token, "");
+        assert_eq!(cfg.ss58_address, "");
+        assert_eq!(cfg.folder_hash, "");
+    }
+
+    // ── folder_hash ─────────────────────────────────────────────────
+
+    #[test]
+    fn folder_hash_is_deterministic() {
+        let h1 = folder_hash("my-folder");
+        let h2 = folder_hash("my-folder");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn folder_hash_is_16_hex_chars() {
+        let h = folder_hash("test");
+        assert_eq!(h.len(), 16);
+        assert!(
+            h.chars().all(|c| c.is_ascii_hexdigit()),
+            "expected hex, got: {h}"
+        );
+    }
+
+    #[test]
+    fn folder_hash_differs_for_different_labels() {
+        assert_ne!(folder_hash("alpha"), folder_hash("beta"));
+    }
+
+    // ── sanitize_label ──────────────────────────────────────────────
+
+    #[test]
+    fn sanitize_label_passes_through_clean_input() {
+        assert_eq!(sanitize_label("my-folder").unwrap(), "my-folder");
+    }
+
+    #[test]
+    fn sanitize_label_strips_disallowed_chars() {
+        assert_eq!(
+            sanitize_label("hello/world\\bad").unwrap(),
+            "helloworldbad"
+        );
+    }
+
+    #[test]
+    fn sanitize_label_trims_leading_trailing_dots() {
+        assert_eq!(sanitize_label("..hidden..").unwrap(), "hidden");
+    }
+
+    #[test]
+    fn sanitize_label_rejects_empty_after_sanitization() {
+        let result = sanitize_label("///");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn sanitize_label_preserves_spaces_and_underscores() {
+        assert_eq!(
+            sanitize_label("My Folder_v2").unwrap(),
+            "My Folder_v2"
+        );
+    }
+
+    #[test]
+    fn sanitize_label_preserves_dots_in_middle() {
+        assert_eq!(
+            sanitize_label("file.backup.2024").unwrap(),
+            "file.backup.2024"
+        );
+    }
+
+    // ── derive_folder_mnemonic ──────────────────────────────────────
+
+    #[test]
+    fn derive_folder_mnemonic_is_deterministic() {
+        let master = "abandon abandon abandon abandon abandon \
+                       abandon abandon abandon abandon abandon \
+                       abandon about";
+        let m1 = derive_folder_mnemonic(master, "docs").unwrap();
+        let m2 = derive_folder_mnemonic(master, "docs").unwrap();
+        assert_eq!(m1, m2);
+    }
+
+    #[test]
+    fn derive_folder_mnemonic_differs_per_label() {
+        let master = "abandon abandon abandon abandon abandon \
+                       abandon abandon abandon abandon abandon \
+                       abandon about";
+        let m1 = derive_folder_mnemonic(master, "docs").unwrap();
+        let m2 = derive_folder_mnemonic(master, "photos").unwrap();
+        assert_ne!(m1, m2);
+    }
+
+    #[test]
+    fn derive_folder_mnemonic_produces_24_words() {
+        let master = "abandon abandon abandon abandon abandon \
+                       abandon abandon abandon abandon abandon \
+                       abandon about";
+        let derived = derive_folder_mnemonic(master, "test").unwrap();
+        assert_eq!(
+            derived.split_whitespace().count(),
+            24,
+            "derived mnemonic should be 24 words"
+        );
+    }
+
+    #[test]
+    fn derive_folder_mnemonic_rejects_invalid_master() {
+        let result = derive_folder_mnemonic("not a valid mnemonic", "x");
+        assert!(result.is_err());
+    }
+
+    // ── TransferDirection ───────────────────────────────────────────
+
+    #[test]
+    fn transfer_direction_upload_produces_correct_strings() {
+        let dir = TransferDirection::Upload;
+        let (name, event, action) = match dir {
+            TransferDirection::Upload => (
+                "Upload",
+                sync_events::UPLOAD_PROGRESS,
+                crate::sync_progress::FileAction::Upload,
+            ),
+            TransferDirection::Download => (
+                "Download",
+                sync_events::DOWNLOAD_PROGRESS,
+                crate::sync_progress::FileAction::Download,
+            ),
+        };
+        assert_eq!(name, "Upload");
+        assert_eq!(event, "hcfs_upload_progress");
+        assert_eq!(action, crate::sync_progress::FileAction::Upload);
+    }
+
+    #[test]
+    fn transfer_direction_download_produces_correct_strings() {
+        let dir = TransferDirection::Download;
+        let (name, event, action) = match dir {
+            TransferDirection::Upload => (
+                "Upload",
+                sync_events::UPLOAD_PROGRESS,
+                crate::sync_progress::FileAction::Upload,
+            ),
+            TransferDirection::Download => (
+                "Download",
+                sync_events::DOWNLOAD_PROGRESS,
+                crate::sync_progress::FileAction::Download,
+            ),
+        };
+        assert_eq!(name, "Download");
+        assert_eq!(event, "hcfs_download_progress");
+        assert_eq!(action, crate::sync_progress::FileAction::Download);
+    }
+
+    // ── config_dir_for_folder / master_mnemonic_path ────────────────
+
+    #[test]
+    fn config_dir_for_folder_uses_folder_hash_subdirectory() {
+        let dir = config_dir_for_folder("5GrwvaEF", "docs").unwrap();
+        let expected_hash = folder_hash("docs");
+        assert!(
+            dir.ends_with(&expected_hash),
+            "path should end with folder hash: {}",
+            dir.display()
+        );
+    }
+
+    #[test]
+    fn master_mnemonic_path_ends_with_expected_filename() {
+        let path = master_mnemonic_path("5GrwvaEF").unwrap();
+        assert!(
+            path.file_name().unwrap() == "master_enc_mnemonic.json",
+            "path should end with master_enc_mnemonic.json: {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn account_dir_is_under_hippius_drives() {
+        let dir = account_dir("5GrwvaEF").unwrap();
+        let components: Vec<_> = dir
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            components.contains(&".hippius".to_string()),
+            "should be under .hippius: {}",
+            dir.display()
+        );
+        assert!(
+            components.contains(&"drives".to_string()),
+            "should be under drives: {}",
+            dir.display()
+        );
+    }
+}

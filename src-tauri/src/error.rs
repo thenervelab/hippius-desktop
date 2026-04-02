@@ -272,4 +272,213 @@ mod tests {
         let app_err = AppError::from(api_err);
         assert!(matches!(app_err, AppError::Other(ref s) if s == "timeout"));
     }
+
+    // ── From impls for remaining types ──────────────────────────────
+
+    #[test]
+    fn json_error_converts_via_from() {
+        let json_err: serde_json::Error =
+            serde_json::from_str::<String>("not valid json").unwrap_err();
+        let app_err = AppError::from(json_err);
+        assert!(matches!(app_err, AppError::Json(_)));
+        assert!(
+            app_err.to_string().contains("JSON error"),
+            "display: {app_err}",
+        );
+    }
+
+    #[test]
+    fn box_dyn_error_converts_to_other() {
+        let boxed: Box<dyn std::error::Error> =
+            Box::new(std::io::Error::other("oops"));
+        let app_err = AppError::from(boxed);
+        assert!(matches!(app_err, AppError::Other(_)));
+        assert!(app_err.to_string().contains("oops"));
+    }
+
+    #[test]
+    fn box_dyn_error_send_sync_converts_to_other() {
+        let boxed: Box<dyn std::error::Error + Send + Sync> =
+            Box::new(std::io::Error::other("boom"));
+        let app_err = AppError::from(boxed);
+        assert!(matches!(app_err, AppError::Other(_)));
+        assert!(app_err.to_string().contains("boom"));
+    }
+
+    // ── NotReadyKind round-trip through JSON ────────────────────────
+
+    #[test]
+    fn not_ready_kind_all_variants_serialize_screaming_snake() {
+        let cases = [
+            (NotReadyKind::SyncSetup, "SYNC_SETUP"),
+            (NotReadyKind::DriveNotInitialized, "DRIVE_NOT_INITIALIZED"),
+            (NotReadyKind::DriveNotUnlocked, "DRIVE_NOT_UNLOCKED"),
+            (NotReadyKind::SyncInProgress, "SYNC_IN_PROGRESS"),
+            (NotReadyKind::NoEncryptionKey, "NO_ENCRYPTION_KEY"),
+            (NotReadyKind::ConfigMissing, "CONFIG_MISSING"),
+        ];
+        for (kind, expected) in cases {
+            let json = serde_json::to_value(&kind).expect("serialize");
+            assert_eq!(
+                json, expected,
+                "variant {kind:?} should serialize to {expected}",
+            );
+        }
+    }
+
+    // ── Display for every variant ───────────────────────────────────
+
+    #[test]
+    fn display_db_error_has_prefix() {
+        // SQLx ColumnNotFound is the easiest error to construct without a DB.
+        let err = AppError::Db(sqlx::Error::ColumnNotFound("test_col".into()));
+        let msg = err.to_string();
+        assert!(msg.starts_with("Database error:"), "got: {msg}");
+        assert!(msg.contains("test_col"), "got: {msg}");
+    }
+
+    #[test]
+    fn display_io_error_has_prefix() {
+        let err = AppError::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "no access",
+        ));
+        assert!(
+            err.to_string().starts_with("I/O error:"),
+            "got: {err}",
+        );
+    }
+
+    #[test]
+    fn display_substrate_error() {
+        let err = AppError::Substrate("rpc timeout".into());
+        assert_eq!(err.to_string(), "Blockchain RPC error: rpc timeout");
+    }
+
+    #[test]
+    fn display_hcfs_error() {
+        let err = AppError::Hcfs("sync failed".into());
+        assert_eq!(err.to_string(), "HCFS client error: sync failed");
+    }
+
+    #[test]
+    fn display_nebula_error() {
+        let err = AppError::Nebula("vpn down".into());
+        assert_eq!(err.to_string(), "VPN error: vpn down");
+    }
+
+    #[test]
+    fn display_crypto_error() {
+        let err = AppError::Crypto("bad key".into());
+        assert_eq!(err.to_string(), "Cryptography error: bad key");
+    }
+
+    #[test]
+    fn display_auth_error() {
+        let err = AppError::Auth("expired token".into());
+        assert_eq!(err.to_string(), "Authentication error: expired token");
+    }
+
+    #[test]
+    fn display_lock_error() {
+        let err = AppError::Lock("mutex poisoned".into());
+        assert_eq!(err.to_string(), "Lock poisoned: mutex poisoned");
+    }
+
+    #[test]
+    fn display_not_ready_shows_kind_message() {
+        let err = AppError::NotReady(NotReadyKind::SyncInProgress);
+        assert_eq!(err.to_string(), "Sync is in progress, please wait");
+    }
+
+    #[test]
+    fn display_other_is_passthrough() {
+        let err = AppError::Other("raw message".into());
+        assert_eq!(err.to_string(), "raw message");
+    }
+
+    // ── Tauri IPC serialization structure ────────────────────────────
+
+    #[test]
+    fn serialize_every_variant_has_kind_and_message() {
+        let variants: Vec<AppError> = vec![
+            AppError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "missing",
+            )),
+            AppError::Json(
+                serde_json::from_str::<String>("bad").unwrap_err(),
+            ),
+            AppError::Substrate("rpc".into()),
+            AppError::Hcfs("sync".into()),
+            AppError::Nebula("vpn".into()),
+            AppError::Crypto("key".into()),
+            AppError::Api {
+                status: 403,
+                body: "forbidden".into(),
+            },
+            AppError::Validation("invalid".into()),
+            AppError::Auth("unauth".into()),
+            AppError::NotReady(NotReadyKind::ConfigMissing),
+            AppError::Lock("poisoned".into()),
+            AppError::Other("misc".into()),
+        ];
+        let expected_kinds = [
+            "Io",
+            "Json",
+            "Substrate",
+            "Hcfs",
+            "Nebula",
+            "Crypto",
+            "Api",
+            "Validation",
+            "Auth",
+            "NotReady",
+            "Lock",
+            "Other",
+        ];
+
+        for (err, expected_kind) in variants.iter().zip(expected_kinds.iter())
+        {
+            let json = serde_json::to_value(err).expect("serialize");
+            assert_eq!(
+                json["kind"], *expected_kind,
+                "wrong kind for {err:?}"
+            );
+            assert!(
+                json["message"].is_string(),
+                "missing message for {err:?}"
+            );
+            assert!(
+                !json["message"].as_str().unwrap().is_empty(),
+                "empty message for {err:?}"
+            );
+        }
+    }
+
+    // ── NotReadyKind Display ────────────────────────────────────────
+
+    #[test]
+    fn not_ready_kind_display_all_variants() {
+        let cases = [
+            (NotReadyKind::SyncSetup, "Sync setup required"),
+            (NotReadyKind::DriveNotInitialized, "Drive not initialized"),
+            (NotReadyKind::DriveNotUnlocked, "Drive is not unlocked"),
+            (
+                NotReadyKind::SyncInProgress,
+                "Sync is in progress, please wait",
+            ),
+            (
+                NotReadyKind::NoEncryptionKey,
+                "No encryption key available",
+            ),
+            (
+                NotReadyKind::ConfigMissing,
+                "HCFS config not found. Please set up sync first.",
+            ),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(kind.to_string(), expected);
+        }
+    }
 }
