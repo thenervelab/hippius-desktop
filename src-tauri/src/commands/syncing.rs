@@ -833,6 +833,75 @@ pub async fn initialize_sync(
     initialize_sync_inner(app, account_id, label, existing_mnemonic, true).await
 }
 
+/// Stop the existing drive with the given label, discard its pending activity
+/// and progress session files, and emit a snapshot.
+async fn teardown_previous_drive(
+    sync: &crate::sync_engine::SyncEngine,
+    label: &str,
+) {
+    {
+        let mut drives_guard = sync.drives.lock().await;
+        if let Some(old_slot) = drives_guard.remove(label) {
+            old_slot.cancel_token.cancel();
+            debug!("Dropped previous drive instance for label '{}'", label);
+        }
+        sync.discard_pending_activity_for_label(label);
+        sync.remove_state(label);
+    }
+    {
+        let mut state = sync.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(session) = state.current_session.as_mut() {
+            let before = session.files.len();
+            session.files.retain(|_path, file| file.label != *label);
+            let removed = before - session.files.len();
+            if removed > 0 {
+                info!(label = %label, removed, "Removed stale files for re-initializing label");
+            }
+        }
+    }
+    sync.emit_snapshot(true);
+}
+
+/// Pre-populate the synced-paths cache and store the manager in the drive
+/// registry so the first sync cycle sees correct state immediately.
+async fn register_drive(
+    sync: &crate::sync_engine::SyncEngine,
+    manager: HcfsDriveManager,
+    label: &str,
+    sync_path: &str,
+    folder_dir: &Path,
+) {
+    // Consume rekey marker (no remote purge)
+    let marker = folder_dir.join(".needs_rekey");
+    if marker.exists() {
+        info!("Rekey marker found for '{}' — consuming without remote purge", label);
+        let _ = std::fs::remove_file(&marker);
+    }
+
+    // Pre-populate synced-paths cache
+    if let Ok(state) = manager.load_sync_state() {
+        let paths = crate::sync_shared::build_synced_paths_from_state(&state);
+        if !paths.is_empty() {
+            info!(
+                label = %label,
+                synced_count = paths.len(),
+                "Pre-populated synced-paths cache at drive registration",
+            );
+        }
+        sync.update_synced_paths_cache(label, paths);
+    }
+
+    sync.register_label_root(label.to_string(), PathBuf::from(sync_path));
+    let mut guard = sync.drives.lock().await;
+    guard.insert(
+        label.to_string(),
+        DriveSlot {
+            manager: std::sync::Arc::new(TokioMutex::new(manager)),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+}
+
 /// Core init logic. When `start_loop` is false the caller is responsible for
 /// starting the sync loop after all drives have been registered (batch restore).
 async fn initialize_sync_inner(
@@ -844,77 +913,39 @@ async fn initialize_sync_inner(
 ) -> Result<InitSyncResult, String> {
     use tauri::Manager;
     let label = sanitize_label(&label)?;
-
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
     let pool_owned = app_state.pool()?.clone();
     let pool = &pool_owned;
-
     info!("initialize_sync called for account: {}, label: '{}'", account_id, label);
 
-    // 0. Stop the existing drive with this label, if any
-    {
-        let mut drives_guard = sync.drives.lock().await;
-        if let Some(old_slot) = drives_guard.remove(&label) {
-            old_slot.cancel_token.cancel();
-            debug!("Dropped previous drive instance for label '{}'", label);
-        }
-        sync.discard_pending_activity_for_label(&label);
-        sync.remove_state(&label);
-    }
+    teardown_previous_drive(sync, &label).await;
 
-    // Remove stale files for this label from the current progress session
-    {
-        let mut state = sync.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(session) = state.current_session.as_mut() {
-            let before = session.files.len();
-            session.files.retain(|_path, file| file.label != label);
-            let removed = before - session.files.len();
-            if removed > 0 {
-                info!(label = %label, removed, "Removed stale files for re-initializing label");
-            }
-        }
-    }
-    sync.emit_snapshot(true);
-
-    // 1-2. Load config from DB
+    // Load config, validate sync dir, prepare config dir
     let cfg = load_sync_config(pool, &account_id, &label).await?;
     crate::commands::file_commands::allow_asset_directory(&app, &cfg.sync_path);
-
-    // 3. Check if sync directory was deleted
     check_deleted_sync_dir(pool, &account_id, &label, &cfg.sync_path).await?;
     std::fs::create_dir_all(&cfg.sync_path)
         .map_err(|e| format!("Failed to create sync directory: {e}"))?;
 
-    // 4. Prepare config dir, run migration, reconcile master mnemonic
     let (_acct_dir, folder_dir, master_path) = prepare_config_dir(
-        &account_id,
-        &label,
-        &cfg.sync_path,
-        &cfg.drive_password,
-        existing_mnemonic.as_deref(),
+        &account_id, &label, &cfg.sync_path,
+        &cfg.drive_password, existing_mnemonic.as_deref(),
     )?;
 
-    // 5. Create drive and set HCFS config
+    // Create drive and set HCFS config
     let mut manager =
         HcfsDriveManager::new(PathBuf::from(&cfg.sync_path), folder_dir.clone());
-
     let bearer_token = get_api_token(pool, &account_id)
         .await
         .map_err(|e| format!("Failed to get auth token: {e}"))?
-        .ok_or_else(|| {
-            "No authentication token found. Please log in again.".to_string()
-        })?;
-
+        .ok_or_else(|| "No authentication token found. Please log in again.".to_string())?;
     let fhash = folder_hash(&label);
     manager.set_config(build_hcfs_config(
-        &cfg.server_url,
-        &bearer_token,
-        &account_id,
-        &fhash,
+        &cfg.server_url, &bearer_token, &account_id, &fhash,
     ))?;
 
-    // 6. Init or unlock the drive
+    // Init or unlock
     let (user_id, mnemonic, is_new_setup) = if manager.is_initialized() {
         debug!("Drive already initialized for '{}', unlocking...", label);
         match manager.unlock(&cfg.drive_password) {
@@ -925,35 +956,27 @@ async fn initialize_sync_inner(
             Err(e) => {
                 error!("Unlock failed for '{}': {}", label, e);
                 info!("Attempting recovery: cleaning up encrypted files...");
-                let recovery_ctx = RecoveryContext {
-                    sync_path: &cfg.sync_path,
-                    folder_dir: &folder_dir,
-                    master_path: &master_path,
-                    server_url: &cfg.server_url,
-                    bearer_token: &bearer_token,
-                    account_id: &account_id,
-                    fhash: &fhash,
-                    label: &label,
+                let ctx = RecoveryContext {
+                    sync_path: &cfg.sync_path, folder_dir: &folder_dir,
+                    master_path: &master_path, server_url: &cfg.server_url,
+                    bearer_token: &bearer_token, account_id: &account_id,
+                    fhash: &fhash, label: &label,
                     drive_password: &cfg.drive_password,
                     existing_mnemonic: existing_mnemonic.as_deref(),
                 };
-                let (new_mgr, uid, master) =
-                    recover_drive(manager, &recovery_ctx)?;
+                let (new_mgr, uid, master) = recover_drive(manager, &ctx)?;
                 manager = new_mgr;
                 (uid, master, true)
             }
         }
     } else {
         init_new_drive(
-            &mut manager,
-            &label,
-            &master_path,
-            &cfg.drive_password,
-            existing_mnemonic.as_deref(),
+            &mut manager, &label, &master_path,
+            &cfg.drive_password, existing_mnemonic.as_deref(),
         )?
     };
 
-    // 7. Validate user_id
+    // Validate user_id
     let expected_user_id = format!("{account_id}_{fhash}");
     if user_id != expected_user_id {
         return Err(format!(
@@ -963,73 +986,23 @@ async fn initialize_sync_inner(
         ));
     }
 
-    // 8. Test server connectivity (fire-and-log)
     check_init_server_health(&cfg.server_url).await;
-
-    // 9. Setup progress handlers and clear cancellation
     setup_progress_handlers(&app, &mut manager, &label, sync);
     sync.clear_cancel();
+    register_drive(sync, manager, &label, &cfg.sync_path, &folder_dir).await;
 
-    // 10. Consume rekey marker (no remote purge)
-    {
-        let marker = folder_dir.join(".needs_rekey");
-        if marker.exists() {
-            info!("Rekey marker found for '{}' — consuming without remote purge", label);
-            let _ = std::fs::remove_file(&marker);
-        }
-    }
-
-    // 11. Pre-populate synced-paths cache
-    if let Ok(state) = manager.load_sync_state() {
-        let paths = crate::sync_shared::build_synced_paths_from_state(&state);
-        if !paths.is_empty() {
-            info!(
-                label = %label,
-                synced_count = paths.len(),
-                "Pre-populated synced-paths cache at drive registration",
-            );
-        }
-        sync.update_synced_paths_cache(&label, paths);
-    }
-
-    // 12. Store manager in registry
-    {
-        sync.register_label_root(label.clone(), PathBuf::from(&cfg.sync_path));
-        let mut guard = sync.drives.lock().await;
-        guard.insert(
-            label.clone(),
-            DriveSlot {
-                manager: std::sync::Arc::new(TokioMutex::new(manager)),
-                cancel_token: CancellationToken::new(),
-            },
-        );
-    }
-
-    // 13. Start sync loop
     if start_loop {
         start_sync_loop(app.clone()).await;
     }
-
     info!(
         "Sync initialized successfully for '{}'. User ID: {}, New setup: {}",
         label, user_id, is_new_setup
     );
-
-    // 14. Register folder with server (background, best-effort)
     spawn_folder_registration(
-        &cfg.server_url,
-        &bearer_token,
-        &label,
-        &account_id,
-        &fhash,
-        pool,
+        &cfg.server_url, &bearer_token, &label, &account_id, &fhash, pool,
     );
 
-    Ok(InitSyncResult {
-        user_id,
-        mnemonic,
-        is_new_setup,
-    })
+    Ok(InitSyncResult { user_id, mnemonic, is_new_setup })
 }
 
 /// Stop ALL drives (used on logout).

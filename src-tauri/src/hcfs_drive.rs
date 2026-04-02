@@ -812,6 +812,35 @@ async fn run_sync_loop(
     info!("Sync loop exited");
 }
 
+/// Hot-add new drive paths to the existing watcher and trigger a background
+/// sync. Called when `start_sync_loop` detects a loop is already running.
+async fn hot_add_drives(
+    app: &AppHandle,
+    sync: &crate::sync_engine::SyncEngine,
+) {
+    let drive_paths = collect_drive_paths(sync).await;
+    {
+        let mut watcher_guard = sync.watcher.lock().unwrap_or_else(|p| {
+            warn!("Poisoned watcher mutex recovered");
+            p.into_inner()
+        });
+        if let Some(w) = watcher_guard.as_mut() {
+            for (label, path) in &drive_paths {
+                match w.watch(path, RecursiveMode::Recursive) {
+                    Ok(()) => info!(label = %label, path = ?path, "Watching new drive"),
+                    Err(e) => error!(label = %label, path = ?path, error = %e, "Failed to watch new drive path"),
+                }
+            }
+        } else {
+            warn!("No file watcher available — new drives will sync on heartbeat only");
+        }
+    }
+    info!("Sync loop already running — hot-added drives, triggering sync");
+
+    let app_for_sync = app.clone();
+    tokio::spawn(async move { trigger_sync(&app_for_sync).await });
+}
+
 /// Start or join the background sync loop.
 ///
 /// If no loop is running, creates a file watcher for all registered drives,
@@ -826,41 +855,18 @@ pub async fn start_sync_loop(app: AppHandle) {
     use tauri::Manager;
     let sync = app.state::<crate::app_state::AppState>().sync.clone();
 
-    // ── If a loop is already running, just hot-add new drives ────────
+    // If a loop is already running, just hot-add new drives
     {
         let handle_guard = sync.loop_handle.lock().await;
         if handle_guard.is_some() {
-            let drive_paths = collect_drive_paths(&sync).await;
-            {
-                let mut watcher_guard = sync.watcher.lock().unwrap_or_else(|p| {
-                    warn!("Poisoned watcher mutex recovered");
-                    p.into_inner()
-                });
-                if let Some(w) = watcher_guard.as_mut() {
-                    for (label, path) in &drive_paths {
-                        match w.watch(path, RecursiveMode::Recursive) {
-                            Ok(()) => info!(label = %label, path = ?path, "Watching new drive"),
-                            Err(e) => error!(label = %label, path = ?path, error = %e, "Failed to watch new drive path"),
-                        }
-                    }
-                } else {
-                    warn!("No file watcher available — new drives will sync on heartbeat only");
-                }
-            }
-            info!("Sync loop already running — hot-added drives, triggering sync");
             drop(handle_guard);
-
-            let app_for_sync = app.clone();
-            tokio::spawn(async move {
-                trigger_sync(&app_for_sync).await;
-            });
+            hot_add_drives(&app, &sync).await;
             return;
         }
     }
 
     info!("Starting sync loop");
 
-    // ── No loop running — start fresh ────────────────────────────────
     let drive_paths = collect_drive_paths(&sync).await;
     if drive_paths.is_empty() {
         info!("No drives registered, sync loop not started");
@@ -883,12 +889,7 @@ pub async fn start_sync_loop(app: AppHandle) {
     let mut watcher: RecommendedWatcher = match notify::recommended_watcher(
         move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
-                handle_watcher_event(
-                    event,
-                    &sync_for_watcher,
-                    &pending_for_watcher,
-                    &tx_clone,
-                );
+                handle_watcher_event(event, &sync_for_watcher, &pending_for_watcher, &tx_clone);
             }
         },
     ) {
@@ -903,14 +904,13 @@ pub async fn start_sync_loop(app: AppHandle) {
         }
     };
 
-    // Watch all drive paths
     for (label, path) in &drive_paths {
         if let Err(e) = watcher.watch(path, RecursiveMode::Recursive) {
             error!(path = ?path, label = %label, error = %e, "Failed to watch path");
         }
     }
 
-    // Store watcher in SyncEngine so new drives can be hot-added
+    // Store watcher so new drives can be hot-added
     {
         let mut watcher_guard = sync.watcher.lock().unwrap_or_else(|p| {
             warn!("Poisoned watcher mutex recovered");
@@ -921,7 +921,6 @@ pub async fn start_sync_loop(app: AppHandle) {
 
     let sync_task = sync.clone();
     let handle = tokio::spawn(run_sync_loop(app, sync_task, rx));
-
     let mut handle_guard = sync.loop_handle.lock().await;
     *handle_guard = Some(handle);
 }
