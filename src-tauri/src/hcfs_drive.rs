@@ -1371,9 +1371,11 @@ fn finalize_session_for_label(
     if let Some((exp_up, exp_down)) = label_expected {
         let has_failures = files_uploaded < exp_up || files_downloaded < exp_down;
         if has_failures {
-            let _ = crate::sync_progress::mark_pending_files_as_failed(sync, files_uploaded, files_downloaded, label);
-        } else {
-            let _ = crate::sync_progress::complete_pending_files(sync, label);
+            if let Err(e) = crate::sync_progress::mark_pending_files_as_failed(sync, files_uploaded, files_downloaded, label) {
+                warn!(label = %label, error = %e, "Failed to mark pending files as failed");
+            }
+        } else if let Err(e) = crate::sync_progress::complete_pending_files(sync, label) {
+            warn!(label = %label, error = %e, "Failed to complete pending files");
         }
     }
 
@@ -1384,7 +1386,9 @@ fn finalize_session_for_label(
     };
 
     if no_other_syncs && !crate::sync_logic::should_defer_completion(changes_pending) {
-        let _ = crate::sync_progress::complete_session(sync, files_uploaded, files_downloaded);
+        if let Err(e) = crate::sync_progress::complete_session(sync, files_uploaded, files_downloaded) {
+            warn!(error = %e, "Failed to complete sync session");
+        }
     } else if changes_pending {
         info!(label = %label, "Deferring session completion — new files pending from watcher");
     }
@@ -1604,7 +1608,9 @@ fn apply_error_backoff_and_notify(
         }
     }
 
-    let _ = crate::sync_progress::mark_all_pending_files_as_failed(sync, err_str.clone());
+    if let Err(e) = crate::sync_progress::mark_all_pending_files_as_failed(sync, err_str.clone()) {
+        warn!(error = %e, "Failed to mark all pending files as failed");
+    }
 
     if let Err(e) = app.emit(
         sync_events::SYNC_ERROR,

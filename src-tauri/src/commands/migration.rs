@@ -80,7 +80,7 @@ pub struct MigrationComplete {
 /// Fields match the server JSON schema. Only `files` is accessed in Rust;
 /// the rest exist so serde can deserialize the full response.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // fields exist for serde deserialization, not direct access
+#[expect(dead_code, reason = "fields exist for serde deserialization, not direct access")]
 struct ServerMigrationResponse {
     needs_migration: bool,
     file_count: u64,
@@ -460,6 +460,7 @@ pub async fn start_migration(
 }
 
 #[expect(clippy::too_many_arguments)] // bundling into struct deferred to Phase 4
+#[expect(clippy::too_many_lines, reason = "sequential download-and-report loop with progress tracking")]
 async fn run_migration_download(
     app: &AppHandle,
     s3_client: &S3Client,
@@ -800,6 +801,7 @@ fn is_uploaded(uploaded_set: &HashSet<String>, relative: &str) -> bool {
 
 /// Report successfully synced files to the server.
 /// Called after each sync cycle for the "migration" drive.
+#[expect(clippy::too_many_lines, reason = "sequential report-and-cleanup flow")]
 pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<(), crate::error::AppError> {
     let app_state = app.state::<crate::app_state::AppState>();
     let pool = app_state.pool()?;
