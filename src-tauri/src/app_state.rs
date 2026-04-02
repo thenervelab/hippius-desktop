@@ -167,7 +167,7 @@ impl AppState {
     }
 
     /// Get a reference to the database pool.
-    pub fn pool(&self) -> Result<&SqlitePool, String> {
-        self.db.get().ok_or_else(|| "Database not initialized".to_string())
+    pub fn pool(&self) -> Result<&SqlitePool, crate::error::AppError> {
+        self.db.get().ok_or_else(|| crate::error::AppError::Db(sqlx::Error::PoolClosed))
     }
 }

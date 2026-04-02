@@ -712,7 +712,7 @@ async fn verify_nebula_setup(app: tauri::AppHandle) -> Result<(), String> {
     // Verify Nebula (this will check and renew certificates if needed)
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
-    let pool = app_state.pool().map_err(|e| e.clone())?;
+    let pool = app_state.pool().map_err(|e| e.to_string())?;
     if let Err(e) = nebula::verify_nebula_internal(pool).await {
         warn!("Nebula verification failed: {}", e);
         return Err("Nebula verification failed".into());

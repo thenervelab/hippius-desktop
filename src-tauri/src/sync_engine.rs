@@ -100,11 +100,7 @@ impl std::fmt::Debug for SyncEngine {
 
 /// Async callback invoked after each successful sync cycle for a drive.
 /// Receives `(app_handle, label, account_id)`.
-pub type PostSyncHook = Box<
-    dyn Fn(AppHandle, String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
-        + Send
-        + Sync,
->;
+pub type PostSyncHook = Box<dyn Fn(AppHandle, String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>;
 
 pub struct SyncEngine {
     // ── Drive Registry (async-only access) ──────────────────────────────
@@ -812,20 +808,13 @@ impl SyncEngine {
     }
 
     /// Run all registered post-sync hooks for the given drive.
-    pub async fn run_post_sync_hooks(
-        &self,
-        app: &AppHandle,
-        label: &str,
-        account_id: &str,
-    ) {
+    pub async fn run_post_sync_hooks(&self, app: &AppHandle, label: &str, account_id: &str) {
         let hooks: Vec<_> = {
             let guard = self.post_sync_hooks.lock().unwrap_or_else(|p| {
                 warn!("Poisoned post_sync_hooks mutex recovered in run");
                 p.into_inner()
             });
-            guard.iter().map(|h| {
-                h(app.clone(), label.to_string(), account_id.to_string())
-            }).collect()
+            guard.iter().map(|h| h(app.clone(), label.to_string(), account_id.to_string())).collect()
         };
         for fut in hooks {
             fut.await;
@@ -836,31 +825,19 @@ impl SyncEngine {
 
     /// Persist the bearer token in the DB and update all live drives
     /// in-memory so ongoing sync cycles use the fresh token.
-    pub async fn update_bearer_token(
-        &self,
-        pool: &sqlx::sqlite::SqlitePool,
-        account_id: &str,
-        bearer_token: &str,
-    ) -> Result<(), String> {
+    pub async fn update_bearer_token(&self, pool: &sqlx::sqlite::SqlitePool, account_id: &str, bearer_token: &str) -> Result<(), String> {
         crate::utils::auth_tokens::save_api_token(pool, account_id, bearer_token)
             .await
             .map_err(|e| format!("Failed to persist auth token: {e}"))?;
 
         let drive_arcs: Vec<(String, Arc<TokioMutex<HcfsDriveManager>>)> = {
             let guard = self.drives.lock().await;
-            guard
-                .iter()
-                .map(|(k, slot)| (k.clone(), slot.manager.clone()))
-                .collect()
+            guard.iter().map(|(k, slot)| (k.clone(), slot.manager.clone())).collect()
         };
         for (label, drive_arc) in drive_arcs {
             let mut manager = drive_arc.lock().await;
             if let Err(e) = manager.update_bearer_token(bearer_token.to_string()) {
-                tracing::error!(
-                    "Failed to update bearer token for drive '{}': {}",
-                    label,
-                    e
-                );
+                tracing::error!("Failed to update bearer token for drive '{}': {}", label, e);
             } else {
                 tracing::debug!("Updated bearer token for drive '{}'", label);
             }

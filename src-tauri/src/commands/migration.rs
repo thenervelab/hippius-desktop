@@ -111,7 +111,10 @@ fn clear_migration_uploads(migration: &crate::app_state::MigrationState) {
 // DB helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn get_migration_status_db(pool: &SqlitePool, account_id: &str) -> Result<Option<(String, i64, i64, String, String)>, String> {
+pub(crate) async fn get_migration_status_db(
+    pool: &SqlitePool,
+    account_id: &str,
+) -> Result<Option<(String, i64, i64, String, String)>, crate::error::AppError> {
     let row = sqlx::query(
         "SELECT status, total_files, completed_files, sync_path, server_url \
          FROM migration_status WHERE account_id = ?",
@@ -119,7 +122,7 @@ pub(crate) async fn get_migration_status_db(pool: &SqlitePool, account_id: &str)
     .bind(account_id)
     .fetch_optional(pool)
     .await
-    .map_err(|e| format!("DB error reading migration_status: {e}"))?;
+    .map_err(|e| crate::error::AppError::Other(format!("DB error reading migration_status: {e}")))?;
 
     match row {
         Some(r) => Ok(Some((
@@ -143,7 +146,7 @@ pub(crate) async fn upsert_migration_status(
     failed_files: &str,
     sync_path: &str,
     server_url: &str,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     sqlx::query(
         r"
         INSERT INTO migration_status
@@ -169,17 +172,17 @@ pub(crate) async fn upsert_migration_status(
     .bind(server_url)
     .execute(pool)
     .await
-    .map_err(|e| format!("DB error upserting migration_status: {e}"))?;
+    .map_err(|e| crate::error::AppError::Other(format!("DB error upserting migration_status: {e}")))?;
     Ok(())
 }
 
-pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String, String> {
+pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String, crate::error::AppError> {
     let owner = crate::utils::account_key::account_key(account_id);
     let row = sqlx::query("SELECT server_url FROM hcfs_config WHERE owner = ?")
         .bind(&owner)
         .fetch_optional(pool)
         .await
-        .map_err(|e| format!("DB error reading hcfs_config: {e}"))?;
+        .map_err(|e| crate::error::AppError::Other(format!("DB error reading hcfs_config: {e}")))?;
     match row {
         Some(r) => {
             let url: String = r.get("server_url");
@@ -197,26 +200,18 @@ pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Resul
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn fetch_migration_files(server_url: &str, user_id: &str) -> Result<Vec<MigrationFile>, String> {
+pub(crate) async fn fetch_migration_files(server_url: &str, user_id: &str) -> Result<Vec<MigrationFile>, crate::error::AppError> {
     let url = format!("{}/migration/{}", server_url.trim_end_matches('/'), user_id);
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
-    let resp = client
-        .get(&url)
-        .header("X-API-Key", "Arion")
-        .send()
-        .await
-        .map_err(|e| format!("Failed to reach migration endpoint: {e}"))?;
+    let client = reqwest::Client::builder().danger_accept_invalid_certs(true).build()?;
+    let resp = client.get(&url).header("X-API-Key", "Arion").send().await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("Migration check failed (status {status}): {text}"));
+        return Err(crate::error::AppError::Other(format!("Migration check failed (status {status}): {text}")));
     }
 
-    let parsed: ServerMigrationResponse = resp.json().await.map_err(|e| format!("Failed to parse migration response: {e}"))?;
+    let parsed: ServerMigrationResponse = resp.json().await?;
 
     Ok(parsed.files.into_iter().filter(|f| !should_skip_key(&f.key)).collect())
 }
@@ -226,7 +221,10 @@ pub(crate) async fn fetch_migration_files(server_url: &str, user_id: &str) -> Re
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<MigrationCheckResult, String> {
+pub async fn check_migration(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<MigrationCheckResult, crate::error::AppError> {
     let pool = state.pool()?;
     // 1. Check local DB for existing migration
     if let Some((status, _total, _completed, sync_path, _server_url)) = get_migration_status_db(pool, &account_id).await? {
@@ -305,10 +303,10 @@ fn should_skip_key(key: &str) -> bool {
     key == MANIFEST_PREFIX || key.starts_with(&format!("{MANIFEST_PREFIX}/"))
 }
 
-async fn build_s3_client(pool: &SqlitePool, account_id: &str) -> Result<S3Client, String> {
+async fn build_s3_client(pool: &SqlitePool, account_id: &str) -> Result<S3Client, crate::error::AppError> {
     let (access_key, secret) = crate::utils::auth_tokens::get_s3_credentials(pool, account_id)
         .await?
-        .ok_or_else(|| "No S3 credentials found".to_string())?;
+        .ok_or_else(|| crate::error::AppError::Other("No S3 credentials found".into()))?;
 
     let credentials = Credentials::new(&access_key, &secret, None, None, "hippius-migration");
 
@@ -323,25 +321,25 @@ async fn build_s3_client(pool: &SqlitePool, account_id: &str) -> Result<S3Client
 }
 
 #[cfg(unix)]
-fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> Result<(), String> {
-    let stat = nix::sys::statvfs::statvfs(path).map_err(|e| format!("Failed to check disk space: {e}"))?;
+fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> Result<(), crate::error::AppError> {
+    let stat = nix::sys::statvfs::statvfs(path).map_err(|e| crate::error::AppError::Other(e.to_string()))?;
     let available = stat.block_size() as u64 * stat.blocks_available() as u64;
     if available < required_bytes {
-        return Err(format!(
+        return Err(crate::error::AppError::Validation(format!(
             "Not enough disk space. Need {required_bytes} bytes but only {available} available."
-        ));
+        )));
     }
     Ok(())
 }
 
 #[cfg(windows)]
-fn check_disk_space(_path: &std::path::Path, _required_bytes: u64) -> Result<(), String> {
+fn check_disk_space(_path: &std::path::Path, _required_bytes: u64) -> Result<(), crate::error::AppError> {
     // Disk space check not yet implemented on Windows
     Ok(())
 }
 
-async fn download_file_with_retry(client: &S3Client, bucket: &str, key: &str, dest: &std::path::Path) -> Result<(), String> {
-    let mut last_err = String::new();
+async fn download_file_with_retry(client: &S3Client, bucket: &str, key: &str, dest: &std::path::Path) -> Result<(), crate::error::AppError> {
+    let mut last_err = crate::error::AppError::Other("Download failed".into());
     for attempt in 1..=MAX_RETRIES {
         match download_file_once(client, bucket, key, dest).await {
             Ok(()) => return Ok(()),
@@ -354,14 +352,12 @@ async fn download_file_with_retry(client: &S3Client, bucket: &str, key: &str, de
             }
         }
     }
-    Err(format!("Failed after {MAX_RETRIES} attempts: {last_err}"))
+    Err(last_err)
 }
 
-async fn download_file_once(client: &S3Client, bucket: &str, key: &str, dest: &std::path::Path) -> Result<(), String> {
+async fn download_file_once(client: &S3Client, bucket: &str, key: &str, dest: &std::path::Path) -> Result<(), crate::error::AppError> {
     if let Some(parent) = dest.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("Failed to create directory: {e}"))?;
+        tokio::fs::create_dir_all(parent).await?;
     }
 
     let resp = client
@@ -370,14 +366,12 @@ async fn download_file_once(client: &S3Client, bucket: &str, key: &str, dest: &s
         .key(key)
         .send()
         .await
-        .map_err(|e| format!("S3 get_object failed: {e}"))?;
+        .map_err(|e| crate::error::AppError::Other(format!("S3 get_object failed: {e}")))?;
 
-    let data = resp.body.collect().await.map_err(|e| format!("Failed to read S3 body: {e}"))?;
+    let data = resp.body.collect().await.map_err(|e| crate::error::AppError::Other(e.to_string()))?;
 
-    let mut file = tokio::fs::File::create(dest).await.map_err(|e| format!("Failed to create file: {e}"))?;
-    file.write_all(&data.into_bytes())
-        .await
-        .map_err(|e| format!("Failed to write file: {e}"))?;
+    let mut file = tokio::fs::File::create(dest).await?;
+    file.write_all(&data.into_bytes()).await?;
 
     Ok(())
 }
@@ -393,7 +387,7 @@ pub async fn start_migration(
     account_id: String,
     sync_path: String,
     mnemonic: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     state.migration.cancel.store(false, Ordering::SeqCst);
     clear_migration_uploads(&state.migration);
 
@@ -401,7 +395,7 @@ pub async fn start_migration(
 
     // Verify HCFS config exists — the frontend must prompt for a password first
     if crate::commands::syncing::get_drive_password(pool, &account_id).await.is_err() {
-        return Err("NEEDS_SYNC_SETUP".to_string());
+        return Err(crate::error::AppError::Other("NEEDS_SYNC_SETUP".into()));
     }
 
     // Ensure S3 credentials exist
@@ -413,7 +407,7 @@ pub async fn start_migration(
     let pending: Vec<MigrationFile> = all_files.into_iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
 
     if pending.is_empty() {
-        return Err("No files to migrate".to_string());
+        return Err(crate::error::AppError::Other("No files to migrate".into()));
     }
 
     let total = pending.len() as u64;
@@ -421,9 +415,7 @@ pub async fn start_migration(
 
     // Check disk space
     let sync_dir = std::path::Path::new(&sync_path);
-    tokio::fs::create_dir_all(sync_dir)
-        .await
-        .map_err(|e| format!("Failed to create sync directory: {e}"))?;
+    tokio::fs::create_dir_all(sync_dir).await?;
     check_disk_space(sync_dir, total_size)?;
 
     // Save state to DB
@@ -453,7 +445,7 @@ pub async fn start_migration(
         )
         .await
         {
-            let _ = app_clone.emit("migration_error", MigrationError { error: e.clone() });
+            let _ = app_clone.emit("migration_error", MigrationError { error: e.to_string() });
             info!("[Migration] Background task failed: {e}");
         }
     });
@@ -477,7 +469,7 @@ async fn run_migration_download(
     files: &[MigrationFile],
     mnemonic: Option<String>,
     pool: &sqlx::SqlitePool,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     let total = files.len() as u64;
     let mut completed: u64 = 0;
     let mut failed: u64 = 0;
@@ -586,7 +578,7 @@ async fn run_migration_download(
                     MigrationFileError {
                         file_name: format!("{}/{}", file.bucket_name, file.key),
                         bucket: file.bucket_name.clone(),
-                        error: e,
+                        error: e.to_string(),
                     },
                 );
             }
@@ -654,7 +646,7 @@ async fn run_migration_download(
             info!("Migration drive initialized, user_id: {}", result.user_id);
         }
         Err(e) => {
-            return Err(format!("Failed to initialize migration drive: {e}"));
+            return Err(crate::error::AppError::Other(format!("Failed to initialize migration drive: {e}")));
         }
     }
 
@@ -678,7 +670,7 @@ async fn run_migration_download(
 }
 
 #[tauri::command]
-pub async fn cancel_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), String> {
+pub async fn cancel_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), crate::error::AppError> {
     let pool = state.pool()?;
     state.migration.cancel.store(true, Ordering::SeqCst);
     clear_migration_uploads(&state.migration);
@@ -699,7 +691,11 @@ pub async fn cancel_migration(state: tauri::State<'_, crate::app_state::AppState
 /// For completed migrations, use `complete_migration_transition` instead —
 /// it handles label promotion, drive stop, and default drive init atomically.
 #[tauri::command]
-pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, reason: String) -> Result<(), String> {
+pub async fn dismiss_migration(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    reason: String,
+) -> Result<(), crate::error::AppError> {
     let pool = state.pool()?;
     clear_migration_uploads(&state.migration);
     let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
@@ -721,7 +717,7 @@ pub async fn complete_migration_transition(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     existing_mnemonic: Option<String>,
-) -> Result<crate::commands::syncing::InitSyncResult, String> {
+) -> Result<crate::commands::syncing::InitSyncResult, crate::error::AppError> {
     let pool = state.pool()?;
 
     // 1. Dismiss migration and promote sync path label to "default".
@@ -804,7 +800,7 @@ fn is_uploaded(uploaded_set: &HashSet<String>, relative: &str) -> bool {
 
 /// Report successfully synced files to the server.
 /// Called after each sync cycle for the "migration" drive.
-pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<(), String> {
+pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<(), crate::error::AppError> {
     let app_state = app.state::<crate::app_state::AppState>();
     let pool = app_state.pool()?;
     let db_status = get_migration_status_db(pool, account_id).await?;
@@ -868,10 +864,7 @@ pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<
     }
 
     // Report each bucket to the server
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+    let client = reqwest::Client::builder().danger_accept_invalid_certs(true).build()?;
 
     for (bucket_name, keys) in &bucket_keys {
         let url = format!("{}/migration", server_url.trim_end_matches('/'));

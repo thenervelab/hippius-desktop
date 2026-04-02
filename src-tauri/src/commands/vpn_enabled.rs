@@ -5,6 +5,7 @@
 //! TUN/TAP device only happens here (on explicit user toggle), never
 //! at app startup.
 
+use crate::error::AppError;
 use serde::Serialize;
 use tracing::{error, info, warn};
 
@@ -16,7 +17,7 @@ pub struct VpnStatus {
 
 /// Read the persisted VPN enabled flag from the database.
 #[tauri::command]
-pub async fn get_vpn_status(state: tauri::State<'_, crate::app_state::AppState>) -> Result<VpnStatus, String> {
+pub async fn get_vpn_status(state: tauri::State<'_, crate::app_state::AppState>) -> Result<VpnStatus, AppError> {
     let pool = state.pool()?;
 
     match sqlx::query_as::<_, (bool,)>("SELECT is_enabled FROM vpn_status WHERE id = 1")
@@ -28,11 +29,10 @@ pub async fn get_vpn_status(state: tauri::State<'_, crate::app_state::AppState>)
             // Should not happen — setup.rs initializes this row, but handle defensively
             sqlx::query("INSERT INTO vpn_status (id, is_enabled) VALUES (1, FALSE)")
                 .execute(pool)
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
             Ok(VpnStatus { is_enabled: false })
         }
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(AppError::Db(e)),
     }
 }
 
@@ -41,7 +41,7 @@ pub async fn get_vpn_status(state: tauri::State<'_, crate::app_state::AppState>)
 /// The DB flag is updated before the process action so the UI reflects
 /// the intended state even if Nebula fails to start.
 #[tauri::command]
-pub async fn toggle_vpn_status(state: tauri::State<'_, crate::app_state::AppState>) -> Result<VpnStatus, String> {
+pub async fn toggle_vpn_status(state: tauri::State<'_, crate::app_state::AppState>) -> Result<VpnStatus, AppError> {
     let pool = state.pool()?;
 
     let current = match sqlx::query_as::<_, (bool,)>("SELECT is_enabled FROM vpn_status WHERE id = 1")
@@ -50,36 +50,37 @@ pub async fn toggle_vpn_status(state: tauri::State<'_, crate::app_state::AppStat
     {
         Ok(Some((is_enabled,))) => VpnStatus { is_enabled },
         Ok(None) => VpnStatus { is_enabled: false },
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(AppError::Db(e)),
     };
 
     let new_status = !current.is_enabled;
 
     if new_status {
         info!("Checking VPN binary permissions before enabling...");
-        let binary_path = crate::utils::nebula::get_nebula_binary_path().map_err(|e| e.to_string())?;
+        let binary_path = crate::utils::nebula::get_nebula_binary_path().map_err(|e| AppError::Nebula(e.to_string()))?;
 
         let has_perms = crate::utils::nebula::check_permissions(&binary_path)
             .await
-            .map_err(|e| format!("Failed to check permissions: {e}"))?;
+            .map_err(|e| AppError::Nebula(format!("Failed to check permissions: {e}")))?;
 
         if !has_perms {
             info!("Requesting elevated permissions for VPN...");
-            crate::utils::nebula::grant_permissions(&binary_path).await.map_err(|e| format!("{e}"))?;
+            crate::utils::nebula::grant_permissions(&binary_path)
+                .await
+                .map_err(|e| AppError::Nebula(e.to_string()))?;
         }
 
         info!("Checking certificate status before enabling...");
         if let Err(e) = crate::utils::nebula::check_and_update_certificate(pool).await {
             error!("Certificate check failed: {}", e);
-            return Err(format!("Failed to verify/renew certificate: {e}"));
+            return Err(AppError::Nebula(format!("Failed to verify/renew certificate: {e}")));
         }
     }
 
     sqlx::query("UPDATE vpn_status SET is_enabled = ?, last_updated = CURRENT_TIMESTAMP WHERE id = 1")
         .bind(new_status)
         .execute(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
     if new_status {
         info!("VPN enabled, starting Nebula...");
@@ -107,7 +108,7 @@ pub struct AutoconnectStatus {
 
 /// Read the persisted autoconnect preference from the database.
 #[tauri::command]
-pub async fn get_autoconnect_status(state: tauri::State<'_, crate::app_state::AppState>) -> Result<AutoconnectStatus, String> {
+pub async fn get_autoconnect_status(state: tauri::State<'_, crate::app_state::AppState>) -> Result<AutoconnectStatus, AppError> {
     let pool = state.pool()?;
 
     match sqlx::query_as::<_, (bool,)>("SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1")
@@ -119,17 +120,16 @@ pub async fn get_autoconnect_status(state: tauri::State<'_, crate::app_state::Ap
             // Should not happen — setup.rs initializes this row, but handle defensively
             sqlx::query("INSERT INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)")
                 .execute(pool)
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
             Ok(AutoconnectStatus { is_enabled: false })
         }
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(AppError::Db(e)),
     }
 }
 
 /// Toggle the autoconnect preference and persist the new value.
 #[tauri::command]
-pub async fn toggle_autoconnect_status(state: tauri::State<'_, crate::app_state::AppState>) -> Result<AutoconnectStatus, String> {
+pub async fn toggle_autoconnect_status(state: tauri::State<'_, crate::app_state::AppState>) -> Result<AutoconnectStatus, AppError> {
     let pool = state.pool()?;
 
     let current = match sqlx::query_as::<_, (bool,)>("SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1")
@@ -138,7 +138,7 @@ pub async fn toggle_autoconnect_status(state: tauri::State<'_, crate::app_state:
     {
         Ok(Some((is_enabled,))) => AutoconnectStatus { is_enabled },
         Ok(None) => AutoconnectStatus { is_enabled: false },
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(AppError::Db(e)),
     };
 
     let new_status = !current.is_enabled;
@@ -146,8 +146,7 @@ pub async fn toggle_autoconnect_status(state: tauri::State<'_, crate::app_state:
     sqlx::query("UPDATE autoconnect_vpn_enabled SET is_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1")
         .bind(new_status)
         .execute(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
     Ok(AutoconnectStatus { is_enabled: new_status })
 }

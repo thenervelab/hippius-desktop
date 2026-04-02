@@ -5,6 +5,7 @@
 //! app to a clean state while preserving the default WSS endpoint.
 
 use crate::constants::substrate::WSS_ENDPOINT;
+use crate::error::AppError;
 use chrono::Utc;
 use sp_core::Pair;
 use sp_core::crypto::Ss58Codec;
@@ -48,7 +49,7 @@ pub struct SubAccountExport {
 /// Duplicates are skipped (not overwritten) and reported in the result
 /// message so the user knows what was already present.
 #[tauri::command]
-pub async fn import_app_data(state: tauri::State<'_, crate::app_state::AppState>, params: ImportDataParams) -> Result<String, String> {
+pub async fn import_app_data(state: tauri::State<'_, crate::app_state::AppState>, params: ImportDataParams) -> Result<String, AppError> {
     info!("[Import] Starting app data import...");
 
     let pool = state.pool()?;
@@ -57,7 +58,7 @@ pub async fn import_app_data(state: tauri::State<'_, crate::app_state::AppState>
     let mut skipped_items = Vec::new();
     let timestamp = Utc::now().timestamp();
 
-    let mut tx = pool.begin().await.map_err(|e| format!("Failed to start transaction: {e}"))?;
+    let mut tx = pool.begin().await?;
 
     // Import sync paths
     if let Some(sync_paths) = params.sync_paths {
@@ -70,8 +71,7 @@ pub async fn import_app_data(state: tauri::State<'_, crate::app_state::AppState>
             let existing: Option<(String,)> = sqlx::query_as("SELECT path FROM sync_paths WHERE owner = '' AND label = ?")
                 .bind(&sp.label)
                 .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| format!("Failed to check existing sync path: {e}"))?;
+                .await?;
 
             if existing.as_ref().map(|p| &p.0) == Some(&sp.path) {
                 skipped_items.push(format!("sync path '{}' (duplicate)", sp.label));
@@ -86,8 +86,7 @@ pub async fn import_app_data(state: tauri::State<'_, crate::app_state::AppState>
             .bind(&sp.label)
             .bind(timestamp)
             .execute(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to import sync path: {e}"))?;
+            .await?;
 
             imported_count += 1;
         }
@@ -110,8 +109,7 @@ pub async fn import_app_data(state: tauri::State<'_, crate::app_state::AppState>
             let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM sub_accounts WHERE account_id = ?")
                 .bind(&account.account_id)
                 .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| format!("Failed to check for existing sub-account: {e}"))?;
+                .await?;
 
             if exists.is_some() {
                 skipped_items.push(format!("sub-account {} (duplicate)", account.account_id));
@@ -126,8 +124,7 @@ pub async fn import_app_data(state: tauri::State<'_, crate::app_state::AppState>
             .bind(&account.sub_account_seed_phrase)
             .bind(account.created_at)
             .execute(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to import sub-account for account ID {}: {}", account.account_id, e))?;
+            .await?;
 
             imported_count += 1;
         }
@@ -137,7 +134,7 @@ pub async fn import_app_data(state: tauri::State<'_, crate::app_state::AppState>
         }
     }
 
-    tx.commit().await.map_err(|e| format!("Failed to commit transaction: {e}"))?;
+    tx.commit().await?;
 
     let mut message_parts = Vec::new();
     if !imported_items.is_empty() {
@@ -157,16 +154,13 @@ pub async fn import_app_data(state: tauri::State<'_, crate::app_state::AppState>
 
 /// Export all sync paths and sub-accounts as a portable JSON bundle.
 #[tauri::command]
-pub async fn export_app_data(state: tauri::State<'_, crate::app_state::AppState>) -> Result<ExportDataResult, String> {
+pub async fn export_app_data(state: tauri::State<'_, crate::app_state::AppState>) -> Result<ExportDataResult, AppError> {
     info!("[Export] Starting app data export...");
 
     let pool = state.pool()?;
 
     // Get all sync paths
-    let sync_rows = sqlx::query("SELECT path, label FROM sync_paths")
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("Failed to fetch sync paths: {e}"))?;
+    let sync_rows = sqlx::query("SELECT path, label FROM sync_paths").fetch_all(pool).await?;
     let sync_paths: Vec<SyncPathExport> = sync_rows
         .iter()
         .map(|row| SyncPathExport {
@@ -178,8 +172,7 @@ pub async fn export_app_data(state: tauri::State<'_, crate::app_state::AppState>
     // Get sub-accounts
     let sub_accounts_rows = sqlx::query("SELECT account_id, sub_account_seed_phrase, created_at FROM sub_accounts")
         .fetch_all(pool)
-        .await
-        .map_err(|e| format!("Failed to fetch sub-accounts: {e}"))?;
+        .await?;
 
     let sub_accounts = sub_accounts_rows
         .into_iter()
@@ -205,7 +198,7 @@ pub async fn export_app_data(state: tauri::State<'_, crate::app_state::AppState>
 /// WSS endpoint. Non-fatal table-clear errors are logged but do not
 /// abort the reset so the app reaches a usable state regardless.
 #[tauri::command]
-pub async fn reset_app(state: tauri::State<'_, crate::app_state::AppState>) -> Result<(), String> {
+pub async fn reset_app(state: tauri::State<'_, crate::app_state::AppState>) -> Result<(), AppError> {
     info!("[Reset App] Starting app reset...");
 
     let pool = state.pool()?;
@@ -238,13 +231,12 @@ pub async fn reset_app(state: tauri::State<'_, crate::app_state::AppState>) -> R
 /// Returns `(account_id, ss58_address)` pairs. Sub-accounts with
 /// invalid mnemonics are logged and silently skipped.
 #[tauri::command]
-pub async fn get_all_subaccount_addresses(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Vec<(String, String)>, String> {
+pub async fn get_all_subaccount_addresses(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Vec<(String, String)>, AppError> {
     let pool = state.pool()?;
 
     let sub_accounts = sqlx::query_as::<_, (String, String)>("SELECT account_id, sub_account_seed_phrase FROM sub_accounts")
         .fetch_all(pool)
-        .await
-        .map_err(|e| format!("Failed to fetch sub-accounts: {e}"))?;
+        .await?;
 
     let mut result = Vec::new();
 

@@ -40,14 +40,11 @@ struct VerifyResponse {
 
 /// Derive both Substrate (sr25519) and Ethereum (secp256k1) keypairs from a
 /// BIP-39 mnemonic. Returns both keypairs and their formatted addresses.
-pub(crate) fn derive_keys(
-    mnemonic: &str,
-) -> Result<(sp_core::sr25519::Pair, String, PrivateKeySigner, String), String> {
+pub(crate) fn derive_keys(mnemonic: &str) -> Result<(sp_core::sr25519::Pair, String, PrivateKeySigner, String), String> {
     use sp_core::Pair as _;
     use sp_core::crypto::Ss58Codec;
 
-    let (sr25519_pair, _) =
-        sp_core::sr25519::Pair::from_phrase(mnemonic, None).map_err(|e| format!("{e:?}"))?;
+    let (sr25519_pair, _) = sp_core::sr25519::Pair::from_phrase(mnemonic, None).map_err(|e| format!("{e:?}"))?;
     let substrate_address = sr25519_pair.public().to_ss58check();
 
     let eth_signer: PrivateKeySigner = MnemonicBuilder::<English>::default()
@@ -92,15 +89,10 @@ pub(crate) async fn challenge_response(
         let status = challenge_res.status();
         let body = challenge_res.text().await.unwrap_or_default();
         warn!(status = %status, "Challenge request failed: {body}");
-        return Err(format!(
-            "Authentication failed (HTTP {status}). Please try again."
-        ));
+        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
     }
 
-    let cr: ChallengeResponse = challenge_res
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse challenge: {e}"))?;
+    let cr: ChallengeResponse = challenge_res.json().await.map_err(|e| format!("Failed to parse challenge: {e}"))?;
 
     let sig = eth_signer
         .sign_message_sync(cr.message.as_bytes())
@@ -131,15 +123,10 @@ pub(crate) async fn challenge_response(
         let status = verify_res.status();
         let body = verify_res.text().await.unwrap_or_default();
         warn!(status = %status, "Verify request failed: {body}");
-        return Err(format!(
-            "Authentication failed (HTTP {status}). Please try again."
-        ));
+        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
     }
 
-    let vr: VerifyResponse = verify_res
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse verify response: {e}"))?;
+    let vr: VerifyResponse = verify_res.json().await.map_err(|e| format!("Failed to parse verify response: {e}"))?;
 
     // Token expires in 30 days (matching frontend authService behavior)
     let token_expiry = chrono::Utc::now().timestamp_millis() + 30 * 24 * 60 * 60 * 1000;
@@ -207,52 +194,27 @@ pub(crate) async fn persist_session(
 ///
 /// Acquires a [`crate::sync_engine::TokenRefreshGuard`] to pause sync while
 /// the token is being replaced, preventing 401 races.
-pub(crate) async fn refresh_auth_token_internal(
-    pool: &SqlitePool,
-    app: &tauri::AppHandle,
-    account_id: &str,
-) -> Result<(), String> {
+pub(crate) async fn refresh_auth_token_internal(pool: &SqlitePool, app: &tauri::AppHandle, account_id: &str) -> Result<(), String> {
     info!(account_id = %account_id, "Auth token refresh started");
     use tauri::Manager;
     let sync = app.state::<crate::app_state::AppState>().sync.clone();
     let _guard = crate::sync_engine::TokenRefreshGuard::new(sync);
 
     let app_state = app.state::<crate::app_state::AppState>();
-    let mnemonic = Zeroizing::new(get_mnemonic_for_account(&app_state, account_id).await?);
+    let mnemonic = Zeroizing::new(get_mnemonic_for_account(&app_state, account_id).await.map_err(|e| e.to_string())?);
 
     let (_sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
 
     let (token, user_id, username, _is_new, token_expiry) =
-        challenge_response(
-            &app_state.api_client,
-            &eth_signer,
-            &eth_address,
-            &substrate_address,
-            None,
-        )
-        .await?;
+        challenge_response(&app_state.api_client, &eth_signer, &eth_address, &substrate_address, None).await?;
 
-    persist_session(
-        pool,
-        &substrate_address,
-        &token,
-        token_expiry,
-        &user_id,
-        &username,
-        "mnemonic",
-        -1,
-    )
-    .await?;
+    persist_session(pool, &substrate_address, &token, token_expiry, &user_id, &username, "mnemonic", -1).await?;
 
     save_api_token(pool, &substrate_address, &token)
         .await
         .map_err(|e| format!("Failed to persist API token: {e}"))?;
 
-    if let Err(e) = app_state
-        .sync
-        .update_bearer_token(pool, account_id, &token)
-        .await
-    {
+    if let Err(e) = app_state.sync.update_bearer_token(pool, account_id, &token).await {
         warn!("Could not update live drive token: {e}");
     }
 

@@ -30,7 +30,7 @@ pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Res
         return Ok(client);
     }
 
-    let pool = app_state.pool()?;
+    let pool = app_state.pool().map_err(|e| e.to_string())?;
 
     // Get the current WSS endpoint from database, fallback to default constant
     let wss_endpoint = get_current_wss_endpoint(pool).await.unwrap_or_else(|_| WSS_ENDPOINT.to_string());
@@ -104,7 +104,7 @@ pub async fn update_wss_endpoint(app_state: &crate::app_state::AppState, new_end
         return Err("Invalid WSS endpoint format. Must start with ws:// or wss://".to_string());
     }
 
-    let pool = app_state.pool()?;
+    let pool = app_state.pool().map_err(|e| e.to_string())?;
 
     // Update or insert the endpoint
     let result = sqlx::query("INSERT OR REPLACE INTO wss_endpoint (id, endpoint, updated_at) VALUES (1, ?, CURRENT_TIMESTAMP)")

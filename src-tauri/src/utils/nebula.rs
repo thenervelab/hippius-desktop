@@ -438,7 +438,7 @@ pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn install_nebula(state: tauri::State<'_, crate::app_state::AppState>, _app: AppHandle) -> Result<(), String> {
-    let pool = state.pool()?;
+    let pool = state.pool().map_err(|e| e.to_string())?;
     let (needs_update, latest_version) = {
         let setup = state.nebula.setup.lock().unwrap_or_else(|p| {
             tracing::warn!("Poisoned mutex recovered in nebula setup");
@@ -588,7 +588,7 @@ pub async fn verify_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), Strin
 
 #[tauri::command]
 pub async fn verify_nebula(state: tauri::State<'_, crate::app_state::AppState>, _app: AppHandle) -> Result<(), String> {
-    verify_nebula_internal(state.pool()?).await
+    verify_nebula_internal(state.pool().map_err(|e| e.to_string())?).await
 }
 
 /// Ensure the Nebula binary has elevated permissions required for VPN.
@@ -926,7 +926,7 @@ pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()>
 #[tauri::command]
 pub async fn finish_setup(state: tauri::State<'_, crate::app_state::AppState>) -> Result<(), String> {
     // Try to start Nebula if enabled
-    if let Err(e) = start_nebula_internal(&state.nebula, state.pool()?).await {
+    if let Err(e) = start_nebula_internal(&state.nebula, state.pool().map_err(|e| e.to_string())?).await {
         warn!("Failed to auto-start in finish_setup: {}", e);
         // We don't return error here to not block the UI flow, just log it
     }
@@ -936,7 +936,7 @@ pub async fn finish_setup(state: tauri::State<'_, crate::app_state::AppState>) -
 
 #[tauri::command]
 pub async fn start_nebula(state: tauri::State<'_, crate::app_state::AppState>) -> Result<(), String> {
-    start_nebula_internal(&state.nebula, state.pool()?).await
+    start_nebula_internal(&state.nebula, state.pool().map_err(|e| e.to_string())?).await
 }
 
 pub async fn start_nebula_internal(nebula_state: &crate::app_state::NebulaState, pool: &sqlx::SqlitePool) -> Result<(), String> {
@@ -1442,7 +1442,9 @@ pub async fn get_nebula_ip_internal(pool: &sqlx::SqlitePool) -> Result<String> {
 
 #[tauri::command]
 pub async fn get_nebula_ip(state: tauri::State<'_, crate::app_state::AppState>) -> Result<String, String> {
-    get_nebula_ip_internal(state.pool()?).await.map_err(|e| e.to_string())
+    get_nebula_ip_internal(state.pool().map_err(|e| e.to_string())?)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Tries to find the Nebula network interface by checking common names and IP ranges
@@ -1547,7 +1549,7 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
 
 #[tauri::command]
 pub async fn get_nebula_stats(state: tauri::State<'_, crate::app_state::AppState>) -> Result<NebulaStats, String> {
-    let pool = state.pool()?;
+    let pool = state.pool().map_err(|e| e.to_string())?;
     // Try to get the Nebula IP from the certificate to help find the interface
     let nebula_ip = get_nebula_ip_internal(pool).await.ok();
     let search_ip = nebula_ip.as_deref();
@@ -1750,7 +1752,7 @@ pub async fn check_nebula_update() -> Result<Option<String>, String> {
 
 #[tauri::command]
 pub async fn get_nebula_binary_installed_status(state: tauri::State<'_, crate::app_state::AppState>) -> Result<bool, String> {
-    let pool = state.pool()?;
+    let pool = state.pool().map_err(|e| e.to_string())?;
 
     // First check if binary is installed
     let is_installed: bool = sqlx::query("SELECT is_nebula_binary_installed FROM nebula_binary_status WHERE id = 1")

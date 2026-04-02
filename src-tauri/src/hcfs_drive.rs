@@ -608,19 +608,11 @@ const DEBOUNCE_SECS: u64 = 5;
 async fn maybe_refresh_token(app: &AppHandle) {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
-    if let (Ok(pool), Ok(acct)) =
-        (app_state.pool(), crate::utils::sync::current_account_id(&app_state))
-        && crate::utils::auth_tokens::is_token_expiring(
-            pool,
-            &acct,
-            crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS,
-        )
-        .await
+    if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state))
+        && crate::utils::auth_tokens::is_token_expiring(pool, &acct, crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS).await
     {
         info!("Token expiring soon, proactively refreshing");
-        if let Err(e) =
-            crate::auth_service::refresh_auth_token_internal(pool, app, &acct).await
-        {
+        if let Err(e) = crate::auth_service::refresh_auth_token_internal(pool, app, &acct).await {
             warn!(error = %e, "Proactive token refresh failed");
         }
     }
@@ -656,31 +648,19 @@ fn handle_watcher_event(
         let mut local_hints = Vec::new();
 
         let rename_kind = match mode {
-            RenameMode::From => event.paths.first().map(|p| {
-                (crate::sync_logic::RenameEventKind::From, p)
-            }),
-            RenameMode::To => event.paths.first().map(|p| {
-                (crate::sync_logic::RenameEventKind::To, p)
-            }),
+            RenameMode::From => event.paths.first().map(|p| (crate::sync_logic::RenameEventKind::From, p)),
+            RenameMode::To => event.paths.first().map(|p| (crate::sync_logic::RenameEventKind::To, p)),
             RenameMode::Both if event.paths.len() >= 2 => Some((
                 crate::sync_logic::RenameEventKind::Both {
                     from: event.paths[0].clone(),
                 },
                 &event.paths[1],
             )),
-            _ => event.paths.first().map(|p| {
-                (crate::sync_logic::RenameEventKind::Any, p)
-            }),
+            _ => event.paths.first().map(|p| (crate::sync_logic::RenameEventKind::Any, p)),
         };
 
         if let Some((kind, path)) = rename_kind {
-            crate::sync_logic::process_rename_event(
-                kind,
-                path,
-                now,
-                &mut pending_guard,
-                &mut local_hints,
-            );
+            crate::sync_logic::process_rename_event(kind, path, now, &mut pending_guard, &mut local_hints);
         }
 
         for hint in local_hints {
@@ -701,10 +681,7 @@ fn handle_watcher_event(
 
 /// Run the fallback sync loop (used when the file watcher cannot be created).
 /// Polls on a heartbeat interval instead of reacting to FS events.
-async fn run_fallback_sync_loop(
-    app: AppHandle,
-    sync: std::sync::Arc<crate::sync_engine::SyncEngine>,
-) {
+async fn run_fallback_sync_loop(app: AppHandle, sync: std::sync::Arc<crate::sync_engine::SyncEngine>) {
     info!("Running initial sync (no file watcher)");
     check_server_health(&app).await;
     trigger_sync(&app).await;
@@ -712,8 +689,7 @@ async fn run_fallback_sync_loop(
     let mut interval = tokio::time::interval(Duration::from_secs(HEARTBEAT_SECS));
     loop {
         let failures = sync.get_sync_failures();
-        let backoff_secs =
-            crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);
+        let backoff_secs = crate::sync_logic::compute_backoff(failures, HEARTBEAT_SECS);
         if failures > 0 {
             tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
         } else {
@@ -734,11 +710,7 @@ async fn run_fallback_sync_loop(
 }
 
 /// Run the main sync loop that reacts to FS watcher events and heartbeat ticks.
-async fn run_sync_loop(
-    app: AppHandle,
-    sync: std::sync::Arc<crate::sync_engine::SyncEngine>,
-    mut rx: tokio::sync::mpsc::Receiver<()>,
-) {
+async fn run_sync_loop(app: AppHandle, sync: std::sync::Arc<crate::sync_engine::SyncEngine>, mut rx: tokio::sync::mpsc::Receiver<()>) {
     // Clean up any stale temp files from previous runs
     {
         let guard = sync.drives.lock().await;
@@ -814,10 +786,7 @@ async fn run_sync_loop(
 
 /// Hot-add new drive paths to the existing watcher and trigger a background
 /// sync. Called when `start_sync_loop` detects a loop is already running.
-async fn hot_add_drives(
-    app: &AppHandle,
-    sync: &crate::sync_engine::SyncEngine,
-) {
+async fn hot_add_drives(app: &AppHandle, sync: &crate::sync_engine::SyncEngine) {
     let drive_paths = collect_drive_paths(sync).await;
     {
         let mut watcher_guard = sync.watcher.lock().unwrap_or_else(|p| {
@@ -882,17 +851,14 @@ pub async fn start_sync_loop(app: AppHandle) {
     // Create file watcher
     let tx_clone = tx.clone();
     let sync_for_watcher = sync.clone();
-    let pending_for_watcher: std::sync::Arc<
-        std::sync::Mutex<Option<crate::sync_logic::PendingRenameFrom>>,
-    > = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let pending_for_watcher: std::sync::Arc<std::sync::Mutex<Option<crate::sync_logic::PendingRenameFrom>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
 
-    let mut watcher: RecommendedWatcher = match notify::recommended_watcher(
-        move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = res {
-                handle_watcher_event(event, &sync_for_watcher, &pending_for_watcher, &tx_clone);
-            }
-        },
-    ) {
+    let mut watcher: RecommendedWatcher = match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+        if let Ok(event) = res {
+            handle_watcher_event(event, &sync_for_watcher, &pending_for_watcher, &tx_clone);
+        }
+    }) {
         Ok(w) => w,
         Err(e) => {
             error!(error = %e, "Failed to create file watcher, sync loop will run without file watching");
@@ -1105,11 +1071,7 @@ fn recover_mutex<T>(lock: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> 
 
 /// Check token refresh, review mode timeout, and is_syncing under a single
 /// lock scope. Returns `true` when the sync cycle may proceed.
-fn check_sync_preconditions(
-    app: &AppHandle,
-    sync: &crate::sync_engine::SyncEngine,
-    label: &str,
-) -> bool {
+fn check_sync_preconditions(app: &AppHandle, sync: &crate::sync_engine::SyncEngine, label: &str) -> bool {
     let mut states = recover_mutex(&sync.states);
 
     if sync.is_token_refreshing() {
@@ -1135,10 +1097,7 @@ fn check_sync_preconditions(
                 s.in_review = false;
                 s.review_entered_at = 0;
             }
-            if let Err(e) = app.emit(
-                sync_events::REVIEW_MODE_TIMEOUT,
-                sync_events::LabelPayload { label: label.to_string() },
-            ) {
+            if let Err(e) = app.emit(sync_events::REVIEW_MODE_TIMEOUT, sync_events::LabelPayload { label: label.to_string() }) {
                 warn!(error = %e, "Failed to emit review_mode_timeout");
             }
         } else {
@@ -1174,12 +1133,7 @@ fn check_sync_preconditions(
 /// If another device deleted the remote folder, re-register it and wipe sync
 /// state so local files are re-uploaded instead of deleted. Extracts config
 /// under the drives lock, then drops it before doing network I/O.
-async fn run_presync_folder_check(
-    app: &AppHandle,
-    sync: &crate::sync_engine::SyncEngine,
-    app_state: &crate::app_state::AppState,
-    label: &str,
-) {
+async fn run_presync_folder_check(app: &AppHandle, sync: &crate::sync_engine::SyncEngine, app_state: &crate::app_state::AppState, label: &str) {
     let drive_info = {
         let drive_arc = {
             let guard = sync.drives.lock().await;
@@ -1199,10 +1153,7 @@ async fn run_presync_folder_check(
         match check_and_recover_remote_folder(&config, &config_dir, label, pool, &acct).await {
             Ok(true) => {
                 info!(label = label, "Remote folder recovered — sync will re-upload local files");
-                if let Err(e) = app.emit(
-                    sync_events::FOLDER_RECOVERED,
-                    sync_events::LabelPayload { label: label.to_string() },
-                ) {
+                if let Err(e) = app.emit(sync_events::FOLDER_RECOVERED, sync_events::LabelPayload { label: label.to_string() }) {
                     warn!(error = %e, "Failed to emit folder_recovered");
                 }
             }
@@ -1217,11 +1168,7 @@ async fn run_presync_folder_check(
 /// Drain rename hints for this drive's root, expand directory renames, and
 /// resolve to relative paths. Currently consumed without effect pending
 /// hcfs-client rename support (thenervelab/hcfs#52).
-fn resolve_rename_hints(
-    sync: &crate::sync_engine::SyncEngine,
-    label: &str,
-    drive_sync_path: &Path,
-) {
+fn resolve_rename_hints(sync: &crate::sync_engine::SyncEngine, label: &str, drive_sync_path: &Path) {
     let raw_hints = sync.drain_rename_hints_for_root(drive_sync_path);
     if raw_hints.is_empty() {
         return;
@@ -1242,8 +1189,7 @@ fn resolve_rename_hints(
             .any(|p| p.starts_with(&rel_hint.old_relative_path) && *p != rel_hint.old_relative_path);
 
         if has_children {
-            let expanded =
-                crate::sync_logic::expand_directory_hint(hint, drive_sync_path, &known_from_cache);
+            let expanded = crate::sync_logic::expand_directory_hint(hint, drive_sync_path, &known_from_cache);
             info!(
                 label = label,
                 dir_old = %hint.old_path.display(),
@@ -1323,9 +1269,7 @@ async fn run_sync_cycle(
     info!(label = label, success = outcome.is_ok(), "sync_with_resolutions returned");
 
     match &outcome {
-        Ok(o) if o.conflicts_skipped > 0 => {
-            handle_conflicts_skipped(app, sync, label, o, &mut m).await
-        }
+        Ok(o) if o.conflicts_skipped > 0 => handle_conflicts_skipped(app, sync, label, o, &mut m).await,
         _ => SyncResult::Synced {
             outcome,
             staged_downloads: Vec::new(),
@@ -1427,12 +1371,7 @@ fn finalize_session_for_label(
     if let Some((exp_up, exp_down)) = label_expected {
         let has_failures = files_uploaded < exp_up || files_downloaded < exp_down;
         if has_failures {
-            let _ = crate::sync_progress::mark_pending_files_as_failed(
-                sync,
-                files_uploaded,
-                files_downloaded,
-                label,
-            );
+            let _ = crate::sync_progress::mark_pending_files_as_failed(sync, files_uploaded, files_downloaded, label);
         } else {
             let _ = crate::sync_progress::complete_pending_files(sync, label);
         }
@@ -1453,11 +1392,7 @@ fn finalize_session_for_label(
 
 /// Log post-sync diagnostics, clean up failed download artifacts, prune
 /// pending activity, and refresh the synced-paths cache.
-async fn post_sync_cleanup(
-    sync: &crate::sync_engine::SyncEngine,
-    drive_arc: &std::sync::Arc<tokio::sync::Mutex<HcfsDriveManager>>,
-    label: &str,
-) {
+async fn post_sync_cleanup(sync: &crate::sync_engine::SyncEngine, drive_arc: &std::sync::Arc<tokio::sync::Mutex<HcfsDriveManager>>, label: &str) {
     let m = drive_arc.lock().await;
     m.log_sync_diagnostics(label);
     let failed_ids = m.cleanup_failed_downloads();
@@ -1541,10 +1476,7 @@ async fn resolve_download_activity(
 ///
 /// hcfs-client has no delete progress callback, so we derive delete file
 /// names from the progress session.
-fn build_delete_activity(
-    sync: &crate::sync_engine::SyncEngine,
-    label: &str,
-) {
+fn build_delete_activity(sync: &crate::sync_engine::SyncEngine, label: &str) {
     let now = chrono::Utc::now().timestamp();
     let delete_items: Vec<SyncActivityItem> = {
         let state = recover_mutex(&sync.progress);
@@ -1620,10 +1552,7 @@ async fn try_error_folder_recovery(
 
     if recovered {
         info!(label = %label, "Remote folder recovered via error handler — next sync will re-upload");
-        if let Err(e) = app.emit(
-            sync_events::FOLDER_RECOVERED,
-            sync_events::LabelPayload { label: label.to_string() },
-        ) {
+        if let Err(e) = app.emit(sync_events::FOLDER_RECOVERED, sync_events::LabelPayload { label: label.to_string() }) {
             warn!(error = %e, "Failed to emit folder_recovered");
         }
     }
@@ -1652,18 +1581,14 @@ fn apply_error_backoff_and_notify(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    sync.retry_at
-        .store(now_epoch + backoff_secs as i64, std::sync::atomic::Ordering::Relaxed);
+    sync.retry_at.store(now_epoch + backoff_secs as i64, std::sync::atomic::Ordering::Relaxed);
     if let Ok(mut guard) = sync.last_error.lock() {
         *guard = Some(err_str.clone());
     }
 
     if err_str.contains("401") || err_str.contains("Unauthorized") {
         warn!(label = %label, "Auth token expired, attempting automatic refresh");
-        if let Err(e) = app.emit(
-            sync_events::AUTH_TOKEN_EXPIRED,
-            sync_events::LabelPayload { label: label.to_string() },
-        ) {
+        if let Err(e) = app.emit(sync_events::AUTH_TOKEN_EXPIRED, sync_events::LabelPayload { label: label.to_string() }) {
             warn!(error = %e, "Failed to emit auth_token_expired");
         }
 
@@ -1731,9 +1656,7 @@ async fn dispatch_sync_result(
             outcome: Err(e),
             sync_path: drive_sync_path,
             ..
-        } => {
-            handle_sync_error(app, app_state, sync, drive_arc, &e, &drive_sync_path, label).await
-        }
+        } => handle_sync_error(app, app_state, sync, drive_arc, &e, &drive_sync_path, label).await,
         SyncResult::NoChanges => {
             sync.clear_failure_state();
             sync.discard_pending_activity_for_label(label);
@@ -1781,10 +1704,8 @@ async fn handle_sync_success(
         "Sync completed",
     );
 
-    let has_file_changes = outcome.files_uploaded > 0
-        || outcome.files_downloaded > 0
-        || outcome.files_deleted_locally > 0
-        || outcome.files_deleted_remotely > 0;
+    let has_file_changes =
+        outcome.files_uploaded > 0 || outcome.files_downloaded > 0 || outcome.files_deleted_locally > 0 || outcome.files_deleted_remotely > 0;
 
     if has_file_changes {
         resolve_download_activity(sync, drive_arc, label, staged_downloads, outcome.files_downloaded).await;
@@ -1899,10 +1820,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
     };
 
     // Execute the core sync cycle under the per-drive lock.
-    let result = run_sync_cycle(
-        app, sync, label, &drive_arc, cancel_token, &mut emitted_sync_started,
-    )
-    .await;
+    let result = run_sync_cycle(app, sync, label, &drive_arc, cancel_token, &mut emitted_sync_started).await;
 
     // Wait for the OS to flush trailing filesystem events generated by sync.
     tokio::time::sleep(Duration::from_millis(200)).await;

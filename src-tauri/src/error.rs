@@ -94,10 +94,7 @@ impl std::fmt::Display for NotReadyKind {
 /// Produces `{ "kind": "Db", "message": "..." }` so the frontend
 /// can match on `kind` programmatically and display `message` to users.
 impl Serialize for AppError {
-    fn serialize<S: serde::Serializer>(
-        &self,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let mut s = serializer.serialize_struct("AppError", 2)?;
         let kind = match self {
@@ -147,13 +144,25 @@ impl<T> From<std::sync::PoisonError<T>> for AppError {
     }
 }
 
+/// Bridge: accept `Box<dyn Error>` (returned by hcfs-client, zip, etc.).
+impl From<Box<dyn std::error::Error>> for AppError {
+    fn from(e: Box<dyn std::error::Error>) -> Self {
+        Self::Other(e.to_string())
+    }
+}
+
+/// Bridge: accept `Box<dyn Error + Send + Sync>`.
+impl From<Box<dyn std::error::Error + Send + Sync>> for AppError {
+    fn from(e: Box<dyn std::error::Error + Send + Sync>) -> Self {
+        Self::Other(e.to_string())
+    }
+}
+
 /// Bridge from the existing [`crate::api_client_logic::ApiError`] type.
 impl From<crate::api_client_logic::ApiError> for AppError {
     fn from(err: crate::api_client_logic::ApiError) -> Self {
         match err {
-            crate::api_client_logic::ApiError::Http { status, body } => {
-                Self::Api { status, body }
-            }
+            crate::api_client_logic::ApiError::Http { status, body } => Self::Api { status, body },
             crate::api_client_logic::ApiError::Other(msg) => Self::Other(msg),
         }
     }
@@ -176,10 +185,7 @@ mod tests {
         let err = AppError::NotReady(NotReadyKind::SyncSetup);
         let json = serde_json::to_value(&err).expect("serialize");
         assert_eq!(json["kind"], "NotReady");
-        assert!(json["message"]
-            .as_str()
-            .expect("message str")
-            .contains("Sync setup"));
+        assert!(json["message"].as_str().expect("message str").contains("Sync setup"));
     }
 
     #[test]
@@ -208,10 +214,7 @@ mod tests {
         };
         let display = err.to_string();
         assert!(display.contains("404"), "should contain status: {display}");
-        assert!(
-            display.contains("not found"),
-            "should contain body: {display}"
-        );
+        assert!(display.contains("not found"), "should contain body: {display}");
     }
 
     #[test]
@@ -233,8 +236,7 @@ mod tests {
 
     #[test]
     fn io_error_converts_via_from() {
-        let io_err =
-            std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
         let app_err = AppError::from(io_err);
         assert!(matches!(app_err, AppError::Io(_)));
         assert!(app_err.to_string().contains("gone"));
@@ -244,11 +246,10 @@ mod tests {
     fn poison_error_converts_via_from() {
         let mutex = std::sync::Mutex::new(42);
         // Poison the mutex
-        let _ =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _guard = mutex.lock().expect("lock");
-                panic!("intentional");
-            }));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = mutex.lock().expect("lock");
+            panic!("intentional");
+        }));
         let lock_result = mutex.lock();
         assert!(lock_result.is_err());
         let app_err = AppError::from(lock_result.unwrap_err());
@@ -262,22 +263,13 @@ mod tests {
             body: "bad gateway".into(),
         };
         let app_err = AppError::from(api_err);
-        assert!(matches!(
-            app_err,
-            AppError::Api {
-                status: 502,
-                body: _
-            }
-        ));
+        assert!(matches!(app_err, AppError::Api { status: 502, body: _ }));
     }
 
     #[test]
     fn api_error_bridge_other() {
-        let api_err =
-            crate::api_client_logic::ApiError::Other("timeout".into());
+        let api_err = crate::api_client_logic::ApiError::Other("timeout".into());
         let app_err = AppError::from(api_err);
-        assert!(
-            matches!(app_err, AppError::Other(ref s) if s == "timeout")
-        );
+        assert!(matches!(app_err, AppError::Other(ref s) if s == "timeout"));
     }
 }

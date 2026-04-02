@@ -36,7 +36,7 @@ pub fn allow_asset_directory(app: &tauri::AppHandle, path: &str) {
 /// Tauri command to explicitly allow a directory in the asset protocol scope.
 /// Called by the frontend at startup for every known sync path.
 #[tauri::command]
-pub async fn allow_asset_scope(app: tauri::AppHandle, path: String) -> Result<(), String> {
+pub async fn allow_asset_scope(app: tauri::AppHandle, path: String) -> Result<(), crate::error::AppError> {
     allow_asset_directory(&app, &path);
     Ok(())
 }
@@ -66,24 +66,32 @@ pub struct FileEntry {
 
 /// Verify that `child` is contained within `parent` after canonicalization.
 /// Prevents path traversal attacks via `../` in user-supplied file names.
-fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf, String> {
-    let canonical_parent = parent.canonicalize().map_err(|e| format!("Invalid sync path: {e}"))?;
-    let canonical_child = child.canonicalize().map_err(|e| format!("Path not found: {e}"))?;
+fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf, crate::error::AppError> {
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
+    let canonical_child = child
+        .canonicalize()
+        .map_err(|e| crate::error::AppError::Other(format!("Path not found: {e}")))?;
     if !canonical_child.starts_with(&canonical_parent) {
-        return Err("Path escapes sync folder".to_string());
+        return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
     }
     Ok(canonical_child)
 }
 
 /// Add file to sync folder (Drive auto-syncs)
 #[tauri::command]
-pub async fn add_file(sync_path: String, file_path: String) -> Result<String, String> {
+pub async fn add_file(sync_path: String, file_path: String) -> Result<String, crate::error::AppError> {
     let source = Path::new(&file_path);
-    let name = source.file_name().and_then(|n| n.to_str()).ok_or("Invalid file name")?.to_string();
+    let name = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or(crate::error::AppError::Other("Invalid file name".into()))?
+        .to_string();
 
     // Reject names containing path separators or traversal components
     if name.contains('/') || name.contains('\\') || name == ".." || name == "." {
-        return Err("Invalid file name".to_string());
+        return Err(crate::error::AppError::Other("Invalid file name".into()));
     }
 
     let parent = Path::new(&sync_path);
@@ -91,36 +99,46 @@ pub async fn add_file(sync_path: String, file_path: String) -> Result<String, St
 
     // Validate destination is within the sync folder BEFORE writing
     // (canonicalize parent only — dest doesn't exist yet)
-    let canonical_parent = parent.canonicalize().map_err(|e| format!("Invalid sync path: {e}"))?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
     let canonical_dest = canonical_parent.join(&name);
     if !canonical_dest.starts_with(&canonical_parent) {
-        return Err("Path escapes sync folder".to_string());
+        return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
     }
 
-    tokio::fs::copy(source, &dest).await.map_err(|e| format!("Copy failed: {e}"))?;
+    tokio::fs::copy(source, &dest)
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Copy failed: {e}")))?;
 
     Ok(name)
 }
 
 /// Add folder to sync folder
 #[tauri::command]
-pub async fn add_folder(sync_path: String, folder_path: String) -> Result<String, String> {
+pub async fn add_folder(sync_path: String, folder_path: String) -> Result<String, crate::error::AppError> {
     let source = Path::new(&folder_path);
-    let name = source.file_name().and_then(|n| n.to_str()).ok_or("Invalid folder name")?.to_string();
+    let name = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or(crate::error::AppError::Other("Invalid folder name".into()))?
+        .to_string();
 
     // Reject names containing path separators or traversal components
     if name.contains('/') || name.contains('\\') || name == ".." || name == "." {
-        return Err("Invalid folder name".to_string());
+        return Err(crate::error::AppError::Other("Invalid folder name".into()));
     }
 
     let parent = Path::new(&sync_path);
     let dest = parent.join(&name);
 
     // Validate destination is within the sync folder BEFORE writing
-    let canonical_parent = parent.canonicalize().map_err(|e| format!("Invalid sync path: {e}"))?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
     let canonical_dest = canonical_parent.join(&name);
     if !canonical_dest.starts_with(&canonical_parent) {
-        return Err("Path escapes sync folder".to_string());
+        return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
     }
 
     copy_dir_recursive(source, &dest, 0).await?;
@@ -138,7 +156,7 @@ pub async fn remove_file(
     sync_path: String,
     name: String,
     label: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     let parent = Path::new(&sync_path);
     let target = parent.join(&name);
     let target = ensure_within(parent, &target)?;
@@ -151,9 +169,13 @@ pub async fn remove_file(
     };
 
     if target.is_dir() {
-        tokio::fs::remove_dir_all(&target).await.map_err(|e| format!("Remove failed: {e}"))?;
+        tokio::fs::remove_dir_all(&target)
+            .await
+            .map_err(|e| crate::error::AppError::Other(format!("Remove failed: {e}")))?;
     } else if target.exists() {
-        tokio::fs::remove_file(&target).await.map_err(|e| format!("Remove failed: {e}"))?;
+        tokio::fs::remove_file(&target)
+            .await
+            .map_err(|e| crate::error::AppError::Other(format!("Remove failed: {e}")))?;
     }
 
     // Record "deleted" activity so recent-files filtering works immediately.
@@ -172,7 +194,7 @@ pub async fn remove_file(
     Ok(())
 }
 
-use crate::sync_shared::{build_synced_paths_from_state, SyncedFileInfo};
+use crate::sync_shared::{SyncedFileInfo, build_synced_paths_from_state};
 
 /// Build a map of relative paths → sync info for files whose
 /// `path_hash` appears in the drive's persisted `synced` tree.
@@ -229,7 +251,9 @@ pub struct SyncedFileMetadata {
 /// files across all drives. Used by the recent-files view to look up
 /// arion hashes without needing to list every subfolder from disk.
 #[tauri::command]
-pub async fn get_synced_file_metadata(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Vec<SyncedFileMetadata>, String> {
+pub async fn get_synced_file_metadata(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<Vec<SyncedFileMetadata>, crate::error::AppError> {
     let sync = &state.sync;
     let mut result = Vec::new();
 
@@ -321,7 +345,7 @@ pub async fn list_sync_folder(
     sync_path: String,
     subfolder: Option<String>,
     label: Option<String>,
-) -> Result<Vec<FileEntry>, String> {
+) -> Result<Vec<FileEntry>, crate::error::AppError> {
     let base = PathBuf::from(&sync_path);
     let target = match subfolder {
         Some(ref sub) => base.join(sub),
@@ -365,9 +389,11 @@ pub async fn list_sync_folder(
     };
 
     let mut entries = Vec::new();
-    let mut dir = tokio::fs::read_dir(&target).await.map_err(|e| format!("Read dir failed: {e}"))?;
+    let mut dir = tokio::fs::read_dir(&target)
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Read dir failed: {e}")))?;
 
-    while let Some(entry) = dir.next_entry().await.map_err(|e| e.to_string())? {
+    while let Some(entry) = dir.next_entry().await? {
         let name = entry.file_name().to_string_lossy().to_string();
 
         // Skip .hippius config directory and hidden files
@@ -375,7 +401,7 @@ pub async fn list_sync_folder(
             continue;
         }
 
-        let meta = entry.metadata().await.map_err(|e| e.to_string())?;
+        let meta = entry.metadata().await?;
         let is_folder = meta.is_dir();
 
         // Remove and skip failed download artifacts (`downloaded_<hex>`) and
@@ -449,7 +475,7 @@ pub async fn list_sync_folder(
 
 /// Export file or folder from sync folder to arbitrary location
 #[tauri::command]
-pub async fn export_file(sync_path: String, file_name: String, output_path: String) -> Result<(), String> {
+pub async fn export_file(sync_path: String, file_name: String, output_path: String) -> Result<(), crate::error::AppError> {
     let parent = Path::new(&sync_path);
     let source = parent.join(&file_name);
     let source = ensure_within(parent, &source)?;
@@ -457,7 +483,9 @@ pub async fn export_file(sync_path: String, file_name: String, output_path: Stri
     if source.is_dir() {
         copy_dir_recursive(&source, Path::new(&output_path), 0).await?;
     } else {
-        tokio::fs::copy(&source, &output_path).await.map_err(|e| format!("Export failed: {e}"))?;
+        tokio::fs::copy(&source, &output_path)
+            .await
+            .map_err(|e| crate::error::AppError::Other(format!("Export failed: {e}")))?;
     }
     Ok(())
 }
@@ -474,10 +502,10 @@ pub async fn resolve_file_path(
     account_id: String,
     label: String,
     file_name: String,
-) -> Result<String, String> {
+) -> Result<String, crate::error::AppError> {
     // Reject path traversal attempts — slashes are allowed for subfolder access
     if file_name.contains("..") {
-        return Err("Invalid file name".to_string());
+        return Err(crate::error::AppError::Other("Invalid file name".into()));
     }
 
     let db = state.pool()?;
@@ -487,8 +515,7 @@ pub async fn resolve_file_path(
         .bind(&owner)
         .bind(&label)
         .fetch_optional(db)
-        .await
-        .map_err(|e| format!("Failed to look up sync path: {e}"))?;
+        .await?;
 
     let sync_path = result
         .map(|(p,)| p)
@@ -497,10 +524,12 @@ pub async fn resolve_file_path(
     let full_path = Path::new(&sync_path).join(&file_name);
 
     // Validate the resolved path stays within the sync folder
-    let canonical_parent = Path::new(&sync_path).canonicalize().map_err(|e| format!("Invalid sync path: {e}"))?;
+    let canonical_parent = Path::new(&sync_path)
+        .canonicalize()
+        .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
     let canonical_file = full_path.canonicalize().map_err(|_| format!("File not found: {file_name}"))?;
     if !canonical_file.starts_with(&canonical_parent) {
-        return Err("Path escapes sync folder".to_string());
+        return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
     }
 
     Ok(canonical_file.to_string_lossy().to_string())
@@ -509,19 +538,21 @@ pub async fn resolve_file_path(
 /// Maximum recursion depth for directory copies to prevent symlink loops
 const MAX_COPY_DEPTH: u32 = 64;
 
-async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<(), String> {
+async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<(), crate::error::AppError> {
     if depth > MAX_COPY_DEPTH {
-        return Err(format!("Directory nesting exceeds maximum depth ({MAX_COPY_DEPTH})"));
+        return Err(crate::error::AppError::Other(format!(
+            "Directory nesting exceeds maximum depth ({MAX_COPY_DEPTH})"
+        )));
     }
 
-    tokio::fs::create_dir_all(dst).await.map_err(|e| e.to_string())?;
-    let mut dir = tokio::fs::read_dir(src).await.map_err(|e| e.to_string())?;
-    while let Some(entry) = dir.next_entry().await.map_err(|e| e.to_string())? {
+    tokio::fs::create_dir_all(dst).await?;
+    let mut dir = tokio::fs::read_dir(src).await?;
+    while let Some(entry) = dir.next_entry().await? {
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
 
         // Use symlink_metadata to detect symlinks without following them
-        let meta = tokio::fs::symlink_metadata(&src_path).await.map_err(|e| e.to_string())?;
+        let meta = tokio::fs::symlink_metadata(&src_path).await?;
 
         // Skip symlinks to prevent traversal loops and escaping the source tree
         if meta.is_symlink() {
@@ -531,7 +562,7 @@ async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<(), St
         if meta.is_dir() {
             Box::pin(copy_dir_recursive(&src_path, &dst_path, depth + 1)).await?;
         } else {
-            tokio::fs::copy(&src_path, &dst_path).await.map_err(|e| e.to_string())?;
+            tokio::fs::copy(&src_path, &dst_path).await?;
         }
     }
     Ok(())

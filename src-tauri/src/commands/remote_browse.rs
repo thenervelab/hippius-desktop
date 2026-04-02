@@ -12,6 +12,7 @@
 //! but does NOT require an initialized Drive instance.
 
 use crate::app_state::AppState;
+use crate::error::AppError;
 use crate::utils::account_key::account_key;
 use crate::utils::auth_tokens::get_api_token;
 use hcfs_client::client::HcfsClientConfig;
@@ -53,12 +54,12 @@ pub struct RemoteFileInfo {
 ///
 /// This replicates the key derivation in `Drive::unlock()` without requiring
 /// a Drive instance.
-fn derive_encryption_key(master_mnemonic: &str, label: &str) -> Result<[u8; 32], String> {
+fn derive_encryption_key(master_mnemonic: &str, label: &str) -> Result<[u8; 32], crate::error::AppError> {
     use bip39::Mnemonic;
     use std::str::FromStr;
 
     // Step 1: derive folder mnemonic (same as syncing.rs::derive_folder_mnemonic)
-    let master = Mnemonic::from_str(master_mnemonic).map_err(|e| format!("Invalid master mnemonic: {e}"))?;
+    let master = Mnemonic::from_str(master_mnemonic).map_err(|e| crate::error::AppError::Crypto(format!("Invalid master mnemonic: {e}")))?;
     let mut master_seed = master.to_seed("");
 
     let mut hasher = Sha256::new();
@@ -69,7 +70,7 @@ fn derive_encryption_key(master_mnemonic: &str, label: &str) -> Result<[u8; 32],
 
     let folder_mnemonic = Mnemonic::from_entropy(&folder_entropy).map_err(|e| {
         folder_entropy.zeroize();
-        format!("Failed to derive folder mnemonic: {e}")
+        crate::error::AppError::Crypto(format!("Failed to derive folder mnemonic: {e}"))
     })?;
     folder_entropy.zeroize();
 
@@ -89,20 +90,19 @@ fn folder_hash(label: &str) -> String {
 }
 
 /// Path to `~/.hippius/drives/<account_key>/master_enc_mnemonic.json`.
-fn master_mnemonic_path(account_id: &str) -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or("Could not determine home directory")?;
+fn master_mnemonic_path(account_id: &str) -> Result<PathBuf, crate::error::AppError> {
+    let home = dirs::home_dir().ok_or(crate::error::AppError::Validation("Could not determine home directory".into()))?;
     let key = account_key(account_id);
     Ok(home.join(".hippius").join("drives").join(key).join("master_enc_mnemonic.json"))
 }
 
 /// Read the HCFS server URL from DB, falling back to the default.
-async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String, String> {
+async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String, crate::error::AppError> {
     let owner = account_key(account_id);
     let result: Option<(String,)> = sqlx::query_as("SELECT server_url FROM hcfs_config WHERE owner = ?")
         .bind(&owner)
         .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("Failed to get HCFS config: {e}"))?;
+        .await?;
     match result {
         Some((url,)) if !url.is_empty() => Ok(url),
         _ => Ok("https://arion.hippius.com".to_string()),
@@ -110,25 +110,24 @@ async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String, S
 }
 
 /// Read the drive password from DB.
-async fn get_password(pool: &SqlitePool, account_id: &str) -> Result<String, String> {
+async fn get_password(pool: &SqlitePool, account_id: &str) -> Result<String, crate::error::AppError> {
     let owner = account_key(account_id);
     let result: Option<(String,)> = sqlx::query_as("SELECT drive_password FROM hcfs_config WHERE owner = ?")
         .bind(&owner)
         .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("Failed to get drive password: {e}"))?;
+        .await?;
     result
         .map(|(p,)| p)
-        .ok_or_else(|| "HCFS config not found. Please set up sync first.".to_string())
+        .ok_or(crate::error::AppError::NotReady(crate::error::NotReadyKind::ConfigMissing))
 }
 
 /// Recover the master mnemonic and derive the encryption key for `label`.
-async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &str) -> Result<[u8; 32], String> {
+async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &str) -> Result<[u8; 32], crate::error::AppError> {
     let password = get_password(pool, account_id).await?;
     let master_path = master_mnemonic_path(account_id)?;
 
     let mut master_mnemonic = hcfs_client::auth::recover_mnemonic(&master_path, &password)
-        .map_err(|e| format!("Failed to recover master mnemonic: {e}"))?
+        .map_err(|e| crate::error::AppError::Hcfs(format!("Failed to recover master mnemonic: {e}")))?
         .to_string();
 
     let key = derive_encryption_key(&master_mnemonic, label);
@@ -137,12 +136,11 @@ async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &s
 }
 
 /// Build an `HcfsClient` for the given account + folder label.
-async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Result<hcfs_client::client::HcfsClient, String> {
+async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Result<hcfs_client::client::HcfsClient, crate::error::AppError> {
     let server_url = get_server_url(pool, account_id).await?;
     let bearer_token = get_api_token(pool, account_id)
-        .await
-        .map_err(|e| format!("Failed to get auth token: {e}"))?
-        .ok_or_else(|| "No authentication token found. Please log in again.".to_string())?;
+        .await?
+        .ok_or(AppError::Auth("No authentication token found. Please log in again.".into()))?;
 
     let fhash = folder_hash(label);
     let config = HcfsClientConfig {
@@ -155,7 +153,7 @@ async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Resul
         folder_hash: fhash,
     };
 
-    hcfs_client::client::HcfsClient::new(config).map_err(|e| format!("Failed to create HCFS client: {e}"))
+    hcfs_client::client::HcfsClient::new(config).map_err(|e| AppError::Hcfs(format!("Failed to create HCFS client: {e}")))
 }
 
 // ─── Commands ───────────────────────────────────────────────────────────────
@@ -165,7 +163,11 @@ async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Resul
 /// Returns a flat list of `RemoteFileInfo`; the frontend builds the tree
 /// by splitting on `/`.
 #[tauri::command]
-pub async fn list_remote_folder_files(state: tauri::State<'_, AppState>, account_id: String, label: String) -> Result<Vec<RemoteFileInfo>, String> {
+pub async fn list_remote_folder_files(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    label: String,
+) -> Result<Vec<RemoteFileInfo>, crate::error::AppError> {
     info!(
         account_id = %account_id,
         label = %label,
@@ -179,7 +181,7 @@ pub async fn list_remote_folder_files(state: tauri::State<'_, AppState>, account
 
     let remote_files = client.get_all_files(&account_id, &fhash, None::<fn(u64, u64)>).await.map_err(|e| {
         error!(label = %label, "Failed to fetch remote files: {e}");
-        format!("Failed to fetch remote files: {e}")
+        AppError::Hcfs(format!("Failed to fetch remote files: {e}"))
     })?;
 
     info!(
@@ -262,7 +264,7 @@ pub async fn download_remote_file(
     label: String,
     file_id: String,
     output_path: String,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     use tauri::Emitter;
 
     info!(
@@ -310,14 +312,14 @@ pub async fn download_remote_file(
         Err(e) => {
             // Clean up temp file on download failure
             let _ = std::fs::remove_file(&temp_path);
-            return Err(format!("Failed to download file: {e}"));
+            return Err(AppError::Hcfs(format!("Failed to download file: {e}")));
         }
     }
 
     // Decrypt the downloaded file
     let decrypt_result = {
-        let mut input = std::fs::File::open(&temp_path).map_err(|e| format!("Failed to open downloaded file: {e}"))?;
-        let mut output_file = std::fs::File::create(&output).map_err(|e| format!("Failed to create output file: {e}"))?;
+        let mut input = std::fs::File::open(&temp_path)?;
+        let mut output_file = std::fs::File::create(&output)?;
 
         hcfs_client::crypto::decrypt_stream(&mut input, &mut output_file, &encryption_key, None, None::<fn(u64, u64)>)
     };
@@ -337,7 +339,7 @@ pub async fn download_remote_file(
         Err(e) => {
             // Clean up partial output on decrypt failure
             let _ = std::fs::remove_file(&output_path);
-            Err(format!("Failed to decrypt file: {e}"))
+            Err(AppError::Hcfs(format!("Failed to decrypt file: {e}")))
         }
     }
 }

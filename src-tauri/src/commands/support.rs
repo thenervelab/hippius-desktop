@@ -5,6 +5,7 @@
 //! authenticated via the account's stored API token.
 
 use crate::api_client::ApiClient;
+use crate::error::AppError;
 use serde::Deserialize;
 use tracing::info;
 
@@ -17,7 +18,7 @@ pub async fn list_support_tickets(
     limit: Option<i64>,
     search: Option<String>,
     ordering: Option<String>,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, AppError> {
     let client = ApiClient::new(state.pool()?.clone());
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
@@ -30,10 +31,9 @@ pub async fn list_support_tickets(
     if let Some(ref s) = search {
         params.push(("search", s.as_str()));
     }
-    client
+    Ok(client
         .get_with_params::<serde_json::Value>("/api/support/tickets/", &params, &account_id)
-        .await
-        .map_err(|e| e.to_string())
+        .await?)
 }
 
 /// Fetch the message thread for a specific support ticket.
@@ -46,7 +46,7 @@ pub async fn get_support_ticket_messages(
     limit: Option<i64>,
     search: Option<String>,
     ordering: Option<String>,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, AppError> {
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/support/tickets/{ticket_id}/messages/");
     let page_str = page.unwrap_or(1).to_string();
@@ -58,10 +58,7 @@ pub async fn get_support_ticket_messages(
     if let Some(ref o) = ordering {
         params.push(("ordering", o.as_str()));
     }
-    client
-        .get_with_params::<serde_json::Value>(&path, &params, &account_id)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(client.get_with_params::<serde_json::Value>(&path, &params, &account_id).await?)
 }
 
 /// Frontend payload for creating a new support ticket.
@@ -82,7 +79,7 @@ pub async fn create_support_ticket(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     params: CreateTicketParams,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, AppError> {
     info!(
         subject = %params.subject,
         category = %params.category,
@@ -97,10 +94,7 @@ pub async fn create_support_ticket(
         "resource_id": params.resource_id,
         "description": params.description,
     });
-    client
-        .post::<serde_json::Value, _>("/api/support/tickets/", &body, &account_id)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(client.post::<serde_json::Value, _>("/api/support/tickets/", &body, &account_id).await?)
 }
 
 /// Append a reply message to an existing support ticket thread.
@@ -111,7 +105,7 @@ pub async fn post_ticket_message(
     ticket_id: i64,
     message_type: String,
     body: String,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, AppError> {
     info!(ticket_id = ticket_id, "Posting ticket message");
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/support/tickets/{ticket_id}/messages/");
@@ -119,10 +113,7 @@ pub async fn post_ticket_message(
         "message_type": message_type,
         "body": body,
     });
-    client
-        .post::<serde_json::Value, _>(&path, &payload, &account_id)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(client.post::<serde_json::Value, _>(&path, &payload, &account_id).await?)
 }
 
 /// Partially update a support ticket (e.g. change status or priority).
@@ -132,11 +123,8 @@ pub async fn update_support_ticket(
     account_id: String,
     ticket_id: i64,
     updates: serde_json::Value,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, AppError> {
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/support/tickets/{ticket_id}/");
-    client
-        .patch::<serde_json::Value, _>(&path, &updates, &account_id)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(client.patch::<serde_json::Value, _>(&path, &updates, &account_id).await?)
 }

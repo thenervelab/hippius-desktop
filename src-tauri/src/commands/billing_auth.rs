@@ -55,16 +55,16 @@ struct VerifyResponse {
 ///
 /// Returns only what billing auth needs (no sr25519 pair, since we don't
 /// sign blockchain transactions in this flow).
-fn derive_keys(mnemonic: &str) -> Result<(String, PrivateKeySigner, String), String> {
-    let (sr25519_pair, _) = sp_core::sr25519::Pair::from_phrase(mnemonic, None).map_err(|e| format!("{e:?}"))?;
+fn derive_keys(mnemonic: &str) -> Result<(String, PrivateKeySigner, String), crate::error::AppError> {
+    let (sr25519_pair, _) = sp_core::sr25519::Pair::from_phrase(mnemonic, None).map_err(|e| crate::error::AppError::Crypto(format!("{e:?}")))?;
     let substrate_address = sp_core::crypto::Ss58Codec::to_ss58check(&sr25519_pair.public());
 
     let eth_signer: PrivateKeySigner = MnemonicBuilder::<English>::default()
         .phrase(mnemonic)
         .index(0)
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::error::AppError::Crypto(e.to_string()))?
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crate::error::AppError::Crypto(e.to_string()))?;
     let eth_address = format!("{}", eth_signer.address());
 
     Ok((substrate_address, eth_signer, eth_address))
@@ -86,7 +86,7 @@ pub async fn billing_auth(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     mnemonic: Option<String>,
-) -> Result<BillingAuthResult, String> {
+) -> Result<BillingAuthResult, crate::error::AppError> {
     info!("Billing auth initiated");
     let mut mnemonic = match mnemonic {
         Some(m) if !m.is_empty() => m,
@@ -102,7 +102,7 @@ pub async fn billing_auth(
     let challenge_url = format!("{base}{CHALLENGE_PATH}");
     let verify_url = format!("{base}{VERIFY_PATH}");
 
-    let mut last_err = String::from("Billing auth failed");
+    let mut last_err = crate::error::AppError::Auth("Billing auth failed".into());
 
     for _ in 0..MAX_ATTEMPTS {
         match attempt(&client, &challenge_url, &verify_url, &eth_signer, &eth_address, &substrate_address).await {
@@ -125,7 +125,7 @@ async fn attempt(
     eth_signer: &PrivateKeySigner,
     eth_address: &str,
     substrate_address: &str,
-) -> Result<BillingAuthResult, String> {
+) -> Result<BillingAuthResult, crate::error::AppError> {
     let challenge_res = client
         .post(challenge_url)
         .header("Content-Type", "application/json")
@@ -136,21 +136,23 @@ async fn attempt(
             "substrate_address": substrate_address,
         }))
         .send()
-        .await
-        .map_err(|e| format!("Challenge request failed: {e}"))?;
+        .await?;
 
     if !challenge_res.status().is_success() {
         let status = challenge_res.status();
         let body = challenge_res.text().await.unwrap_or_default();
         warn!(status = %status, "Challenge request failed: {body}");
-        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
+        return Err(crate::error::AppError::Api {
+            status: status.as_u16(),
+            body,
+        });
     }
 
-    let cr: ChallengeResponse = challenge_res.json().await.map_err(|e| format!("Failed to parse challenge: {e}"))?;
+    let cr: ChallengeResponse = challenge_res.json().await?;
 
     let sig = eth_signer
         .sign_message_sync(cr.message.as_bytes())
-        .map_err(|e| format!("Signing failed: {e}"))?;
+        .map_err(|e| crate::error::AppError::Crypto(format!("Signing failed: {e}")))?;
     let formatted_sig = format!("{sig}");
 
     let verify_res = client
@@ -170,17 +172,19 @@ async fn attempt(
             },
         }))
         .send()
-        .await
-        .map_err(|e| format!("Verify request failed: {e}"))?;
+        .await?;
 
     if !verify_res.status().is_success() {
         let status = verify_res.status();
         let body = verify_res.text().await.unwrap_or_default();
         warn!(status = %status, "Verify request failed: {body}");
-        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
+        return Err(crate::error::AppError::Api {
+            status: status.as_u16(),
+            body,
+        });
     }
 
-    let vr: VerifyResponse = verify_res.json().await.map_err(|e| format!("Failed to parse verify response: {e}"))?;
+    let vr: VerifyResponse = verify_res.json().await?;
 
     Ok(BillingAuthResult {
         token: vr.token,

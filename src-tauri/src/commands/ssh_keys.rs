@@ -4,6 +4,7 @@
 //! Hippius API. Keys are referenced by ID when provisioning new VMs.
 
 use crate::api_client::ApiClient;
+use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -35,7 +36,7 @@ pub async fn list_ssh_keys(
     page_size: Option<i64>,
     search: Option<String>,
     ordering: Option<String>,
-) -> Result<SSHKeysResponse, String> {
+) -> Result<SSHKeysResponse, AppError> {
     let client = ApiClient::new(state.pool()?.clone());
     let mut params = Vec::new();
     let page_str = page.unwrap_or(1).to_string();
@@ -49,10 +50,7 @@ pub async fn list_ssh_keys(
         params.push(("ordering", o.as_str()));
     }
 
-    client
-        .get_with_params("/api/ssh-keys/", &params, &account_id)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(client.get_with_params("/api/ssh-keys/", &params, &account_id).await?)
 }
 
 /// Register a new SSH public key with the Hippius API.
@@ -62,21 +60,21 @@ pub async fn create_ssh_key(
     account_id: String,
     name: String,
     public_key: String,
-) -> Result<SSHKey, String> {
+) -> Result<SSHKey, AppError> {
     info!(name = %name, "Creating SSH key");
     let client = ApiClient::new(state.pool()?.clone());
     let body = serde_json::json!({
         "name": name,
         "public_key": public_key,
     });
-    client.post("/api/ssh-keys/", &body, &account_id).await.map_err(|e| e.to_string())
+    Ok(client.post("/api/ssh-keys/", &body, &account_id).await?)
 }
 
 /// Remove an SSH key by ID. Active VMs using this key are unaffected.
 #[tauri::command]
-pub async fn delete_ssh_key(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, key_id: i64) -> Result<(), String> {
+pub async fn delete_ssh_key(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, key_id: i64) -> Result<(), AppError> {
     info!(key_id = key_id, "Deleting SSH key");
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/ssh-keys/{key_id}/");
-    client.delete(&path, &account_id).await.map_err(|e| e.to_string())
+    Ok(client.delete(&path, &account_id).await?)
 }

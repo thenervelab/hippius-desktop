@@ -4,6 +4,7 @@
 //! direct fetch() calls. Auth tokens are injected automatically.
 
 use crate::api_client::ApiClient;
+use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -56,39 +57,30 @@ pub struct VMInstance {
 
 /// List available VM hardware flavors for the account's billing tier.
 #[tauri::command]
-pub async fn list_vm_flavors(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMFlavor>, String> {
+pub async fn list_vm_flavors(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMFlavor>, AppError> {
     let client = ApiClient::new(state.pool()?.clone());
-    client
-        .get("/api/infrastructure/vm/flavors/", &account_id)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(client.get("/api/infrastructure/vm/flavors/", &account_id).await?)
 }
 
 /// List available base OS images for VM creation.
 #[tauri::command]
-pub async fn list_vm_images(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMImage>, String> {
+pub async fn list_vm_images(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMImage>, AppError> {
     let client = ApiClient::new(state.pool()?.clone());
-    client.get("/api/infrastructure/vm/images/", &account_id).await.map_err(|e| e.to_string())
+    Ok(client.get("/api/infrastructure/vm/images/", &account_id).await?)
 }
 
 /// List pre-configured application stacks that can be installed on a VM.
 #[tauri::command]
-pub async fn list_vm_applications(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMApplication>, String> {
+pub async fn list_vm_applications(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMApplication>, AppError> {
     let client = ApiClient::new(state.pool()?.clone());
-    client
-        .get("/api/infrastructure/vm/applications/", &account_id)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(client.get("/api/infrastructure/vm/applications/", &account_id).await?)
 }
 
 /// List all VM instances owned by the account.
 #[tauri::command]
-pub async fn list_vm_instances(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMInstance>, String> {
+pub async fn list_vm_instances(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMInstance>, AppError> {
     let client = ApiClient::new(state.pool()?.clone());
-    client
-        .get("/api/infrastructure/vm/instances/", &account_id)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(client.get("/api/infrastructure/vm/instances/", &account_id).await?)
 }
 
 /// Fetch a single VM instance by ID, including its current IP addresses.
@@ -97,10 +89,10 @@ pub async fn get_vm_instance(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     instance_id: i64,
-) -> Result<VMInstance, String> {
+) -> Result<VMInstance, AppError> {
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/");
-    client.get(&path, &account_id).await.map_err(|e| e.to_string())
+    Ok(client.get(&path, &account_id).await?)
 }
 
 /// Frontend payload for spawning a new VM instance.
@@ -130,7 +122,7 @@ pub async fn create_vm(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     params: CreateVMParams,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, AppError> {
     info!(
         name = %params.name,
         flavor_id = params.flavor_id,
@@ -145,10 +137,7 @@ pub async fn create_vm(
         name: params.name,
         application_id: params.application_id,
     };
-    client
-        .post("/api/infrastructure/vm/spawn/", &body, &account_id)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(client.post("/api/infrastructure/vm/spawn/", &body, &account_id).await?)
 }
 
 /// Hard-reboot a running VM instance.
@@ -157,14 +146,11 @@ pub async fn reboot_vm(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     instance_id: i64,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, AppError> {
     info!(instance_id = instance_id, "Rebooting VM");
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/reboot/");
-    client
-        .post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(client.post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id).await?)
 }
 
 /// Power on a stopped VM instance.
@@ -173,26 +159,24 @@ pub async fn start_vm(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     instance_id: i64,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, AppError> {
     info!(instance_id = instance_id, "Starting VM");
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/start/");
-    client
-        .post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(client.post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id).await?)
 }
 
 /// Gracefully shut down a running VM instance (preserves disk).
 #[tauri::command]
-pub async fn stop_vm(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, instance_id: i64) -> Result<serde_json::Value, String> {
+pub async fn stop_vm(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    instance_id: i64,
+) -> Result<serde_json::Value, AppError> {
     info!(instance_id = instance_id, "Stopping VM");
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/stop/");
-    client
-        .post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(client.post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id).await?)
 }
 
 /// Permanently destroy a VM instance and release its resources.
@@ -201,12 +185,9 @@ pub async fn terminate_vm(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     instance_id: i64,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, AppError> {
     info!(instance_id = instance_id, "Terminating VM");
     let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/terminate/");
-    client
-        .post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(client.post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id).await?)
 }

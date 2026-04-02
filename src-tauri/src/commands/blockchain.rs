@@ -87,18 +87,27 @@ pub struct BlockTimestampResult {
 /// Build a `PairSigner` from the sr25519 keypair in `AppState.auth`.
 ///
 /// Fails if the user is not authenticated (no keypair stored).
-fn get_signer(app_state: &crate::app_state::AppState) -> Result<PairSigner<subxt::PolkadotConfig, sp_core::sr25519::Pair>, String> {
-    let auth = app_state.auth.lock().map_err(|e| format!("Lock error: {e}"))?;
-    let pair = auth.sr25519_pair.clone().ok_or("Not authenticated — please log in first")?;
+fn get_signer(app_state: &crate::app_state::AppState) -> Result<PairSigner<subxt::PolkadotConfig, sp_core::sr25519::Pair>, crate::error::AppError> {
+    let auth = app_state
+        .auth
+        .lock()
+        .map_err(|e| crate::error::AppError::Other(format!("Lock error: {e}")))?;
+    let pair = auth
+        .sr25519_pair
+        .clone()
+        .ok_or(crate::error::AppError::Other("Not authenticated — please log in first".into()))?;
     Ok(PairSigner::new(pair))
 }
 
 /// Read the SS58 address from the in-memory auth state.
-fn get_substrate_address(app_state: &crate::app_state::AppState) -> Result<String, String> {
-    let auth = app_state.auth.lock().map_err(|e| format!("Lock error: {e}"))?;
+fn get_substrate_address(app_state: &crate::app_state::AppState) -> Result<String, crate::error::AppError> {
+    let auth = app_state
+        .auth
+        .lock()
+        .map_err(|e| crate::error::AppError::Other(format!("Lock error: {e}")))?;
     auth.substrate_address
         .clone()
-        .ok_or("Not authenticated — please log in first".to_string())
+        .ok_or(crate::error::AppError::Auth("Not authenticated — please log in first".into()))
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +116,10 @@ fn get_substrate_address(app_state: &crate::app_state::AppState) -> Result<Strin
 
 /// Query `system.account(address)` for free/reserved/frozen balance.
 #[tauri::command]
-pub async fn get_account_balance(state: tauri::State<'_, crate::app_state::AppState>, address: String) -> Result<AccountBalance, String> {
+pub async fn get_account_balance(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    address: String,
+) -> Result<AccountBalance, crate::error::AppError> {
     let client = get_substrate_client(&state).await?;
 
     let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| format!("Invalid SS58 address: {address}"))?;
@@ -117,10 +129,10 @@ pub async fn get_account_balance(state: tauri::State<'_, crate::app_state::AppSt
         .storage()
         .at_latest()
         .await
-        .map_err(|e| format!("Storage error: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
         .fetch(&storage_query)
         .await
-        .map_err(|e| format!("Query failed: {e}"))?;
+        .map_err(|e| crate::error::AppError::Other(format!("Query failed: {e}")))?;
 
     match account_info {
         Some(info) => Ok(AccountBalance {
@@ -141,7 +153,7 @@ pub async fn get_account_balance(state: tauri::State<'_, crate::app_state::AppSt
 /// Combines `staking.ledger`, `staking.currentEra`, and `system.account`
 /// into a single response to minimize frontend round-trips.
 #[tauri::command]
-pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState>) -> Result<StakingInfo, String> {
+pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState>) -> Result<StakingInfo, crate::error::AppError> {
     let address = get_substrate_address(&state)?;
     let client = get_substrate_client(&state).await?;
 
@@ -152,10 +164,10 @@ pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState
         .storage()
         .at_latest()
         .await
-        .map_err(|e| format!("Storage error: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
         .fetch(&balance_query)
         .await
-        .map_err(|e| format!("Balance query failed: {e}"))?;
+        .map_err(|e| crate::error::AppError::Other(format!("Balance query failed: {e}")))?;
     let free_balance = balance_info.map_or_else(|| "0".to_string(), |info| info.data.free.to_string());
 
     let mut bonded = "0".to_string();
@@ -168,10 +180,10 @@ pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState
         .storage()
         .at_latest()
         .await
-        .map_err(|e| format!("Storage error: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
         .fetch(&current_era_query)
         .await
-        .map_err(|e| format!("Era query failed: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Era query failed: {e}")))?
         .unwrap_or(0);
 
     let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
@@ -179,7 +191,7 @@ pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState
         .storage()
         .at_latest()
         .await
-        .map_err(|e| format!("Storage error: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
         .fetch(&ledger_query)
         .await
     {
@@ -220,7 +232,10 @@ pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState
 
 /// Query the on-chain timestamp for a given block number.
 #[tauri::command]
-pub async fn get_block_timestamp(state: tauri::State<'_, crate::app_state::AppState>, block_number: u64) -> Result<BlockTimestampResult, String> {
+pub async fn get_block_timestamp(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    block_number: u64,
+) -> Result<BlockTimestampResult, crate::error::AppError> {
     use subxt::backend::legacy::LegacyRpcMethods;
     use subxt::backend::rpc::RpcClient;
 
@@ -229,13 +244,15 @@ pub async fn get_block_timestamp(state: tauri::State<'_, crate::app_state::AppSt
     let rpc_url = crate::substrate_client::get_current_wss_endpoint(state.pool()?)
         .await
         .unwrap_or_else(|_| crate::constants::substrate::WSS_ENDPOINT.to_string());
-    let rpc_client = RpcClient::from_url(&rpc_url).await.map_err(|e| format!("RPC connect failed: {e}"))?;
+    let rpc_client = RpcClient::from_url(&rpc_url)
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("RPC connect failed: {e}")))?;
     let legacy: LegacyRpcMethods<subxt::PolkadotConfig> = LegacyRpcMethods::new(rpc_client);
 
     let block_hash = legacy
         .chain_get_block_hash(Some(block_number.into()))
         .await
-        .map_err(|e| format!("Block hash query failed: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Block hash query failed: {e}")))?
         .ok_or_else(|| format!("Block {block_number} not found"))?;
 
     let timestamp_query = custom_runtime::storage().timestamp().now();
@@ -244,7 +261,7 @@ pub async fn get_block_timestamp(state: tauri::State<'_, crate::app_state::AppSt
         .at(block_hash)
         .fetch(&timestamp_query)
         .await
-        .map_err(|e| format!("Timestamp query failed: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Timestamp query failed: {e}")))?
         .unwrap_or(0);
 
     Ok(BlockTimestampResult { timestamp })
@@ -255,14 +272,24 @@ pub async fn get_block_timestamp(state: tauri::State<'_, crate::app_state::AppSt
 /// Iterates all on-chain referral codes and filters to those owned by
 /// the target account. Rewards are converted from planck to whole units.
 #[tauri::command]
-pub async fn get_referral_links(state: tauri::State<'_, crate::app_state::AppState>, address: String) -> Result<Vec<ReferralLink>, String> {
+pub async fn get_referral_links(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    address: String,
+) -> Result<Vec<ReferralLink>, crate::error::AppError> {
     let client = get_substrate_client(&state).await?;
     let target_account: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
 
-    let storage = client.storage().at_latest().await.map_err(|e| format!("Storage error: {e}"))?;
+    let storage = client
+        .storage()
+        .at_latest()
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?;
 
     let query = custom_runtime::storage().credits().referral_codes_iter();
-    let mut entries = storage.iter(query).await.map_err(|e| format!("ReferralCodes query failed: {e}"))?;
+    let mut entries = storage
+        .iter(query)
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("ReferralCodes query failed: {e}")))?;
 
     let decimals = 10u128.pow(18);
     let mut links = Vec::new();
@@ -276,7 +303,7 @@ pub async fn get_referral_links(state: tauri::State<'_, crate::app_state::AppSta
             let reward_raw = storage
                 .fetch(&reward_query)
                 .await
-                .map_err(|e| format!("Reward query failed: {e}"))?
+                .map_err(|e| crate::error::AppError::Other(format!("Reward query failed: {e}")))?
                 .unwrap_or(0u128);
 
             links.push(ReferralLink {
@@ -303,12 +330,14 @@ pub fn validate_address(address: String) -> bool {
 ///
 /// Rewards are auto-staked (`RewardDestination::Staked`) for initial bonds.
 #[tauri::command]
-pub async fn stake_bond(state: tauri::State<'_, crate::app_state::AppState>, amount: String) -> Result<TxResult, String> {
+pub async fn stake_bond(state: tauri::State<'_, crate::app_state::AppState>, amount: String) -> Result<TxResult, crate::error::AppError> {
     let signer = get_signer(&state)?;
     let client = get_substrate_client(&state).await?;
     let address = get_substrate_address(&state)?;
 
-    let amount: u128 = amount.parse().map_err(|e| format!("Invalid amount: {e}"))?;
+    let amount: u128 = amount
+        .parse()
+        .map_err(|e| crate::error::AppError::Other(format!("Invalid amount: {e}")))?;
 
     let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
 
@@ -317,10 +346,10 @@ pub async fn stake_bond(state: tauri::State<'_, crate::app_state::AppState>, amo
         .storage()
         .at_latest()
         .await
-        .map_err(|e| format!("Storage error: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
         .fetch(&ledger_query)
         .await
-        .map_err(|e| format!("Ledger query failed: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Ledger query failed: {e}")))?
         .is_some();
 
     let tx_hash = if already_bonded {
@@ -330,10 +359,10 @@ pub async fn stake_bond(state: tauri::State<'_, crate::app_state::AppState>, amo
             .tx()
             .sign_and_submit_then_watch_default(&tx, &signer)
             .await
-            .map_err(|e| format!("Submit failed: {e}"))?
+            .map_err(|e| crate::error::AppError::Other(format!("Submit failed: {e}")))?
             .wait_for_finalized_success()
             .await
-            .map_err(|e| format!("Transaction failed: {e}"))?
+            .map_err(|e| crate::error::AppError::Other(format!("Transaction failed: {e}")))?
             .extrinsic_hash()
     } else {
         info!("Submitting bond transaction...");
@@ -344,10 +373,10 @@ pub async fn stake_bond(state: tauri::State<'_, crate::app_state::AppState>, amo
             .tx()
             .sign_and_submit_then_watch_default(&tx, &signer)
             .await
-            .map_err(|e| format!("Submit failed: {e}"))?
+            .map_err(|e| crate::error::AppError::Other(format!("Submit failed: {e}")))?
             .wait_for_finalized_success()
             .await
-            .map_err(|e| format!("Transaction failed: {e}"))?
+            .map_err(|e| crate::error::AppError::Other(format!("Transaction failed: {e}")))?
             .extrinsic_hash()
     };
 
@@ -360,11 +389,13 @@ pub async fn stake_bond(state: tauri::State<'_, crate::app_state::AppState>, amo
 
 /// Unbond tokens (schedule for withdrawal after the unbonding period).
 #[tauri::command]
-pub async fn stake_unbond(state: tauri::State<'_, crate::app_state::AppState>, amount: String) -> Result<TxResult, String> {
+pub async fn stake_unbond(state: tauri::State<'_, crate::app_state::AppState>, amount: String) -> Result<TxResult, crate::error::AppError> {
     let signer = get_signer(&state)?;
     let client = get_substrate_client(&state).await?;
 
-    let amount: u128 = amount.parse().map_err(|e| format!("Invalid amount: {e}"))?;
+    let amount: u128 = amount
+        .parse()
+        .map_err(|e| crate::error::AppError::Other(format!("Invalid amount: {e}")))?;
 
     info!("Submitting unbond transaction...");
     let tx = custom_runtime::tx().staking().unbond(amount);
@@ -372,10 +403,10 @@ pub async fn stake_unbond(state: tauri::State<'_, crate::app_state::AppState>, a
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
-        .map_err(|e| format!("Submit failed: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Submit failed: {e}")))?
         .wait_for_finalized_success()
         .await
-        .map_err(|e| format!("Transaction failed: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Transaction failed: {e}")))?
         .extrinsic_hash();
 
     info!("Unbond tx finalized: {:?}", tx_hash);
@@ -389,7 +420,7 @@ pub async fn stake_unbond(state: tauri::State<'_, crate::app_state::AppState>, a
 ///
 /// Automatically queries slashing spans to pass the correct parameter.
 #[tauri::command]
-pub async fn stake_withdraw_unbonded(state: tauri::State<'_, crate::app_state::AppState>) -> Result<TxResult, String> {
+pub async fn stake_withdraw_unbonded(state: tauri::State<'_, crate::app_state::AppState>) -> Result<TxResult, crate::error::AppError> {
     let signer = get_signer(&state)?;
     let client = get_substrate_client(&state).await?;
     let address = get_substrate_address(&state)?;
@@ -401,10 +432,10 @@ pub async fn stake_withdraw_unbonded(state: tauri::State<'_, crate::app_state::A
         .storage()
         .at_latest()
         .await
-        .map_err(|e| format!("Storage error: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
         .fetch(&spans_query)
         .await
-        .map_err(|e| format!("Slashing spans query failed: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Slashing spans query failed: {e}")))?
     {
         Some(spans) => spans.prior.len() as u32,
         None => 0,
@@ -416,10 +447,10 @@ pub async fn stake_withdraw_unbonded(state: tauri::State<'_, crate::app_state::A
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
-        .map_err(|e| format!("Submit failed: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Submit failed: {e}")))?
         .wait_for_finalized_success()
         .await
-        .map_err(|e| format!("Transaction failed: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Transaction failed: {e}")))?
         .extrinsic_hash();
 
     info!("Withdraw tx finalized: {:?}", tx_hash);
@@ -431,7 +462,7 @@ pub async fn stake_withdraw_unbonded(state: tauri::State<'_, crate::app_state::A
 
 /// Claim staking rewards via `payout_stakers` for the previous era.
 #[tauri::command]
-pub async fn stake_claim_rewards(state: tauri::State<'_, crate::app_state::AppState>) -> Result<TxResult, String> {
+pub async fn stake_claim_rewards(state: tauri::State<'_, crate::app_state::AppState>) -> Result<TxResult, crate::error::AppError> {
     let signer = get_signer(&state)?;
     let client = get_substrate_client(&state).await?;
     let address = get_substrate_address(&state)?;
@@ -443,14 +474,14 @@ pub async fn stake_claim_rewards(state: tauri::State<'_, crate::app_state::AppSt
         .storage()
         .at_latest()
         .await
-        .map_err(|e| format!("Storage error: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
         .fetch(&era_query)
         .await
-        .map_err(|e| format!("Era query failed: {e}"))?
-        .ok_or("Current era not available")?;
+        .map_err(|e| crate::error::AppError::Other(format!("Era query failed: {e}")))?
+        .ok_or(crate::error::AppError::Other("Current era not available".into()))?;
 
     if current_era == 0 {
-        return Err("Cannot claim rewards: era is 0".to_string());
+        return Err(crate::error::AppError::Other("Cannot claim rewards: era is 0".into()));
     }
 
     info!("Submitting payout_stakers for era {}...", current_era - 1);
@@ -459,10 +490,10 @@ pub async fn stake_claim_rewards(state: tauri::State<'_, crate::app_state::AppSt
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
-        .map_err(|e| format!("Submit failed: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Submit failed: {e}")))?
         .wait_for_finalized_success()
         .await
-        .map_err(|e| format!("Transaction failed: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Transaction failed: {e}")))?
         .extrinsic_hash();
 
     info!("Payout tx finalized: {:?}", tx_hash);
@@ -480,14 +511,16 @@ pub async fn transfer_balance(
     state: tauri::State<'_, crate::app_state::AppState>,
     recipient_address: String,
     amount: String,
-) -> Result<TxResult, String> {
+) -> Result<TxResult, crate::error::AppError> {
     let signer = get_signer(&state)?;
     let client = get_substrate_client(&state).await?;
 
-    let amount: u128 = amount.parse().map_err(|e| format!("Invalid amount: {e}"))?;
+    let amount: u128 = amount
+        .parse()
+        .map_err(|e| crate::error::AppError::Other(format!("Invalid amount: {e}")))?;
 
-    let recipient =
-        <sp_core::crypto::AccountId32 as Ss58Codec>::from_ss58check(&recipient_address).map_err(|e| format!("Invalid recipient address: {e:?}"))?;
+    let recipient = <sp_core::crypto::AccountId32 as Ss58Codec>::from_ss58check(&recipient_address)
+        .map_err(|e| crate::error::AppError::Other(format!("Invalid recipient address: {e:?}")))?;
 
     info!("Submitting transfer_keep_alive transaction...");
     let tx = custom_runtime::tx().balances().transfer_keep_alive(recipient.into(), amount);
@@ -496,10 +529,10 @@ pub async fn transfer_balance(
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
-        .map_err(|e| format!("Submit failed: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Submit failed: {e}")))?
         .wait_for_finalized_success()
         .await
-        .map_err(|e| format!("Transaction failed: {e}"))?
+        .map_err(|e| crate::error::AppError::Other(format!("Transaction failed: {e}")))?
         .extrinsic_hash();
 
     info!("Transfer tx finalized: {:?}", tx_hash);
@@ -518,9 +551,9 @@ const EXPLORER_BASE: &str = "https://hipstats.com";
 
 /// Convert a human-readable amount (e.g. "1.5") to planck string (18 decimals).
 #[tauri::command]
-pub fn to_plancks(amount: String) -> Result<String, String> {
+pub fn to_plancks(amount: String) -> Result<String, crate::error::AppError> {
     if amount.is_empty() {
-        return Err("Invalid amount".to_string());
+        return Err(crate::error::AppError::Other("Invalid amount".into()));
     }
     amount.parse::<f64>().map_err(|_| "Invalid amount".to_string())?;
 
@@ -546,7 +579,7 @@ pub fn to_plancks(amount: String) -> Result<String, String> {
 
 /// Convert a planck string to human-readable f64 (divide by 10^18).
 #[tauri::command]
-pub fn from_plancks(plancks: String) -> Result<f64, String> {
+pub fn from_plancks(plancks: String) -> Result<f64, crate::error::AppError> {
     let value: f64 = plancks.parse().map_err(|_| "Invalid planck value".to_string())?;
     Ok(value / 1e18)
 }

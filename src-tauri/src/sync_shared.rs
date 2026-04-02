@@ -116,9 +116,7 @@ impl SyncedFileInfo {
 
 /// Build a map of relative paths to sync info from a loaded `SyncState`.
 /// Extracted so it can be reused from the cache-update path in `hcfs_drive.rs`.
-pub(crate) fn build_synced_paths_from_state(
-    state: &hcfs_client::sync::SyncState,
-) -> std::collections::HashMap<String, SyncedFileInfo> {
+pub(crate) fn build_synced_paths_from_state(state: &hcfs_client::sync::SyncState) -> std::collections::HashMap<String, SyncedFileInfo> {
     let mut paths = std::collections::HashMap::new();
     for (hash, rel_path) in &state.path_index {
         if state.synced.files.contains_key(hash) {

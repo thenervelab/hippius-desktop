@@ -4,6 +4,7 @@
 //! and session persistence. The frontend never stores OAuth state
 //! in localStorage/sessionStorage.
 
+use crate::error::AppError;
 use crate::utils::account_key::account_key;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
@@ -83,7 +84,7 @@ struct ExchangeUser {
 /// Build the OAuth authorization URL for the given provider and return it.
 /// The frontend opens this URL in the external browser.
 #[tauri::command]
-pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState>, provider: String) -> Result<OAuthUrlResult, String> {
+pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState>, provider: String) -> Result<OAuthUrlResult, AppError> {
     info!(provider = %provider, "OAuth flow started");
     let base = api_base_url();
 
@@ -91,12 +92,12 @@ pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState
         "google" => "/accounts/google/login/",
         "github" => "/accounts/github/login/",
         "apple" => "/accounts/apple/login/",
-        _ => return Err(format!("Unsupported OAuth provider: {provider}")),
+        _ => return Err(AppError::Validation(format!("Unsupported OAuth provider: {provider}"))),
     };
 
     let nonce = uuid::Uuid::new_v4().to_string();
     {
-        let mut states = state.oauth.pkce_states.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let mut states = state.oauth.pkce_states.lock()?;
         states.insert(
             provider.clone(),
             PkceState {
@@ -123,16 +124,16 @@ pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState
 pub async fn complete_oauth_flow(
     state: tauri::State<'_, crate::app_state::AppState>,
     params: OAuthCallbackParams,
-) -> Result<OAuthSessionResult, String> {
+) -> Result<OAuthSessionResult, AppError> {
     if let Some(ref err) = params.error {
         let desc = params.error_description.as_deref().unwrap_or("");
         error!("OAuth error from provider: {err} {desc}");
-        return Err("Authentication failed".to_string());
+        return Err(AppError::Auth("Authentication failed".into()));
     }
 
     let (token, user_id, username, email, substrate_address) = if let Some(ref t) = params.token {
         {
-            let mut states = state.oauth.pkce_states.lock().map_err(|e| format!("Lock error: {e}"))?;
+            let mut states = state.oauth.pkce_states.lock()?;
             states.clear();
         }
         (
@@ -144,18 +145,18 @@ pub async fn complete_oauth_flow(
         )
     } else if let Some(ref code) = params.code {
         let provider = {
-            let states = state.oauth.pkce_states.lock().map_err(|e| format!("Lock error: {e}"))?;
+            let states = state.oauth.pkce_states.lock()?;
             if states.is_empty() {
-                return Err("No pending OAuth flow found".to_string());
+                return Err(AppError::Auth("No pending OAuth flow found".into()));
             }
             if states.len() > 1 {
-                return Err("Multiple pending OAuth flows — cannot determine provider".to_string());
+                return Err(AppError::Auth("Multiple pending OAuth flows — cannot determine provider".into()));
             }
             states
                 .values()
                 .next()
                 .map(|s| s.provider.clone())
-                .ok_or_else(|| "No pending OAuth flow found".to_string())?
+                .ok_or(AppError::Auth("No pending OAuth flow found".into()))?
         };
 
         let base = api_base_url();
@@ -169,19 +170,18 @@ pub async fn complete_oauth_flow(
                 "code_verifier": provider,
             }))
             .send()
-            .await
-            .map_err(|e| format!("Token exchange request failed: {e}"))?;
+            .await?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Token exchange failed: HTTP {status}: {body}"));
+            return Err(AppError::Api { status, body });
         }
 
-        let data: ExchangeResponse = resp.json().await.map_err(|e| format!("Token exchange parse error: {e}"))?;
+        let data: ExchangeResponse = resp.json().await?;
 
         {
-            let mut states = state.oauth.pkce_states.lock().map_err(|e| format!("Lock error: {e}"))?;
+            let mut states = state.oauth.pkce_states.lock()?;
             states.remove(&provider);
         }
 
@@ -193,7 +193,7 @@ pub async fn complete_oauth_flow(
             data.user.substrate_address.unwrap_or_default(),
         )
     } else {
-        return Err("Missing both token and authorization code".into());
+        return Err(AppError::Validation("Missing both token and authorization code".into()));
     };
 
     let expires_at = {
@@ -229,8 +229,7 @@ pub async fn complete_oauth_flow(
         .bind(&provider_name)
         .bind(&substrate_address)
         .execute(pool)
-        .await
-        .map_err(|e| format!("DB error: {e}"))?;
+        .await?;
 
         sqlx::query(
             "INSERT INTO objectstore_auth_scoped (owner, temp_auth_key)
@@ -240,8 +239,7 @@ pub async fn complete_oauth_flow(
         .bind(&owner)
         .bind(&token)
         .execute(pool)
-        .await
-        .map_err(|e| format!("DB objectstore error: {e}"))?;
+        .await?;
     }
 
     info!(

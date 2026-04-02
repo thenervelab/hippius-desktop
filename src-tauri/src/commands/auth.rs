@@ -15,6 +15,7 @@
 //! in SQLite, using CryptoJS-compatible encryption for backward compatibility
 //! with mnemonics encrypted by the earlier TypeScript implementation.
 
+use crate::error::AppError;
 use sha2::{Digest, Sha256};
 use tracing::info;
 use zeroize::Zeroizing;
@@ -51,7 +52,7 @@ pub async fn login_with_mnemonic(
     mnemonic: String,
     referral_code: Option<String>,
     logout_time_minutes: Option<i64>,
-) -> Result<LoginResult, String> {
+) -> Result<LoginResult, AppError> {
     info!("Login initiated via mnemonic");
     let mnemonic = Zeroizing::new(mnemonic);
 
@@ -61,7 +62,7 @@ pub async fn login_with_mnemonic(
         challenge_response(&state.api_client, &eth_signer, &eth_address, &substrate_address, referral_code.as_deref()).await?;
 
     {
-        let mut auth = state.auth.lock().map_err(|e| format!("Auth state lock failed: {e}"))?;
+        let mut auth = state.auth.lock()?;
         auth.sr25519_pair = Some(sr25519_pair);
         auth.substrate_address = Some(substrate_address.clone());
         auth.eth_address = Some(eth_address.clone());
@@ -71,9 +72,7 @@ pub async fn login_with_mnemonic(
     let ltm = logout_time_minutes.unwrap_or(-1);
     persist_session(pool, &substrate_address, &token, token_expiry, &user_id, &username, "mnemonic", ltm).await?;
 
-    save_api_token(pool, &substrate_address, &token)
-        .await
-        .map_err(|e| format!("Failed to persist API token: {e}"))?;
+    save_api_token(pool, &substrate_address, &token).await?;
 
     info!(
         address = %substrate_address,
@@ -101,9 +100,9 @@ pub fn validate_mnemonic(mnemonic: String) -> bool {
 
 /// Generate a new 12-word BIP-39 mnemonic.
 #[tauri::command]
-pub fn generate_mnemonic() -> Result<String, String> {
+pub fn generate_mnemonic() -> Result<String, AppError> {
     use bip39::{Language, Mnemonic};
-    let mnemonic = Mnemonic::generate_in(Language::English, 12).map_err(|e| format!("Failed to generate mnemonic: {e}"))?;
+    let mnemonic = Mnemonic::generate_in(Language::English, 12).map_err(|e| AppError::Crypto(format!("Failed to generate mnemonic: {e}")))?;
     Ok(mnemonic.to_string())
 }
 
@@ -124,7 +123,7 @@ pub async fn set_passcode(
     account_id: String,
     passcode: String,
     mnemonic: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let mnemonic = Zeroizing::new(mnemonic);
 
     info!("Setting passcode for account");
@@ -144,7 +143,7 @@ pub async fn set_passcode(
         buf[..plaintext.len()].copy_from_slice(plaintext);
         let ciphertext = encryptor
             .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
-            .map_err(|e| format!("Encryption failed: {e}"))?;
+            .map_err(|e| AppError::Crypto(format!("Encryption failed: {e}")))?;
 
         // CryptoJS format: "Salted__" + salt + ciphertext, base64-encoded
         let mut output = Vec::with_capacity(16 + ciphertext.len());
@@ -172,8 +171,7 @@ pub async fn set_passcode(
     .bind(&encrypted)
     .bind(&passcode_hash)
     .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to save wallet: {e}"))?;
+    .await?;
 
     Ok(())
 }
@@ -209,16 +207,16 @@ fn crypto_js_derive_key_iv(passphrase: &[u8], salt: &[u8]) -> ([u8; 32], [u8; 16
 /// Decrypt a CryptoJS-AES encrypted mnemonic with a passcode.
 ///
 /// Expects the CryptoJS wire format: base64("Salted__" + 8-byte salt + ciphertext).
-fn decrypt_mnemonic_aes(encrypted: &str, passcode: &str) -> Result<String, String> {
+fn decrypt_mnemonic_aes(encrypted: &str, passcode: &str) -> Result<String, AppError> {
     use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
     use base64::Engine;
 
     let raw = base64::engine::general_purpose::STANDARD
         .decode(encrypted)
-        .map_err(|e| format!("Base64 decode failed: {e}"))?;
+        .map_err(|e| AppError::Crypto(format!("Base64 decode failed: {e}")))?;
 
     if raw.len() < 16 || &raw[..8] != b"Salted__" {
-        return Err("Invalid encrypted data format".to_string());
+        return Err(AppError::Crypto("Invalid encrypted data format".into()));
     }
 
     let salt = &raw[8..16];
@@ -232,9 +230,9 @@ fn decrypt_mnemonic_aes(encrypted: &str, passcode: &str) -> Result<String, Strin
     let mut buf = ciphertext.to_vec();
     let plaintext = decryptor
         .decrypt_padded_mut::<Pkcs7>(&mut buf)
-        .map_err(|_| "Decryption failed (wrong passcode?)".to_string())?;
+        .map_err(|_| AppError::Auth("Decryption failed (wrong passcode?)".into()))?;
 
-    String::from_utf8(plaintext.to_vec()).map_err(|e| format!("Invalid UTF-8 after decrypt: {e}"))
+    String::from_utf8(plaintext.to_vec()).map_err(|e| AppError::Crypto(format!("Invalid UTF-8 after decrypt: {e}")))
 }
 
 /// Unlock with passcode: verify hash, decrypt mnemonic, derive keypair, restore session.
@@ -249,7 +247,7 @@ pub async fn unlock_with_passcode(
     account_id: String,
     passcode: String,
     logout_time_minutes: Option<i64>,
-) -> Result<LoginResult, String> {
+) -> Result<LoginResult, AppError> {
     info!("Passcode unlock initiated");
     let pool = state.pool()?;
     let owner = account_key(&account_id);
@@ -257,21 +255,20 @@ pub async fn unlock_with_passcode(
     let row = sqlx::query_as::<_, (String, String)>("SELECT encrypted_mnemonic, passcode_hash FROM wallet_store WHERE owner = ?")
         .bind(&owner)
         .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("Failed to fetch wallet: {e}"))?
-        .ok_or("No wallet record found")?;
+        .await?
+        .ok_or(AppError::Auth("No wallet record found".into()))?;
 
     let (encrypted_mnemonic, stored_hash) = row;
 
     let passcode_hash = hash_passcode(&passcode);
     if passcode_hash != stored_hash {
-        return Err("Incorrect passcode".to_string());
+        return Err(AppError::Auth("Incorrect passcode".into()));
     }
 
     let mnemonic = Zeroizing::new(decrypt_mnemonic_aes(&encrypted_mnemonic, &passcode)?);
 
     if bip39::Mnemonic::parse_in_normalized(bip39::Language::English, &mnemonic).is_err() {
-        return Err("Decrypted mnemonic is invalid".to_string());
+        return Err(AppError::Crypto("Decrypted mnemonic is invalid".into()));
     }
 
     let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
@@ -280,7 +277,7 @@ pub async fn unlock_with_passcode(
         challenge_response(&state.api_client, &eth_signer, &eth_address, &substrate_address, None).await?;
 
     {
-        let mut auth = state.auth.lock().map_err(|e| format!("Auth state lock failed: {e}"))?;
+        let mut auth = state.auth.lock()?;
         auth.sr25519_pair = Some(sr25519_pair);
         auth.substrate_address = Some(substrate_address.clone());
         auth.eth_address = Some(eth_address.clone());
@@ -289,9 +286,7 @@ pub async fn unlock_with_passcode(
     let ltm = logout_time_minutes.unwrap_or(1440);
     persist_session(pool, &substrate_address, &token, token_expiry, &user_id, &username, "mnemonic", ltm).await?;
 
-    save_api_token(pool, &substrate_address, &token)
-        .await
-        .map_err(|e| format!("Failed to persist API token: {e}"))?;
+    save_api_token(pool, &substrate_address, &token).await?;
 
     info!(address = %substrate_address, "Passcode unlock successful");
 
@@ -320,19 +315,20 @@ pub async fn refresh_auth_token(
     state: tauri::State<'_, crate::app_state::AppState>,
     app: tauri::AppHandle,
     account_id: String,
-) -> Result<(), String> {
-    refresh_auth_token_internal(state.pool()?, &app, &account_id).await
+) -> Result<(), AppError> {
+    refresh_auth_token_internal(state.pool()?, &app, &account_id).await?;
+    Ok(())
 }
 
 /// Logout: clear in-memory keypair and session.
 ///
 /// Note: the frontend should call `stop_sync` separately before calling this.
 #[tauri::command]
-pub async fn auth_logout(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), String> {
+pub async fn auth_logout(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), AppError> {
     info!(account_id = %account_id, "Logout initiated");
 
     {
-        let mut auth = state.auth.lock().map_err(|e| format!("Auth state lock failed: {e}"))?;
+        let mut auth = state.auth.lock()?;
         auth.sr25519_pair = None;
         auth.substrate_address = None;
         auth.eth_address = None;
@@ -357,8 +353,7 @@ pub async fn auth_logout(state: tauri::State<'_, crate::app_state::AppState>, ac
     )
     .bind(&owner)
     .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to clear auth session: {e}"))?;
+    .await?;
 
     info!("Logout complete");
     Ok(())
@@ -366,14 +361,14 @@ pub async fn auth_logout(state: tauri::State<'_, crate::app_state::AppState>, ac
 
 /// Return the SS58 address for the currently authenticated session.
 #[tauri::command]
-pub fn get_polkadot_address(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Option<String>, String> {
-    let auth = state.auth.lock().map_err(|e| format!("Auth state lock failed: {e}"))?;
+pub fn get_polkadot_address(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Option<String>, AppError> {
+    let auth = state.auth.lock()?;
     Ok(auth.substrate_address.clone())
 }
 
 /// Return the Ethereum address for the currently authenticated session.
 #[tauri::command]
-pub fn get_eth_address(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Option<String>, String> {
-    let auth = state.auth.lock().map_err(|e| format!("Auth state lock failed: {e}"))?;
+pub fn get_eth_address(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Option<String>, AppError> {
+    let auth = state.auth.lock()?;
     Ok(auth.eth_address.clone())
 }

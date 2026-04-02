@@ -333,7 +333,7 @@ fn build_chart(accounts: &[AccountInput], range: &str, divide_by_1e18: bool, inc
 /// Divides `total_balance` by 10^18 to get credit values.
 /// Uses carry-forward fill for missing days.
 #[tauri::command]
-pub fn format_credits_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, String> {
+pub fn format_credits_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, crate::error::AppError> {
     Ok(build_chart(&accounts, &range, true, false))
 }
 
@@ -342,7 +342,7 @@ pub fn format_credits_chart(accounts: Vec<AccountInput>, range: String) -> Resul
 /// `total_balance` represents raw bytes (no division).
 /// Uses carry-forward fill for missing days.
 #[tauri::command]
-pub fn format_storage_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, String> {
+pub fn format_storage_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, crate::error::AppError> {
     Ok(build_chart(&accounts, &range, false, false))
 }
 
@@ -351,7 +351,7 @@ pub fn format_storage_chart(accounts: Vec<AccountInput>, range: String) -> Resul
 /// Divides both `total_balance` and `credit` by 10^18.
 /// Uses carry-forward fill for missing days.
 #[tauri::command]
-pub fn format_balance_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, String> {
+pub fn format_balance_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, crate::error::AppError> {
     Ok(build_chart(&accounts, &range, true, true))
 }
 
@@ -390,7 +390,7 @@ pub struct MarketplaceCreditOutput {
 /// Returns an `Account`-shaped vec so the result can be fed directly into
 /// the same chart components as balance data.
 #[tauri::command]
-pub fn transform_marketplace_credits(credits: Vec<MarketplaceCreditInput>) -> Result<Vec<MarketplaceCreditOutput>, String> {
+pub fn transform_marketplace_credits(credits: Vec<MarketplaceCreditInput>) -> Result<Vec<MarketplaceCreditOutput>, crate::error::AppError> {
     if credits.is_empty() {
         return Ok(vec![]);
     }
@@ -411,8 +411,10 @@ pub fn transform_marketplace_credits(credits: Vec<MarketplaceCreditInput>) -> Re
     let first_key = daily.keys().next().unwrap().clone();
     let last_key = daily.keys().last().unwrap().clone();
 
-    let start_date = NaiveDate::parse_from_str(&first_key, "%Y-%m-%d").map_err(|e| format!("Invalid start date: {e}"))?;
-    let end_date = NaiveDate::parse_from_str(&last_key, "%Y-%m-%d").map_err(|e| format!("Invalid end date: {e}"))?;
+    let start_date =
+        NaiveDate::parse_from_str(&first_key, "%Y-%m-%d").map_err(|e| crate::error::AppError::Validation(format!("Invalid start date: {e}")))?;
+    let end_date =
+        NaiveDate::parse_from_str(&last_key, "%Y-%m-%d").map_err(|e| crate::error::AppError::Validation(format!("Invalid end date: {e}")))?;
 
     let mut results = Vec::new();
     let mut cumulative: u128 = 0;
@@ -469,18 +471,18 @@ fn parse_date_key(date_str: &str) -> String {
 /// charges a flat first-hour rate plus per-block charges for the remainder
 /// of the timeframe (block time = 6 seconds).
 #[tauri::command]
-pub fn calculate_storage_cost(storage_type: String, timeframe: String, num_of_gb: f64) -> Result<f64, String> {
+pub fn calculate_storage_cost(storage_type: String, timeframe: String, num_of_gb: f64) -> Result<f64, crate::error::AppError> {
     let per_block_time: f64 = 6.0;
     let (per_block_charge, first_hour_charge) = match storage_type.as_str() {
         "s3" | "ipfs" => (6.7878e-9, 0.000_031_5),
-        _ => return Err(format!("Unknown storage type: {storage_type}")),
+        _ => return Err(crate::error::AppError::Validation(format!("Unknown storage type: {storage_type}"))),
     };
 
     let timeframe_duration = match timeframe.as_str() {
         "first-hour" => 3600.0,
         "per-month" => 2.628e6,
         "per-year" => 3.154e7,
-        _ => return Err(format!("Unknown timeframe: {timeframe}")),
+        _ => return Err(crate::error::AppError::Validation(format!("Unknown timeframe: {timeframe}"))),
     };
     let first_hour_duration = 3600.0;
 
