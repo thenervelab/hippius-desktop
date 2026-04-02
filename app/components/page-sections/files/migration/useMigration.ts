@@ -2,13 +2,11 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { MigrationFile } from "./MigrationProgressDialog";
 import { getHcfsConfig, saveHcfsConfig } from "@/lib/utils/hcfsConfigUtils";
 import { syncEngineStatusAtom, isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
-import { migrationCheckAtom } from "@/lib/global-atoms/migrationAtoms";
+import { migrationCheckAtom, migrationLockAtom } from "@/lib/global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 
 export type MigrationStep = "prompt" | "skip-confirm" | "setup" | "progress" | "complete";
@@ -29,18 +27,13 @@ interface MigrationCheckResult {
   is_resuming: boolean;
 }
 
-interface MigrationProgressPayload {
-  phase: "downloading" | "syncing";
-  current_file: string;
-  completed: number;
+interface PollMigrationStatusResult {
+  status: string;
   total: number;
+  completed: number;
   failed: number;
-}
-
-interface MigrationFileErrorPayload {
-  file_name: string;
-  bucket: string;
-  error: string;
+  failed_files: string[];
+  current_file: string | null;
 }
 
 export interface UseMigrationReturn {
@@ -67,6 +60,8 @@ export interface UseMigrationReturn {
   closeMigration: () => Promise<void>;
 }
 
+const POLL_INTERVAL_MS = 3000;
+
 export function useMigration(
   getMnemonic?: () => Promise<string | null>
 ): UseMigrationReturn {
@@ -77,20 +72,12 @@ export function useMigration(
   const [isCancelling, setIsCancelling] = useState(false);
   const [totalSize, setTotalSize] = useState(0);
   const [isResuming, setIsResuming] = useState(false);
-  const [resumeSyncPath, setResumeSyncPath] = useState<string | null>(null);
-
-  const [phase, setPhase] = useState<"downloading" | "syncing">("downloading");
-  const [uploadedCount, setUploadedCount] = useState(0);
-  const [currentUploadFile, setCurrentUploadFile] = useState("");
-  const uploadedFilesRef = useRef(new Set<string>());
-  const totalFilesRef = useRef(0);
 
   const [pendingAccountId, setPendingAccountId] = useState<string | null>(null);
   const [isSettingUp, setIsSettingUp] = useState(false);
 
-  // Tracks the account ID across the entire migration lifecycle so
-  // confirmSkip / cancelMigration / closeMigration can persist the choice.
   const activeAccountIdRef = useRef<string | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [successCount, setSuccessCount] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
@@ -98,97 +85,83 @@ export function useMigration(
     Array<{ name: string; error: string }>
   >([]);
 
+  // Clean up polling on unmount
   useEffect(() => {
-    const unlisteners: Array<() => void> = [];
-
-    listen<MigrationProgressPayload>("migration_progress", (event) => {
-      const { phase: eventPhase, current_file, completed, total, failed } = event.payload;
-      setPhase(eventPhase);
-      totalFilesRef.current = total;
-      if (eventPhase === "downloading") {
-        setOverallProgress(total > 0 ? (completed / total) * 50 : 0);
-      }
-      setSuccessCount(Number(completed));
-      setFailedCount(Number(failed));
-      setCurrentFileIndex(Number(completed));
-
-      setFiles((prev) => {
-        let completedSoFar = 0;
-        return prev.map((f) => {
-          if (f.status === "failed") return f;
-          if (completedSoFar < completed && f.name !== current_file) {
-            completedSoFar++;
-            return f.status === "completed"
-              ? f
-              : { ...f, status: "completed" as const };
-          }
-          if (f.name === current_file) {
-            return { ...f, status: "migrating" as const };
-          }
-          return f;
-        });
-      });
-    }).then((u) => unlisteners.push(u));
-
-    listen<MigrationFileErrorPayload>("migration_file_error", (event) => {
-      const { file_name, error } = event.payload;
-      setFailedFiles((prev) => [...prev, { name: file_name, error }]);
-      setFiles((prev) =>
-        prev.map((f) =>
-          f.name === file_name
-            ? { ...f, status: "failed" as const, error }
-            : f
-        )
-      );
-    }).then((u) => unlisteners.push(u));
-
-    listen("migration_complete", () => {
-      setOverallProgress(100);
-      setCurrentStep("complete");
-    }).then((u) => unlisteners.push(u));
-
-    listen<{ error: string }>("migration_error", (event) => {
-      console.error("[Migration] Background error:", event.payload.error);
-      setFailedFiles((prev) => [
-        ...prev,
-        { name: "Migration", error: event.payload.error },
-      ]);
-      setCurrentStep("complete");
-    }).then((u) => unlisteners.push(u));
-
-    listen<{ label: string; bytes: number; total: number; path: string | null }>(
-      "hcfs_upload_progress",
-      (event) => {
-        const { label, bytes, total, path } = event.payload;
-        if (label !== "migration") return;
-
-        if (path) {
-          const fileName = path.split("/").pop() || path;
-          setCurrentUploadFile(fileName);
-        }
-
-        if (bytes === total && total > 0 && path) {
-          if (!uploadedFilesRef.current.has(path)) {
-            uploadedFilesRef.current.add(path);
-            const count = uploadedFilesRef.current.size;
-            setUploadedCount(count);
-            const totalFiles = totalFilesRef.current;
-            if (totalFiles > 0) {
-              setOverallProgress(50 + (count / totalFiles) * 50);
-            }
-          }
-        }
-      }
-    ).then((u) => unlisteners.push(u));
-
     return () => {
-      unlisteners.forEach((u) => u());
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
     };
   }, []);
 
+  const stopPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }, []);
+
+  const startPolling = useCallback(
+    (accountId: string) => {
+      stopPolling();
+
+      const poll = async () => {
+        try {
+          const result = await invoke<PollMigrationStatusResult>(
+            "poll_migration_status",
+            { accountId }
+          );
+
+          setSuccessCount(result.completed);
+          setFailedCount(result.failed);
+          setCurrentFileIndex(result.completed);
+
+          if (result.total > 0) {
+            setOverallProgress((result.completed / result.total) * 100);
+          }
+
+          if (result.current_file) {
+            setFiles((prev) =>
+              prev.map((f) => {
+                if (f.name === result.current_file) {
+                  return { ...f, status: "migrating" as const };
+                }
+                return f;
+              })
+            );
+          }
+
+          // Mark completed/failed files
+          if (result.failed_files.length > 0) {
+            setFailedFiles(
+              result.failed_files.map((name) => ({
+                name,
+                error: "Migration failed on server",
+              }))
+            );
+          }
+
+          if (result.status === "completed" || result.status === "failed") {
+            stopPolling();
+            setOverallProgress(100);
+            setCurrentStep("complete");
+            appStore.set(migrationLockAtom, false);
+          }
+        } catch (err) {
+          console.error("[Migration] Poll failed:", err);
+        }
+      };
+
+      // Poll immediately, then on interval
+      poll();
+      pollIntervalRef.current = setInterval(poll, POLL_INTERVAL_MS);
+    },
+    [stopPolling]
+  );
+
   const checkMigration = useCallback(
     async (accountId: string): Promise<boolean> => {
-      // Reset shouldCheck so the effect doesn't re-fire on account switch
       appStore.set(migrationCheckAtom, {
         ...appStore.get(migrationCheckAtom),
         shouldCheck: false,
@@ -208,7 +181,6 @@ export function useMigration(
           setFiles(migrationFiles);
           setTotalSize(result.total_size);
           setIsResuming(result.is_resuming);
-          setResumeSyncPath(result.sync_path);
           setCurrentStep("prompt");
           activeAccountIdRef.current = accountId;
           return true;
@@ -222,34 +194,46 @@ export function useMigration(
     []
   );
 
-  const launchMigration = useCallback(
-    async (accountId: string, syncPath: string) => {
+  const launchServerMigration = useCallback(
+    async (accountId: string) => {
       setCurrentStep("progress");
       setOverallProgress(0);
       setSuccessCount(0);
       setFailedCount(0);
       setFailedFiles([]);
       setCurrentFileIndex(0);
-      setPhase("downloading");
-      setUploadedCount(0);
-      setCurrentUploadFile("");
-      uploadedFilesRef.current.clear();
+
+      // Lock the app — block sync operations
+      appStore.set(migrationLockAtom, true);
 
       try {
-        const mnemonic = getMnemonic ? await getMnemonic() : null;
-        await invoke("start_migration", {
+        // Derive path_prefix from migration files (bucket name)
+        const firstFile = files[0];
+        const pathPrefix = firstFile
+          ? firstFile.name.split("/")[0] || ""
+          : "";
+
+        await invoke("start_server_migration", {
           accountId,
-          syncPath,
-          mnemonic: mnemonic ?? null,
+          pathPrefix,
+          totalSize,
         });
-        // Migration drive started syncing — mark engine as active
-        appStore.set(isSyncConfiguredAtom, true);
-        appStore.set(syncEngineStatusAtom, "active");
+
+        // Start polling for progress
+        startPolling(accountId);
       } catch (err) {
         console.error("[Migration] Start failed:", err);
+        appStore.set(migrationLockAtom, false);
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        if (errorMsg.includes("Not enough disk space")) {
+          toast.error("Not enough disk space for migration. Please free up space and try again.");
+        } else {
+          toast.error("Failed to start migration. Please try again.");
+        }
+        setCurrentStep("prompt");
       }
     },
-    [getMnemonic]
+    [files, totalSize, startPolling]
   );
 
   const startMigration = useCallback(
@@ -268,24 +252,9 @@ export function useMigration(
         return;
       }
 
-      let syncPath = resumeSyncPath;
-
-      if (!syncPath) {
-        const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
-        const defaultPath = await getSyncFolderDefaultPath(accountId);
-        const selected = await open({
-          directory: true,
-          multiple: false,
-          title: "Choose Migration Folder",
-          defaultPath,
-        });
-        if (!selected) return;
-        syncPath = selected as string;
-      }
-
-      await launchMigration(accountId, syncPath);
+      await launchServerMigration(accountId);
     },
-    [resumeSyncPath, launchMigration]
+    [launchServerMigration]
   );
 
   const onSetupComplete = useCallback(
@@ -295,35 +264,15 @@ export function useMigration(
 
       try {
         await saveHcfsConfig(pendingAccountId, result.serverUrl, result.password);
-
-        let syncPath = resumeSyncPath;
-
-        if (!syncPath) {
-          const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
-          const defaultPath = await getSyncFolderDefaultPath(pendingAccountId);
-          const selected = await open({
-            directory: true,
-            multiple: false,
-            title: "Choose Migration Folder",
-            defaultPath,
-          });
-          if (!selected) {
-            setCurrentStep("prompt");
-            setIsSettingUp(false);
-            return;
-          }
-          syncPath = selected as string;
-        }
-
         setIsSettingUp(false);
-        await launchMigration(pendingAccountId, syncPath);
+        await launchServerMigration(pendingAccountId);
       } catch (err) {
         console.error("[Migration] Setup failed:", err);
         setIsSettingUp(false);
         setCurrentStep("prompt");
       }
     },
-    [pendingAccountId, resumeSyncPath, launchMigration]
+    [pendingAccountId, launchServerMigration]
   );
 
   const cancelMigration = useCallback(async () => {
@@ -331,17 +280,16 @@ export function useMigration(
     try {
       const accountId = activeAccountIdRef.current;
       if (accountId) {
-        await invoke("cancel_migration", { accountId });
-      } else {
-        // Fallback: at minimum stop the download loop
-        await invoke("cancel_migration", { accountId: "" });
+        await invoke("cancel_server_migration", { accountId });
       }
     } catch (err) {
       console.error("[Migration] Cancel failed:", err);
     }
+    stopPolling();
+    appStore.set(migrationLockAtom, false);
     setIsCancelling(false);
     setCurrentStep("complete");
-  }, []);
+  }, [stopPolling]);
 
   const confirmSkip = useCallback(async () => {
     try {
@@ -357,7 +305,6 @@ export function useMigration(
       console.error("[Migration] Dismiss (skip) failed:", err);
       toast.error("Failed to save your choice. Please try again.");
     }
-    // Reset the atom so the checker doesn't re-trigger
     appStore.set(migrationCheckAtom, {
       checked: true,
       needsMigration: false,
@@ -370,20 +317,28 @@ export function useMigration(
 
   const closeMigration = useCallback(async () => {
     const accountId = activeAccountIdRef.current;
+    stopPolling();
     try {
       if (accountId) {
-        const mnemonic = getMnemonic ? await getMnemonic() : null;
-        await invoke("complete_migration_transition", {
+        // Dismiss migration status
+        await invoke("dismiss_migration", {
           accountId,
-          existingMnemonic: mnemonic,
+          reason: "completed",
+        });
+        // Start normal sync — three-tree engine will download migrated files
+        const mnemonic = getMnemonic ? await getMnemonic() : null;
+        await invoke("initialize_sync", {
+          accountId,
+          label: "default",
+          mnemonic: mnemonic ?? null,
         });
         appStore.set(syncEngineStatusAtom, "active");
         appStore.set(isSyncConfiguredAtom, true);
       }
     } catch (err) {
-      console.error("[Migration] complete_migration_transition failed:", err);
+      console.error("[Migration] close failed:", err);
     }
-    // Reset the atom so the checker doesn't re-trigger
+    appStore.set(migrationLockAtom, false);
     appStore.set(migrationCheckAtom, {
       checked: true,
       needsMigration: false,
@@ -400,15 +355,10 @@ export function useMigration(
     setFailedFiles([]);
     setTotalSize(0);
     setIsResuming(false);
-    setResumeSyncPath(null);
     setPendingAccountId(null);
     setIsSettingUp(false);
-    setPhase("downloading");
-    setUploadedCount(0);
-    setCurrentUploadFile("");
-    uploadedFilesRef.current.clear();
     activeAccountIdRef.current = null;
-  }, [getMnemonic]);
+  }, [getMnemonic, stopPolling]);
 
   return {
     currentStep,
@@ -422,9 +372,10 @@ export function useMigration(
     failedFiles,
     totalSize,
     isResuming,
-    phase,
-    uploadedCount,
-    currentUploadFile,
+    // Kept for backward compatibility with MigrationProgressDialog
+    phase: "downloading",
+    uploadedCount: 0,
+    currentUploadFile: "",
     checkMigration,
     startMigration,
     onSetupComplete,

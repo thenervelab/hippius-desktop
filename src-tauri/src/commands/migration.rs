@@ -934,6 +934,178 @@ pub async fn report_migrated_files(app: &AppHandle, account_id: &str) -> Result<
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Server-side migration commands
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StartServerMigrationResult {
+    pub status: String,
+    pub total_files: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerMigrationStatus {
+    pub status: String,
+    pub total: i32,
+    pub completed: i32,
+    pub failed: i32,
+    pub failed_files: Vec<String>,
+    pub current_file: Option<String>,
+}
+
+#[tauri::command]
+pub async fn start_server_migration(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    path_prefix: String,
+    total_size: u64,
+) -> Result<StartServerMigrationResult, crate::error::AppError> {
+    // Compute folder_hash from the "default" label (same as syncing.rs::folder_hash)
+    let digest = {
+        use sha2::Digest;
+        sha2::Sha256::digest(b"default")
+    };
+    let folder_hash = hex::encode(digest)[..16].to_string();
+    let pool = state.pool()?;
+
+    // Check disk space — files will be downloaded locally after server migration
+    let sync_path = crate::commands::syncing::get_sync_path_for_label(
+        pool, &account_id, "default",
+    )
+    .await
+    .unwrap_or_else(|_| {
+        dirs::home_dir()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_default()
+    });
+    let sync_dir = std::path::Path::new(&sync_path);
+    if sync_dir.exists() {
+        check_disk_space(sync_dir, total_size)?;
+    }
+
+    // Recover the master mnemonic to derive the encryption key
+    let password = crate::commands::syncing::get_drive_password(
+        pool, &account_id,
+    )
+    .await?;
+    let mnemonic_path =
+        crate::commands::syncing::master_mnemonic_path(&account_id)?;
+    let mnemonic = hcfs_client::auth::recover_mnemonic(
+        &mnemonic_path, &password,
+    )
+    .map_err(|e| {
+        crate::error::AppError::Other(format!(
+            "Failed to recover mnemonic: {e}"
+        ))
+    })?;
+
+    let seed = mnemonic.to_seed("");
+    let encryption_key_hex = hex::encode(&seed[..32]);
+
+    // Call server endpoint
+    let server_url = get_server_url(pool, &account_id).await?;
+    let url = format!(
+        "{}/migration/start",
+        server_url.trim_end_matches('/')
+    );
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()?;
+
+    let resp = client
+        .post(&url)
+        .header("X-API-Key", "Arion")
+        .json(&serde_json::json!({
+            "ss58_address": account_id,
+            "folder_hash": folder_hash,
+            "encryption_key_hex": encryption_key_hex,
+            "path_prefix": path_prefix,
+        }))
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(crate::error::AppError::Other(format!(
+            "Migration start failed: {text}"
+        )));
+    }
+
+    let result: StartServerMigrationResult = resp.json().await?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn poll_migration_status(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<ServerMigrationStatus, crate::error::AppError> {
+    let pool = state.pool()?;
+    let server_url = get_server_url(pool, &account_id).await?;
+    let url = format!(
+        "{}/migration/{}/status",
+        server_url.trim_end_matches('/'),
+        account_id
+    );
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()?;
+
+    let resp = client
+        .get(&url)
+        .header("X-API-Key", "Arion")
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(crate::error::AppError::Other(format!(
+            "Status check failed: {text}"
+        )));
+    }
+
+    let status: ServerMigrationStatus = resp.json().await?;
+    Ok(status)
+}
+
+#[tauri::command]
+pub async fn cancel_server_migration(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<(), crate::error::AppError> {
+    let pool = state.pool()?;
+    let server_url = get_server_url(pool, &account_id).await?;
+    let url = format!(
+        "{}/migration/cancel",
+        server_url.trim_end_matches('/')
+    );
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()?;
+
+    let resp = client
+        .post(&url)
+        .header("X-API-Key", "Arion")
+        .json(&serde_json::json!({
+            "ss58_address": account_id,
+        }))
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(crate::error::AppError::Other(format!(
+            "Cancel failed: {text}"
+        )));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -18,3 +18,6 @@ export const migrationCheckAtom = atom<MigrationCheckState>({
 });
 
 export const showMigrationPromptAtom = atom(false);
+
+/** When true, sync cycles and drive operations are blocked (server-side migration in progress). */
+export const migrationLockAtom = atom(false);

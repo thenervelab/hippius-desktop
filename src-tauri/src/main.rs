@@ -243,6 +243,9 @@ fn main() {
             commands::migration::cancel_migration,
             commands::migration::dismiss_migration,
             commands::migration::complete_migration_transition,
+            commands::migration::start_server_migration,
+            commands::migration::poll_migration_status,
+            commands::migration::cancel_server_migration,
             // Blockchain queries & transactions
             get_account_balance,
             get_staking_info,

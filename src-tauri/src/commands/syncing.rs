@@ -171,7 +171,7 @@ pub(crate) async fn get_drive_password(pool: &SqlitePool, account_id: &str) -> R
 }
 
 /// Read the sync path for a specific label from the database.
-async fn get_sync_path_for_label(pool: &SqlitePool, account_id: &str, label: &str) -> Result<String, crate::error::AppError> {
+pub(crate) async fn get_sync_path_for_label(pool: &SqlitePool, account_id: &str, label: &str) -> Result<String, crate::error::AppError> {
     let db = pool;
     let owner = account_key(account_id);
 
@@ -208,7 +208,7 @@ fn config_dir_for_folder(account_id: &str, label: &str) -> Result<PathBuf, crate
 
 /// Path to the master encrypted mnemonic at the account level:
 /// `~/.hippius/drives/<account_key>/master_enc_mnemonic.json`
-fn master_mnemonic_path(account_id: &str) -> Result<PathBuf, crate::error::AppError> {
+pub(crate) fn master_mnemonic_path(account_id: &str) -> Result<PathBuf, crate::error::AppError> {
     Ok(account_dir(account_id)?.join("master_enc_mnemonic.json"))
 }
 

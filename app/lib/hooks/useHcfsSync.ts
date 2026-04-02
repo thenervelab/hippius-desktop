@@ -11,6 +11,7 @@ import {
 import { getPrivateSyncPath, getAllSyncPaths, allowAssetScope } from "../utils/syncPathUtils";
 import { invoke } from "@tauri-apps/api/core";
 import { isSyncConfiguredAtom, syncEngineStatusAtom } from "../global-atoms/unpinAtoms";
+import { migrationLockAtom } from "../global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 
 export interface UseHcfsSyncResult {
@@ -53,6 +54,12 @@ export function useHcfsSync(): UseHcfsSyncResult {
   const tryInitializeSync = useCallback(
     async (accountId: string, label: string, mnemonic?: string): Promise<boolean> => {
       setError(null);
+
+      // Block sync while server-side migration is in progress
+      if (appStore.get(migrationLockAtom)) {
+        console.log("[useHcfsSync] Migration in progress, sync blocked");
+        return false;
+      }
 
       try {
         // Check if HCFS config exists
@@ -165,6 +172,12 @@ export async function tryAutoInitSync(
   accountId: string,
   mnemonic?: string
 ): Promise<boolean> {
+  // Block sync while server-side migration is in progress
+  if (appStore.get(migrationLockAtom)) {
+    console.log("[tryAutoInitSync] Migration in progress, sync blocked");
+    return false;
+  }
+
   try {
     // Eagerly persist the master mnemonic to disk so it survives app restarts.
     // This is a no-op if the master already exists or the HCFS password hasn't
