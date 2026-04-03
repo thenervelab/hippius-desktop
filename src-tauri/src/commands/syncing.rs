@@ -1372,9 +1372,6 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
         started_set: Arc::clone(&upload_started),
         direction: TransferDirection::Upload,
     });
-    let app_migration = app.clone();
-    let label_migration = label.to_string();
-
     // Download callback
     let download_ctx = Arc::new(TransferContext {
         sync: sync.clone(),
@@ -1404,13 +1401,6 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
         on_sync_plan_ready: Some(build_plan_ready_callback(app, label, sync)),
         on_upload_progress: Some(Arc::new(move |b, t, p| {
             handle_transfer_progress(&upload_ctx, b, t, p);
-            if b == t
-                && t > 0
-                && let Some(path_str) = p
-                && label_migration == "migration"
-            {
-                crate::commands::migration::record_migration_upload(&app_migration, path_str.to_string());
-            }
         })),
         on_download_progress: Some(Arc::new(move |b, t, p| {
             handle_transfer_progress(&download_ctx, b, t, p);

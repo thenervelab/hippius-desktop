@@ -54,10 +54,7 @@ reqwest = { version = "0.13.1", default-features = false, features = [
     "stream",
     "rustls",
 ] }
-aws-sdk-s3 = { version = "1.125.0", features = ["behavior-version-latest"] }
-aws-credential-types = { version = "1.2.14", features = [
-    "hardcoded-credentials",
-] }
+ed25519-dalek = "2.2"
 zip = "4.2.0"
 dotenvy = "0.15"
 base64 = "0.21"

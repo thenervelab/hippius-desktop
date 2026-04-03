@@ -239,8 +239,6 @@ fn main() {
             set_device_name,
             // Migration
             commands::migration::check_migration,
-            commands::migration::start_migration,
-            commands::migration::cancel_migration,
             commands::migration::dismiss_migration,
             commands::migration::complete_migration_transition,
             commands::migration::start_server_migration,

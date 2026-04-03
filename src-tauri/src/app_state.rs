@@ -10,7 +10,7 @@
 use crate::sync_engine::SyncEngine;
 use sp_core::sr25519;
 use sqlx::sqlite::SqlitePool;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -97,18 +97,12 @@ impl NebulaState {
     }
 }
 
-/// State for the S3-to-HCFS migration workflow.
+/// State for the server-side migration workflow.
 ///
-/// - `cancel`: cancellation flag for the download loop
-/// - `task`: handle to the background migration tokio task
-/// - `uploaded`: set of relative paths confirmed uploaded to HCFS
 /// - `in_progress`: true while a migration is running (blocks non-migration sync init)
 /// - `client`: shared HTTP client for migration API calls
 pub struct MigrationState {
-    pub cancel: AtomicBool,
     pub in_progress: AtomicBool,
-    pub task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
-    pub uploaded: Mutex<HashSet<String>>,
     pub client: reqwest::Client,
 }
 
@@ -123,10 +117,7 @@ impl MigrationState {
             builder.build().expect("Failed to build migration HTTP client")
         };
         Self {
-            cancel: AtomicBool::new(false),
             in_progress: AtomicBool::new(false),
-            task: tokio::sync::Mutex::new(None),
-            uploaded: Mutex::new(HashSet::new()),
             client,
         }
     }
