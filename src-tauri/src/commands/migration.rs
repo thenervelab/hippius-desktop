@@ -187,6 +187,7 @@ pub(crate) async fn fetch_migration_files(
 /// The server-side migration worker uses these credentials to download the
 /// user's files from the legacy S3 storage (s3.hippius.com).
 async fn fetch_s3_credentials(
+    client: &reqwest::Client,
     pool: &SqlitePool,
     account_id: &str,
 ) -> Result<(String, String), crate::error::AppError> {
@@ -218,7 +219,6 @@ async fn fetch_s3_credentials(
         secret: String,
     }
 
-    let client = reqwest::Client::new();
     let resp = client
         .post(&url)
         .header("Authorization", format!("Token {api_token}"))
@@ -428,7 +428,6 @@ pub struct ServerMigrationStatus {
 pub async fn start_server_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
-    path_prefix: Option<String>,
     total_size: u64,
 ) -> Result<StartServerMigrationResult, crate::error::AppError> {
     state.migration.in_progress.store(true, Ordering::SeqCst);
@@ -438,19 +437,15 @@ pub async fn start_server_migration(
     let folder_hash = crate::commands::syncing::folder_hash("default");
     let pool = state.pool()?;
 
-    // Resolve path_prefix: use provided value, or derive from migration files
-    let path_prefix = if let Some(p) = path_prefix.filter(|p| !p.is_empty()) {
-        p
-    } else {
-        let server_url = get_server_url(pool, &account_id).await?;
-        let files = fetch_migration_files(
-            &state.migration.client,
-            &server_url,
-            &account_id,
-        )
-        .await?;
-        derive_path_prefix(&files)
-    };
+    // Derive path_prefix from server migration files (bucket name)
+    let server_url = get_server_url(pool, &account_id).await?;
+    let files = fetch_migration_files(
+        &state.migration.client,
+        &server_url,
+        &account_id,
+    )
+    .await?;
+    let path_prefix = derive_path_prefix(&files);
 
     // Check disk space — files will be downloaded locally after server migration
     let sync_path = crate::commands::syncing::get_sync_path_for_label(
@@ -504,10 +499,11 @@ pub async fn start_server_migration(
 
     // Fetch per-user S3 credentials from Hippius API
     let (s3_access_key, s3_secret_key) =
-        fetch_s3_credentials(pool, &account_id).await?;
+        fetch_s3_credentials(&state.migration.client, pool, &account_id)
+            .await?;
 
-    // Call server endpoint
-    let server_url = get_server_url(pool, &account_id).await?;
+    // Call server endpoint — use a longer timeout since the server
+    // validates credentials and sets up the migration job.
     let url = format!(
         "{}/migration/start",
         server_url.trim_end_matches('/')
@@ -515,6 +511,7 @@ pub async fn start_server_migration(
 
     let resp = state.migration.client
         .post(&url)
+        .timeout(std::time::Duration::from_secs(120))
         .json(&serde_json::json!({
             "ss58_address": account_id,
             "folder_hash": folder_hash,
