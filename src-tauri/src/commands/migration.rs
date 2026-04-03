@@ -271,12 +271,11 @@ pub async fn check_migration(
     account_id: String,
 ) -> Result<MigrationCheckResult, crate::error::AppError> {
     let pool = state.pool()?;
-    // 1. Check local DB for existing migration
-    if let Some((status, _total, _completed, sync_path, _server_url)) = get_migration_status_db(pool, &account_id).await? {
-        // If the user already dismissed (skipped, cancelled, or completed)
-        // the migration, never show the prompt again.
-        let terminal_statuses = ["dismissed", "skipped", "cancelled", "complete"];
-        if terminal_statuses.iter().any(|s| status.eq_ignore_ascii_case(s)) {
+
+    // Only respect explicit user dismissal (skipped/dismissed).
+    // For everything else, the server is the source of truth.
+    if let Some((status, ..)) = get_migration_status_db(pool, &account_id).await? {
+        if status.eq_ignore_ascii_case("dismissed") || status.eq_ignore_ascii_case("skipped") {
             return Ok(MigrationCheckResult {
                 needs_migration: false,
                 file_count: 0,
@@ -286,43 +285,15 @@ pub async fn check_migration(
                 is_resuming: false,
             });
         }
-
-        // Status is "in_progress" — verify with the server
-        let server_url = get_server_url(pool, &account_id).await?;
-        let files = fetch_migration_files(&state.migration.client, &server_url, &account_id).await?;
-        let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
-
-        if pending.is_empty() {
-            // Server confirms everything is migrated
-            if let Err(e) = upsert_migration_status(pool, &account_id, "complete", 0, 0, "[]", &sync_path, &server_url).await {
-                warn!("Failed to update migration status to complete: {e}");
-            }
-            return Ok(MigrationCheckResult {
-                needs_migration: false,
-                file_count: 0,
-                total_size: 0,
-                files: vec![],
-                sync_path: None,
-                is_resuming: false,
-            });
-        }
-
-        // Server still has pending files — resume migration
-        let total_size: u64 = pending.iter().map(|f| f.size_bytes).sum();
-        return Ok(MigrationCheckResult {
-            needs_migration: true,
-            file_count: pending.len() as u64,
-            total_size,
-            files: pending,
-            sync_path: Some(sync_path),
-            is_resuming: true,
-        });
     }
 
-    // 2. No local state -- check server
+    // Always check the server for pending migration files
     let server_url = get_server_url(pool, &account_id).await?;
     let files = fetch_migration_files(&state.migration.client, &server_url, &account_id).await?;
-    let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
+    let pending: Vec<MigrationFile> = files
+        .into_iter()
+        .filter(|f| f.status.eq_ignore_ascii_case("pending"))
+        .collect();
     let total_size: u64 = pending.iter().map(|f| f.size_bytes).sum();
 
     Ok(MigrationCheckResult {
