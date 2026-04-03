@@ -109,7 +109,8 @@ pub struct MigrationState {
 impl MigrationState {
     pub fn new() -> Self {
         let client = {
-            let mut builder = reqwest::Client::builder();
+            let mut builder = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30));
             #[cfg(debug_assertions)]
             {
                 builder = builder.danger_accept_invalid_certs(true);

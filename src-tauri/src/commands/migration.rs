@@ -462,6 +462,8 @@ pub async fn start_server_migration(
 ) -> Result<StartServerMigrationResult, crate::error::AppError> {
     state.migration.in_progress.store(true, Ordering::SeqCst);
 
+    // Migrated files always land in the "default" folder — the only
+    // user-visible drive label after migration completes.
     let folder_hash = crate::commands::syncing::folder_hash("default");
     let pool = state.pool()?;
 
@@ -542,7 +544,6 @@ pub async fn start_server_migration(
 
     let resp = state.migration.client
         .post(&url)
-
         .json(&serde_json::json!({
             "ss58_address": account_id,
             "folder_hash": folder_hash,
@@ -582,7 +583,6 @@ pub async fn poll_migration_status(
 
     let resp = state.migration.client
         .get(&url)
-
         .send()
         .await?;
 
@@ -612,7 +612,6 @@ pub async fn cancel_server_migration(
 
     let resp = state.migration.client
         .post(&url)
-
         .json(&serde_json::json!({
             "ss58_address": account_id,
         }))
