@@ -7,7 +7,6 @@ import { invoke } from "@tauri-apps/api/core";
 import useSubscriptionData from "@/app/lib/hooks/useSubscriptionData";
 import ButtonCard from "../../ui/button/CardButton";
 import { Graphsheet } from "../../ui";
-import { ensureBillingAuth } from "@/app/lib/hooks/api/useBillingAuth";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 export interface Plan {
@@ -66,13 +65,8 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
                 return;
             }
 
-            // Ensure authentication is valid
-            const authOk = await ensureBillingAuth(polkadotAddress);
-            if (!authOk.ok) {
-                toast.error(authOk.error || "Authentication failed");
-                return;
-            }
-
+            // ensure_billing_auth is called by PreAuthProvider on login — no separate call needed.
+            // If auth expired, the portal URL request will fail and the catch block handles it.
             const data = await invoke<{ portal_url?: string }>(
                 "get_customer_portal_url",
                 {

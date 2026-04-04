@@ -9,8 +9,17 @@ interface BlockTimestampProps {
     blockNumber: number;
 }
 
-// Cache for block timestamps to avoid redundant Rust calls
-const blockTimestampCache: Record<number, Date> = {};
+// Cache for block timestamps with LRU eviction (max 500 entries)
+const MAX_CACHE_SIZE = 500;
+const blockTimestampCache = new Map<number, Date>();
+function cacheSet(key: number, value: Date) {
+    if (blockTimestampCache.size >= MAX_CACHE_SIZE) {
+        // Evict oldest entry (first key in Map insertion order)
+        const firstKey = blockTimestampCache.keys().next().value;
+        if (firstKey !== undefined) blockTimestampCache.delete(firstKey);
+    }
+    blockTimestampCache.set(key, value);
+}
 
 const BlockTimestamp: React.FC<BlockTimestampProps> = ({ blockNumber }) => {
     const [timestamp, setTimestamp] = useState<Date | null>(null);
@@ -25,9 +34,10 @@ const BlockTimestamp: React.FC<BlockTimestampProps> = ({ blockNumber }) => {
                 setIsLoading(true);
 
                 // Check cache first
-                if (blockTimestampCache[blockNumber]) {
+                const cached = blockTimestampCache.get(blockNumber);
+                if (cached) {
                     if (isMounted) {
-                        setTimestamp(blockTimestampCache[blockNumber]);
+                        setTimestamp(cached);
                         setIsLoading(false);
                     }
                     return;
@@ -40,7 +50,7 @@ const BlockTimestamp: React.FC<BlockTimestampProps> = ({ blockNumber }) => {
                 const date = new Date(result.timestamp);
 
                 // Cache the result
-                blockTimestampCache[blockNumber] = date;
+                cacheSet(blockNumber, date);
 
                 if (isMounted) {
                     setTimestamp(date);

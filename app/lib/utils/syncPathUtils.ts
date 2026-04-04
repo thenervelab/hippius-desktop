@@ -3,15 +3,15 @@ import { invoke } from "@tauri-apps/api/core";
 export interface SyncPathResult {
     path: string;
     label: string;
-    isPaused?: boolean;
+    isPublic: boolean;
+    isPaused: boolean;
 }
 
 export async function getPrivateSyncPath(accountId?: string): Promise<SyncPathResult | null> {
     try {
-        const result = await invoke<{ path: string; label: string }>("get_sync_path", {
+        return await invoke<SyncPathResult>("get_sync_path", {
             params: { isPublic: false, accountId },
         });
-        return { path: result.path, label: result.label };
     } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         if (msg.includes("not set yet")) {
@@ -40,10 +40,9 @@ export async function setPrivateSyncPath(
 
 export async function getPublicSyncPath(accountId?: string): Promise<SyncPathResult> {
     try {
-        const result = await invoke<{ path: string; label: string }>("get_sync_path", {
+        return await invoke<SyncPathResult>("get_sync_path", {
             params: { isPublic: true, accountId },
         });
-        return { path: result.path, label: result.label };
     } catch (error) {
         console.error("Error fetching sync path:", error);
         throw new Error(error instanceof Error ? error.message : `${error}`);

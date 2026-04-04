@@ -8,6 +8,7 @@ import Link from "next/link";
 import TableActionMenu from "../../ui/alt-table/TableActionMenu";
 import { Icons } from "../../ui";
 import { CopyableCell } from "../../ui/alt-table";
+import { parseImageName } from "@/lib/utils/vmUtils";
 import { formatDate } from "@/app/lib/utils/formatters/formatDate";
 import ImageCell from "./image-cell";
 import TemplateCell from "./template-cell";
@@ -79,42 +80,7 @@ export const getDesktopColumns = (
   columnHelper.accessor("image", {
     header: "IMAGE",
     cell: (d) => {
-      const imageName = d.getValue();
-      // Extract OS and version from image name
-      let os:
-        | "AlmaLinux"
-        | "CentOS"
-        | "Debian"
-        | "Fedora"
-        | "Rocky Linux"
-        | "Ubuntu";
-      let version: string;
-
-      if (imageName.startsWith("AlmaLinux")) {
-        os = "AlmaLinux";
-        version = imageName;
-      } else if (imageName.startsWith("CentOS")) {
-        os = "CentOS";
-        version = imageName;
-      } else if (imageName.startsWith("Debian")) {
-        os = "Debian";
-        version = imageName;
-      } else if (imageName.startsWith("Fedora")) {
-        os = "Fedora";
-        version = imageName;
-      } else if (imageName.startsWith("Rocky Linux")) {
-        os = "Rocky Linux";
-        version = imageName;
-      } else if (imageName.startsWith("Ubuntu")) {
-        os = "Ubuntu";
-        version = imageName;
-      } else {
-        // Fallback for unknown OS
-        os = "Rocky Linux"; // Default fallback
-        version = imageName;
-      }
-
-      return <ImageCell value={{ os, version }} />;
+      return <ImageCell value={parseImageName(d.getValue())} />;
     },
   }),
   columnHelper.accessor("nebula_ip", {

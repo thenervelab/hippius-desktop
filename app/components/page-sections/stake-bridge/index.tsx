@@ -51,9 +51,18 @@ const StakeBridge = () => {
             return;
         }
 
-        const availableAmount = Number(availableBalance || '0') / 1e18; // Convert from planck with 18 decimals
-        if (parseFloat(amount) > availableAmount) {
-            toast.error("Amount exceeds available balance");
+        // Lossless BigInt validation — no float intermediary
+        try {
+            const [intPart, fracPart = ""] = amount.split(".");
+            const padded = fracPart.padEnd(18, "0").slice(0, 18);
+            const amountPlanck = BigInt((intPart || "0") + padded);
+            const availablePlanck = BigInt(stakingInfo.availableBalance || "0");
+            if (amountPlanck > availablePlanck) {
+                toast.error("Amount exceeds available balance");
+                return;
+            }
+        } catch {
+            toast.error("Invalid amount");
             return;
         }
 
@@ -101,22 +110,7 @@ const StakeBridge = () => {
         toast.info("This feature is coming soon!");
     };
 
-    // Calculate available balance for staking (excluding staked and unbonding amounts)
-    const calculateAvailableBalance = () => {
-        if (!stakingInfo.balance) return "0";
-
-        try {
-            const total = BigInt(stakingInfo.balance || "0");
-            const bonded = BigInt(stakingInfo.bonded || "0");
-            const unbonding = BigInt(stakingInfo.unbonding || "0");
-            const available = total - bonded - unbonding;
-            return available > BigInt(0) ? available.toString() : "0";
-        } catch {
-            return stakingInfo.balance; // Fallback to total balance
-        }
-    };
-
-    const availableBalance = calculateAvailableBalance();
+    const availableBalance = stakingInfo.availableBalance || "0";
 
     return (
         <>

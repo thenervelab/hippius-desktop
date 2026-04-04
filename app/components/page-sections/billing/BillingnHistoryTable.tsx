@@ -150,7 +150,7 @@ const BillingHistoryTable: React.FC = () => {
         header: "ID",
         cell: (info) => (
           <CopyableCell
-            copyAbleText={info.getValue() as string}
+            copyAbleText={String(info.getValue())}
             title="Copy Billing ID"
             toastMessage="Billing ID Copied Successfully!"
             isTable={true}

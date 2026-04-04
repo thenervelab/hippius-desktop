@@ -73,185 +73,61 @@ interface VpnStatus {
   is_enabled: boolean;
 }
 
-interface OAuthSession {
-  token: string;
-  userId: string;
-  username: string;
-  substrateAddress: string;
-  provider: string;
-  expiresAt: string;
-}
-
-interface CreditsApiResponse {
-  balance: string; // String representation of the credit balance
-}
-
 const MINIMUM_CREDITS = 10;
-const OAUTH_SESSION_KEY = "hippius_oauth_session";
-const CREDITS_CACHE_DURATION = 30000; // Cache credits for 30 seconds
 
-// Cache for credits to avoid repeated API calls
-let creditsCache: {
-  credits: number;
-  timestamp: number;
-  isLoading: boolean;
-  error?: string;
-} | null = null;
-
-// Cache for async login check
-let loginStatusCache: { loggedIn: boolean; timestamp: number } | null = null;
-const LOGIN_STATUS_CACHE_DURATION = 5000; // 5 seconds
+// Tray data cache — refreshed via get_tray_menu_data Rust command
+let trayDataCache: { loggedIn: boolean; credits: number | null; substrateAddress: string | null; timestamp: number } | null = null;
+const TRAY_CACHE_DURATION = 5000; // 5 seconds
 
 /**
- * Immediately invalidate the login status cache so the next
- * `isUserLoggedIn()` / `refreshLoginStatus()` call re-checks.
+ * Immediately invalidate the tray data cache so the next check re-queries Rust.
  * Call this on logout so the VPN watcher picks up the change instantly.
  */
 export function clearLoginStatusCache() {
-  loginStatusCache = null;
+  trayDataCache = null;
 }
 
-// Helper to check if user is logged in (synchronous, uses cache)
-function isUserLoggedIn(): boolean {
-  if (typeof window === "undefined") return false;
-
-  // Use cache if fresh
-  if (loginStatusCache && Date.now() - loginStatusCache.timestamp < LOGIN_STATUS_CACHE_DURATION) {
-    return loginStatusCache.loggedIn;
+/** Fetch tray data from Rust (login status + credits), with caching. */
+async function refreshTrayData(): Promise<{ loggedIn: boolean; credits: number | null; substrateAddress: string | null }> {
+  if (trayDataCache && Date.now() - trayDataCache.timestamp < TRAY_CACHE_DURATION) {
+    return trayDataCache;
   }
-
   try {
-    // Check localStorage for OAuth session
-    const storedSession = localStorage.getItem(OAUTH_SESSION_KEY);
-    const storedExpiry = localStorage.getItem("hippius_oauth_session_expiry");
-
-    if (storedSession && storedExpiry) {
-      const expiryTime = new Date(storedExpiry).getTime();
-      if (Date.now() < expiryTime) {
-        const session: OAuthSession = JSON.parse(storedSession);
-        if (session.token) {
-          loginStatusCache = { loggedIn: true, timestamp: Date.now() };
-          return true;
-        }
-      } else {
-        logger.debug("[Tray] Session expired");
-      }
-    }
-
-    // Fall back to cached result while async check runs
-    if (loginStatusCache) return loginStatusCache.loggedIn;
-    return false;
-  } catch (error) {
-    console.error("[Tray] Failed to check login status:", error);
-    return false;
-  }
-}
-
-// Async login check that also queries Rust backend (for mnemonic logins
-// that don't store an OAuth session in localStorage).
-async function refreshLoginStatus(): Promise<boolean> {
-  // First check localStorage (fast path)
-  if (isUserLoggedIn()) return true;
-
-  // Fall back to Rust backend session check
-  try {
-    const session = await invoke<{ authToken?: string | null; tokenExpiry?: number | null } | null>("get_last_auth_session");
-    if (session?.authToken) {
-      const isValid = !session.tokenExpiry || session.tokenExpiry > Date.now();
-      loginStatusCache = { loggedIn: isValid, timestamp: Date.now() };
-      return isValid;
-    }
+    const data = await invoke<{ loggedIn: boolean; credits: number | null; substrateAddress: string | null }>("get_tray_menu_data");
+    trayDataCache = { ...data, timestamp: Date.now() };
+    return data;
   } catch {
-    // DB not ready yet — ignore
-  }
-
-  loginStatusCache = { loggedIn: false, timestamp: Date.now() };
-  return false;
-}
-
-// Helper to fetch credits via Rust backend with caching
-async function fetchUserCredits(forceRefresh = false): Promise<{
-  credits: number;
-  isLoading: boolean;
-  error?: string;
-}> {
-  // Return cached result if available and not expired
-  if (!forceRefresh && creditsCache) {
-    const now = Date.now();
-    if (now - creditsCache.timestamp < CREDITS_CACHE_DURATION) {
-      return {
-        credits: creditsCache.credits,
-        isLoading: creditsCache.isLoading,
-        error: creditsCache.error,
-      };
-    }
-  }
-
-  try {
-    // Get substrate address from localStorage session
-    const storedSession = localStorage.getItem(OAUTH_SESSION_KEY);
-    if (!storedSession) {
-      const result = { credits: 0, isLoading: true, error: "Loading credits" };
-      creditsCache = { ...result, timestamp: Date.now() };
-      return result;
-    }
-    const session: OAuthSession = JSON.parse(storedSession);
-    if (!session.substrateAddress) {
-      const result = { credits: 0, isLoading: true, error: "Loading credits" };
-      creditsCache = { ...result, timestamp: Date.now() };
-      return result;
-    }
-
-    const data = await invoke<CreditsApiResponse>("get_user_credits_balance", {
-      accountId: session.substrateAddress,
-    });
-    const balanceStr = data.balance || "0";
-    const credits = parseFloat(balanceStr);
-
-    const result = { credits, isLoading: false };
-    creditsCache = { ...result, timestamp: Date.now() };
-    return result;
-  } catch (error) {
-    console.error("[Tray] Failed to fetch credits:", error);
-    const result = { credits: 0, isLoading: true, error: "Loading credits" };
-    creditsCache = { ...result, timestamp: Date.now() };
-    return result;
+    return { loggedIn: false, credits: null, substrateAddress: null };
   }
 }
 
-// Helper to check if user has sufficient credits
+/** Synchronous login check using cached data. */
+function isUserLoggedIn(): boolean {
+  return trayDataCache?.loggedIn ?? false;
+}
+
+/** Async login check via Rust. */
+async function refreshLoginStatus(): Promise<boolean> {
+  const data = await refreshTrayData();
+  return data.loggedIn;
+}
+
+/** Check if user has sufficient credits. */
 async function checkUserCredits(): Promise<{
   hasEnough: boolean;
   isLoading: boolean;
   error?: string;
   notLoggedIn?: boolean;
 }> {
-  // First check if user is logged in
-  if (!isUserLoggedIn()) {
-    return {
-      hasEnough: false,
-      isLoading: false,
-      notLoggedIn: true,
-      error: "Login required",
-    };
+  const data = await refreshTrayData();
+  if (!data.loggedIn) {
+    return { hasEnough: false, isLoading: false, notLoggedIn: true, error: "Login required" };
   }
-
-  const result = await fetchUserCredits();
-
-  if (result.isLoading) {
-    return {
-      hasEnough: false,
-      isLoading: true,
-      error: result.error || "Loading credits",
-    };
-  }
-
-  const hasEnough = result.credits >= MINIMUM_CREDITS;
-
+  const credits = data.credits ?? 0;
   return {
-    hasEnough,
+    hasEnough: credits >= MINIMUM_CREDITS,
     isLoading: false,
-    error: hasEnough ? undefined : "Insufficient credits",
+    error: credits >= MINIMUM_CREDITS ? undefined : "Insufficient credits",
   };
 }
 

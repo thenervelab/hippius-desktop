@@ -94,13 +94,12 @@ export default function FolderUploadDialog({
             // Get sync path — use selected path or fall back to default
             const syncPath = selectedSyncPath ?? (await getPrivateSyncPath(polkadotAddress || ""))?.path ?? "";
 
+            // Single call — copies folder and triggers sync internally
             const name = await invoke<string>("add_folder", {
                 syncPath,
                 folderPath,
+                subfolder: null,
             });
-
-            // Trigger sync to push changes
-            await invoke("trigger_sync_now").catch((err: unknown) => console.warn("[FolderUploadDialog] trigger_sync_now failed:", err));
 
             // Refresh file list AFTER backend has added the folder so list_sync_folder sees it
             queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });

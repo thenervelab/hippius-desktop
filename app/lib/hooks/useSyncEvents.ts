@@ -34,13 +34,6 @@ interface SyncOutcome {
   conflicts_skipped: number;
 }
 
-interface TransferProgress {
-  label: string;
-  bytes: number;
-  total: number;
-  path: string | null;
-}
-
 export function useSyncEvents() {
   const queryClient = useAtomValue(queryClientAtom);
   const setSyncEngineHealthAtom = useSetAtom(syncEngineHealthAtom);
@@ -114,16 +107,11 @@ export function useSyncEvents() {
               });
             }
           }),
-          // Refresh recent files when individual files finish syncing
-          listen<TransferProgress>("hcfs_upload_progress", (e) => {
-            if (e.payload.bytes >= e.payload.total && e.payload.total > 0) {
-              scheduleRecentFilesRefresh();
-            }
-          }),
-          listen<TransferProgress>("hcfs_download_progress", (e) => {
-            if (e.payload.bytes >= e.payload.total && e.payload.total > 0) {
-              scheduleRecentFilesRefresh();
-            }
+          // Refresh recent files when individual files finish syncing.
+          // Rust emits this event when bytes == total — no byte-count
+          // interpretation needed in TypeScript.
+          listen("hcfs_file_transfer_complete", () => {
+            scheduleRecentFilesRefresh();
           }),
           // Activity updated (e.g. file renamed on disk) — dispatch
           // immediately so recent files reflect the new name without

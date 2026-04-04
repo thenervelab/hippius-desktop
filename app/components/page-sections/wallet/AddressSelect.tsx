@@ -49,6 +49,22 @@ const AddressSelect: React.FC<AddressSelectProps> = ({
     setSearchText(value);
   }, [value]);
 
+  // Filter addresses when search text changes
+  useEffect(() => {
+    if (!searchText.trim()) {
+      setFilteredAddresses(addresses);
+    } else {
+      const lower = searchText.toLowerCase();
+      setFilteredAddresses(
+        addresses.filter(
+          (a) =>
+            a.name.toLowerCase().includes(lower) ||
+            a.walletAddress.toLowerCase().includes(lower)
+        )
+      );
+    }
+  }, [searchText, addresses]);
+
   const handleOpenChange = (open: boolean) => {
     setIsOpen(open);
     onOpenChange?.(open);

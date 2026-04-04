@@ -52,41 +52,23 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
     setLoggingIn(true);
 
     try {
-      await login(mnemonic.trim());
+      // login() returns the substrate address directly — no localStorage parsing needed
+      const userAddress = await login(mnemonic.trim());
 
-      // Get the user address from session after login
-      await new Promise(resolve => setTimeout(resolve, 100));
-      const storedSession = localStorage.getItem("hippius_oauth_session");
-      let userAddress: string | null = null;
-
-      if (storedSession) {
-        try {
-          const session = JSON.parse(storedSession);
-          userAddress = session.substrateAddress;
-        } catch (e) {
-          console.error("[AccessKeyLogin] Failed to parse session:", e);
-        }
-      }
-
-      // Add welcome notification if we have the address
+      // Add welcome notification
       if (userAddress) {
-        console.log("[AccessKeyLogin] Creating welcome notification for:", userAddress);
         await addNotification({
           userAddress,
           notificationType: "Hippius",
           notificationSubtype: "Welcome",
-          notificationTitleText: "Hello from Hippius 👋  Here's what's new!",
-          notificationDescription: `🎉 Welcome to Hippius! You're now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. We keep credit pricing simple and fair, so you always know what you're spending. You can check your remaining credits at any time in the billing tab, and top up when you need more. When you're ready, tap Check Out to launch your first storage session.`,
+          notificationTitleText: "Hello from Hippius! Here's what's new!",
+          notificationDescription: "Welcome to Hippius! You're now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. You can check your remaining credits at any time in the billing tab, and top up when you need more. When you're ready, tap Check Out to launch your first storage session.",
           notificationLinkText: "Check Out",
           notificationLink: "/files",
         });
       }
 
-      // Get redirect parameter from URL or default to dashboard
       const redirectPath = searchParams.get("redirect") || "/";
-      console.log("[AccessKeyLogin] Redirecting to:", redirectPath);
-
-      // Use replace to avoid adding to history and prevent back button issues
       router.replace(redirectPath);
     } catch (error) {
       console.error("Failed to login with access key:", error);

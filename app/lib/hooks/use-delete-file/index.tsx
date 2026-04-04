@@ -8,8 +8,6 @@ import { queryClientAtom } from "jotai-tanstack-query";
 import { useAtomValue } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { getPrivateSyncPath, getAllSyncPaths } from "@/lib/utils/syncPathUtils";
-import { recordDeletedFile } from "@/lib/services/syncProgressService";
 import { toast } from "sonner";
 import { useRef } from "react";
 
@@ -81,70 +79,29 @@ export const useDeleteFile = ({
             if (files.length === 0) throw new Error("No files to delete");
             if (!polkadotAddress) throw new Error("Wallet not connected");
 
-            // Build a label → path lookup for multi-folder support
-            const allPaths = await getAllSyncPaths(polkadotAddress);
-            const pathByLabel = new Map(
-                allPaths.map((sp) => [sp.label, sp.path])
+            // Single Rust call handles path resolution, deletion, and sync trigger
+            const result = await invoke<{ deleted: number; failed: Array<{ name: string; error: string }> }>(
+                "delete_files",
+                {
+                    accountId: polkadotAddress,
+                    files: files.map((f) => ({
+                        name: f.actualFileName || f.name,
+                        source: f.source ?? null,
+                        label: f.label ?? null,
+                        size: f.size ?? 0,
+                    })),
+                }
             );
-            const defaultSyncPath =
-                (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
 
-            const results = [];
-
-            for (const file of files) {
-                const fileName = file.actualFileName || file.name;
-
-                // Resolve the correct sync path for this file
-                const syncPath =
-                    (file.label ? pathByLabel.get(file.label) : null) ??
-                    defaultSyncPath;
-
-                // For files inside subfolders, derive the relative path from source.
-                // source = "/path/to/syncRoot/subfolder/file.txt" → relativeName = "subfolder/file.txt"
-                let relativeName = fileName;
-                if (file.source && syncPath) {
-                    const prefix = syncPath.endsWith("/") ? syncPath : syncPath + "/";
-                    if (file.source.startsWith(prefix)) {
-                        relativeName = file.source.slice(prefix.length);
-                    }
-                }
-
-                try {
-                    await invoke("remove_file", {
-                        syncPath,
-                        name: relativeName,
-                        label: file.label ?? null,
-                    });
-                    results.push({ file, success: true });
-
-                    // Record in sync progress so widget shows delete immediately
-                    await recordDeletedFile(relativeName, file.size ?? 0);
-                } catch (error) {
-                    console.error(`Failed to delete ${file.isFolder ? 'folder' : 'file'}: ${fileName}`, error);
-                    results.push({
-                        file,
-                        success: false,
-                        error: error instanceof Error ? error.message : String(error)
-                    });
-                }
-            }
-
-            const failedDeletions = results.filter(r => !r.success);
-            if (failedDeletions.length > 0) {
-                const errorMessages = failedDeletions.map(f => `${f.file.name}: ${f.error}`).join('; ');
+            if (result.failed.length > 0) {
+                const errorMessages = result.failed.map((f) => `${f.name}: ${f.error}`).join("; ");
                 throw new Error(`Failed to delete some files: ${errorMessages}`);
             }
-
-            // Trigger sync so server picks up the deletion
-            await invoke("trigger_sync_now").catch((err: unknown) => console.warn("[useDeleteFile] trigger_sync_now failed:", err));
 
             // Notify sync progress system so the widget refreshes immediately
             window.dispatchEvent(new CustomEvent("sync_progress_update"));
 
-            // Refetch file listing and recent files.
-            // The Rust remove_file command records "deleted" entries in the
-            // activity ring buffer, so the recent-files query will filter
-            // them out on refetch.
+            // Refetch file listing and recent files
             await Promise.all([
                 queryClient.refetchQueries({
                     queryKey: [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress],
@@ -156,8 +113,6 @@ export const useDeleteFile = ({
                     queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY],
                 }),
             ]);
-
-            return results;
         },
     });
 };

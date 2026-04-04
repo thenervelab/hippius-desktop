@@ -10,7 +10,7 @@ import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { toast } from "sonner";
 import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
-import SendBalanceDialog, { TRANSACTION_FEE } from "./SendBalanceDialog";
+import SendBalanceDialog from "./SendBalanceDialog";
 import ReceiveBalanceDialog from "./ReceiveBalanceDialog";
 
 interface WalletBalanceWidgetProps {
@@ -28,7 +28,6 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [receiveDialogOpen, setReceiveDialogOpen] = useState(false);
   const { polkadotAddress } = useWalletAuth();
-  const mnemonic = ""
 
   const handleSendBalance = () => {
     if (!balanceInfo?.data?.free) {
@@ -36,18 +35,18 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
       return;
     }
 
-    const currentBalance = +formatCreditBalance(balanceInfo.data.free);
-
-    if (currentBalance <= 0) {
+    const freePlanck = BigInt(balanceInfo.data.free);
+    if (freePlanck <= BigInt(0)) {
       toast.error(
         "Your balance is zero. Please add funds to your account first."
       );
       return;
     }
 
-    if (currentBalance <= parseFloat(TRANSACTION_FEE)) {
+    // Fee constant matches Rust ESTIMATED_TRANSFER_FEE_PLANCK
+    if (freePlanck <= BigInt("270233151")) {
       toast.error(
-        `Your balance (${currentBalance} hALPHA) is too low to cover the transaction fee (${TRANSACTION_FEE} hALPHA). Please add funds to your account first.`
+        `Your balance (${formatCreditBalance(balanceInfo.data.free)} hALPHA) is too low to cover the transaction fee. Please add funds to your account first.`
       );
       return;
     }
@@ -139,10 +138,7 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
       <SendBalanceDialog
         open={sendDialogOpen}
         onClose={() => setSendDialogOpen(false)}
-        availableBalance={
-          +formatCreditBalance(balanceInfo?.data?.free ?? null)
-        }
-        mnemonic={mnemonic || ""}
+        availableBalancePlanck={String(balanceInfo?.data?.free ?? "0")}
         refetchBalance={() => {
           refetch();
           refetchSystemBalance?.();

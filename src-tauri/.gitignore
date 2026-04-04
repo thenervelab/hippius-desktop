@@ -6,3 +6,5 @@
 # will have schema files for capabilities auto-completion
 /gen/schemas
 .illu/
+.claude/agents/illu-*.md
+.gemini/agents/illu-*.md

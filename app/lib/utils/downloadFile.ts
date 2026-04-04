@@ -2,37 +2,11 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
-import { getPrivateSyncPath, getAllSyncPaths } from "@/lib/utils/syncPathUtils";
+import { join } from "@tauri-apps/api/path";
 
-async function resolveSyncPath(
-  file: FormattedUserFile,
-  polkadotAddress: string
-): Promise<string> {
-  if (file.label) {
-    const allPaths = await getAllSyncPaths(polkadotAddress);
-    const match = allPaths.find((sp) => sp.label === file.label);
-    if (match?.path) return match.path;
-  }
-  return (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
-}
-
-/**
- * Derive the file name relative to the sync root.
- * Prefers computing from `file.source` (full filesystem path) so that
- * files / folders inside subfolders resolve correctly even when
- * `actualFileName` only contains the basename.
- */
-function resolveRelativeName(
-  file: FormattedUserFile,
-  syncPath: string,
-): string {
-  if (file.source && syncPath) {
-    const prefix = syncPath.endsWith("/") ? syncPath : syncPath + "/";
-    if (file.source.startsWith(prefix)) {
-      return file.source.slice(prefix.length);
-    }
-  }
-  return file.actualFileName || file.name;
+interface FilePathInfo {
+  sync_path: string;
+  relative_name: string;
 }
 
 const getFileSavePath = async (name: string, directory?: string) => {
@@ -69,7 +43,12 @@ const downloadFileExport = async (
   const toastId = toast.loading(`Preparing download: ${name}`);
 
   try {
-    const syncPath = await resolveSyncPath(file, polkadotAddress);
+    const info = await invoke<FilePathInfo>("resolve_file_info", {
+      accountId: polkadotAddress,
+      label: file.label ?? null,
+      source: file.source ?? null,
+      fileName: file.actualFileName || file.name,
+    });
 
     const { downloadDir } = await import("@tauri-apps/api/path");
     let saveDir: string | undefined;
@@ -87,10 +66,9 @@ const downloadFileExport = async (
 
     toast.loading(`Exporting: ${name}`, { id: toastId });
 
-    const fileName = resolveRelativeName(file, syncPath);
     await invoke("export_file", {
-      syncPath,
-      fileName,
+      syncPath: info.sync_path,
+      fileName: info.relative_name,
       outputPath: filePath,
     });
 
@@ -132,15 +110,19 @@ const downloadFolderExport = async (
       return { success: false, error: "Download cancelled" };
     }
 
-    const syncPath = await resolveSyncPath(file, polkadotAddress);
+    const info = await invoke<FilePathInfo>("resolve_file_info", {
+      accountId: polkadotAddress,
+      label: file.label ?? null,
+      source: file.source ?? null,
+      fileName: file.actualFileName || file.name,
+    });
 
     toast.loading(`Exporting folder: ${name}`, { id: toastId });
 
-    const fileName = resolveRelativeName(file, syncPath);
     await invoke("export_file", {
-      syncPath,
-      fileName,
-      outputPath: `${selectedDir}/${name}`,
+      syncPath: info.sync_path,
+      fileName: info.relative_name,
+      outputPath: await join(selectedDir, name),
     });
 
     toast.success(`Folder downloaded: ${name}`, { id: toastId });

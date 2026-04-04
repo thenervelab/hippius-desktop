@@ -1,0 +1,357 @@
+//! Mnemonic and key management for HCFS sync.
+//!
+//! Contains functions for deriving folder-specific mnemonics from the master
+//! mnemonic, persisting the master mnemonic, and creating encrypted backups.
+
+use tracing::{info, warn};
+
+use crate::auth::account_key::account_key;
+use crate::sync::config::get_drive_password;
+use hcfs_client::engine::manager::DriveManager;
+use std::io::{Cursor, Write as _};
+use std::path::{Path, PathBuf};
+
+/// Compute the account-level directory: `~/.hippius/drives/<account_key>/`
+pub(crate) fn account_dir(account_id: &str) -> Result<PathBuf, crate::error::AppError> {
+    let home = dirs::home_dir().ok_or(crate::error::AppError::Other("Could not determine home directory".into()))?;
+    let key = account_key(account_id);
+    Ok(home.join(".hippius").join("drives").join(key))
+}
+
+/// Deterministic 16-char hex hash of a folder label.
+/// Delegates to the hcfs-client library.
+pub(crate) fn folder_hash(label: &str) -> String {
+    hcfs_client::drive::keys::folder_hash(label)
+}
+
+/// Compute the per-folder config directory:
+/// `~/.hippius/drives/<account_key>/<folder_hash>/`
+pub(crate) fn config_dir_for_folder(account_id: &str, label: &str) -> Result<PathBuf, crate::error::AppError> {
+    Ok(account_dir(account_id)?.join(folder_hash(label)))
+}
+
+/// Path to the master encrypted mnemonic at the account level:
+/// `~/.hippius/drives/<account_key>/master_enc_mnemonic.json`
+pub(crate) fn master_mnemonic_path(account_id: &str) -> Result<PathBuf, crate::error::AppError> {
+    Ok(account_dir(account_id)?.join("master_enc_mnemonic.json"))
+}
+
+/// Derive a folder-specific mnemonic from the master mnemonic + folder label.
+/// Delegates to the hcfs-client library.
+pub(crate) fn derive_folder_mnemonic(master_mnemonic: &str, label: &str) -> Result<String, crate::error::AppError> {
+    hcfs_client::drive::keys::derive_folder_mnemonic(master_mnemonic, label)
+        .map_err(|e| crate::error::AppError::Other(e.to_string()))
+}
+
+/// Ensure the folder uses the correct derived mnemonic for the current master.
+///
+/// Detects two legacy states:
+///   1. Folder mnemonic == master verbatim (copied during migration without derivation)
+///   2. Folder mnemonic != derive(master, label) (derived from a different/old master)
+///
+/// In either case it re-derives from the current master, writes a `.needs_rekey`
+/// marker (so `initialize_sync_inner` purges stale remote files), and wipes local
+/// sync state to force re-upload with the correct key.
+pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, password: &str, label: &str) -> Result<(), crate::error::AppError> {
+    use zeroize::Zeroize;
+
+    let folder_enc = folder_dir.join("enc_mnemonic.json");
+    if !folder_enc.exists() || !master_path.exists() {
+        return Ok(());
+    }
+
+    let master = hcfs_client::auth::recover_mnemonic(master_path, password).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
+    let mut master_str = master.to_string();
+
+    let folder = hcfs_client::auth::recover_mnemonic(&folder_enc, password).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
+    let mut folder_str = folder.to_string();
+
+    let mut expected = derive_folder_mnemonic(&master_str, label)?;
+
+    if folder_str == expected {
+        // Already correct — nothing to do.
+        master_str.zeroize();
+        folder_str.zeroize();
+        expected.zeroize();
+        return Ok(());
+    }
+
+    // Folder mnemonic is wrong — either raw master or derived from an old master.
+    if folder_str == master_str {
+        info!("Folder '{}' uses raw master mnemonic — re-deriving", label);
+    } else {
+        info!("Folder '{}' uses wrong derived mnemonic (old master?) — re-deriving", label);
+    }
+    folder_str.zeroize();
+    master_str.zeroize();
+
+    // Create the rekey marker BEFORE saving the new mnemonic. If the
+    // process crashes after the mnemonic is saved but before the marker
+    // is written, the next startup would see folder == expected and
+    // skip — leaving stale remote files encrypted with the old key.
+    let marker = folder_dir.join(".needs_rekey");
+    std::fs::File::create(&marker)?;
+
+    hcfs_client::auth::save_encrypted_mnemonic(&folder_enc, &expected, password).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
+    expected.zeroize();
+
+    // Wipe sync state so files get re-uploaded with the new key
+    let state_path = folder_dir.join("sync_state.json");
+    let state_bak = folder_dir.join("sync_state.json.bak");
+    let _ = std::fs::remove_file(&state_path);
+    let _ = std::fs::remove_file(&state_bak);
+
+    info!("Re-derived mnemonic for '{}', wiped sync state (remote files preserved)", label);
+
+    Ok(())
+}
+
+/// Retrieve the master BIP-39 mnemonic for an account by decrypting it from
+/// disk. Shared implementation used by both the Tauri command and the billing
+/// auth module.
+///
+/// Takes `&AppState` to access both the DB pool and the live drive registry
+/// without relying on global state.
+pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, account_id: &str) -> Result<String, crate::error::AppError> {
+    let pool = app_state.pool()?;
+    let drive_password = get_drive_password(pool, account_id).await?;
+
+    // Prefer the master mnemonic at account level
+    let master_path = master_mnemonic_path(account_id)?;
+    if master_path.exists() {
+        let mnemonic = hcfs_client::auth::recover_mnemonic(&master_path, &drive_password)?;
+        return Ok(mnemonic.to_string());
+    }
+
+    // Fallback: try the first active drive's folder mnemonic (pre-migration state).
+    warn!("Master mnemonic not found at {:?}, falling back to per-folder mnemonic", master_path);
+    let first_arc = {
+        let guard = app_state.sync.drives.lock().await;
+        guard.values().next().map(|slot| slot.manager.clone())
+    };
+    if let Some(arc) = first_arc {
+        let m = arc.lock().await;
+        if m.is_initialized() {
+            Ok(m.export_mnemonic(&drive_password)?)
+        } else {
+            Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::DriveNotInitialized))
+        }
+    } else {
+        // No active drive — try reading DB for any sync path
+        let owner = account_key(account_id);
+        let result: Option<(String, String)> = sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ? LIMIT 1")
+            .bind(&owner)
+            .fetch_optional(pool)
+            .await?;
+
+        if let Some((path, lbl)) = result {
+            let folder_dir = config_dir_for_folder(account_id, &lbl)?;
+            let manager = DriveManager::new(PathBuf::from(&path), folder_dir);
+            if manager.is_initialized() {
+                Ok(manager.export_mnemonic(&drive_password)?)
+            } else {
+                Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::DriveNotInitialized))
+            }
+        } else {
+            Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::SyncSetup))
+        }
+    }
+}
+
+/// Tauri command wrapper: return the master BIP-39 mnemonic by decrypting it
+/// from disk.
+#[tauri::command]
+pub async fn get_drive_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String, crate::error::AppError> {
+    get_mnemonic_for_account(&state, &account_id).await
+}
+
+/// Ensure a BIP-39 mnemonic is available for HCFS sync.
+///
+/// Tries the drive's encrypted mnemonic first, falls back to generating
+/// a new one. Replaces the TypeScript `ensureSyncMnemonic.ts` that did
+/// the same fallback with a module-level dedup promise.
+#[tauri::command]
+pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String, crate::error::AppError> {
+    // Try drive mnemonic first
+    match get_mnemonic_for_account(&state, &account_id).await {
+        Ok(m) if !m.is_empty() => return Ok(m),
+        _ => {}
+    }
+
+    // Fall back to generating a new mnemonic (OAuth users on first sync)
+    info!(
+        "No drive mnemonic available, generating new one for account {}",
+        &account_id[..8.min(account_id.len())]
+    );
+    crate::auth::login::generate_mnemonic()
+}
+
+/// Persist the master mnemonic to disk early (during login), even before any
+/// sync folder is configured. This prevents the fallback to a random master
+/// that would make cross-device sync impossible.
+///
+/// If a master already exists on disk but differs from the provided mnemonic,
+/// it is updated to match the login mnemonic (source of truth for cross-device
+/// sync). No-op if the HCFS drive password has not been set yet.
+#[tauri::command]
+pub async fn persist_master_mnemonic(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    mnemonic: String,
+) -> Result<(), crate::error::AppError> {
+    let pool = state.pool()?;
+    let master_path = master_mnemonic_path(&account_id)?;
+
+    let Ok(drive_password) = get_drive_password(pool, &account_id).await else {
+        // HCFS config not set up yet — nothing we can do.
+        // The master will be saved when initialize_sync runs.
+        return Ok(());
+    };
+
+    if master_path.exists() {
+        // Compare stored master with the login mnemonic. A mismatch means
+        // the master was generated randomly (e.g. app restart lost the
+        // in-memory mnemonic). Update it so initialize_sync's step 4b and
+        // ensure_derived_mnemonic can detect and fix folder key mismatches.
+        use zeroize::Zeroize;
+        let stored = hcfs_client::auth::recover_mnemonic(&master_path, &drive_password)?;
+        let mut stored_str = stored.to_string();
+        if stored_str == mnemonic {
+            stored_str.zeroize();
+            return Ok(());
+        }
+        stored_str.zeroize();
+        info!("Stored master differs from login mnemonic — updating early");
+    }
+
+    let acct_dir = account_dir(&account_id)?;
+    std::fs::create_dir_all(&acct_dir)?;
+
+    hcfs_client::auth::save_encrypted_mnemonic(&master_path, &mnemonic, &drive_password)?;
+
+    info!("Eagerly persisted master mnemonic for account {}", &account_id[..8.min(account_id.len())]);
+    Ok(())
+}
+
+/// Create a password-protected zip file containing the plaintext mnemonic.
+/// Uses AES-256 encryption on the zip entry.
+#[tauri::command]
+pub async fn create_encrypted_backup(mut mnemonic: String, mut password: String, output_path: String) -> Result<(), crate::error::AppError> {
+    let result = (|| -> Result<(), crate::error::AppError> {
+        let buf = Cursor::new(Vec::new());
+        let mut zip = zip::ZipWriter::new(buf);
+
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .with_aes_encryption(zip::AesMode::Aes256, &password);
+
+        zip.start_file("recovery-phrase.txt", options)
+            .map_err(|e| crate::error::AppError::Other(e.to_string()))?;
+        zip.write_all(mnemonic.as_bytes())?;
+
+        let cursor = zip.finish().map_err(|e| crate::error::AppError::Other(e.to_string()))?;
+        std::fs::write(&output_path, cursor.into_inner())?;
+
+        Ok(())
+    })();
+
+    // Clear sensitive data from memory before dropping.
+    zeroize::Zeroize::zeroize(&mut mnemonic);
+    zeroize::Zeroize::zeroize(&mut password);
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── folder_hash ─────────────────────────────────────────────────
+
+    #[test]
+    fn folder_hash_is_deterministic() {
+        let h1 = folder_hash("my-folder");
+        let h2 = folder_hash("my-folder");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn folder_hash_is_16_hex_chars() {
+        let h = folder_hash("test");
+        assert_eq!(h.len(), 16);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()), "expected hex, got: {h}");
+    }
+
+    #[test]
+    fn folder_hash_differs_for_different_labels() {
+        assert_ne!(folder_hash("alpha"), folder_hash("beta"));
+    }
+
+    // ── derive_folder_mnemonic ──────────────────────────────────────
+
+    #[test]
+    fn derive_folder_mnemonic_is_deterministic() {
+        let master = "abandon abandon abandon abandon abandon \
+                       abandon abandon abandon abandon abandon \
+                       abandon about";
+        let m1 = derive_folder_mnemonic(master, "docs").unwrap();
+        let m2 = derive_folder_mnemonic(master, "docs").unwrap();
+        assert_eq!(m1, m2);
+    }
+
+    #[test]
+    fn derive_folder_mnemonic_differs_per_label() {
+        let master = "abandon abandon abandon abandon abandon \
+                       abandon abandon abandon abandon abandon \
+                       abandon about";
+        let m1 = derive_folder_mnemonic(master, "docs").unwrap();
+        let m2 = derive_folder_mnemonic(master, "photos").unwrap();
+        assert_ne!(m1, m2);
+    }
+
+    #[test]
+    fn derive_folder_mnemonic_produces_24_words() {
+        let master = "abandon abandon abandon abandon abandon \
+                       abandon abandon abandon abandon abandon \
+                       abandon about";
+        let derived = derive_folder_mnemonic(master, "test").unwrap();
+        assert_eq!(derived.split_whitespace().count(), 24, "derived mnemonic should be 24 words");
+    }
+
+    #[test]
+    fn derive_folder_mnemonic_rejects_invalid_master() {
+        let result = derive_folder_mnemonic("not a valid mnemonic", "x");
+        assert!(result.is_err());
+    }
+
+    // ── config_dir_for_folder / master_mnemonic_path ────────────────
+
+    #[test]
+    fn config_dir_for_folder_uses_folder_hash_subdirectory() {
+        let dir = config_dir_for_folder("5GrwvaEF", "docs").unwrap();
+        let expected_hash = folder_hash("docs");
+        assert!(dir.ends_with(&expected_hash), "path should end with folder hash: {}", dir.display());
+    }
+
+    #[test]
+    fn master_mnemonic_path_ends_with_expected_filename() {
+        let path = master_mnemonic_path("5GrwvaEF").unwrap();
+        assert!(
+            path.file_name().unwrap() == "master_enc_mnemonic.json",
+            "path should end with master_enc_mnemonic.json: {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn account_dir_is_under_hippius_drives() {
+        let dir = account_dir("5GrwvaEF").unwrap();
+        let components: Vec<_> = dir.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
+        assert!(
+            components.contains(&".hippius".to_string()),
+            "should be under .hippius: {}",
+            dir.display()
+        );
+        assert!(components.contains(&"drives".to_string()), "should be under drives: {}", dir.display());
+    }
+}

@@ -15,6 +15,7 @@ interface StakingInfoResult {
     unbonding: string;
     withdrawable: string;
     balance: string;
+    availableBalance: string;
     unbondingPeriods: UnbondingPeriod[];
 }
 
@@ -53,6 +54,7 @@ export const useStaking = () => {
         unbonding: data?.unbonding ?? '0',
         withdrawable: data?.withdrawable ?? '0',
         balance: data?.balance ?? '0',
+        availableBalance: data?.availableBalance ?? '0',
         isLoading,
         error: error ? (error instanceof Error ? error.message : 'Failed to fetch staking info') : null,
         unbondingPeriods: data?.unbondingPeriods ?? [],

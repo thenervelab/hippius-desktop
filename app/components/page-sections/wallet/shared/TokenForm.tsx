@@ -5,7 +5,7 @@ import { Input, CardButton, Icons, AbstractIconWrapper } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
-import { formatPreciseBalance } from "@/app/lib/utils/formatters/formatPreciseBalance";
+
 
 interface TokenFormProps {
     title: string;
@@ -30,7 +30,7 @@ const TokenForm: FC<TokenFormProps> = ({
     title,
     description,
     balanceLabel,
-    balanceAmount,
+    // balanceAmount — kept in props interface for callers, but we use Rust display values instead
     inputPlaceholder,
     buttonText,
     showStakedAmount = false,
@@ -47,30 +47,18 @@ const TokenForm: FC<TokenFormProps> = ({
     const [amount, setAmount] = useState("");
     const { stakingInfo } = useStaking();
 
-    // Calculate available amounts based on operation type
-    const availableAmount = useMemo(() => {
-        console.log('Calculating available amount:', {
-            isStaking,
-            isUnstaking,
-            balanceAmount,
-            balanceAmountType: typeof balanceAmount,
-            bondedAmount: stakingInfo.bonded,
-            bondedAmountType: typeof stakingInfo.bonded,
-            formattedBonded: formatBalance(stakingInfo.bonded)
-        });
+    // Raw planck string for the relevant balance
+    const availablePlanck = useMemo(() => {
+        if (isStaking) return stakingInfo.availableBalance || "0";
+        if (isUnstaking) return stakingInfo.bonded || "0";
+        return stakingInfo.balance || "0";
+    }, [stakingInfo.availableBalance, stakingInfo.bonded, stakingInfo.balance, isStaking, isUnstaking]);
 
-        if (isStaking) {
-            // For staking, work with raw planck values to avoid precision loss
-            const nativeBalancePlanck = BigInt(balanceAmount || '0');
-            const result = Math.max(0, Number(nativeBalancePlanck) / 1e18);
-            return result;
-        } else if (isUnstaking) {
-            // For unstaking, show only the staked amount
-            return Number(stakingInfo.bonded || '0') / 1e18;
-        }
-        // For other operations, assume balanceAmount is already in planck
-        return Number(balanceAmount || '0') / 1e18;
-    }, [balanceAmount, stakingInfo.bonded, isStaking, isUnstaking]);
+    // Display-formatted balance (acceptable precision loss for display only)
+    const availableDisplay = useMemo(
+        () => formatBalance(availablePlanck),
+        [availablePlanck],
+    );
 
     // Format the staked amount for display
     const formattedStakedAmount = useMemo(() => {
@@ -85,13 +73,22 @@ const TokenForm: FC<TokenFormProps> = ({
     };
 
     const handleMaxClick = () => {
-        setAmount(availableAmount.toString());
+        setAmount(availableDisplay);
     };
 
+    // Lossless validation: convert user input to planck BigInt and compare
+    // against the raw planck balance — no float intermediary.
     const isAmountValid = useMemo(() => {
-        const numAmount = parseFloat(amount);
-        return numAmount > 0 && numAmount <= availableAmount;
-    }, [amount, availableAmount]);
+        if (!amount || amount === "." || amount === "0") return false;
+        try {
+            const [intPart, fracPart = ""] = amount.split(".");
+            const padded = fracPart.padEnd(18, "0").slice(0, 18);
+            const userPlanck = BigInt((intPart || "0") + padded);
+            return userPlanck > BigInt(0) && userPlanck <= BigInt(availablePlanck);
+        } catch {
+            return false;
+        }
+    }, [amount, availablePlanck]);
 
     return (
         <div className={cn("w-full max-w-[29rem] mx-auto", className)}>
@@ -131,7 +128,7 @@ const TokenForm: FC<TokenFormProps> = ({
                             <span className="ml-1">
                                 {isUnstaking
                                     ? `${formatBalance(stakingInfo.bonded)} hALPHA`
-                                    : formatPreciseBalance(availableAmount, 8)
+                                    : formatBalance(availablePlanck, 8)
                                 }
                             </span>
                         </div>

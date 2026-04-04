@@ -10,39 +10,50 @@ export interface ChangeImageData {
   image: string;
 }
 
+interface VMImage {
+  id: number;
+  name: string;
+}
+
 type Props = {
   open: boolean;
   onClose: () => void;
   onSubmit: (data: ChangeImageData) => void;
   isLoading?: boolean;
+  /** VM images from the API. If not provided, the selectors will be empty. */
+  images?: VMImage[];
 };
-
-const operatingSystems = [
-  { value: "ubuntu", label: "Ubuntu" },
-  { value: "debian", label: "Debian" },
-  { value: "centos", label: "CentOS" },
-  { value: "rocky", label: "Rocky Linux" },
-];
-
-const allImages = [
-  { value: "ubuntu-22.04", label: "Ubuntu 22.04 LTS", os: "ubuntu" },
-  { value: "ubuntu-24.04", label: "Ubuntu 24.04 LTS", os: "ubuntu" },
-  { value: "debian-12", label: "Debian 12", os: "debian" },
-  { value: "debian-11", label: "Debian 11", os: "debian" },
-  { value: "centos-stream-9", label: "CentOS Stream 9", os: "centos" },
-  { value: "rocky-9", label: "Rocky Linux 9", os: "rocky" },
-];
 
 const ChangeImageModal: React.FC<Props> = ({
   open,
   onClose,
   onSubmit,
   isLoading = false,
+  images = [],
 }) => {
   const [operatingSystem, setOperatingSystem] = useState("");
   const [image, setImage] = useState("");
 
-  // Filter images based on selected operating system
+  // Derive OS list and image options from API data
+  const operatingSystems = React.useMemo(() => {
+    const osMap = new Map<string, string>();
+    images.forEach((img) => {
+      const osName = img.name.split(" ")[0];
+      const osKey = osName.toLowerCase();
+      if (!osMap.has(osKey)) osMap.set(osKey, osName);
+    });
+    return Array.from(osMap.entries()).map(([value, label]) => ({ value, label }));
+  }, [images]);
+
+  const allImages = React.useMemo(() =>
+    images.map((img) => ({
+      value: String(img.id),
+      label: img.name,
+      os: img.name.split(" ")[0].toLowerCase(),
+    })),
+    [images]
+  );
+
   const filteredImages = operatingSystem
     ? allImages.filter((img) => img.os === operatingSystem)
     : allImages;

@@ -19,7 +19,6 @@ import {
 import {
   ReferralEvent,
 } from "@/app/lib/hooks/api/useUserReferrals";
-import { cn } from "@/app/lib/utils";
 import { useState, useMemo, useCallback, useEffect } from "react";
 
 const columnHelper = createColumnHelper<ReferralEvent>();
@@ -203,7 +202,7 @@ const ReferralHistoryTable: React.FC = () => {
   const columns = [
     columnHelper.accessor("address", {
       header: "ADDRESS",
-      cell: (d) => `$ ${d.getValue().toLocaleString()}`,
+      cell: (d) => d.getValue(),
       enableSorting: false,
     }),
     columnHelper.accessor("reward", {
@@ -228,11 +227,7 @@ const ReferralHistoryTable: React.FC = () => {
   });
 
   return (
-    <div
-      className={cn(
-        ""
-      )}
-    >
+    <div>
       <div className="flex items-center gap-x-2 mb-4">
         <AbstractIconWrapper className="size-10">
           <Hourglass className="absolute size-6 text-primary-50" />

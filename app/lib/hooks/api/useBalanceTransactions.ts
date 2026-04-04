@@ -1,37 +1,6 @@
-import {
-  UseQueryOptions,
-  UseQueryResult,
-  keepPreviousData,
-} from "@tanstack/react-query";
+import { keepPreviousData, UseQueryOptions, UseQueryResult } from "@tanstack/react-query";
 import { useInvokeQuery } from "./useInvokeQuery";
 
-// Define types based on the indexer API response
-export interface TransferEvent {
-  block_number: number;
-  event_index: number;
-  from_account: string;
-  to_account: string;
-  amount: string;
-  extrinsic_hash: string | null;
-  raw_event_data: {
-    amount: string;
-    from: string;
-    to: string;
-  };
-  processed_timestamp: string;
-}
-
-export interface TransfersResponse {
-  data: TransferEvent[];
-  pagination: {
-    page: number;
-    limit: number;
-    total: number;
-    total_pages: number;
-  };
-}
-
-// Modified structure to match new column requirements
 export interface TransactionObject {
   id: string;
   block: number;
@@ -39,25 +8,23 @@ export interface TransactionObject {
   from: string;
   to: string;
   date: string;
+  direction: string;
 }
 
-export interface UseTransfersParams {
+export interface UseBalanceTransfersParams {
   page?: number;
   limit?: number;
 }
 
 export default function useBalanceTransactions(
-  params?: UseTransfersParams,
-  options?: Omit<
-    UseQueryOptions<TransfersResponse, Error, TransactionObject[]>,
-    "queryKey" | "queryFn"
-  >
+  params?: UseBalanceTransfersParams,
+  options?: Omit<UseQueryOptions<TransactionObject[], Error, TransactionObject[]>, "queryKey" | "queryFn">
 ): UseQueryResult<TransactionObject[], Error> {
   const page = params?.page || 1;
   const limit = params?.limit || 10;
 
-  return useInvokeQuery<TransfersResponse, TransactionObject[]>({
-    command: "get_balance_transfers",
+  return useInvokeQuery<TransactionObject[], TransactionObject[]>({
+    command: "get_balance_transfers_ui",
     queryKey: (addr) => ["transfers", addr, page, limit],
     params: (polkadotAddress) => ({
       accountId: polkadotAddress,
@@ -65,16 +32,6 @@ export default function useBalanceTransactions(
       limit,
     }),
     options: {
-      select: (data) => {
-        return data.data.map((transfer) => ({
-          id: `${transfer.block_number}-${transfer.event_index}`,
-          block: transfer.block_number,
-          amount: parseFloat(transfer.amount),
-          from: transfer.from_account,
-          to: transfer.to_account,
-          date: transfer.processed_timestamp,
-        }));
-      },
       placeholderData: keepPreviousData,
       ...options,
     },

@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { ensureBillingAuth } from "@/app/lib/hooks/api/useBillingAuth";
-import { getHcfsConfig } from "@/lib/utils/hcfsConfigUtils";
 
 interface PreAuthProviderProps {
     children: React.ReactNode;
@@ -15,18 +14,10 @@ export default function PreAuthProvider({ children }: PreAuthProviderProps) {
 
     useEffect(() => {
         if (isAuthenticated && polkadotAddress && !authInitialized) {
-            (async () => {
-                try {
-                    // Only attempt billing auth if HCFS config exists
-                    // (mnemonic on disk is needed to sign the challenge)
-                    const config = await getHcfsConfig(polkadotAddress);
-                    if (config.has_password) {
-                        await ensureBillingAuth(polkadotAddress);
-                    }
-                } finally {
-                    setAuthInitialized(true);
-                }
-            })();
+            // Single Rust call — checks config internally, skips if not ready
+            invoke("ensure_billing_auth", { accountId: polkadotAddress })
+                .catch(() => {})
+                .finally(() => setAuthInitialized(true));
         }
     }, [isAuthenticated, polkadotAddress, authInitialized]);
 

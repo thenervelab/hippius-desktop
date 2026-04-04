@@ -8,6 +8,8 @@ import { CardButton, Graphsheet, Icons, ProgressBar } from "@/components/ui";
 export interface MigrationFile {
     arionHash: string;
     name: string;
+    /** Raw S3 key for matching against server poll responses. */
+    serverKey?: string;
     size: number;
     status: "pending" | "migrating" | "completed" | "failed";
     error?: string;

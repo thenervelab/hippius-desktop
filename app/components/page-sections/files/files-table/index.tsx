@@ -48,8 +48,9 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { FormattedTimestamp } from "@/app/components/ui"; // Add this import
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
-import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { revealFile } from "@/lib/utils/revealFile";
+
 import { toast } from "sonner";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
@@ -344,30 +345,12 @@ const FilesTable: FC<FilesTableProps> = memo(
             itemTitle: "Reveal in Finder",
             onItemClick: async () => {
               try {
-                let filePath = file.source;
-
-                // If source path is set, try it first
-                if (filePath) {
-                  try {
-                    await revealItemInDir(filePath);
-                    return;
-                  } catch {
-                    console.warn("[RevealInFinder] source path failed, trying resolve_file_path. source:", filePath);
-                  }
-                }
-
-                // Fallback: resolve canonical path from DB
-                if (file.label && polkadotAddress) {
-                  const fileName = file.actualFileName || file.name;
-                  filePath = await invoke<string>("resolve_file_path", {
-                    accountId: polkadotAddress,
-                    label: file.label,
-                    fileName,
-                  });
-                  await revealItemInDir(filePath);
-                } else {
-                  toast.error("File is not available locally. It may only exist on another device.");
-                }
+                await revealFile({
+                  sourcePath: file.source,
+                  label: file.label,
+                  accountId: polkadotAddress ?? undefined,
+                  fileName: file.actualFileName || file.name,
+                });
               } catch (error) {
                 console.error("Failed to reveal file in Finder:", error);
                 toast.error("File is not available locally. It may only exist on another device.");

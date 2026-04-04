@@ -16,12 +16,12 @@ import { useRouter } from "next/navigation";
 import { logger } from "@/lib/utils/logger";
 
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { useTrayInit, clearLoginStatusCache } from "./hooks/useTraySync";
 import { tryAutoInitSync } from "./hooks/useHcfsSync";
-import { ensureSyncMnemonic } from "./helpers/ensureSyncMnemonic";
 import { appStore } from "./store/jotaiStore";
 import { migrationCheckAtom } from "./global-atoms/migrationAtoms";
+import { splashCompleteAtom } from "./global-atoms/splashAtoms";
+import { useAtomValue } from "jotai";
 
 /** Result from Rust login_with_mnemonic / unlock_with_passcode commands */
 interface LoginResult {
@@ -33,26 +33,6 @@ interface LoginResult {
   token: string;
   tokenExpiry: number;
   isNew: boolean;
-}
-
-/** Result from Rust get_auth_session / get_last_auth_session commands */
-interface AuthSession {
-  authToken: string | null;
-  tokenExpiry: number | null;
-  userId: number | null;
-  username: string | null;
-  provider: string | null;
-  substrateAddress: string | null;
-  logoutTimeMinutes: number | null;
-  lastLoginAt: string | null;
-}
-
-/** Result from Rust get_auth_token command */
-interface ApiAuth {
-  token: string;
-  tokenExpiry: number;
-  userId: number | null;
-  username: string | null;
 }
 
 /** Build an OAuthSession-compatible object from a login/unlock result. */
@@ -89,7 +69,7 @@ interface WalletContextType {
   authType: "mnemonic" | "oauth" | null;
   oauthSession: import("@/app/lib/types/oAuth").OAuthSession | null;
   getMnemonic: () => Promise<string | null>;
-  login: (mnemonic: string, referralCode?: string | null) => Promise<void>;
+  login: (mnemonic: string, referralCode?: string | null) => Promise<string>;
   setOAuthSession: (
     session: import("@/app/lib/types/oAuth").OAuthSession
   ) => Promise<void>;
@@ -108,8 +88,6 @@ interface WalletContextType {
 const MAX_DELAY = 2_147_483_647; // ~24.8 days
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
-
-const TOKEN_REFRESH_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
 export function WalletAuthProvider({
   children,
@@ -130,6 +108,8 @@ export function WalletAuthProvider({
   >(null);
 
   const syncInitialized = useRef(false);
+  const pendingSyncInit = useRef<{ accountId: string; mnemonic?: string } | null>(null);
+  const splashComplete = useAtomValue(splashCompleteAtom);
   const logoutTimerRef = useRef<NodeJS.Timeout | null>(null);
   // Ref mirrors polkadotAddress so scheduleLogout's timer callback
   // always reads the current value (avoids stale closure).
@@ -162,27 +142,18 @@ export function WalletAuthProvider({
   const logout = useCallback(
     async (redirectPath?: string) => {
       try {
-        logger.debug("[WalletAuth] Starting sync cleanup...");
-        await invoke("stop_sync").catch(() => { });
-        logger.debug("[WalletAuth] Sync cleanup completed");
-
-        // Read from ref so timer callbacks get the current address
+        // Single Rust call: stops sync, clears auth, clears progress data
         const currentAddress = polkadotAddressRef.current;
-        if (currentAddress) {
-          await invoke("auth_logout", { accountId: currentAddress }).catch((err: unknown) =>
-            console.warn("[WalletAuth] auth_logout failed:", err)
-          );
-        }
+        await invoke("logout_full", { accountId: currentAddress || "" }).catch((err: unknown) =>
+          console.warn("[WalletAuth] logout_full failed:", err)
+        );
 
-        // Clear OAuth session if present
+        // Clear browser-side OAuth session (Rust can't access localStorage)
         if (typeof window !== "undefined") {
           localStorage.removeItem("hippius_oauth_session");
           localStorage.removeItem("hippius_oauth_session_expiry");
           localStorage.removeItem("hippius_oauth_provider");
         }
-
-        // Clear sync progress data to prevent cross-account data leaking
-        await invoke("sp_clear_all_data").catch(() => {});
 
         // Immediately invalidate login status cache so the tray watcher
         // picks up the logged-out state on its next 2-second tick.
@@ -225,21 +196,37 @@ export function WalletAuthProvider({
     }, delay);
   }
 
-  /** Start sync for the given account, called after any successful auth */
+  /** Start sync for the given account, called after any successful auth.
+   *  Defers until the splash screen is done so sync doesn't race the loading screen. */
   function initSync(accountId: string, mnemonic?: string) {
     if (syncInitialized.current) return;
-    syncInitialized.current = true;
     // Store the mnemonic so getMnemonic() can return it later
     // (e.g. when migration needs it for OAuth users)
     if (mnemonic && !sessionMnemonicRef.current) {
       sessionMnemonicRef.current = mnemonic;
     }
+    if (!splashComplete) {
+      // Splash still showing — defer until it finishes
+      pendingSyncInit.current = { accountId, mnemonic };
+      return;
+    }
+    syncInitialized.current = true;
+    pendingSyncInit.current = null;
     invoke("stop_sync").catch(() => { });
     tryAutoInitSync(accountId, mnemonic).catch((err) =>
       console.error("[WalletAuth] Failed to start sync:", err)
     );
     triggerMigrationCheck();
   }
+
+  // Trigger deferred sync init once the splash screen finishes
+  useEffect(() => {
+    if (splashComplete && pendingSyncInit.current && !syncInitialized.current) {
+      const { accountId, mnemonic } = pendingSyncInit.current;
+      initSync(accountId, mnemonic);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [splashComplete]);
 
   // Boot: restore session from Rust DB or localStorage OAuth session
   useEffect(() => {
@@ -254,134 +241,81 @@ export function WalletAuthProvider({
         logoutTimerRef.current = null;
       }
 
-      // First, check for OAuth session in localStorage
-      if (typeof window !== "undefined") {
-        const storedSession = localStorage.getItem("hippius_oauth_session");
-        const storedExpiry = localStorage.getItem(
-          "hippius_oauth_session_expiry"
-        );
+      // Read localStorage (browser-only) and pass to Rust for validation
+      const storedSession = typeof window !== "undefined"
+        ? localStorage.getItem("hippius_oauth_session")
+        : null;
+      const storedExpiry = typeof window !== "undefined"
+        ? localStorage.getItem("hippius_oauth_session_expiry")
+        : null;
 
-        if (storedSession && storedExpiry) {
-          const expiryTime = isNaN(Number(storedExpiry))
-            ? new Date(storedExpiry).getTime()
-            : parseInt(storedExpiry, 10);
+      const oauthExpiryMs = storedExpiry
+        ? (isNaN(Number(storedExpiry)) ? new Date(storedExpiry).getTime() : parseInt(storedExpiry, 10))
+        : null;
 
-          if (Date.now() < expiryTime) {
-            try {
-              const oauthSessionData = JSON.parse(storedSession);
+      // Single Rust call handles all validation, token checking, fallback
+      const result = await invoke<{
+        authenticated: boolean;
+        substrateAddress: string | null;
+        authType: string | null;
+        oauthSession: Record<string, unknown> | null;
+        logoutTimeMs: number | null;
+        shouldClearOauth: boolean;
+        needsSyncMnemonic: boolean;
+        redirectTo: string | null;
+      }>("restore_session", {
+        oauthSessionJson: storedSession ?? null,
+        oauthExpiryMs: oauthExpiryMs ?? null,
+      });
 
-              // Validate token via Rust if we have a substrate address
-              if (oauthSessionData.substrateAddress) {
-                const apiAuth = await invoke<ApiAuth | null>(
-                  "get_auth_token",
-                  { accountId: oauthSessionData.substrateAddress }
-                );
-                if (!apiAuth) {
-                  logger.debug("[WalletAuth] Token expired in DB, clearing session");
-                  localStorage.removeItem("hippius_oauth_session");
-                  localStorage.removeItem("hippius_oauth_session_expiry");
-                  await logout("/login");
-                  return;
-                }
-              }
-
-              console.log(
-                "[WalletAuth] Restoring OAuth session:",
-                oauthSessionData.username
-              );
-
-              setOAuthSessionState(oauthSessionData);
-              setPolkadotAddress(oauthSessionData.substrateAddress || null);
-              setAuthType(
-                oauthSessionData.provider === "mnemonic" ? "mnemonic" : "oauth"
-              );
-              setIsAuthenticated(true);
-
-              // OAuth sessions rely on server-side token expiry (30 days)
-              // rather than a frontend logout timer. Token validity is
-              // checked via get_auth_token on each boot.
-              if (oauthSessionData.substrateAddress) {
-                if (oauthSessionData.provider === "mnemonic") {
-                  initSync(oauthSessionData.substrateAddress);
-                } else {
-                  try {
-                    const mnemonic = await ensureSyncMnemonic(oauthSessionData.substrateAddress);
-                    initSync(oauthSessionData.substrateAddress, mnemonic);
-                  } catch (err) {
-                    console.error("[WalletAuth] Failed to start sync for OAuth restore:", err);
-                  }
-                }
-              }
-
-              logger.debug("[WalletAuth] OAuth session restored");
-              return;
-            } catch (error) {
-              console.error(
-                "[WalletAuth] Failed to restore OAuth session:",
-                error
-              );
-              localStorage.removeItem("hippius_oauth_session");
-              localStorage.removeItem("hippius_oauth_session_expiry");
-            }
-          } else {
-            logger.debug("[WalletAuth] OAuth session expired, clearing");
-            localStorage.removeItem("hippius_oauth_session");
-            localStorage.removeItem("hippius_oauth_session_expiry");
-          }
-        }
+      // Clear localStorage if Rust says so
+      if (result.shouldClearOauth) {
+        localStorage.removeItem("hippius_oauth_session");
+        localStorage.removeItem("hippius_oauth_session_expiry");
       }
 
-      // Fall back to Rust DB session (mnemonic-based logins)
-      const lastSession = await invoke<AuthSession | null>("get_last_auth_session");
-      if (!lastSession || !lastSession.authToken) {
+      if (!result.authenticated) {
+        if (result.redirectTo === "/login") {
+          await logout("/login");
+        }
         setSessionTimeRemaining(null);
         return;
       }
 
-      // Validate token expiry via Rust
-      if (lastSession.tokenExpiry && lastSession.tokenExpiry < Date.now()) {
-        logger.debug("[WalletAuth] Token expired for session, redirecting to login");
-        if (lastSession.substrateAddress) {
-          await invoke("clear_auth_session", { accountId: lastSession.substrateAddress }).catch((err: unknown) =>
-            console.warn("[WalletAuth] Failed to clear expired auth session:", err)
-          );
-        }
-        await logout("/login");
-        return;
-      }
-
-      // Session exists with valid token — restore state.
-      // Can't derive keypair without plaintext mnemonic, so just mark
-      // authenticated. The user will get a passcode prompt for staking.
+      // Set React state from Rust result
       setIsAuthenticated(true);
-      if (lastSession.substrateAddress) {
-        setPolkadotAddress(lastSession.substrateAddress);
+      if (result.substrateAddress) {
+        setPolkadotAddress(result.substrateAddress);
       }
-      setAuthType(lastSession.provider === "oauth" ? "oauth" : "mnemonic");
-
-      // Build OAuthSession so the API Token settings tab can display the token
-      if (lastSession.authToken) {
-        setOAuthSessionState({
-          token: lastSession.authToken,
-          userId: lastSession.userId ?? 0,
-          username: lastSession.username ?? "",
-          provider: (lastSession.provider as import("@/app/lib/types/oAuth").OAuthSession["provider"]) ?? "mnemonic",
-          expiresAt: lastSession.tokenExpiry ? new Date(lastSession.tokenExpiry).toISOString() : "",
-          substrateAddress: lastSession.substrateAddress ?? undefined,
-          isNew: false,
-        });
+      setAuthType(result.authType === "oauth" ? "oauth" : "mnemonic");
+      if (result.oauthSession) {
+        setOAuthSessionState(result.oauthSession as unknown as import("@/app/lib/types/oAuth").OAuthSession);
       }
 
-      const effMinutes = lastSession.logoutTimeMinutes ?? 1440;
-      const timeRemaining = effMinutes === -1 ? Infinity : effMinutes * 60_000;
-      setSessionTimeRemaining(timeRemaining === Infinity ? null : timeRemaining);
-      scheduleLogout(timeRemaining);
-
-      if (lastSession.substrateAddress) {
-        initSync(lastSession.substrateAddress);
+      // Schedule logout timer (browser setTimeout — can't do in Rust)
+      if (result.logoutTimeMs !== null) {
+        setSessionTimeRemaining(result.logoutTimeMs);
+        scheduleLogout(result.logoutTimeMs);
       }
 
-      router.push("/");
+      // Init sync
+      if (result.substrateAddress) {
+        if (result.needsSyncMnemonic) {
+          try {
+            const mnemonic = await invoke<string>("ensure_sync_mnemonic", { accountId: result.substrateAddress });
+            initSync(result.substrateAddress, mnemonic);
+          } catch (err) {
+            console.error("[WalletAuth] Failed to get sync mnemonic:", err);
+            initSync(result.substrateAddress);
+          }
+        } else {
+          initSync(result.substrateAddress);
+        }
+      }
+
+      if (result.redirectTo) {
+        router.push(result.redirectTo);
+      }
     };
 
     setupSessionTimeout();
@@ -391,51 +325,6 @@ export function WalletAuthProvider({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logout, router]);
-
-  // Silently refresh the auth token when the sync server returns 401.
-  // Rust handles the entire challenge-response flow — no frontend crypto needed.
-  const refreshingTokenRef = useRef(false);
-  const lastRefreshAttemptRef = useRef(0);
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-
-    listen<{ label: string }>("hcfs_auth_token_expired", async () => {
-      const now = Date.now();
-      const elapsed = now - lastRefreshAttemptRef.current;
-      if (
-        refreshingTokenRef.current ||
-        !isAuthenticated ||
-        !polkadotAddress ||
-        elapsed < TOKEN_REFRESH_COOLDOWN_MS
-      ) {
-        return;
-      }
-      refreshingTokenRef.current = true;
-      logger.debug("[WalletAuth] Auth token expired, attempting silent refresh");
-
-      try {
-        await invoke("refresh_auth_token", { accountId: polkadotAddress });
-        lastRefreshAttemptRef.current = Date.now();
-        logger.debug("[WalletAuth] Auth token refreshed successfully");
-      } catch (err) {
-        console.error("[WalletAuth] Silent token refresh failed:", err);
-      } finally {
-        refreshingTokenRef.current = false;
-      }
-    }).then((u) => {
-      if (cancelled) {
-        u();
-      } else {
-        unlisten = u;
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [isAuthenticated, polkadotAddress]);
 
   const unlockWithPasscode = async (
     passcode: string,
@@ -526,7 +415,7 @@ export function WalletAuthProvider({
   };
 
   // Mnemonic login — all crypto happens in Rust
-  const login = async (inputMnemonic: string, referralCode?: string | null): Promise<void> => {
+  const login = async (inputMnemonic: string, referralCode?: string | null): Promise<string> => {
     setIsLoading(true);
     sessionMnemonicRef.current = inputMnemonic;
     try {
@@ -551,6 +440,8 @@ export function WalletAuthProvider({
       setIsAuthenticated(true);
 
       initSync(result.substrateAddress, inputMnemonic);
+
+      return result.substrateAddress;
     } catch (error) {
       console.error("[WalletAuth] Login failed:", error);
       setPolkadotAddress(null);
@@ -588,8 +479,13 @@ export function WalletAuthProvider({
     logger.debug("[WalletAuth] OAuth session persisted and state updated");
 
     if (session.substrateAddress && !syncInitialized.current) {
-      const mnemonic = await ensureSyncMnemonic(session.substrateAddress);
-      initSync(session.substrateAddress, mnemonic);
+      try {
+        const mnemonic = await invoke<string>("ensure_sync_mnemonic", { accountId: session.substrateAddress });
+        initSync(session.substrateAddress, mnemonic);
+      } catch (err) {
+        console.error("[WalletAuth] Failed to get sync mnemonic for OAuth:", err);
+        initSync(session.substrateAddress);
+      }
     }
   };
 

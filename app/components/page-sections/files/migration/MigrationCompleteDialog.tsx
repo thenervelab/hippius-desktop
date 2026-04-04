@@ -13,6 +13,9 @@ export interface MigrationCompleteDialogProps {
   failedCount: number;
   totalCount: number;
   failedFiles?: Array<{ name: string; error: string }>;
+  transitionError?: string | null;
+  onRetry?: () => void;
+  onDismiss?: () => void;
 }
 
 const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
@@ -22,6 +25,9 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
   failedCount,
   totalCount,
   failedFiles = [],
+  transitionError,
+  onRetry,
+  onDismiss,
 }) => {
   const effectiveFailedCount = Math.max(failedCount, failedFiles.length);
   const isFullSuccess = effectiveFailedCount === 0;
@@ -29,7 +35,7 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
   const router = useRouter();
 
   return (
-    <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+    <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && (transitionError ? onDismiss?.() : onClose())}>
       <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[28.125rem] h-fit">
         <Dialog.Title className="sr-only">Migration Complete</Dialog.Title>
 
@@ -119,22 +125,54 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
             </div>
           )}
 
-          {/* Action Button */}
-          <CardButton
-            variant="primary"
-            className="w-full h-12 text-base font-medium"
-            onClick={() => {
-              onClose();
-              if (isFullSuccess) {
-                router.push("/files");
-              }
-            }}
-          >
-            {isFullSuccess ? "Go to My Files" : "Close"}
-          </CardButton>
+          {/* Transition Error Banner */}
+          {transitionError && (
+            <div className="bg-warning-50/10 border border-warning-50/30 rounded-lg p-3">
+              <p className="text-xs font-medium text-warning-50 mb-1">
+                Sync setup failed
+              </p>
+              <p className="text-xs text-grey-40">
+                Your files were migrated successfully but sync could not be
+                initialized. You can retry or set it up later from Settings.
+              </p>
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          {transitionError ? (
+            <div className="flex flex-col gap-2">
+              <CardButton
+                variant="primary"
+                className="w-full h-12 text-base font-medium"
+                onClick={onRetry ?? onClose}
+              >
+                Retry
+              </CardButton>
+              <CardButton
+                variant="secondary"
+                className="w-full h-10 text-sm font-medium border border-grey-80"
+                onClick={onDismiss ?? onClose}
+              >
+                Close Anyway
+              </CardButton>
+            </div>
+          ) : (
+            <CardButton
+              variant="primary"
+              className="w-full h-12 text-base font-medium"
+              onClick={() => {
+                onClose();
+                if (isFullSuccess) {
+                  router.push("/files");
+                }
+              }}
+            >
+              {isFullSuccess ? "Go to My Files" : "Close"}
+            </CardButton>
+          )}
 
           {/* Help Text */}
-          {effectiveFailedCount > 0 && (
+          {effectiveFailedCount > 0 && !transitionError && (
             <p className="text-xs text-grey-60 text-center">
               Failed files can still be accessed from your original S3 storage.
             </p>
