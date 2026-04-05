@@ -50,6 +50,18 @@ async fn remove_dir_all_async(path: PathBuf) -> Result<(), crate::error::AppErro
     Ok(())
 }
 
+/// Create a directory (recursively) without blocking the Tokio runtime.
+///
+/// `std::fs::create_dir_all` can perform many synchronous syscalls on
+/// deeply nested or slow filesystems. Offloading to `spawn_blocking`
+/// keeps the runtime responsive during sync initialization.
+async fn async_create_dir_all(path: PathBuf) -> Result<(), crate::error::AppError> {
+    tokio::task::spawn_blocking(move || std::fs::create_dir_all(path))
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Join error creating dir: {e}")))??;
+    Ok(())
+}
+
 /// Result of `initialize_sync` — contains the derived user ID and
 /// whether this is a fresh setup (no existing drive metadata found).
 #[derive(serde::Serialize, Clone)]
@@ -651,7 +663,7 @@ pub(crate) async fn initialize_sync_inner(
     let cfg = load_sync_config(pool, &account_id, &label).await?;
     crate::sync::files::allow_asset_directory(&app, &cfg.sync_path);
     check_deleted_sync_dir(pool, &account_id, &label, &cfg.sync_path).await?;
-    std::fs::create_dir_all(&cfg.sync_path)?;
+    async_create_dir_all(PathBuf::from(&cfg.sync_path)).await?;
 
     let (_acct_dir, folder_dir, master_path) =
         prepare_config_dir(&account_id, &label, &cfg.sync_path, &cfg.drive_password, existing_mnemonic.as_deref())?;
@@ -1038,7 +1050,7 @@ pub async fn auto_init_sync(
     {
         let master_path = master_mnemonic_path(&account_id)?;
         let acct_dir = account_dir(&account_id)?;
-        let _ = std::fs::create_dir_all(&acct_dir);
+        let _ = async_create_dir_all(acct_dir.clone()).await;
         if let Err(e) = hcfs_client::auth::save_encrypted_mnemonic(&master_path, m, &password) {
             debug!("Early mnemonic persist skipped: {e}");
         }
@@ -1459,5 +1471,30 @@ mod tests {
         let missing = tmp.path().join("does-not-exist");
         let result = remove_dir_all_async(missing).await;
         assert!(result.is_err(), "helper should surface ENOENT from libstd");
+    }
+
+    #[tokio::test]
+    async fn async_create_dir_all_creates_nested_directories() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("a/b/c/d");
+        assert!(!target.exists());
+
+        async_create_dir_all(target.clone()).await.expect("create");
+
+        assert!(target.exists(), "nested dirs should be created");
+        assert!(target.is_dir(), "leaf should be a directory");
+    }
+
+    #[tokio::test]
+    async fn async_create_dir_all_is_idempotent() {
+        // create_dir_all should succeed even if the dir already exists.
+        // Documents the contract: callers don't need to guard with .exists().
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("existing");
+        std::fs::create_dir_all(&target).expect("pre-create");
+
+        async_create_dir_all(target.clone()).await.expect("should succeed on existing dir");
+
+        assert!(target.exists());
     }
 }
