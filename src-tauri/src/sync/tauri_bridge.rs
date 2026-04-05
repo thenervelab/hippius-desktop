@@ -148,22 +148,12 @@ impl SyncEventHandler for TauriSyncBridge {
                     }),
                 );
             }
-            SyncEvent::UploadProgress { label, bytes, total, path } => {
-                let _ = app.emit(
-                    "hcfs_upload_progress",
-                    serde_json::json!({
-                        "label": label, "bytes": bytes, "total": total, "path": path,
-                    }),
-                );
-            }
-            SyncEvent::DownloadProgress { label, bytes, total, path } => {
-                let _ = app.emit(
-                    "hcfs_download_progress",
-                    serde_json::json!({
-                        "label": label, "bytes": bytes, "total": total, "path": path,
-                    }),
-                );
-            }
+            // Per-chunk transfer progress is served via the throttled
+            // `sync_progress_snapshot` event emitted from
+            // `crate::sync::progress::update_file_progress`. Forwarding these
+            // variants to Tauri would flood the webview. See lifecycle.rs
+            // `handle_transfer_progress` for the live path.
+            SyncEvent::UploadProgress { .. } | SyncEvent::DownloadProgress { .. } => {}
             SyncEvent::ScanProgress { label, scanned, path } => {
                 let _ = app.emit(
                     "hcfs_scan_progress",
