@@ -79,25 +79,6 @@ pub const fn should_emit_snapshot(
 ///   value previously stored in `last_emit_ms`.
 /// * `is_file_complete` — see [`should_emit_snapshot`].
 /// * `min_interval_ms` — see [`should_emit_snapshot`].
-/// Is this progress tick a file-completion tick?
-///
-/// Returns `true` when `bytes == total` and `total > 0`. The `total > 0`
-/// guard is load-bearing: some backends emit a single `(0, 0, path)` tick
-/// for empty files, and we do not want to treat those as completions.
-///
-/// This unifies the "file complete?" check used by two hot-path sites:
-/// - [`crate::sync::progress::update_file_progress`] to bypass the snapshot
-///   throttle so per-file completions reach the UI immediately, and
-/// - `handle_transfer_progress` in `sync/lifecycle.rs` to decide whether
-///   to emit `FILE_TRANSFER_COMPLETE` and append to the activity log.
-///
-/// Keeping these two call sites in sync via a single pure function avoids
-/// the class of bug where one path treats a tick as completion and the
-/// other doesn't.
-pub const fn is_file_completion_tick(bytes: u64, total: u64) -> bool {
-    total > 0 && bytes == total
-}
-
 pub fn try_claim_snapshot_emit(
     last_emit_ms: &AtomicU64,
     now_ms: u64,
@@ -120,6 +101,25 @@ pub fn try_claim_snapshot_emit(
     } else {
         false
     }
+}
+
+/// Is this progress tick a file-completion tick?
+///
+/// Returns `true` when `bytes == total` and `total > 0`. The `total > 0`
+/// guard is load-bearing: some backends emit a single `(0, 0, path)` tick
+/// for empty files, and we do not want to treat those as completions.
+///
+/// This unifies the "file complete?" check used by two hot-path sites:
+/// - [`crate::sync::progress::update_file_progress`] to bypass the snapshot
+///   throttle so per-file completions reach the UI immediately, and
+/// - `handle_transfer_progress` in `sync/lifecycle.rs` to decide whether
+///   to emit `FILE_TRANSFER_COMPLETE` and append to the activity log.
+///
+/// Keeping these two call sites in sync via a single pure function avoids
+/// the class of bug where one path treats a tick as completion and the
+/// other doesn't.
+pub const fn is_file_completion_tick(bytes: u64, total: u64) -> bool {
+    total > 0 && bytes == total
 }
 
 #[cfg(test)]
