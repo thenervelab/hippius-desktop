@@ -1102,8 +1102,7 @@ mod tests {
         let home_dir = dirs::home_dir();
         assert!(
             doc_dir.as_ref() == Some(&parent.to_path_buf()) || home_dir.as_ref() == Some(&parent.to_path_buf()),
-            "Expected parent to be Documents or Home, got {:?}",
-            parent,
+            "Expected parent to be Documents or Home, got {parent:?}",
         );
     }
 }

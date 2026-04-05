@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn transfer_empty_amount() {
-        let result = validate_and_convert_transfer("".into(), "1000".into(), "0".into());
+        let result = validate_and_convert_transfer(String::new(), "1000".into(), "0".into());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("required"));
     }
