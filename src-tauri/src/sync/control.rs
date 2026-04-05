@@ -44,6 +44,10 @@ pub async fn stage_changes(app: tauri::AppHandle) -> Result<StagedChanges, crate
 /// `resolutions` maps hex-encoded FileId → resolution string
 /// (one of: "keep_local", "accept_remote", "keep_both", "skip").
 #[tauri::command]
+#[expect(
+    clippy::implicit_hasher,
+    reason = "Tauri commands cannot be generic; the hasher must be concrete because #[tauri::command] generates a non-generic handler"
+)]
 pub async fn sync_with_conflict_resolutions(app: AppHandle, resolutions: HashMap<String, String>) -> Result<(), crate::error::AppError> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();

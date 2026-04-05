@@ -17,7 +17,6 @@ use tracing::info;
 /// the UI while preserving the row for analytics and undo.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-#[expect(clippy::struct_field_names)] // field names match the DB schema and frontend API
 pub struct Notification {
     pub id: i64,
     pub user_address: String,

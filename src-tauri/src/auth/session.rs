@@ -412,6 +412,10 @@ pub async fn logout_full(app: tauri::AppHandle, account_id: String) -> Result<()
 /// Rust validates tokens, checks expiry, falls back to DB session,
 /// and returns a structured result for the frontend to render.
 #[tauri::command]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Linear multi-stage auth flow (OAuth JSON validation → DB fallback → result build). Splitting fragments the early-return error paths and has caused past regressions; tests/session_commands.rs provides integration coverage."
+)]
 pub async fn restore_session(
     state: tauri::State<'_, crate::app_state::AppState>,
     oauth_session_json: Option<String>,

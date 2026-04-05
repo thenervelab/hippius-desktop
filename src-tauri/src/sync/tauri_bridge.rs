@@ -43,6 +43,10 @@ impl TauriSyncBridge {
 }
 
 impl SyncEventHandler for TauriSyncBridge {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "One match arm per SyncEvent variant, each with a distinct payload shape. Splitting per-variant requires either trait objects or N helper functions with different signatures; the giant match keeps the mapping between Rust event and Tauri event name auditable in one place."
+    )]
     fn on_event(&self, event: SyncEvent) {
         let Some(app) = self.app() else { return };
 

@@ -614,6 +614,10 @@ pub struct RecentFile {
 /// This replaces the 130-line orchestration in `use-recent-files/index.ts`.
 /// All data joining, filtering, deduplication, and sorting happens in Rust.
 #[tauri::command]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Orchestration pipeline: activity fetch → label→path join → file-metadata hydration → filter → sort → dedupe. Intermediate state (label_to_path, seen_ids) is shared across steps; extraction requires threading >4 maps through helpers and harms readability more than it helps."
+)]
 pub async fn get_recent_files(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
@@ -958,6 +962,10 @@ pub struct UserFileEntry {
 /// Replaces both the `use-user-files` orchestration (multi-invoke loop with
 /// timestamp logic) AND `fileFilterUtils.ts` (search, type, date, size filtering).
 #[tauri::command]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Replaces two full frontend modules (use-user-files + fileFilterUtils) in one Rust function. The filter chain (search / type / date / size) must share the candidate list and statistics accumulators; splitting would require an iterator-builder pattern that obscures the filter order."
+)]
 pub async fn get_user_files(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,

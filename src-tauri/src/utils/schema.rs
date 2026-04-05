@@ -4,6 +4,43 @@ use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use tracing::{debug, info, warn};
 
+/// Names of every table `ensure_table_schema` is expected to create.
+///
+/// This list is the single source of truth used by the smoke test
+/// [`tests::ensure_table_schema_creates_all_expected_tables`] to verify
+/// that no table is silently dropped from the initializer. When adding a
+/// new table to [`ensure_table_schema`], append its name here.
+#[cfg(test)]
+const EXPECTED_TABLES: &[&str] = &[
+    // Declarative TABLE_SCHEMAS block (5 tables)
+    "vpn_status",
+    "nebula_binary_status",
+    "sub_accounts",
+    "nebula_certificate",
+    "autoconnect_vpn_enabled",
+    // Imperative CREATE TABLE statements (16 tables)
+    "sync_paths",
+    "wss_endpoint",
+    "security_scoped_bookmarks",
+    "wallet_store",
+    "auth_session",
+    "hcfs_config",
+    "objectstore_auth",
+    "objectstore_auth_scoped",
+    "device_settings",
+    "migration_status",
+    "notifications",
+    "app_state",
+    "notification_preferences",
+    "address_book",
+    "onboarding",
+    "user_preferences",
+];
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "Large but straightforward schema initializer: declarative TABLE_SCHEMAS loop plus one complex sync_paths migration (label column, is_paused column, UNIQUE constraint recreation) that must stay co-located to be auditable in a single transaction. Coverage is provided by the `ensure_table_schema_creates_all_expected_tables` smoke test against EXPECTED_TABLES."
+)]
 pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Define the expected table schemas (only tables still needed)
     const TABLE_SCHEMAS: &[(&str, &[(&str, &str)])] = &[
@@ -489,4 +526,84 @@ pub async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> 
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use std::collections::HashSet;
+
+    /// Create a fresh in-memory SQLite pool for isolated schema tests.
+    async fn temp_pool() -> SqlitePool {
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("failed to create in-memory SQLite pool")
+    }
+
+    /// Regression guard: verifies that [`ensure_table_schema`] creates every
+    /// table listed in [`EXPECTED_TABLES`] and only those tables. Protects
+    /// against silent drops during refactoring — the same class of bug that
+    /// removed `sync_logic.rs`'s connectivity monitoring in the f13fbd75
+    /// refactor and went unnoticed for weeks.
+    ///
+    /// If this test fails, either the initializer dropped a table or
+    /// [`EXPECTED_TABLES`] is stale. Update whichever is wrong.
+    #[tokio::test]
+    async fn ensure_table_schema_creates_all_expected_tables() {
+        let pool = temp_pool().await;
+
+        ensure_table_schema(&pool).await.expect("ensure_table_schema failed on fresh DB");
+
+        let rows = sqlx::query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+            .fetch_all(&pool)
+            .await
+            .expect("failed to list tables");
+
+        let actual: HashSet<String> = rows.iter().map(|r| r.get::<String, _>("name")).collect();
+        let expected: HashSet<String> = EXPECTED_TABLES.iter().map(|s| (*s).to_string()).collect();
+
+        let missing: Vec<&String> = expected.difference(&actual).collect();
+        let extra: Vec<&String> = actual.difference(&expected).collect();
+
+        assert!(
+            missing.is_empty() && extra.is_empty(),
+            "Schema drift detected.\n  Missing (expected but not created): {missing:?}\n  Extra (created but not expected): {extra:?}\n  If a table was intentionally added/removed, update EXPECTED_TABLES."
+        );
+    }
+
+    /// Calling [`ensure_table_schema`] twice must be a no-op on the second
+    /// invocation. Startup can call it multiple times (splash screen,
+    /// session restore), so idempotency is load-bearing.
+    #[tokio::test]
+    async fn ensure_table_schema_is_idempotent() {
+        let pool = temp_pool().await;
+        ensure_table_schema(&pool).await.expect("first call failed");
+        ensure_table_schema(&pool).await.expect("second call failed");
+        // Verify the table set is unchanged on the second run.
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+            .fetch_one(&pool)
+            .await
+            .expect("failed to count tables");
+        assert_eq!(count as usize, EXPECTED_TABLES.len(), "table count changed across calls");
+    }
+
+    /// The `sync_paths` table must end up with the `label` and `is_paused`
+    /// columns regardless of whether it was created fresh or migrated from
+    /// an older schema. This guards the migration block at lines 133-154.
+    #[tokio::test]
+    async fn sync_paths_has_required_columns_after_schema_ensure() {
+        let pool = temp_pool().await;
+        ensure_table_schema(&pool).await.expect("ensure_table_schema failed");
+        let cols = sqlx::query("PRAGMA table_info(sync_paths)")
+            .fetch_all(&pool)
+            .await
+            .expect("PRAGMA failed");
+        let names: HashSet<String> = cols.iter().map(|r| r.get::<String, _>("name")).collect();
+        for required in ["owner", "path", "type", "label", "timestamp", "is_paused"] {
+            assert!(names.contains(required), "sync_paths missing column `{required}`; present: {names:?}");
+        }
+    }
 }

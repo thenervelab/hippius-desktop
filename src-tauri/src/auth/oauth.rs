@@ -137,13 +137,11 @@ pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState
     Ok(OAuthUrlResult { url, provider })
 }
 
-/// Process the OAuth callback parameters:
-/// - If `token` is present, use it directly.
 /// Parse an OAuth deep link URL and extract callback parameters.
 ///
-/// Handles: malformed URLs (extra `?` chars), JSON `session` parameter,
-/// and determines whether the URL is an OAuth callback at all.
-/// Replaces the 60+ lines of URL parsing in `LoginForm.tsx`.
+/// Handles malformed URLs (extra `?` chars), JSON `session` parameter,
+/// and determines whether the URL is an OAuth callback at all. Replaces
+/// the 60+ lines of URL parsing that used to live in `LoginForm.tsx`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParsedDeepLink {
