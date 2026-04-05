@@ -219,25 +219,30 @@ async fn cancel_all_drive_tokens(sync: &SyncRunner) {
 }
 
 /// Await the sync loop task with a bounded grace window. Returns
-/// `true` if the loop exited cleanly (including expected cancellation),
-/// `false` if the grace window expired — in which case the caller
-/// should fall back to `abort_sync_loop`.
+/// `true` if the loop exited cleanly (including expected cancellation
+/// or a panic — a panicked task is already terminated, so no abort is
+/// needed), `false` if the grace window expired. On timeout the
+/// `JoinHandle` is restored to `sync.loop_handle` so the caller's
+/// fallback `abort_sync_loop` can consume and abort it.
 // TODO: wired up in Task 6 of docs/plans/2026-04-05-sync-engine-hardening.md
 #[allow(dead_code)]
 async fn wait_for_sync_loop_exit(sync: &SyncRunner, grace: std::time::Duration) -> bool {
     let mut handle_guard = sync.loop_handle.lock().await;
-    let Some(handle) = handle_guard.take() else {
+    let Some(mut handle) = handle_guard.take() else {
         return true;
     };
-    match tokio::time::timeout(grace, handle).await {
+    match tokio::time::timeout(grace, &mut handle).await {
         Ok(Ok(())) => true,
         Ok(Err(join_err)) if join_err.is_cancelled() => true,
         Ok(Err(join_err)) => {
+            // Task already dead — no abort needed, but surface the panic.
             warn!("Sync loop task panicked on exit: {join_err}");
             true
         }
         Err(_) => {
             warn!("Sync loop did not exit within {grace:?} — will abort");
+            // Put the handle back so `abort_sync_loop` can consume it.
+            *handle_guard = Some(handle);
             false
         }
     }
