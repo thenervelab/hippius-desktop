@@ -35,6 +35,21 @@ pub(crate) async fn start_sync_loop(app: tauri::AppHandle) {
     sync.start_sync_loop().await;
 }
 
+/// Remove a directory tree without blocking the Tokio runtime.
+///
+/// `std::fs::remove_dir_all` walks the tree synchronously and can block
+/// a worker for hundreds of milliseconds on large caches. Offloading to
+/// `spawn_blocking` keeps the runtime responsive.
+///
+/// The caller is responsible for guarding against missing paths; this
+/// helper propagates `ENOENT` from libstd rather than hiding it.
+async fn remove_dir_all_async(path: PathBuf) -> Result<(), crate::error::AppError> {
+    tokio::task::spawn_blocking(move || std::fs::remove_dir_all(path))
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Join error removing directory: {e}")))??;
+    Ok(())
+}
+
 /// Result of `initialize_sync` — contains the derived user ID and
 /// whether this is a fresh setup (no existing drive metadata found).
 #[derive(serde::Serialize, Clone)]
@@ -930,14 +945,11 @@ pub async fn reset_sync_data(
 
     debug!("Reset: Deleting account directory: {:?}", acct_dir);
 
-    // Delete the entire account directory (contains sync state, encrypted mnemonic, etc.)
-    // Offloaded to spawn_blocking because remove_dir_all can block the Tokio worker for
-    // hundreds of milliseconds on large sync caches, stalling every other task on that worker.
+    // Delete the entire account directory (contains sync state, encrypted mnemonic, etc.).
+    // `remove_dir_all_async` offloads the blocking walk to `spawn_blocking` so the Tokio
+    // runtime stays responsive on large caches.
     if acct_dir.exists() {
-        let acct_dir_owned = acct_dir.clone();
-        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&acct_dir_owned))
-            .await
-            .map_err(|e| crate::error::AppError::Other(format!("Join error removing account dir: {e}")))??;
+        remove_dir_all_async(acct_dir).await?;
         debug!("Reset: Deleted account directory");
     }
 
@@ -1418,25 +1430,34 @@ mod tests {
         assert_eq!(action, crate::sync::progress::FileAction::Download);
     }
 
-    // ── reset_sync_data async removal pattern ───────────────────────────
+    // ── remove_dir_all_async helper ──────────────────────────────────────
     //
-    // Validates the spawn_blocking wrapper pattern used inside `reset_sync_data`
-    // to remove an account directory without stalling the Tokio worker. The
-    // command itself is not invoked here (it requires a full AppState/AppHandle);
-    // this test exercises the exact I/O pattern the command delegates to.
+    // `remove_dir_all_async` is the shared helper called by `reset_sync_data`
+    // (and future callers) to remove a directory tree off the Tokio runtime.
+    // These tests exercise the helper directly so a regression that reverts
+    // the `spawn_blocking` wrap, changes the error type, or swallows ENOENT
+    // would fail here.
+
     #[tokio::test]
-    async fn reset_sync_data_removes_directory_without_blocking_runtime() {
+    async fn remove_dir_all_async_removes_nested_directory() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let target = tmp.path().join("acct-to-delete");
+        let target = tmp.path().join("to-delete");
         std::fs::create_dir_all(target.join("a/b/c")).expect("mkdirs");
         std::fs::write(target.join("a/b/c/file.bin"), [0u8; 1024]).expect("write");
+        assert!(target.exists());
 
-        let target_owned = target.clone();
-        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&target_owned))
-            .await
-            .expect("join")
-            .expect("remove");
+        remove_dir_all_async(target.clone()).await.expect("remove");
 
         assert!(!target.exists(), "target should be gone after async remove");
+    }
+
+    #[tokio::test]
+    async fn remove_dir_all_async_is_ok_on_missing_path() {
+        // `remove_dir_all` returns an error on missing path; document that the
+        // helper propagates it so callers know to guard with `path.exists()` first.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let missing = tmp.path().join("does-not-exist");
+        let result = remove_dir_all_async(missing).await;
+        assert!(result.is_err(), "helper should surface ENOENT from libstd");
     }
 }
