@@ -199,6 +199,62 @@ async fn teardown_previous_drive(sync: &SyncRunner, label: &str) {
     sync.emit_snapshot(true);
 }
 
+/// Cancel every drive's `CancellationToken`. Does NOT remove drives
+/// from the map — that happens later in the teardown sequence. Safe to
+/// call from any context; takes a brief lock on the drives map.
+///
+/// The per-drive tokens are observed promptly by `hcfs_client`'s
+/// `run_sync_cycle`, which passes them into
+/// `sync_with_resolutions_cancellable`. Cancelling here causes any
+/// in-flight sync to unwind at its next await point rather than being
+/// torn down mid-operation by `JoinHandle::abort`.
+// TODO: wired up in Task 6 of docs/plans/2026-04-05-sync-engine-hardening.md
+#[allow(dead_code)]
+async fn cancel_all_drive_tokens(sync: &SyncRunner) {
+    let guard = sync.drives.lock().await;
+    for (label, slot) in guard.iter() {
+        slot.cancel_token.cancel();
+        debug!("Cancelled sync token for drive '{}'", label);
+    }
+}
+
+/// Await the sync loop task with a bounded grace window. Returns
+/// `true` if the loop exited cleanly (including expected cancellation),
+/// `false` if the grace window expired — in which case the caller
+/// should fall back to `abort_sync_loop`.
+// TODO: wired up in Task 6 of docs/plans/2026-04-05-sync-engine-hardening.md
+#[allow(dead_code)]
+async fn wait_for_sync_loop_exit(sync: &SyncRunner, grace: std::time::Duration) -> bool {
+    let mut handle_guard = sync.loop_handle.lock().await;
+    let Some(handle) = handle_guard.take() else {
+        return true;
+    };
+    match tokio::time::timeout(grace, handle).await {
+        Ok(Ok(())) => true,
+        Ok(Err(join_err)) if join_err.is_cancelled() => true,
+        Ok(Err(join_err)) => {
+            warn!("Sync loop task panicked on exit: {join_err}");
+            true
+        }
+        Err(_) => {
+            warn!("Sync loop did not exit within {grace:?} — will abort");
+            false
+        }
+    }
+}
+
+/// Abort the sync loop task as a last resort. Called only after
+/// `wait_for_sync_loop_exit` returns false — a clean cancel-and-wait
+/// is always preferred.
+// TODO: wired up in Task 6 of docs/plans/2026-04-05-sync-engine-hardening.md
+#[allow(dead_code)]
+async fn abort_sync_loop(sync: &SyncRunner) {
+    let mut handle_guard = sync.loop_handle.lock().await;
+    if let Some(prev) = handle_guard.take() {
+        prev.abort();
+    }
+}
+
 /// Pre-populate the synced-paths cache and store the manager in the drive
 /// registry so the first sync cycle sees correct state immediately.
 async fn register_drive(sync: &SyncRunner, manager: DriveManager, label: &str, sync_path: &str, folder_dir: &Path) {
