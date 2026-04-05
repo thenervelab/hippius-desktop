@@ -37,17 +37,18 @@ pub async fn get_subscription_data(state: tauri::State<'_, crate::app_state::App
     let recommendation = plans_resp.get("recommendation").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
     // Derive is_on_highest_plan
-    let has_subscription = active.get("has_subscription").and_then(|v| v.as_bool()).unwrap_or(false);
+    let has_subscription = active.get("has_subscription").and_then(serde_json::Value::as_bool).unwrap_or(false);
     let is_on_highest_plan = if has_subscription {
         let current_amount = active
             .get("subscription")
             .and_then(|s| s.get("amount"))
-            .and_then(|v| v.as_f64())
+            .and_then(serde_json::Value::as_f64)
             .unwrap_or(0.0);
-        let highest_amount = plans
-            .as_array()
-            .map(|arr| arr.iter().filter_map(|p| p.get("amount").and_then(|v| v.as_f64())).fold(0.0f64, f64::max))
-            .unwrap_or(0.0);
+        let highest_amount = plans.as_array().map_or(0.0, |arr| {
+            arr.iter()
+                .filter_map(|p| p.get("amount").and_then(serde_json::Value::as_f64))
+                .fold(0.0f64, f64::max)
+        });
         current_amount >= highest_amount
     } else {
         false

@@ -70,8 +70,7 @@ pub struct FileEntry {
 /// Verify that `child` is contained within `parent` after canonicalization.
 /// Delegates to hcfs-client library.
 fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf, crate::error::AppError> {
-    hcfs_client::drive::files::ensure_within(parent, child)
-        .map_err(|e| crate::error::AppError::Other(e.to_string()))
+    hcfs_client::drive::files::ensure_within(parent, child).map_err(|e| crate::error::AppError::Other(e.to_string()))
 }
 
 /// Add file to sync folder (Drive auto-syncs)
@@ -164,7 +163,11 @@ pub async fn add_folder(app: AppHandle, sync_path: String, folder_path: String, 
     copy_dir_recursive(source, &dest, 0).await?;
 
     // Trigger sync so the uploaded folder gets synced
-    { use tauri::Manager; let s = app.state::<crate::app_state::AppState>().sync.clone(); let _ = trigger_sync(&s).await; }
+    {
+        use tauri::Manager;
+        let s = app.state::<crate::app_state::AppState>().sync.clone();
+        let _ = trigger_sync(&s).await;
+    }
 
     Ok(name)
 }
@@ -353,7 +356,11 @@ pub async fn delete_files(
     }
 
     // Trigger sync so server picks up the deletions
-    { use tauri::Manager; let s = app.state::<crate::app_state::AppState>().sync.clone(); let _ = trigger_sync(&s).await; }
+    {
+        use tauri::Manager;
+        let s = app.state::<crate::app_state::AppState>().sync.clone();
+        let _ = trigger_sync(&s).await;
+    }
 
     info!(deleted, failed = failed.len(), "Batch delete completed");
     Ok(DeleteFilesResult { deleted, failed })
@@ -379,19 +386,18 @@ pub async fn add_files(
     subfolder: Option<String>,
 ) -> Result<AddFilesResult, crate::error::AppError> {
     // Credit check — reject if user has no credits (defense-in-depth; TS also checks for UX).
-    if let Some(state) = app.try_state::<crate::app_state::AppState>() {
-        if let Ok(acct) = state.current_account_id() {
-            if let Ok(pool) = state.pool() {
-                let client = crate::api::client::ApiClient::new(pool.clone());
-                if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
-                    let balance_str = resp.get("balance").and_then(|v| v.as_str()).unwrap_or("0");
-                    let balance: f64 = balance_str.parse().unwrap_or(0.0);
-                    if balance <= 0.0 {
-                        return Err(crate::error::AppError::Validation(
-                            "Insufficient credits. Please add credits before uploading files.".into(),
-                        ));
-                    }
-                }
+    if let Some(state) = app.try_state::<crate::app_state::AppState>()
+        && let Ok(acct) = state.current_account_id()
+        && let Ok(pool) = state.pool()
+    {
+        let client = crate::api::client::ApiClient::new(pool.clone());
+        if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
+            let balance_str = resp.get("balance").and_then(|v| v.as_str()).unwrap_or("0");
+            let balance: f64 = balance_str.parse().unwrap_or(0.0);
+            if balance <= 0.0 {
+                return Err(crate::error::AppError::Validation(
+                    "Insufficient credits. Please add credits before uploading files.".into(),
+                ));
             }
         }
     }
@@ -438,10 +444,7 @@ pub async fn add_files(
         match result {
             Ok(name) => added.push(name),
             Err(e) => {
-                let name = source
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| file_path.clone());
+                let name = source.file_name().map_or_else(|| file_path.clone(), |n| n.to_string_lossy().to_string());
                 warn!(file = %name, error = %e, "Failed to add file");
                 failed.push(FileDeleteError { name, error: e.to_string() });
             }
@@ -456,7 +459,11 @@ pub async fn add_files(
     }
 
     // Always trigger sync so successfully added files get uploaded
-    { use tauri::Manager; let s = app.state::<crate::app_state::AppState>().sync.clone(); let _ = trigger_sync(&s).await; }
+    {
+        use tauri::Manager;
+        let s = app.state::<crate::app_state::AppState>().sync.clone();
+        let _ = trigger_sync(&s).await;
+    }
 
     info!(added = added.len(), failed = failed.len(), "Batch add completed");
     Ok(AddFilesResult { added, failed })
@@ -980,7 +987,7 @@ pub async fn get_user_files(
         total_private_size += entries.iter().map(|e| e.size).sum::<u64>();
 
         for entry in entries.iter().filter(|e| e.sync_status != "excluded") {
-            let local_modified_ms = entry.modified.map(|m| m as i64 * 1000).unwrap_or(0);
+            let local_modified_ms = entry.modified.map_or(0, |m| m as i64 * 1000);
             let uploaded_at_ms = if entry.uploaded_at != 0 { entry.uploaded_at * 1000 } else { 0 };
             let updated_at_ms = if entry.updated_at != 0 { entry.updated_at * 1000 } else { 0 };
             let is_pending = entry.sync_status == "pending";
@@ -1049,76 +1056,76 @@ pub async fn get_user_files(
         }
 
         // File type filter
-        if let Some(ref types) = f.file_types {
-            if !types.is_empty() {
-                all_files.retain(|file| {
-                    if file.is_folder {
-                        return types.iter().any(|t| t == "folder");
-                    }
-                    let ext = file.name.rsplit('.').next().unwrap_or("").to_lowercase();
-                    let file_type = match ext.as_str() {
-                        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "svg" | "webp" | "ico" | "tiff" => "image",
-                        "mp4" | "mov" | "avi" | "mkv" | "wmv" | "flv" | "webm" | "m4v" | "3gp" => "video",
-                        "mp3" | "wav" | "ogg" | "flac" | "aac" | "wma" | "m4a" => "audio",
-                        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "rtf" | "csv" | "md" => "document",
-                        "zip" | "tar" | "gz" | "rar" | "7z" | "bz2" => "archive",
-                        _ => "other",
-                    };
-                    types.iter().any(|t| t == file_type)
-                });
-            }
+        if let Some(ref types) = f.file_types
+            && !types.is_empty()
+        {
+            all_files.retain(|file| {
+                if file.is_folder {
+                    return types.iter().any(|t| t == "folder");
+                }
+                let ext = file.name.rsplit('.').next().unwrap_or("").to_lowercase();
+                let file_type = match ext.as_str() {
+                    "jpg" | "jpeg" | "png" | "gif" | "bmp" | "svg" | "webp" | "ico" | "tiff" => "image",
+                    "mp4" | "mov" | "avi" | "mkv" | "wmv" | "flv" | "webm" | "m4v" | "3gp" => "video",
+                    "mp3" | "wav" | "ogg" | "flac" | "aac" | "wma" | "m4a" => "audio",
+                    "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "rtf" | "csv" | "md" => "document",
+                    "zip" | "tar" | "gz" | "rar" | "7z" | "bz2" => "archive",
+                    _ => "other",
+                };
+                types.iter().any(|t| t == file_type)
+            });
         }
 
         // Date filter
-        if let Some(ref date) = f.date_filter {
-            if !date.is_empty() {
-                let now = chrono::Utc::now();
-                all_files.retain(|file| {
-                    if file.created_at == 0 {
-                        return false;
-                    }
-                    let file_ms = if file.created_at > 946_684_800_000 {
-                        file.created_at
-                    } else {
-                        file.created_at * 1000
-                    };
-                    let Some(file_dt) = chrono::DateTime::from_timestamp_millis(file_ms) else {
-                        return false;
-                    };
+        if let Some(ref date) = f.date_filter
+            && !date.is_empty()
+        {
+            let now = chrono::Utc::now();
+            all_files.retain(|file| {
+                if file.created_at == 0 {
+                    return false;
+                }
+                let file_ms = if file.created_at > 946_684_800_000 {
+                    file.created_at
+                } else {
+                    file.created_at * 1000
+                };
+                let Some(file_dt) = chrono::DateTime::from_timestamp_millis(file_ms) else {
+                    return false;
+                };
 
-                    match date.as_str() {
-                        "today" => file_dt.date_naive() == now.date_naive(),
-                        "last7days" => (now - file_dt).num_days() <= 7,
-                        "last30days" => (now - file_dt).num_days() <= 30,
-                        "thisyear" => file_dt.date_naive().year() == now.date_naive().year(),
-                        "lastyear" => file_dt.date_naive().year() == now.date_naive().year() - 1,
-                        _ => {
-                            // Custom date YYYY-MM-DD
-                            if let Ok(target) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-                                file_dt.date_naive() == target
-                            } else {
-                                true
-                            }
+                match date.as_str() {
+                    "today" => file_dt.date_naive() == now.date_naive(),
+                    "last7days" => (now - file_dt).num_days() <= 7,
+                    "last30days" => (now - file_dt).num_days() <= 30,
+                    "thisyear" => file_dt.date_naive().year() == now.date_naive().year(),
+                    "lastyear" => file_dt.date_naive().year() == now.date_naive().year() - 1,
+                    _ => {
+                        // Custom date YYYY-MM-DD
+                        if let Ok(target) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+                            file_dt.date_naive() == target
+                        } else {
+                            true
                         }
                     }
-                });
-            }
+                }
+            });
         }
 
         // File size filter
-        if let Some(ref sizes) = f.file_sizes {
-            if !sizes.is_empty() {
-                all_files.retain(|file| {
-                    let size = file.size;
-                    sizes.iter().any(|&threshold| match threshold {
-                        1 => size < 1_048_576,                                      // Small: < 1 MB
-                        1_048_576 => size >= 1_048_576 && size <= 104_857_600,      // Medium: 1-100 MB
-                        104_857_600 => size > 104_857_600 && size <= 1_073_741_824, // Large: 100MB-1GB
-                        1_073_741_824 => size > 1_073_741_824,                      // Very Large: > 1 GB
-                        _ => size >= threshold,
-                    })
-                });
-            }
+        if let Some(ref sizes) = f.file_sizes
+            && !sizes.is_empty()
+        {
+            all_files.retain(|file| {
+                let size = file.size;
+                sizes.iter().any(|&threshold| match threshold {
+                    1 => size < 1_048_576,                                      // Small: < 1 MB
+                    1_048_576 => (1_048_576..=104_857_600).contains(&size),     // Medium: 1-100 MB
+                    104_857_600 => size > 104_857_600 && size <= 1_073_741_824, // Large: 100MB-1GB
+                    1_073_741_824 => size > 1_073_741_824,                      // Very Large: > 1 GB
+                    _ => size >= threshold,
+                })
+            });
         }
     }
 

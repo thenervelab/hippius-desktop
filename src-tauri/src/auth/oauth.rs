@@ -12,6 +12,12 @@ pub struct OAuthState {
     pub pkce_states: Mutex<HashMap<String, PkceState>>,
 }
 
+impl Default for OAuthState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OAuthState {
     pub fn new() -> Self {
         Self {
@@ -200,23 +206,23 @@ pub fn parse_oauth_deep_link(url: String) -> Result<ParsedDeepLink, AppError> {
     }
 
     // Handle JSON `session` parameter (fallback source for code, username, user_id)
-    if let Some(session_str) = params.get("session") {
-        if let Ok(session_data) = serde_json::from_str::<serde_json::Value>(session_str) {
-            if !out.contains_key("code") {
-                if let Some(c) = session_data.get("code").and_then(|v| v.as_str()) {
-                    out.insert("code".to_string(), c.to_string());
-                }
-            }
-            if !out.contains_key("username") {
-                if let Some(u) = session_data.get("username").and_then(|v| v.as_str()) {
-                    out.insert("username".to_string(), u.to_string());
-                }
-            }
-            if !out.contains_key("user_id") {
-                if let Some(id) = session_data.get("id") {
-                    out.insert("user_id".to_string(), id.to_string().trim_matches('"').to_string());
-                }
-            }
+    if let Some(session_str) = params.get("session")
+        && let Ok(session_data) = serde_json::from_str::<serde_json::Value>(session_str)
+    {
+        if !out.contains_key("code")
+            && let Some(c) = session_data.get("code").and_then(|v| v.as_str())
+        {
+            out.insert("code".to_string(), c.to_string());
+        }
+        if !out.contains_key("username")
+            && let Some(u) = session_data.get("username").and_then(|v| v.as_str())
+        {
+            out.insert("username".to_string(), u.to_string());
+        }
+        if !out.contains_key("user_id")
+            && let Some(id) = session_data.get("id")
+        {
+            out.insert("user_id".to_string(), id.to_string().trim_matches('"').to_string());
         }
     }
 

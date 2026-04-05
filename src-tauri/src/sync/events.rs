@@ -156,9 +156,14 @@ impl SyncStartedPayload {
     pub fn empty(label: &str) -> Self {
         Self {
             label: label.to_string(),
-            uploads: 0, downloads: 0, local_deletes: 0, remote_deletes: 0,
-            upload_files: Vec::new(), download_files: Vec::new(),
-            local_delete_files: Vec::new(), remote_delete_files: Vec::new(),
+            uploads: 0,
+            downloads: 0,
+            local_deletes: 0,
+            remote_deletes: 0,
+            upload_files: Vec::new(),
+            download_files: Vec::new(),
+            local_delete_files: Vec::new(),
+            remote_delete_files: Vec::new(),
         }
     }
 }

@@ -42,9 +42,7 @@ async fn get_password(pool: &SqlitePool, account_id: &str) -> Result<String, App
         .bind(&owner)
         .fetch_optional(pool)
         .await?;
-    result
-        .map(|(p,)| p)
-        .ok_or(AppError::NotReady(crate::error::NotReadyKind::ConfigMissing))
+    result.map(|(p,)| p).ok_or(AppError::NotReady(crate::error::NotReadyKind::ConfigMissing))
 }
 
 async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &str) -> Result<[u8; 32], AppError> {
@@ -53,8 +51,7 @@ async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &s
     let mut master_mnemonic = hcfs_client::auth::recover_mnemonic(&master_path, &password)
         .map_err(|e| AppError::Hcfs(format!("Failed to recover master mnemonic: {e}")))?
         .to_string();
-    let key = hcfs_client::drive::remote::derive_encryption_key(&master_mnemonic, label)
-        .map_err(|e| AppError::Crypto(e.to_string()));
+    let key = hcfs_client::drive::remote::derive_encryption_key(&master_mnemonic, label).map_err(|e| AppError::Crypto(e.to_string()));
     master_mnemonic.zeroize();
     key
 }
@@ -78,11 +75,7 @@ async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Resul
 // ─── Tauri Commands ────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn list_remote_folder_files(
-    state: tauri::State<'_, AppState>,
-    account_id: String,
-    label: String,
-) -> Result<Vec<RemoteFileInfo>, AppError> {
+pub async fn list_remote_folder_files(state: tauri::State<'_, AppState>, account_id: String, label: String) -> Result<Vec<RemoteFileInfo>, AppError> {
     info!(account_id = %account_id, label = %label, "Listing remote folder files");
     let pool = state.pool()?;
     let encryption_key = encryption_key_for_label(pool, &account_id, &label).await?;

@@ -9,9 +9,7 @@ pub fn to_plancks(amount: String) -> Result<String, crate::error::AppError> {
     if amount.is_empty() {
         return Err(crate::error::AppError::Other("Invalid amount".into()));
     }
-    amount
-        .parse::<f64>()
-        .map_err(|_| "Invalid amount".to_string())?;
+    amount.parse::<f64>().map_err(|_| "Invalid amount".to_string())?;
 
     let (whole, fraction) = match amount.split_once('.') {
         Some((w, f)) => (w, f),
@@ -36,9 +34,7 @@ pub fn to_plancks(amount: String) -> Result<String, crate::error::AppError> {
 /// Convert a planck string to human-readable f64 (divide by 10^18).
 #[tauri::command]
 pub fn from_plancks(plancks: String) -> Result<f64, crate::error::AppError> {
-    let value: f64 = plancks
-        .parse()
-        .map_err(|_| "Invalid planck value".to_string())?;
+    let value: f64 = plancks.parse().map_err(|_| "Invalid planck value".to_string())?;
     Ok(value / 1e18)
 }
 
@@ -78,10 +74,7 @@ mod tests {
 
     #[test]
     fn to_plancks_many_decimals_truncates() {
-        assert_eq!(
-            to_plancks("0.1234567890123456789999".into()).unwrap(),
-            "123456789012345678"
-        );
+        assert_eq!(to_plancks("0.1234567890123456789999".into()).unwrap(), "123456789012345678");
     }
 
     #[test]

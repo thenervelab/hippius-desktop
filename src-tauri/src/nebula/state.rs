@@ -8,6 +8,12 @@ pub struct NebulaState {
     pub ping_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
+impl Default for NebulaState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NebulaState {
     pub fn new() -> Self {
         Self {

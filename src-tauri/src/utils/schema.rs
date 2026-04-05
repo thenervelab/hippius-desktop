@@ -1,8 +1,8 @@
 //! SQLite schema initialization and migration.
 
+use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use tracing::{debug, info, warn};
-use sqlx::Row;
 
 pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Define the expected table schemas (only tables still needed)

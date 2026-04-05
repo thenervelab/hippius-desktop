@@ -20,9 +20,9 @@ pub fn get_indexer_api_key() -> Result<String, AppError> {
     Ok(key)
 }
 
+use super::client::{ApiError, url_with_params};
 use reqwest::header::ACCEPT;
 use serde::de::DeserializeOwned;
-use super::client::{ApiError, url_with_params};
 
 const DEFAULT_INDEXER_URL: &str = "https://indexer.hippius.network";
 
@@ -48,8 +48,7 @@ impl IndexerClient {
 
     /// Create from the env var.
     pub fn from_env() -> Result<Self, ApiError> {
-        let api_key = std::env::var("INDEXER_API_KEY")
-            .map_err(|_| ApiError::Other("INDEXER_API_KEY not set".into()))?;
+        let api_key = std::env::var("INDEXER_API_KEY").map_err(|_| ApiError::Other("INDEXER_API_KEY not set".into()))?;
         Ok(Self::new(api_key))
     }
 
@@ -70,7 +69,10 @@ impl IndexerClient {
             resp.json::<T>().await.map_err(|e| ApiError::Other(format!("JSON parse error: {e}")))
         } else {
             let body = resp.text().await.unwrap_or_default();
-            Err(ApiError::Http { status: status.as_u16(), body })
+            Err(ApiError::Http {
+                status: status.as_u16(),
+                body,
+            })
         }
     }
 }

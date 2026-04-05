@@ -181,7 +181,11 @@ pub async fn apply_sync_selection(
     );
 
     // Trigger sync to download newly included files
-    { use tauri::Manager; let s = app.state::<crate::app_state::AppState>().sync.clone(); let _ = trigger_sync(&s).await; }
+    {
+        use tauri::Manager;
+        let s = app.state::<crate::app_state::AppState>().sync.clone();
+        let _ = trigger_sync(&s).await;
+    }
 
     Ok(())
 }

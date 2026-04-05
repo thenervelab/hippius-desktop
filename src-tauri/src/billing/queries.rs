@@ -210,7 +210,7 @@ pub async fn get_credits_ui(account_id: String, page: Option<i64>, limit: Option
     for row in &rows {
         let ts = best_timestamp(
             row.get("processed_timestamp").and_then(|v| v.as_str()),
-            row.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0),
+            row.get("timestamp").and_then(serde_json::Value::as_i64).unwrap_or(0),
         );
         let key = day_key(ts);
         let entry = by_day.entry(key).or_insert((ts, row));
@@ -227,7 +227,7 @@ pub async fn get_credits_ui(account_id: String, page: Option<i64>, limit: Option
         .into_iter()
         .map(|(ts, row)| CreditObject {
             id: row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            block: row.get("block_number").and_then(|v| v.as_i64()).unwrap_or(0),
+            block: row.get("block_number").and_then(serde_json::Value::as_i64).unwrap_or(0),
             amount: row.get("credits").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
             account_id: row.get("account_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             date: chrono::DateTime::from_timestamp_millis(ts).map(|d| d.to_rfc3339()).unwrap_or_default(),
@@ -268,7 +268,7 @@ pub async fn get_system_balance_ui(account_id: String, page: Option<i64>, limit:
     for row in &rows {
         let ts = best_timestamp(
             row.get("processed_timestamp").and_then(|v| v.as_str()),
-            row.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0),
+            row.get("timestamp").and_then(serde_json::Value::as_i64).unwrap_or(0),
         );
         let key = day_key(ts);
         let entry = by_day.entry(key).or_insert((ts, row));
@@ -286,7 +286,7 @@ pub async fn get_system_balance_ui(account_id: String, page: Option<i64>, limit:
             let free = row.get("free_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string();
             BalanceObject {
                 account_id: row.get("account_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                block_number: row.get("block_number").and_then(|v| v.as_i64()).unwrap_or(0),
+                block_number: row.get("block_number").and_then(serde_json::Value::as_i64).unwrap_or(0),
                 free_balance: free.clone(),
                 total_balance: free,
                 timestamp: chrono::DateTime::from_timestamp_millis(ts).map(|d| d.to_rfc3339()).unwrap_or_default(),
@@ -330,8 +330,8 @@ pub async fn get_balance_transfers_ui(account_id: String, page: Option<i64>, lim
     Ok(rows
         .iter()
         .map(|row| {
-            let block = row.get("block_number").and_then(|v| v.as_i64()).unwrap_or(0);
-            let event_idx = row.get("event_index").and_then(|v| v.as_i64()).unwrap_or(0);
+            let block = row.get("block_number").and_then(serde_json::Value::as_i64).unwrap_or(0);
+            let event_idx = row.get("event_index").and_then(serde_json::Value::as_i64).unwrap_or(0);
             let from = row.get("from_account").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let to = row.get("to_account").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let direction = if from == account_id {
@@ -393,19 +393,16 @@ pub async fn get_billing_transactions_ui(
         .map(|t| {
             let payment_type = t.get("payment_type").and_then(|v| v.as_str()).unwrap_or("");
             let tx_type = if payment_type.to_lowercase().contains("stripe") { "card" } else { "tao" };
-            let amount = t
-                .get("amount")
-                .map(|v| {
-                    if let Some(s) = v.as_str() {
-                        s.parse::<f64>().unwrap_or(0.0)
-                    } else {
-                        v.as_f64().unwrap_or(0.0)
-                    }
-                })
-                .unwrap_or(0.0);
+            let amount = t.get("amount").map_or(0.0, |v| {
+                if let Some(s) = v.as_str() {
+                    s.parse::<f64>().unwrap_or(0.0)
+                } else {
+                    v.as_f64().unwrap_or(0.0)
+                }
+            });
 
             BillingTransactionObject {
-                id: t.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
+                id: t.get("id").and_then(serde_json::Value::as_i64).unwrap_or(0),
                 transaction_type: tx_type.to_string(),
                 amount,
                 transaction_date: t.get("created_at").and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -449,8 +446,8 @@ pub async fn get_add_credit_events_ui(account_id: String, page: Option<i64>, lim
     Ok(events
         .iter()
         .map(|e| CreditEventObject {
-            id: e.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
-            block_number: e.get("block_number").and_then(|v| v.as_i64()).unwrap_or(0),
+            id: e.get("id").and_then(serde_json::Value::as_i64).unwrap_or(0),
+            block_number: e.get("block_number").and_then(serde_json::Value::as_i64).unwrap_or(0),
             amount: e
                 .get("event_data")
                 .and_then(|d| d.get("amount"))

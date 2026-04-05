@@ -8,10 +8,7 @@ use tracing::info;
 
 /// Bond tokens for staking. If already bonded, calls `bond_extra` instead.
 #[tauri::command]
-pub async fn stake_bond(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    amount: String,
-) -> Result<TxResult, crate::error::AppError> {
+pub async fn stake_bond(state: tauri::State<'_, crate::app_state::AppState>, amount: String) -> Result<TxResult, crate::error::AppError> {
     let signer = get_signer(&state)?;
     let client = get_substrate_client(&state).await?;
     let address = get_substrate_address(&state)?;
@@ -20,8 +17,7 @@ pub async fn stake_bond(
         .parse()
         .map_err(|e| crate::error::AppError::Other(format!("Invalid amount: {e}")))?;
 
-    let account_id: subxt::utils::AccountId32 =
-        address.parse().map_err(|_| "Invalid address".to_string())?;
+    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
 
     let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
     let already_bonded = client
@@ -48,10 +44,9 @@ pub async fn stake_bond(
             .extrinsic_hash()
     } else {
         info!("Submitting bond transaction...");
-        let tx = custom_runtime::tx().staking().bond(
-            amount,
-            custom_runtime::runtime_types::pallet_staking::RewardDestination::Staked,
-        );
+        let tx = custom_runtime::tx()
+            .staking()
+            .bond(amount, custom_runtime::runtime_types::pallet_staking::RewardDestination::Staked);
         client
             .tx()
             .sign_and_submit_then_watch_default(&tx, &signer)
@@ -72,10 +67,7 @@ pub async fn stake_bond(
 
 /// Unbond tokens (schedule for withdrawal after the unbonding period).
 #[tauri::command]
-pub async fn stake_unbond(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    amount: String,
-) -> Result<TxResult, crate::error::AppError> {
+pub async fn stake_unbond(state: tauri::State<'_, crate::app_state::AppState>, amount: String) -> Result<TxResult, crate::error::AppError> {
     let signer = get_signer(&state)?;
     let client = get_substrate_client(&state).await?;
 
@@ -104,15 +96,12 @@ pub async fn stake_unbond(
 
 /// Withdraw unbonded tokens (after the unbonding period completes).
 #[tauri::command]
-pub async fn stake_withdraw_unbonded(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<TxResult, crate::error::AppError> {
+pub async fn stake_withdraw_unbonded(state: tauri::State<'_, crate::app_state::AppState>) -> Result<TxResult, crate::error::AppError> {
     let signer = get_signer(&state)?;
     let client = get_substrate_client(&state).await?;
     let address = get_substrate_address(&state)?;
 
-    let account_id: subxt::utils::AccountId32 =
-        address.parse().map_err(|_| "Invalid address".to_string())?;
+    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
 
     let spans_query = custom_runtime::storage().staking().slashing_spans(&account_id);
     let num_slashing_spans = match client
@@ -129,9 +118,7 @@ pub async fn stake_withdraw_unbonded(
     };
 
     info!("Submitting withdraw_unbonded transaction (spans={num_slashing_spans})...");
-    let tx = custom_runtime::tx()
-        .staking()
-        .withdraw_unbonded(num_slashing_spans);
+    let tx = custom_runtime::tx().staking().withdraw_unbonded(num_slashing_spans);
     let tx_hash = client
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
@@ -151,15 +138,12 @@ pub async fn stake_withdraw_unbonded(
 
 /// Claim staking rewards via `payout_stakers` for the previous era.
 #[tauri::command]
-pub async fn stake_claim_rewards(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<TxResult, crate::error::AppError> {
+pub async fn stake_claim_rewards(state: tauri::State<'_, crate::app_state::AppState>) -> Result<TxResult, crate::error::AppError> {
     let signer = get_signer(&state)?;
     let client = get_substrate_client(&state).await?;
     let address = get_substrate_address(&state)?;
 
-    let account_id: subxt::utils::AccountId32 =
-        address.parse().map_err(|_| "Invalid address".to_string())?;
+    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
 
     let era_query = custom_runtime::storage().staking().current_era();
     let current_era = client
@@ -170,20 +154,14 @@ pub async fn stake_claim_rewards(
         .fetch(&era_query)
         .await
         .map_err(|e| crate::error::AppError::Other(format!("Era query failed: {e}")))?
-        .ok_or(crate::error::AppError::Other(
-            "Current era not available".into(),
-        ))?;
+        .ok_or(crate::error::AppError::Other("Current era not available".into()))?;
 
     if current_era == 0 {
-        return Err(crate::error::AppError::Other(
-            "Cannot claim rewards: era is 0".into(),
-        ));
+        return Err(crate::error::AppError::Other("Cannot claim rewards: era is 0".into()));
     }
 
     info!("Submitting payout_stakers for era {}...", current_era - 1);
-    let tx = custom_runtime::tx()
-        .staking()
-        .payout_stakers(account_id, current_era - 1);
+    let tx = custom_runtime::tx().staking().payout_stakers(account_id, current_era - 1);
     let tx_hash = client
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)

@@ -92,8 +92,11 @@ pub async fn update_sync_bearer_token(
     crate::auth::tokens::save_api_token(pool, &account_id, &bearer_token)
         .await
         .map_err(|e| crate::error::AppError::Other(format!("Failed to persist token: {e}")))?;
-    state.sync.update_all_drive_tokens(&bearer_token).await
-        .map_err(|e| crate::error::AppError::Other(e))?;
+    state
+        .sync
+        .update_all_drive_tokens(&bearer_token)
+        .await
+        .map_err(crate::error::AppError::Other)?;
     Ok(())
 }
 

@@ -8,11 +8,11 @@
 //! Sub-state definitions live in their respective domain modules. This file
 //! composes them into the single `AppState` container.
 
-use crate::auth::state::AuthInfo;
 use crate::auth::oauth::OAuthState;
-use crate::blockchain::state::{BlockchainState, BlockSubscriptionState};
-use crate::sync::migration::MigrationState;
+use crate::auth::state::AuthInfo;
+use crate::blockchain::state::{BlockSubscriptionState, BlockchainState};
 use crate::nebula::state::NebulaState;
+use crate::sync::migration::MigrationState;
 use crate::sync::tauri_bridge::TauriSyncBridge;
 use hcfs_client::engine::runner::SyncRunner;
 
@@ -73,32 +73,23 @@ impl AppState {
             nebula: NebulaState::new(),
             migration: MigrationState::new(),
             health_client,
-            api_client: reqwest::Client::builder()
-                .build()
-                .expect("Failed to build API HTTP client"),
+            api_client: reqwest::Client::builder().build().expect("Failed to build API HTTP client"),
         }
     }
 
     /// Set the database pool. Called once during async setup.
     pub fn set_pool(&self, pool: SqlitePool) {
-        self.db
-            .set(pool)
-            .expect("AppState pool already initialized");
+        self.db.set(pool).expect("AppState pool already initialized");
     }
 
     /// Get a reference to the database pool.
     pub fn pool(&self) -> Result<&SqlitePool, crate::error::AppError> {
-        self.db
-            .get()
-            .ok_or_else(|| crate::error::AppError::Db(sqlx::Error::PoolClosed))
+        self.db.get().ok_or_else(|| crate::error::AppError::Db(sqlx::Error::PoolClosed))
     }
 
     /// Store the active account ID for background tasks to reference.
     pub fn set_active_account(&self, account_id: &str) {
-        let mut guard = self
-            .active_account_id
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut guard = self.active_account_id.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = Some(account_id.to_string());
     }
 

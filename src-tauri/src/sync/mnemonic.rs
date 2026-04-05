@@ -39,8 +39,7 @@ pub(crate) fn master_mnemonic_path(account_id: &str) -> Result<PathBuf, crate::e
 /// Derive a folder-specific mnemonic from the master mnemonic + folder label.
 /// Delegates to the hcfs-client library.
 pub(crate) fn derive_folder_mnemonic(master_mnemonic: &str, label: &str) -> Result<String, crate::error::AppError> {
-    hcfs_client::drive::keys::derive_folder_mnemonic(master_mnemonic, label)
-        .map_err(|e| crate::error::AppError::Other(e.to_string()))
+    hcfs_client::drive::keys::derive_folder_mnemonic(master_mnemonic, label).map_err(|e| crate::error::AppError::Other(e.to_string()))
 }
 
 /// Ensure the folder uses the correct derived mnemonic for the current master.

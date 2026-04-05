@@ -3,9 +3,9 @@
 
 use tracing::info;
 
+use crate::sync::lifecycle::stop_drive;
 use hcfs_client::engine::manager::StagedChanges;
 use hcfs_client::engine::runner::{ReviewModeGuard, trigger_sync};
-use crate::sync::lifecycle::stop_drive;
 use std::collections::HashMap;
 use tauri::{AppHandle, Emitter};
 

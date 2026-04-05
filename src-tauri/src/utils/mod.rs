@@ -2,5 +2,5 @@
 
 pub mod bookmarks;
 pub mod preferences;
-pub mod support;
 pub mod schema;
+pub mod support;

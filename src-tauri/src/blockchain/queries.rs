@@ -3,7 +3,7 @@
 use crate::blockchain::client::get_substrate_client;
 use crate::blockchain::helpers::get_substrate_address;
 use crate::blockchain::runtime::custom_runtime;
-use crate::blockchain::types::*;
+use crate::blockchain::types::{AccountBalance, BlockTimestampResult, ReferralLink, StakingInfo, UnbondingPeriod};
 
 /// Query `system.account(address)` for free/reserved/frozen balance.
 #[tauri::command]
@@ -12,8 +12,7 @@ pub async fn get_account_balance(
     address: String,
 ) -> Result<AccountBalance, crate::error::AppError> {
     let client = get_substrate_client(&state).await?;
-    let account_id: subxt::utils::AccountId32 =
-        address.parse().map_err(|_| format!("Invalid SS58 address: {address}"))?;
+    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| format!("Invalid SS58 address: {address}"))?;
     let storage_query = custom_runtime::storage().system().account(&account_id);
     let account_info = client
         .storage()
@@ -40,13 +39,10 @@ pub async fn get_account_balance(
 
 /// Query staking state for the current authenticated user.
 #[tauri::command]
-pub async fn get_staking_info(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<StakingInfo, crate::error::AppError> {
+pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState>) -> Result<StakingInfo, crate::error::AppError> {
     let address = get_substrate_address(&state)?;
     let client = get_substrate_client(&state).await?;
-    let account_id: subxt::utils::AccountId32 =
-        address.parse().map_err(|_| format!("Invalid SS58 address: {address}"))?;
+    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| format!("Invalid SS58 address: {address}"))?;
 
     let balance_query = custom_runtime::storage().system().account(&account_id);
     let balance_info = client
@@ -161,8 +157,7 @@ pub async fn get_referral_links(
     address: String,
 ) -> Result<Vec<ReferralLink>, crate::error::AppError> {
     let client = get_substrate_client(&state).await?;
-    let target_account: subxt::utils::AccountId32 =
-        address.parse().map_err(|_| "Invalid address".to_string())?;
+    let target_account: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
 
     let storage = client
         .storage()
@@ -182,18 +177,9 @@ pub async fn get_referral_links(
     while let Some(Ok(entry)) = entries.next().await {
         if entry.value == target_account {
             let code_bytes = &entry.key_bytes[entry.key_bytes.len().saturating_sub(32)..];
-            let code = String::from_utf8_lossy(
-                code_bytes
-                    .iter()
-                    .copied()
-                    .skip_while(|b| *b == 0)
-                    .collect::<Vec<u8>>()
-                    .as_slice(),
-            )
-            .to_string();
+            let code = String::from_utf8_lossy(code_bytes.iter().copied().skip_while(|b| *b == 0).collect::<Vec<u8>>().as_slice()).to_string();
 
-            let reward_query =
-                custom_runtime::storage().credits().referral_code_rewards(code_bytes);
+            let reward_query = custom_runtime::storage().credits().referral_code_rewards(code_bytes);
             let reward_raw = storage
                 .fetch(&reward_query)
                 .await

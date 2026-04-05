@@ -239,7 +239,7 @@ pub async fn process_credit_events(
         }
 
         // Parse amount from raw blockchain value
-        let clean_amount = event.amount.chars().filter(|c| c.is_ascii_digit()).collect::<String>();
+        let clean_amount = event.amount.chars().filter(char::is_ascii_digit).collect::<String>();
         let amount: f64 = if clean_amount.is_empty() {
             0.0
         } else {

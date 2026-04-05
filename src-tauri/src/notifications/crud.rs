@@ -461,4 +461,3 @@ pub async fn get_local_enabled_notification_types(state: tauri::State<'_, AppSta
 }
 
 // ── App State ───────────────────────────────────────────────────────────
-

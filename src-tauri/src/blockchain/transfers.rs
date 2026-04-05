@@ -30,9 +30,7 @@ pub async fn transfer_balance(
         .map_err(|e| crate::error::AppError::Other(format!("Invalid recipient address: {e:?}")))?;
 
     info!("Submitting transfer_keep_alive transaction...");
-    let tx = custom_runtime::tx()
-        .balances()
-        .transfer_keep_alive(recipient.into(), amount);
+    let tx = custom_runtime::tx().balances().transfer_keep_alive(recipient.into(), amount);
 
     let tx_hash = client
         .tx()
@@ -53,11 +51,7 @@ pub async fn transfer_balance(
 
 /// Validate a transfer amount and convert to planck.
 #[tauri::command]
-pub fn validate_and_convert_transfer(
-    amount: String,
-    available_balance_planck: String,
-    fee_planck: String,
-) -> Result<String, crate::error::AppError> {
+pub fn validate_and_convert_transfer(amount: String, available_balance_planck: String, fee_planck: String) -> Result<String, crate::error::AppError> {
     if amount.trim().is_empty() {
         return Err(crate::error::AppError::Validation("Amount is required".into()));
     }
@@ -67,9 +61,7 @@ pub fn validate_and_convert_transfer(
         .map_err(|_| crate::error::AppError::Validation("Amount must be a valid number".into()))?;
 
     if num <= 0.0 {
-        return Err(crate::error::AppError::Validation(
-            "Amount must be greater than zero".into(),
-        ));
+        return Err(crate::error::AppError::Validation("Amount must be greater than zero".into()));
     }
 
     let planck = to_plancks(amount)?;
@@ -78,9 +70,7 @@ pub fn validate_and_convert_transfer(
     let fee_u128: u128 = fee_planck.parse().unwrap_or(0);
 
     if planck_u128 > balance_u128 {
-        return Err(crate::error::AppError::Validation(
-            "Amount exceeds your available balance".into(),
-        ));
+        return Err(crate::error::AppError::Validation("Amount exceeds your available balance".into()));
     }
 
     if planck_u128.saturating_add(fee_u128) > balance_u128 {
@@ -100,16 +90,12 @@ pub async fn validate_send_balance(
     amount: String,
 ) -> Result<ValidatedTransfer, crate::error::AppError> {
     if !validate_address(recipient_address) {
-        return Err(crate::error::AppError::Validation(
-            "Invalid recipient address".into(),
-        ));
+        return Err(crate::error::AppError::Validation("Invalid recipient address".into()));
     }
 
     let address = get_substrate_address(&state)?;
     let client = get_substrate_client(&state).await?;
-    let account_id: subxt::utils::AccountId32 = address
-        .parse()
-        .map_err(|_| format!("Invalid sender address: {address}"))?;
+    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| format!("Invalid sender address: {address}"))?;
     let storage_query = custom_runtime::storage().system().account(&account_id);
     let account_info = client
         .storage()
@@ -119,7 +105,7 @@ pub async fn validate_send_balance(
         .fetch(&storage_query)
         .await
         .map_err(|e| crate::error::AppError::Other(format!("Query failed: {e}")))?;
-    let available: u128 = account_info.map(|i| i.data.free).unwrap_or(0);
+    let available: u128 = account_info.map_or(0, |i| i.data.free);
 
     let planck_str = to_plancks(amount)?;
     let planck: u128 = planck_str
@@ -127,15 +113,11 @@ pub async fn validate_send_balance(
         .map_err(|_| crate::error::AppError::Validation("Invalid planck amount".into()))?;
 
     if planck == 0 {
-        return Err(crate::error::AppError::Validation(
-            "Amount must be greater than zero".into(),
-        ));
+        return Err(crate::error::AppError::Validation("Amount must be greater than zero".into()));
     }
 
     if planck > available {
-        return Err(crate::error::AppError::Validation(
-            "Amount exceeds your available balance".into(),
-        ));
+        return Err(crate::error::AppError::Validation("Amount exceeds your available balance".into()));
     }
     if planck.saturating_add(ESTIMATED_TRANSFER_FEE_PLANCK) > available {
         return Err(crate::error::AppError::Validation(

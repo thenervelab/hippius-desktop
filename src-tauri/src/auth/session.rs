@@ -505,27 +505,28 @@ pub async fn restore_session(
     };
 
     // Check token expiry
-    if let Some(expiry) = token_expiry {
-        if expiry > 0 && expiry < now_ms {
-            info!("DB session token expired, clearing");
-            if let Some(ref addr) = substrate_address {
-                let owner = account_key(addr);
-                let _ = sqlx::query("UPDATE auth_session SET auth_token = NULL, token_expiry = NULL, user_id = NULL, username = NULL, provider = NULL, substrate_address = NULL WHERE owner = ?")
+    if let Some(expiry) = token_expiry
+        && expiry > 0
+        && expiry < now_ms
+    {
+        info!("DB session token expired, clearing");
+        if let Some(ref addr) = substrate_address {
+            let owner = account_key(addr);
+            let _ = sqlx::query("UPDATE auth_session SET auth_token = NULL, token_expiry = NULL, user_id = NULL, username = NULL, provider = NULL, substrate_address = NULL WHERE owner = ?")
                     .bind(&owner)
                     .execute(pool)
                     .await;
-            }
-            return Ok(SessionRestoreResult {
-                authenticated: false,
-                substrate_address: None,
-                auth_type: None,
-                oauth_session: None,
-                logout_time_ms: None,
-                should_clear_oauth: should_clear,
-                needs_sync_mnemonic: false,
-                redirect_to: Some("/login".into()),
-            });
         }
+        return Ok(SessionRestoreResult {
+            authenticated: false,
+            substrate_address: None,
+            auth_type: None,
+            oauth_session: None,
+            logout_time_ms: None,
+            should_clear_oauth: should_clear,
+            needs_sync_mnemonic: false,
+            redirect_to: Some("/login".into()),
+        });
     }
 
     // Valid session — build OAuth session object for frontend display

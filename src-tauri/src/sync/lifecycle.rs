@@ -75,14 +75,14 @@ pub async fn setup_and_init_sync(
     save_hcfs_config_internal(pool, &account_id, &server_url, &password).await?;
 
     // 2. Persist master mnemonic (if available and config has a password now)
-    if let Some(ref m) = mnemonic {
-        if let Ok(pw) = get_drive_password(pool, &account_id).await {
-            let master_path = master_mnemonic_path(&account_id)?;
-            let acct_dir = account_dir(&account_id)?;
-            let _ = std::fs::create_dir_all(&acct_dir);
-            if let Err(e) = hcfs_client::auth::save_encrypted_mnemonic(&master_path, m, &pw) {
-                debug!("Mnemonic persist during setup skipped: {e}");
-            }
+    if let Some(ref m) = mnemonic
+        && let Ok(pw) = get_drive_password(pool, &account_id).await
+    {
+        let master_path = master_mnemonic_path(&account_id)?;
+        let acct_dir = account_dir(&account_id)?;
+        let _ = std::fs::create_dir_all(&acct_dir);
+        if let Err(e) = hcfs_client::auth::save_encrypted_mnemonic(&master_path, m, &pw) {
+            debug!("Mnemonic persist during setup skipped: {e}");
         }
     }
 
@@ -1016,28 +1016,28 @@ pub async fn auto_init_sync(
     let pool = state.pool()?;
 
     // 2. Persist master mnemonic early (no-op if already exists or no config)
-    if let Some(ref m) = mnemonic {
-        if let Ok(password) = get_drive_password(pool, &account_id).await {
-            let master_path = master_mnemonic_path(&account_id)?;
-            let acct_dir = account_dir(&account_id)?;
-            let _ = std::fs::create_dir_all(&acct_dir);
-            if let Err(e) = hcfs_client::auth::save_encrypted_mnemonic(&master_path, m, &password) {
-                debug!("Early mnemonic persist skipped: {e}");
-            }
+    if let Some(ref m) = mnemonic
+        && let Ok(password) = get_drive_password(pool, &account_id).await
+    {
+        let master_path = master_mnemonic_path(&account_id)?;
+        let acct_dir = account_dir(&account_id)?;
+        let _ = std::fs::create_dir_all(&acct_dir);
+        if let Err(e) = hcfs_client::auth::save_encrypted_mnemonic(&master_path, m, &password) {
+            debug!("Early mnemonic persist skipped: {e}");
         }
     }
 
     // 3. Get all configured sync paths (with legacy fallback)
     let mut sync_paths = get_all_sync_paths_internal(pool, &account_id).await.unwrap_or_default();
-    if sync_paths.is_empty() {
-        if let Ok(legacy) = get_sync_path_for_label(pool, &account_id, "default").await {
-            sync_paths.push(crate::sync::paths::SyncPathResult {
-                path: legacy,
-                is_public: false,
-                label: "default".to_string(),
-                is_paused: false,
-            });
-        }
+    if sync_paths.is_empty()
+        && let Ok(legacy) = get_sync_path_for_label(pool, &account_id, "default").await
+    {
+        sync_paths.push(crate::sync::paths::SyncPathResult {
+            path: legacy,
+            is_public: false,
+            label: "default".to_string(),
+            is_paused: false,
+        });
     }
 
     if sync_paths.is_empty() {

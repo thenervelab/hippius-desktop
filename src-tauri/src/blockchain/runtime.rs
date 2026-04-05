@@ -68,17 +68,15 @@ pub async fn transfer_balance_tauri(
         .parse()
         .map_err(|e| crate::error::AppError::Other(format!("Invalid amount: {e}")))?;
 
-    let pair = sr25519::Pair::from_string(&sender_seed, None)
-        .map_err(|e| crate::error::AppError::Other(format!("Failed to create signer pair: {e:?}")))?;
+    let pair =
+        sr25519::Pair::from_string(&sender_seed, None).map_err(|e| crate::error::AppError::Other(format!("Failed to create signer pair: {e:?}")))?;
     let signer = PairSigner::new(pair);
 
     let recipient = sp_core::crypto::AccountId32::from_ss58check(&recipient_address)
         .map_err(|e| crate::error::AppError::Other(format!("Invalid recipient address: {e:?}")))?;
 
     let api = get_substrate_client(&state).await?;
-    let tx = custom_runtime::tx()
-        .balances()
-        .transfer_keep_alive(recipient.into(), amount);
+    let tx = custom_runtime::tx().balances().transfer_keep_alive(recipient.into(), amount);
 
     info!("Submitting balance transfer transaction...");
     let tx_hash = api
@@ -97,9 +95,7 @@ pub async fn transfer_balance_tauri(
 
 /// Fetch the current WSS endpoint.
 #[tauri::command]
-pub async fn get_wss_endpoint(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<String, crate::error::AppError> {
+pub async fn get_wss_endpoint(state: tauri::State<'_, crate::app_state::AppState>) -> Result<String, crate::error::AppError> {
     Ok(get_current_wss_endpoint(state.pool()?).await?)
 }
 
@@ -118,9 +114,7 @@ pub async fn update_wss_endpoint_command(
 pub async fn test_rpc_endpoint_command(endpoint: String) -> Result<(), crate::error::AppError> {
     let trimmed = endpoint.trim();
     if trimmed.is_empty() {
-        return Err(crate::error::AppError::Validation(
-            "Please enter an RPC endpoint".into(),
-        ));
+        return Err(crate::error::AppError::Validation("Please enter an RPC endpoint".into()));
     }
     if !trimmed.starts_with("ws://") && !trimmed.starts_with("wss://") {
         return Err(crate::error::AppError::Validation(

@@ -48,85 +48,141 @@ impl SyncEventHandler for TauriSyncBridge {
 
         match event {
             SyncEvent::SyncStarted {
-                label, uploads, downloads, local_deletes, remote_deletes,
-                upload_files, download_files, local_delete_files, remote_delete_files,
+                label,
+                uploads,
+                downloads,
+                local_deletes,
+                remote_deletes,
+                upload_files,
+                download_files,
+                local_delete_files,
+                remote_delete_files,
             } => {
-                let _ = app.emit("hcfs_sync_started", serde_json::json!({
-                    "label": label,
-                    "uploads": uploads, "downloads": downloads,
-                    "localDeletes": local_deletes, "remoteDeletes": remote_deletes,
-                    "uploadFiles": upload_files, "downloadFiles": download_files,
-                    "localDeleteFiles": local_delete_files, "remoteDeleteFiles": remote_delete_files,
-                }));
+                let _ = app.emit(
+                    "hcfs_sync_started",
+                    serde_json::json!({
+                        "label": label,
+                        "uploads": uploads, "downloads": downloads,
+                        "localDeletes": local_deletes, "remoteDeletes": remote_deletes,
+                        "uploadFiles": upload_files, "downloadFiles": download_files,
+                        "localDeleteFiles": local_delete_files, "remoteDeleteFiles": remote_delete_files,
+                    }),
+                );
             }
             SyncEvent::SyncCompleted {
-                label, files_uploaded, files_downloaded,
-                files_deleted_locally, files_deleted_remotely,
-                conflicts_resolved, conflicts_skipped,
+                label,
+                files_uploaded,
+                files_downloaded,
+                files_deleted_locally,
+                files_deleted_remotely,
+                conflicts_resolved,
+                conflicts_skipped,
             } => {
-                let _ = app.emit("hcfs_sync_completed", serde_json::json!({
-                    "label": label,
-                    "files_uploaded": files_uploaded, "files_downloaded": files_downloaded,
-                    "files_deleted_locally": files_deleted_locally,
-                    "files_deleted_remotely": files_deleted_remotely,
-                    "conflicts_resolved": conflicts_resolved, "conflicts_skipped": conflicts_skipped,
-                }));
+                let _ = app.emit(
+                    "hcfs_sync_completed",
+                    serde_json::json!({
+                        "label": label,
+                        "files_uploaded": files_uploaded, "files_downloaded": files_downloaded,
+                        "files_deleted_locally": files_deleted_locally,
+                        "files_deleted_remotely": files_deleted_remotely,
+                        "conflicts_resolved": conflicts_resolved, "conflicts_skipped": conflicts_skipped,
+                    }),
+                );
             }
-            SyncEvent::SyncError { label, error, retry_in_secs, consecutive_failures } => {
-                let _ = app.emit("hcfs_sync_error", serde_json::json!({
-                    "label": label, "error": error,
-                    "retry_in_secs": retry_in_secs, "consecutive_failures": consecutive_failures,
-                }));
+            SyncEvent::SyncError {
+                label,
+                error,
+                retry_in_secs,
+                consecutive_failures,
+            } => {
+                let _ = app.emit(
+                    "hcfs_sync_error",
+                    serde_json::json!({
+                        "label": label, "error": error,
+                        "retry_in_secs": retry_in_secs, "consecutive_failures": consecutive_failures,
+                    }),
+                );
             }
             SyncEvent::SyncStopped { label } => {
                 let _ = app.emit("hcfs_sync_stopped", serde_json::json!({ "label": label }));
             }
             SyncEvent::SyncReset { account_id, message } => {
-                let _ = app.emit("hcfs_sync_reset", serde_json::json!({
-                    "account_id": account_id, "message": message,
-                }));
+                let _ = app.emit(
+                    "hcfs_sync_reset",
+                    serde_json::json!({
+                        "account_id": account_id, "message": message,
+                    }),
+                );
             }
             SyncEvent::PlanReady {
-                label, uploads, downloads, local_deletes, remote_deletes,
-                upload_files, download_files, local_delete_files, remote_delete_files,
+                label,
+                uploads,
+                downloads,
+                local_deletes,
+                remote_deletes,
+                upload_files,
+                download_files,
+                local_delete_files,
+                remote_delete_files,
             } => {
-                let _ = app.emit("hcfs_sync_plan_ready", serde_json::json!({
-                    "label": label,
-                    "uploads": uploads, "downloads": downloads,
-                    "localDeletes": local_deletes, "remoteDeletes": remote_deletes,
-                    "uploadFiles": upload_files, "downloadFiles": download_files,
-                    "localDeleteFiles": local_delete_files, "remoteDeleteFiles": remote_delete_files,
-                }));
+                let _ = app.emit(
+                    "hcfs_sync_plan_ready",
+                    serde_json::json!({
+                        "label": label,
+                        "uploads": uploads, "downloads": downloads,
+                        "localDeletes": local_deletes, "remoteDeletes": remote_deletes,
+                        "uploadFiles": upload_files, "downloadFiles": download_files,
+                        "localDeleteFiles": local_delete_files, "remoteDeleteFiles": remote_delete_files,
+                    }),
+                );
             }
             SyncEvent::ConflictsPending { label, staged } => {
-                let _ = app.emit("hcfs_conflicts_pending", serde_json::json!({
-                    "label": label, "staged": staged,
-                }));
+                let _ = app.emit(
+                    "hcfs_conflicts_pending",
+                    serde_json::json!({
+                        "label": label, "staged": staged,
+                    }),
+                );
             }
             SyncEvent::UploadProgress { label, bytes, total, path } => {
-                let _ = app.emit("hcfs_upload_progress", serde_json::json!({
-                    "label": label, "bytes": bytes, "total": total, "path": path,
-                }));
+                let _ = app.emit(
+                    "hcfs_upload_progress",
+                    serde_json::json!({
+                        "label": label, "bytes": bytes, "total": total, "path": path,
+                    }),
+                );
             }
             SyncEvent::DownloadProgress { label, bytes, total, path } => {
-                let _ = app.emit("hcfs_download_progress", serde_json::json!({
-                    "label": label, "bytes": bytes, "total": total, "path": path,
-                }));
+                let _ = app.emit(
+                    "hcfs_download_progress",
+                    serde_json::json!({
+                        "label": label, "bytes": bytes, "total": total, "path": path,
+                    }),
+                );
             }
             SyncEvent::ScanProgress { label, scanned, path } => {
-                let _ = app.emit("hcfs_scan_progress", serde_json::json!({
-                    "label": label, "scanned": scanned, "path": path,
-                }));
+                let _ = app.emit(
+                    "hcfs_scan_progress",
+                    serde_json::json!({
+                        "label": label, "scanned": scanned, "path": path,
+                    }),
+                );
             }
             SyncEvent::FetchProgress { label, fetched, total } => {
-                let _ = app.emit("hcfs_fetch_progress", serde_json::json!({
-                    "label": label, "fetched": fetched, "total": total,
-                }));
+                let _ = app.emit(
+                    "hcfs_fetch_progress",
+                    serde_json::json!({
+                        "label": label, "fetched": fetched, "total": total,
+                    }),
+                );
             }
             SyncEvent::FileTransferComplete { label } => {
-                let _ = app.emit("hcfs_file_transfer_complete", serde_json::json!({
-                    "label": label,
-                }));
+                let _ = app.emit(
+                    "hcfs_file_transfer_complete",
+                    serde_json::json!({
+                        "label": label,
+                    }),
+                );
             }
             SyncEvent::HealthChanged { health } => {
                 let _ = app.emit("hcfs_connectivity_changed", &health);
@@ -157,7 +213,7 @@ impl SyncCallbacks for TauriSyncBridge {
             use tauri::Manager;
             let app_state = app.state::<crate::app_state::AppState>();
             let pool = app_state.pool().map_err(|e| e.to_string())?;
-            let acct = app_state.current_account_id().map_err(|e| e.to_string())?;
+            let acct = app_state.current_account_id().map_err(|e| e.clone())?;
 
             crate::auth::service::refresh_auth_token_internal(pool, &app, &acct).await?;
 
@@ -200,9 +256,7 @@ impl SyncCallbacks for TauriSyncBridge {
         Box::pin(async {
             let app = self.app().ok_or_else(|| "AppHandle not available".to_string())?;
             use tauri::Manager;
-            app.state::<crate::app_state::AppState>()
-                .current_account_id()
-                .map_err(|e| e.to_string())
+            app.state::<crate::app_state::AppState>().current_account_id().map_err(|e| e.clone())
         })
     }
 }

@@ -5,14 +5,11 @@
 //! `hcfs_client::sync::progress_tracker`.
 
 // Core types re-exported from library
-pub use hcfs_client::engine::progress::state::{
-    FileAction, FileProgress, FileProgressStatus, FileStatus,
-    OverallProgress, RecentFile, SessionFileList, SyncFile,
-    SyncProgressState, SyncSession,
-    count_expected_for_label,
-    RECENT_FILES_RETENTION_MS,
-};
 pub use hcfs_client::engine::progress::snapshot::{SyncSnapshot, build_snapshot};
+pub use hcfs_client::engine::progress::state::{
+    FileAction, FileProgress, FileProgressStatus, FileStatus, OverallProgress, RECENT_FILES_RETENTION_MS, RecentFile, SessionFileList, SyncFile,
+    SyncProgressState, SyncSession, count_expected_for_label,
+};
 
 use hcfs_client::engine::runner::SyncRunner;
 use std::sync::OnceLock;
@@ -93,9 +90,12 @@ pub fn merge_into_session(
     label: Option<String>,
 ) -> Result<(), String> {
     sync.progress.merge_into_session(
-        expected_uploads, expected_downloads,
-        expected_local_deletes, expected_remote_deletes,
-        file_list, label.as_deref(),
+        expected_uploads,
+        expected_downloads,
+        expected_local_deletes,
+        expected_remote_deletes,
+        file_list,
+        label.as_deref(),
     )?;
     sync.emit_snapshot(true);
     Ok(())
@@ -126,9 +126,12 @@ pub fn start_session(
     label: Option<String>,
 ) -> Result<SyncSession, String> {
     let result = sync.progress.start_session(
-        expected_uploads, expected_downloads,
-        expected_local_deletes, expected_remote_deletes,
-        file_list, label.as_deref(),
+        expected_uploads,
+        expected_downloads,
+        expected_local_deletes,
+        expected_remote_deletes,
+        file_list,
+        label.as_deref(),
     )?;
     sync.emit_snapshot(true);
     Ok(result)
@@ -156,12 +159,7 @@ pub fn complete_pending_files(sync: &SyncRunner, label: &str) -> Result<(), Stri
 }
 
 /// Mark excess pending files as failed.
-pub fn mark_pending_files_as_failed(
-    sync: &SyncRunner,
-    actual_uploads: u32,
-    actual_downloads: u32,
-    label: &str,
-) -> Result<(), String> {
+pub fn mark_pending_files_as_failed(sync: &SyncRunner, actual_uploads: u32, actual_downloads: u32, label: &str) -> Result<(), String> {
     sync.progress.mark_pending_files_as_failed(actual_uploads, actual_downloads, label)?;
     sync.emit_snapshot(true);
     Ok(())
@@ -220,7 +218,15 @@ pub fn sp_start_session(
     file_list: Option<SessionFileList>,
     label: Option<String>,
 ) -> Result<SyncSession, String> {
-    start_session(&state.sync, expected_uploads, expected_downloads, expected_local_deletes, expected_remote_deletes, file_list, label)
+    start_session(
+        &state.sync,
+        expected_uploads,
+        expected_downloads,
+        expected_local_deletes,
+        expected_remote_deletes,
+        file_list,
+        label,
+    )
 }
 
 #[tauri::command]
@@ -233,7 +239,15 @@ pub fn sp_merge_into_session(
     file_list: Option<SessionFileList>,
     label: Option<String>,
 ) -> Result<(), String> {
-    merge_into_session(&state.sync, expected_uploads, expected_downloads, expected_local_deletes, expected_remote_deletes, file_list, label)
+    merge_into_session(
+        &state.sync,
+        expected_uploads,
+        expected_downloads,
+        expected_local_deletes,
+        expected_remote_deletes,
+        file_list,
+        label,
+    )
 }
 
 #[tauri::command]

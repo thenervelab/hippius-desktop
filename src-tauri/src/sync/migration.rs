@@ -428,13 +428,13 @@ pub async fn start_migration_flow(
     let pool = state.pool()?;
     let config = crate::sync::config::get_hcfs_config_internal(pool, &account_id).await?;
 
-    if !config.has_password {
+    if config.has_password {
         Ok(MigrationFlowResult {
-            next_step: "setup".to_string(),
+            next_step: "progress".to_string(),
         })
     } else {
         Ok(MigrationFlowResult {
-            next_step: "progress".to_string(),
+            next_step: "setup".to_string(),
         })
     }
 }
@@ -541,38 +541,35 @@ async fn poll_migration_status_internal(
     }
     .await;
 
-    match result {
-        Ok(raw) => {
+    if let Ok(raw) = result {
+        state.migration.poll_failure_count.store(0, Ordering::SeqCst);
+        Ok(ServerMigrationStatus {
+            status: raw.status,
+            total: raw.total,
+            completed: raw.completed,
+            failed: raw.failed,
+            failed_files: raw.failed_files,
+            current_file: raw.current_file,
+            should_warn: false,
+            should_abort: false,
+        })
+    } else {
+        let failures = state.migration.poll_failure_count.fetch_add(1, Ordering::SeqCst) + 1;
+        let should_warn = failures >= WARN_AFTER_POLL_FAILURES;
+        let should_abort = failures >= ABORT_AFTER_POLL_FAILURES;
+        if should_abort {
             state.migration.poll_failure_count.store(0, Ordering::SeqCst);
-            Ok(ServerMigrationStatus {
-                status: raw.status,
-                total: raw.total,
-                completed: raw.completed,
-                failed: raw.failed,
-                failed_files: raw.failed_files,
-                current_file: raw.current_file,
-                should_warn: false,
-                should_abort: false,
-            })
         }
-        Err(_) => {
-            let failures = state.migration.poll_failure_count.fetch_add(1, Ordering::SeqCst) + 1;
-            let should_warn = failures >= WARN_AFTER_POLL_FAILURES;
-            let should_abort = failures >= ABORT_AFTER_POLL_FAILURES;
-            if should_abort {
-                state.migration.poll_failure_count.store(0, Ordering::SeqCst);
-            }
-            Ok(ServerMigrationStatus {
-                status: "poll_error".to_string(),
-                total: 0,
-                completed: 0,
-                failed: 0,
-                failed_files: Vec::new(),
-                current_file: None,
-                should_warn,
-                should_abort,
-            })
-        }
+        Ok(ServerMigrationStatus {
+            status: "poll_error".to_string(),
+            total: 0,
+            completed: 0,
+            failed: 0,
+            failed_files: Vec::new(),
+            current_file: None,
+            should_warn,
+            should_abort,
+        })
     }
 }
 
@@ -689,6 +686,12 @@ pub struct MigrationState {
     pub client: reqwest::Client,
     /// Handle for the background migration polling task (if running).
     pub poll_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl Default for MigrationState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MigrationState {

@@ -521,7 +521,7 @@ pub fn calculate_storage_capacity(credits_per_month: Vec<f64>) -> Vec<StorageCap
             let mut max_gb: u64 = 0;
 
             while low <= high {
-                let mid = (low + high) / 2;
+                let mid = u64::midpoint(low, high);
                 let cost = calculate_storage_cost_internal("ipfs", "per-month", mid as f64);
                 if cost <= credits {
                     max_gb = mid;

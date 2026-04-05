@@ -34,9 +34,9 @@ fn credits_to_planck(balance_str: &str) -> String {
     let padded: String = if frac_part.len() >= 18 {
         frac_part[..18].to_string()
     } else {
-        format!("{:0<18}", frac_part)
+        format!("{frac_part:0<18}")
     };
-    let combined = format!("{}{}", int_part, padded);
+    let combined = format!("{int_part}{padded}");
     // Strip leading zeros but keep at least "0"
     let stripped = combined.trim_start_matches('0');
     if stripped.is_empty() { "0".to_string() } else { stripped.to_string() }
@@ -79,19 +79,19 @@ pub async fn check_sync_eligibility(state: tauri::State<'_, crate::app_state::Ap
         let guard = state.blockchain.client.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.clone()
     };
-    if let Some(client) = substrate_client {
-        if let Ok(acct) = account_id.parse::<subxt::utils::AccountId32>() {
-            let query = crate::blockchain::runtime::custom_runtime::storage().system().account(&acct);
-            if let Ok(storage) = client.storage().at_latest().await {
-                if let Ok(info) = storage.fetch(&query).await {
-                    let free = info.map(|i| i.data.free).unwrap_or(0);
-                    if free == 0 {
-                        return Ok(SyncEligibility {
-                            eligible: false,
-                            reason: Some("balance_zero".into()),
-                        });
-                    }
-                }
+    if let Some(client) = substrate_client
+        && let Ok(acct) = account_id.parse::<subxt::utils::AccountId32>()
+    {
+        let query = crate::blockchain::runtime::custom_runtime::storage().system().account(&acct);
+        if let Ok(storage) = client.storage().at_latest().await
+            && let Ok(info) = storage.fetch(&query).await
+        {
+            let free = info.map_or(0, |i| i.data.free);
+            if free == 0 {
+                return Ok(SyncEligibility {
+                    eligible: false,
+                    reason: Some("balance_zero".into()),
+                });
             }
         }
     }

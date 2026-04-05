@@ -50,11 +50,7 @@ pub const NEVER_EMITTED: u64 = u64::MAX;
 ///   progress of each file immediately.
 /// * `min_interval_ms` — minimum gap between throttled emits. `0` disables
 ///   the throttle entirely (every call emits).
-pub const fn should_emit_snapshot(
-    elapsed_since_last_ms: u64,
-    is_file_complete: bool,
-    min_interval_ms: u64,
-) -> bool {
+pub const fn should_emit_snapshot(elapsed_since_last_ms: u64, is_file_complete: bool, min_interval_ms: u64) -> bool {
     is_file_complete || elapsed_since_last_ms >= min_interval_ms
 }
 
@@ -79,22 +75,13 @@ pub const fn should_emit_snapshot(
 ///   value previously stored in `last_emit_ms`.
 /// * `is_file_complete` — see [`should_emit_snapshot`].
 /// * `min_interval_ms` — see [`should_emit_snapshot`].
-pub fn try_claim_snapshot_emit(
-    last_emit_ms: &AtomicU64,
-    now_ms: u64,
-    is_file_complete: bool,
-    min_interval_ms: u64,
-) -> bool {
+pub fn try_claim_snapshot_emit(last_emit_ms: &AtomicU64, now_ms: u64, is_file_complete: bool, min_interval_ms: u64) -> bool {
     let last = last_emit_ms.load(Ordering::Relaxed);
     // First-ever call (cursor holds the [`NEVER_EMITTED`] sentinel): treat
     // elapsed as infinite so the very first progress tick always emits. This
     // matters at process startup, when `now_ms` is tiny and a zero-initialised
     // cursor would otherwise block the first tick by a full window.
-    let elapsed = if last == NEVER_EMITTED {
-        u64::MAX
-    } else {
-        now_ms.saturating_sub(last)
-    };
+    let elapsed = if last == NEVER_EMITTED { u64::MAX } else { now_ms.saturating_sub(last) };
     if should_emit_snapshot(elapsed, is_file_complete, min_interval_ms) {
         last_emit_ms.store(now_ms, Ordering::Relaxed);
         true

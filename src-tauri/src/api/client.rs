@@ -86,7 +86,6 @@ impl From<ApiError> for String {
     }
 }
 
-
 const DEFAULT_BASE_URL: &str = "https://api.hippius.com";
 
 pub(crate) fn api_base_url() -> String {
@@ -249,7 +248,6 @@ impl ApiClient {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -74,4 +74,3 @@ pub async fn delete_contact(state: tauri::State<'_, AppState>, id: i64) -> Resul
 }
 
 // ── Onboarding ──────────────────────────────────────────────────────────
-

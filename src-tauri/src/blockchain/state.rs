@@ -8,6 +8,12 @@ pub struct BlockchainState {
     pub client: std::sync::RwLock<Option<Arc<subxt::OnlineClient<subxt::PolkadotConfig>>>>,
 }
 
+impl Default for BlockchainState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BlockchainState {
     pub fn new() -> Self {
         Self {
@@ -22,6 +28,12 @@ pub struct BlockSubscriptionState {
     pub latest_block: AtomicU64,
     pub is_connected: AtomicBool,
     pub handle: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl Default for BlockSubscriptionState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BlockSubscriptionState {
