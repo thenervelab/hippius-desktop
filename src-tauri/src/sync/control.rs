@@ -1,13 +1,18 @@
 //! Active sync operations: staging, conflict resolution, triggering, and
 //! drive active-status queries.
 
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::sync::lifecycle::stop_drive;
 use hcfs_client::engine::manager::StagedChanges;
 use hcfs_client::engine::runner::{ReviewModeGuard, trigger_sync};
 use std::collections::HashMap;
 use tauri::{AppHandle, Emitter};
+
+/// Delay after a reviewed sync before re-enabling the file watcher.
+/// Gives trailing filesystem events from the sync cycle time to drain
+/// so they don't immediately re-trigger another sync.
+const WATCHER_REENABLE_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Stage changes and return a preview of what will sync.
 /// Pauses auto-sync while the user reviews.
@@ -99,11 +104,24 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, resolutions: HashMap
         }
     };
 
-    // Re-enable file watcher after a short delay to ignore trailing FS events
+    // Re-enable file watcher after a short delay to ignore trailing FS events.
+    //
+    // NOTE: The spawned task handle is intentionally dropped. `end_sync()` is a
+    // lock-free atomic decrement on `syncs_in_progress` and is safe to call on
+    // a torn-down runner, so orphaning this task during shutdown is safe — and
+    // in fact required, since `begin_sync()` was already called above and the
+    // counter MUST be balanced even if the process is winding down.
+    //
+    // `SyncRunner` does not currently expose an awaitable cancellation token
+    // (only `request_cancel()` / `is_cancelled()` over an `AtomicBool`), so a
+    // `tokio::select!` against cancellation is not possible today. If hcfs-client
+    // ever exposes a `CancellationToken` accessor, switch this to a select so
+    // the delay can be short-circuited on shutdown.
     {
         let sync_for_delay = sync.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            tokio::time::sleep(WATCHER_REENABLE_DELAY).await;
+            debug!("Re-enabling file watcher after reviewed sync");
             sync_for_delay.end_sync();
         });
     }
