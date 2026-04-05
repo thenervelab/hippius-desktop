@@ -1117,18 +1117,21 @@ struct TransferContext {
     direction: TransferDirection,
 }
 
-/// Handle per-chunk transfer progress: log first event, track in UI, emit
-/// Tauri event, and record completion activity. Shared between upload and
-/// download callbacks to avoid code duplication.
+/// Handle per-chunk transfer progress: log first event, track in UI via the
+/// throttled snapshot path, and record completion activity. Shared between
+/// upload and download callbacks to avoid code duplication.
+///
+/// Per-chunk byte progress is surfaced to the frontend exclusively through
+/// the throttled `sync_progress_snapshot` event emitted by
+/// [`crate::sync::progress::update_file_progress`]. The previous separate
+/// `hcfs_upload_progress` / `hcfs_download_progress` Tauri events were
+/// removed after verifying (via grep of `app/`) that zero frontend code
+/// listened to them — they were firing on every chunk for no consumer.
 fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path: Option<&str>) {
     ctx.sync.touch_progress_time();
-    let (dir_name, event_name, file_action) = match ctx.direction {
-        TransferDirection::Upload => ("Upload", crate::sync::events::UPLOAD_PROGRESS, crate::sync::progress::FileAction::Upload),
-        TransferDirection::Download => (
-            "Download",
-            crate::sync::events::DOWNLOAD_PROGRESS,
-            crate::sync::progress::FileAction::Download,
-        ),
+    let (dir_name, file_action) = match ctx.direction {
+        TransferDirection::Upload => ("Upload", crate::sync::progress::FileAction::Upload),
+        TransferDirection::Download => ("Download", crate::sync::progress::FileAction::Download),
     };
 
     if let Some(path_str) = path {
@@ -1150,18 +1153,8 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
         let _ = crate::sync::progress::update_file_progress(&ctx.sync, path_str.to_string(), bytes, total, file_action, Some(ctx.label.clone()));
     }
     debug!("{} [{}]: {}/{} bytes, path: {:?}", dir_name, ctx.label, bytes, total, path);
-    let _ = ctx.app.emit(
-        event_name,
-        crate::sync::events::TransferProgressPayload {
-            label: ctx.label.clone(),
-            bytes,
-            total,
-            path: path.map(String::from),
-        },
-    );
 
-    if bytes == total
-        && total > 0
+    if crate::sync::logic::is_file_completion_tick(bytes, total)
         && let Some(path_str) = path
     {
         let display_name = Path::new(path_str)
@@ -1401,32 +1394,22 @@ mod tests {
     #[test]
     fn transfer_direction_upload_produces_correct_strings() {
         let dir = TransferDirection::Upload;
-        let (name, event, action) = match dir {
-            TransferDirection::Upload => ("Upload", crate::sync::events::UPLOAD_PROGRESS, crate::sync::progress::FileAction::Upload),
-            TransferDirection::Download => (
-                "Download",
-                crate::sync::events::DOWNLOAD_PROGRESS,
-                crate::sync::progress::FileAction::Download,
-            ),
+        let (name, action) = match dir {
+            TransferDirection::Upload => ("Upload", crate::sync::progress::FileAction::Upload),
+            TransferDirection::Download => ("Download", crate::sync::progress::FileAction::Download),
         };
         assert_eq!(name, "Upload");
-        assert_eq!(event, "hcfs_upload_progress");
         assert_eq!(action, crate::sync::progress::FileAction::Upload);
     }
 
     #[test]
     fn transfer_direction_download_produces_correct_strings() {
         let dir = TransferDirection::Download;
-        let (name, event, action) = match dir {
-            TransferDirection::Upload => ("Upload", crate::sync::events::UPLOAD_PROGRESS, crate::sync::progress::FileAction::Upload),
-            TransferDirection::Download => (
-                "Download",
-                crate::sync::events::DOWNLOAD_PROGRESS,
-                crate::sync::progress::FileAction::Download,
-            ),
+        let (name, action) = match dir {
+            TransferDirection::Upload => ("Upload", crate::sync::progress::FileAction::Upload),
+            TransferDirection::Download => ("Download", crate::sync::progress::FileAction::Download),
         };
         assert_eq!(name, "Download");
-        assert_eq!(event, "hcfs_download_progress");
         assert_eq!(action, crate::sync::progress::FileAction::Download);
     }
 }

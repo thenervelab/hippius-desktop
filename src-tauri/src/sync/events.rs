@@ -18,10 +18,6 @@ pub const SYNC_STOPPED: &str = "hcfs_sync_stopped";
 pub const SYNC_PLAN_READY: &str = "hcfs_sync_plan_ready";
 /// Emitted when the sync engine is fully reset.
 pub const SYNC_RESET: &str = "hcfs_sync_reset";
-/// Per-file upload byte progress.
-pub const UPLOAD_PROGRESS: &str = "hcfs_upload_progress";
-/// Per-file download byte progress.
-pub const DOWNLOAD_PROGRESS: &str = "hcfs_download_progress";
 /// Local filesystem scan progress.
 pub const SCAN_PROGRESS: &str = "hcfs_scan_progress";
 /// Remote file-list fetch progress.
@@ -103,15 +99,6 @@ pub struct SyncErrorPayload {
 pub struct ConflictsPendingPayload {
     pub label: String,
     pub staged: StagedChanges,
-}
-
-/// Per-file transfer progress.
-#[derive(Serialize, Clone)]
-pub struct TransferProgressPayload {
-    pub label: String,
-    pub bytes: u64,
-    pub total: u64,
-    pub path: Option<String>,
 }
 
 /// Local scan progress.

@@ -79,6 +79,25 @@ pub const fn should_emit_snapshot(
 ///   value previously stored in `last_emit_ms`.
 /// * `is_file_complete` — see [`should_emit_snapshot`].
 /// * `min_interval_ms` — see [`should_emit_snapshot`].
+/// Is this progress tick a file-completion tick?
+///
+/// Returns `true` when `bytes == total` and `total > 0`. The `total > 0`
+/// guard is load-bearing: some backends emit a single `(0, 0, path)` tick
+/// for empty files, and we do not want to treat those as completions.
+///
+/// This unifies the "file complete?" check used by two hot-path sites:
+/// - [`crate::sync::progress::update_file_progress`] to bypass the snapshot
+///   throttle so per-file completions reach the UI immediately, and
+/// - `handle_transfer_progress` in `sync/lifecycle.rs` to decide whether
+///   to emit `FILE_TRANSFER_COMPLETE` and append to the activity log.
+///
+/// Keeping these two call sites in sync via a single pure function avoids
+/// the class of bug where one path treats a tick as completion and the
+/// other doesn't.
+pub const fn is_file_completion_tick(bytes: u64, total: u64) -> bool {
+    total > 0 && bytes == total
+}
+
 pub fn try_claim_snapshot_emit(
     last_emit_ms: &AtomicU64,
     now_ms: u64,
@@ -140,6 +159,38 @@ mod tests {
         // Escape hatch: setting min_interval_ms = 0 means "emit on every tick".
         assert!(should_emit_snapshot(0, false, 0));
         assert!(should_emit_snapshot(0, true, 0));
+    }
+
+    // ── is_file_completion_tick ────────────────────────────────────────
+
+    #[test]
+    fn completion_tick_when_bytes_equal_total() {
+        assert!(is_file_completion_tick(100, 100));
+        assert!(is_file_completion_tick(1, 1));
+        assert!(is_file_completion_tick(u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn partial_tick_is_not_completion() {
+        assert!(!is_file_completion_tick(0, 100));
+        assert!(!is_file_completion_tick(50, 100));
+        assert!(!is_file_completion_tick(99, 100));
+    }
+
+    #[test]
+    fn zero_total_never_completes() {
+        // Empty-file ticks (0/0) and pre-init ticks must not be classified
+        // as completions, otherwise `FILE_TRANSFER_COMPLETE` would fire for
+        // files that were never actually transferred.
+        assert!(!is_file_completion_tick(0, 0));
+    }
+
+    #[test]
+    fn bytes_exceeding_total_not_treated_as_completion() {
+        // Defensive: if a backend over-reports bytes past total (bug-class
+        // we've seen in other chunked transfer systems), we don't want a
+        // stale completion event. Exact equality is required.
+        assert!(!is_file_completion_tick(101, 100));
     }
 
     // ── try_claim_snapshot_emit ────────────────────────────────────────

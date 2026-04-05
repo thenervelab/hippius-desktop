@@ -19,7 +19,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
-use crate::sync::logic::{NEVER_EMITTED, try_claim_snapshot_emit};
+use crate::sync::logic::{NEVER_EMITTED, is_file_completion_tick, try_claim_snapshot_emit};
 
 /// Minimum milliseconds between throttled `emit_snapshot(false)` calls from
 /// the per-chunk progress hot path.
@@ -75,7 +75,7 @@ pub fn update_file_progress(
     label: Option<String>,
 ) -> Result<Option<SyncFile>, String> {
     let result = sync.progress.update_file_progress(path, bytes_transferred, total_bytes, action, label)?;
-    let is_file_complete = total_bytes > 0 && bytes_transferred == total_bytes;
+    let is_file_complete = is_file_completion_tick(bytes_transferred, total_bytes);
     if try_claim_snapshot_emit(&LAST_THROTTLED_EMIT_MS, monotonic_now_ms(), is_file_complete, SNAPSHOT_THROTTLE_MS) {
         sync.emit_snapshot(false);
     }
