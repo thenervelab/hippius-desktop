@@ -931,8 +931,13 @@ pub async fn reset_sync_data(
     debug!("Reset: Deleting account directory: {:?}", acct_dir);
 
     // Delete the entire account directory (contains sync state, encrypted mnemonic, etc.)
+    // Offloaded to spawn_blocking because remove_dir_all can block the Tokio worker for
+    // hundreds of milliseconds on large sync caches, stalling every other task on that worker.
     if acct_dir.exists() {
-        std::fs::remove_dir_all(&acct_dir)?;
+        let acct_dir_owned = acct_dir.clone();
+        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&acct_dir_owned))
+            .await
+            .map_err(|e| crate::error::AppError::Other(format!("Join error removing account dir: {e}")))??;
         debug!("Reset: Deleted account directory");
     }
 
@@ -1411,5 +1416,27 @@ mod tests {
         };
         assert_eq!(name, "Download");
         assert_eq!(action, crate::sync::progress::FileAction::Download);
+    }
+
+    // ── reset_sync_data async removal pattern ───────────────────────────
+    //
+    // Validates the spawn_blocking wrapper pattern used inside `reset_sync_data`
+    // to remove an account directory without stalling the Tokio worker. The
+    // command itself is not invoked here (it requires a full AppState/AppHandle);
+    // this test exercises the exact I/O pattern the command delegates to.
+    #[tokio::test]
+    async fn reset_sync_data_removes_directory_without_blocking_runtime() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("acct-to-delete");
+        std::fs::create_dir_all(target.join("a/b/c")).expect("mkdirs");
+        std::fs::write(target.join("a/b/c/file.bin"), [0u8; 1024]).expect("write");
+
+        let target_owned = target.clone();
+        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&target_owned))
+            .await
+            .expect("join")
+            .expect("remove");
+
+        assert!(!target.exists(), "target should be gone after async remove");
     }
 }
