@@ -1,0 +1,272 @@
+//! Pure, I/O-free logic helpers for the sync engine.
+//!
+//! Functions in this module are deterministic and side-effect-free (except for
+//! explicitly passed atomics), so they can be unit-tested exhaustively without
+//! mocking `SyncRunner`, Tauri, or the filesystem.
+//!
+//! # Snapshot emit throttling
+//!
+//! Every per-chunk progress tick from `hcfs-client` flows through
+//! [`crate::sync::progress::update_file_progress`], which previously called
+//! `SyncRunner::emit_snapshot(false)` unconditionally. On macOS that routes
+//! into `wkwebview.eval("...")` on the main thread, where WebKit blocks
+//! converting the JSON payload to an `NSString`. Under a large session, the
+//! main thread cannot drain its eval queue and the app hangs for tens of
+//! seconds (see bug report dated 2026-04-05).
+//!
+//! [`should_emit_snapshot`] and [`try_claim_snapshot_emit`] implement a
+//! trailing-edge throttle so that only the first call in any `min_interval_ms`
+//! window triggers an emit. File-completion ticks bypass the throttle to keep
+//! per-file UI updates snappy.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Sentinel stored in the snapshot-emit cursor to mean "no prior emit has
+/// been recorded". Chosen as [`u64::MAX`] so the first call to
+/// [`try_claim_snapshot_emit`] is treated as having infinite elapsed time and
+/// therefore always claims. This keeps the first per-chunk progress tick in
+/// the UI responsive at process startup, when the real monotonic millisecond
+/// counter is close to zero.
+///
+/// Real monotonic timestamps (derived from [`std::time::Instant`]) will not
+/// reach this value within any realistic process lifetime, so there is no
+/// risk of an honest timestamp being misinterpreted as the sentinel.
+pub const NEVER_EMITTED: u64 = u64::MAX;
+
+/// Decide whether a throttled snapshot emit should fire.
+///
+/// Returns `true` when either:
+/// - the caller is reporting a file completion (`is_file_complete`), or
+/// - at least `min_interval_ms` have elapsed since the previous emit.
+///
+/// Pure function with no side effects — safe to call from any thread.
+///
+/// # Arguments
+/// * `elapsed_since_last_ms` — milliseconds since the last throttled emit.
+///   Monotonic. Callers should derive this from [`std::time::Instant`], not
+///   wall-clock time, so that backward NTP jumps cannot stall the throttle.
+/// * `is_file_complete` — `true` when this tick represents `bytes == total`
+///   for a file. Completion ticks always emit so the UI reflects the final
+///   progress of each file immediately.
+/// * `min_interval_ms` — minimum gap between throttled emits. `0` disables
+///   the throttle entirely (every call emits).
+pub const fn should_emit_snapshot(
+    elapsed_since_last_ms: u64,
+    is_file_complete: bool,
+    min_interval_ms: u64,
+) -> bool {
+    is_file_complete || elapsed_since_last_ms >= min_interval_ms
+}
+
+/// Attempt to claim a throttled snapshot emit slot.
+///
+/// Reads `last_emit_ms`, consults [`should_emit_snapshot`], and — if the emit
+/// is allowed — stores `now_ms` back into `last_emit_ms` and returns `true`.
+/// Otherwise leaves the cursor untouched and returns `false`.
+///
+/// # Ordering
+///
+/// Uses [`Ordering::Relaxed`] for both load and store. In a race between two
+/// worker threads, both may observe a stale `last_emit_ms` and pass the gate
+/// within the same window. That produces at most one extra emit per window —
+/// acceptable and self-correcting on the next tick. We only need atomicity,
+/// not synchronization with other memory.
+///
+/// # Arguments
+/// * `last_emit_ms` — process-wide cursor holding the millisecond timestamp
+///   of the most recent throttled emit. Must hold monotonic values.
+/// * `now_ms` — current monotonic time in milliseconds. Must be `>=` any
+///   value previously stored in `last_emit_ms`.
+/// * `is_file_complete` — see [`should_emit_snapshot`].
+/// * `min_interval_ms` — see [`should_emit_snapshot`].
+pub fn try_claim_snapshot_emit(
+    last_emit_ms: &AtomicU64,
+    now_ms: u64,
+    is_file_complete: bool,
+    min_interval_ms: u64,
+) -> bool {
+    let last = last_emit_ms.load(Ordering::Relaxed);
+    // First-ever call (cursor holds the [`NEVER_EMITTED`] sentinel): treat
+    // elapsed as infinite so the very first progress tick always emits. This
+    // matters at process startup, when `now_ms` is tiny and a zero-initialised
+    // cursor would otherwise block the first tick by a full window.
+    let elapsed = if last == NEVER_EMITTED {
+        u64::MAX
+    } else {
+        now_ms.saturating_sub(last)
+    };
+    if should_emit_snapshot(elapsed, is_file_complete, min_interval_ms) {
+        last_emit_ms.store(now_ms, Ordering::Relaxed);
+        true
+    } else {
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── should_emit_snapshot ────────────────────────────────────────────
+
+    #[test]
+    fn throttles_within_window() {
+        // Only 100 ms elapsed, threshold is 250 ms, not a completion → block.
+        assert!(!should_emit_snapshot(100, false, 250));
+    }
+
+    #[test]
+    fn allows_exactly_at_window() {
+        // elapsed == interval is the boundary; must allow to guarantee
+        // progress under steady tick rates.
+        assert!(should_emit_snapshot(250, false, 250));
+    }
+
+    #[test]
+    fn allows_after_window() {
+        assert!(should_emit_snapshot(1000, false, 250));
+    }
+
+    #[test]
+    fn completion_always_bypasses_throttle() {
+        // Zero elapsed, but the file just finished — must emit so the UI
+        // shows the final per-file state without waiting for the next window.
+        assert!(should_emit_snapshot(0, true, 250));
+        assert!(should_emit_snapshot(5, true, 10_000));
+    }
+
+    #[test]
+    fn zero_interval_disables_throttle() {
+        // Escape hatch: setting min_interval_ms = 0 means "emit on every tick".
+        assert!(should_emit_snapshot(0, false, 0));
+        assert!(should_emit_snapshot(0, true, 0));
+    }
+
+    // ── try_claim_snapshot_emit ────────────────────────────────────────
+
+    #[test]
+    fn first_call_always_claims() {
+        let cursor = AtomicU64::new(0);
+        assert!(try_claim_snapshot_emit(&cursor, 1_000, false, 250));
+        assert_eq!(cursor.load(Ordering::Relaxed), 1_000);
+    }
+
+    #[test]
+    fn sentinel_cursor_claims_even_at_zero_now() {
+        // Production cursor is initialised to NEVER_EMITTED. The very first
+        // progress tick can arrive while `monotonic_now_ms()` is still 0 if
+        // sync starts that early, and it MUST emit. A naive elapsed check
+        // would silently block the first emit for a full window.
+        let cursor = AtomicU64::new(NEVER_EMITTED);
+        assert!(try_claim_snapshot_emit(&cursor, 0, false, 250));
+        assert_eq!(cursor.load(Ordering::Relaxed), 0);
+        // Subsequent in-window ticks are throttled as expected.
+        assert!(!try_claim_snapshot_emit(&cursor, 100, false, 250));
+    }
+
+    #[test]
+    fn burst_within_window_collapses_to_single_emit() {
+        // Simulates the hot path: many workers hammering the gate with
+        // now_ms values inside a 250 ms window. Only the first should claim.
+        let cursor = AtomicU64::new(0);
+        let base = 10_000;
+        // First call at t=10_000 establishes the cursor.
+        assert!(try_claim_snapshot_emit(&cursor, base, false, 250));
+        // Next 100 calls spread across the next 249 ms all see the claim.
+        let mut claimed = 0_usize;
+        for offset in 1..=100 {
+            // Spread across 0..249 ms after base.
+            let now = base + (offset * 249) / 100;
+            if try_claim_snapshot_emit(&cursor, now, false, 250) {
+                claimed += 1;
+            }
+        }
+        assert_eq!(claimed, 0, "no secondary claim allowed inside the 250 ms window");
+    }
+
+    #[test]
+    fn second_window_reopens_the_gate() {
+        let cursor = AtomicU64::new(0);
+        assert!(try_claim_snapshot_emit(&cursor, 10_000, false, 250));
+        assert!(!try_claim_snapshot_emit(&cursor, 10_100, false, 250));
+        assert!(!try_claim_snapshot_emit(&cursor, 10_249, false, 250));
+        // At exactly 250 ms past the stored cursor, the window has elapsed.
+        assert!(try_claim_snapshot_emit(&cursor, 10_250, false, 250));
+        assert_eq!(cursor.load(Ordering::Relaxed), 10_250);
+    }
+
+    #[test]
+    fn completion_claims_even_inside_window_without_blocking_later_completions() {
+        // Two file completions 10 ms apart must both emit; a non-completion
+        // tick between them must still be blocked.
+        let cursor = AtomicU64::new(5_000);
+        assert!(try_claim_snapshot_emit(&cursor, 5_050, true, 250));
+        assert_eq!(cursor.load(Ordering::Relaxed), 5_050);
+        assert!(!try_claim_snapshot_emit(&cursor, 5_060, false, 250));
+        // Cursor unchanged by the rejected call.
+        assert_eq!(cursor.load(Ordering::Relaxed), 5_050);
+        assert!(try_claim_snapshot_emit(&cursor, 5_070, true, 250));
+        assert_eq!(cursor.load(Ordering::Relaxed), 5_070);
+    }
+
+    #[test]
+    fn saturating_elapsed_handles_equal_cursor() {
+        // now_ms == last_emit_ms → elapsed = 0 → block (non-completion).
+        let cursor = AtomicU64::new(12_345);
+        assert!(!try_claim_snapshot_emit(&cursor, 12_345, false, 250));
+    }
+
+    #[test]
+    fn simulates_hot_path_reduction() {
+        // Regression guard for the 2026-04-05 hang report. Simulates 2000
+        // per-byte progress ticks arriving over 1 full second (2 kHz tick
+        // rate — comparable to what hcfs-client produced during the hang).
+        // With a 250 ms window we must emit at most ~5 times over 1 second
+        // (t=0, t=250, t=500, t=750, t=1000 = 5 slots). Seeded with the
+        // production sentinel so the t=0 tick claims as it would in the real
+        // app.
+        let cursor = AtomicU64::new(NEVER_EMITTED);
+        let mut emitted = 0_usize;
+        for i in 0..=2_000 {
+            // Tick at millisecond i/2 (half-ms granularity rounded down).
+            let now_ms = i / 2;
+            if try_claim_snapshot_emit(&cursor, now_ms, false, 250) {
+                emitted += 1;
+            }
+        }
+        // 5 slots available over [0, 1000]: at 0, 250, 500, 750, 1000.
+        assert_eq!(
+            emitted, 5,
+            "expected exactly 5 throttled emits over 1 s at 2 kHz tick rate; got {emitted}"
+        );
+    }
+
+    #[test]
+    fn reduces_emits_by_two_orders_of_magnitude_under_hang_workload() {
+        // Strong regression guard tied directly to the bug report. The hang
+        // report shows the webview main thread falling behind when tokio
+        // workers call `update_file_progress` at very high rates. Under a
+        // pessimistic 10 kHz tick rate sustained for 5 seconds (50 000
+        // calls), the throttle must reduce emits to at most ~21 (one per
+        // 250 ms window over 5 s, plus the initial claim). This is a >2000x
+        // reduction in work pushed at webview.eval(), which is what resolves
+        // the hang.
+        let cursor = AtomicU64::new(NEVER_EMITTED);
+        let mut emitted = 0_usize;
+        for i in 0..50_000 {
+            // 10 kHz ticks → 10 calls per millisecond → i / 10 is ms.
+            let now_ms = i / 10;
+            if try_claim_snapshot_emit(&cursor, now_ms, false, 250) {
+                emitted += 1;
+            }
+        }
+        assert!(
+            emitted <= 21,
+            "expected ≤21 emits from 50k calls over 5 s at 10 kHz; got {emitted} — throttle not working"
+        );
+        assert!(
+            emitted >= 20,
+            "expected ≥20 emits from 50k calls over 5 s at 10 kHz; got {emitted} — throttle too aggressive"
+        );
+    }
+}

@@ -15,10 +15,57 @@ pub use hcfs_client::engine::progress::state::{
 pub use hcfs_client::engine::progress::snapshot::{SyncSnapshot, build_snapshot};
 
 use hcfs_client::engine::runner::SyncRunner;
+use std::sync::OnceLock;
+use std::sync::atomic::AtomicU64;
+use std::time::Instant;
+
+use crate::sync::logic::{NEVER_EMITTED, try_claim_snapshot_emit};
+
+/// Minimum milliseconds between throttled `emit_snapshot(false)` calls from
+/// the per-chunk progress hot path.
+///
+/// Per-chunk emits are the only code path that can fire hundreds of times per
+/// second; state-transition emits (`emit_snapshot(true)`) are not throttled.
+/// 250 ms matches the trailing-edge cadence the frontend `useSyncSnapshot`
+/// listener is designed for and keeps the perceived UI update rate at 4 Hz,
+/// which is visually smooth without flooding the WebKit main-thread eval
+/// queue. See `src/sync/logic.rs` for the motivating bug report and the
+/// underlying throttle logic.
+const SNAPSHOT_THROTTLE_MS: u64 = 250;
+
+/// Process-wide cursor (millis since process start) tracking the most recent
+/// throttled snapshot emit. Monotonic by construction — see
+/// [`monotonic_now_ms`]. Initialised to [`NEVER_EMITTED`] so the first
+/// progress tick of the process always emits, regardless of how early in
+/// startup it arrives.
+static LAST_THROTTLED_EMIT_MS: AtomicU64 = AtomicU64::new(NEVER_EMITTED);
+
+/// Milliseconds since the current process started.
+///
+/// Uses [`Instant`] so the value is immune to wall-clock adjustments (NTP
+/// jumps, DST, manual clock changes). The value is truncated to `u64::MAX` in
+/// the astronomically unlikely event the process runs for >584 million years.
+fn monotonic_now_ms() -> u64 {
+    static PROCESS_START: OnceLock<Instant> = OnceLock::new();
+    let start = PROCESS_START.get_or_init(Instant::now);
+    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
 
 // ── Inner functions (called from lifecycle.rs, auth/session.rs) ────────
 
 /// Update progress for a single file. Called from progress callbacks.
+///
+/// The underlying `SyncRunner::emit_snapshot(false)` call is **trailing-edge
+/// throttled** to one emit per [`SNAPSHOT_THROTTLE_MS`] across the whole
+/// process. File-completion ticks (`bytes_transferred == total_bytes` with
+/// `total_bytes > 0`) bypass the throttle so the UI reflects per-file
+/// completion without waiting for the next window.
+///
+/// Without this throttle, upload/download/encrypt/decrypt callbacks fired by
+/// `hcfs-client` can flood `webview.eval` with hundreds of large
+/// `SyncSnapshot` JSON payloads per second, which blocks the macOS main
+/// thread in `NSString` UTF-8 decoding and hangs the app. See the bug report
+/// dated 2026-04-05 and the unit tests in `src/sync/logic.rs` for details.
 pub fn update_file_progress(
     sync: &SyncRunner,
     path: String,
@@ -28,7 +75,10 @@ pub fn update_file_progress(
     label: Option<String>,
 ) -> Result<Option<SyncFile>, String> {
     let result = sync.progress.update_file_progress(path, bytes_transferred, total_bytes, action, label)?;
-    sync.emit_snapshot(false);
+    let is_file_complete = total_bytes > 0 && bytes_transferred == total_bytes;
+    if try_claim_snapshot_emit(&LAST_THROTTLED_EMIT_MS, monotonic_now_ms(), is_file_complete, SNAPSHOT_THROTTLE_MS) {
+        sync.emit_snapshot(false);
+    }
     Ok(result)
 }
 

@@ -10,6 +10,7 @@ pub mod events;
 pub mod files;
 pub mod folders;
 pub mod lifecycle;
+pub mod logic;
 pub mod mnemonic;
 pub mod migration;
 pub mod paths;
