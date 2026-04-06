@@ -118,6 +118,19 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         }
     }
 
+    // Seed singleton rows for tables created in the loop above
+    sqlx::query("INSERT OR IGNORE INTO vpn_status (id, is_enabled) VALUES (1, FALSE)")
+        .execute(pool)
+        .await?;
+
+    sqlx::query("INSERT OR IGNORE INTO nebula_binary_status (id, is_nebula_binary_installed) VALUES (1, FALSE)")
+        .execute(pool)
+        .await?;
+
+    sqlx::query("INSERT OR IGNORE INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)")
+        .execute(pool)
+        .await?;
+
     // sync_paths table (kept for path storage)
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS sync_paths (
@@ -230,6 +243,11 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    sqlx::query("INSERT OR IGNORE INTO wss_endpoint (id, endpoint) VALUES (1, ?)")
+        .bind(crate::blockchain::client::WSS_ENDPOINT)
+        .execute(pool)
+        .await?;
 
     // Create security_scoped_bookmarks table for macOS file access persistence
     sqlx::query(

@@ -47,7 +47,6 @@ use crate::billing::queries::{
 use crate::billing::subscriptions::{
     create_subscription, get_active_subscription, get_customer_portal_url, get_subscription_data, get_subscription_plans,
 };
-use crate::blockchain::client::WSS_ENDPOINT;
 use crate::blockchain::convert::{from_plancks, get_explorer_url, to_plancks};
 use crate::blockchain::queries::{get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address};
 use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, transfer_balance_tauri, update_wss_endpoint_command};
@@ -473,10 +472,6 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     })
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Tauri app setup: plugin registration and lifecycle hooks must stay together for capture context"
-)]
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");
@@ -554,51 +549,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 warn!("Account key migration failed (non-fatal): {}", e);
             }
 
-            // Initialize WSS endpoint if it doesn't exist
-            let endpoint_exists: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) as count FROM wss_endpoint")
-                .fetch_optional(&pool)
-                .await
-                .unwrap_or(Some((0,)));
-
-            if let Some((count,)) = endpoint_exists {
-                if count == 0 {
-                    info!("No WSS endpoint found, creating default endpoint...");
-                    if let Err(e) = sqlx::query("INSERT INTO wss_endpoint (id, endpoint) VALUES (1, ?)")
-                        .bind(WSS_ENDPOINT)
-                        .execute(&pool)
-                        .await
-                    {
-                        error!("Failed to create default WSS endpoint: {}", e);
-                    } else {
-                        info!("Default WSS endpoint created successfully");
-                    }
-                } else {
-                    debug!("WSS endpoint already exists");
-                }
-            }
-
-            // Initialize VPN status if it doesn't exist
-            let vpn_status_exists: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) as count FROM vpn_status")
-                .fetch_optional(&pool)
-                .await
-                .unwrap_or(Some((0,)));
-
-            if let Some((count,)) = vpn_status_exists {
-                if count == 0 {
-                    info!("No VPN status found, creating default entry...");
-                    if let Err(e) = sqlx::query("INSERT INTO vpn_status (id, is_enabled) VALUES (1, FALSE)")
-                        .execute(&pool)
-                        .await
-                    {
-                        error!("Failed to create default VPN status: {}", e);
-                    } else {
-                        info!("Default VPN status created successfully");
-                    }
-                } else {
-                    debug!("VPN status entry already exists");
-                }
-            }
-
             // Check if autoconnect is enabled
             let autoconnect_enabled: bool = sqlx::query("SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1")
                 .fetch_optional(&pool)
@@ -618,50 +568,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 let nebula_st = &app_handle.state::<crate::app_state::AppState>().nebula;
                 if let Err(e) = crate::nebula::manager::stop_nebula(nebula_st).await {
                     warn!("Failed to stop Nebula: {}", e);
-                }
-            }
-
-            // Initialize Nebula binary status if it doesn't exist
-            let nebula_binary_status_exists: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) as count FROM nebula_binary_status")
-                .fetch_optional(&pool)
-                .await
-                .unwrap_or(Some((0,)));
-
-            if let Some((count,)) = nebula_binary_status_exists {
-                if count == 0 {
-                    info!("No Nebula binary status found, creating default entry...");
-                    if let Err(e) = sqlx::query("INSERT INTO nebula_binary_status (id, is_nebula_binary_installed) VALUES (1, FALSE)")
-                        .execute(&pool)
-                        .await
-                    {
-                        error!("Failed to create default Nebula binary status: {}", e);
-                    } else {
-                        info!("Default Nebula binary status created successfully");
-                    }
-                } else {
-                    debug!("Nebula binary status entry already exists");
-                }
-            }
-
-            // Initialize autoconnect VPN status if it doesn't exist
-            let autoconnect_exists: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) as count FROM autoconnect_vpn_enabled")
-                .fetch_optional(&pool)
-                .await
-                .unwrap_or(Some((0,)));
-
-            if let Some((count,)) = autoconnect_exists {
-                if count == 0 {
-                    info!("No autoconnect VPN status found, creating default entry...");
-                    if let Err(e) = sqlx::query("INSERT INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)")
-                        .execute(&pool)
-                        .await
-                    {
-                        error!("Failed to create default autoconnect VPN status: {}", e);
-                    } else {
-                        info!("Default autoconnect VPN status created successfully");
-                    }
-                } else {
-                    debug!("Autoconnect VPN status entry already exists");
                 }
             }
 
