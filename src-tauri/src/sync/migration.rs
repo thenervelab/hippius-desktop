@@ -703,6 +703,10 @@ impl MigrationState {
             {
                 builder = builder.danger_accept_invalid_certs(true);
             }
+            // SAFETY: reqwest::ClientBuilder::build() only fails on native-tls
+            // backend initialization, which is configured at compile time. A
+            // failure here indicates a broken build artifact, not a runtime
+            // condition — panicking at startup is acceptable.
             builder.build().expect("Failed to build migration HTTP client")
         };
         Self {

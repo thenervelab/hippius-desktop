@@ -30,7 +30,8 @@ impl TauriSyncBridge {
         Self::default()
     }
 
-    /// Set the AppHandle once it's available (replaces the old `set_app_handle`).
+    /// Register the Tauri `AppHandle` for use by sync callbacks and event emission.
+    /// Called exactly once from `main.rs` setup after the Tauri app is built.
     pub fn set_app_handle(&self, handle: AppHandle) {
         if let Ok(mut guard) = self.app.lock() {
             *guard = Some(handle);
