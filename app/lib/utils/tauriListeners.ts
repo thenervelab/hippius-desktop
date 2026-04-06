@@ -1,4 +1,5 @@
 import { listen, type Event, type UnlistenFn } from "@tauri-apps/api/event";
+import { errorMessage } from "@/lib/utils/errorUtils";
 
 /**
  * Register multiple Tauri event listeners sequentially. Returns a cleanup
@@ -24,7 +25,7 @@ export function registerTauriListeners(
       } catch (err) {
         console.warn(
           `[TauriListeners] Failed to register ${event}:`,
-          err
+          errorMessage(err)
         );
       }
     }

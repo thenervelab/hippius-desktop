@@ -1358,6 +1358,12 @@ fn build_plan_ready_callback(app: &AppHandle, label: &str, sync: &Arc<SyncRunner
     })
 }
 
+/// Wire up the hcfs-client progress callbacks for a drive.
+///
+/// Connects the `SyncProgress` callback struct (upload/download/encrypt/decrypt
+/// progress, scan/fetch state, file-synced notification, and the plan-ready
+/// callback) to the `SyncRunner`'s progress tracking and Tauri event emission.
+/// Called once per drive during [`initialize_sync_inner`].
 #[expect(clippy::too_many_lines, reason = "closure-heavy callback setup; splitting breaks capture context")]
 pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManager, label: &str, sync: &Arc<SyncRunner>) {
     let upload_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));

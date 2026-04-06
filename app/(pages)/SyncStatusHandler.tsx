@@ -1,12 +1,11 @@
 "use client";
 
 import React, { useEffect, useCallback } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 
 import SyncStatusDialog from "./SyncStatusDialog";
 import { useSyncSnapshot } from "../lib/hooks/useSyncSnapshot";
-import { errorMessage } from "../lib/utils/errorUtils";
+import { registerTauriListeners } from "../lib/utils/tauriListeners";
 
 /**
  * Sync status widget handler.
@@ -20,23 +19,13 @@ const SyncStatusHandler: React.FC = () => {
 
   // Listen for sync_stopped to dismiss widget
   useEffect(() => {
-    let cancelled = false;
-    const unsubs: (() => void)[] = [];
-
-    listen("hcfs_sync_stopped", () => {
-      if (!cancelled) {
+    const { cleanup } = registerTauriListeners([
+      ["hcfs_sync_stopped", () => {
         invoke("sp_dismiss_sync_widget").catch(() => {});
-      }
-    })
-      .then((u) => { if (cancelled) u(); else unsubs.push(u); })
-      .catch((err: unknown) => {
-        console.warn("[SyncStatusHandler] Failed to listen for sync_stopped:", errorMessage(err));
-      });
+      }],
+    ]);
 
-    return () => {
-      cancelled = true;
-      unsubs.forEach((u) => u());
-    };
+    return cleanup;
   }, []);
 
   const handleClose = useCallback(() => {
