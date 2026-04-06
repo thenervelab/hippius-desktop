@@ -547,9 +547,21 @@ pub async fn start_server_migration(
         })?;
 
     let seed = mnemonic.to_seed("");
-    let encryption_key_hex = hex::encode(&seed[..32]);
 
-    // Derive Ed25519 signing key from seed
+    // Derive the folder-specific encryption key — the Drive decrypts using
+    // a key derived from derive_folder_mnemonic(master, "default"), NOT the
+    // raw master seed. The server must encrypt with the same derived key.
+    let folder_mnemonic_str = hcfs_client::drive::keys::derive_folder_mnemonic(&mnemonic.to_string(), "default")
+        .map_err(|e| {
+            tracing::error!("[Migration] Failed to derive folder mnemonic: {e}");
+            crate::error::AppError::Other(format!("Failed to derive folder mnemonic: {e}"))
+        })?;
+    let folder_mnemonic = bip39::Mnemonic::parse_in_normalized(bip39::Language::English, &folder_mnemonic_str)
+        .map_err(|e| crate::error::AppError::Other(format!("Invalid folder mnemonic: {e}")))?;
+    let folder_seed = folder_mnemonic.to_seed("");
+    let encryption_key_hex = hex::encode(&folder_seed[..32]);
+
+    // Derive Ed25519 signing key from the master seed (not the folder key)
     let signing_key =
         hcfs_client::auth::recover_signing_key(seed).map_err(|e| {
             tracing::error!("[Migration] Failed to derive signing key: {e}");
