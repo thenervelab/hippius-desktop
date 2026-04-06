@@ -1193,7 +1193,7 @@ enum TransferDirection {
 struct TransferContext {
     sync: Arc<SyncRunner>,
     app: AppHandle,
-    label: String,
+    label: Arc<str>,
     started_set: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     direction: TransferDirection,
 }
@@ -1231,7 +1231,7 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
                 info!("{} started [{}]: {} ({} bytes)", dir_name, ctx.label, file_name, total);
             }
         }
-        let _ = crate::sync::progress::update_file_progress(&ctx.sync, path_str.to_string(), bytes, total, file_action, Some(ctx.label.clone()));
+        let _ = crate::sync::progress::update_file_progress(&ctx.sync, path_str.to_string(), bytes, total, file_action, Some(ctx.label.to_string()));
     }
     debug!("{} [{}]: {}/{} bytes, path: {:?}", dir_name, ctx.label, bytes, total, path);
 
@@ -1248,23 +1248,22 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
         info!("{} complete [{}]: {} ({} bytes)", dir_name, ctx.label, display_name, total);
         let _ = ctx.app.emit(
             crate::sync::events::FILE_TRANSFER_COMPLETE,
-            crate::sync::events::LabelPayload { label: ctx.label.clone() },
+            crate::sync::events::LabelPayload { label: ctx.label.to_string() },
         );
         ctx.sync.add_pending_activity(SyncActivityItem {
             file_name: path_str.to_string(),
             action: action_str.to_string(),
             timestamp: chrono::Utc::now().timestamp(),
             size_bytes: total,
-            label: ctx.label.clone(),
+            label: ctx.label.to_string(),
         });
     }
 }
 
 /// Build the `on_sync_plan_ready` callback that merges the sync plan into the
 /// progress session and emits the `SYNC_PLAN_READY` event.
-fn build_plan_ready_callback(app: &AppHandle, label: &str, sync: &Arc<SyncRunner>) -> hcfs_client::sync::SyncPlanReadyFn {
+fn build_plan_ready_callback(app: &AppHandle, label: Arc<str>, sync: &Arc<SyncRunner>) -> hcfs_client::sync::SyncPlanReadyFn {
     let app = app.clone();
-    let label = label.to_string();
     let sync = sync.clone();
     Arc::new(move |uploads, downloads, local_deletes, remote_deletes, renames| {
         sync.touch_progress_time();
@@ -1309,7 +1308,7 @@ fn build_plan_ready_callback(app: &AppHandle, label: &str, sync: &Arc<SyncRunner
             local_deletes.len() as u32,
             remote_deletes.len() as u32,
             Some(file_list),
-            Some(label.clone()),
+            Some(label.to_string()),
         );
 
         if !size_map.is_empty() {
@@ -1335,7 +1334,7 @@ fn build_plan_ready_callback(app: &AppHandle, label: &str, sync: &Arc<SyncRunner
         let _ = app.emit(
             crate::sync::events::SYNC_PLAN_READY,
             crate::sync::events::SyncPlanReadyPayload {
-                label: label.clone(),
+                label: label.to_string(),
                 uploads: uploads.len(),
                 downloads: downloads.len(),
                 local_deletes: local_deletes.len(),
@@ -1356,7 +1355,7 @@ fn build_plan_ready_callback(app: &AppHandle, label: &str, sync: &Arc<SyncRunner
 /// over both.
 fn build_crypto_callback(
     sync: Arc<SyncRunner>,
-    label: String,
+    label: Arc<str>,
     action: crate::sync::progress::FileAction,
     direction_name: &'static str,
 ) -> hcfs_client::sync::SyncProgressFn {
@@ -1374,7 +1373,7 @@ fn build_crypto_callback(
                 b,
                 t,
                 action.clone(),
-                Some(label.clone()),
+                Some(label.to_string()),
             );
         }
     })
@@ -1385,7 +1384,7 @@ fn build_crypto_callback(
 fn build_scan_callback(
     sync: Arc<SyncRunner>,
     app: AppHandle,
-    label: String,
+    label: Arc<str>,
 ) -> hcfs_client::sync::ScanProgressFn {
     Arc::new(move |n, p| {
         sync.touch_progress_time();
@@ -1393,7 +1392,7 @@ fn build_scan_callback(
         let _ = app.emit(
             crate::sync::events::SCAN_PROGRESS,
             crate::sync::events::ScanProgressPayload {
-                label: label.clone(),
+                label: label.to_string(),
                 scanned: n,
                 path: p.map(std::string::ToString::to_string),
             },
@@ -1406,7 +1405,7 @@ fn build_scan_callback(
 fn build_fetch_callback(
     sync: Arc<SyncRunner>,
     app: AppHandle,
-    label: String,
+    label: Arc<str>,
 ) -> hcfs_client::sync::FetchProgressFn {
     Arc::new(move |f, t| {
         sync.touch_progress_time();
@@ -1414,7 +1413,7 @@ fn build_fetch_callback(
         let _ = app.emit(
             crate::sync::events::FETCH_PROGRESS,
             crate::sync::events::FetchProgressPayload {
-                label: label.clone(),
+                label: label.to_string(),
                 fetched: f,
                 total: t,
             },
@@ -1426,7 +1425,7 @@ fn build_fetch_callback(
 /// and updates the synced-paths cache.
 fn build_file_synced_callback(
     sync: Arc<SyncRunner>,
-    label: String,
+    label: Arc<str>,
 ) -> hcfs_client::sync::FileSyncedFn {
     Arc::new(move |rel_path, path_hash_hex, arion_cid, action| {
         debug!("File synced [{label}]: {rel_path} ({action}) cid={arion_cid}");
@@ -1447,6 +1446,8 @@ fn build_file_synced_callback(
 /// callback) to the `SyncRunner`'s progress tracking and Tauri event emission.
 /// Called once per drive during [`initialize_sync_inner`].
 pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManager, label: &str, sync: &Arc<SyncRunner>) {
+    let label: Arc<str> = Arc::from(label);
+
     let upload_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
     let download_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
         Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
@@ -1454,20 +1455,20 @@ pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManage
     let upload_ctx = Arc::new(TransferContext {
         sync: sync.clone(),
         app: app.clone(),
-        label: label.to_string(),
+        label: Arc::clone(&label),
         started_set: Arc::clone(&upload_started),
         direction: TransferDirection::Upload,
     });
     let download_ctx = Arc::new(TransferContext {
         sync: sync.clone(),
         app: app.clone(),
-        label: label.to_string(),
+        label: Arc::clone(&label),
         started_set: Arc::clone(&download_started),
         direction: TransferDirection::Download,
     });
 
     manager.set_progress(SyncProgress {
-        on_sync_plan_ready: Some(build_plan_ready_callback(app, label, sync)),
+        on_sync_plan_ready: Some(build_plan_ready_callback(app, Arc::clone(&label), sync)),
         on_upload_progress: Some(Arc::new(move |b, t, p| {
             handle_transfer_progress(&upload_ctx, b, t, p);
         })),
@@ -1476,19 +1477,19 @@ pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManage
         })),
         on_encrypt_progress: Some(build_crypto_callback(
             sync.clone(),
-            label.to_string(),
+            Arc::clone(&label),
             crate::sync::progress::FileAction::Encrypt,
             "Encrypt",
         )),
         on_decrypt_progress: Some(build_crypto_callback(
             sync.clone(),
-            label.to_string(),
+            Arc::clone(&label),
             crate::sync::progress::FileAction::Decrypt,
             "Decrypt",
         )),
-        on_scan_progress: Some(build_scan_callback(sync.clone(), app.clone(), label.to_string())),
-        on_fetch_state_progress: Some(build_fetch_callback(sync.clone(), app.clone(), label.to_string())),
-        on_file_synced: Some(build_file_synced_callback(sync.clone(), label.to_string())),
+        on_scan_progress: Some(build_scan_callback(sync.clone(), app.clone(), Arc::clone(&label))),
+        on_fetch_state_progress: Some(build_fetch_callback(sync.clone(), app.clone(), Arc::clone(&label))),
+        on_file_synced: Some(build_file_synced_callback(sync.clone(), Arc::clone(&label))),
     });
 }
 
