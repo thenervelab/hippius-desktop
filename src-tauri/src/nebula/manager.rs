@@ -279,7 +279,7 @@ async fn fetch_latest_release(client: &Client) -> Result<GitHubRelease> {
 }
 
 /// Extract ZIP archive
-async fn extract_zip(bytes: &[u8], target_dir: &Path) -> Result<()> {
+fn extract_zip(bytes: &[u8], target_dir: &Path) -> Result<()> {
     use std::io::Cursor;
     use zip::ZipArchive;
 
@@ -309,7 +309,7 @@ async fn extract_zip(bytes: &[u8], target_dir: &Path) -> Result<()> {
 }
 
 /// Extract TAR.GZ archive
-async fn extract_tar_gz(bytes: &[u8], target_dir: &Path) -> Result<()> {
+fn extract_tar_gz(bytes: &[u8], target_dir: &Path) -> Result<()> {
     use flate2::read::GzDecoder;
     use std::io::Cursor;
     use tar::Archive;
@@ -478,9 +478,19 @@ pub async fn install_nebula(state: tauri::State<'_, crate::app_state::AppState>,
 
             let asset_path = std::path::Path::new(&asset_name);
             if asset_path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("zip")) {
-                extract_zip(&bytes, &nebula_dir).await.map_err(|e| e.to_string())?;
+                let dir = nebula_dir.clone();
+                let b = bytes.clone();
+                tokio::task::spawn_blocking(move || extract_zip(&b, &dir))
+                    .await
+                    .map_err(|e| format!("Extract task panicked: {e}"))?
+                    .map_err(|e| e.to_string())?;
             } else if asset_name.to_ascii_lowercase().ends_with(".tar.gz") {
-                extract_tar_gz(&bytes, &nebula_dir).await.map_err(|e| e.to_string())?;
+                let dir = nebula_dir.clone();
+                let b = bytes.clone();
+                tokio::task::spawn_blocking(move || extract_tar_gz(&b, &dir))
+                    .await
+                    .map_err(|e| format!("Extract task panicked: {e}"))?
+                    .map_err(|e| e.to_string())?;
             }
 
             // Cleanup
