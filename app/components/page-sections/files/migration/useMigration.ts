@@ -226,7 +226,7 @@ export function useMigration(
   );
 
   const launchServerMigration = useCallback(
-    async (accountId: string) => {
+    async (accountId: string, mnemonic: string) => {
       setCurrentStep("progress");
       setOverallProgress(0);
       setSuccessCount(0);
@@ -239,17 +239,6 @@ export function useMigration(
       appStore.set(migrationLockAtom, true);
 
       try {
-        // Pass the in-memory mnemonic so start_server_migration doesn't
-        // depend on the on-disk master (which may not exist yet).
-        const mnemonic = getMnemonic ? await getMnemonic() : null;
-        if (!mnemonic) {
-          appStore.set(migrationLockAtom, false);
-          toast.error(
-            "Seed phrase not available. Please log out and log back in with your seed phrase to start migration."
-          );
-          setCurrentStep("prompt");
-          return;
-        }
         await invoke("start_server_migration", {
           accountId,
           totalSize,
@@ -270,11 +259,20 @@ export function useMigration(
         setCurrentStep("prompt");
       }
     },
-    [totalSize, startPolling, getMnemonic]
+    [totalSize, startPolling]
   );
 
   const startMigration = useCallback(
     async (accountId: string) => {
+      // Resolve mnemonic once — it's needed for encryption key derivation.
+      const mnemonic = getMnemonic ? await getMnemonic() : null;
+      if (!mnemonic) {
+        toast.error(
+          "Seed phrase not available. Please log out and log back in with your seed phrase to start migration."
+        );
+        return;
+      }
+
       // Rust checks HCFS config and returns which step to show
       const flow = await invoke<{ nextStep: string }>("start_migration_flow", { accountId });
       if (flow.nextStep === "setup") {
@@ -283,18 +281,13 @@ export function useMigration(
         return;
       }
       // Password exists but mnemonic file may not — persist it before launching
-      if (getMnemonic) {
-        const mnemonic = await getMnemonic();
-        if (mnemonic) {
-          await invoke("persist_master_mnemonic", {
-            accountId,
-            mnemonic,
-          }).catch((err: unknown) =>
-            console.warn("[Migration] persist_master_mnemonic failed:", err)
-          );
-        }
-      }
-      await launchServerMigration(accountId);
+      await invoke("persist_master_mnemonic", {
+        accountId,
+        mnemonic,
+      }).catch((err: unknown) =>
+        console.warn("[Migration] persist_master_mnemonic failed:", err)
+      );
+      await launchServerMigration(accountId, mnemonic);
     },
     [launchServerMigration, getMnemonic]
   );
@@ -307,22 +300,28 @@ export function useMigration(
       try {
         await saveHcfsConfig(pendingAccountId, result.serverUrl, result.password);
 
-        // Persist the master mnemonic to disk now that the drive password
-        // exists — start_server_migration needs it to derive encryption keys.
-        if (getMnemonic) {
-          const mnemonic = await getMnemonic();
-          if (mnemonic) {
-            await invoke("persist_master_mnemonic", {
-              accountId: pendingAccountId,
-              mnemonic,
-            }).catch((err: unknown) =>
-              console.warn("[Migration] persist_master_mnemonic failed:", err)
-            );
-          }
+        // Resolve mnemonic once and thread it through the entire flow.
+        const mnemonic = getMnemonic ? await getMnemonic() : null;
+        if (!mnemonic) {
+          setIsSettingUp(false);
+          toast.error(
+            "Seed phrase not available. Please log out and log back in with your seed phrase to start migration."
+          );
+          setCurrentStep("prompt");
+          return;
         }
 
+        // Persist the master mnemonic to disk now that the drive password
+        // exists — needed for future sessions.
+        await invoke("persist_master_mnemonic", {
+          accountId: pendingAccountId,
+          mnemonic,
+        }).catch((err: unknown) =>
+          console.warn("[Migration] persist_master_mnemonic failed:", err)
+        );
+
         setIsSettingUp(false);
-        await launchServerMigration(pendingAccountId);
+        await launchServerMigration(pendingAccountId, mnemonic);
       } catch (err) {
         console.error("[Migration] Setup failed:", err);
         setIsSettingUp(false);
