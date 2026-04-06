@@ -16,7 +16,10 @@ use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
+use crate::error::AppError;
 use crate::sync::logic::{NEVER_EMITTED, is_file_completion_tick, try_claim_snapshot_emit};
+
+type Result<T> = std::result::Result<T, AppError>;
 
 /// Minimum milliseconds between throttled `emit_snapshot(false)` calls from
 /// the per-chunk progress hot path.
@@ -70,8 +73,8 @@ pub fn update_file_progress(
     total_bytes: u64,
     action: FileAction,
     label: Option<String>,
-) -> Result<Option<SyncFile>, String> {
-    let result = sync.progress.update_file_progress(path, bytes_transferred, total_bytes, action, label)?;
+) -> Result<Option<SyncFile>> {
+    let result = sync.progress.update_file_progress(path, bytes_transferred, total_bytes, action, label).map_err(AppError::Progress)?;
     let is_file_complete = is_file_completion_tick(bytes_transferred, total_bytes);
     if try_claim_snapshot_emit(&LAST_THROTTLED_EMIT_MS, monotonic_now_ms(), is_file_complete, SNAPSHOT_THROTTLE_MS) {
         sync.emit_snapshot(false);
@@ -88,7 +91,7 @@ pub fn merge_into_session(
     expected_remote_deletes: u32,
     file_list: Option<SessionFileList>,
     label: Option<String>,
-) -> Result<(), String> {
+) -> Result<()> {
     sync.progress.merge_into_session(
         expected_uploads,
         expected_downloads,
@@ -96,21 +99,21 @@ pub fn merge_into_session(
         expected_remote_deletes,
         file_list,
         label.as_deref(),
-    )?;
+    ).map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
 
 /// Remove all files for a label from the current session.
-pub fn remove_files_for_label(sync: &SyncRunner, label: String) -> Result<(), String> {
-    sync.progress.remove_files_for_label(label)?;
+pub fn remove_files_for_label(sync: &SyncRunner, label: String) -> Result<()> {
+    sync.progress.remove_files_for_label(label).map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
 
 /// Clear all sync progress data (session + recent files).
-pub fn clear_all_data(sync: &SyncRunner) -> Result<(), String> {
-    sync.progress.clear_all_data()?;
+pub fn clear_all_data(sync: &SyncRunner) -> Result<()> {
+    sync.progress.clear_all_data().map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
@@ -124,7 +127,7 @@ pub fn start_session(
     expected_remote_deletes: u32,
     file_list: Option<SessionFileList>,
     label: Option<String>,
-) -> Result<SyncSession, String> {
+) -> Result<SyncSession> {
     let result = sync.progress.start_session(
         expected_uploads,
         expected_downloads,
@@ -132,60 +135,60 @@ pub fn start_session(
         expected_remote_deletes,
         file_list,
         label.as_deref(),
-    )?;
+    ).map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(result)
 }
 
 /// Complete the current session.
-pub fn complete_session(sync: &SyncRunner, files_uploaded: u32, files_downloaded: u32) -> Result<(), String> {
-    sync.progress.complete_session(files_uploaded, files_downloaded)?;
+pub fn complete_session(sync: &SyncRunner, files_uploaded: u32, files_downloaded: u32) -> Result<()> {
+    sync.progress.complete_session(files_uploaded, files_downloaded).map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
 
 /// Stop the current session.
-pub fn stop_session(sync: &SyncRunner) -> Result<(), String> {
-    sync.progress.stop_session()?;
+pub fn stop_session(sync: &SyncRunner) -> Result<()> {
+    sync.progress.stop_session().map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
 
 /// Force-complete all pending files for a label.
-pub fn complete_pending_files(sync: &SyncRunner, label: &str) -> Result<(), String> {
-    sync.progress.complete_pending_files(label)?;
+pub fn complete_pending_files(sync: &SyncRunner, label: &str) -> Result<()> {
+    sync.progress.complete_pending_files(label).map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
 
 /// Mark excess pending files as failed.
-pub fn mark_pending_files_as_failed(sync: &SyncRunner, actual_uploads: u32, actual_downloads: u32, label: &str) -> Result<(), String> {
-    sync.progress.mark_pending_files_as_failed(actual_uploads, actual_downloads, label)?;
+pub fn mark_pending_files_as_failed(sync: &SyncRunner, actual_uploads: u32, actual_downloads: u32, label: &str) -> Result<()> {
+    sync.progress.mark_pending_files_as_failed(actual_uploads, actual_downloads, label).map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
 
 /// Mark every pending/in-progress file as failed.
-pub fn mark_all_pending_files_as_failed(sync: &SyncRunner, error_message: String) -> Result<(), String> {
-    sync.progress.mark_all_pending_files_as_failed(error_message)?;
+pub fn mark_all_pending_files_as_failed(sync: &SyncRunner, error_message: String) -> Result<()> {
+    sync.progress.mark_all_pending_files_as_failed(error_message).map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
 
 /// Mark a specific file as errored.
-pub fn mark_file_error(sync: &SyncRunner, path: String, error: String) -> Result<(), String> {
-    sync.progress.mark_file_error(path, error)?;
+pub fn mark_file_error(sync: &SyncRunner, path: String, error: String) -> Result<()> {
+    sync.progress.mark_file_error(path, error).map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
 
 /// Compute overall progress.
-pub fn get_overall_progress(sync: &SyncRunner) -> Result<OverallProgress, String> {
-    sync.progress.get_overall_progress()
+pub fn get_overall_progress(sync: &SyncRunner) -> Result<OverallProgress> {
+    sync.progress.get_overall_progress().map_err(AppError::Progress)
 }
 
 /// Get a full snapshot with retry state injected.
-pub fn get_snapshot(sync: &SyncRunner) -> Result<SyncSnapshot, String> {
+pub fn get_snapshot(sync: &SyncRunner) -> Result<SyncSnapshot> {
     let mut snapshot = sync.progress.build_snapshot();
     let retry_at = sync.retry_at.load(std::sync::atomic::Ordering::Relaxed);
     if retry_at > 0 {
@@ -200,8 +203,8 @@ pub fn get_snapshot(sync: &SyncRunner) -> Result<SyncSnapshot, String> {
 }
 
 /// Record a deleted file in recent files.
-pub fn record_deleted_file(sync: &SyncRunner, file_name: String, size_bytes: u64) -> Result<(), String> {
-    sync.progress.record_deleted_file(file_name, size_bytes)?;
+pub fn record_deleted_file(sync: &SyncRunner, file_name: String, size_bytes: u64) -> Result<()> {
+    sync.progress.record_deleted_file(file_name, size_bytes).map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
@@ -217,7 +220,7 @@ pub fn sp_start_session(
     expected_remote_deletes: u32,
     file_list: Option<SessionFileList>,
     label: Option<String>,
-) -> Result<SyncSession, String> {
+) -> Result<SyncSession> {
     start_session(
         &state.sync,
         expected_uploads,
@@ -238,7 +241,7 @@ pub fn sp_merge_into_session(
     expected_remote_deletes: u32,
     file_list: Option<SessionFileList>,
     label: Option<String>,
-) -> Result<(), String> {
+) -> Result<()> {
     merge_into_session(
         &state.sync,
         expected_uploads,
@@ -251,12 +254,12 @@ pub fn sp_merge_into_session(
 }
 
 #[tauri::command]
-pub fn sp_complete_session(state: tauri::State<'_, crate::app_state::AppState>, files_uploaded: u32, files_downloaded: u32) -> Result<(), String> {
+pub fn sp_complete_session(state: tauri::State<'_, crate::app_state::AppState>, files_uploaded: u32, files_downloaded: u32) -> Result<()> {
     complete_session(&state.sync, files_uploaded, files_downloaded)
 }
 
 #[tauri::command]
-pub fn sp_stop_session(state: tauri::State<'_, crate::app_state::AppState>) -> Result<(), String> {
+pub fn sp_stop_session(state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
     stop_session(&state.sync)
 }
 
@@ -268,12 +271,12 @@ pub fn sp_update_file_progress(
     total_bytes: u64,
     action: FileAction,
     label: Option<String>,
-) -> Result<Option<SyncFile>, String> {
+) -> Result<Option<SyncFile>> {
     update_file_progress(&state.sync, path, bytes_transferred, total_bytes, action, label)
 }
 
 #[tauri::command]
-pub fn sp_complete_pending_files(state: tauri::State<'_, crate::app_state::AppState>, label: Option<String>) -> Result<(), String> {
+pub fn sp_complete_pending_files(state: tauri::State<'_, crate::app_state::AppState>, label: Option<String>) -> Result<()> {
     complete_pending_files(&state.sync, label.as_deref().unwrap_or("default"))
 }
 
@@ -283,42 +286,42 @@ pub fn sp_mark_pending_files_as_failed(
     actual_uploads: u32,
     actual_downloads: u32,
     label: Option<String>,
-) -> Result<(), String> {
+) -> Result<()> {
     mark_pending_files_as_failed(&state.sync, actual_uploads, actual_downloads, label.as_deref().unwrap_or("default"))
 }
 
 #[tauri::command]
-pub fn sp_mark_all_pending_files_as_failed(state: tauri::State<'_, crate::app_state::AppState>, error_message: String) -> Result<(), String> {
+pub fn sp_mark_all_pending_files_as_failed(state: tauri::State<'_, crate::app_state::AppState>, error_message: String) -> Result<()> {
     mark_all_pending_files_as_failed(&state.sync, error_message)
 }
 
 #[tauri::command]
-pub fn sp_mark_file_error(state: tauri::State<'_, crate::app_state::AppState>, path: String, error: String) -> Result<(), String> {
+pub fn sp_mark_file_error(state: tauri::State<'_, crate::app_state::AppState>, path: String, error: String) -> Result<()> {
     mark_file_error(&state.sync, path, error)
 }
 
 #[tauri::command]
-pub fn sp_get_overall_progress(state: tauri::State<'_, crate::app_state::AppState>) -> Result<OverallProgress, String> {
+pub fn sp_get_overall_progress(state: tauri::State<'_, crate::app_state::AppState>) -> Result<OverallProgress> {
     get_overall_progress(&state.sync)
 }
 
 #[tauri::command]
-pub fn sp_record_deleted_file(state: tauri::State<'_, crate::app_state::AppState>, file_name: String, size_bytes: u64) -> Result<(), String> {
+pub fn sp_record_deleted_file(state: tauri::State<'_, crate::app_state::AppState>, file_name: String, size_bytes: u64) -> Result<()> {
     record_deleted_file(&state.sync, file_name, size_bytes)
 }
 
 #[tauri::command]
-pub fn sp_remove_files_for_label(state: tauri::State<'_, crate::app_state::AppState>, label: String) -> Result<(), String> {
+pub fn sp_remove_files_for_label(state: tauri::State<'_, crate::app_state::AppState>, label: String) -> Result<()> {
     remove_files_for_label(&state.sync, label)
 }
 
 #[tauri::command]
-pub fn sp_clear_all_data(state: tauri::State<'_, crate::app_state::AppState>) -> Result<(), String> {
+pub fn sp_clear_all_data(state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
     clear_all_data(&state.sync)
 }
 
 #[tauri::command]
-pub fn sp_get_snapshot(state: tauri::State<'_, crate::app_state::AppState>) -> Result<SyncSnapshot, String> {
+pub fn sp_get_snapshot(state: tauri::State<'_, crate::app_state::AppState>) -> Result<SyncSnapshot> {
     get_snapshot(&state.sync)
 }
 

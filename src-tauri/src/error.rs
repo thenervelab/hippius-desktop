@@ -43,6 +43,9 @@ pub enum AppError {
     #[error("{0}")]
     NotReady(NotReadyKind),
 
+    #[error("Progress error: {0}")]
+    Progress(String),
+
     #[error("Lock poisoned: {0}")]
     Lock(String),
 
@@ -110,6 +113,7 @@ impl Serialize for AppError {
             Self::Validation(_) => "Validation",
             Self::Auth(_) => "Auth",
             Self::NotReady(_) => "NotReady",
+            Self::Progress(_) => "Progress",
             Self::Lock(_) => "Lock",
             Self::Other(_) => "Other",
         };
@@ -365,6 +369,12 @@ mod tests {
     }
 
     #[test]
+    fn display_progress_error() {
+        let err = AppError::Progress("tracker fail".into());
+        assert_eq!(err.to_string(), "Progress error: tracker fail");
+    }
+
+    #[test]
     fn display_lock_error() {
         let err = AppError::Lock("mutex poisoned".into());
         assert_eq!(err.to_string(), "Lock poisoned: mutex poisoned");
@@ -400,6 +410,7 @@ mod tests {
             AppError::Validation("invalid".into()),
             AppError::Auth("unauth".into()),
             AppError::NotReady(NotReadyKind::ConfigMissing),
+            AppError::Progress("tracker".into()),
             AppError::Lock("poisoned".into()),
             AppError::Other("misc".into()),
         ];
@@ -414,6 +425,7 @@ mod tests {
             "Validation",
             "Auth",
             "NotReady",
+            "Progress",
             "Lock",
             "Other",
         ];
