@@ -6,8 +6,96 @@
 use crate::api::client::ApiClient;
 use crate::api::indexer::IndexerClient;
 use crate::error::AppError;
-use serde::Serialize;
+use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+// ---------------------------------------------------------------------------
+// Typed response structs for indexer API deserialization
+// ---------------------------------------------------------------------------
+
+/// Generic wrapper for indexer API responses that use a `data` array.
+#[derive(Deserialize)]
+struct IndexerResponse<T> {
+    #[serde(default)]
+    data: Vec<T>,
+}
+
+/// Row from the credits endpoint (`/credits/free-credits`).
+#[derive(Deserialize, Default)]
+struct CreditRow {
+    id: Option<String>,
+    block_number: Option<i64>,
+    credits: Option<String>,
+    account_id: Option<String>,
+    processed_timestamp: Option<String>,
+    #[serde(default)]
+    timestamp: i64,
+}
+
+/// Row from the system balance endpoint (`/system-account-balance`).
+#[derive(Deserialize, Default)]
+struct BalanceRow {
+    account_id: Option<String>,
+    free_balance: Option<String>,
+    processed_timestamp: Option<String>,
+    #[serde(default)]
+    block_number: i64,
+    #[serde(default)]
+    timestamp: i64,
+}
+
+/// Row from the balance transfers endpoint (`/balance-transfers`).
+#[derive(Deserialize, Default)]
+struct TransferRow {
+    from_account: Option<String>,
+    to_account: Option<String>,
+    amount: Option<String>,
+    block_number: Option<i64>,
+    event_index: Option<i64>,
+    processed_timestamp: Option<String>,
+}
+
+/// Nested event data within a credit event row.
+#[derive(Deserialize)]
+struct EventData {
+    amount: Option<String>,
+}
+
+/// Row from the events endpoint (e.g. `MintedAccountCredits`).
+#[derive(Deserialize)]
+struct CreditEventRow {
+    id: Option<i64>,
+    block_number: Option<i64>,
+    event_data: Option<EventData>,
+    account_id: Option<String>,
+    processed_timestamp: Option<String>,
+    extrinsic_hash: Option<String>,
+}
+
+/// Wrapper for the events endpoint which uses `events` instead of `data`.
+#[derive(Deserialize)]
+struct EventsResponse {
+    #[serde(default)]
+    events: Vec<CreditEventRow>,
+}
+
+/// Row from the billing transactions endpoint (`/api/billing/transactions/`).
+#[derive(Deserialize)]
+struct BillingTransactionRow {
+    id: Option<i64>,
+    payment_type: Option<String>,
+    amount: Option<serde_json::Value>,
+    created_at: Option<String>,
+    status: Option<String>,
+}
+
+/// Wrapper for the billing transactions endpoint which uses `results`.
+#[derive(Deserialize)]
+struct BillingTransactionsResponse {
+    #[serde(default)]
+    results: Vec<BillingTransactionRow>,
+}
 
 /// Fetch paginated billing transaction history for an account.
 #[tauri::command]
@@ -170,10 +258,11 @@ fn best_timestamp(processed: Option<&str>, numeric: i64) -> i64 {
     processed.and_then(parse_iso_ms).unwrap_or_else(|| unit_safe_ms(numeric))
 }
 
-/// Build a local date key (YYYY-MM-DD) from epoch milliseconds using UTC.
-fn day_key(ms: i64) -> String {
-    let dt = chrono::DateTime::from_timestamp_millis(ms).unwrap_or_default();
-    dt.format("%Y-%m-%d").to_string()
+/// Convert epoch milliseconds to a `NaiveDate` for use as HashMap key.
+fn day_date(ms: i64) -> NaiveDate {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .unwrap_or_default()
+        .date_naive()
 }
 
 // ── Credits (deduplicated, day-bucketed) ────────────────────────────────
@@ -202,37 +291,32 @@ pub async fn get_credits_ui(state: tauri::State<'_, crate::app_state::AppState>,
         ("limit", limit_str.as_str()),
     ];
 
-    let resp: serde_json::Value = indexer.get("/credits/free-credits", &params).await?;
-    let rows = resp.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
+    let resp: IndexerResponse<CreditRow> = indexer.get("/credits/free-credits", &params).await?;
 
     // Deduplicate: keep latest entry per day
-    let mut by_day: HashMap<String, (i64, &serde_json::Value)> = HashMap::new();
-    for row in &rows {
-        let ts = best_timestamp(
-            row.get("processed_timestamp").and_then(|v| v.as_str()),
-            row.get("timestamp").and_then(serde_json::Value::as_i64).unwrap_or(0),
-        );
-        let key = day_key(ts);
+    let mut by_day: HashMap<NaiveDate, (i64, &CreditRow)> = HashMap::new();
+    for row in &resp.data {
+        let ts = best_timestamp(row.processed_timestamp.as_deref(), row.timestamp);
+        let key = day_date(ts);
         let entry = by_day.entry(key).or_insert((ts, row));
         if ts > entry.0 {
             *entry = (ts, row);
         }
     }
 
-    // Sort by recency
-    let mut deduped: Vec<_> = by_day.into_values().collect();
-    deduped.sort_by(|a, b| b.0.cmp(&a.0));
-
-    Ok(deduped
+    let mut results: Vec<CreditObject> = by_day
         .into_iter()
-        .map(|(ts, row)| CreditObject {
-            id: row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            block: row.get("block_number").and_then(serde_json::Value::as_i64).unwrap_or(0),
-            amount: row.get("credits").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
-            account_id: row.get("account_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            date: chrono::DateTime::from_timestamp_millis(ts).map(|d| d.to_rfc3339()).unwrap_or_default(),
+        .map(|(date, (ts, row))| CreditObject {
+            id: row.id.clone().unwrap_or_default(),
+            block: row.block_number.unwrap_or(0),
+            amount: row.credits.clone().unwrap_or_else(|| "0".into()),
+            account_id: row.account_id.clone().unwrap_or_default(),
+            date: chrono::DateTime::from_timestamp_millis(ts)
+                .map_or_else(|| date.format("%Y-%m-%d").to_string(), |d| d.to_rfc3339()),
         })
-        .collect())
+        .collect();
+    results.sort_by(|a, b| b.block.cmp(&a.block));
+    Ok(results)
 }
 
 // ── System balance (deduplicated, day-bucketed) ─────────────────────────
@@ -261,38 +345,33 @@ pub async fn get_system_balance_ui(state: tauri::State<'_, crate::app_state::App
         ("limit", limit_str.as_str()),
     ];
 
-    let resp: serde_json::Value = indexer.get("/system-account-balance", &params).await?;
-    let rows = resp.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
+    let resp: IndexerResponse<BalanceRow> = indexer.get("/system-account-balance", &params).await?;
 
-    let mut by_day: HashMap<String, (i64, &serde_json::Value)> = HashMap::new();
-    for row in &rows {
-        let ts = best_timestamp(
-            row.get("processed_timestamp").and_then(|v| v.as_str()),
-            row.get("timestamp").and_then(serde_json::Value::as_i64).unwrap_or(0),
-        );
-        let key = day_key(ts);
+    let mut by_day: HashMap<NaiveDate, (i64, &BalanceRow)> = HashMap::new();
+    for row in &resp.data {
+        let ts = best_timestamp(row.processed_timestamp.as_deref(), row.timestamp);
+        let key = day_date(ts);
         let entry = by_day.entry(key).or_insert((ts, row));
         if ts > entry.0 {
             *entry = (ts, row);
         }
     }
 
-    let mut deduped: Vec<_> = by_day.into_values().collect();
-    deduped.sort_by(|a, b| b.0.cmp(&a.0));
-
-    Ok(deduped
+    let mut results: Vec<BalanceObject> = by_day
         .into_iter()
-        .map(|(ts, row)| {
-            let free = row.get("free_balance").and_then(|v| v.as_str()).unwrap_or("0").to_string();
+        .map(|(_date, (ts, row))| {
+            let free = row.free_balance.clone().unwrap_or_else(|| "0".into());
             BalanceObject {
-                account_id: row.get("account_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                block_number: row.get("block_number").and_then(serde_json::Value::as_i64).unwrap_or(0),
+                account_id: row.account_id.clone().unwrap_or_default(),
+                block_number: row.block_number,
                 free_balance: free.clone(),
                 total_balance: free,
                 timestamp: chrono::DateTime::from_timestamp_millis(ts).map(|d| d.to_rfc3339()).unwrap_or_default(),
             }
         })
-        .collect())
+        .collect();
+    results.sort_by(|a, b| b.block_number.cmp(&a.block_number));
+    Ok(results)
 }
 
 // ── Balance transfers (parsed amounts, composite IDs) ───────────────────
@@ -324,16 +403,16 @@ pub async fn get_balance_transfers_ui(state: tauri::State<'_, crate::app_state::
         ("limit", limit_str.as_str()),
     ];
 
-    let resp: serde_json::Value = indexer.get("/balance-transfers", &params).await?;
-    let rows = resp.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
+    let resp: IndexerResponse<TransferRow> = indexer.get("/balance-transfers", &params).await?;
 
-    Ok(rows
+    Ok(resp
+        .data
         .iter()
         .map(|row| {
-            let block = row.get("block_number").and_then(serde_json::Value::as_i64).unwrap_or(0);
-            let event_idx = row.get("event_index").and_then(serde_json::Value::as_i64).unwrap_or(0);
-            let from = row.get("from_account").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let to = row.get("to_account").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let block = row.block_number.unwrap_or(0);
+            let event_idx = row.event_index.unwrap_or(0);
+            let from = row.from_account.clone().unwrap_or_default();
+            let to = row.to_account.clone().unwrap_or_default();
             let direction = if from == account_id {
                 "Sent"
             } else if to == account_id {
@@ -345,14 +424,10 @@ pub async fn get_balance_transfers_ui(state: tauri::State<'_, crate::app_state::
             TransferObject {
                 id: format!("{block}-{event_idx}"),
                 block,
-                amount: row
-                    .get("amount")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(0.0),
+                amount: row.amount.as_deref().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0),
                 from,
                 to,
-                date: row.get("processed_timestamp").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                date: row.processed_timestamp.clone().unwrap_or_default(),
                 direction,
             }
         })
@@ -384,16 +459,16 @@ pub async fn get_billing_transactions_ui(
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
     let params = vec![("page", page_str.as_str()), ("limit", limit_str.as_str())];
-    let resp: serde_json::Value = client.get_with_params("/api/billing/transactions/", &params, &account_id).await?;
+    let resp: BillingTransactionsResponse =
+        client.get_with_params("/api/billing/transactions/", &params, &account_id).await?;
 
-    let results = resp.get("results").and_then(|r| r.as_array()).cloned().unwrap_or_default();
-
-    Ok(results
+    Ok(resp
+        .results
         .iter()
         .map(|t| {
-            let payment_type = t.get("payment_type").and_then(|v| v.as_str()).unwrap_or("");
+            let payment_type = t.payment_type.as_deref().unwrap_or("");
             let tx_type = if payment_type.to_lowercase().contains("stripe") { "card" } else { "tao" };
-            let amount = t.get("amount").map_or(0.0, |v| {
+            let amount = t.amount.as_ref().map_or(0.0, |v| {
                 if let Some(s) = v.as_str() {
                     s.parse::<f64>().unwrap_or(0.0)
                 } else {
@@ -402,11 +477,11 @@ pub async fn get_billing_transactions_ui(
             });
 
             BillingTransactionObject {
-                id: t.get("id").and_then(serde_json::Value::as_i64).unwrap_or(0),
+                id: t.id.unwrap_or(0),
                 transaction_type: tx_type.to_string(),
                 amount,
-                transaction_date: t.get("created_at").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                status: t.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                transaction_date: t.created_at.clone().unwrap_or_default(),
+                status: t.status.clone().unwrap_or_default(),
             }
         })
         .collect())
@@ -440,23 +515,23 @@ pub async fn get_add_credit_events_ui(state: tauri::State<'_, crate::app_state::
         ("limit", limit_str.as_str()),
     ];
 
-    let resp: serde_json::Value = indexer.get("/events", &params).await?;
-    let events = resp.get("events").and_then(|e| e.as_array()).cloned().unwrap_or_default();
+    let resp: EventsResponse = indexer.get("/events", &params).await?;
 
-    Ok(events
+    Ok(resp
+        .events
         .iter()
         .map(|e| CreditEventObject {
-            id: e.get("id").and_then(serde_json::Value::as_i64).unwrap_or(0),
-            block_number: e.get("block_number").and_then(serde_json::Value::as_i64).unwrap_or(0),
+            id: e.id.unwrap_or(0),
+            block_number: e.block_number.unwrap_or(0),
             amount: e
-                .get("event_data")
-                .and_then(|d| d.get("amount"))
-                .and_then(|v| v.as_str())
+                .event_data
+                .as_ref()
+                .and_then(|d| d.amount.as_deref())
                 .unwrap_or("0")
                 .to_string(),
-            account_id: e.get("account_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            timestamp: e.get("processed_timestamp").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            hash: e.get("extrinsic_hash").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            account_id: e.account_id.clone().unwrap_or_default(),
+            timestamp: e.processed_timestamp.clone().unwrap_or_default(),
+            hash: e.extrinsic_hash.clone().unwrap_or_default(),
         })
         .collect())
 }
