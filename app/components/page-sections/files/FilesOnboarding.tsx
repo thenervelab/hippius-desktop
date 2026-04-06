@@ -377,13 +377,6 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
     if (!polkadotAddress) return;
     try {
       await saveHcfsConfig(polkadotAddress, result.serverUrl, result.password);
-      const mnemonic = await getMnemonic();
-      if (mnemonic) {
-        await invoke("persist_master_mnemonic", {
-          accountId: polkadotAddress,
-          mnemonic,
-        }).catch(() => {});
-      }
       setShowHcfsSetup(false);
       if (pendingAction === "sync") {
         await doRestore();

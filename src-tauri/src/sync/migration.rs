@@ -430,9 +430,13 @@ pub async fn complete_migration_transition(
     }
 
     // 3. Initialize the "default" drive and start the sync loop.
-    // Mnemonic is resolved internally via get_mnemonic_for_account
-    // (which checks the AuthInfo cache before disk).
-    let result = crate::sync::lifecycle::initialize_sync(app, account_id.clone(), "default".to_string(), None).await?;
+    // Resolve the mnemonic via the unified chain (cache → disk → drive → DB).
+    // For fresh migration users the master file isn't on disk yet, so we must
+    // pass the resolved mnemonic explicitly — initialize_sync_inner does NOT
+    // call get_mnemonic_for_account itself, it only consults its parameter
+    // and the on-disk master_enc_mnemonic.json.
+    let mnemonic = crate::sync::mnemonic::get_mnemonic_for_account(&state, &account_id).await?;
+    let result = crate::sync::lifecycle::initialize_sync(app, account_id.clone(), "default".to_string(), Some(mnemonic)).await?;
 
     // 4. Mark migration as completed ONLY after sync init succeeds.
     //    If init fails, the ? above propagates the error and this line
