@@ -1359,19 +1359,108 @@ fn build_plan_ready_callback(app: &AppHandle, label: &str, sync: &Arc<SyncRunner
     })
 }
 
+/// Build an encrypt or decrypt progress callback.
+///
+/// The two callbacks are structurally identical — only the log prefix
+/// and `FileAction` variant differ — so this helper is parameterized
+/// over both.
+fn build_crypto_callback(
+    sync: Arc<SyncRunner>,
+    label: String,
+    action: crate::sync::progress::FileAction,
+    direction_name: &'static str,
+) -> hcfs_client::sync::SyncProgressFn {
+    Arc::new(move |b, t, p| {
+        sync.touch_progress_time();
+        if b == 0 {
+            info!("{direction_name} starting [{label}]: {p:?} ({t} bytes)");
+        } else if b == t && t > 0 {
+            info!("{direction_name} complete [{label}]: {p:?} ({t} bytes)");
+        }
+        if let Some(path_str) = p {
+            let _ = crate::sync::progress::update_file_progress(
+                &sync,
+                path_str.to_string(),
+                b,
+                t,
+                action.clone(),
+                Some(label.clone()),
+            );
+        }
+    })
+}
+
+/// Build the `on_scan_progress` callback that logs scan progress and
+/// emits the `SCAN_PROGRESS` Tauri event.
+fn build_scan_callback(
+    sync: Arc<SyncRunner>,
+    app: AppHandle,
+    label: String,
+) -> hcfs_client::sync::ScanProgressFn {
+    Arc::new(move |n, p| {
+        sync.touch_progress_time();
+        info!("Scan [{label}]: {n} files scanned, current: {p:?}");
+        let _ = app.emit(
+            crate::sync::events::SCAN_PROGRESS,
+            crate::sync::events::ScanProgressPayload {
+                label: label.clone(),
+                scanned: n,
+                path: p.map(std::string::ToString::to_string),
+            },
+        );
+    })
+}
+
+/// Build the `on_fetch_state_progress` callback that logs fetch state
+/// progress and emits the `FETCH_PROGRESS` Tauri event.
+fn build_fetch_callback(
+    sync: Arc<SyncRunner>,
+    app: AppHandle,
+    label: String,
+) -> hcfs_client::sync::FetchProgressFn {
+    Arc::new(move |f, t| {
+        sync.touch_progress_time();
+        info!("Fetch state [{label}]: {f}/{t} entries");
+        let _ = app.emit(
+            crate::sync::events::FETCH_PROGRESS,
+            crate::sync::events::FetchProgressPayload {
+                label: label.clone(),
+                fetched: f,
+                total: t,
+            },
+        );
+    })
+}
+
+/// Build the `on_file_synced` callback that logs per-file completion
+/// and updates the synced-paths cache.
+fn build_file_synced_callback(
+    sync: Arc<SyncRunner>,
+    label: String,
+) -> hcfs_client::sync::FileSyncedFn {
+    Arc::new(move |rel_path, path_hash_hex, arion_cid, action| {
+        debug!("File synced [{label}]: {rel_path} ({action}) cid={arion_cid}");
+        if !rel_path.is_empty() {
+            let info = SyncedFileInfo::new(
+                path_hash_hex.to_string(),
+                arion_cid.to_string(),
+            );
+            sync.upsert_synced_path(&label, rel_path.to_string(), info);
+        }
+    })
+}
+
 /// Wire up the hcfs-client progress callbacks for a drive.
 ///
 /// Connects the `SyncProgress` callback struct (upload/download/encrypt/decrypt
 /// progress, scan/fetch state, file-synced notification, and the plan-ready
 /// callback) to the `SyncRunner`'s progress tracking and Tauri event emission.
 /// Called once per drive during [`initialize_sync_inner`].
-#[expect(clippy::too_many_lines, reason = "closure-heavy callback setup; splitting breaks capture context")]
 pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManager, label: &str, sync: &Arc<SyncRunner>) {
     let upload_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
     let download_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
         Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
 
-    // Upload callback
     let upload_ctx = Arc::new(TransferContext {
         sync: sync.clone(),
         app: app.clone(),
@@ -1379,7 +1468,6 @@ pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManage
         started_set: Arc::clone(&upload_started),
         direction: TransferDirection::Upload,
     });
-    // Download callback
     let download_ctx = Arc::new(TransferContext {
         sync: sync.clone(),
         app: app.clone(),
@@ -1387,22 +1475,6 @@ pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManage
         started_set: Arc::clone(&download_started),
         direction: TransferDirection::Download,
     });
-
-    // Encrypt/decrypt callbacks
-    let sync_encrypt = sync.clone();
-    let l3 = label.to_string();
-    let sync_decrypt = sync.clone();
-    let l4 = label.to_string();
-
-    // Scan/fetch/synced callbacks
-    let sync_scan = sync.clone();
-    let a5 = app.clone();
-    let l5 = label.to_string();
-    let sync_fetch = sync.clone();
-    let a6 = app.clone();
-    let l6 = label.to_string();
-    let sync_file_synced = sync.clone();
-    let l7 = label.to_string();
 
     manager.set_progress(SyncProgress {
         on_sync_plan_ready: Some(build_plan_ready_callback(app, label, sync)),
@@ -1412,73 +1484,21 @@ pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManage
         on_download_progress: Some(Arc::new(move |b, t, p| {
             handle_transfer_progress(&download_ctx, b, t, p);
         })),
-        on_encrypt_progress: Some(Arc::new(move |b, t, p| {
-            sync_encrypt.touch_progress_time();
-            if b == 0 {
-                info!("Encrypt starting [{}]: {:?} ({} bytes)", l3, p, t);
-            } else if b == t && t > 0 {
-                info!("Encrypt complete [{}]: {:?} ({} bytes)", l3, p, t);
-            }
-            if let Some(path_str) = p {
-                let _ = crate::sync::progress::update_file_progress(
-                    &sync_encrypt,
-                    path_str.to_string(),
-                    b,
-                    t,
-                    crate::sync::progress::FileAction::Encrypt,
-                    Some(l3.clone()),
-                );
-            }
-        })),
-        on_decrypt_progress: Some(Arc::new(move |b, t, p| {
-            sync_decrypt.touch_progress_time();
-            if b == 0 {
-                info!("Decrypt starting [{}]: {:?} ({} bytes)", l4, p, t);
-            } else if b == t && t > 0 {
-                info!("Decrypt complete [{}]: {:?} ({} bytes)", l4, p, t);
-            }
-            if let Some(path_str) = p {
-                let _ = crate::sync::progress::update_file_progress(
-                    &sync_decrypt,
-                    path_str.to_string(),
-                    b,
-                    t,
-                    crate::sync::progress::FileAction::Decrypt,
-                    Some(l4.clone()),
-                );
-            }
-        })),
-        on_scan_progress: Some(Arc::new(move |n, p| {
-            sync_scan.touch_progress_time();
-            info!("Scan [{}]: {} files scanned, current: {:?}", l5, n, p);
-            let _ = a5.emit(
-                crate::sync::events::SCAN_PROGRESS,
-                crate::sync::events::ScanProgressPayload {
-                    label: l5.clone(),
-                    scanned: n,
-                    path: p.map(std::string::ToString::to_string),
-                },
-            );
-        })),
-        on_fetch_state_progress: Some(Arc::new(move |f, t| {
-            sync_fetch.touch_progress_time();
-            info!("Fetch state [{}]: {}/{} entries", l6, f, t);
-            let _ = a6.emit(
-                crate::sync::events::FETCH_PROGRESS,
-                crate::sync::events::FetchProgressPayload {
-                    label: l6.clone(),
-                    fetched: f,
-                    total: t,
-                },
-            );
-        })),
-        on_file_synced: Some(Arc::new(move |rel_path: &str, path_hash_hex: &str, arion_cid: &str, action: &str| {
-            debug!("File synced [{}]: {} ({}) cid={}", l7, rel_path, action, arion_cid);
-            if !rel_path.is_empty() {
-                let info = SyncedFileInfo::new(path_hash_hex.to_string(), arion_cid.to_string());
-                sync_file_synced.upsert_synced_path(&l7, rel_path.to_string(), info);
-            }
-        })),
+        on_encrypt_progress: Some(build_crypto_callback(
+            sync.clone(),
+            label.to_string(),
+            crate::sync::progress::FileAction::Encrypt,
+            "Encrypt",
+        )),
+        on_decrypt_progress: Some(build_crypto_callback(
+            sync.clone(),
+            label.to_string(),
+            crate::sync::progress::FileAction::Decrypt,
+            "Decrypt",
+        )),
+        on_scan_progress: Some(build_scan_callback(sync.clone(), app.clone(), label.to_string())),
+        on_fetch_state_progress: Some(build_fetch_callback(sync.clone(), app.clone(), label.to_string())),
+        on_file_synced: Some(build_file_synced_callback(sync.clone(), label.to_string())),
     });
 }
 
