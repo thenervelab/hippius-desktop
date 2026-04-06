@@ -69,23 +69,15 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 
   const isUnhealthy = engineHealth.status !== "connected";
 
-  // Derive all display state from the snapshot
+  // Display state pre-computed by Rust snapshot
   const isInProgress = snapshot.isActive;
   const isRetrying = !snapshot.isActive && snapshot.retryInSecs > 0;
   const isCompleted = !snapshot.isActive && !isRetrying && (snapshot.completedFiles > 0 || snapshot.failedFiles > 0);
   const hasFailed = (snapshot.failedFiles > 0 && isCompleted) || isRetrying;
   const totalFiles = snapshot.totalFiles;
   const isSingleFile = totalFiles === 1;
-
-  // Detect files still being processed even though the session may be
-  // marked as complete (e.g. encryption finishes after sync loop returns).
-  const hasActiveFiles = snapshot.files.some(
-    (f) => f.status !== "completed" && f.status !== "error"
-  );
-  // For display purposes, treat the widget as "in progress" when files
-  // are still actively processing, even if the session is marked complete.
-  const effectiveInProgress = isInProgress || hasActiveFiles;
-  const effectiveCompleted = isCompleted && !hasActiveFiles;
+  const effectiveInProgress = snapshot.effectiveInProgress;
+  const effectiveCompleted = snapshot.effectiveCompleted;
 
   // ── Smoothed progress ──────────────────────────────────────────
   // Interpolate between snapshot.overallPercent values so the bar
@@ -136,19 +128,9 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
   const [speedBytesPerSec, setSpeedBytesPerSec] = useState<number | null>(null);
 
-  // Compute combined progress across all phases (encrypt + transfer)
-  // so rate calculation works during encryption, not just upload.
-  const combinedProgressBytes = snapshot.files.reduce(
-    (sum, f) => sum + f.bytesEncrypted + f.bytesTransferred, 0
-  );
-  // Expected total work: uploads/downloads go through 2 phases
-  // (encrypt+upload or download+decrypt), deletes are single-phase.
-  const combinedBytesExpected = snapshot.files.reduce(
-    (sum, f) => {
-      const isTransfer = f.action === "upload" || f.action === "download";
-      return sum + f.totalBytes * (isTransfer ? 2 : 1);
-    }, 0
-  );
+  // Combined progress pre-computed by Rust
+  const combinedProgressBytes = snapshot.combinedProgressBytes;
+  const combinedBytesExpected = snapshot.combinedBytesExpected;
 
   useEffect(() => {
     if (!effectiveInProgress || combinedBytesExpected === 0 || combinedProgressBytes === 0) {
@@ -268,11 +250,6 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   // Nothing to show — no files, not active, not retrying, not completed
   if (snapshot.totalFiles === 0 && !isInProgress && !isRetrying && !isCompleted) return null;
 
-  // Derive counts for the status banner
-  const syncedFiles = snapshot.completedFiles;
-  const deletedFiles = snapshot.files.filter(
-    (f) => (f.action === "local_delete" || f.action === "remote_delete") && f.status === "completed"
-  ).length;
 
   return (
     <div
@@ -479,7 +456,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           <div className="flex flex-col w-full mt-4 ml-4 gap-2">
             <div className="flex items-center gap-2 flex-wrap">
               {(() => {
-                // Retry state — show countdown
+                // Retry state — show countdown (only part that needs live React state)
                 if (isRetrying) {
                   return (
                     <div className={cn("w-fit px-2 py-0.5 border rounded", "bg-error-100/40 border-error-80")}>
@@ -492,111 +469,49 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   );
                 }
 
-                // Total completed = synced (uploaded) + deleted
-                const completedFiles = syncedFiles + deletedFiles;
-                // Calculate actual total including failed files
-                const actualTotal = snapshot.failedFiles > 0
-                  ? Math.max(totalFiles, completedFiles + snapshot.failedFiles)
-                  : totalFiles;
-
-                // Determine what type of sync is happening based on snapshot action counts
-                const hasUploads = snapshot.expectedUploads > 0;
-                const hasDownloads = snapshot.expectedDownloads > 0;
-                const hasLocalDeletes = snapshot.expectedLocalDeletes > 0;
-                const hasRemoteDeletes = snapshot.expectedRemoteDeletes > 0;
-                const nonDeleteSynced = syncedFiles - deletedFiles;
-
-                // If there are failed files, show appropriate failure message
-                if (snapshot.failedFiles > 0 && !isInProgress) {
-                  let failMsg: string;
-                  if (hasDownloads && !hasUploads) {
-                    failMsg = `${snapshot.failedFiles} of ${actualTotal} files failed to download`;
-                  } else if (hasUploads && !hasDownloads) {
-                    failMsg = `${snapshot.failedFiles} of ${actualTotal} files failed to upload`;
+                // Status text and variant pre-computed by Rust
+                const variantClasses: Record<string, string> = {
+                  error: "bg-error-100/40 border-error-80 text-error-40",
+                  success: "bg-success-100/40 border-success-80 text-success-40",
+                  progress: "bg-primary-100/40 border-primary-80 text-primary-40",
+                };
+                // Format badge text from structured data
+                const { syncedCount, deletedCount, actualTotal, failedFiles, syncDirection, effectiveCompleted, effectiveInProgress } = snapshot;
+                const completedTotal = syncedCount + deletedCount;
+                let badgeText: string;
+                if (snapshot.statusVariant === "error") {
+                  const verb = syncDirection === "download" ? "download" : syncDirection === "upload" ? "upload" : "sync";
+                  badgeText = `${failedFiles} of ${actualTotal} files failed to ${verb}`;
+                } else if (effectiveCompleted) {
+                  if (syncedCount > 0 && deletedCount > 0) {
+                    badgeText = syncDirection === "download"
+                      ? `${completedTotal} ${completedTotal === 1 ? "file" : "files"} downloaded`
+                      : `${completedTotal} ${completedTotal === 1 ? "file" : "files"} synced`;
+                  } else if (syncedCount > 0) {
+                    badgeText = syncDirection === "download"
+                      ? `${syncedCount} ${syncedCount === 1 ? "file" : "files"} downloaded`
+                      : `${syncedCount} ${syncedCount === 1 ? "file" : "files"} synced`;
+                  } else if (deletedCount > 0) {
+                    badgeText = `${deletedCount} ${deletedCount === 1 ? "file" : "files"} deleted`;
                   } else {
-                    failMsg = `${snapshot.failedFiles} of ${actualTotal} files failed to sync`;
+                    badgeText = "Sync complete";
                   }
-                  return (
-                    <div className="w-fit px-2 py-0.5 border rounded bg-error-100/40 border-error-80">
-                      <div className="text-sm text-error-40">{failMsg}</div>
-                    </div>
-                  );
-                }
-                
-                // When completed successfully
-                if (effectiveCompleted) {
-                  const badges: React.ReactNode[] = [];
-
-                  // Combined badge: when both synced and deleted, show total as "synced";
-                  // when only deletions, show "deleted"
-                  if (nonDeleteSynced > 0 && deletedFiles > 0) {
-                    // Mixed: combine into a single "synced" badge
-                    const total = nonDeleteSynced + deletedFiles;
-                    let syncText: string;
-                    if (hasDownloads && !hasUploads) {
-                      syncText = `${total} ${total === 1 ? "file" : "files"} downloaded`;
-                    } else {
-                      syncText = `${total} ${total === 1 ? "file" : "files"} synced`;
-                    }
-                    badges.push(
-                      <div key="synced" className="w-fit px-2 py-0.5 border rounded bg-success-100/40 border-success-80">
-                        <div className="text-sm text-success-40">{syncText}</div>
-                      </div>
-                    );
-                  } else if (nonDeleteSynced > 0) {
-                    // Only uploads/downloads, no deletes
-                    let syncText: string;
-                    if (hasDownloads && !hasUploads) {
-                      syncText = `${nonDeleteSynced} ${nonDeleteSynced === 1 ? "file" : "files"} downloaded`;
-                    } else {
-                      syncText = `${nonDeleteSynced} ${nonDeleteSynced === 1 ? "file" : "files"} synced`;
-                    }
-                    badges.push(
-                      <div key="synced" className="w-fit px-2 py-0.5 border rounded bg-success-100/40 border-success-80">
-                        <div className="text-sm text-success-40">{syncText}</div>
-                      </div>
-                    );
-                  } else if (deletedFiles > 0) {
-                    // Only deletions
-                    badges.push(
-                      <div key="deleted" className="w-fit px-2 py-0.5 border rounded bg-success-100/40 border-success-80">
-                        <div className="text-sm text-success-40">{`${deletedFiles} ${deletedFiles === 1 ? "file" : "files"} deleted`}</div>
-                      </div>
-                    );
-                  }
-
-                  // Fallback if no synced or deleted
-                  if (badges.length === 0) {
-                    badges.push(
-                      <div key="complete" className="w-fit px-2 py-0.5 border rounded bg-success-100/40 border-success-80">
-                        <div className="text-sm text-success-40">Sync complete</div>
-                      </div>
-                    );
-                  }
-
-                  return <>{badges}</>;
-                }
-                
-                // During sync
-                let inProgressText: string;
-                if (effectiveInProgress || actualTotal > 0) {
-                  if (hasDownloads && !hasUploads) {
-                    inProgressText = `${completedFiles} of ${actualTotal} files downloaded`;
-                  } else if ((hasLocalDeletes || hasRemoteDeletes) && !hasUploads && !hasDownloads) {
-                    const deleteCount = snapshot.expectedLocalDeletes + snapshot.expectedRemoteDeletes;
-                    inProgressText = `Deleting ${deleteCount} ${deleteCount === 1 ? 'file' : 'files'}`;
+                } else if (effectiveInProgress || actualTotal > 0) {
+                  if (syncDirection === "download") {
+                    badgeText = `${completedTotal} of ${actualTotal} files downloaded`;
+                  } else if (syncDirection === "delete") {
+                    badgeText = `Deleting ${actualTotal} ${actualTotal === 1 ? "file" : "files"}`;
                   } else {
-                    inProgressText = `${completedFiles} of ${actualTotal} files synced`;
+                    badgeText = `${completedTotal} of ${actualTotal} files synced`;
                   }
-                } else if (completedFiles > 0) {
-                  inProgressText = `${completedFiles} files synced`;
                 } else {
-                  inProgressText = "Preparing sync...";
+                  badgeText = "Preparing sync...";
                 }
 
+                const classes = variantClasses[snapshot.statusVariant] || variantClasses.progress;
                 return (
-                  <div className="w-fit px-2 py-0.5 border rounded bg-primary-100/40 border-primary-80">
-                    <div className="text-sm text-primary-40">{inProgressText}</div>
+                  <div className={cn("w-fit px-2 py-0.5 border rounded", classes)}>
+                    <div className="text-sm">{badgeText}</div>
                   </div>
                 );
               })()}

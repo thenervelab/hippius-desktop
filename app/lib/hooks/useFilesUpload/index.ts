@@ -92,53 +92,33 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         throw new Error("Insufficient Credits. Please add credits.");
       }
 
-      const cids: string[] = [];
-
       const syncPath = syncPathOverride ?? (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
       if (!syncPath) {
         throw new Error("Sync path not configured. Please set a sync folder first.");
       }
 
-      // Dismiss the loading toast — we'll show a success toast immediately
+      // Single Rust call: adds all files + triggers sync
+      const result = await invoke<{ added: string[]; failed: Array<{ name: string; error: string }> }>("add_files", { syncPath, filePaths });
+
+      // Show result AFTER the work completes
       toast.dismiss(localToastId);
+      if (result.failed.length > 0) {
+        const failedNames = result.failed.map((f) => f.name).join(", ");
+        toast.warning(`${result.added.length} files added, ${result.failed.length} failed: ${failedNames}`, { duration: 6000, closeButton: true });
+      } else {
+        const addedText =
+          filePaths.length === 1
+            ? `${firstFileName} added. Your sync will start soon.`
+            : `${filePaths.length} files added. Your sync will start soon.`;
+        toast.success(addedText, { duration: 4000, closeButton: true });
+      }
 
-      // Show "added" confirmation right away
-      const addedText =
-        filePaths.length === 1
-          ? `${firstFileName} added. Your sync will start soon.`
-          : `${filePaths.length} files added. Your sync will start soon.`;
-      toast.success(addedText, { duration: 4000, closeButton: true });
-
-      // Refetch immediately so the file list shows the new files
       refetchUserFiles();
       queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
-
-      // Add each file to sync folder (hcfs-client will handle upload/encryption)
-      for (let i = 0; i < filePaths.length; i++) {
-        const filePath = filePaths[i];
-
-        const name = await invoke<string>("add_file", {
-          syncPath,
-          filePath,
-        });
-        cids.push(name);
-
-        // update progress
-        const percent = Math.round(((i + 1) / filePaths.length) * 100);
-        setProgress(percent);
-      }
 
       // finish up
       setRequestState("idle");
       setProgress(0);
-
-      // Fire-and-forget: trigger sync without awaiting (it may block if a
-      // sync cycle is already running). The file watcher will also pick up
-      // the new files on its own heartbeat cycle.
-      invoke("trigger_sync_now").catch((err) => {
-        console.error("[Upload] trigger_sync_now failed:", err);
-      });
-
       onSuccess?.();
     } catch (err) {
       setRequestState("idle");
@@ -151,6 +131,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
           : msgs?.errorMultiple?.(filePaths.length) ??
           `Failed to add ${filePaths.length} files`;
 
+      toast.dismiss(localToastId);
       toast.error(errorText);
     }
   }

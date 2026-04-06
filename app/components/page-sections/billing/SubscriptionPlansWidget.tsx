@@ -25,7 +25,7 @@ interface SubscriptionPlansWidgetProps {
 const SubscriptionPlansWidget: FC<SubscriptionPlansWidgetProps> = ({
   className,
 }) => {
-  const { activeSubscription, isLoadingActive, subscriptionPlans } =
+  const { activeSubscription, isLoadingActive, isOnHighestPlan, subscriptionPlans } =
     useSubscriptionData();
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -37,42 +37,21 @@ const SubscriptionPlansWidget: FC<SubscriptionPlansWidgetProps> = ({
 
   const handleCancelSubscriptionClick = (event: React.MouseEvent | Event) => {
     event.preventDefault();
-    setDropdownOpen(false); // Close dropdown when item is clicked
-    setCancelDialogOpen(true); // Open the dialog
+    setDropdownOpen(false);
+    setCancelDialogOpen(true);
   };
 
+  // Date formatting — UI concern, stays in TypeScript
   const getDaysUntilExpiration = (endDateStr: string) => {
     const endDate = new Date(endDateStr);
     const today = new Date();
-
-    const endDateOnly = new Date(
-      endDate.getFullYear(),
-      endDate.getMonth(),
-      endDate.getDate(),
-    );
-
-    const todayOnly = new Date(
-      today.getFullYear(),
-      today.getMonth(),
-      today.getDate(),
-    );
-
+    const endDateOnly = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+    const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const timeDiff = endDateOnly.getTime() - todayOnly.getTime();
     return Math.max(0, Math.ceil(timeDiff / (1000 * 60 * 60 * 24)));
   };
 
   const hasActiveSubscription = activeSubscription?.has_subscription;
-  const isOnHighestPlan =
-    hasActiveSubscription && subscriptionPlans && subscriptionPlans.length > 0
-      ? (() => {
-          const currentPlanAmount =
-            activeSubscription?.subscription?.amount || 0;
-          const highestPlanAmount = Math.max(
-            ...subscriptionPlans.map((plan) => plan.amount || 0),
-          );
-          return currentPlanAmount >= highestPlanAmount;
-        })()
-      : false;
 
   return (
     <div

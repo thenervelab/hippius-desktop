@@ -56,10 +56,16 @@ export function makeSnapshot(
             )
           : 0;
 
+  const isActive = files.some(
+    (f) => f.status === "pending" || f.status === "inProgress" || f.status === "encrypting" || f.status === "decrypting",
+  );
+  const hasActiveFiles = files.some((f) => f.status !== "completed" && f.status !== "error");
+  const isCompleted = !isActive && (completedFiles > 0 || failedFiles > 0);
+  const deletedCount = files.filter((f) => (f.action === "local_delete" || f.action === "remote_delete") && f.status === "completed").length;
+  const syncedCount = completedFiles - deletedCount;
+
   return {
-    isActive: files.some(
-      (f) => f.status === "pending" || f.status === "inProgress" || f.status === "encrypting" || f.status === "decrypting",
-    ),
+    isActive,
     overallPercent,
     progressBytes,
     bytesExpected,
@@ -75,6 +81,17 @@ export function makeSnapshot(
     startedAt: null,
     completedAt: null,
     files,
+    widgetState: isActive ? "active" : isCompleted ? "completed" : "idle",
+    widgetVisible: (isActive && files.length > 0) || isCompleted,
+    combinedProgressBytes: progressBytes,
+    combinedBytesExpected: bytesExpected,
+    deletedCount,
+    syncedCount,
+    actualTotal: files.length,
+    statusVariant: failedFiles > 0 && !isActive ? "error" : isCompleted && !hasActiveFiles ? "success" : "progress",
+    syncDirection: "mixed",
+    effectiveInProgress: isActive || hasActiveFiles,
+    effectiveCompleted: isCompleted && !hasActiveFiles,
     ...overrides,
   };
 }

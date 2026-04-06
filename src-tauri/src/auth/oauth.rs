@@ -1,0 +1,381 @@
+//! OAuth flow commands and PKCE state.
+//!
+//! Handles OAuth URL construction, PKCE state, token exchange,
+//! and session persistence. The frontend never stores OAuth state
+//! in localStorage/sessionStorage.
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+/// In-flight OAuth PKCE states, keyed by the `state` parameter.
+pub struct OAuthState {
+    pub pkce_states: Mutex<HashMap<String, PkceState>>,
+}
+
+impl Default for OAuthState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OAuthState {
+    pub fn new() -> Self {
+        Self {
+            pkce_states: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+use crate::auth::account_key::account_key;
+use crate::error::AppError;
+use serde::{Deserialize, Serialize};
+use tracing::{error, info};
+
+/// Transient PKCE state for an in-flight OAuth authorization.
+///
+/// Keyed by provider name in `OAuthState.pkce_states` to prevent
+/// cross-provider confusion when multiple flows overlap.
+pub struct PkceState {
+    provider: String,
+    #[expect(dead_code)] // stored for future nonce validation in complete_oauth_flow
+    nonce: String,
+}
+
+const API_BASE_URL: &str = "https://api.hippius.com";
+const CALLBACK_URL: &str = "https://console.hippius.com/auth/callback";
+
+fn api_base_url() -> String {
+    std::env::var("HIPPIUS_API_BASE_URL").unwrap_or_else(|_| API_BASE_URL.to_string())
+}
+
+/// The authorization URL and provider name returned to the frontend
+/// so it can open the browser to the correct OAuth endpoint.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthUrlResult {
+    pub url: String,
+    pub provider: String,
+}
+
+/// Parameters received from the OAuth callback deep-link.
+///
+/// Either `token` (direct grant) or `code` (authorization code) will be
+/// present, but never both. Error fields are populated when the provider
+/// rejects the request.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthCallbackParams {
+    pub token: Option<String>,
+    pub code: Option<String>,
+    pub error: Option<String>,
+    pub error_description: Option<String>,
+    pub user_id: Option<i64>,
+    pub username: Option<String>,
+    pub email: Option<String>,
+    pub substrate_address: Option<String>,
+}
+
+/// Authenticated session data returned to the frontend after a
+/// successful OAuth flow, also persisted in the local SQLite DB.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthSessionResult {
+    pub token: String,
+    pub user_id: i64,
+    pub username: String,
+    pub email: String,
+    pub substrate_address: String,
+    pub provider: String,
+    pub expires_at: String,
+}
+
+#[derive(Deserialize)]
+struct ExchangeResponse {
+    token: String,
+    user: ExchangeUser,
+}
+
+#[derive(Deserialize)]
+struct ExchangeUser {
+    id: i64,
+    username: String,
+    email: String,
+    substrate_address: Option<String>,
+}
+
+/// Build the OAuth authorization URL for the given provider and return it.
+/// The frontend opens this URL in the external browser.
+#[tauri::command]
+pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState>, provider: String) -> Result<OAuthUrlResult, AppError> {
+    info!(provider = %provider, "OAuth flow started");
+    let base = api_base_url();
+
+    let auth_path = match provider.as_str() {
+        "google" => "/accounts/google/login/",
+        "github" => "/accounts/github/login/",
+        "apple" => "/accounts/apple/login/",
+        _ => return Err(AppError::Validation(format!("Unsupported OAuth provider: {provider}"))),
+    };
+
+    let nonce = uuid::Uuid::new_v4().to_string();
+    {
+        let mut states = state.oauth.pkce_states.lock()?;
+        states.insert(
+            provider.clone(),
+            PkceState {
+                provider: provider.clone(),
+                nonce: nonce.clone(),
+            },
+        );
+    }
+
+    let callback = format!("{CALLBACK_URL}?source=desktop");
+    let next = format!("/get-token/?callback_url={}", crate::api::client::urlencoding(&callback));
+
+    let url = format!("{base}{auth_path}?next={}", crate::api::client::urlencoding(&next));
+
+    Ok(OAuthUrlResult { url, provider })
+}
+
+/// Parse an OAuth deep link URL and extract callback parameters.
+///
+/// Handles malformed URLs (extra `?` chars), JSON `session` parameter,
+/// and determines whether the URL is an OAuth callback at all. Replaces
+/// the 60+ lines of URL parsing that used to live in `LoginForm.tsx`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedDeepLink {
+    /// Whether this URL is an OAuth callback
+    pub is_callback: bool,
+    /// The callback path with query string (e.g. "/auth/callback?token=...&code=...")
+    pub callback_path: Option<String>,
+}
+
+#[tauri::command]
+pub fn parse_oauth_deep_link(url: String) -> Result<ParsedDeepLink, AppError> {
+    // Fix malformed URLs with multiple `?` characters (server workaround)
+    let fixed_url = if url.matches('?').count() > 1 {
+        let mut first = true;
+        url.chars()
+            .map(|c| {
+                if c == '?' {
+                    if first {
+                        first = false;
+                        '?'
+                    } else {
+                        '&'
+                    }
+                } else {
+                    c
+                }
+            })
+            .collect::<String>()
+    } else {
+        url.clone()
+    };
+
+    let url_obj = reqwest::Url::parse(&fixed_url).map_err(|e| AppError::Other(format!("Invalid deep link URL: {e}")))?;
+
+    // Check if this is an OAuth callback
+    if !url_obj.path().contains("/auth/callback") {
+        return Ok(ParsedDeepLink {
+            is_callback: false,
+            callback_path: None,
+        });
+    }
+
+    let params: std::collections::HashMap<String, String> = url_obj.query_pairs().into_owned().collect();
+
+    // Extract standard parameters
+    let mut out = std::collections::HashMap::new();
+    for key in &[
+        "token",
+        "code",
+        "username",
+        "email",
+        "user_id",
+        "substrate_address",
+        "error",
+        "error_description",
+    ] {
+        if let Some(val) = params.get(*key) {
+            out.insert(key.to_string(), val.clone());
+        }
+    }
+
+    // Handle JSON `session` parameter (fallback source for code, username, user_id)
+    if let Some(session_str) = params.get("session")
+        && let Ok(session_data) = serde_json::from_str::<serde_json::Value>(session_str)
+    {
+        if !out.contains_key("code")
+            && let Some(c) = session_data.get("code").and_then(|v| v.as_str())
+        {
+            out.insert("code".to_string(), c.to_string());
+        }
+        if !out.contains_key("username")
+            && let Some(u) = session_data.get("username").and_then(|v| v.as_str())
+        {
+            out.insert("username".to_string(), u.to_string());
+        }
+        if !out.contains_key("user_id")
+            && let Some(id) = session_data.get("id")
+        {
+            out.insert("user_id".to_string(), id.to_string().trim_matches('"').to_string());
+        }
+    }
+
+    // Build callback path with proper URL encoding via reqwest::Url
+    let mut builder = reqwest::Url::parse("http://localhost/auth/callback").map_err(|e| AppError::Other(format!("URL build error: {e}")))?;
+    for (k, v) in &out {
+        builder.query_pairs_mut().append_pair(k, v);
+    }
+    let callback_params = builder.query().unwrap_or("").to_string();
+
+    Ok(ParsedDeepLink {
+        is_callback: true,
+        callback_path: Some(format!("/auth/callback?{callback_params}")),
+    })
+}
+
+/// - If `code` is present, exchange it for a token.
+/// - Store the resulting session in the DB.
+/// Returns the session data for the frontend to update React state.
+#[tauri::command]
+#[expect(clippy::too_many_lines, reason = "OAuth protocol flow; splitting loses coherence")]
+pub async fn complete_oauth_flow(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    params: OAuthCallbackParams,
+) -> Result<OAuthSessionResult, AppError> {
+    if let Some(ref err) = params.error {
+        let desc = params.error_description.as_deref().unwrap_or("");
+        error!("OAuth error from provider: {err} {desc}");
+        return Err(AppError::Auth("Authentication failed".into()));
+    }
+
+    let (token, user_id, username, email, substrate_address) = if let Some(ref t) = params.token {
+        {
+            let mut states = state.oauth.pkce_states.lock()?;
+            states.clear();
+        }
+        (
+            t.clone(),
+            params.user_id.unwrap_or(0),
+            params.username.clone().unwrap_or_default(),
+            params.email.clone().unwrap_or_default(),
+            params.substrate_address.clone().unwrap_or_default(),
+        )
+    } else if let Some(ref code) = params.code {
+        let provider = {
+            let states = state.oauth.pkce_states.lock()?;
+            if states.is_empty() {
+                return Err(AppError::Auth("No pending OAuth flow found".into()));
+            }
+            if states.len() > 1 {
+                return Err(AppError::Auth("Multiple pending OAuth flows — cannot determine provider".into()));
+            }
+            states
+                .values()
+                .next()
+                .map(|s| s.provider.clone())
+                .ok_or(AppError::Auth("No pending OAuth flow found".into()))?
+        };
+
+        let base = api_base_url();
+        let resp = state
+            .api_client
+            .post(format!("{base}/api/auth/exchange/"))
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&serde_json::json!({
+                "code": code,
+                "code_verifier": provider,
+            }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::Api { status, body });
+        }
+
+        let data: ExchangeResponse = resp.json().await?;
+
+        {
+            let mut states = state.oauth.pkce_states.lock()?;
+            states.remove(&provider);
+        }
+
+        (
+            data.token,
+            data.user.id,
+            data.user.username,
+            data.user.email,
+            data.user.substrate_address.unwrap_or_default(),
+        )
+    } else {
+        return Err(AppError::Validation("Missing both token and authorization code".into()));
+    };
+
+    let expires_at = {
+        let now = chrono::Utc::now();
+        let expiry = now + chrono::Duration::days(30);
+        expiry.to_rfc3339()
+    };
+    let token_expiry_ms = chrono::Utc::now().timestamp_millis() + 30 * 24 * 60 * 60 * 1000;
+
+    let provider_name = params.token.as_ref().map_or("oauth", |_| "oauth").to_string();
+
+    if !substrate_address.is_empty() {
+        let pool = state.pool()?;
+        let owner = account_key(&substrate_address);
+
+        sqlx::query(
+            "INSERT INTO auth_session (owner, auth_token, token_expiry, user_id, username, provider, substrate_address, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+             ON CONFLICT(owner) DO UPDATE SET
+               auth_token = excluded.auth_token,
+               token_expiry = excluded.token_expiry,
+               user_id = excluded.user_id,
+               username = excluded.username,
+               provider = excluded.provider,
+               substrate_address = excluded.substrate_address,
+               updated_at = datetime('now')",
+        )
+        .bind(&owner)
+        .bind(&token)
+        .bind(token_expiry_ms)
+        .bind(user_id)
+        .bind(&username)
+        .bind(&provider_name)
+        .bind(&substrate_address)
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO objectstore_auth_scoped (owner, temp_auth_key)
+             VALUES (?, ?)
+             ON CONFLICT(owner) DO UPDATE SET temp_auth_key = excluded.temp_auth_key",
+        )
+        .bind(&owner)
+        .bind(&token)
+        .execute(pool)
+        .await?;
+    }
+
+    info!(
+        provider = %provider_name,
+        address = %substrate_address,
+        "OAuth flow completed"
+    );
+
+    Ok(OAuthSessionResult {
+        token,
+        user_id,
+        username,
+        email,
+        substrate_address,
+        provider: provider_name,
+        expires_at,
+    })
+}

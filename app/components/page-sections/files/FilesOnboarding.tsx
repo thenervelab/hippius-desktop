@@ -5,9 +5,8 @@ import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
 import { AddLocalFolderDialog } from "@/components/page-sections/settings/AddLocalFolderDialog";
-import { getAllSyncPaths, removeSyncPath } from "@/app/lib/utils/syncPathUtils";
+import { removeSyncPath } from "@/app/lib/utils/syncPathUtils";
 import {
-  listRemoteFolders,
   restoreRemoteFolders,
   deleteRemoteFolder,
 } from "@/app/lib/utils/restoreUtils";
@@ -102,43 +101,41 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
     try {
       setIsLoading(true);
 
-      const [syncPaths, remoteList] = await Promise.all([
-        getAllSyncPaths(polkadotAddress).catch((err: unknown) => { console.warn("getAllSyncPaths failed:", err); return []; }),
-        listRemoteFolders(polkadotAddress).catch((err: unknown) => { console.warn("listRemoteFolders failed:", err); return []; }),
-      ]);
+      // Single Rust call: fetches local + remote folders, joins data, determines status
+      const result = await invoke<{
+        local: Array<{
+          id: string;
+          folderName: string;
+          localPath: string;
+          status: string;
+          fileCount: number | null;
+          totalBytes: number | null;
+          lastModified: number | null;
+        }>;
+        remote: Array<{
+          folderName: string;
+          deviceName: string;
+          fileCount: number;
+          totalBytes: number;
+          lastModified: number;
+        }>;
+      }>("get_sync_folders_with_stats", { accountId: polkadotAddress });
 
-      const localFolders: SyncFolder[] = await Promise.all(
-        syncPaths.map(async (syncPath, index) => {
-          const folderName =
-            syncPath.path.split(/[\\\u002f]/).filter(Boolean).pop() ||
-            syncPath.label;
-          const label = syncPath.label || `sync-folder-${index}`;
-          const isActive = await invoke<boolean>("is_drive_active", {
-            label,
-          }).catch(() => true);
+      const localFolders: SyncFolder[] = result.local.map((f) => ({
+        id: f.id,
+        folderName: f.folderName,
+        localPath: f.localPath,
+        isLocal: true,
+        status: f.status as "syncing" | "paused",
+      }));
 
-          return {
-            id: label,
-            folderName,
-            localPath: syncPath.path,
-            isLocal: true,
-            status: isActive ? ("syncing" as const) : ("paused" as const),
-          };
-        })
-      );
-
-      const localLabelSet = new Set(localFolders.map((f) => f.id));
-
-      const remoteFoldersData: RemoteFolder[] = remoteList
-        .filter((r) => !localLabelSet.has(r.label))
-        .map((r) => ({
-          folderName: r.label,
-          deviceName: r.device_name || "Unknown Device",
-          fileCount: r.file_count,
-          totalBytes: r.total_bytes,
-          lastModified: (r.updated_at || r.created_at) * 1000,
-        }))
-        .sort((a, b) => b.lastModified - a.lastModified);
+      const remoteFoldersData: RemoteFolder[] = result.remote.map((f) => ({
+        folderName: f.folderName,
+        deviceName: f.deviceName,
+        fileCount: f.fileCount,
+        totalBytes: f.totalBytes,
+        lastModified: f.lastModified,
+      }));
 
       setSyncFolders(localFolders);
       setRemoteFolders(remoteFoldersData);
@@ -412,13 +409,8 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
     setIsDeletingServer(true);
     try {
       const label = deleteDialog.folderId ?? deleteDialog.folderName;
+      // delete_remote_folder also stops the drive and removes the sync path if local
       const result = await deleteRemoteFolder(polkadotAddress, label);
-
-      if (deleteDialog.folderId) {
-        await removeSyncPath(polkadotAddress, deleteDialog.folderId).catch(
-          () => {}
-        );
-      }
 
       toast.success(
         `Folder deleted from server (${result.files_deleted} file${result.files_deleted !== 1 ? "s" : ""} removed)`

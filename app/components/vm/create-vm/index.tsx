@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { getFlavorCategory } from "@/lib/utils/vmUtils";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 import VMTemplateCard, { VMTemplate } from "./vm-template-card";
@@ -40,21 +41,7 @@ const CreateVM: React.FC = () => {
   // Transform flavors API data to template format with categories
   const categorizedTemplates =
     flavors?.map((flavor) => {
-      const flavorName = flavor.name.toLowerCase();
-      let category = "all";
-
-      // Categorize based on flavor name
-      if (flavorName === "spark" || flavorName === "pulse") {
-        category = "starter";
-      } else if (flavorName === "cipher" || flavorName === "vault") {
-        category = "standard";
-      } else if (
-        flavorName === "fortress" ||
-        flavorName === "titan" ||
-        flavorName === "sovereign"
-      ) {
-        category = "high-capacity";
-      }
+      const category = getFlavorCategory(flavor.name);
 
       return {
         id: String(flavor.id),

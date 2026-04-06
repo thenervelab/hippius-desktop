@@ -1,9 +1,14 @@
 export const getFilePartsFromFileName = (name: string) => {
-    const parts = name.split(".");
-    const fileName = parts[0];
-    const fileFormat = parts[parts.length - 1];
+    // Handle dotfiles like ".gitignore" — no extension
+    if (name.startsWith(".") && !name.slice(1).includes(".")) {
+        return { fileName: name, fileFormat: "" };
+    }
+    const lastDot = name.lastIndexOf(".");
+    if (lastDot <= 0) {
+        return { fileName: name, fileFormat: "" };
+    }
     return {
-        fileName,
-        fileFormat,
+        fileName: name.slice(0, lastDot),
+        fileFormat: name.slice(lastDot + 1),
     };
 };

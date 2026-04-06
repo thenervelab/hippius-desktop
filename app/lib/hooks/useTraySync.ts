@@ -6,7 +6,6 @@ import {
   PredefinedMenuItem,
 } from "@tauri-apps/api/menu";
 import { useEffect } from "react";
-import { logger } from "@/lib/utils/logger";
 import { invoke } from "@tauri-apps/api/core";
 import { resolveResource } from "@tauri-apps/api/path";
 import {
@@ -26,6 +25,7 @@ import { useAtom, useSetAtom } from "jotai";
 import { vpnConnectedAtom } from "@/components/dashboard-title-wrapper/vpn-menu/vpnAtoms";
 import type { SyncSnapshot } from "../types/syncSnapshot";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
+import { errorMessage } from "@/app/lib/utils/errorUtils";
 
 /* ─ IDs ───────────────────────────────────────────────────────── */
 const TRAY_ID = "hippius-tray";
@@ -73,185 +73,61 @@ interface VpnStatus {
   is_enabled: boolean;
 }
 
-interface OAuthSession {
-  token: string;
-  userId: string;
-  username: string;
-  substrateAddress: string;
-  provider: string;
-  expiresAt: string;
-}
-
-interface CreditsApiResponse {
-  balance: string; // String representation of the credit balance
-}
-
 const MINIMUM_CREDITS = 10;
-const OAUTH_SESSION_KEY = "hippius_oauth_session";
-const CREDITS_CACHE_DURATION = 30000; // Cache credits for 30 seconds
 
-// Cache for credits to avoid repeated API calls
-let creditsCache: {
-  credits: number;
-  timestamp: number;
-  isLoading: boolean;
-  error?: string;
-} | null = null;
-
-// Cache for async login check
-let loginStatusCache: { loggedIn: boolean; timestamp: number } | null = null;
-const LOGIN_STATUS_CACHE_DURATION = 5000; // 5 seconds
+// Tray data cache — refreshed via get_tray_menu_data Rust command
+let trayDataCache: { loggedIn: boolean; credits: number | null; substrateAddress: string | null; timestamp: number } | null = null;
+const TRAY_CACHE_DURATION = 5000; // 5 seconds
 
 /**
- * Immediately invalidate the login status cache so the next
- * `isUserLoggedIn()` / `refreshLoginStatus()` call re-checks.
+ * Immediately invalidate the tray data cache so the next check re-queries Rust.
  * Call this on logout so the VPN watcher picks up the change instantly.
  */
 export function clearLoginStatusCache() {
-  loginStatusCache = null;
+  trayDataCache = null;
 }
 
-// Helper to check if user is logged in (synchronous, uses cache)
-function isUserLoggedIn(): boolean {
-  if (typeof window === "undefined") return false;
-
-  // Use cache if fresh
-  if (loginStatusCache && Date.now() - loginStatusCache.timestamp < LOGIN_STATUS_CACHE_DURATION) {
-    return loginStatusCache.loggedIn;
+/** Fetch tray data from Rust (login status + credits), with caching. */
+async function refreshTrayData(): Promise<{ loggedIn: boolean; credits: number | null; substrateAddress: string | null }> {
+  if (trayDataCache && Date.now() - trayDataCache.timestamp < TRAY_CACHE_DURATION) {
+    return trayDataCache;
   }
-
   try {
-    // Check localStorage for OAuth session
-    const storedSession = localStorage.getItem(OAUTH_SESSION_KEY);
-    const storedExpiry = localStorage.getItem("hippius_oauth_session_expiry");
-
-    if (storedSession && storedExpiry) {
-      const expiryTime = new Date(storedExpiry).getTime();
-      if (Date.now() < expiryTime) {
-        const session: OAuthSession = JSON.parse(storedSession);
-        if (session.token) {
-          loginStatusCache = { loggedIn: true, timestamp: Date.now() };
-          return true;
-        }
-      } else {
-        logger.debug("[Tray] Session expired");
-      }
-    }
-
-    // Fall back to cached result while async check runs
-    if (loginStatusCache) return loginStatusCache.loggedIn;
-    return false;
-  } catch (error) {
-    console.error("[Tray] Failed to check login status:", error);
-    return false;
-  }
-}
-
-// Async login check that also queries Rust backend (for mnemonic logins
-// that don't store an OAuth session in localStorage).
-async function refreshLoginStatus(): Promise<boolean> {
-  // First check localStorage (fast path)
-  if (isUserLoggedIn()) return true;
-
-  // Fall back to Rust backend session check
-  try {
-    const session = await invoke<{ authToken?: string | null; tokenExpiry?: number | null } | null>("get_last_auth_session");
-    if (session?.authToken) {
-      const isValid = !session.tokenExpiry || session.tokenExpiry > Date.now();
-      loginStatusCache = { loggedIn: isValid, timestamp: Date.now() };
-      return isValid;
-    }
+    const data = await invoke<{ loggedIn: boolean; credits: number | null; substrateAddress: string | null }>("get_tray_menu_data");
+    trayDataCache = { ...data, timestamp: Date.now() };
+    return data;
   } catch {
-    // DB not ready yet — ignore
-  }
-
-  loginStatusCache = { loggedIn: false, timestamp: Date.now() };
-  return false;
-}
-
-// Helper to fetch credits via Rust backend with caching
-async function fetchUserCredits(forceRefresh = false): Promise<{
-  credits: number;
-  isLoading: boolean;
-  error?: string;
-}> {
-  // Return cached result if available and not expired
-  if (!forceRefresh && creditsCache) {
-    const now = Date.now();
-    if (now - creditsCache.timestamp < CREDITS_CACHE_DURATION) {
-      return {
-        credits: creditsCache.credits,
-        isLoading: creditsCache.isLoading,
-        error: creditsCache.error,
-      };
-    }
-  }
-
-  try {
-    // Get substrate address from localStorage session
-    const storedSession = localStorage.getItem(OAUTH_SESSION_KEY);
-    if (!storedSession) {
-      const result = { credits: 0, isLoading: true, error: "Loading credits" };
-      creditsCache = { ...result, timestamp: Date.now() };
-      return result;
-    }
-    const session: OAuthSession = JSON.parse(storedSession);
-    if (!session.substrateAddress) {
-      const result = { credits: 0, isLoading: true, error: "Loading credits" };
-      creditsCache = { ...result, timestamp: Date.now() };
-      return result;
-    }
-
-    const data = await invoke<CreditsApiResponse>("get_user_credits_balance", {
-      accountId: session.substrateAddress,
-    });
-    const balanceStr = data.balance || "0";
-    const credits = parseFloat(balanceStr);
-
-    const result = { credits, isLoading: false };
-    creditsCache = { ...result, timestamp: Date.now() };
-    return result;
-  } catch (error) {
-    console.error("[Tray] Failed to fetch credits:", error);
-    const result = { credits: 0, isLoading: true, error: "Loading credits" };
-    creditsCache = { ...result, timestamp: Date.now() };
-    return result;
+    return { loggedIn: false, credits: null, substrateAddress: null };
   }
 }
 
-// Helper to check if user has sufficient credits
+/** Synchronous login check using cached data. */
+function isUserLoggedIn(): boolean {
+  return trayDataCache?.loggedIn ?? false;
+}
+
+/** Async login check via Rust. */
+async function refreshLoginStatus(): Promise<boolean> {
+  const data = await refreshTrayData();
+  return data.loggedIn;
+}
+
+/** Check if user has sufficient credits. */
 async function checkUserCredits(): Promise<{
   hasEnough: boolean;
   isLoading: boolean;
   error?: string;
   notLoggedIn?: boolean;
 }> {
-  // First check if user is logged in
-  if (!isUserLoggedIn()) {
-    return {
-      hasEnough: false,
-      isLoading: false,
-      notLoggedIn: true,
-      error: "Login required",
-    };
+  const data = await refreshTrayData();
+  if (!data.loggedIn) {
+    return { hasEnough: false, isLoading: false, notLoggedIn: true, error: "Login required" };
   }
-
-  const result = await fetchUserCredits();
-
-  if (result.isLoading) {
-    return {
-      hasEnough: false,
-      isLoading: true,
-      error: result.error || "Loading credits",
-    };
-  }
-
-  const hasEnough = result.credits >= MINIMUM_CREDITS;
-
+  const credits = data.credits ?? 0;
   return {
-    hasEnough,
+    hasEnough: credits >= MINIMUM_CREDITS,
     isLoading: false,
-    error: hasEnough ? undefined : "Insufficient credits",
+    error: credits >= MINIMUM_CREDITS ? undefined : "Insufficient credits",
   };
 }
 
@@ -686,73 +562,6 @@ async function setTrayIconSyncing(
   }
 }
 
-/* ─ Public: keep your existing percent label behavior ─────────── */
-async function updateTraySyncPercent(percent: number | null) {
-  // Use the same mutex as updateTraySyncLabel
-  if (isUpdatingTrayLabel) {
-    logger.debug("[TraySync] Skipping percent update - already in progress");
-    return;
-  }
-  isUpdatingTrayLabel = true;
-  
-  try {
-    const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
-    if (!menu) {
-      isUpdatingTrayLabel = false;
-      return;
-    }
-
-    const items = await menu.items();
-
-    // ALWAYS search for existing sync items in the menu
-    const existingItems = items.filter((i) => i.id === SYNC_ID);
-    if (existingItems.length > 1) {
-      for (let i = 1; i < existingItems.length; i++) {
-        await menu.remove(existingItems[i]);
-      }
-    }
-    syncItem = existingItems[0] as MenuItem | null;
-
-    // If percent is null, we want to remove the sync item
-    if (percent === null) {
-      if (syncItem) {
-        await menu.remove(syncItem);
-        syncItem = null;
-      }
-      await setTrayIconSyncing(false, false);
-      return;
-    }
-
-    const isCompleted = percent >= 100;
-    
-    let label: string;
-    if (isCompleted) {
-      label = "✓ Sync: Completed";
-    } else {
-      label = `⟳ Sync: ${Math.round(percent)}%`;
-    }
-
-    // If sync item doesn't exist yet, create it and add it to the menu
-    if (!syncItem) {
-      syncItem = await MenuItem.new({
-        id: SYNC_ID,
-        text: label,
-        enabled: false,
-      });
-
-      // Insert at position 0 — sync info goes at the very top of the menu
-      await menu.insert(syncItem, 0);
-    } else {
-      await syncItem.setText(label);
-    }
-
-    // Updated to pass both syncing and completed status
-    await setTrayIconSyncing(percent < 100, percent >= 100);
-  } finally {
-    isUpdatingTrayLabel = false;
-  }
-}
-
 /* ─ Update tray sync label (simpler version without percentage) ─── */
 // Mutex to prevent concurrent updates causing duplicates
 let isUpdatingTrayLabel = false;
@@ -861,13 +670,6 @@ async function clearTrayFileEntries() {
   }
 }
 
-
-// Deprecated: Keep for backwards compatibility but don't use internally
-export async function setTraySyncPercent(percent: number | null) {
-  // logTrayAction("setTraySyncPercent is deprecated, use syncPercentAtom instead", { percent });
-  // Just forward to the internal implementation for now
-  await updateTraySyncPercent(percent);
-}
 
 /* ─ Login status watcher (updates tray menu on login/logout) ──── */
 let vpnStateSetter: ((enabled: boolean) => void) | null = null;
@@ -1184,7 +986,7 @@ function startSyncActivityWatcher() {
         syncDeleteItem = null;
       }
     } catch (error) {
-      console.error("[TraySync] Error updating sync summary:", error);
+      console.error("[TraySync] Error updating sync summary:", errorMessage(error));
     }
   };
 

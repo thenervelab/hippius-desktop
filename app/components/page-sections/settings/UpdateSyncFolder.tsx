@@ -89,34 +89,26 @@ const UpdateSyncFolder: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [polkadotAddress]);
 
-  // While stopping, poll until the drive is actually dropped
+  // When stopping, wait for the drive to actually drop (Rust handles the polling)
   useEffect(() => {
     if (syncEngineStatus !== "stopping") return;
 
     let cancelled = false;
-    const poll = async () => {
-      const start = Date.now();
-      while (!cancelled) {
-        await new Promise((r) => setTimeout(r, 1000));
-        if (Date.now() - start > 30_000) {
+    (async () => {
+      try {
+        await invoke("stop_drive_and_wait", { label: "default", timeoutMs: 30000 });
+        if (!cancelled) {
+          toast.success("Syncing stopped");
+          setSyncEngineStatus("stopped");
+          triggerSyncPathRefresh((prev) => prev + 1);
+        }
+      } catch {
+        if (!cancelled) {
           toast.error("Timed out waiting for sync to stop");
           setSyncEngineStatus("stopped");
-          break;
-        }
-        try {
-          const active = await invoke<boolean>("is_drive_active");
-          if (!active && !cancelled) {
-            toast.success("Syncing stopped");
-            setSyncEngineStatus("stopped");
-            triggerSyncPathRefresh((prev) => prev + 1);
-            break;
-          }
-        } catch {
-          // Ignore transient failures
         }
       }
-    };
-    poll();
+    })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncEngineStatus]);
@@ -147,13 +139,14 @@ const UpdateSyncFolder: React.FC = () => {
         localStorage.removeItem("hippius_sync_stopped");
         setSyncEngineStatus("active");
 
-        // Fire off stop + re-init in background (don't block UI)
+        // Single Rust call: stops old drive, sets path, initializes new drive
         const mnemonic = (await getMnemonic()) ?? undefined;
-        invoke("stop_sync").catch((err: unknown) => console.warn("[UpdateSyncFolder] stop_sync failed:", err)).then(() =>
-          tryInitializeSync(polkadotAddress!, "default", mnemonic ?? undefined).catch((err) =>
-            console.error("[UpdateSyncFolder] Background sync init failed:", err)
-          )
-        );
+        invoke("change_sync_folder", {
+          accountId: polkadotAddress,
+          newPath: path,
+          label: "default",
+          mnemonic: mnemonic ?? null,
+        }).catch((err) => console.error("[UpdateSyncFolder] change_sync_folder failed:", err));
       }
     } catch (err) {
       console.error("Failed to update sync path:", err);

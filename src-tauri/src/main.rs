@@ -10,82 +10,95 @@
 //! **Note**: `lib.rs` in this crate is a vestigial template file — this `main.rs`
 //! is the actual application entry point.
 
-mod api_client;
-mod api_client_logic;
+mod api;
 mod app_state;
-mod auth_service;
-mod block_subscription;
-mod builder_blocks;
-mod commands;
-mod constants;
+pub mod auth;
+pub mod billing;
+pub mod blockchain;
 pub mod error;
-mod hcfs_drive;
-mod macos_bookmarks;
-mod substrate_client;
-mod sync_engine;
-mod sync_events;
-mod sync_logic;
-mod sync_progress;
-mod sync_shared;
+pub mod infra;
+pub mod nebula;
+pub mod notifications;
+pub mod sync;
 mod utils;
 
-use crate::commands::sync_status::{app_close, get_sync_activity, get_sync_engine_health, get_sync_status};
-use crate::commands::syncing::{
-    delete_remote_folder, get_device_name, get_drive_mnemonic, initialize_sync, is_drive_active, list_remote_folders, pause_drive,
-    persist_master_mnemonic, reset_sync_data, restore_remote_folders, resume_drive, set_device_name, stop_drive, stop_sync, trigger_sync_now,
-};
-use crate::sync_progress::{
-    sp_clear_all_data, sp_complete_pending_files, sp_complete_session, sp_get_overall_progress, sp_get_snapshot, sp_mark_all_pending_files_as_failed,
-    sp_mark_file_error, sp_mark_pending_files_as_failed, sp_merge_into_session, sp_record_deleted_file, sp_remove_files_for_label, sp_start_session,
-    sp_stop_session, sp_update_file_progress,
-};
-use block_subscription::{get_current_block_number, start_block_subscription, stop_block_subscription};
-use builder_blocks::{on_window_event::on_window_event, setup::setup};
-use commands::accounts::{export_app_data, get_all_subaccount_addresses, import_app_data, reset_app};
-use commands::auth::{
+use crate::auth::accounts::{export_app_data, get_all_subaccount_addresses, import_app_data, reset_app};
+use crate::auth::contacts::{add_contact, delete_contact, get_contacts, update_contact};
+use crate::auth::login::{
     auth_logout, generate_mnemonic, get_eth_address, get_polkadot_address, login_with_mnemonic, refresh_auth_token, set_passcode,
     unlock_with_passcode, validate_mnemonic,
 };
-use commands::billing::{
-    create_subscription, get_active_subscription, get_add_credit_events, get_balance_transfers, get_billing_transactions, get_customer_portal_url,
-    get_deposit_address, get_file_nodes, get_files_count, get_files_size, get_indexer_credits, get_marketplace_credits, get_node_locations,
-    get_subscription_plans, get_system_balance_history, get_user_credits_balance,
+use crate::auth::oauth::{complete_oauth_flow, parse_oauth_deep_link, start_oauth_flow};
+use crate::auth::session::{
+    clear_auth_session, clear_wallet, get_auth_session, get_auth_token, get_last_auth_session, get_platform_info, get_tray_menu_data, get_wallet,
+    has_wallet, is_token_valid, logout_full, restore_session, save_api_token_command, save_auth_session, save_wallet, update_logout_time,
 };
-use commands::blockchain::{
-    from_plancks, get_account_balance, get_block_timestamp, get_explorer_url, get_referral_links, get_staking_info, stake_bond, stake_claim_rewards,
-    stake_unbond, stake_withdraw_unbonded, to_plancks, transfer_balance, validate_address,
+use crate::auth::ssh_keys::{create_ssh_key, delete_ssh_key, list_ssh_keys};
+use crate::billing::charts::{
+    calculate_storage_capacity, calculate_storage_cost, format_balance_chart, format_credits_chart, format_storage_chart,
+    transform_marketplace_credits,
 };
-use commands::chart_formatting::{
-    calculate_storage_cost, format_balance_chart, format_credits_chart, format_storage_chart, transform_marketplace_credits,
+use crate::billing::credits::{check_sync_eligibility, get_credits_planck, get_user_credits_balance};
+use crate::billing::queries::{
+    get_add_credit_events, get_add_credit_events_ui, get_balance_transfers, get_balance_transfers_ui, get_billing_transactions,
+    get_billing_transactions_ui, get_credits_ui, get_deposit_address, get_file_nodes, get_files_count, get_files_size, get_indexer_credits,
+    get_marketplace_credits, get_node_locations, get_system_balance_history, get_system_balance_ui,
 };
-use commands::file_commands::{
-    add_file, add_folder, allow_asset_scope, export_file, get_synced_file_metadata, list_sync_folder, remove_file, resolve_file_path,
+use crate::billing::subscriptions::{
+    create_subscription, get_active_subscription, get_customer_portal_url, get_subscription_data, get_subscription_plans,
 };
-use commands::local_db::{
-    add_contact, add_notification, clear_all_notifications, credit_already_notified, delete_all_notifications, delete_contact, delete_notification,
-    delete_system_notification_by_version, get_contacts, get_is_above_half_credit, get_last_deleted_low_credit_time,
-    get_local_enabled_notification_types, get_local_notification_preferences, get_unread_count, get_user_preference,
-    has_active_low_credit_notification, hippius_version_notification_exists, is_first_time, is_onboarding_done, list_notifications,
-    low_credit_subtype_exists, mark_all_notifications_read, mark_first_time_seen, mark_notification_read, mark_notification_unread,
-    save_user_preference, set_onboarding_done, update_contact, update_is_above_half_credit, update_local_notification_preferences,
-};
-use commands::notifications::{get_notification_settings, update_notification_settings};
-use commands::oauth::{complete_oauth_flow, start_oauth_flow};
-use commands::remote_browse::{download_remote_file, list_remote_folder_files};
-use commands::session::{
-    clear_auth_session, clear_wallet, get_auth_session, get_auth_token, get_last_auth_session, get_wallet, has_wallet, is_token_valid,
-    save_api_token_command, save_auth_session, save_wallet, update_logout_time,
-};
-use commands::ssh_keys::{create_ssh_key, delete_ssh_key, list_ssh_keys};
-use commands::substrate_tx::{
-    get_all_sync_paths, get_sync_path, get_wss_endpoint, remove_sync_path, set_sync_path, transfer_balance_tauri, update_wss_endpoint_command,
-};
-use commands::support::{create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message, update_support_ticket};
-use commands::vm::{
+use crate::blockchain::client::WSS_ENDPOINT;
+use crate::blockchain::convert::{from_plancks, get_explorer_url, to_plancks};
+use crate::blockchain::queries::{get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address};
+use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, transfer_balance_tauri, update_wss_endpoint_command};
+use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded};
+use crate::blockchain::subscription::{get_current_block_number, start_block_subscription, stop_block_subscription};
+use crate::blockchain::transfers::{transfer_balance, validate_and_convert_transfer, validate_send_balance};
+use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
-use tauri::{Builder, Emitter, Manager};
-use tracing::{debug, info};
+use crate::notifications::credits::{
+    check_low_credit_notification, create_credit_notifications, create_sync_notification, get_is_above_half_credit, is_first_time,
+    mark_first_time_seen, process_credit_events, update_is_above_half_credit,
+};
+use crate::notifications::crud::{
+    add_notification, clear_all_notifications, credit_already_notified, delete_all_notifications, delete_notification,
+    delete_system_notification_by_version, get_last_deleted_low_credit_time, get_local_enabled_notification_types,
+    get_local_notification_preferences, get_unread_count, has_active_low_credit_notification, hippius_version_notification_exists,
+    list_notifications, low_credit_subtype_exists, mark_all_notifications_read, mark_notification_read, mark_notification_unread,
+    update_local_notification_preferences,
+};
+use crate::notifications::settings::{get_notification_settings, update_notification_settings};
+use crate::sync::control::{is_drive_active, stop_drive_and_wait, trigger_sync_now};
+use crate::sync::device::{get_device_name, set_device_name};
+use crate::sync::files::{
+    add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, get_recent_files, get_synced_file_metadata, get_user_files,
+    list_sync_folder, remove_file, resolve_file_info, resolve_file_path,
+};
+use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
+use crate::sync::lifecycle::{
+    add_local_sync_folder, auto_init_sync, change_sync_folder, initialize_sync, pause_drive, reset_sync_data, resume_drive, setup_and_init_sync,
+    stop_drive, stop_sync,
+};
+use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic, persist_master_mnemonic};
+use crate::sync::paths::{generate_unique_label, get_all_sync_paths, get_sync_path, remove_sync_path, set_sync_path};
+use crate::sync::progress::{
+    sp_clear_all_data, sp_complete_pending_files, sp_complete_session, sp_dismiss_sync_widget, sp_get_overall_progress, sp_get_snapshot,
+    sp_mark_all_pending_files_as_failed, sp_mark_file_error, sp_mark_pending_files_as_failed, sp_merge_into_session, sp_record_deleted_file,
+    sp_remove_files_for_label, sp_start_session, sp_stop_session, sp_update_file_progress,
+};
+use crate::sync::remote::{download_remote_file, list_remote_folder_files};
+use crate::sync::status::{app_close, get_sync_activity, get_sync_activity_rows, get_sync_engine_health, get_sync_status};
+use crate::utils::preferences::{get_user_preference, is_onboarding_done, save_user_preference, set_onboarding_done};
+use crate::utils::support::{
+    create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message, update_support_ticket, upload_ticket_attachment,
+};
+use sqlx::Row;
+use sqlx::sqlite::SqlitePool;
+use tauri::{Builder, Emitter, Manager, Wry, path::BaseDirectory};
+#[cfg(target_os = "linux")]
+use tauri_plugin_deep_link::DeepLinkExt;
+use tracing::{debug, error, info, warn};
 
 /// Load environment variables from `.env` file(s). Tries both the working
 /// directory and the `CARGO_MANIFEST_DIR` path (for development builds).
@@ -149,84 +162,100 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             // Sync control (hcfs-client)
             initialize_sync,
+            add_local_sync_folder,
+            setup_and_init_sync,
             stop_sync,
             stop_drive,
             pause_drive,
             resume_drive,
             reset_sync_data,
             trigger_sync_now,
+            stop_drive_and_wait,
+            change_sync_folder,
+            auto_init_sync,
+            get_sync_folders_with_stats,
             is_drive_active,
             // Sync status
             get_sync_status,
             get_sync_activity,
+            get_sync_activity_rows,
             get_sync_engine_health,
             // File operations
             add_file,
+            add_files,
             add_folder,
             remove_file,
+            delete_files,
             list_sync_folder,
             get_synced_file_metadata,
+            get_recent_files,
+            get_user_files,
             export_file,
             resolve_file_path,
+            resolve_file_info,
             allow_asset_scope,
             // App lifecycle
             app_close,
             // Substrate / blockchain
             get_sync_path,
             get_all_sync_paths,
+            generate_unique_label,
             set_sync_path,
             remove_sync_path,
             transfer_balance_tauri,
             get_wss_endpoint,
             update_wss_endpoint_command,
+            test_rpc_endpoint_command,
             // Account management
             reset_app,
             get_all_subaccount_addresses,
             import_app_data,
             export_app_data,
             // VPN / Nebula
-            utils::nebula::get_nebula_version,
-            utils::nebula::check_nebula_update,
-            utils::nebula::get_nebula_ip,
-            utils::nebula::get_nebula_stats,
-            utils::nebula::get_nebula_status,
-            utils::nebula::get_nebula_binary_installed_status,
-            commands::vpn_enabled::get_vpn_status,
-            commands::vpn_enabled::toggle_vpn_status,
-            commands::vpn_enabled::get_autoconnect_status,
-            commands::vpn_enabled::toggle_autoconnect_status,
-            utils::nebula::check_nebula_requirements,
-            utils::nebula::download_nebula,
-            utils::nebula::install_nebula,
-            utils::nebula::verify_nebula,
-            utils::nebula::ensure_vpn_permissions,
-            utils::nebula::finish_setup,
-            utils::nebula::start_nebula,
+            crate::nebula::manager::get_nebula_version,
+            crate::nebula::manager::check_nebula_update,
+            crate::nebula::manager::get_nebula_ip,
+            crate::nebula::manager::get_nebula_stats,
+            crate::nebula::manager::get_nebula_status,
+            crate::nebula::manager::get_nebula_binary_installed_status,
+            crate::nebula::vpn::get_vpn_status,
+            crate::nebula::vpn::toggle_vpn_status,
+            crate::nebula::vpn::get_autoconnect_status,
+            crate::nebula::vpn::toggle_autoconnect_status,
+            crate::nebula::manager::check_nebula_requirements,
+            crate::nebula::manager::download_nebula,
+            crate::nebula::manager::install_nebula,
+            crate::nebula::manager::verify_nebula,
+            crate::nebula::manager::ensure_vpn_permissions,
+            crate::nebula::manager::finish_setup,
+            crate::nebula::manager::start_nebula,
             // Indexer
-            commands::indexer::get_indexer_api_key,
+            crate::api::indexer::get_indexer_api_key,
             // API token persistence
             save_api_token_command,
             // HCFS mnemonic management
             get_drive_mnemonic,
+            ensure_sync_mnemonic,
             persist_master_mnemonic,
             // Billing auth (Ethereum challenge-response)
-            commands::billing_auth::billing_auth,
+            crate::auth::billing_auth::billing_auth,
+            crate::auth::billing_auth::ensure_billing_auth,
             // HCFS config commands
-            commands::syncing::save_hcfs_config,
-            commands::syncing::get_hcfs_config,
-            commands::syncing::update_hcfs_server_url,
-            commands::syncing::update_sync_bearer_token,
+            crate::sync::config::save_hcfs_config,
+            crate::sync::config::get_hcfs_config,
+            crate::sync::config::update_hcfs_server_url,
             // Selective sync (exclusion patterns)
-            commands::selective_sync::list_exclude_patterns,
-            commands::selective_sync::add_exclude_pattern,
-            commands::selective_sync::remove_exclude_pattern,
-            commands::selective_sync::is_file_excluded,
+            crate::sync::selective::list_exclude_patterns,
+            crate::sync::selective::add_exclude_pattern,
+            crate::sync::selective::remove_exclude_pattern,
+            crate::sync::selective::is_file_excluded,
+            crate::sync::selective::apply_sync_selection,
             // Stage & conflict resolution
-            commands::syncing::stage_changes,
-            commands::syncing::sync_with_conflict_resolutions,
-            commands::syncing::cancel_review,
+            crate::sync::control::stage_changes,
+            crate::sync::control::sync_with_conflict_resolutions,
+            crate::sync::control::cancel_review,
             // Encrypted backup
-            commands::syncing::create_encrypted_backup,
+            crate::sync::mnemonic::create_encrypted_backup,
             // Remote folder discovery
             list_remote_folders,
             restore_remote_folders,
@@ -238,12 +267,15 @@ fn main() {
             get_device_name,
             set_device_name,
             // Migration
-            commands::migration::check_migration,
-            commands::migration::dismiss_migration,
-            commands::migration::complete_migration_transition,
-            commands::migration::start_server_migration,
-            commands::migration::poll_migration_status,
-            commands::migration::cancel_server_migration,
+            crate::sync::migration::check_migration,
+            crate::sync::migration::dismiss_migration,
+            crate::sync::migration::complete_migration_transition,
+            crate::sync::migration::start_migration_flow,
+            crate::sync::migration::start_server_migration,
+            crate::sync::migration::poll_migration_status,
+            crate::sync::migration::start_migration_polling,
+            crate::sync::migration::stop_migration_polling,
+            crate::sync::migration::cancel_server_migration,
             // Blockchain queries & transactions
             get_account_balance,
             get_staking_info,
@@ -254,6 +286,8 @@ fn main() {
             stake_claim_rewards,
             transfer_balance,
             validate_address,
+            validate_and_convert_transfer,
+            validate_send_balance,
             get_referral_links,
             to_plancks,
             from_plancks,
@@ -279,8 +313,11 @@ fn main() {
             delete_ssh_key,
             // Billing & credits
             get_user_credits_balance,
+            get_credits_planck,
+            check_sync_eligibility,
             get_billing_transactions,
             get_subscription_plans,
+            get_subscription_data,
             get_active_subscription,
             create_subscription,
             get_customer_portal_url,
@@ -294,6 +331,12 @@ fn main() {
             get_file_nodes,
             get_node_locations,
             get_deposit_address,
+            // Billing UI-ready typed commands
+            get_credits_ui,
+            get_system_balance_ui,
+            get_balance_transfers_ui,
+            get_billing_transactions_ui,
+            get_add_credit_events_ui,
             // Notifications
             get_notification_settings,
             update_notification_settings,
@@ -302,10 +345,12 @@ fn main() {
             get_support_ticket_messages,
             create_support_ticket,
             update_support_ticket,
+            upload_ticket_attachment,
             post_ticket_message,
             // OAuth
             start_oauth_flow,
             complete_oauth_flow,
+            parse_oauth_deep_link,
             // Authentication & crypto
             login_with_mnemonic,
             unlock_with_passcode,
@@ -325,6 +370,10 @@ fn main() {
             get_auth_session,
             get_auth_token,
             get_last_auth_session,
+            restore_session,
+            logout_full,
+            get_tray_menu_data,
+            get_platform_info,
             clear_auth_session,
             is_token_valid,
             update_logout_time,
@@ -341,6 +390,10 @@ fn main() {
             credit_already_notified,
             low_credit_subtype_exists,
             has_active_low_credit_notification,
+            check_low_credit_notification,
+            process_credit_events,
+            create_credit_notifications,
+            create_sync_notification,
             get_last_deleted_low_credit_time,
             hippius_version_notification_exists,
             clear_all_notifications,
@@ -374,12 +427,14 @@ fn main() {
             sp_remove_files_for_label,
             sp_clear_all_data,
             sp_get_snapshot,
+            sp_dismiss_sync_widget,
             // Chart data formatting
             format_credits_chart,
             format_storage_chart,
             format_balance_chart,
             transform_marketplace_credits,
             calculate_storage_cost,
+            calculate_storage_capacity,
         ]);
 
     let builder = setup(builder);
@@ -387,4 +442,234 @@ fn main() {
 
     info!("Running Tauri application...");
     builder.run(tauri::generate_context!()).expect("error while running tauri application");
+}
+
+// ---------------------------------------------------------------------------
+// App setup (was setup.rs)
+// ---------------------------------------------------------------------------
+
+/// Register the window close handler on the Tauri builder.
+///
+/// Prevents the default close, stops Nebula, then exits cleanly.
+pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
+    builder.on_window_event(|window, event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            info!("Close requested");
+            api.prevent_close();
+            let app_handle = window.app_handle().clone();
+
+            tauri::async_runtime::spawn(async move {
+                debug!("Stopping Nebula VPN...");
+                // Stop Nebula before exiting
+                let nebula_st = &app_handle.state::<crate::app_state::AppState>().nebula;
+                if let Err(e) = crate::nebula::manager::stop_nebula(nebula_st).await {
+                    warn!("Failed to stop Nebula: {}", e);
+                }
+
+                info!("Exiting application...");
+                app_handle.exit(0);
+            });
+        }
+    })
+}
+
+#[expect(clippy::too_many_lines, reason = "Tauri app setup: plugin registration and lifecycle hooks must stay together for capture context")]
+pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
+    builder.setup(|app| {
+        debug!(".setup() closure called in setup.rs");
+
+        if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
+            let _ = dotenvy::from_filename(env_path);
+        }
+
+        // Register deep links for Linux at runtime (required for dev)
+        #[cfg(target_os = "linux")]
+        {
+            debug!("Registering deep links for Linux...");
+            match app.deep_link().register_all() {
+                Ok(_) => info!("Deep links registered successfully for Linux"),
+                Err(e) => error!("Failed to register deep links: {}", e),
+            }
+        }
+
+        let app_handle = app.handle().clone();
+
+        // Single AppState holds all mutable state — zero statics.
+        let app_state = crate::app_state::AppState::new();
+        app_state.sync_bridge.set_app_handle(app_handle.clone());
+        app_handle.manage(app_state);
+        let win = app.get_webview_window("main").expect("main window not found");
+
+        if let Some(m) = win.current_monitor()? {
+            let phys = m.size();
+            let origin = m.position();
+
+            let w = (phys.width as f64 * 0.8) as u32;
+            let h = (phys.height as f64 * 0.9) as u32;
+
+            let pos_x = origin.x + ((phys.width as i32 - w as i32) / 2);
+            let pos_y = origin.y + ((phys.height as i32 - h as i32) / 2);
+
+            win.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: w, height: h }))?;
+            win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }))?;
+            win.show()?;
+        }
+        // Spawn async task for database initialization and Nebula setup
+        tauri::async_runtime::spawn(async move {
+            debug!("Async block started in setup.rs");
+
+            // Database initialization
+            let home_dir = dirs::home_dir().expect("Failed to get home directory");
+            let db_dir = home_dir.join(".hippius");
+            let db_path = db_dir.join("hippius.db");
+            debug!("DB path: {}", db_path.display());
+
+            std::fs::create_dir_all(&db_dir).expect("Failed to create .hippius directory");
+
+            if !db_path.exists() {
+                std::fs::File::create(&db_path).expect("Failed to create database file");
+            }
+
+            let db_url = format!("sqlite:{}", db_path.display());
+            let pool = match SqlitePool::connect(&db_url).await {
+                Ok(pool) => pool,
+                Err(e) => {
+                    error!("FATAL: Failed to open database at {}: {e}", db_path.display());
+                    return; // cannot propagate from spawned task; error is logged
+                }
+            };
+            app_handle.state::<crate::app_state::AppState>().set_pool(pool.clone());
+
+            // Ensure all tables and columns exist
+            if let Err(e) = crate::utils::schema::ensure_table_schema(&pool).await {
+                error!("FATAL: Failed to ensure table schema: {}", e);
+                return;
+            }
+
+            // Migrate account keys from 8-char to 16-char format
+            if let Err(e) = crate::utils::schema::migrate_account_keys(&pool).await {
+                warn!("Account key migration failed (non-fatal): {}", e);
+            }
+
+            // Initialize WSS endpoint if it doesn't exist
+            let endpoint_exists: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) as count FROM wss_endpoint")
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(Some((0,)));
+
+            if let Some((count,)) = endpoint_exists {
+                if count == 0 {
+                    info!("No WSS endpoint found, creating default endpoint...");
+                    if let Err(e) = sqlx::query("INSERT INTO wss_endpoint (id, endpoint) VALUES (1, ?)")
+                        .bind(WSS_ENDPOINT)
+                        .execute(&pool)
+                        .await
+                    {
+                        error!("Failed to create default WSS endpoint: {}", e);
+                    } else {
+                        info!("Default WSS endpoint created successfully");
+                    }
+                } else {
+                    debug!("WSS endpoint already exists");
+                }
+            }
+
+            // Initialize VPN status if it doesn't exist
+            let vpn_status_exists: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) as count FROM vpn_status")
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(Some((0,)));
+
+            if let Some((count,)) = vpn_status_exists {
+                if count == 0 {
+                    info!("No VPN status found, creating default entry...");
+                    if let Err(e) = sqlx::query("INSERT INTO vpn_status (id, is_enabled) VALUES (1, FALSE)")
+                        .execute(&pool)
+                        .await
+                    {
+                        error!("Failed to create default VPN status: {}", e);
+                    } else {
+                        info!("Default VPN status created successfully");
+                    }
+                } else {
+                    debug!("VPN status entry already exists");
+                }
+            }
+
+            // Check if autoconnect is enabled
+            let autoconnect_enabled: bool = sqlx::query("SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1")
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(None)
+                .is_some_and(|row| row.get("is_enabled"));
+
+            if autoconnect_enabled {
+                debug!("Autoconnect enabled, skipping VPN status reset");
+            } else {
+                debug!("Resetting VPN status to FALSE on startup...");
+                if let Err(e) = sqlx::query("UPDATE vpn_status SET is_enabled = FALSE WHERE id = 1").execute(&pool).await {
+                    error!("Failed to reset VPN status: {}", e);
+                }
+
+                debug!("Ensuring Nebula is stopped on startup...");
+                let nebula_st = &app_handle.state::<crate::app_state::AppState>().nebula;
+                if let Err(e) = crate::nebula::manager::stop_nebula(nebula_st).await {
+                    warn!("Failed to stop Nebula: {}", e);
+                }
+            }
+
+            // Initialize Nebula binary status if it doesn't exist
+            let nebula_binary_status_exists: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) as count FROM nebula_binary_status")
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(Some((0,)));
+
+            if let Some((count,)) = nebula_binary_status_exists {
+                if count == 0 {
+                    info!("No Nebula binary status found, creating default entry...");
+                    if let Err(e) = sqlx::query("INSERT INTO nebula_binary_status (id, is_nebula_binary_installed) VALUES (1, FALSE)")
+                        .execute(&pool)
+                        .await
+                    {
+                        error!("Failed to create default Nebula binary status: {}", e);
+                    } else {
+                        info!("Default Nebula binary status created successfully");
+                    }
+                } else {
+                    debug!("Nebula binary status entry already exists");
+                }
+            }
+
+            // Initialize autoconnect VPN status if it doesn't exist
+            let autoconnect_exists: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) as count FROM autoconnect_vpn_enabled")
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(Some((0,)));
+
+            if let Some((count,)) = autoconnect_exists {
+                if count == 0 {
+                    info!("No autoconnect VPN status found, creating default entry...");
+                    if let Err(e) = sqlx::query("INSERT INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)")
+                        .execute(&pool)
+                        .await
+                    {
+                        error!("Failed to create default autoconnect VPN status: {}", e);
+                    } else {
+                        info!("Default autoconnect VPN status created successfully");
+                    }
+                } else {
+                    debug!("Autoconnect VPN status entry already exists");
+                }
+            }
+
+            info!("Database initialized successfully");
+
+            // Verify Nebula setup and certificates
+            debug!("Verifying Nebula setup...");
+            if let Err(e) = crate::nebula::manager::verify_nebula_setup(app_handle).await {
+                warn!("{}", e);
+            }
+        });
+        Ok(())
+    })
 }

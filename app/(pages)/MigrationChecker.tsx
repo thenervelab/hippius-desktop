@@ -90,6 +90,9 @@ const MigrationChecker: React.FC = () => {
           failedCount={migration.failedCount}
           totalCount={migration.files.length}
           failedFiles={migration.failedFiles}
+          transitionError={migration.transitionError}
+          onRetry={migration.closeMigration}
+          onDismiss={migration.dismissAfterError}
         />
       )}
     </>

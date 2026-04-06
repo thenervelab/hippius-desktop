@@ -10,6 +10,7 @@ import {
   phaseCommandRunningAtom,
   isUpdateCheckPhaseAtom,
   phaseInternalProgressAtom,
+  splashCompleteAtom,
 } from "./atoms";
 import {
   updateCheckCompleteAtom,
@@ -42,6 +43,7 @@ export default function SplashWrapper({
   const setPhaseInternalProgress = useSetAtom(phaseInternalProgressAtom);
   const [keepSplashscreenInDom, setKeepSplacescreenInDom] = useState(true);
   const [isFullyComplete, setIsFullyComplete] = useState(false);
+  const setSplashComplete = useSetAtom(splashCompleteAtom);
   const setupStartedRef = useRef(false);
 
   // Track update status
@@ -406,6 +408,7 @@ export default function SplashWrapper({
         await wait(800);
       }
       setIsFullyComplete(true);
+      setSplashComplete(true);
     };
 
     runSetupPhases();
@@ -417,6 +420,7 @@ export default function SplashWrapper({
     setPhaseCommandRunning,
     setIsUpdateCheckPhase,
     setPhaseInternalProgress,
+    setSplashComplete,
   ]);
 
   useEffect(() => {

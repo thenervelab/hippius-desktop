@@ -1,16 +1,11 @@
-import { FC, useMemo, useState } from "react";
+import { FC, useEffect, useMemo, useState } from "react";
 import TabList, { TabOption } from "@/components/ui/tabs/TabList";
 import { Icons } from "@/components/ui";
 import FolderCardContextMenu, {
   FolderCardMenuItem,
 } from "@/app/components/ui/context-menu/FolderCardContextMenu";
 import { FolderOpen, FolderSearch, PauseCircle, PlayCircle, Trash2, ServerCrash } from "lucide-react";
-
-const getFileManagerLabel = () => {
-  if (typeof navigator !== "undefined" && /win/i.test(navigator.platform))
-    return "Explorer";
-  return "Finder";
-};
+import { invoke } from "@tauri-apps/api/core";
 
 interface SyncFolderTabsProps {
   labels: string[];
@@ -54,6 +49,13 @@ const SyncFolderTabs: FC<SyncFolderTabsProps> = ({
     [labels]
   );
 
+  const [fileManagerLabel, setFileManagerLabel] = useState("Finder");
+  useEffect(() => {
+    invoke<{ fileManagerLabel: string }>("get_platform_info")
+      .then((info) => setFileManagerLabel(info.fileManagerLabel))
+      .catch(() => {});
+  }, []);
+
   if (labels.length < 2) return null;
 
   const activeTab = selectedTab ?? ALL_TAB;
@@ -61,8 +63,6 @@ const SyncFolderTabs: FC<SyncFolderTabsProps> = ({
   const handleTabChange = (tabName: string) => {
     onTabChange(tabName === ALL_TAB ? null : tabName);
   };
-
-  const fileManagerLabel = getFileManagerLabel();
 
   const contextMenuItems: FolderCardMenuItem[] = tabContextMenu
     ? (() => {

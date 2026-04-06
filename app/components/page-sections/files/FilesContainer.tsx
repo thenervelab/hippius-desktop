@@ -724,9 +724,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     if (!label || !polkadotAddress) return;
     setIsDeletingServer(true);
     try {
+      // delete_remote_folder also stops the drive and removes the sync path if local
       const result = await deleteRemoteFolder(polkadotAddress, label);
-      // Also remove from local sync paths
-      await removeSyncPath(polkadotAddress, label).catch(() => {});
       toast.success(
         `Folder deleted from server (${result.files_deleted} file${result.files_deleted !== 1 ? "s" : ""} removed)`
       );

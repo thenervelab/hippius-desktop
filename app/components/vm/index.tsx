@@ -1,6 +1,7 @@
 "use client";
 
 import AbstractIconWrapper from "../ui/abstract-icon-wrapper";
+import { getFlavorCategory } from "@/lib/utils/vmUtils";
 import { FC, useEffect, useState } from "react";
 import React from "react";
 
@@ -80,21 +81,7 @@ const VirtualMachines: FC = () => {
   // Transform flavors API data to template format with categories
   const templatesFromFlavors =
     flavors?.map((flavor) => {
-      const flavorName = flavor.name.toLowerCase();
-      let category = "all";
-
-      // Categorize based on flavor name
-      if (flavorName === "spark" || flavorName === "pulse") {
-        category = "starter";
-      } else if (flavorName === "cipher" || flavorName === "vault") {
-        category = "standard";
-      } else if (
-        flavorName === "fortress" ||
-        flavorName === "titan" ||
-        flavorName === "sovereign"
-      ) {
-        category = "high-capacity";
-      }
+      const category = getFlavorCategory(flavor.name);
 
       return {
         id: String(flavor.id),

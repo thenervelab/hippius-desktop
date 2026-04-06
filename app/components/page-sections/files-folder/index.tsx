@@ -141,8 +141,6 @@ export default function FolderView({
           label: syncFolderLabel || null,
         });
 
-        console.log("Fetched folder contents:", entries);
-
         const formattedFiles = entries.map((entry): FormattedUserFile => {
           const modifiedMs = (entry.modified ?? 0) * 1000;
           const filePath = subfolder

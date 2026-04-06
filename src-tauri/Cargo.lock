@@ -5220,7 +5220,7 @@ dependencies = [
 [[package]]
 name = "hcfs-client"
 version = "0.1.9"
-source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=b018f2d#b018f2d39e37d40560561be38672bbf1e95955fe"
+source = "git+https://github.com/thenervelab/hcfs.git?rev=b7de6f3#b7de6f314de124585c0a1127c98e832042f7a949"
 dependencies = [
  "async-stream",
  "base64 0.22.1",
@@ -5228,28 +5228,32 @@ dependencies = [
  "blake3",
  "bytes",
  "chacha20poly1305",
+ "chrono",
  "ed25519-dalek",
  "futures-util",
  "globset",
  "hcfs-shared",
  "hex",
  "libc",
+ "notify",
  "rand 0.9.2",
  "reqwest 0.13.2",
  "ring",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 1.0.69",
  "tokio",
  "tokio-util",
  "tracing",
  "urlencoding",
+ "zeroize",
 ]
 
 [[package]]
 name = "hcfs-shared"
 version = "0.1.8"
-source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=b018f2d#b018f2d39e37d40560561be38672bbf1e95955fe"
+source = "git+https://github.com/thenervelab/hcfs.git?rev=b7de6f3#b7de6f314de124585c0a1127c98e832042f7a949"
 dependencies = [
  "blake3",
  "ed25519-dalek",

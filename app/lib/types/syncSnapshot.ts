@@ -38,6 +38,27 @@ export interface SyncSnapshot {
   /** Epoch-ms when the session completed (null if still active). */
   completedAt: number | null;
   files: FileProgress[];
+  /** Pre-computed widget state: "active", "completed", "retrying", or "idle". */
+  widgetState: string;
+  /** Whether the sync status widget should be visible. */
+  widgetVisible: boolean;
+
+  // Pre-computed display values from Rust
+  combinedProgressBytes: number;
+  combinedBytesExpected: number;
+  deletedCount: number;
+  /** Non-delete completed count */
+  syncedCount: number;
+  /** Effective total including failed files */
+  actualTotal: number;
+  /** Badge variant: "progress" | "success" | "error" */
+  statusVariant: string;
+  /** Primary sync direction: "upload" | "download" | "delete" | "mixed" */
+  syncDirection: string;
+  /** True when files still processing even if session marked complete */
+  effectiveInProgress: boolean;
+  /** True only when session complete AND no files still processing */
+  effectiveCompleted: boolean;
 }
 
 export const EMPTY_SNAPSHOT: SyncSnapshot = {
@@ -57,4 +78,15 @@ export const EMPTY_SNAPSHOT: SyncSnapshot = {
   startedAt: null,
   completedAt: null,
   files: [],
+  widgetState: "idle",
+  widgetVisible: false,
+  combinedProgressBytes: 0,
+  combinedBytesExpected: 0,
+  deletedCount: 0,
+  syncedCount: 0,
+  actualTotal: 0,
+  statusVariant: "progress",
+  syncDirection: "mixed",
+  effectiveInProgress: false,
+  effectiveCompleted: false,
 };

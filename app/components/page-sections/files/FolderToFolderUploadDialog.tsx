@@ -89,22 +89,15 @@ export default function FolderToFolderUploadDialog({
         toast.success("Folder added. Your sync will start soon.", { duration: 4000, closeButton: true });
 
         try {
-            // Get sync path and build target directory (current subfolder)
+            // Rust handles subfolder join and sync trigger
             const baseSyncPath = syncBasePath || ((await getPrivateSyncPath(polkadotAddress ?? undefined))?.path ?? "");
             const subfolder = getFullPath(mainFolderActualName, subFolderPath);
-            let targetPath = baseSyncPath;
-            if (subfolder) {
-                const { join } = await import("@tauri-apps/api/path");
-                targetPath = await join(baseSyncPath, subfolder);
-            }
 
             const name = await invoke<string>("add_folder", {
-                syncPath: targetPath,
+                syncPath: baseSyncPath,
                 folderPath,
+                subfolder: subfolder || null,
             });
-
-            // Trigger sync to push changes
-            await invoke("trigger_sync_now").catch((err: unknown) => console.warn("[FolderToFolderUploadDialog] trigger_sync_now failed:", err));
 
             // Refresh file list AFTER backend has added the folder so list_sync_folder sees it
             queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });

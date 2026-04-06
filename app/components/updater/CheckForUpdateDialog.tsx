@@ -110,13 +110,14 @@ export default function CheckForUpdateDialog({
     if (!o) onClose?.();
   };
 
-  // Simulate installation progress in 5 phases
+  // Simulate installation progress then transition to complete
   const simulateInstallation = async () => {
     const phases = [20, 40, 60, 80, 100];
     for (let i = 0; i < phases.length; i++) {
       await new Promise(resolve => setTimeout(resolve, 500));
       setInstallProgress(phases[i]);
     }
+    setStatus("complete");
   };
 
   // download/install flow with progress tracking in UI
@@ -129,8 +130,6 @@ export default function CheckForUpdateDialog({
       setDownloadProgress(0);
       setDownloadedBytes(0);
       setTotalBytes(0);
-
-      // Reset refs
       downloadedBytesRef.current = 0;
       totalBytesRef.current = 0;
 
@@ -143,26 +142,19 @@ export default function CheckForUpdateDialog({
             downloadedBytesRef.current = 0;
             setDownloadedBytes(0);
             setDownloadProgress(0);
-            console.log("Download started, total bytes:", total);
             break;
           }
           case "Progress": {
             downloadedBytesRef.current += ev.data.chunkLength;
             setDownloadedBytes(downloadedBytesRef.current);
-
             const progress = totalBytesRef.current > 0
               ? (downloadedBytesRef.current / totalBytesRef.current) * 100
               : 0;
-
-            const roundedProgress = Math.min(Math.round(progress), 100);
-            setDownloadProgress(roundedProgress);
-
-            console.log(`Download progress: ${roundedProgress}% (${downloadedBytesRef.current}/${totalBytesRef.current})`);
+            setDownloadProgress(Math.min(Math.round(progress), 100));
             break;
           }
           case "Finished": {
             setDownloadProgress(100);
-            console.log("Download finished, starting installation");
             setStatus("installing");
             simulateInstallation();
             break;
@@ -170,7 +162,7 @@ export default function CheckForUpdateDialog({
         }
       });
 
-      setStatus("complete");
+      // Don't set "complete" here — simulateInstallation handles the transition
 
     } catch (err) {
       console.error("Update failed:", err);

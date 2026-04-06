@@ -145,15 +145,15 @@ export function filterFiles(
 
             const matches = criteria.fileSizes!.some(threshold => {
                 let isMatch = false;
-                // Define size ranges based on predefined options
+                // Size ranges using SI units (1000-based) consistent with formatBytes
                 if (threshold === 1) { // Small: < 1 MB
-                    isMatch = fileSize < BigInt(1024 * 1024);
-                } else if (threshold === 1024 * 1024) { // Medium: 1 MB - 100 MB
-                    isMatch = fileSize >= BigInt(1024 * 1024) && fileSize <= BigInt(100 * 1024 * 1024);
-                } else if (threshold === 100 * 1024 * 1024) { // Large: 100 MB - 1 GB
-                    isMatch = fileSize > BigInt(100 * 1024 * 1024) && fileSize <= BigInt(1024 * 1024 * 1024);
-                } else if (threshold === 1024 * 1024 * 1024) { // Very Large: > 1 GB
-                    isMatch = fileSize > BigInt(1024 * 1024 * 1024);
+                    isMatch = fileSize < BigInt(1_000_000);
+                } else if (threshold === 1_000_000) { // Medium: 1 MB - 100 MB
+                    isMatch = fileSize >= BigInt(1_000_000) && fileSize <= BigInt(100_000_000);
+                } else if (threshold === 100_000_000) { // Large: 100 MB - 1 GB
+                    isMatch = fileSize > BigInt(100_000_000) && fileSize <= BigInt(1_000_000_000);
+                } else if (threshold === 1_000_000_000) { // Very Large: > 1 GB
+                    isMatch = fileSize > BigInt(1_000_000_000);
                 } else {
                     // Handle custom sizes: use >= threshold
                     isMatch = fileSize >= BigInt(threshold);
@@ -237,9 +237,9 @@ export function generateActiveFilters(
     if (fileSizes && fileSizes.length > 0) {
         const sizeLabels: Record<number, string> = {
             1: 'Small (< 1 MB)',
-            [1024 * 1024]: 'Medium (1 MB - 100 MB)',
-            [100 * 1024 * 1024]: 'Large (100 MB - 1 GB)',
-            [1024 * 1024 * 1024]: 'Very Large (> 1 GB)'
+            [1_000_000]: 'Medium (1 MB - 100 MB)',
+            [100_000_000]: 'Large (100 MB - 1 GB)',
+            [1_000_000_000]: 'Very Large (> 1 GB)'
         };
 
         fileSizes.forEach(size => {

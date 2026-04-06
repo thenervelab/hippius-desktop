@@ -23,9 +23,18 @@ const Unstake = () => {
             return;
         }
 
-        const stakedBalance = Number(stakingInfo.bonded || '0') / 1e18; // Convert from planck with 18 decimals
-        if (parseFloat(amount) > stakedBalance) {
-            toast.error("Amount exceeds staked balance");
+        // Lossless BigInt validation — no float intermediary
+        try {
+            const [intPart, fracPart = ""] = amount.split(".");
+            const padded = fracPart.padEnd(18, "0").slice(0, 18);
+            const amountPlanck = BigInt((intPart || "0") + padded);
+            const bondedPlanck = BigInt(stakingInfo.bonded || "0");
+            if (amountPlanck > bondedPlanck) {
+                toast.error("Amount exceeds staked balance");
+                return;
+            }
+        } catch {
+            toast.error("Invalid amount");
             return;
         }
 

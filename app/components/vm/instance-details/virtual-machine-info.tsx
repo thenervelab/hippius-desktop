@@ -3,11 +3,13 @@ import InfoPanel from "./info-panel";
 import LabelWithIcon from "./label-with-icon";
 import ImageCell from "../instances-table/image-cell";
 import StatusCell from "../instances-table/status-cell";
+import { parseImageName } from "@/lib/utils/vmUtils";
 import TemplateItem from "@/components/vm/instance-details/template-item";
 import { Button as NewButton } from "@/components/ui/button/NewButton";
 import { MoreVertical } from "lucide-react";
 import { toast } from "sonner";
 import ChangeImageModal, { ChangeImageData } from "./change-image-modal";
+import useVMImages from "@/app/lib/hooks/api/useVMImages";
 import { useDeleteInstance } from "../hooks/useDeleteInstance";
 import { useStartStopInstance } from "../hooks/useStartStopInstance";
 import { useRebootInstance } from "../hooks/useRebootInstance";
@@ -30,6 +32,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
 }) => {
   const [openChangeImageModal, setOpenChangeImageModal] = useState(false);
   const [openChangeInstanceModal, setOpenChangeInstanceModal] = useState(false);
+  const { data: vmImages } = useVMImages();
 
   // Use delete instance hook with redirect
   const { handleDeleteInstance, DeleteInstanceModal } = useDeleteInstance({
@@ -48,41 +51,6 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
   });
 
   // Parse image name for ImageCell
-  const parseImageName = (imageName: string) => {
-    let os:
-      | "AlmaLinux"
-      | "CentOS"
-      | "Debian"
-      | "Fedora"
-      | "Rocky Linux"
-      | "Ubuntu";
-    let version: string;
-
-    if (imageName.startsWith("AlmaLinux")) {
-      os = "AlmaLinux";
-      version = imageName;
-    } else if (imageName.startsWith("CentOS")) {
-      os = "CentOS";
-      version = imageName;
-    } else if (imageName.startsWith("Debian")) {
-      os = "Debian";
-      version = imageName;
-    } else if (imageName.startsWith("Fedora")) {
-      os = "Fedora";
-      version = imageName;
-    } else if (imageName.startsWith("Rocky Linux")) {
-      os = "Rocky Linux";
-      version = imageName;
-    } else if (imageName.startsWith("Ubuntu")) {
-      os = "Ubuntu";
-      version = imageName;
-    } else {
-      os = "Ubuntu";
-      version = imageName;
-    }
-
-    return { os, version };
-  };
 
   const handleChangeImage = (data: ChangeImageData) => {
     console.log("Change Image Data:", data);
@@ -323,6 +291,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
         open={openChangeImageModal}
         onClose={() => setOpenChangeImageModal(false)}
         onSubmit={handleChangeImage}
+        images={vmImages}
       />
 
       <ConfirmDialog

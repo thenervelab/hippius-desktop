@@ -43,6 +43,9 @@ pub enum AppError {
     #[error("{0}")]
     NotReady(NotReadyKind),
 
+    #[error("Progress error: {0}")]
+    Progress(String),
+
     #[error("Lock poisoned: {0}")]
     Lock(String),
 
@@ -94,7 +97,7 @@ impl std::fmt::Display for NotReadyKind {
 /// Produces `{ "kind": "Db", "message": "..." }` so the frontend
 /// can match on `kind` programmatically and display `message` to users.
 impl Serialize for AppError {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let mut s = serializer.serialize_struct("AppError", 2)?;
         let kind = match self {
@@ -110,6 +113,7 @@ impl Serialize for AppError {
             Self::Validation(_) => "Validation",
             Self::Auth(_) => "Auth",
             Self::NotReady(_) => "NotReady",
+            Self::Progress(_) => "Progress",
             Self::Lock(_) => "Lock",
             Self::Other(_) => "Other",
         };
@@ -122,6 +126,10 @@ impl Serialize for AppError {
 // Tauri 2 has a blanket `impl<T: Serialize> From<T> for InvokeError`,
 // so `AppError` is automatically usable as a command error type via the
 // `Serialize` impl above — no explicit `From` impl needed.
+
+/// Project-wide result type alias. Every Tauri command and most
+/// async helpers return this.
+pub type Result<T> = std::result::Result<T, AppError>;
 
 /// Bridge: accept existing `Result<_, String>` into `AppError`.
 impl From<String> for AppError {
@@ -158,12 +166,12 @@ impl From<Box<dyn std::error::Error + Send + Sync>> for AppError {
     }
 }
 
-/// Bridge from the existing [`crate::api_client_logic::ApiError`] type.
-impl From<crate::api_client_logic::ApiError> for AppError {
-    fn from(err: crate::api_client_logic::ApiError) -> Self {
+/// Bridge from the existing [`crate::api::client::ApiError`] type.
+impl From<crate::api::client::ApiError> for AppError {
+    fn from(err: crate::api::client::ApiError) -> Self {
         match err {
-            crate::api_client_logic::ApiError::Http { status, body } => Self::Api { status, body },
-            crate::api_client_logic::ApiError::Other(msg) => Self::Other(msg),
+            crate::api::client::ApiError::Http { status, body } => Self::Api { status, body },
+            crate::api::client::ApiError::Other(msg) => Self::Other(msg),
         }
     }
 }
@@ -258,7 +266,7 @@ mod tests {
 
     #[test]
     fn api_error_bridge_http() {
-        let api_err = crate::api_client_logic::ApiError::Http {
+        let api_err = crate::api::client::ApiError::Http {
             status: 502,
             body: "bad gateway".into(),
         };
@@ -268,7 +276,7 @@ mod tests {
 
     #[test]
     fn api_error_bridge_other() {
-        let api_err = crate::api_client_logic::ApiError::Other("timeout".into());
+        let api_err = crate::api::client::ApiError::Other("timeout".into());
         let app_err = AppError::from(api_err);
         assert!(matches!(app_err, AppError::Other(ref s) if s == "timeout"));
     }
@@ -277,20 +285,15 @@ mod tests {
 
     #[test]
     fn json_error_converts_via_from() {
-        let json_err: serde_json::Error =
-            serde_json::from_str::<String>("not valid json").unwrap_err();
+        let json_err: serde_json::Error = serde_json::from_str::<String>("not valid json").unwrap_err();
         let app_err = AppError::from(json_err);
         assert!(matches!(app_err, AppError::Json(_)));
-        assert!(
-            app_err.to_string().contains("JSON error"),
-            "display: {app_err}",
-        );
+        assert!(app_err.to_string().contains("JSON error"), "display: {app_err}",);
     }
 
     #[test]
     fn box_dyn_error_converts_to_other() {
-        let boxed: Box<dyn std::error::Error> =
-            Box::new(std::io::Error::other("oops"));
+        let boxed: Box<dyn std::error::Error> = Box::new(std::io::Error::other("oops"));
         let app_err = AppError::from(boxed);
         assert!(matches!(app_err, AppError::Other(_)));
         assert!(app_err.to_string().contains("oops"));
@@ -298,8 +301,7 @@ mod tests {
 
     #[test]
     fn box_dyn_error_send_sync_converts_to_other() {
-        let boxed: Box<dyn std::error::Error + Send + Sync> =
-            Box::new(std::io::Error::other("boom"));
+        let boxed: Box<dyn std::error::Error + Send + Sync> = Box::new(std::io::Error::other("boom"));
         let app_err = AppError::from(boxed);
         assert!(matches!(app_err, AppError::Other(_)));
         assert!(app_err.to_string().contains("boom"));
@@ -319,10 +321,7 @@ mod tests {
         ];
         for (kind, expected) in cases {
             let json = serde_json::to_value(&kind).expect("serialize");
-            assert_eq!(
-                json, expected,
-                "variant {kind:?} should serialize to {expected}",
-            );
+            assert_eq!(json, expected, "variant {kind:?} should serialize to {expected}",);
         }
     }
 
@@ -339,14 +338,8 @@ mod tests {
 
     #[test]
     fn display_io_error_has_prefix() {
-        let err = AppError::Io(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "no access",
-        ));
-        assert!(
-            err.to_string().starts_with("I/O error:"),
-            "got: {err}",
-        );
+        let err = AppError::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no access"));
+        assert!(err.to_string().starts_with("I/O error:"), "got: {err}",);
     }
 
     #[test]
@@ -380,6 +373,12 @@ mod tests {
     }
 
     #[test]
+    fn display_progress_error() {
+        let err = AppError::Progress("tracker fail".into());
+        assert_eq!(err.to_string(), "Progress error: tracker fail");
+    }
+
+    #[test]
     fn display_lock_error() {
         let err = AppError::Lock("mutex poisoned".into());
         assert_eq!(err.to_string(), "Lock poisoned: mutex poisoned");
@@ -402,13 +401,8 @@ mod tests {
     #[test]
     fn serialize_every_variant_has_kind_and_message() {
         let variants: Vec<AppError> = vec![
-            AppError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "missing",
-            )),
-            AppError::Json(
-                serde_json::from_str::<String>("bad").unwrap_err(),
-            ),
+            AppError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "missing")),
+            AppError::Json(serde_json::from_str::<String>("bad").unwrap_err()),
             AppError::Substrate("rpc".into()),
             AppError::Hcfs("sync".into()),
             AppError::Nebula("vpn".into()),
@@ -420,6 +414,7 @@ mod tests {
             AppError::Validation("invalid".into()),
             AppError::Auth("unauth".into()),
             AppError::NotReady(NotReadyKind::ConfigMissing),
+            AppError::Progress("tracker".into()),
             AppError::Lock("poisoned".into()),
             AppError::Other("misc".into()),
         ];
@@ -434,25 +429,16 @@ mod tests {
             "Validation",
             "Auth",
             "NotReady",
+            "Progress",
             "Lock",
             "Other",
         ];
 
-        for (err, expected_kind) in variants.iter().zip(expected_kinds.iter())
-        {
+        for (err, expected_kind) in variants.iter().zip(expected_kinds.iter()) {
             let json = serde_json::to_value(err).expect("serialize");
-            assert_eq!(
-                json["kind"], *expected_kind,
-                "wrong kind for {err:?}"
-            );
-            assert!(
-                json["message"].is_string(),
-                "missing message for {err:?}"
-            );
-            assert!(
-                !json["message"].as_str().unwrap().is_empty(),
-                "empty message for {err:?}"
-            );
+            assert_eq!(json["kind"], *expected_kind, "wrong kind for {err:?}");
+            assert!(json["message"].is_string(), "missing message for {err:?}");
+            assert!(!json["message"].as_str().unwrap().is_empty(), "empty message for {err:?}");
         }
     }
 
@@ -464,18 +450,9 @@ mod tests {
             (NotReadyKind::SyncSetup, "Sync setup required"),
             (NotReadyKind::DriveNotInitialized, "Drive not initialized"),
             (NotReadyKind::DriveNotUnlocked, "Drive is not unlocked"),
-            (
-                NotReadyKind::SyncInProgress,
-                "Sync is in progress, please wait",
-            ),
-            (
-                NotReadyKind::NoEncryptionKey,
-                "No encryption key available",
-            ),
-            (
-                NotReadyKind::ConfigMissing,
-                "HCFS config not found. Please set up sync first.",
-            ),
+            (NotReadyKind::SyncInProgress, "Sync is in progress, please wait"),
+            (NotReadyKind::NoEncryptionKey, "No encryption key available"),
+            (NotReadyKind::ConfigMissing, "HCFS config not found. Please set up sync first."),
         ];
         for (kind, expected) in cases {
             assert_eq!(kind.to_string(), expected);

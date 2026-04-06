@@ -2,13 +2,11 @@
 
 import { useState, useCallback } from "react";
 import {
-  saveHcfsConfig,
   getHcfsConfig,
   initializeSync,
   type InitSyncResult,
   type HcfsConfigResult,
 } from "../utils/hcfsConfigUtils";
-import { getPrivateSyncPath, getAllSyncPaths, allowAssetScope } from "../utils/syncPathUtils";
 import { invoke } from "@tauri-apps/api/core";
 import { isSyncConfiguredAtom, syncEngineStatusAtom } from "../global-atoms/unpinAtoms";
 import { migrationLockAtom } from "../global-atoms/migrationAtoms";
@@ -109,12 +107,14 @@ export function useHcfsSync(): UseHcfsSyncResult {
       setIsInitializing(true);
 
       try {
-        // Save the HCFS config first
-        await saveHcfsConfig(accountId, serverUrl, password);
-        console.log("[useHcfsSync] HCFS config saved");
-
-        // Then initialize sync
-        const result = await initializeSync(accountId, label, mnemonic);
+        // Single Rust call: saves config + persists mnemonic + initializes sync
+        const result = await invoke<InitSyncResult>("setup_and_init_sync", {
+          accountId,
+          label,
+          serverUrl,
+          password,
+          mnemonic: mnemonic ?? null,
+        });
 
         // If a new mnemonic was generated, show backup dialog
         if (result.mnemonic) {
@@ -158,119 +158,44 @@ export function useHcfsSync(): UseHcfsSyncResult {
   };
 }
 
+interface AutoInitResult {
+  anyInitialized: boolean;
+  isConfigured: boolean;
+  skippedReason: string | null;
+}
+
 /**
  * Standalone function for use outside React components (e.g., in wallet-auth-context).
  *
- * Called on login / session restore. Only starts sync if BOTH conditions are met:
- *   1. A sync path has been configured by the user
- *   2. The HCFS encryption password has been set
- *
- * Does NOT auto-create sync paths or prompt for setup.
- * The user triggers setup explicitly by choosing a sync folder in the Files page.
+ * All business logic (migration lock, mnemonic persistence, path queries,
+ * HCFS config check, path filtering, sequential init) is in Rust.
+ * This function reads localStorage (browser-only), calls Rust, and updates atoms.
  */
 export async function tryAutoInitSync(
   accountId: string,
   mnemonic?: string
 ): Promise<boolean> {
-  // Block sync while server-side migration is in progress
-  if (appStore.get(migrationLockAtom)) {
-    console.log("[tryAutoInitSync] Migration in progress, sync blocked");
-    return false;
-  }
-
   try {
-    // Eagerly persist the master mnemonic to disk so it survives app restarts.
-    // This is a no-op if the master already exists or the HCFS password hasn't
-    // been set yet. Without this, an app restart loses the in-memory mnemonic
-    // and a subsequent sync setup would generate a random key, making
-    // cross-device decryption impossible.
-    if (mnemonic) {
-      try {
-        await invoke("persist_master_mnemonic", { accountId, mnemonic });
-      } catch {
-        // HCFS config not set up yet — will be saved during initialize_sync
-      }
-    }
-
-    // Get all configured sync paths
-    let syncPaths: { path: string; label: string; isPaused?: boolean }[] = [];
-    try {
-      syncPaths = await getAllSyncPaths(accountId);
-    } catch {
-      // No sync paths table or DB not ready yet
-    }
-
-    // Fallback: check legacy single-path config
-    if (syncPaths.length === 0) {
-      const legacy = await getPrivateSyncPath(accountId);
-      if (legacy?.path) {
-        syncPaths = [{ path: legacy.path, label: legacy.label || "default" }];
-      }
-    }
-
-    if (syncPaths.length === 0) {
-      console.log("[AutoSync] No sync paths configured, skipping auto-init");
-      return false;
-    }
-
-    // Expand asset protocol scope for all sync paths so file previews work,
-    // even if sync is stopped or config isn't ready yet.
-    for (const sp of syncPaths) {
-      try {
-        await allowAssetScope(sp.path);
-      } catch {
-        // Non-critical — Rust initialize_sync also does this
-      }
-    }
-
-    // Check if HCFS config exists
-    const config = await getHcfsConfig(accountId);
-    if (!config.has_password) {
-      console.log("[AutoSync] No HCFS config, skipping auto-init (user will be prompted when setting sync folder)");
-      return false;
-    }
-
-    // HCFS config exists - mark sync as configured so SyncStoppedAlert can show when needed
-    appStore.set(isSyncConfiguredAtom, true);
-
-    // If the user explicitly stopped sync, don't auto-start on login / session restore
-    if (
+    const userStoppedSync =
       typeof window !== "undefined" &&
-      localStorage.getItem("hippius_sync_stopped") === "true"
-    ) {
-      console.log("[AutoSync] Sync was explicitly stopped by user, skipping auto-init (but sync is configured)");
-      return false;
-    }
+      localStorage.getItem("hippius_sync_stopped") === "true";
 
-    // Initialize sync for each configured path
-    // Skip "migration" (has its own init flow) and paused folders
-    const regularPaths = syncPaths
-      .filter((sp) => sp.label !== "migration")
-      .filter((sp) => !sp.isPaused);
-    const pausedCount = syncPaths.filter((sp) => sp.isPaused).length;
-    if (pausedCount > 0) {
-      console.log(`[AutoSync] Skipping ${pausedCount} paused sync path(s)`);
-    }
-    console.log(`[AutoSync] Auto-initializing ${regularPaths.length} sync path(s)...`);
-    let anyInitialized = false;
-    for (const sp of regularPaths) {
-      try {
-        const result = await initializeSync(accountId, sp.label, mnemonic);
-        console.log(`[AutoSync] Sync initialized for '${sp.label}':`, result.user_id);
-        anyInitialized = true;
-      } catch (err) {
-        console.error(`[AutoSync] Failed to init sync for label '${sp.label}':`, err);
-      }
-    }
+    const result = await invoke<AutoInitResult>("auto_init_sync", {
+      accountId,
+      mnemonic: mnemonic ?? null,
+      userStoppedSync,
+    });
 
-    // Mark sync engine as active so the "Syncing is stopped" banner clears
-    if (anyInitialized) {
+    if (result.isConfigured) {
+      appStore.set(isSyncConfiguredAtom, true);
+    }
+    if (result.anyInitialized) {
       appStore.set(syncEngineStatusAtom, "active");
     }
 
-    return anyInitialized;
+    return result.anyInitialized;
   } catch (err) {
-    console.error("[AutoSync] Auto-sync init failed:", err);
+    console.error("[AutoSync] auto_init_sync failed:", err);
     return false;
   }
 }

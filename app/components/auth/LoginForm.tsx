@@ -77,118 +77,53 @@ export function LoginForm({
         let unlisten: null | (() => void) = null;
         let initialDeepLinkProcessed = false;
 
-        const handleDeepLink = (url: string, isInitial = false) => {
-            // addDlLog(`Received URL: ${url}`);
-            // setDlRaw(url);
-
+        const handleDeepLink = async (url: string, isInitial = false) => {
             try {
-                // Check if this deep link has already been processed (use localStorage for persistence across restarts)
+                // Dedup: skip if this URL was already processed (persists across restarts)
                 const lastProcessedUrl = localStorage.getItem("last_processed_deep_link");
-                
                 if (lastProcessedUrl === url) {
-                    // addDlLog("⚠️ This deep link was already processed, skipping");
-                    console.log("[LoginForm] Deep link already processed, skipping:", url);
-                    // Refresh the timestamp so we keep skipping this stale callback
+                    console.log("[LoginForm] Deep link already processed, skipping");
                     localStorage.setItem("last_processed_deep_link_time", Date.now().toString());
                     return;
                 }
 
-                // If user manually navigated to login, don't process old deep links
+                // Skip initial deep links if user manually navigated to login
                 const manualNavigation = sessionStorage.getItem("manual_navigation");
                 if (manualNavigation === "true" && isInitial) {
-                    // addDlLog("⚠️ Manual navigation detected, skipping initial deep link");
                     console.log("[LoginForm] Skipping initial deep link due to manual navigation");
                     sessionStorage.removeItem("manual_navigation");
                     return;
                 }
-                
-                // Check if user is already authenticated - don't process deep links if already logged in
+
+                // Skip if user already has a valid session
                 const storedSession = localStorage.getItem("hippius_oauth_session");
                 const storedExpiry = localStorage.getItem("hippius_oauth_session_expiry");
                 if (storedSession && storedExpiry) {
                     const expiryTime = isNaN(Number(storedExpiry))
                         ? new Date(storedExpiry).getTime()
                         : parseInt(storedExpiry, 10);
-                    
                     if (Date.now() < expiryTime) {
-                        console.log("[LoginForm] User already has valid session, redirecting to home instead of processing deep link");
+                        console.log("[LoginForm] User already has valid session, redirecting to home");
                         router.replace("/");
                         return;
                     }
                 }
 
-                const urlObj = new URL(url);
-                // addDlLog(`Parsed - scheme: ${urlObj.protocol}, path: ${urlObj.pathname}`);
+                // Rust handles URL parsing, malformed URL fixup, session param extraction,
+                // and callback path construction
+                const { invoke } = await import("@tauri-apps/api/core");
+                const result = await invoke<{ isCallback: boolean; callbackPath: string | null }>(
+                    "parse_oauth_deep_link", { url }
+                );
 
-                // Check if this is an OAuth callback
-                if (urlObj.pathname.includes("/auth/callback")) {
-                    // addDlLog("✅ OAuth callback detected, extracting parameters...");
-
-                    // Extract all query parameters
-                    const params = new URLSearchParams(urlObj.search);
-                    const token = params.get("token");
-                    const code = params.get("code");
-                    const username = params.get("username");
-                    const email = params.get("email");
-                    const userId = params.get("user_id");
-                    const substrateAddress = params.get("substrate_address");
-                    const error = params.get("error");
-                    const errorDescription = params.get("error_description");
-
-                    // Also check for 'session' parameter with JSON data
-                    const sessionParam = params.get("session");
-                    if (sessionParam) {
-                        try {
-                            const sessionData = JSON.parse(decodeURIComponent(sessionParam));
-                            // addDlLog(`Session parameter found: ${JSON.stringify(sessionData)}`);
-                            // Extract data from session object
-                            if (sessionData.code && !code) params.set("code", sessionData.code);
-                            if (sessionData.username && !username) params.set("username", sessionData.username);
-                            if (sessionData.id && !userId) params.set("user_id", sessionData.id);
-                        } catch (e) {
-                            console.log("[LoginForm] Failed to parse session parameter:", e);
-                            // addDlLog(`Failed to parse session parameter: ${e}`);
-                        }
-                    }
-
-                    // addDlLog(`Parameters - token: ${token ? "present" : "missing"}, code: ${code || params.get("code") ? "present" : "missing"}, username: ${username || params.get("username") || "missing"}`);
-
-                    // Build callback URL with parameters
-                    const callbackParams = new URLSearchParams();
-                    if (token || params.get("token")) callbackParams.set("token", token || params.get("token")!);
-                    if (code || params.get("code")) callbackParams.set("code", code || params.get("code")!);
-                    if (username || params.get("username")) callbackParams.set("username", username || params.get("username")!);
-                    if (email) callbackParams.set("email", email);
-                    if (userId || params.get("user_id")) callbackParams.set("user_id", userId || params.get("user_id")!);
-                    if (substrateAddress) callbackParams.set("substrate_address", substrateAddress);
-                    if (error) callbackParams.set("error", error);
-                    if (errorDescription) callbackParams.set("error_description", errorDescription);
-
-                    const callbackUrl = `/auth/callback?${callbackParams.toString()}`;
-                    // addDlLog(`✅ Redirecting to: ${callbackUrl}`);
-                    console.log("[LoginForm] Redirecting to callback page:", callbackUrl);
-
-                    // Mark this deep link as processed BEFORE redirecting (use localStorage for persistence)
+                if (result.isCallback && result.callbackPath) {
+                    console.log("[LoginForm] Redirecting to callback page:", result.callbackPath);
                     localStorage.setItem("last_processed_deep_link", url);
                     localStorage.setItem("last_processed_deep_link_time", Date.now().toString());
-                    console.log("[LoginForm] Marked deep link as processed");
-
-                    // Redirect to callback page
-                    router.push(callbackUrl);
-
-                    // Clear deep link state after initiating redirect
-                    // This ensures state is clean when user returns to login
-                    setTimeout(() => {
-                        // setDlRaw(null);
-                        // setDlLogs([]);
-                        console.log("[LoginForm] Deep link state cleared after redirect");
-                    }, 500);
-                } else {
-                    // addDlLog(`ℹ️ Non-callback deep link: ${urlObj.pathname}`);
+                    router.push(result.callbackPath);
                 }
-            } catch (e: any) {
-                // addDlLog(`Failed to parse URL: ${e?.message || String(e)}`);
-                console.error("[LoginForm] Failed to parse deep link:", e);
+            } catch (e) {
+                console.error("[LoginForm] Failed to process deep link:", e);
             }
         };
 
