@@ -4,6 +4,8 @@
 //! (legacy name — predates the HCFS migration). The `temp_auth_key` column
 //! holds the bearer token used for API calls, sync auth, and VPN auth.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use tracing::warn;
@@ -14,6 +16,11 @@ use tracing::warn;
 pub const TOKEN_REFRESH_MARGIN_SECS: i64 = 14400;
 
 const AUTH_ROW_ID: i64 = 1;
+
+/// Once set, skips the legacy `objectstore_auth` and `auth_session` fallback
+/// queries in [`get_api_token`]. The migration only needs to run once per
+/// process lifetime — after that the scoped table is authoritative.
+static LEGACY_TOKEN_MIGRATED: AtomicBool = AtomicBool::new(false);
 
 // ── API Token (used everywhere) ─────────────────────────────────────────
 
@@ -56,6 +63,13 @@ pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> Result<Option
         return Ok(Some(token));
     }
 
+    // After the first full pass through the legacy fallback paths (whether or
+    // not data was found), the scoped table is authoritative — skip the two
+    // extra SQLite round-trips on every subsequent call.
+    if LEGACY_TOKEN_MIGRATED.load(Ordering::Relaxed) {
+        return Ok(None);
+    }
+
     // Legacy single-row fallback — auto-migrate
     let legacy = sqlx::query("SELECT temp_auth_key FROM objectstore_auth WHERE id = ?")
         .bind(AUTH_ROW_ID)
@@ -94,6 +108,10 @@ pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> Result<Option
         }
         return Ok(Some(token));
     }
+
+    // We have now completed one full pass through both legacy fallback paths.
+    // Mark as migrated so future calls skip straight to Ok(None) after stage 1.
+    LEGACY_TOKEN_MIGRATED.store(true, Ordering::Relaxed);
 
     Ok(None)
 }
