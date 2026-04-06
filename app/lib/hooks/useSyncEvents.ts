@@ -15,6 +15,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect } from "react";
 import { useSetAtom, useAtomValue } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
+import { errorMessage } from "../utils/errorUtils";
 import {
   syncEngineHealthAtom,
   DEFAULT_SYNC_ENGINE_HEALTH,
@@ -65,8 +66,8 @@ export function useSyncEvents() {
           setSyncEngineHealthAtom(health);
         }
       })
-      .catch((err) => {
-        console.warn("[SyncEvents] Failed to get initial health state:", err);
+      .catch((err: unknown) => {
+        console.warn("[SyncEvents] Failed to get initial health state:", errorMessage(err));
       });
 
     (async () => {
@@ -149,7 +150,7 @@ export function useSyncEvents() {
       } catch (err) {
         console.warn(
           "[SyncEvents] Failed to register event listeners:",
-          err
+          errorMessage(err)
         );
       }
     })();

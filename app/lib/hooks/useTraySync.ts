@@ -26,6 +26,7 @@ import { useAtom, useSetAtom } from "jotai";
 import { vpnConnectedAtom } from "@/components/dashboard-title-wrapper/vpn-menu/vpnAtoms";
 import type { SyncSnapshot } from "../types/syncSnapshot";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
+import { errorMessage } from "@/app/lib/utils/errorUtils";
 
 /* ─ IDs ───────────────────────────────────────────────────────── */
 const TRAY_ID = "hippius-tray";
@@ -1060,7 +1061,7 @@ function startSyncActivityWatcher() {
         syncDeleteItem = null;
       }
     } catch (error) {
-      console.error("[TraySync] Error updating sync summary:", error);
+      console.error("[TraySync] Error updating sync summary:", errorMessage(error));
     }
   };
 

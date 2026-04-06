@@ -5,6 +5,7 @@ import { atom, useAtomValue, useSetAtom } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { EMPTY_SNAPSHOT, type SyncSnapshot } from "../types/syncSnapshot";
+import { errorMessage } from "../utils/errorUtils";
 
 export const snapshotAtom = atom<SyncSnapshot>(EMPTY_SNAPSHOT);
 
@@ -25,8 +26,8 @@ export function useSyncSnapshotListener() {
       .then((snapshot) => {
         if (!cancelled) setSnapshot(snapshot);
       })
-      .catch((err) => {
-        console.error("[SyncSnapshot] Failed to get initial snapshot:", err);
+      .catch((err: unknown) => {
+        console.error("[SyncSnapshot] Failed to get initial snapshot:", errorMessage(err));
       });
 
     let unsubFn: (() => void) | null = null;
@@ -41,8 +42,8 @@ export function useSyncSnapshotListener() {
           unsubFn = unsub;
         }
       })
-      .catch((err) => {
-        console.error("[SyncSnapshot] Failed to listen:", err);
+      .catch((err: unknown) => {
+        console.error("[SyncSnapshot] Failed to listen:", errorMessage(err));
       });
 
     return () => {

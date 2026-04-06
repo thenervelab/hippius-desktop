@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import SyncStatusDialog from "./SyncStatusDialog";
 import { useSyncSnapshot } from "../lib/hooks/useSyncSnapshot";
+import { errorMessage } from "../lib/utils/errorUtils";
 
 /**
  * Sync status widget handler.
@@ -28,8 +29,8 @@ const SyncStatusHandler: React.FC = () => {
       }
     })
       .then((u) => { if (cancelled) u(); else unsubs.push(u); })
-      .catch((err) => {
-        console.warn("[SyncStatusHandler] Failed to listen for sync_stopped:", err);
+      .catch((err: unknown) => {
+        console.warn("[SyncStatusHandler] Failed to listen for sync_stopped:", errorMessage(err));
       });
 
     return () => {
