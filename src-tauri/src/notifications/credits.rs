@@ -85,16 +85,13 @@ pub async fn check_low_credit_notification(
     let planck: u128 = credit_balance_planck.parse().unwrap_or(0);
     let credit_balance = planck as f64 / 1e18;
 
-    // Read state flags
-    let first_time = sqlx::query_as::<_, (i32,)>("SELECT is_first_time FROM app_state WHERE id = 1")
-        .fetch_optional(pool)
-        .await?
-        .is_none_or(|(v,)| v != 0);
-
-    let above_half = sqlx::query_as::<_, (i32,)>("SELECT is_above_half_credit FROM app_state WHERE id = 1")
-        .fetch_optional(pool)
-        .await?
-        .is_some_and(|(v,)| v != 0);
+    // Read both state flags in a single query (1 round-trip instead of 2)
+    let (first_time, above_half) = sqlx::query_as::<_, (i32, i32)>(
+        "SELECT is_first_time, is_above_half_credit FROM app_state WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await?
+    .map_or((true, false), |(ft, ah)| (ft != 0, ah != 0));
 
     // Credits >= 0.5: update flags and return no notification
     if credit_balance >= 0.5 {
@@ -214,32 +211,51 @@ pub async fn process_credit_events(
         return Ok(Vec::new());
     };
 
+    // Pre-filter events by timestamp (no DB needed)
+    let candidates: Vec<(&CreditEventInput, String)> = events
+        .iter()
+        .filter_map(|event| {
+            let event_ms = chrono::DateTime::parse_from_rfc3339(&event.timestamp)
+                .map(|d| d.timestamp_millis())
+                .or_else(|_| event.timestamp.parse::<i64>())
+                .unwrap_or(0);
+            if event_ms <= welcome_ms {
+                return None;
+            }
+            let subtype = format!("MintedAccountCredits-{}", event.timestamp);
+            Some((event, subtype))
+        })
+        .collect();
+
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Batch dedup: single query with IN clause instead of N per-event queries
+    let placeholders: String = candidates.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let query_str = format!(
+        "SELECT notification_subtype FROM notifications WHERE notification_subtype IN ({placeholders})"
+    );
+    let mut query = sqlx::query_scalar::<_, String>(&query_str);
+    for (_, subtype) in &candidates {
+        query = query.bind(subtype);
+    }
+    let existing: std::collections::HashSet<String> =
+        query.fetch_all(pool).await?.into_iter().collect();
+
+    // Build notifications, skipping already-existing subtypes
     let mut notifications = Vec::new();
-
-    for event in &events {
-        // Parse event timestamp
-        let event_ms = chrono::DateTime::parse_from_rfc3339(&event.timestamp)
-            .map(|d| d.timestamp_millis())
-            .or_else(|_| event.timestamp.parse::<i64>())
-            .unwrap_or(0);
-
-        if event_ms <= welcome_ms {
-            continue;
-        }
-
-        // Check dedup
-        let subtype = format!("MintedAccountCredits-{}", event.timestamp);
-        let exists = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications WHERE notification_subtype = ?")
-            .bind(&subtype)
-            .fetch_one(pool)
-            .await?;
-
-        if exists.0 > 0 {
+    for (event, subtype) in candidates {
+        if existing.contains(&subtype) {
             continue;
         }
 
         // Parse amount from raw blockchain value
-        let clean_amount = event.amount.chars().filter(char::is_ascii_digit).collect::<String>();
+        let clean_amount = event
+            .amount
+            .chars()
+            .filter(char::is_ascii_digit)
+            .collect::<String>();
         let amount: f64 = if clean_amount.is_empty() {
             0.0
         } else {
@@ -312,6 +328,8 @@ pub async fn create_credit_notifications(
     let pool = state.pool()?;
     let mut count = 0u32;
 
+    // Wrap all INSERTs in a single transaction (1 fsync instead of N)
+    let mut tx = pool.begin().await?;
     for n in &notifications {
         sqlx::query(
             r"
@@ -327,10 +345,11 @@ pub async fn create_credit_notifications(
         .bind(&n.subtype)
         .bind(&n.title)
         .bind(&n.description)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
         count += 1;
     }
+    tx.commit().await?;
 
     Ok(count)
 }
