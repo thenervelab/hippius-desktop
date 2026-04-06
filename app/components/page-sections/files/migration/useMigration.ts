@@ -257,9 +257,21 @@ export function useMigration(
         setCurrentStep("setup");
         return;
       }
+      // Password exists but mnemonic file may not — persist it before launching
+      if (getMnemonic) {
+        const mnemonic = await getMnemonic();
+        if (mnemonic) {
+          await invoke("persist_master_mnemonic", {
+            accountId,
+            mnemonic,
+          }).catch((err: unknown) =>
+            console.warn("[Migration] persist_master_mnemonic failed:", err)
+          );
+        }
+      }
       await launchServerMigration(accountId);
     },
-    [launchServerMigration]
+    [launchServerMigration, getMnemonic]
   );
 
   const onSetupComplete = useCallback(
@@ -269,6 +281,21 @@ export function useMigration(
 
       try {
         await saveHcfsConfig(pendingAccountId, result.serverUrl, result.password);
+
+        // Persist the master mnemonic to disk now that the drive password
+        // exists — start_server_migration needs it to derive encryption keys.
+        if (getMnemonic) {
+          const mnemonic = await getMnemonic();
+          if (mnemonic) {
+            await invoke("persist_master_mnemonic", {
+              accountId: pendingAccountId,
+              mnemonic,
+            }).catch((err: unknown) =>
+              console.warn("[Migration] persist_master_mnemonic failed:", err)
+            );
+          }
+        }
+
         setIsSettingUp(false);
         await launchServerMigration(pendingAccountId);
       } catch (err) {
@@ -277,7 +304,7 @@ export function useMigration(
         setCurrentStep("prompt");
       }
     },
-    [pendingAccountId, launchServerMigration]
+    [pendingAccountId, launchServerMigration, getMnemonic]
   );
 
   const cancelMigration = useCallback(async () => {

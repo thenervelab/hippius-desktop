@@ -446,6 +446,7 @@ pub async fn start_server_migration(
     account_id: String,
     total_size: u64,
 ) -> Result<StartServerMigrationResult> {
+    tracing::info!("[Migration] Starting server migration for account {account_id}, total_size={total_size}");
     state.migration.in_progress.store(true, Ordering::SeqCst);
     state.migration.poll_failure_count.store(0, Ordering::SeqCst);
 
@@ -455,8 +456,17 @@ pub async fn start_server_migration(
     let pool = state.pool()?;
 
     // Derive path_prefix from server migration files (bucket name)
-    let server_url = get_server_url(pool, &account_id).await?;
-    let files = fetch_migration_files(&state.migration.client, &server_url, &account_id).await?;
+    let server_url = get_server_url(pool, &account_id).await.map_err(|e| {
+        tracing::error!("[Migration] Failed to get server URL: {e}");
+        e
+    })?;
+    tracing::info!("[Migration] Server URL: {server_url}");
+
+    let files = fetch_migration_files(&state.migration.client, &server_url, &account_id).await.map_err(|e| {
+        tracing::error!("[Migration] Failed to fetch migration files: {e}");
+        e
+    })?;
+    tracing::info!("[Migration] Found {} migration files", files.len());
     let path_prefix = derive_path_prefix(&files);
 
     // Check disk space — files will be downloaded locally after server migration
@@ -469,17 +479,26 @@ pub async fn start_server_migration(
     }
 
     // Recover the master mnemonic to derive the encryption key
-    let password = crate::sync::config::get_drive_password(pool, &account_id).await?;
+    let password = crate::sync::config::get_drive_password(pool, &account_id).await.map_err(|e| {
+        tracing::error!("[Migration] Failed to get drive password: {e}");
+        e
+    })?;
     let mnemonic_path = crate::sync::mnemonic::master_mnemonic_path(&account_id)?;
     let mnemonic = hcfs_client::auth::recover_mnemonic(&mnemonic_path, &password)
-        .map_err(|e| crate::error::AppError::Other(format!("Failed to recover mnemonic: {e}")))?;
+        .map_err(|e| {
+            tracing::error!("[Migration] Failed to recover mnemonic: {e}");
+            crate::error::AppError::Other(format!("Failed to recover mnemonic: {e}"))
+        })?;
 
     let seed = mnemonic.to_seed("");
     let encryption_key_hex = hex::encode(&seed[..32]);
 
     // Derive Ed25519 signing key from seed
     let signing_key =
-        hcfs_client::auth::recover_signing_key(seed).map_err(|e| crate::error::AppError::Other(format!("Failed to derive signing key: {e}")))?;
+        hcfs_client::auth::recover_signing_key(seed).map_err(|e| {
+            tracing::error!("[Migration] Failed to derive signing key: {e}");
+            crate::error::AppError::Other(format!("Failed to derive signing key: {e}"))
+        })?;
 
     // Sign the migration request
     let signing_text = format!(
@@ -490,16 +509,30 @@ pub async fn start_server_migration(
     let signature = signing_key.sign(signing_text.as_bytes());
 
     // Fetch per-user S3 credentials from Hippius API
-    let (s3_access_key, s3_secret_key) = fetch_s3_credentials(&state.migration.client, pool, &account_id).await?;
+    let (s3_access_key, s3_secret_key) = fetch_s3_credentials(&state.migration.client, pool, &account_id).await.map_err(|e| {
+        tracing::error!("[Migration] Failed to fetch S3 credentials: {e}");
+        e
+    })?;
+
+    // Retrieve API token for authorization
+    let api_token = crate::auth::tokens::get_api_token(pool, &account_id)
+        .await
+        .map_err(crate::error::AppError::Other)?
+        .ok_or_else(|| {
+            tracing::error!("[Migration] No API token available");
+            crate::error::AppError::Other("No API token available — log in first".into())
+        })?;
 
     // Call server endpoint — use a longer timeout since the server
     // validates credentials and sets up the migration job.
     let url = format!("{}/migration/start", server_url.trim_end_matches('/'));
+    tracing::info!("[Migration] Posting to {url}");
 
     let resp = state
         .migration
         .client
         .post(&url)
+        .header("Authorization", format!("Bearer {api_token}"))
         .timeout(std::time::Duration::from_secs(120))
         .json(&serde_json::json!({
             "ss58_address": account_id,
@@ -512,14 +545,20 @@ pub async fn start_server_migration(
             "signing_key": signing_key.verifying_key().to_bytes().to_vec(),
         }))
         .send()
-        .await?;
+        .await
+        .map_err(|e| {
+            tracing::error!("[Migration] HTTP request failed: {e}");
+            e
+        })?;
 
     if !resp.status().is_success() {
         let text = resp.text().await.unwrap_or_default();
+        tracing::error!("[Migration] Server returned error: {text}");
         return Err(crate::error::AppError::Other(format!("Migration start failed: {text}")));
     }
 
     let result: StartServerMigrationResult = resp.json().await?;
+    tracing::info!("[Migration] Server migration started successfully");
     Ok(result)
 }
 
