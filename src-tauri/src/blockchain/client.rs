@@ -56,6 +56,8 @@ pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Res
                         // Cache the RPC client for legacy methods (e.g. get_block_timestamp)
                         if let Ok(mut rpc_lock) = app_state.blockchain.rpc_client.write() {
                             *rpc_lock = Some(rpc);
+                        } else {
+                            warn!("Failed to acquire write lock to cache RPC client");
                         }
 
                         info!(
