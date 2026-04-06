@@ -75,6 +75,7 @@ const MigrationChecker: React.FC = () => {
           open
           onCancel={migration.cancelMigration}
           files={migration.files}
+          fileCount={migration.fileCount}
           currentFileIndex={migration.currentFileIndex}
           overallProgress={migration.overallProgress}
           currentFileName={
@@ -90,7 +91,7 @@ const MigrationChecker: React.FC = () => {
           onClose={migration.closeMigration}
           successCount={migration.successCount}
           failedCount={migration.failedCount}
-          totalCount={migration.files.length}
+          totalCount={migration.fileCount}
           failedFiles={migration.failedFiles}
           transitionError={migration.transitionError}
           onRetry={migration.closeMigration}

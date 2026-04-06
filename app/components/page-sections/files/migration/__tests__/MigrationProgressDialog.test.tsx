@@ -74,6 +74,7 @@ const defaultProps = {
   open: true,
   onCancel: vi.fn(),
   files: makeFiles(3),
+  fileCount: 3,
   currentFileIndex: 0,
   overallProgress: 25,
   currentFileName: "bucket/file-0.txt",

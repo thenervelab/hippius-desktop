@@ -19,6 +19,8 @@ export interface MigrationProgressDialogProps {
     open: boolean;
     onCancel: () => void;
     files: MigrationFile[];
+    /** Total file count (may exceed files.length for large migrations). */
+    fileCount: number;
     currentFileIndex: number;
     overallProgress: number;
     currentFileName: string;
@@ -38,13 +40,14 @@ const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
     open,
     onCancel,
     files,
+    fileCount,
     currentFileIndex,
     overallProgress,
     currentFileName,
     isCancelling = false,
     totalSize = 0,
 }) => {
-    const totalCount = files.length;
+    const totalCount = fileCount;
     // Derive counts from poll data (currentFileIndex = completed count)
     // to avoid O(n) filter on 100k+ files every render.
     const completedCount = files.length <= 1000
