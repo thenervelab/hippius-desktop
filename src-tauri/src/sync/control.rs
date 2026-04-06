@@ -129,7 +129,13 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, resolutions: HashMap
     // Resume auto-sync for this drive
     sync.clear_drive_review(&label);
 
-    // Update shared state
+    // Update per-drive UI state. `is_syncing` flips to false immediately
+    // because the sync cycle IS done from the user's perspective.
+    // `syncs_in_progress` (the global watcher-suppression counter) stays
+    // elevated for another WATCHER_REENABLE_DELAY via the spawned task
+    // above — that's intentional: the two track different things.
+    //   is_syncing        = "is this drive's sync cycle running?" (UI)
+    //   syncs_in_progress = "should the file watcher suppress events?" (internal)
     sync.update_state(&label, |s| {
         s.is_syncing = false;
         s.last_sync_time = Some(chrono::Utc::now().timestamp());
