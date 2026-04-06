@@ -10,6 +10,8 @@ use std::pin::Pin;
 use std::sync::Mutex as StdMutex;
 use tauri::{AppHandle, Emitter};
 
+use super::events;
+
 /// Tauri adapter that implements both sync traits.
 ///
 /// Stores the `AppHandle` behind a mutex so it can be created before the
@@ -64,14 +66,18 @@ impl SyncEventHandler for TauriSyncBridge {
                 remote_delete_files,
             } => {
                 let _ = app.emit(
-                    "hcfs_sync_started",
-                    serde_json::json!({
-                        "label": label,
-                        "uploads": uploads, "downloads": downloads,
-                        "localDeletes": local_deletes, "remoteDeletes": remote_deletes,
-                        "uploadFiles": upload_files, "downloadFiles": download_files,
-                        "localDeleteFiles": local_delete_files, "remoteDeleteFiles": remote_delete_files,
-                    }),
+                    events::SYNC_STARTED,
+                    events::SyncStartedPayload {
+                        label,
+                        uploads,
+                        downloads,
+                        local_deletes,
+                        remote_deletes,
+                        upload_files,
+                        download_files,
+                        local_delete_files,
+                        remote_delete_files,
+                    },
                 );
             }
             SyncEvent::SyncCompleted {
@@ -84,14 +90,16 @@ impl SyncEventHandler for TauriSyncBridge {
                 conflicts_skipped,
             } => {
                 let _ = app.emit(
-                    "hcfs_sync_completed",
-                    serde_json::json!({
-                        "label": label,
-                        "files_uploaded": files_uploaded, "files_downloaded": files_downloaded,
-                        "files_deleted_locally": files_deleted_locally,
-                        "files_deleted_remotely": files_deleted_remotely,
-                        "conflicts_resolved": conflicts_resolved, "conflicts_skipped": conflicts_skipped,
-                    }),
+                    events::SYNC_COMPLETED,
+                    events::SyncCompletedPayload {
+                        label,
+                        files_uploaded,
+                        files_downloaded,
+                        files_deleted_locally,
+                        files_deleted_remotely,
+                        conflicts_resolved,
+                        conflicts_skipped,
+                    },
                 );
             }
             SyncEvent::SyncError {
@@ -101,22 +109,22 @@ impl SyncEventHandler for TauriSyncBridge {
                 consecutive_failures,
             } => {
                 let _ = app.emit(
-                    "hcfs_sync_error",
-                    serde_json::json!({
-                        "label": label, "error": error,
-                        "retry_in_secs": retry_in_secs, "consecutive_failures": consecutive_failures,
-                    }),
+                    events::SYNC_ERROR,
+                    events::SyncErrorPayload {
+                        label,
+                        error,
+                        retry_in_secs,
+                        consecutive_failures,
+                    },
                 );
             }
             SyncEvent::SyncStopped { label } => {
-                let _ = app.emit("hcfs_sync_stopped", serde_json::json!({ "label": label }));
+                let _ = app.emit(events::SYNC_STOPPED, events::LabelPayload { label });
             }
             SyncEvent::SyncReset { account_id, message } => {
                 let _ = app.emit(
-                    "hcfs_sync_reset",
-                    serde_json::json!({
-                        "account_id": account_id, "message": message,
-                    }),
+                    events::SYNC_RESET,
+                    events::SyncResetPayload { account_id, message },
                 );
             }
             SyncEvent::PlanReady {
@@ -131,22 +139,24 @@ impl SyncEventHandler for TauriSyncBridge {
                 remote_delete_files,
             } => {
                 let _ = app.emit(
-                    "hcfs_sync_plan_ready",
-                    serde_json::json!({
-                        "label": label,
-                        "uploads": uploads, "downloads": downloads,
-                        "localDeletes": local_deletes, "remoteDeletes": remote_deletes,
-                        "uploadFiles": upload_files, "downloadFiles": download_files,
-                        "localDeleteFiles": local_delete_files, "remoteDeleteFiles": remote_delete_files,
-                    }),
+                    events::SYNC_PLAN_READY,
+                    events::SyncPlanReadyPayload {
+                        label,
+                        uploads,
+                        downloads,
+                        local_deletes,
+                        remote_deletes,
+                        upload_files,
+                        download_files,
+                        local_delete_files,
+                        remote_delete_files,
+                    },
                 );
             }
             SyncEvent::ConflictsPending { label, staged } => {
                 let _ = app.emit(
-                    "hcfs_conflicts_pending",
-                    serde_json::json!({
-                        "label": label, "staged": staged,
-                    }),
+                    events::CONFLICTS_PENDING,
+                    events::ConflictsPendingPayload { label, staged },
                 );
             }
             // Per-chunk transfer progress is served via the throttled
@@ -157,45 +167,42 @@ impl SyncEventHandler for TauriSyncBridge {
             SyncEvent::UploadProgress { .. } | SyncEvent::DownloadProgress { .. } => {}
             SyncEvent::ScanProgress { label, scanned, path } => {
                 let _ = app.emit(
-                    "hcfs_scan_progress",
-                    serde_json::json!({
-                        "label": label, "scanned": scanned, "path": path,
-                    }),
+                    events::SCAN_PROGRESS,
+                    events::ScanProgressPayload { label, scanned, path },
                 );
             }
             SyncEvent::FetchProgress { label, fetched, total } => {
                 let _ = app.emit(
-                    "hcfs_fetch_progress",
-                    serde_json::json!({
-                        "label": label, "fetched": fetched, "total": total,
-                    }),
+                    events::FETCH_PROGRESS,
+                    events::FetchProgressPayload { label, fetched, total },
                 );
             }
             SyncEvent::FileTransferComplete { label } => {
                 let _ = app.emit(
-                    "hcfs_file_transfer_complete",
-                    serde_json::json!({
-                        "label": label,
-                    }),
+                    events::FILE_TRANSFER_COMPLETE,
+                    events::LabelPayload { label },
                 );
             }
             SyncEvent::HealthChanged { health } => {
-                let _ = app.emit("hcfs_connectivity_changed", &health);
+                let _ = app.emit(events::CONNECTIVITY_CHANGED, &health);
             }
             SyncEvent::FolderRecovered { label } => {
-                let _ = app.emit("hcfs_folder_recovered", serde_json::json!({ "label": label }));
+                let _ = app.emit(events::FOLDER_RECOVERED, events::LabelPayload { label });
             }
             SyncEvent::ReviewModeTimeout { label } => {
-                let _ = app.emit("hcfs_review_mode_timeout", serde_json::json!({ "label": label }));
+                let _ = app.emit(events::REVIEW_MODE_TIMEOUT, events::LabelPayload { label });
             }
             SyncEvent::ActivityUpdated => {
-                let _ = app.emit("hcfs_activity_updated", ());
+                let _ = app.emit(events::ACTIVITY_UPDATED, ());
             }
             SyncEvent::AuthRequired { error } => {
-                let _ = app.emit("hcfs_auth_relogin_required", serde_json::json!({ "error": error }));
+                let _ = app.emit(
+                    events::AUTH_RELOGIN_REQUIRED,
+                    events::AuthRequiredPayload { error },
+                );
             }
             SyncEvent::ProgressSnapshot { snapshot } => {
-                let _ = app.emit("sync_progress_snapshot", &snapshot);
+                let _ = app.emit(events::PROGRESS_SNAPSHOT, &snapshot);
             }
         }
     }

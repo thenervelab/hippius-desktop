@@ -32,6 +32,10 @@ pub const REVIEW_MODE_TIMEOUT: &str = "hcfs_review_mode_timeout";
 pub const CONFLICTS_PENDING: &str = "hcfs_conflicts_pending";
 /// Emitted when the recent activity list changes.
 pub const ACTIVITY_UPDATED: &str = "hcfs_activity_updated";
+/// Emitted when the backend detects credentials are invalid and re-login is needed.
+pub const AUTH_RELOGIN_REQUIRED: &str = "hcfs_auth_relogin_required";
+/// Emitted with a full progress snapshot for the sync status widget.
+pub const PROGRESS_SNAPSHOT: &str = "sync_progress_snapshot";
 
 // ── Payload structs for direct Tauri emission ──────────────────────────
 // Used by lifecycle.rs (progress callbacks) and control.rs (manual sync).
@@ -130,11 +134,17 @@ pub struct SyncPlanReadyPayload {
     pub label: String,
     pub uploads: usize,
     pub downloads: usize,
+    #[serde(rename = "localDeletes")]
     pub local_deletes: usize,
+    #[serde(rename = "remoteDeletes")]
     pub remote_deletes: usize,
+    #[serde(rename = "uploadFiles")]
     pub upload_files: Vec<String>,
+    #[serde(rename = "downloadFiles")]
     pub download_files: Vec<String>,
+    #[serde(rename = "localDeleteFiles")]
     pub local_delete_files: Vec<String>,
+    #[serde(rename = "remoteDeleteFiles")]
     pub remote_delete_files: Vec<String>,
 }
 
@@ -144,11 +154,17 @@ pub struct SyncStartedPayload {
     pub label: String,
     pub uploads: usize,
     pub downloads: usize,
+    #[serde(rename = "localDeletes")]
     pub local_deletes: usize,
+    #[serde(rename = "remoteDeletes")]
     pub remote_deletes: usize,
+    #[serde(rename = "uploadFiles")]
     pub upload_files: Vec<String>,
+    #[serde(rename = "downloadFiles")]
     pub download_files: Vec<String>,
+    #[serde(rename = "localDeleteFiles")]
     pub local_delete_files: Vec<String>,
+    #[serde(rename = "remoteDeleteFiles")]
     pub remote_delete_files: Vec<String>,
 }
 
@@ -166,4 +182,10 @@ impl SyncStartedPayload {
             remote_delete_files: Vec::new(),
         }
     }
+}
+
+/// Emitted when the backend detects credentials are invalid and re-login is needed.
+#[derive(Serialize, Clone)]
+pub struct AuthRequiredPayload {
+    pub error: String,
 }
