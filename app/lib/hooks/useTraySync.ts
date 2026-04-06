@@ -6,7 +6,6 @@ import {
   PredefinedMenuItem,
 } from "@tauri-apps/api/menu";
 import { useEffect } from "react";
-import { logger } from "@/lib/utils/logger";
 import { invoke } from "@tauri-apps/api/core";
 import { resolveResource } from "@tauri-apps/api/path";
 import {
@@ -563,73 +562,6 @@ async function setTrayIconSyncing(
   }
 }
 
-/* ─ Public: keep your existing percent label behavior ─────────── */
-async function updateTraySyncPercent(percent: number | null) {
-  // Use the same mutex as updateTraySyncLabel
-  if (isUpdatingTrayLabel) {
-    logger.debug("[TraySync] Skipping percent update - already in progress");
-    return;
-  }
-  isUpdatingTrayLabel = true;
-  
-  try {
-    const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
-    if (!menu) {
-      isUpdatingTrayLabel = false;
-      return;
-    }
-
-    const items = await menu.items();
-
-    // ALWAYS search for existing sync items in the menu
-    const existingItems = items.filter((i) => i.id === SYNC_ID);
-    if (existingItems.length > 1) {
-      for (let i = 1; i < existingItems.length; i++) {
-        await menu.remove(existingItems[i]);
-      }
-    }
-    syncItem = existingItems[0] as MenuItem | null;
-
-    // If percent is null, we want to remove the sync item
-    if (percent === null) {
-      if (syncItem) {
-        await menu.remove(syncItem);
-        syncItem = null;
-      }
-      await setTrayIconSyncing(false, false);
-      return;
-    }
-
-    const isCompleted = percent >= 100;
-    
-    let label: string;
-    if (isCompleted) {
-      label = "✓ Sync: Completed";
-    } else {
-      label = `⟳ Sync: ${Math.round(percent)}%`;
-    }
-
-    // If sync item doesn't exist yet, create it and add it to the menu
-    if (!syncItem) {
-      syncItem = await MenuItem.new({
-        id: SYNC_ID,
-        text: label,
-        enabled: false,
-      });
-
-      // Insert at position 0 — sync info goes at the very top of the menu
-      await menu.insert(syncItem, 0);
-    } else {
-      await syncItem.setText(label);
-    }
-
-    // Updated to pass both syncing and completed status
-    await setTrayIconSyncing(percent < 100, percent >= 100);
-  } finally {
-    isUpdatingTrayLabel = false;
-  }
-}
-
 /* ─ Update tray sync label (simpler version without percentage) ─── */
 // Mutex to prevent concurrent updates causing duplicates
 let isUpdatingTrayLabel = false;
@@ -738,13 +670,6 @@ async function clearTrayFileEntries() {
   }
 }
 
-
-// Deprecated: Keep for backwards compatibility but don't use internally
-export async function setTraySyncPercent(percent: number | null) {
-  // logTrayAction("setTraySyncPercent is deprecated, use syncPercentAtom instead", { percent });
-  // Just forward to the internal implementation for now
-  await updateTraySyncPercent(percent);
-}
 
 /* ─ Login status watcher (updates tray menu on login/logout) ──── */
 let vpnStateSetter: ((enabled: boolean) => void) | null = null;

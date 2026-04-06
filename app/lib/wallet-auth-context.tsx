@@ -141,32 +141,31 @@ export function WalletAuthProvider({
 
   const logout = useCallback(
     async (redirectPath?: string) => {
-      try {
-        // Single Rust call: stops sync, clears auth, clears progress data
-        const currentAddress = polkadotAddressRef.current;
-        await invoke("logout_full", { accountId: currentAddress || "" }).catch((err: unknown) =>
-          console.warn("[WalletAuth] logout_full failed:", err)
-        );
-
-        // Clear browser-side OAuth session (Rust can't access localStorage)
-        if (typeof window !== "undefined") {
-          localStorage.removeItem("hippius_oauth_session");
-          localStorage.removeItem("hippius_oauth_session_expiry");
-          localStorage.removeItem("hippius_oauth_provider");
-        }
-
-        // Immediately invalidate login status cache so the tray watcher
-        // picks up the logged-out state on its next 2-second tick.
-        clearLoginStatusCache();
-      } catch (error) {
-        console.error("Failed to cleanup sync on logout:", error);
-      }
-
-      // Clear the logout timer if it exists
+      // Clear the logout timer first to prevent re-entrant calls
       if (logoutTimerRef.current) {
         clearTimeout(logoutTimerRef.current);
         logoutTimerRef.current = null;
       }
+
+      try {
+        // Single Rust call: stops sync, clears auth, clears progress data.
+        // Awaited so sync teardown completes before we clear local state.
+        const currentAddress = polkadotAddressRef.current;
+        await invoke("logout_full", { accountId: currentAddress || "" });
+      } catch (err) {
+        console.warn("[WalletAuth] logout_full failed:", err);
+      }
+
+      // Clear browser-side OAuth session (Rust can't access localStorage)
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("hippius_oauth_session");
+        localStorage.removeItem("hippius_oauth_session_expiry");
+        localStorage.removeItem("hippius_oauth_provider");
+      }
+
+      // Immediately invalidate login status cache so the tray watcher
+      // picks up the logged-out state on its next 2-second tick.
+      clearLoginStatusCache();
 
       setPolkadotAddress(null);
       setAuthType(null);
