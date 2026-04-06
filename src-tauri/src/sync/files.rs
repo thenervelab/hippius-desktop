@@ -968,18 +968,29 @@ pub async fn get_user_files(
     let mut total_private_size: u64 = 0;
     let sync_folder_labels: Vec<String> = sync_paths.iter().filter(|sp| !sp.path.is_empty()).map(|sp| sp.label.clone()).collect();
 
-    for sp in &sync_paths {
-        if sp.path.is_empty() {
-            continue;
-        }
-        let entries = match list_sync_folder(state.clone(), sp.path.clone(), None, Some(sp.label.clone())).await {
-            Ok(e) => e,
-            Err(err) => {
-                tracing::warn!(label = %sp.label, error = %err, "Failed to list sync folder");
-                continue;
+    // List all sync folders concurrently
+    let folder_futures: Vec<_> = sync_paths
+        .iter()
+        .filter(|sp| !sp.path.is_empty())
+        .map(|sp| {
+            let state = state.clone();
+            let path = sp.path.clone();
+            let label = sp.label.clone();
+            async move {
+                match list_sync_folder(state, path, None, Some(label.clone())).await {
+                    Ok(entries) => (label, entries),
+                    Err(err) => {
+                        tracing::warn!(label = %label, error = %err, "Failed to list sync folder");
+                        (label, Vec::new())
+                    }
+                }
             }
-        };
+        })
+        .collect();
 
+    let results = futures::future::join_all(folder_futures).await;
+
+    for (label, entries) in &results {
         total_private_size += entries.iter().map(|e| e.size).sum::<u64>();
 
         for entry in entries.iter().filter(|e| e.sync_status != "excluded") {
@@ -1013,6 +1024,9 @@ pub async fn get_user_files(
                 entry.name.clone()
             };
 
+            // Find the sync path for this label to get the folder path
+            let folder_path = sync_paths.iter().find(|sp| sp.label == *label).map_or("", |sp| sp.path.as_str());
+
             all_files.push(UserFileEntry {
                 name: display_name,
                 actual_file_name: entry.name.clone(),
@@ -1020,7 +1034,7 @@ pub async fn get_user_files(
                 created_at: created_at_ms,
                 arion_hash: entry.arion_hash.clone(),
                 arion_cid: entry.arion_cid.clone(),
-                source: format!("{}/{}", sp.path, entry.name),
+                source: format!("{folder_path}/{}", entry.name),
                 miner_ids: Vec::new(),
                 is_assigned: true,
                 last_charged_at: last_charged_at_ms,
@@ -1029,55 +1043,65 @@ pub async fn get_user_files(
                 is_erasure_coded: false,
                 main_req_hash: String::new(),
                 sync_status: entry.sync_status.clone(),
-                label: sp.label.clone(),
+                label: label.clone(),
                 file_count: if entry.is_folder { Some(entry.file_count) } else { None },
                 deleted: false,
             });
         }
     }
 
-    // Apply filters if provided
+    // Apply all filters in a single pass
     if let Some(ref f) = filters {
-        // Folder tab filter
-        if let Some(ref tab) = f.folder_tab {
-            all_files.retain(|file| file.label == *tab);
-        }
+        // Pre-compute lowercase search term once
+        let search_lower = f.search_term.as_ref().and_then(|s| {
+            let low = s.to_lowercase();
+            if low.is_empty() { None } else { Some(low) }
+        });
+        let now = chrono::Utc::now();
 
-        // Search filter
-        if let Some(ref search) = f.search_term {
-            let search = search.to_lowercase();
-            if !search.is_empty() {
-                all_files.retain(|file| file.name.to_lowercase().contains(&search) || file.arion_hash.to_lowercase().contains(&search));
+        all_files.retain(|file| {
+            // Folder tab filter
+            if let Some(ref tab) = f.folder_tab
+                && file.label != *tab
+            {
+                return false;
             }
-        }
 
-        // File type filter
-        if let Some(ref types) = f.file_types
-            && !types.is_empty()
-        {
-            all_files.retain(|file| {
-                if file.is_folder {
-                    return types.iter().any(|t| t == "folder");
-                }
-                let ext = file.name.rsplit('.').next().unwrap_or("").to_lowercase();
-                let file_type = match ext.as_str() {
-                    "jpg" | "jpeg" | "png" | "gif" | "bmp" | "svg" | "webp" | "ico" | "tiff" => "image",
-                    "mp4" | "mov" | "avi" | "mkv" | "wmv" | "flv" | "webm" | "m4v" | "3gp" => "video",
-                    "mp3" | "wav" | "ogg" | "flac" | "aac" | "wma" | "m4a" => "audio",
-                    "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "rtf" | "csv" | "md" => "document",
-                    "zip" | "tar" | "gz" | "rar" | "7z" | "bz2" => "archive",
-                    _ => "other",
+            // Search filter
+            if let Some(ref search) = search_lower
+                && !file.name.to_lowercase().contains(search)
+                && !file.arion_hash.to_lowercase().contains(search)
+            {
+                return false;
+            }
+
+            // File type filter
+            if let Some(ref types) = f.file_types
+                && !types.is_empty()
+            {
+                let matches = if file.is_folder {
+                    types.iter().any(|t| t == "folder")
+                } else {
+                    let ext = file.name.rsplit('.').next().unwrap_or("").to_lowercase();
+                    let file_type = match ext.as_str() {
+                        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "svg" | "webp" | "ico" | "tiff" => "image",
+                        "mp4" | "mov" | "avi" | "mkv" | "wmv" | "flv" | "webm" | "m4v" | "3gp" => "video",
+                        "mp3" | "wav" | "ogg" | "flac" | "aac" | "wma" | "m4a" => "audio",
+                        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "rtf" | "csv" | "md" => "document",
+                        "zip" | "tar" | "gz" | "rar" | "7z" | "bz2" => "archive",
+                        _ => "other",
+                    };
+                    types.iter().any(|t| t == file_type)
                 };
-                types.iter().any(|t| t == file_type)
-            });
-        }
+                if !matches {
+                    return false;
+                }
+            }
 
-        // Date filter
-        if let Some(ref date) = f.date_filter
-            && !date.is_empty()
-        {
-            let now = chrono::Utc::now();
-            all_files.retain(|file| {
+            // Date filter
+            if let Some(ref date) = f.date_filter
+                && !date.is_empty()
+            {
                 if file.created_at == 0 {
                     return false;
                 }
@@ -1089,8 +1113,7 @@ pub async fn get_user_files(
                 let Some(file_dt) = chrono::DateTime::from_timestamp_millis(file_ms) else {
                     return false;
                 };
-
-                match date.as_str() {
+                let date_matches = match date.as_str() {
                     "today" => file_dt.date_naive() == now.date_naive(),
                     "last7days" => (now - file_dt).num_days() <= 7,
                     "last30days" => (now - file_dt).num_days() <= 30,
@@ -1104,25 +1127,31 @@ pub async fn get_user_files(
                             true
                         }
                     }
+                };
+                if !date_matches {
+                    return false;
                 }
-            });
-        }
+            }
 
-        // File size filter
-        if let Some(ref sizes) = f.file_sizes
-            && !sizes.is_empty()
-        {
-            all_files.retain(|file| {
+            // File size filter
+            if let Some(ref sizes) = f.file_sizes
+                && !sizes.is_empty()
+            {
                 let size = file.size;
-                sizes.iter().any(|&threshold| match threshold {
+                let size_matches = sizes.iter().any(|&threshold| match threshold {
                     1 => size < 1_048_576,                                      // Small: < 1 MB
                     1_048_576 => (1_048_576..=104_857_600).contains(&size),     // Medium: 1-100 MB
                     104_857_600 => size > 104_857_600 && size <= 1_073_741_824, // Large: 100MB-1GB
                     1_073_741_824 => size > 1_073_741_824,                      // Very Large: > 1 GB
                     _ => size >= threshold,
-                })
-            });
-        }
+                });
+                if !size_matches {
+                    return false;
+                }
+            }
+
+            true
+        });
     }
 
     // Sort by timestamp (newest first)
