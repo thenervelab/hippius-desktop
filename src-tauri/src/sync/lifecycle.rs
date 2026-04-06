@@ -208,8 +208,6 @@ async fn teardown_previous_drive(sync: &SyncRunner, label: &str) {
 /// `sync_with_resolutions_cancellable`. Cancelling here causes any
 /// in-flight sync to unwind at its next await point rather than being
 /// torn down mid-operation by `JoinHandle::abort`.
-// TODO: wired up in Task 6 of docs/plans/2026-04-05-sync-engine-hardening.md
-#[allow(dead_code)]
 async fn cancel_all_drive_tokens(sync: &SyncRunner) {
     let guard = sync.drives.lock().await;
     for (label, slot) in guard.iter() {
@@ -224,8 +222,6 @@ async fn cancel_all_drive_tokens(sync: &SyncRunner) {
 /// needed), `false` if the grace window expired. On timeout the
 /// `JoinHandle` is restored to `sync.loop_handle` so the caller's
 /// fallback `abort_sync_loop` can consume and abort it.
-// TODO: wired up in Task 6 of docs/plans/2026-04-05-sync-engine-hardening.md
-#[allow(dead_code)]
 async fn wait_for_sync_loop_exit(sync: &SyncRunner, grace: std::time::Duration) -> bool {
     let mut handle_guard = sync.loop_handle.lock().await;
     let Some(mut handle) = handle_guard.take() else {
@@ -251,8 +247,6 @@ async fn wait_for_sync_loop_exit(sync: &SyncRunner, grace: std::time::Duration) 
 /// Abort the sync loop task as a last resort. Called only after
 /// `wait_for_sync_loop_exit` returns false — a clean cancel-and-wait
 /// is always preferred.
-// TODO: wired up in Task 6 of docs/plans/2026-04-05-sync-engine-hardening.md
-#[allow(dead_code)]
 async fn abort_sync_loop(sync: &SyncRunner) {
     let mut handle_guard = sync.loop_handle.lock().await;
     if let Some(prev) = handle_guard.take() {
@@ -809,17 +803,25 @@ pub async fn stop_sync(app: AppHandle) -> Result<(), crate::error::AppError> {
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
+    // 1. Cancel every drive's cancellation token FIRST so the sync loop
+    //    sees a clean shutdown signal and can persist state before exiting.
+    cancel_all_drive_tokens(sync).await;
+
+    // 2. Request the global cancel (belt + braces for loop-level checks
+    //    and to prevent a fresh cycle from starting after the per-drive
+    //    tokens above are observed — `trigger_sync_for_drive` overwrites
+    //    `slot.cancel_token` with a fresh token at the start of each cycle).
     sync.request_cancel();
 
-    // Abort the background sync loop task to prevent spurious error events
-    {
-        let mut handle_guard = sync.loop_handle.lock().await;
-        if let Some(prev) = handle_guard.take() {
-            prev.abort();
-        }
+    // 3. Give the loop up to GRACEFUL_SHUTDOWN to observe the cancels and
+    //    exit on its own. Fall back to abort only if it hangs.
+    const GRACEFUL_SHUTDOWN: std::time::Duration = std::time::Duration::from_millis(500);
+    let clean_exit = wait_for_sync_loop_exit(sync, GRACEFUL_SHUTDOWN).await;
+    if !clean_exit {
+        abort_sync_loop(sync).await;
     }
 
-    // Clear the file watcher
+    // 4. Now safe to clear the watcher — no task is racing on sync state.
     {
         let mut watcher_guard = sync.watcher.lock().unwrap_or_else(|p| {
             warn!("Poisoned watcher mutex recovered in stop_sync");
@@ -828,12 +830,9 @@ pub async fn stop_sync(app: AppHandle) -> Result<(), crate::error::AppError> {
         *watcher_guard = None;
     }
 
+    // 5. Clear drives map and reset in-memory state.
     {
         let mut guard = sync.drives.lock().await;
-        // Cancel all in-progress syncs before clearing
-        for slot in guard.values() {
-            slot.cancel_token.cancel();
-        }
         guard.clear();
     }
     sync.reset_sync_counter();
