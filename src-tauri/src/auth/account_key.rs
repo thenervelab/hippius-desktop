@@ -1,21 +1,25 @@
 use sha2::{Digest, Sha256};
 
-/// Deterministic short key derived from the main account id to namespace per-user data.
-/// Uses 16 hex chars (64 bits) for effectively zero collision risk.
+/// Derive a 16-character hex account key from an account ID via SHA-256.
+///
+/// Used as the owner key for scoped credential storage (auth tokens, sync paths).
+/// Only the first 8 bytes of the digest are encoded, producing exactly 16 hex chars.
 pub fn account_key(account_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(account_id.as_bytes());
     let digest = hasher.finalize();
-    hex::encode(digest)[..16].to_string()
+    hex::encode(&digest[..8])
 }
 
-/// Legacy 8-char account key format (32 bits). Used only for migration
-/// from the old format to the new 16-char format.
+/// Derive an 8-character hex account key (legacy format).
+///
+/// Superseded by [`account_key`] which produces 16 chars. Retained for
+/// migration from the old storage format.
 pub fn account_key_legacy(account_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(account_id.as_bytes());
     let digest = hasher.finalize();
-    hex::encode(digest)[..8].to_string()
+    hex::encode(&digest[..4])
 }
 
 #[cfg(test)]
