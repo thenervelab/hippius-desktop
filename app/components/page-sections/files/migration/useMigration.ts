@@ -26,6 +26,10 @@ interface MigrationCheckResult {
   }>;
   sync_path: string | null;
   is_resuming: boolean;
+  /** Server migration finished but client never ran complete_migration_transition */
+  needs_completion: boolean;
+  /** When needs_completion is true, the server job's final status */
+  completion_status: string | null;
 }
 
 interface PollMigrationStatusResult {
@@ -188,6 +192,15 @@ export function useMigration(
           "check_migration",
           { accountId }
         );
+        // Server migration finished but client transition never ran
+        // (e.g. app restarted mid-migration) — show completion dialog.
+        if (result.needs_completion) {
+          setMigrationSucceeded(result.completion_status === "completed");
+          activeAccountIdRef.current = accountId;
+          setCurrentStep("complete");
+          return true;
+        }
+
         if (result.needs_migration) {
           const migrationFiles: MigrationFile[] = result.files.map((f) => ({
             arionHash: "",

@@ -42,6 +42,12 @@ pub struct MigrationCheckResult {
     pub files: Vec<MigrationFile>,
     pub sync_path: Option<String>,
     pub is_resuming: bool,
+    /// Server migration finished but `complete_migration_transition` never ran
+    /// (e.g. app restarted). Frontend should show the completion dialog.
+    pub needs_completion: bool,
+    /// When `needs_completion` is true, the server job's final status
+    /// ("completed", "failed", "cancelled") so the frontend can determine success.
+    pub completion_status: Option<String>,
 }
 
 /// Server response from GET /migration/{user_id}
@@ -258,10 +264,14 @@ pub async fn check_migration(
 ) -> Result<MigrationCheckResult> {
     let pool = state.pool()?;
 
-    // Only respect explicit user dismissal (skipped/dismissed).
+    let local_status = get_migration_status_db(pool, &account_id).await?;
+
+    // Only respect explicit user dismissal (skipped/dismissed) or completed.
     // For everything else, the server is the source of truth.
-    if let Some((status, ..)) = get_migration_status_db(pool, &account_id).await?
-        && (status.eq_ignore_ascii_case("dismissed") || status.eq_ignore_ascii_case("skipped"))
+    if let Some((ref status, ..)) = local_status
+        && (status.eq_ignore_ascii_case("dismissed")
+            || status.eq_ignore_ascii_case("skipped")
+            || status.eq_ignore_ascii_case("completed"))
     {
         return Ok(MigrationCheckResult {
             needs_migration: false,
@@ -270,6 +280,8 @@ pub async fn check_migration(
             files: vec![],
             sync_path: None,
             is_resuming: false,
+            needs_completion: false,
+            completion_status: None,
         });
     }
 
@@ -279,13 +291,56 @@ pub async fn check_migration(
     let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
     let total_size: u64 = pending.iter().map(|f| f.size_bytes).sum();
 
+    if !pending.is_empty() {
+        return Ok(MigrationCheckResult {
+            needs_migration: true,
+            file_count: pending.len() as u64,
+            total_size,
+            files: pending,
+            sync_path: None,
+            is_resuming: false,
+            needs_completion: false,
+            completion_status: None,
+        });
+    }
+
+    // No pending files — check if a server migration completed but the client
+    // never ran complete_migration_transition (e.g. app restarted mid-migration).
+    let has_local_in_progress = local_status
+        .as_ref()
+        .is_some_and(|(s, ..)| s.eq_ignore_ascii_case("in_progress"));
+
+    const TERMINAL_STATUSES: &[&str] = &["completed", "failed", "cancelled"];
+
+    if has_local_in_progress
+        && let Ok(job_status) = poll_migration_status_internal(&state, &account_id).await
+        && TERMINAL_STATUSES.contains(&job_status.status.as_str())
+    {
+        info!(
+            status = %job_status.status,
+            "Server migration finished but client transition pending — prompting user"
+        );
+        return Ok(MigrationCheckResult {
+            needs_migration: false,
+            file_count: 0,
+            total_size: 0,
+            files: vec![],
+            sync_path: None,
+            is_resuming: false,
+            needs_completion: true,
+            completion_status: Some(job_status.status),
+        });
+    }
+
     Ok(MigrationCheckResult {
-        needs_migration: !pending.is_empty(),
-        file_count: pending.len() as u64,
-        total_size,
-        files: pending,
+        needs_migration: false,
+        file_count: 0,
+        total_size: 0,
+        files: vec![],
         sync_path: None,
         is_resuming: false,
+        needs_completion: false,
+        completion_status: None,
     })
 }
 
@@ -558,6 +613,11 @@ pub async fn start_server_migration(
     }
 
     let result: StartServerMigrationResult = resp.json().await?;
+
+    // Save "in_progress" locally so check_migration can detect a completed
+    // server migration that was never transitioned (e.g. app restarted).
+    let _ = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await;
+
     tracing::info!("[Migration] Server migration started successfully");
     Ok(result)
 }
@@ -910,11 +970,14 @@ mod tests {
             }],
             sync_path: Some("/tmp/sync".into()),
             is_resuming: false,
+            needs_completion: false,
+            completion_status: None,
         };
 
         let json = serde_json::to_string(&result).expect("serialization failed");
         assert!(json.contains("\"needs_migration\":true"));
         assert!(json.contains("\"file_count\":3"));
+        assert!(json.contains("\"needs_completion\":false"));
     }
 
     #[test]
