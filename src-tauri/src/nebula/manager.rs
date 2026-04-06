@@ -479,15 +479,13 @@ pub async fn install_nebula(state: tauri::State<'_, crate::app_state::AppState>,
             let asset_path = std::path::Path::new(&asset_name);
             if asset_path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("zip")) {
                 let dir = nebula_dir.clone();
-                let b = bytes.clone();
-                tokio::task::spawn_blocking(move || extract_zip(&b, &dir))
+                tokio::task::spawn_blocking(move || extract_zip(&bytes, &dir))
                     .await
                     .map_err(|e| format!("Extract task panicked: {e}"))?
                     .map_err(|e| e.to_string())?;
             } else if asset_name.to_ascii_lowercase().ends_with(".tar.gz") {
                 let dir = nebula_dir.clone();
-                let b = bytes.clone();
-                tokio::task::spawn_blocking(move || extract_tar_gz(&b, &dir))
+                tokio::task::spawn_blocking(move || extract_tar_gz(&bytes, &dir))
                     .await
                     .map_err(|e| format!("Extract task panicked: {e}"))?
                     .map_err(|e| e.to_string())?;
