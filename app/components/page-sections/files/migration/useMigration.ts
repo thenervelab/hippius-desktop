@@ -367,9 +367,9 @@ export function useMigration(
     stopPolling();
     setTransitionError(null);
 
-    // Only complete the migration transition if it actually succeeded.
-    // On failure, just close the dialog — the user can retry on next login.
-    if (accountId && migrationSucceeded) {
+    // Complete the migration transition for any terminal state — even partial
+    // failures have successfully migrated files that should be accessible via sync.
+    if (accountId) {
       try {
         const existingMnemonic = getMnemonic ? await getMnemonic() : null;
         await invoke("complete_migration_transition", {
@@ -409,7 +409,7 @@ export function useMigration(
     setPendingAccountId(null);
     setIsSettingUp(false);
     activeAccountIdRef.current = null;
-  }, [getMnemonic, migrationSucceeded, stopPolling]);
+  }, [getMnemonic, stopPolling]);
 
   /** Dismiss the dialog after a transition error — user can set up sync manually. */
   const dismissAfterError = useCallback(() => {
