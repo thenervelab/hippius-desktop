@@ -598,15 +598,20 @@ pub struct RecentFile {
     pub label: String,
 }
 
+/// Bundled per-file metadata from synced paths, used to enrich recent file entries.
+/// Keyed by `"filename::label"` in the lookup map.
+struct MetadataBundle {
+    arion_hash: String,
+    arion_cid: String,
+    uploaded_at: i64,
+    updated_at: i64,
+}
+
 /// Fetch recent files by joining sync activity, sync paths, and file metadata.
 ///
 /// This replaces the 130-line orchestration in `use-recent-files/index.ts`.
 /// All data joining, filtering, deduplication, and sorting happens in Rust.
 #[tauri::command]
-#[expect(
-    clippy::too_many_lines,
-    reason = "Orchestration pipeline: activity fetch → label→path join → file-metadata hydration → filter → sort → dedupe. Intermediate state (label_to_path, seen_ids) is shared across steps; extraction requires threading >4 maps through helpers and harms readability more than it helps."
-)]
 pub async fn get_recent_files(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
@@ -631,26 +636,17 @@ pub async fn get_recent_files(
         .map(|sp| (sp.label.clone(), sp.path.clone()))
         .collect();
 
-    // 3. Get synced file metadata → build lookup maps
+    // 3. Get synced file metadata → build lookup map
     let metadata = get_synced_file_metadata(state.clone()).await.unwrap_or_default();
-    let mut arion_hash_map: HashMap<String, String> = HashMap::new();
-    let mut arion_cid_map: HashMap<String, String> = HashMap::new();
-    let mut uploaded_at_map: HashMap<String, i64> = HashMap::new();
-    let mut updated_at_map: HashMap<String, i64> = HashMap::new();
+    let mut meta_map: HashMap<String, MetadataBundle> = HashMap::with_capacity(metadata.len());
     for entry in &metadata {
         let key = format!("{}::{}", entry.file_name, entry.label);
-        if !entry.arion_hash.is_empty() {
-            arion_hash_map.insert(key.clone(), entry.arion_hash.clone());
-        }
-        if !entry.arion_cid.is_empty() {
-            arion_cid_map.insert(key.clone(), entry.arion_cid.clone());
-        }
-        if entry.uploaded_at != 0 {
-            uploaded_at_map.insert(key.clone(), entry.uploaded_at);
-        }
-        if entry.updated_at != 0 {
-            updated_at_map.insert(key, entry.updated_at);
-        }
+        meta_map.insert(key, MetadataBundle {
+            arion_hash: entry.arion_hash.clone(),
+            arion_cid: entry.arion_cid.clone(),
+            uploaded_at: entry.uploaded_at,
+            updated_at: entry.updated_at,
+        });
     }
 
     // 4. Filter deleted files
@@ -675,9 +671,9 @@ pub async fn get_recent_files(
     let mut result = Vec::new();
 
     for item in &non_deleted {
-        // Deduplicate by actualFileName + label
-        let dedup_key = format!("{}::{}", item.file_name, item.label);
-        if !seen.insert(dedup_key.clone()) {
+        // Deduplicate by actualFileName + label (reuse key for meta_map lookup)
+        let key = format!("{}::{}", item.file_name, item.label);
+        if !seen.insert(key.clone()) {
             continue;
         }
 
@@ -689,10 +685,13 @@ pub async fn get_recent_files(
         let display_name = item.file_name.rsplit('/').next().unwrap_or(&item.file_name).to_string();
         let display_name = if display_name.is_empty() { "Unknown".to_string() } else { display_name };
 
-        let key = format!("{}::{}", item.file_name, item.label);
+        let bundle = meta_map.remove(&key);
+        let (arion_hash, arion_cid, uploaded_at_sec, updated_at_sec) = match bundle {
+            Some(b) => (b.arion_hash, b.arion_cid, b.uploaded_at, b.updated_at),
+            None => (String::new(), String::new(), 0, 0),
+        };
+
         let activity_ms = if item.timestamp != 0 { item.timestamp * 1000 } else { now_ms };
-        let uploaded_at_sec = uploaded_at_map.get(&key).copied().unwrap_or(0);
-        let updated_at_sec = updated_at_map.get(&key).copied().unwrap_or(0);
         let created_at_ms = if uploaded_at_sec != 0 { uploaded_at_sec * 1000 } else { activity_ms };
         let last_charged_at_ms = if updated_at_sec != 0 {
             updated_at_sec * 1000
@@ -716,8 +715,8 @@ pub async fn get_recent_files(
             actual_file_name: item.file_name.clone(),
             size: item.size_bytes,
             created_at: created_at_ms,
-            arion_hash: arion_hash_map.get(&key).cloned().unwrap_or_default(),
-            arion_cid: arion_cid_map.get(&key).cloned().unwrap_or_default(),
+            arion_hash,
+            arion_cid,
             source,
             miner_ids: Vec::new(),
             is_assigned: true,
