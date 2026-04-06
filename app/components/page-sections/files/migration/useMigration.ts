@@ -366,6 +366,8 @@ export function useMigration(
     const accountId = activeAccountIdRef.current;
     stopPolling();
     setTransitionError(null);
+    // Close the dialog immediately so the user isn't blocked
+    setCurrentStep(null);
 
     // Complete the migration transition for any terminal state — even partial
     // failures have successfully migrated files that should be accessible via sync.
@@ -382,6 +384,8 @@ export function useMigration(
         console.error("[Migration] complete_migration_transition failed:", err);
         const errorMsg = err instanceof Error ? err.message : String(err);
         setTransitionError(errorMsg);
+        // Re-open the dialog so the user can retry
+        setCurrentStep("complete");
         toast.error("Failed to set up file sync after migration. You can retry or close and set it up later.");
         return; // Keep dialog open so user can retry
       }
