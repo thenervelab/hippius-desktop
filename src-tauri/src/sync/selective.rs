@@ -5,7 +5,7 @@
 //! gitignore-style) and are applied during `scan_local_files`.
 
 use crate::app_state::AppState;
-use crate::error::AppError;
+use crate::error::{AppError, Result};
 use hcfs_client::engine::runner::trigger_sync;
 use std::path::Path;
 use tauri::AppHandle;
@@ -15,7 +15,7 @@ use tracing::{debug, info};
 ///
 /// Rejects empty/whitespace-only patterns and patterns containing `../`
 /// (path traversal). Returns the trimmed pattern on success.
-fn validate_pattern(pattern: &str) -> Result<String, AppError> {
+fn validate_pattern(pattern: &str) -> Result<String> {
     let trimmed = pattern.trim().to_string();
     if trimmed.is_empty() {
         return Err(AppError::Validation("Pattern cannot be empty".into()));
@@ -32,7 +32,7 @@ fn validate_pattern(pattern: &str) -> Result<String, AppError> {
 /// then locks the manager to read patterns. Returns an empty list if the
 /// drive does not exist.
 #[tauri::command]
-pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, AppState>) -> Result<Vec<String>, AppError> {
+pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, AppState>) -> Result<Vec<String>> {
     let drive_arc = {
         let guard = app_state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
@@ -59,7 +59,7 @@ pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, Ap
 /// patterns), then delegates to `Drive::add_exclude_pattern`. Returns `true`
 /// if the pattern was added, `false` if it already existed.
 #[tauri::command]
-pub async fn add_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>) -> Result<bool, AppError> {
+pub async fn add_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>) -> Result<bool> {
     let trimmed = validate_pattern(&pattern)?;
 
     let drive_arc = {
@@ -90,7 +90,7 @@ pub async fn add_exclude_pattern(label: String, pattern: String, app_state: taur
 /// Delegates to `Drive::remove_exclude_pattern`. Returns `true` if the
 /// pattern was removed, `false` if it was not found.
 #[tauri::command]
-pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>) -> Result<bool, AppError> {
+pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>) -> Result<bool> {
     let drive_arc = {
         let guard = app_state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
@@ -116,7 +116,7 @@ pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: t
 
 /// Check whether a relative path is excluded by the drive's current rules.
 #[tauri::command]
-pub async fn is_file_excluded(label: String, path: String, is_dir: bool, app_state: tauri::State<'_, AppState>) -> Result<bool, AppError> {
+pub async fn is_file_excluded(label: String, path: String, is_dir: bool, app_state: tauri::State<'_, AppState>) -> Result<bool> {
     let drive_arc = {
         let guard = app_state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
@@ -150,7 +150,7 @@ pub async fn apply_sync_selection(
     label: String,
     include: Vec<String>,
     exclude: Vec<String>,
-) -> Result<(), AppError> {
+) -> Result<()> {
     let drive_arc = {
         let guard = app_state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())

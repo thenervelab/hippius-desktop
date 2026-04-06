@@ -97,7 +97,7 @@ impl std::fmt::Display for NotReadyKind {
 /// Produces `{ "kind": "Db", "message": "..." }` so the frontend
 /// can match on `kind` programmatically and display `message` to users.
 impl Serialize for AppError {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let mut s = serializer.serialize_struct("AppError", 2)?;
         let kind = match self {
@@ -126,6 +126,10 @@ impl Serialize for AppError {
 // Tauri 2 has a blanket `impl<T: Serialize> From<T> for InvokeError`,
 // so `AppError` is automatically usable as a command error type via the
 // `Serialize` impl above — no explicit `From` impl needed.
+
+/// Project-wide result type alias. Every Tauri command and most
+/// async helpers return this.
+pub type Result<T> = std::result::Result<T, AppError>;
 
 /// Bridge: accept existing `Result<_, String>` into `AppError`.
 impl From<String> for AppError {

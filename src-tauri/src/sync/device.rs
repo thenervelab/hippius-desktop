@@ -3,10 +3,11 @@
 
 use tracing::info;
 
+use crate::error::Result;
 use sqlx::sqlite::SqlitePool;
 
 /// Internal helper to read the device name from DB.
-pub(crate) async fn get_device_name_internal(pool: &SqlitePool) -> Result<String, crate::error::AppError> {
+pub(crate) async fn get_device_name_internal(pool: &SqlitePool) -> Result<String> {
     let row = sqlx::query_scalar::<_, String>("SELECT device_name FROM device_settings WHERE id = 1")
         .fetch_optional(pool)
         .await?;
@@ -15,13 +16,13 @@ pub(crate) async fn get_device_name_internal(pool: &SqlitePool) -> Result<String
 
 /// Get the friendly device name for this machine.
 #[tauri::command]
-pub async fn get_device_name(state: tauri::State<'_, crate::app_state::AppState>) -> Result<String, crate::error::AppError> {
+pub async fn get_device_name(state: tauri::State<'_, crate::app_state::AppState>) -> Result<String> {
     get_device_name_internal(state.pool()?).await
 }
 
 /// Set a custom friendly device name for this machine.
 #[tauri::command]
-pub async fn set_device_name(state: tauri::State<'_, crate::app_state::AppState>, name: String) -> Result<(), crate::error::AppError> {
+pub async fn set_device_name(state: tauri::State<'_, crate::app_state::AppState>, name: String) -> Result<()> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err(crate::error::AppError::Other("Device name cannot be empty".into()));

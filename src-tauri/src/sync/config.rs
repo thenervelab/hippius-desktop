@@ -6,6 +6,7 @@
 use tracing::debug;
 
 use crate::auth::account_key::account_key;
+use crate::error::Result;
 use hcfs_client::client::HcfsClientConfig;
 use sqlx::sqlite::SqlitePool;
 
@@ -29,7 +30,7 @@ pub async fn save_hcfs_config(
     account_id: String,
     server_url: String,
     drive_password: String,
-) -> Result<(), crate::error::AppError> {
+) -> Result<()> {
     let db = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -57,7 +58,7 @@ pub async fn update_hcfs_server_url(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     server_url: String,
-) -> Result<(), crate::error::AppError> {
+) -> Result<()> {
     let db = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -79,7 +80,7 @@ pub async fn update_hcfs_server_url(
 }
 /// Internal helper that accepts a pool reference directly.
 /// Used by both the Tauri command and other internal callers.
-pub(crate) async fn get_hcfs_config_internal(pool: &SqlitePool, account_id: &str) -> Result<HcfsConfigResult, crate::error::AppError> {
+pub(crate) async fn get_hcfs_config_internal(pool: &SqlitePool, account_id: &str) -> Result<HcfsConfigResult> {
     let db = pool;
     let owner = account_key(account_id);
 
@@ -108,11 +109,11 @@ pub(crate) async fn get_hcfs_config_internal(pool: &SqlitePool, account_id: &str
 pub async fn get_hcfs_config(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
-) -> Result<HcfsConfigResult, crate::error::AppError> {
+) -> Result<HcfsConfigResult> {
     get_hcfs_config_internal(state.pool()?, &account_id).await
 }
 
-pub(crate) async fn get_drive_password(pool: &SqlitePool, account_id: &str) -> Result<String, crate::error::AppError> {
+pub(crate) async fn get_drive_password(pool: &SqlitePool, account_id: &str) -> Result<String> {
     let db = pool;
     let owner = account_key(account_id);
 
@@ -131,7 +132,7 @@ pub(crate) async fn get_drive_password(pool: &SqlitePool, account_id: &str) -> R
 }
 
 /// Read the sync path for a specific label from the database.
-pub(crate) async fn get_sync_path_for_label(pool: &SqlitePool, account_id: &str, label: &str) -> Result<String, crate::error::AppError> {
+pub(crate) async fn get_sync_path_for_label(pool: &SqlitePool, account_id: &str, label: &str) -> Result<String> {
     let db = pool;
     let owner = account_key(account_id);
 
@@ -159,7 +160,7 @@ pub(crate) fn build_hcfs_config(server_url: &str, bearer_token: &str, account_id
 }
 
 /// Read the sync path, drive password, and server URL from the DB.
-pub(crate) async fn load_sync_config(pool: &SqlitePool, account_id: &str, label: &str) -> Result<SyncConfig, crate::error::AppError> {
+pub(crate) async fn load_sync_config(pool: &SqlitePool, account_id: &str, label: &str) -> Result<SyncConfig> {
     let sync_path = get_sync_path_for_label(pool, account_id, label).await?;
     debug!("Sync path: {}, label: {}", sync_path, label);
 
@@ -186,7 +187,7 @@ pub(crate) async fn save_hcfs_config_internal(
     account_id: &str,
     server_url: &str,
     drive_password: &str,
-) -> Result<(), crate::error::AppError> {
+) -> Result<()> {
     let owner = account_key(account_id);
     sqlx::query(
         r"

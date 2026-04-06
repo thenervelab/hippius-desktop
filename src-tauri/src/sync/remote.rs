@@ -7,7 +7,7 @@
 use crate::app_state::AppState;
 use crate::auth::account_key::account_key;
 use crate::auth::tokens::get_api_token;
-use crate::error::AppError;
+use crate::error::{AppError, Result};
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::drive::keys::folder_hash;
 use hcfs_client::drive::remote::RemoteFileInfo;
@@ -18,13 +18,13 @@ use zeroize::Zeroize;
 
 // ─── DB Helpers (desktop-specific) ─────────────────────────────────────────
 
-fn master_mnemonic_path(account_id: &str) -> Result<PathBuf, AppError> {
+fn master_mnemonic_path(account_id: &str) -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or(AppError::Validation("Could not determine home directory".into()))?;
     let key = account_key(account_id);
     Ok(home.join(".hippius").join("drives").join(key).join("master_enc_mnemonic.json"))
 }
 
-async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String, AppError> {
+async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String> {
     let owner = account_key(account_id);
     let result: Option<(String,)> = sqlx::query_as("SELECT server_url FROM hcfs_config WHERE owner = ?")
         .bind(&owner)
@@ -36,7 +36,7 @@ async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String, A
     }
 }
 
-async fn get_password(pool: &SqlitePool, account_id: &str) -> Result<String, AppError> {
+async fn get_password(pool: &SqlitePool, account_id: &str) -> Result<String> {
     let owner = account_key(account_id);
     let result: Option<(String,)> = sqlx::query_as("SELECT drive_password FROM hcfs_config WHERE owner = ?")
         .bind(&owner)
@@ -45,7 +45,7 @@ async fn get_password(pool: &SqlitePool, account_id: &str) -> Result<String, App
     result.map(|(p,)| p).ok_or(AppError::NotReady(crate::error::NotReadyKind::ConfigMissing))
 }
 
-async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &str) -> Result<[u8; 32], AppError> {
+async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &str) -> Result<[u8; 32]> {
     let password = get_password(pool, account_id).await?;
     let master_path = master_mnemonic_path(account_id)?;
     let mut master_mnemonic = hcfs_client::auth::recover_mnemonic(&master_path, &password)
@@ -56,7 +56,7 @@ async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &s
     key
 }
 
-async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Result<hcfs_client::client::HcfsClient, AppError> {
+async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Result<hcfs_client::client::HcfsClient> {
     let server_url = get_server_url(pool, account_id).await?;
     let bearer_token = get_api_token(pool, account_id)
         .await?
@@ -75,7 +75,7 @@ async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Resul
 // ─── Tauri Commands ────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn list_remote_folder_files(state: tauri::State<'_, AppState>, account_id: String, label: String) -> Result<Vec<RemoteFileInfo>, AppError> {
+pub async fn list_remote_folder_files(state: tauri::State<'_, AppState>, account_id: String, label: String) -> Result<Vec<RemoteFileInfo>> {
     info!(account_id = %account_id, label = %label, "Listing remote folder files");
     let pool = state.pool()?;
     let encryption_key = encryption_key_for_label(pool, &account_id, &label).await?;
@@ -98,7 +98,7 @@ pub async fn download_remote_file(
     label: String,
     file_id: String,
     output_path: String,
-) -> Result<(), AppError> {
+) -> Result<()> {
     use tauri::Emitter;
     info!(label = %label, file_id = %file_id, "Downloading remote file");
 

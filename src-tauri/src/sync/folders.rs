@@ -8,6 +8,7 @@ use serde::Serialize;
 use tracing::{error, info, warn};
 
 use crate::auth::account_key::account_key;
+use crate::error::Result;
 use crate::auth::tokens::get_api_token;
 use crate::sync::config::get_hcfs_config_internal;
 use crate::sync::lifecycle::start_sync_loop;
@@ -79,7 +80,7 @@ pub struct DeleteRemoteFolderResult {
     pub was_local: bool,
 }
 
-pub(crate) fn sanitize_label(label: &str) -> Result<String, crate::error::AppError> {
+pub(crate) fn sanitize_label(label: &str) -> Result<String> {
     let sanitized: String = label
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == ' ' || *c == '.')
@@ -95,7 +96,7 @@ pub(crate) fn sanitize_label(label: &str) -> Result<String, crate::error::AppErr
 pub(crate) async fn get_all_sync_paths_internal(
     pool: &SqlitePool,
     account_id: &str,
-) -> Result<Vec<crate::sync::paths::SyncPathResult>, crate::error::AppError> {
+) -> Result<Vec<crate::sync::paths::SyncPathResult>> {
     use sqlx::Row;
     let owner = account_key(account_id);
     let rows = sqlx::query("SELECT path, type, label, is_paused FROM sync_paths WHERE owner = ?")
@@ -120,7 +121,7 @@ pub(crate) async fn get_all_sync_paths_internal(
 }
 
 /// Internal helper to list remote folders without Tauri State params.
-pub(crate) async fn list_remote_folders_internal(pool: &SqlitePool, account_id: &str) -> Result<Vec<RemoteFolderInfoResult>, crate::error::AppError> {
+pub(crate) async fn list_remote_folders_internal(pool: &SqlitePool, account_id: &str) -> Result<Vec<RemoteFolderInfoResult>> {
     let config = get_hcfs_config_internal(pool, account_id).await?;
     let server_url = if config.server_url.is_empty() {
         "https://arion.hippius.com".to_string()
@@ -166,7 +167,7 @@ pub(crate) async fn list_remote_folders_internal(pool: &SqlitePool, account_id: 
 pub async fn list_remote_folders(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
-) -> Result<Vec<RemoteFolderInfoResult>, crate::error::AppError> {
+) -> Result<Vec<RemoteFolderInfoResult>> {
     info!("Listing remote folders for account '{}'", account_id);
     let pool = state.pool()?;
     let config = get_hcfs_config_internal(pool, &account_id).await?;
@@ -221,7 +222,7 @@ async fn restore_single_folder(
     base_path: &str,
     label: &str,
     existing_mnemonic: Option<&str>,
-) -> Result<(), crate::error::AppError> {
+) -> Result<()> {
     let safe_label = sanitize_label(label)?;
     let folder_path = PathBuf::from(base_path).join(&safe_label);
 
@@ -268,7 +269,7 @@ pub async fn restore_remote_folders(
     base_path: String,
     folders: Vec<RestoreFolderRequest>,
     existing_mnemonic: Option<String>,
-) -> Result<Vec<RestoreResult>, crate::error::AppError> {
+) -> Result<Vec<RestoreResult>> {
     info!(
         "Restoring {} remote folder(s) to '{}' for account '{}'",
         folders.len(),
@@ -318,7 +319,7 @@ pub async fn delete_remote_folder(
     app: tauri::AppHandle,
     account_id: String,
     label: String,
-) -> Result<DeleteRemoteFolderResult, crate::error::AppError> {
+) -> Result<DeleteRemoteFolderResult> {
     info!("Deleting remote folder '{}' for account '{}'", label, account_id);
     let pool = state.pool()?;
     let config = get_hcfs_config_internal(pool, &account_id).await?;
@@ -385,7 +386,7 @@ pub async fn delete_remote_folder(
 pub async fn get_sync_folders_with_stats(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
-) -> Result<SyncFoldersResult, crate::error::AppError> {
+) -> Result<SyncFoldersResult> {
     let pool = state.pool()?;
 
     // Parallel fetch: local paths + remote folders

@@ -16,10 +16,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
-use crate::error::AppError;
+use crate::error::{AppError, Result};
 use crate::sync::logic::{NEVER_EMITTED, is_file_completion_tick, try_claim_snapshot_emit};
-
-type Result<T> = std::result::Result<T, AppError>;
 
 /// Minimum milliseconds between throttled `emit_snapshot(false)` calls from
 /// the per-chunk progress hot path.

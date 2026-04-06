@@ -6,6 +6,7 @@ use serde::Serialize;
 use tracing::{debug, error, info, warn};
 
 use crate::auth::account_key::account_key;
+use crate::error::Result;
 use crate::auth::tokens::get_api_token;
 use crate::sync::config::{
     build_hcfs_config, get_drive_password, get_hcfs_config_internal, get_sync_path_for_label, load_sync_config, save_hcfs_config_internal,
@@ -43,7 +44,7 @@ pub(crate) async fn start_sync_loop(app: tauri::AppHandle) {
 ///
 /// The caller is responsible for guarding against missing paths; this
 /// helper propagates `ENOENT` from libstd rather than hiding it.
-async fn remove_dir_all_async(path: PathBuf) -> Result<(), crate::error::AppError> {
+async fn remove_dir_all_async(path: PathBuf) -> Result<()> {
     tokio::task::spawn_blocking(move || std::fs::remove_dir_all(path))
         .await
         .map_err(|e| crate::error::AppError::Other(format!("Join error removing directory: {e}")))??;
@@ -55,7 +56,7 @@ async fn remove_dir_all_async(path: PathBuf) -> Result<(), crate::error::AppErro
 /// `std::fs::create_dir_all` can perform many synchronous syscalls on
 /// deeply nested or slow filesystems. Offloading to `spawn_blocking`
 /// keeps the runtime responsive during sync initialization.
-async fn create_dir_all_async(path: PathBuf) -> Result<(), crate::error::AppError> {
+async fn create_dir_all_async(path: PathBuf) -> Result<()> {
     tokio::task::spawn_blocking(move || std::fs::create_dir_all(path))
         .await
         .map_err(|e| crate::error::AppError::Other(format!("Join error creating dir: {e}")))??;
@@ -93,7 +94,7 @@ pub async fn setup_and_init_sync(
     server_url: String,
     password: String,
     mnemonic: Option<String>,
-) -> Result<InitSyncResult, crate::error::AppError> {
+) -> Result<InitSyncResult> {
     use tauri::Manager;
     let state = app.state::<crate::app_state::AppState>();
     let pool = state.pool()?;
@@ -130,7 +131,7 @@ pub async fn add_local_sync_folder(
     path: String,
     folder_name: String,
     mnemonic: Option<String>,
-) -> Result<String, crate::error::AppError> {
+) -> Result<String> {
     use tauri::Manager;
     let state = app.state::<crate::app_state::AppState>();
     let pool = state.pool()?;
@@ -169,7 +170,7 @@ pub async fn initialize_sync(
     account_id: String,
     label: String,
     existing_mnemonic: Option<String>,
-) -> Result<InitSyncResult, crate::error::AppError> {
+) -> Result<InitSyncResult> {
     initialize_sync_inner(app, account_id, label, existing_mnemonic, true).await
 }
 
@@ -362,7 +363,7 @@ async fn register_drive(sync: &SyncRunner, manager: DriveManager, label: &str, s
 ///
 /// Both preserve the existing mnemonic as-is (no re-derivation) to maintain access
 /// to existing server files for the migrated folder.
-fn run_migration(sync_path: &str, account_dir: &Path, folder_dir: &Path, master_path: &Path) -> Result<(), crate::error::AppError> {
+fn run_migration(sync_path: &str, account_dir: &Path, folder_dir: &Path, master_path: &Path) -> Result<()> {
     // If folder_dir already has an enc_mnemonic.json, migration is complete
     if folder_dir.join("enc_mnemonic.json").exists() {
         return Ok(());
@@ -461,7 +462,7 @@ fn run_migration(sync_path: &str, account_dir: &Path, folder_dir: &Path, master_
 }
 
 /// Copy all entries from `src` into `dst`, recursing into subdirectories.
-fn copy_dir_contents(src: &Path, dst: &Path) -> Result<(), crate::error::AppError> {
+fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
     let entries = std::fs::read_dir(src).map_err(|e| crate::error::AppError::Other(format!("Failed to read dir {}: {e}", src.display())))?;
 
     for entry in entries.flatten() {
@@ -499,7 +500,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// If the config dir has sync state (was previously syncing) but the sync
 /// folder is completely gone, the user intentionally removed it. Removes
 /// the stale DB row and returns an error so `initialize_sync_inner` aborts.
-async fn check_deleted_sync_dir(pool: &SqlitePool, account_id: &str, label: &str, sync_path: &str) -> Result<(), crate::error::AppError> {
+async fn check_deleted_sync_dir(pool: &SqlitePool, account_id: &str, label: &str, sync_path: &str) -> Result<()> {
     let sync_dir_existed = Path::new(sync_path).exists();
     let folder_dir = config_dir_for_folder(account_id, label)?;
     let had_sync_state = folder_dir.join("sync_state.json").exists();
@@ -532,7 +533,7 @@ fn prepare_config_dir(
     sync_path: &str,
     drive_password: &str,
     existing_mnemonic: Option<&str>,
-) -> Result<(PathBuf, PathBuf, PathBuf), crate::error::AppError> {
+) -> Result<(PathBuf, PathBuf, PathBuf)> {
     let acct_dir = account_dir(account_id)?;
     let folder_dir = config_dir_for_folder(account_id, label)?;
     let master_path = master_mnemonic_path(account_id)?;
@@ -578,7 +579,7 @@ struct RecoveryContext<'a> {
 /// create a fresh `DriveManager`, re-derive the mnemonic, and unlock.
 ///
 /// Returns `(new_manager, user_id, optional_master_mnemonic)`.
-fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Result<(DriveManager, String, Option<String>), crate::error::AppError> {
+fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Result<(DriveManager, String, Option<String>)> {
     // Remove corrupted enc_mnemonic.json
     let enc_path = ctx.folder_dir.join("enc_mnemonic.json");
     if enc_path.exists() {
@@ -632,7 +633,7 @@ fn init_new_drive(
     master_path: &Path,
     drive_password: &str,
     existing_mnemonic: Option<&str>,
-) -> Result<(String, Option<String>, bool), crate::error::AppError> {
+) -> Result<(String, Option<String>, bool)> {
     info!(
         "Drive not initialized for '{}', creating... (existing_mnemonic={}, master_exists={})",
         label,
@@ -746,7 +747,7 @@ pub(crate) async fn initialize_sync_inner(
     label: String,
     existing_mnemonic: Option<String>,
     start_loop: bool,
-) -> Result<InitSyncResult, crate::error::AppError> {
+) -> Result<InitSyncResult> {
     use tauri::Manager;
     let label = sanitize_label(&label)?;
     let app_state = app.state::<crate::app_state::AppState>();
@@ -872,7 +873,7 @@ pub(crate) async fn initialize_sync_inner(
 
 /// Stop ALL drives (used on logout).
 #[tauri::command]
-pub async fn stop_sync(app: AppHandle) -> Result<(), crate::error::AppError> {
+pub async fn stop_sync(app: AppHandle) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
@@ -926,7 +927,7 @@ pub async fn stop_sync(app: AppHandle) -> Result<(), crate::error::AppError> {
 /// Also removes the corresponding sync_paths DB row so the drive is not
 /// resurrected on restart (prevents ghost sync paths).
 #[tauri::command]
-pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), crate::error::AppError> {
+pub async fn stop_drive(app: AppHandle, label: String) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
@@ -954,7 +955,7 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), crate::erro
 /// Unlike `stop_drive`, the DB row is preserved so the folder reappears on restart
 /// (but won't auto-sync until resumed).
 #[tauri::command]
-pub async fn pause_drive(app: AppHandle, label: String) -> Result<(), crate::error::AppError> {
+pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
@@ -978,7 +979,7 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<(), crate::err
 
 /// Resume a paused sync folder: clear the paused flag and re-initialize.
 #[tauri::command]
-pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String>) -> Result<(), crate::error::AppError> {
+pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String>) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
 
@@ -1005,7 +1006,7 @@ pub async fn reset_sync_data(
     state: tauri::State<'_, crate::app_state::AppState>,
     app: AppHandle,
     account_id: String,
-) -> Result<(), crate::error::AppError> {
+) -> Result<()> {
     info!("Resetting sync data for account: {}", account_id);
 
     // First stop all active syncs
@@ -1059,7 +1060,7 @@ pub async fn change_sync_folder(
     new_path: String,
     label: String,
     mnemonic: Option<String>,
-) -> Result<InitSyncResult, crate::error::AppError> {
+) -> Result<InitSyncResult> {
     let pool = state.pool()?;
 
     // Stop existing drive (fire and forget if it doesn't exist)
@@ -1089,7 +1090,7 @@ pub async fn auto_init_sync(
     account_id: String,
     mnemonic: Option<String>,
     user_stopped_sync: bool,
-) -> Result<AutoInitResult, crate::error::AppError> {
+) -> Result<AutoInitResult> {
     use std::sync::atomic::Ordering;
 
     // 1. Block if migration in progress

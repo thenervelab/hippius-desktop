@@ -3,6 +3,7 @@
 
 use tracing::{debug, info};
 
+use crate::error::Result;
 use crate::sync::lifecycle::stop_drive;
 use hcfs_client::engine::manager::StagedChanges;
 use hcfs_client::engine::runner::{ReviewModeGuard, trigger_sync};
@@ -17,7 +18,7 @@ const WATCHER_REENABLE_DELAY: std::time::Duration = std::time::Duration::from_se
 /// Stage changes and return a preview of what will sync.
 /// Pauses auto-sync while the user reviews.
 #[tauri::command]
-pub async fn stage_changes(app: tauri::AppHandle) -> Result<StagedChanges, crate::error::AppError> {
+pub async fn stage_changes(app: tauri::AppHandle) -> Result<StagedChanges> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
@@ -53,7 +54,7 @@ pub async fn stage_changes(app: tauri::AppHandle) -> Result<StagedChanges, crate
     clippy::implicit_hasher,
     reason = "Tauri commands cannot be generic; the hasher must be concrete because #[tauri::command] generates a non-generic handler"
 )]
-pub async fn sync_with_conflict_resolutions(app: AppHandle, resolutions: HashMap<String, String>) -> Result<(), crate::error::AppError> {
+pub async fn sync_with_conflict_resolutions(app: AppHandle, resolutions: HashMap<String, String>) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
@@ -188,7 +189,7 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, resolutions: HashMap
 
 /// Cancel the review dialog and resume auto-sync without syncing.
 #[tauri::command]
-pub async fn cancel_review(app: tauri::AppHandle) -> Result<(), crate::error::AppError> {
+pub async fn cancel_review(app: tauri::AppHandle) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
@@ -199,7 +200,7 @@ pub async fn cancel_review(app: tauri::AppHandle) -> Result<(), crate::error::Ap
 }
 
 #[tauri::command]
-pub async fn trigger_sync_now(app: AppHandle) -> Result<(), crate::error::AppError> {
+pub async fn trigger_sync_now(app: AppHandle) -> Result<()> {
     use tauri::Manager;
     let sync = app.state::<crate::app_state::AppState>().sync.clone();
     trigger_sync(&sync).await;
@@ -230,7 +231,7 @@ pub fn is_drive_active(state: tauri::State<'_, crate::app_state::AppState>, labe
 /// Returns `Ok(())` when the drive is gone, or an error on timeout.
 /// Replaces the 1-second polling loop in `UpdateSyncFolder.tsx`.
 #[tauri::command]
-pub async fn stop_drive_and_wait(app: AppHandle, label: String, timeout_ms: u64) -> Result<(), crate::error::AppError> {
+pub async fn stop_drive_and_wait(app: AppHandle, label: String, timeout_ms: u64) -> Result<()> {
     use tauri::Manager;
     stop_drive(app.clone(), label.clone()).await?;
 

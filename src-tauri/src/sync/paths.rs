@@ -4,6 +4,7 @@
 //! to prevent conflicting folder hierarchies.
 
 use crate::auth::account_key::account_key;
+use crate::error::Result;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -40,7 +41,7 @@ pub struct SyncPathResult {
 }
 
 /// Reject a new sync path if it overlaps (is a parent or child of) any existing sync path.
-fn validate_no_path_overlap(new_path: &Path, new_label: &str, existing: &[(String, String)]) -> Result<(), crate::error::AppError> {
+fn validate_no_path_overlap(new_path: &Path, new_label: &str, existing: &[(String, String)]) -> Result<()> {
     let canonical_new = std::fs::canonicalize(new_path).unwrap_or_else(|_| new_path.to_path_buf());
 
     for (label, path_str) in existing {
@@ -72,7 +73,7 @@ pub(crate) async fn set_sync_path_internal(
     path: &str,
     is_public: bool,
     label: Option<&str>,
-) -> Result<String, crate::error::AppError> {
+) -> Result<String> {
     let path_type = if is_public { "public" } else { "private" };
     let label = label.unwrap_or("default");
     let timestamp = Utc::now().timestamp();
@@ -144,7 +145,7 @@ pub async fn set_sync_path(
     state: tauri::State<'_, crate::app_state::AppState>,
     app_handle: tauri::AppHandle,
     params: SetSyncPathParams,
-) -> Result<String, crate::error::AppError> {
+) -> Result<String> {
     info!(
         "Setting sync path for label '{}': path='{}', is_public={}",
         params.label.as_deref().unwrap_or("default"),
@@ -162,7 +163,7 @@ pub async fn set_sync_path(
 }
 
 /// Fetch a single sync path by type for the given account.
-pub async fn get_sync_path_internal(pool: &SqlitePool, is_public: bool, owner: &str) -> Result<SyncPathResult, crate::error::AppError> {
+pub async fn get_sync_path_internal(pool: &SqlitePool, is_public: bool, owner: &str) -> Result<SyncPathResult> {
     let path_type = if is_public { "public" } else { "private" };
     {
         let row = sqlx::query("SELECT path, label, is_paused FROM sync_paths WHERE owner = ? AND type = ? LIMIT 1")
@@ -230,7 +231,7 @@ pub async fn get_sync_path_internal(pool: &SqlitePool, is_public: bool, owner: &
 pub async fn get_sync_path(
     state: tauri::State<'_, crate::app_state::AppState>,
     params: GetSyncPathParams,
-) -> Result<SyncPathResult, crate::error::AppError> {
+) -> Result<SyncPathResult> {
     let Some(account_id) = params.account_id.or_else(|| state.current_account_id().ok()) else {
         return Ok(SyncPathResult {
             path: String::new(),
@@ -248,7 +249,7 @@ pub async fn get_sync_path(
 pub async fn get_all_sync_paths(
     state: tauri::State<'_, crate::app_state::AppState>,
     params: GetSyncPathParams,
-) -> Result<Vec<SyncPathResult>, crate::error::AppError> {
+) -> Result<Vec<SyncPathResult>> {
     let Some(account_id) = params.account_id.or_else(|| state.current_account_id().ok()) else {
         return Ok(Vec::new());
     };
@@ -289,7 +290,7 @@ pub async fn generate_unique_label(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     base_name: String,
-) -> Result<String, crate::error::AppError> {
+) -> Result<String> {
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -312,7 +313,7 @@ pub async fn generate_unique_label(
 }
 
 /// Set the `is_paused` flag for a sync path in the DB.
-pub(crate) async fn set_sync_path_paused(pool: &SqlitePool, account_id: &str, label: &str, paused: bool) -> Result<(), crate::error::AppError> {
+pub(crate) async fn set_sync_path_paused(pool: &SqlitePool, account_id: &str, label: &str, paused: bool) -> Result<()> {
     let owner = account_key(account_id);
     let val: i32 = i32::from(paused);
 
@@ -327,7 +328,7 @@ pub(crate) async fn set_sync_path_paused(pool: &SqlitePool, account_id: &str, la
 }
 
 /// Delete a sync path row from the DB without stopping the drive.
-pub(crate) async fn remove_sync_path_internal(pool: &SqlitePool, account_id: &str, label: &str) -> Result<(), crate::error::AppError> {
+pub(crate) async fn remove_sync_path_internal(pool: &SqlitePool, account_id: &str, label: &str) -> Result<()> {
     let owner = account_key(account_id);
 
     sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND label = ?")
@@ -346,7 +347,7 @@ pub async fn remove_sync_path(
     app: tauri::AppHandle,
     account_id: String,
     label: String,
-) -> Result<(), crate::error::AppError> {
+) -> Result<()> {
     info!("Removing sync path for label '{}', account '{}'", label, account_id);
     let pool = state.pool()?;
     let owner = account_key(&account_id);

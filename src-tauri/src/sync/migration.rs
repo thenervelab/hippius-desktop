@@ -8,6 +8,7 @@
 //! `poll_migration_status` → `complete_migration_transition` (ensure sync
 //! path exists, initialize default drive, mark completed).
 
+use crate::error::Result;
 use ed25519_dalek::Signer;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -63,7 +64,7 @@ struct ServerMigrationResponse {
 pub(crate) async fn get_migration_status_db(
     pool: &SqlitePool,
     account_id: &str,
-) -> Result<Option<(String, i64, i64, String, String)>, crate::error::AppError> {
+) -> Result<Option<(String, i64, i64, String, String)>> {
     let row = sqlx::query(
         "SELECT status, total_files, completed_files, sync_path, server_url \
          FROM migration_status WHERE account_id = ?",
@@ -95,7 +96,7 @@ pub(crate) async fn upsert_migration_status(
     failed_files: &str,
     sync_path: &str,
     server_url: &str,
-) -> Result<(), crate::error::AppError> {
+) -> Result<()> {
     sqlx::query(
         r"
         INSERT INTO migration_status
@@ -125,7 +126,7 @@ pub(crate) async fn upsert_migration_status(
     Ok(())
 }
 
-pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String, crate::error::AppError> {
+pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String> {
     let owner = crate::auth::account_key::account_key(account_id);
     let row = sqlx::query("SELECT server_url FROM hcfs_config WHERE owner = ?")
         .bind(&owner)
@@ -164,7 +165,7 @@ pub(crate) async fn fetch_migration_files(
     client: &reqwest::Client,
     server_url: &str,
     user_id: &str,
-) -> Result<Vec<MigrationFile>, crate::error::AppError> {
+) -> Result<Vec<MigrationFile>> {
     let url = format!("{}/migration/{}", server_url.trim_end_matches('/'), user_id);
     let resp = client.get(&url).send().await?;
 
@@ -183,7 +184,7 @@ pub(crate) async fn fetch_migration_files(
 ///
 /// The server-side migration worker uses these credentials to download the
 /// user's files from the legacy S3 storage (s3.hippius.com).
-async fn fetch_s3_credentials(client: &reqwest::Client, pool: &SqlitePool, account_id: &str) -> Result<(String, String), crate::error::AppError> {
+async fn fetch_s3_credentials(client: &reqwest::Client, pool: &SqlitePool, account_id: &str) -> Result<(String, String)> {
     let api_token = crate::auth::tokens::get_api_token(pool, account_id)
         .await
         .map_err(crate::error::AppError::Other)?
@@ -229,7 +230,7 @@ async fn fetch_s3_credentials(client: &reqwest::Client, pool: &SqlitePool, accou
 // ---------------------------------------------------------------------------
 
 #[cfg(unix)]
-fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> Result<(), crate::error::AppError> {
+fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> Result<()> {
     let stat = nix::sys::statvfs::statvfs(path).map_err(|e| crate::error::AppError::Other(e.to_string()))?;
     let available = stat.block_size() as u64 * stat.blocks_available() as u64;
     if available < required_bytes {
@@ -241,7 +242,7 @@ fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> Result<(), c
 }
 
 #[cfg(windows)]
-fn check_disk_space(_path: &std::path::Path, _required_bytes: u64) -> Result<(), crate::error::AppError> {
+fn check_disk_space(_path: &std::path::Path, _required_bytes: u64) -> Result<()> {
     // Disk space check not yet implemented on Windows
     Ok(())
 }
@@ -254,7 +255,7 @@ fn check_disk_space(_path: &std::path::Path, _required_bytes: u64) -> Result<(),
 pub async fn check_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
-) -> Result<MigrationCheckResult, crate::error::AppError> {
+) -> Result<MigrationCheckResult> {
     let pool = state.pool()?;
 
     // Only respect explicit user dismissal (skipped/dismissed).
@@ -298,7 +299,7 @@ pub async fn dismiss_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     reason: String,
-) -> Result<(), crate::error::AppError> {
+) -> Result<()> {
     let pool = state.pool()?;
     let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
     let status = if reason.is_empty() { "dismissed" } else { &reason };
@@ -312,7 +313,7 @@ pub async fn dismiss_migration(
 /// hasn't explicitly chosen one (e.g., during migration completion).
 ///
 /// Prefers `~/Documents/Hippius`, falling back to `~/Hippius`.
-fn compute_default_sync_path() -> Result<PathBuf, crate::error::AppError> {
+fn compute_default_sync_path() -> Result<PathBuf> {
     let base = dirs::document_dir()
         .or_else(dirs::home_dir)
         .ok_or_else(|| crate::error::AppError::Other("Could not determine a suitable directory for sync folder".into()))?;
@@ -332,7 +333,7 @@ pub async fn complete_migration_transition(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     existing_mnemonic: Option<String>,
-) -> Result<crate::sync::lifecycle::InitSyncResult, crate::error::AppError> {
+) -> Result<crate::sync::lifecycle::InitSyncResult> {
     let pool = state.pool()?;
 
     // 1. Clear migration-in-progress flag so initialize_sync isn't blocked.
@@ -424,7 +425,7 @@ pub struct MigrationFlowResult {
 pub async fn start_migration_flow(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
-) -> Result<MigrationFlowResult, crate::error::AppError> {
+) -> Result<MigrationFlowResult> {
     let pool = state.pool()?;
     let config = crate::sync::config::get_hcfs_config_internal(pool, &account_id).await?;
 
@@ -444,7 +445,7 @@ pub async fn start_server_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     total_size: u64,
-) -> Result<StartServerMigrationResult, crate::error::AppError> {
+) -> Result<StartServerMigrationResult> {
     state.migration.in_progress.store(true, Ordering::SeqCst);
     state.migration.poll_failure_count.store(0, Ordering::SeqCst);
 
@@ -526,7 +527,7 @@ pub async fn start_server_migration(
 async fn poll_migration_status_internal(
     state: &crate::app_state::AppState,
     account_id: &str,
-) -> Result<ServerMigrationStatus, crate::error::AppError> {
+) -> Result<ServerMigrationStatus> {
     let pool = state.pool()?;
     let server_url = get_server_url(pool, account_id).await?;
     let url = format!("{}/migration/{}/status", server_url.trim_end_matches('/'), account_id);
@@ -577,7 +578,7 @@ async fn poll_migration_status_internal(
 pub async fn poll_migration_status(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
-) -> Result<ServerMigrationStatus, crate::error::AppError> {
+) -> Result<ServerMigrationStatus> {
     poll_migration_status_internal(&state, &account_id).await
 }
 
@@ -589,7 +590,7 @@ const TERMINAL_STATUSES: &[&str] = &["completed", "failed", "cancelled"];
 /// Replaces the `setInterval` polling loop in `useMigration.ts`. The frontend
 /// listens for events instead of driving the poll loop.
 #[tauri::command]
-pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) -> Result<(), crate::error::AppError> {
+pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) -> Result<()> {
     use tauri::{Emitter, Manager};
 
     // Cancel any existing poll task
@@ -640,7 +641,7 @@ pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) 
 
 /// Stop background migration polling.
 #[tauri::command]
-pub async fn stop_migration_polling(app: tauri::AppHandle) -> Result<(), crate::error::AppError> {
+pub async fn stop_migration_polling(app: tauri::AppHandle) -> Result<()> {
     use tauri::Manager;
     let state = app.state::<crate::app_state::AppState>();
     let mut guard = state.migration.poll_task.lock().await;
@@ -651,7 +652,7 @@ pub async fn stop_migration_polling(app: tauri::AppHandle) -> Result<(), crate::
 }
 
 #[tauri::command]
-pub async fn cancel_server_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), crate::error::AppError> {
+pub async fn cancel_server_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<()> {
     state.migration.in_progress.store(false, Ordering::SeqCst);
     let pool = state.pool()?;
     let server_url = get_server_url(pool, &account_id).await?;
@@ -956,7 +957,7 @@ mod tests {
     #[test]
     fn migration_file_rejects_missing_fields() {
         let json = r#"{"user_id": "u1", "bucket_name": "b1"}"#;
-        let result: Result<MigrationFile, _> = serde_json::from_str(json);
+        let result: std::result::Result<MigrationFile, _> = serde_json::from_str(json);
         assert!(result.is_err());
     }
 

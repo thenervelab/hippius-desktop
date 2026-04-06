@@ -6,13 +6,14 @@
 use tracing::{info, warn};
 
 use crate::auth::account_key::account_key;
+use crate::error::Result;
 use crate::sync::config::get_drive_password;
 use hcfs_client::engine::manager::DriveManager;
 use std::io::{Cursor, Write as _};
 use std::path::{Path, PathBuf};
 
 /// Compute the account-level directory: `~/.hippius/drives/<account_key>/`
-pub(crate) fn account_dir(account_id: &str) -> Result<PathBuf, crate::error::AppError> {
+pub(crate) fn account_dir(account_id: &str) -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or(crate::error::AppError::Other("Could not determine home directory".into()))?;
     let key = account_key(account_id);
     Ok(home.join(".hippius").join("drives").join(key))
@@ -26,19 +27,19 @@ pub(crate) fn folder_hash(label: &str) -> String {
 
 /// Compute the per-folder config directory:
 /// `~/.hippius/drives/<account_key>/<folder_hash>/`
-pub(crate) fn config_dir_for_folder(account_id: &str, label: &str) -> Result<PathBuf, crate::error::AppError> {
+pub(crate) fn config_dir_for_folder(account_id: &str, label: &str) -> Result<PathBuf> {
     Ok(account_dir(account_id)?.join(folder_hash(label)))
 }
 
 /// Path to the master encrypted mnemonic at the account level:
 /// `~/.hippius/drives/<account_key>/master_enc_mnemonic.json`
-pub(crate) fn master_mnemonic_path(account_id: &str) -> Result<PathBuf, crate::error::AppError> {
+pub(crate) fn master_mnemonic_path(account_id: &str) -> Result<PathBuf> {
     Ok(account_dir(account_id)?.join("master_enc_mnemonic.json"))
 }
 
 /// Derive a folder-specific mnemonic from the master mnemonic + folder label.
 /// Delegates to the hcfs-client library.
-pub(crate) fn derive_folder_mnemonic(master_mnemonic: &str, label: &str) -> Result<String, crate::error::AppError> {
+pub(crate) fn derive_folder_mnemonic(master_mnemonic: &str, label: &str) -> Result<String> {
     hcfs_client::drive::keys::derive_folder_mnemonic(master_mnemonic, label).map_err(|e| crate::error::AppError::Other(e.to_string()))
 }
 
@@ -51,7 +52,7 @@ pub(crate) fn derive_folder_mnemonic(master_mnemonic: &str, label: &str) -> Resu
 /// In either case it re-derives from the current master, writes a `.needs_rekey`
 /// marker (so `initialize_sync_inner` purges stale remote files), and wipes local
 /// sync state to force re-upload with the correct key.
-pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, password: &str, label: &str) -> Result<(), crate::error::AppError> {
+pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, password: &str, label: &str) -> Result<()> {
     use zeroize::Zeroize;
 
     let folder_enc = folder_dir.join("enc_mnemonic.json");
@@ -111,7 +112,7 @@ pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, pas
 ///
 /// Takes `&AppState` to access both the DB pool and the live drive registry
 /// without relying on global state.
-pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, account_id: &str) -> Result<String, crate::error::AppError> {
+pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, account_id: &str) -> Result<String> {
     let pool = app_state.pool()?;
     let drive_password = get_drive_password(pool, account_id).await?;
 
@@ -160,7 +161,7 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
 /// Tauri command wrapper: return the master BIP-39 mnemonic by decrypting it
 /// from disk.
 #[tauri::command]
-pub async fn get_drive_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String, crate::error::AppError> {
+pub async fn get_drive_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String> {
     get_mnemonic_for_account(&state, &account_id).await
 }
 
@@ -170,7 +171,7 @@ pub async fn get_drive_mnemonic(state: tauri::State<'_, crate::app_state::AppSta
 /// a new one. Replaces the TypeScript `ensureSyncMnemonic.ts` that did
 /// the same fallback with a module-level dedup promise.
 #[tauri::command]
-pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String, crate::error::AppError> {
+pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String> {
     // Try drive mnemonic first
     match get_mnemonic_for_account(&state, &account_id).await {
         Ok(m) if !m.is_empty() => return Ok(m),
@@ -197,7 +198,7 @@ pub async fn persist_master_mnemonic(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     mnemonic: String,
-) -> Result<(), crate::error::AppError> {
+) -> Result<()> {
     let pool = state.pool()?;
     let master_path = master_mnemonic_path(&account_id)?;
 
@@ -235,8 +236,8 @@ pub async fn persist_master_mnemonic(
 /// Create a password-protected zip file containing the plaintext mnemonic.
 /// Uses AES-256 encryption on the zip entry.
 #[tauri::command]
-pub async fn create_encrypted_backup(mut mnemonic: String, mut password: String, output_path: String) -> Result<(), crate::error::AppError> {
-    let result = (|| -> Result<(), crate::error::AppError> {
+pub async fn create_encrypted_backup(mut mnemonic: String, mut password: String, output_path: String) -> Result<()> {
+    let result = (|| -> Result<()> {
         let buf = Cursor::new(Vec::new());
         let mut zip = zip::ZipWriter::new(buf);
 

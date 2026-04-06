@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tracing::{info, warn};
 
 use crate::auth::account_key::account_key;
+use crate::error::Result;
 use hcfs_client::engine::manager::DriveManager;
 use hcfs_client::engine::runner::{SyncRunner, trigger_sync};
 use hcfs_client::engine::types::SyncActivityItem;
@@ -39,7 +40,7 @@ pub fn allow_asset_directory(app: &tauri::AppHandle, path: &str) {
 /// Tauri command to explicitly allow a directory in the asset protocol scope.
 /// Called by the frontend at startup for every known sync path.
 #[tauri::command]
-pub async fn allow_asset_scope(app: tauri::AppHandle, path: String) -> Result<(), crate::error::AppError> {
+pub async fn allow_asset_scope(app: tauri::AppHandle, path: String) -> Result<()> {
     allow_asset_directory(&app, &path);
     Ok(())
 }
@@ -69,13 +70,13 @@ pub struct FileEntry {
 
 /// Verify that `child` is contained within `parent` after canonicalization.
 /// Delegates to hcfs-client library.
-fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf, crate::error::AppError> {
+fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf> {
     hcfs_client::drive::files::ensure_within(parent, child).map_err(|e| crate::error::AppError::Other(e.to_string()))
 }
 
 /// Add file to sync folder (Drive auto-syncs)
 #[tauri::command]
-pub async fn add_file(sync_path: String, file_path: String) -> Result<String, crate::error::AppError> {
+pub async fn add_file(sync_path: String, file_path: String) -> Result<String> {
     let source = Path::new(&file_path);
     let name = source
         .file_name()
@@ -110,7 +111,7 @@ pub async fn add_file(sync_path: String, file_path: String) -> Result<String, cr
 
 /// Add folder to sync folder
 #[tauri::command]
-pub async fn add_folder(app: AppHandle, sync_path: String, folder_path: String, subfolder: Option<String>) -> Result<String, crate::error::AppError> {
+pub async fn add_folder(app: AppHandle, sync_path: String, folder_path: String, subfolder: Option<String>) -> Result<String> {
     let source = Path::new(&folder_path);
     let name = source
         .file_name()
@@ -173,7 +174,7 @@ pub async fn add_folder(app: AppHandle, sync_path: String, folder_path: String, 
 }
 
 /// Internal folder copy — no sync trigger (caller handles it).
-async fn add_folder_internal(sync_path: &str, folder_path: &str) -> Result<String, crate::error::AppError> {
+async fn add_folder_internal(sync_path: &str, folder_path: &str) -> Result<String> {
     let source = Path::new(folder_path);
     let name = source
         .file_name()
@@ -210,7 +211,7 @@ pub async fn remove_file(
     sync_path: String,
     name: String,
     label: Option<String>,
-) -> Result<(), crate::error::AppError> {
+) -> Result<()> {
     let parent = Path::new(&sync_path);
     let target = parent.join(&name);
     let target = ensure_within(parent, &target)?;
@@ -287,7 +288,7 @@ pub async fn delete_files(
     app: AppHandle,
     account_id: String,
     files: Vec<FileDeleteRequest>,
-) -> Result<DeleteFilesResult, crate::error::AppError> {
+) -> Result<DeleteFilesResult> {
     let pool = state.pool()?;
     let mut deleted = 0u32;
     let mut failed = Vec::new();
@@ -384,7 +385,7 @@ pub async fn add_files(
     sync_path: String,
     file_paths: Vec<String>,
     subfolder: Option<String>,
-) -> Result<AddFilesResult, crate::error::AppError> {
+) -> Result<AddFilesResult> {
     // Credit check — reject if user has no credits (defense-in-depth; TS also checks for UX).
     if let Some(state) = app.try_state::<crate::app_state::AppState>()
         && let Ok(acct) = state.current_account_id()
@@ -528,7 +529,7 @@ pub struct SyncedFileMetadata {
 #[tauri::command]
 pub async fn get_synced_file_metadata(
     state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<Vec<SyncedFileMetadata>, crate::error::AppError> {
+) -> Result<Vec<SyncedFileMetadata>> {
     let sync = &state.sync;
     let mut result = Vec::new();
 
@@ -622,7 +623,7 @@ pub async fn get_recent_files(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     limit: Option<usize>,
-) -> Result<Vec<RecentFile>, crate::error::AppError> {
+) -> Result<Vec<RecentFile>> {
     let sync = &state.sync;
     let pool = state.pool()?;
 
@@ -784,7 +785,7 @@ pub async fn list_sync_folder(
     sync_path: String,
     subfolder: Option<String>,
     label: Option<String>,
-) -> Result<Vec<FileEntry>, crate::error::AppError> {
+) -> Result<Vec<FileEntry>> {
     let base = PathBuf::from(&sync_path);
     let target = match subfolder {
         Some(ref sub) => base.join(sub),
@@ -970,7 +971,7 @@ pub async fn get_user_files(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     filters: Option<FileFilterCriteria>,
-) -> Result<UserFilesResult, crate::error::AppError> {
+) -> Result<UserFilesResult> {
     let pool = state.pool()?;
     let sync_paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
         .await
@@ -1149,7 +1150,7 @@ pub async fn get_user_files(
 
 /// Export file or folder from sync folder to arbitrary location
 #[tauri::command]
-pub async fn export_file(sync_path: String, file_name: String, output_path: String) -> Result<(), crate::error::AppError> {
+pub async fn export_file(sync_path: String, file_name: String, output_path: String) -> Result<()> {
     let parent = Path::new(&sync_path);
     let source = parent.join(&file_name);
     let source = ensure_within(parent, &source)?;
@@ -1176,7 +1177,7 @@ pub async fn resolve_file_path(
     account_id: String,
     label: String,
     file_name: String,
-) -> Result<String, crate::error::AppError> {
+) -> Result<String> {
     // Reject path traversal attempts — slashes are allowed for subfolder access
     if file_name.contains("..") {
         return Err(crate::error::AppError::Other("Invalid file name".into()));
@@ -1233,7 +1234,7 @@ pub async fn resolve_file_info(
     label: Option<String>,
     source: Option<String>,
     file_name: String,
-) -> Result<FilePathInfo, crate::error::AppError> {
+) -> Result<FilePathInfo> {
     let pool = state.pool()?;
     let effective_label = label.as_deref().unwrap_or("default");
 
@@ -1273,7 +1274,7 @@ fn derive_relative_name(sync_path: &str, source: Option<&str>, fallback_name: &s
 }
 
 /// Delegates to hcfs-client library.
-async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<(), crate::error::AppError> {
+async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<()> {
     hcfs_client::drive::files::copy_dir_recursive(src, dst, depth)
         .await
         .map_err(|e| crate::error::AppError::Other(e.to_string()))
