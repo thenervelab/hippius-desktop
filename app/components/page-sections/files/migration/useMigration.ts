@@ -47,6 +47,8 @@ export interface UseMigrationReturn {
   currentStep: MigrationStep | null;
   setCurrentStep: (step: MigrationStep | null) => void;
   files: MigrationFile[];
+  /** Total number of files to migrate (may exceed files.length for large sets). */
+  fileCount: number;
   currentFileIndex: number;
   overallProgress: number;
   isCancelling: boolean;
@@ -79,6 +81,7 @@ export function useMigration(
   const [overallProgress, setOverallProgress] = useState(0);
   const [isCancelling, setIsCancelling] = useState(false);
   const [totalSize, setTotalSize] = useState(0);
+  const [fileCount, setFileCount] = useState(0);
   const [isResuming, setIsResuming] = useState(false);
 
   const [pendingAccountId, setPendingAccountId] = useState<string | null>(null);
@@ -142,9 +145,11 @@ export function useMigration(
           setOverallProgress((result.completed / result.total) * 100);
         }
 
-        // Update per-file statuses using serverKey for matching
-        setFiles((prev) =>
-          prev.map((f, index) => {
+        // Update per-file statuses — skip for large sets since the
+        // progress dialog only shows a summary (no per-file list).
+        setFiles((prev) => {
+          if (prev.length > 200) return prev;
+          return prev.map((f, index) => {
             const key = f.serverKey ?? f.name;
             if (result.failed_files.includes(key))
               return f.status === "failed" ? f : { ...f, status: "failed" as const };
@@ -153,8 +158,8 @@ export function useMigration(
             if (result.current_file && key === result.current_file)
               return f.status === "migrating" ? f : { ...f, status: "migrating" as const };
             return f;
-          })
-        );
+          });
+        });
 
         if (result.failed_files.length > 0) {
           setFailedFiles(
@@ -210,6 +215,7 @@ export function useMigration(
             status: "pending" as const,
           }));
           setFiles(migrationFiles);
+          setFileCount(result.file_count);
           setTotalSize(result.total_size);
           setIsResuming(result.is_resuming);
           setCurrentStep("prompt");
@@ -418,6 +424,7 @@ export function useMigration(
     setFailedCount(0);
     setFailedFiles([]);
     setTotalSize(0);
+    setFileCount(0);
     setIsResuming(false);
     setMigrationSucceeded(false);
     setTransitionError(null);
@@ -444,6 +451,7 @@ export function useMigration(
     currentStep,
     setCurrentStep,
     files,
+    fileCount,
     currentFileIndex,
     overallProgress,
     isCancelling,

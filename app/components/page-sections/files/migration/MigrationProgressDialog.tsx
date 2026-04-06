@@ -44,9 +44,15 @@ const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
     isCancelling = false,
     totalSize = 0,
 }) => {
-    const completedCount = files.filter((f) => f.status === "completed").length;
-    const failedCount = files.filter((f) => f.status === "failed").length;
     const totalCount = files.length;
+    // Derive counts from poll data (currentFileIndex = completed count)
+    // to avoid O(n) filter on 100k+ files every render.
+    const completedCount = files.length <= 1000
+        ? files.filter((f) => f.status === "completed").length
+        : currentFileIndex;
+    const failedCount = files.length <= 1000
+        ? files.filter((f) => f.status === "failed").length
+        : 0; // poll events update failedFiles separately
 
     return (
         <Dialog.Root open={open}>
@@ -130,31 +136,42 @@ const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
                         </div>
                     </div>
 
-                    {/* File List (scrollable) */}
-                    <div className="bg-grey-95 border border-grey-80 rounded-lg p-3 max-h-[12.5rem] overflow-y-auto">
-                        <p className="text-xs font-medium text-grey-50 mb-2 px-1">File Status</p>
-                        <div className="space-y-1">
-                            {files.map((file, index) => (
-                                <div
-                                    key={file.arionHash || `${file.name}-${index}`}
-                                    className={`flex items-center gap-2 px-2 py-1.5 rounded ${index === currentFileIndex ? "bg-primary-50/10" : ""
-                                        }`}
-                                >
-                                    {file.status === "completed" ? (
-                                        <Icons.TickCircle className="size-4 text-success-50 flex-shrink-0" />
-                                    ) : file.status === "failed" ? (
-                                        <Icons.CloseCircle className="size-4 text-error-50 flex-shrink-0" />
-                                    ) : file.status === "migrating" ? (
-                                        <Icons.Loader className="size-4 text-primary-50 animate-spin flex-shrink-0" />
-                                    ) : (
-                                        <div className="size-4 rounded-full border border-grey-70 flex-shrink-0" />
-                                    )}
-                                    <span className="text-xs text-grey-40 truncate flex-1">{file.name}</span>
-                                    <span className="text-xs text-grey-60">{formatBytes(file.size)}</span>
-                                </div>
-                            ))}
+                    {/* File List — only rendered for small sets; large migrations show summary */}
+                    {totalCount <= 200 ? (
+                        <div className="bg-grey-95 border border-grey-80 rounded-lg p-3 max-h-[12.5rem] overflow-y-auto">
+                            <p className="text-xs font-medium text-grey-50 mb-2 px-1">File Status</p>
+                            <div className="space-y-1">
+                                {files.map((file, index) => (
+                                    <div
+                                        key={file.arionHash || `${file.name}-${index}`}
+                                        className={`flex items-center gap-2 px-2 py-1.5 rounded ${index === currentFileIndex ? "bg-primary-50/10" : ""
+                                            }`}
+                                    >
+                                        {file.status === "completed" ? (
+                                            <Icons.TickCircle className="size-4 text-success-50 flex-shrink-0" />
+                                        ) : file.status === "failed" ? (
+                                            <Icons.CloseCircle className="size-4 text-error-50 flex-shrink-0" />
+                                        ) : file.status === "migrating" ? (
+                                            <Icons.Loader className="size-4 text-primary-50 animate-spin flex-shrink-0" />
+                                        ) : (
+                                            <div className="size-4 rounded-full border border-grey-70 flex-shrink-0" />
+                                        )}
+                                        <span className="text-xs text-grey-40 truncate flex-1">{file.name}</span>
+                                        <span className="text-xs text-grey-60">{formatBytes(file.size)}</span>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
-                    </div>
+                    ) : (
+                        <div className="bg-grey-95 border border-grey-80 rounded-lg p-4 text-center">
+                            <p className="text-sm text-grey-40">
+                                {`Migrating ${totalCount.toLocaleString()} files (${formatBytes(totalSize)})`}
+                            </p>
+                            <p className="text-xs text-grey-60 mt-1">
+                                This may take a while. The server is processing your files.
+                            </p>
+                        </div>
+                    )}
 
                     {/* Cancel Button */}
                     {!isCancelling && (

@@ -305,12 +305,17 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
         let prefix = derive_path_prefix(&pending);
         *state.migration.cached_path_prefix.lock().await = Some(prefix);
 
-        info!("[Migration] Migration needed — returning {} pending files", pending.len());
+        let pending_count = pending.len() as u64;
+        info!("[Migration] Migration needed — {pending_count} pending files");
+        // Only send individual files for small sets. For large accounts
+        // the frontend shows a summary and the full list would be tens
+        // of MB of JSON over IPC, freezing the UI.
+        let files_for_frontend = if pending.len() <= 200 { pending } else { vec![] };
         return Ok(MigrationCheckResult {
             needs_migration: true,
-            file_count: pending.len() as u64,
+            file_count: pending_count,
             total_size,
-            files: pending,
+            files: files_for_frontend,
             sync_path: None,
             is_resuming: false,
             needs_completion: false,

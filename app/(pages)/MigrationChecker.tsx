@@ -27,11 +27,13 @@ const MigrationChecker: React.FC = () => {
   const migration = useMigration(getMnemonic);
 
   useEffect(() => {
+    console.log("[MigrationChecker] useEffect fired — shouldCheck:", migrationCheck.shouldCheck, "currentStep:", migration.currentStep, "polkadotAddress:", !!polkadotAddress);
     if (
       migrationCheck.shouldCheck &&
       !migration.currentStep &&
       polkadotAddress
     ) {
+      console.log("[MigrationChecker] Calling checkMigration for:", polkadotAddress);
       migration.checkMigration(polkadotAddress);
     }
   }, [migrationCheck.shouldCheck, polkadotAddress]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -48,7 +50,7 @@ const MigrationChecker: React.FC = () => {
             migration.startMigration(polkadotAddress)
           }
           onSkip={() => migration.setCurrentStep("skip-confirm")}
-          fileCount={migration.files.length}
+          fileCount={migration.fileCount}
           totalSize={migration.totalSize}
         />
       )}
@@ -57,7 +59,7 @@ const MigrationChecker: React.FC = () => {
           open
           onClose={() => migration.setCurrentStep("prompt")}
           onConfirm={migration.confirmSkip}
-          fileCount={migration.files.length}
+          fileCount={migration.fileCount}
         />
       )}
       {migration.currentStep === "setup" && (
