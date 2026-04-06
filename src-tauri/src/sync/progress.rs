@@ -8,7 +8,7 @@
 pub use hcfs_client::engine::progress::snapshot::{SyncSnapshot, build_snapshot};
 pub use hcfs_client::engine::progress::state::{
     FileAction, FileProgress, FileProgressStatus, FileStatus, OverallProgress, RECENT_FILES_RETENTION_MS, RecentFile, SessionFileList, SyncFile,
-    SyncProgressState, SyncSession, count_expected_for_label,
+    SyncProgressState, SyncSession, SyncSessionHandle, count_expected_for_label,
 };
 
 use hcfs_client::engine::runner::SyncRunner;
@@ -71,16 +71,15 @@ pub fn update_file_progress(
     total_bytes: u64,
     action: FileAction,
     label: Option<String>,
-) -> Result<Option<SyncFile>> {
-    let result = sync
-        .progress
+) -> Result<()> {
+    sync.progress
         .update_file_progress(path, bytes_transferred, total_bytes, action, label)
         .map_err(AppError::Progress)?;
     let is_file_complete = is_file_completion_tick(bytes_transferred, total_bytes);
     if try_claim_snapshot_emit(&LAST_THROTTLED_EMIT_MS, monotonic_now_ms(), is_file_complete, SNAPSHOT_THROTTLE_MS) {
         sync.emit_snapshot(false);
     }
-    Ok(result)
+    Ok(())
 }
 
 /// Merge file expectations into the current session, or start a new one.
@@ -130,7 +129,7 @@ pub fn start_session(
     expected_remote_deletes: u32,
     file_list: Option<SessionFileList>,
     label: Option<String>,
-) -> Result<SyncSession> {
+) -> Result<SyncSessionHandle> {
     let result = sync
         .progress
         .start_session(
@@ -232,7 +231,7 @@ pub fn sp_start_session(
     expected_remote_deletes: u32,
     file_list: Option<SessionFileList>,
     label: Option<String>,
-) -> Result<SyncSession> {
+) -> Result<SyncSessionHandle> {
     start_session(
         &state.sync,
         expected_uploads,
@@ -283,7 +282,7 @@ pub fn sp_update_file_progress(
     total_bytes: u64,
     action: FileAction,
     label: Option<String>,
-) -> Result<Option<SyncFile>> {
+) -> Result<()> {
     update_file_progress(&state.sync, path, bytes_transferred, total_bytes, action, label)
 }
 

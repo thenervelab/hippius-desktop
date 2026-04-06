@@ -26,7 +26,7 @@ use crate::auth::accounts::{export_app_data, get_all_subaccount_addresses, impor
 use crate::auth::contacts::{add_contact, delete_contact, get_contacts, update_contact};
 use crate::auth::login::{
     auth_logout, generate_mnemonic, get_eth_address, get_polkadot_address, login_with_mnemonic, refresh_auth_token, set_passcode,
-    unlock_with_passcode, validate_mnemonic,
+    set_session_mnemonic, unlock_with_passcode, validate_mnemonic,
 };
 use crate::auth::oauth::{complete_oauth_flow, parse_oauth_deep_link, start_oauth_flow};
 use crate::auth::session::{
@@ -79,7 +79,7 @@ use crate::sync::lifecycle::{
     add_local_sync_folder, auto_init_sync, change_sync_folder, initialize_sync, pause_drive, reset_sync_data, resume_drive, setup_and_init_sync,
     stop_drive, stop_sync,
 };
-use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic, persist_master_mnemonic};
+use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
 use crate::sync::paths::{generate_unique_label, get_all_sync_paths, get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{
     sp_clear_all_data, sp_complete_pending_files, sp_complete_session, sp_dismiss_sync_widget, sp_get_overall_progress, sp_get_snapshot,
@@ -235,7 +235,6 @@ fn main() {
             // HCFS mnemonic management
             get_drive_mnemonic,
             ensure_sync_mnemonic,
-            persist_master_mnemonic,
             // Billing auth (Ethereum challenge-response)
             crate::auth::billing_auth::billing_auth,
             crate::auth::billing_auth::ensure_billing_auth,
@@ -354,6 +353,7 @@ fn main() {
             login_with_mnemonic,
             unlock_with_passcode,
             set_passcode,
+            set_session_mnemonic,
             validate_mnemonic,
             refresh_auth_token,
             auth_logout,

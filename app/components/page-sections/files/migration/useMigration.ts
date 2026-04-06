@@ -41,6 +41,7 @@ interface PollMigrationStatusResult {
   current_file: string | null;
   should_warn: boolean;
   should_abort: boolean;
+  is_terminal: boolean;
 }
 
 export interface UseMigrationReturn {
@@ -69,12 +70,7 @@ export interface UseMigrationReturn {
   dismissAfterError: () => void;
 }
 
-/** Server statuses that mean the migration job is done (no more polling). */
-const TERMINAL_STATUSES = ["completed", "failed", "cancelled"];
-
-export function useMigration(
-  getMnemonic?: () => Promise<string | null>
-): UseMigrationReturn {
+export function useMigration(): UseMigrationReturn {
   const [currentStep, setCurrentStep] = useState<MigrationStep | null>(null);
   const [files, setFiles] = useState<MigrationFile[]>([]);
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
@@ -170,7 +166,7 @@ export function useMigration(
           );
         }
 
-        if (TERMINAL_STATUSES.includes(result.status)) {
+        if (result.is_terminal) {
           stopPolling();
           setOverallProgress(100);
           setMigrationSucceeded(result.status === "completed");
@@ -232,7 +228,7 @@ export function useMigration(
   );
 
   const launchServerMigration = useCallback(
-    async (accountId: string, mnemonic: string) => {
+    async (accountId: string) => {
       setCurrentStep("progress");
       setOverallProgress(0);
       setSuccessCount(0);
@@ -245,20 +241,27 @@ export function useMigration(
       appStore.set(migrationLockAtom, true);
 
       try {
-        await invoke("start_server_migration", {
-          accountId,
-          totalSize,
-          existingMnemonic: mnemonic,
-        });
+        await invoke("start_server_migration", { accountId, totalSize });
 
         // Start polling for progress
         startPolling(accountId);
       } catch (err) {
         console.error("[Migration] Start failed:", err);
         appStore.set(migrationLockAtom, false);
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        if (errorMsg.includes("Not enough disk space")) {
-          toast.error("Not enough disk space for migration. Please free up space and try again.");
+        // Structural dispatch on AppError.kind from Rust.
+        const kind = (err as { kind?: string } | null)?.kind;
+        if (kind === "NotReady") {
+          // NotReady wraps a NotReadyKind whose SCREAMING_SNAKE name is in the message.
+          const message = (err as { message?: string }).message ?? "";
+          if (message.includes("Not enough disk space")) {
+            toast.error("Not enough disk space for migration. Please free up space and try again.");
+          } else if (message.includes("Master mnemonic")) {
+            toast.error(
+              "Seed phrase not available. Please log out and log back in with your seed phrase to start migration."
+            );
+          } else {
+            toast.error("Failed to start migration. Please try again.");
+          }
         } else {
           toast.error("Failed to start migration. Please try again.");
         }
@@ -270,15 +273,6 @@ export function useMigration(
 
   const startMigration = useCallback(
     async (accountId: string) => {
-      // Resolve mnemonic once — it's needed for encryption key derivation.
-      const mnemonic = getMnemonic ? await getMnemonic() : null;
-      if (!mnemonic) {
-        toast.error(
-          "Seed phrase not available. Please log out and log back in with your seed phrase to start migration."
-        );
-        return;
-      }
-
       // Rust checks HCFS config and returns which step to show
       const flow = await invoke<{ nextStep: string }>("start_migration_flow", { accountId });
       if (flow.nextStep === "setup") {
@@ -286,16 +280,9 @@ export function useMigration(
         setCurrentStep("setup");
         return;
       }
-      // Password exists but mnemonic file may not — persist it before launching
-      await invoke("persist_master_mnemonic", {
-        accountId,
-        mnemonic,
-      }).catch((err: unknown) =>
-        console.warn("[Migration] persist_master_mnemonic failed:", err)
-      );
-      await launchServerMigration(accountId, mnemonic);
+      await launchServerMigration(accountId);
     },
-    [launchServerMigration, getMnemonic]
+    [launchServerMigration]
   );
 
   const onSetupComplete = useCallback(
@@ -305,36 +292,15 @@ export function useMigration(
 
       try {
         await saveHcfsConfig(pendingAccountId, result.serverUrl, result.password);
-
-        // Resolve mnemonic once and thread it through the entire flow.
-        const mnemonic = getMnemonic ? await getMnemonic() : null;
-        if (!mnemonic) {
-          setIsSettingUp(false);
-          toast.error(
-            "Seed phrase not available. Please log out and log back in with your seed phrase to start migration."
-          );
-          setCurrentStep("prompt");
-          return;
-        }
-
-        // Persist the master mnemonic to disk now that the drive password
-        // exists — needed for future sessions.
-        await invoke("persist_master_mnemonic", {
-          accountId: pendingAccountId,
-          mnemonic,
-        }).catch((err: unknown) =>
-          console.warn("[Migration] persist_master_mnemonic failed:", err)
-        );
-
         setIsSettingUp(false);
-        await launchServerMigration(pendingAccountId, mnemonic);
+        await launchServerMigration(pendingAccountId);
       } catch (err) {
         console.error("[Migration] Setup failed:", err);
         setIsSettingUp(false);
         setCurrentStep("prompt");
       }
     },
-    [pendingAccountId, launchServerMigration, getMnemonic]
+    [pendingAccountId, launchServerMigration]
   );
 
   const cancelMigration = useCallback(async () => {
@@ -390,11 +356,7 @@ export function useMigration(
     // failures have successfully migrated files that should be accessible via sync.
     if (accountId) {
       try {
-        const existingMnemonic = getMnemonic ? await getMnemonic() : null;
-        await invoke("complete_migration_transition", {
-          accountId,
-          existingMnemonic: existingMnemonic ?? null,
-        });
+        await invoke("complete_migration_transition", { accountId });
         appStore.set(syncEngineStatusAtom, "active");
         appStore.set(isSyncConfiguredAtom, true);
       } catch (err) {
@@ -431,7 +393,7 @@ export function useMigration(
     setPendingAccountId(null);
     setIsSettingUp(false);
     activeAccountIdRef.current = null;
-  }, [getMnemonic, stopPolling]);
+  }, [stopPolling]);
 
   /** Dismiss the dialog after a transition error — user can set up sync manually. */
   const dismissAfterError = useCallback(() => {

@@ -240,9 +240,9 @@ fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> Result<()> {
     let stat = nix::sys::statvfs::statvfs(path).map_err(|e| crate::error::AppError::Other(e.to_string()))?;
     let available = stat.block_size() as u64 * stat.blocks_available() as u64;
     if available < required_bytes {
-        return Err(crate::error::AppError::Validation(format!(
-            "Not enough disk space. Need {required_bytes} bytes but only {available} available."
-        )));
+        return Err(crate::error::AppError::NotReady(
+            crate::error::NotReadyKind::NotEnoughDiskSpace,
+        ));
     }
     Ok(())
 }
@@ -373,6 +373,17 @@ pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppStat
     let status = if reason.is_empty() { "dismissed" } else { &reason };
 
     upsert_migration_status(pool, &account_id, status, 0, 0, "[]", "", &server_url).await?;
+
+    // Abort any background poll task internally so the frontend doesn't
+    // need a separate stop_migration_polling round-trip.
+    {
+        let mut guard = state.migration.poll_task.lock().await;
+        if let Some(handle) = guard.take() {
+            handle.abort();
+        }
+    }
+    state.migration.in_progress.store(false, Ordering::SeqCst);
+
     info!("Migration dismissed for account {account_id} with reason: {status}");
     Ok(())
 }
@@ -400,7 +411,6 @@ pub async fn complete_migration_transition(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
-    existing_mnemonic: Option<String>,
 ) -> Result<crate::sync::lifecycle::InitSyncResult> {
     let pool = state.pool()?;
 
@@ -420,7 +430,9 @@ pub async fn complete_migration_transition(
     }
 
     // 3. Initialize the "default" drive and start the sync loop.
-    let result = crate::sync::lifecycle::initialize_sync(app, account_id.clone(), "default".to_string(), existing_mnemonic).await?;
+    // Mnemonic is resolved internally via get_mnemonic_for_account
+    // (which checks the AuthInfo cache before disk).
+    let result = crate::sync::lifecycle::initialize_sync(app, account_id.clone(), "default".to_string(), None).await?;
 
     // 4. Mark migration as completed ONLY after sync init succeeds.
     //    If init fails, the ? above propagates the error and this line
@@ -470,6 +482,10 @@ pub struct ServerMigrationStatus {
     pub should_warn: bool,
     /// True when 10+ consecutive poll failures (frontend should abort polling)
     pub should_abort: bool,
+    /// True when `status` is one of `completed` / `failed` / `cancelled`.
+    /// Set in Rust so the frontend doesn't need its own copy of the
+    /// terminal status list.
+    pub is_terminal: bool,
 }
 
 const WARN_AFTER_POLL_FAILURES: i32 = 3;
@@ -511,7 +527,6 @@ pub async fn start_server_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     total_size: u64,
-    existing_mnemonic: Option<String>,
 ) -> Result<StartServerMigrationResult> {
     tracing::info!("[Migration] Starting server migration for account {account_id}, total_size={total_size}");
     state.migration.in_progress.store(true, Ordering::SeqCst);
@@ -548,24 +563,12 @@ pub async fn start_server_migration(
         check_disk_space(sync_dir, total_size)?;
     }
 
-    // Recover the master mnemonic to derive the encryption key.
-    // Prefer the mnemonic passed from the frontend (in-memory from login)
-    // since the on-disk master may not exist yet.
-    let mnemonic = if let Some(ref m) = existing_mnemonic {
-        tracing::info!("[Migration] Using mnemonic provided by frontend");
-        bip39::Mnemonic::parse_in_normalized(bip39::Language::English, m)
-            .map_err(|e| crate::error::AppError::Other(format!("Invalid mnemonic: {e}")))?
-    } else {
-        let password = crate::sync::config::get_drive_password(pool, &account_id).await.map_err(|e| {
-            tracing::error!("[Migration] Failed to get drive password: {e}");
-            e
-        })?;
-        let mnemonic_path = crate::sync::mnemonic::master_mnemonic_path(&account_id)?;
-        hcfs_client::auth::recover_mnemonic(&mnemonic_path, &password).map_err(|e| {
-            tracing::error!("[Migration] Failed to recover mnemonic from disk: {e}");
-            crate::error::AppError::Other(format!("Failed to recover mnemonic: {e}"))
-        })?
-    };
+    // Recover the master mnemonic via the unified resolver. It checks the
+    // in-memory AuthInfo cache first (populated at login/unlock), then
+    // disk, drive, and DB before returning a typed MasterMnemonicUnrecoverable.
+    let mnemonic_str = crate::sync::mnemonic::get_mnemonic_for_account(&state, &account_id).await?;
+    let mnemonic = bip39::Mnemonic::parse_in_normalized(bip39::Language::English, &mnemonic_str)
+        .map_err(|e| crate::error::AppError::Other(format!("Invalid mnemonic from cache: {e}")))?;
 
     let seed = mnemonic.to_seed("");
 
@@ -721,6 +724,7 @@ async fn poll_migration_status_internal(state: &crate::app_state::AppState, acco
 
     if let Ok(raw) = result {
         state.migration.poll_failure_count.store(0, Ordering::SeqCst);
+        let is_terminal = TERMINAL_STATUSES.contains(&raw.status.as_str());
         Ok(ServerMigrationStatus {
             status: raw.status,
             total: raw.total,
@@ -730,6 +734,7 @@ async fn poll_migration_status_internal(state: &crate::app_state::AppState, acco
             current_file: raw.current_file,
             should_warn: false,
             should_abort: false,
+            is_terminal,
         })
     } else {
         let failures = state.migration.poll_failure_count.fetch_add(1, Ordering::SeqCst) + 1;
@@ -747,6 +752,7 @@ async fn poll_migration_status_internal(state: &crate::app_state::AppState, acco
             current_file: None,
             should_warn,
             should_abort,
+            is_terminal: false,
         })
     }
 }
@@ -828,6 +834,16 @@ pub async fn stop_migration_polling(app: tauri::AppHandle) -> Result<()> {
 #[tauri::command]
 pub async fn cancel_server_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<()> {
     state.migration.in_progress.store(false, Ordering::SeqCst);
+
+    // Abort the background poll task internally — the frontend no
+    // longer needs to call stop_migration_polling separately.
+    {
+        let mut guard = state.migration.poll_task.lock().await;
+        if let Some(handle) = guard.take() {
+            handle.abort();
+        }
+    }
+
     let pool = state.pool()?;
     let server_url = get_server_url(pool, &account_id).await?;
     let url = format!("{}/migration/cancel", server_url.trim_end_matches('/'));

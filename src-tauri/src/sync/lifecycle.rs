@@ -16,7 +16,7 @@ use crate::sync::folders::{get_all_sync_paths_internal, sanitize_label};
 use crate::sync::mnemonic::{account_dir, config_dir_for_folder, derive_folder_mnemonic, ensure_derived_mnemonic, folder_hash, master_mnemonic_path};
 use hcfs_client::engine::manager::DriveManager;
 use hcfs_client::engine::runner::{DriveSlot, SyncRunner};
-use hcfs_client::engine::types::{SyncActivityItem, SyncedFileInfo, build_synced_paths_from_state};
+use hcfs_client::engine::types::{SyncActivityAction, SyncActivityItem, SyncedFileInfo, build_synced_paths_from_state};
 use hcfs_client::sync::SyncProgress;
 use sqlx::sqlite::SqlitePool;
 use std::error::Error as _;
@@ -108,12 +108,18 @@ pub async fn setup_and_init_sync(
     {
         let master_path = master_mnemonic_path(&account_id)?;
         let acct_dir = account_dir(&account_id)?;
-        if let Err(e) = create_dir_all_async(acct_dir.clone()).await {
-            debug!("Early acct dir create skipped in setup_and_init_sync: {e}");
-        }
-        if let Err(e) = hcfs_client::auth::save_encrypted_mnemonic(&master_path, m, &pw) {
-            debug!("Mnemonic persist during setup skipped: {e}");
-        }
+        create_dir_all_async(acct_dir.clone()).await.map_err(|e| {
+            crate::error::AppError::Other(format!(
+                "Failed to create account directory at {}: {e}",
+                acct_dir.display()
+            ))
+        })?;
+        hcfs_client::auth::save_encrypted_mnemonic(&master_path, m, &pw).map_err(|e| {
+            crate::error::AppError::Other(format!(
+                "Failed to persist master mnemonic at {}: {e}",
+                master_path.display()
+            ))
+        })?;
     }
 
     // 3. Initialize sync
@@ -185,7 +191,7 @@ async fn teardown_previous_drive(sync: &SyncRunner, label: &str) {
         let mut state = sync.progress.lock();
         if let Some(session) = state.current_session.as_mut() {
             let before = session.files.len();
-            session.files.retain(|_path, file| file.label != *label);
+            session.files.retain(|_path, file| file.label.as_ref() != label);
             let removed = before - session.files.len();
             if removed > 0 {
                 info!(label = %label, removed, "Removed stale files for re-initializing label");
@@ -317,7 +323,7 @@ async fn register_drive(sync: &SyncRunner, manager: DriveManager, label: &str, s
     }
 
     // Pre-populate synced-paths cache
-    if let Ok(state) = manager.load_sync_state() {
+    if let Ok(state) = manager.load_sync_state().await {
         let paths = build_synced_paths_from_state(&state);
         if !paths.is_empty() {
             info!(
@@ -568,7 +574,7 @@ struct RecoveryContext<'a> {
 /// create a fresh `DriveManager`, re-derive the mnemonic, and unlock.
 ///
 /// Returns `(new_manager, user_id, optional_master_mnemonic)`.
-fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Result<(DriveManager, String, Option<String>)> {
+async fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Result<(DriveManager, String, Option<String>)> {
     // Remove corrupted enc_mnemonic.json
     let enc_path = ctx.folder_dir.join("enc_mnemonic.json");
     if enc_path.exists() {
@@ -602,7 +608,7 @@ fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Result<(Dr
     hcfs_client::auth::save_encrypted_mnemonic(ctx.master_path, &master_str, ctx.drive_password)?;
     let derived = derive_folder_mnemonic(&master_str, ctx.label)?;
 
-    let mut init_mnemonic = new_manager.init(ctx.drive_password, Some(&derived))?;
+    let mut init_mnemonic = new_manager.init(ctx.drive_password, Some(&derived)).await?;
     zeroize::Zeroize::zeroize(&mut init_mnemonic);
 
     let uid = new_manager.unlock(ctx.drive_password)?;
@@ -616,7 +622,7 @@ fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Result<(Dr
 /// and unlock it.
 ///
 /// Returns `(user_id, optional_master_for_backup, is_new_master)`.
-fn init_new_drive(
+async fn init_new_drive(
     manager: &mut DriveManager,
     label: &str,
     master_path: &Path,
@@ -661,7 +667,7 @@ fn init_new_drive(
         return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::NoEncryptionKey));
     };
 
-    let mut init_mnemonic = manager.init(drive_password, Some(&folder_mnemonic))?;
+    let mut init_mnemonic = manager.init(drive_password, Some(&folder_mnemonic)).await?;
     zeroize::Zeroize::zeroize(&mut init_mnemonic);
     drop(init_mnemonic);
     let mut folder_mnemonic = folder_mnemonic;
@@ -810,13 +816,13 @@ pub(crate) async fn initialize_sync_inner(
                     drive_password: &cfg.drive_password,
                     existing_mnemonic: existing_mnemonic.as_deref(),
                 };
-                let (new_mgr, uid, master) = recover_drive(manager, &ctx)?;
+                let (new_mgr, uid, master) = recover_drive(manager, &ctx).await?;
                 manager = new_mgr;
                 (uid, master, true)
             }
         }
     } else {
-        init_new_drive(&mut manager, &label, &master_path, &cfg.drive_password, existing_mnemonic.as_deref())?
+        init_new_drive(&mut manager, &label, &master_path, &cfg.drive_password, existing_mnemonic.as_deref()).await?
     };
 
     // Validate user_id
@@ -1226,9 +1232,9 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
         let display_name = Path::new(path_str)
             .file_name()
             .map_or_else(|| path_str.to_string(), |f| f.to_string_lossy().to_string());
-        let action_str = match ctx.direction {
-            TransferDirection::Upload => "uploaded",
-            TransferDirection::Download => "downloaded",
+        let action = match ctx.direction {
+            TransferDirection::Upload => SyncActivityAction::Uploaded,
+            TransferDirection::Download => SyncActivityAction::Downloaded,
         };
         info!("{} complete [{}]: {} ({} bytes)", dir_name, ctx.label, display_name, total);
         let _ = ctx.app.emit(
@@ -1238,11 +1244,11 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
             },
         );
         ctx.sync.add_pending_activity(SyncActivityItem {
-            file_name: path_str.to_string(),
-            action: action_str.to_string(),
+            file_name: std::sync::Arc::from(path_str),
+            action,
             timestamp: chrono::Utc::now().timestamp(),
             size_bytes: total,
-            label: ctx.label.to_string(),
+            label: Arc::clone(&ctx.label),
         });
     }
 }
@@ -1398,10 +1404,33 @@ fn build_fetch_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) 
 fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_client::sync::FileSyncedFn {
     Arc::new(move |rel_path, path_hash_hex, arion_cid, action| {
         debug!("File synced [{label}]: {rel_path} ({action}) cid={arion_cid}");
-        if !rel_path.is_empty() {
-            let info = SyncedFileInfo::new(path_hash_hex.to_string(), arion_cid.to_string());
-            sync.upsert_synced_path(&label, rel_path.to_string(), info);
+        if rel_path.is_empty() {
+            return;
         }
+        // hcfs's `FileSyncedFn` callback passes `path_hash_hex` as a hex
+        // string. `SyncedFileInfo::new` now wants the raw 32-byte hash, so
+        // we decode here. A future hcfs PR could pass `&[u8; 32]` directly
+        // to skip this round-trip.
+        let decoded = match hex::decode(path_hash_hex) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    path_hash_hex = path_hash_hex,
+                    "failed to decode path_hash_hex, skipping synced-paths upsert"
+                );
+                return;
+            }
+        };
+        let Ok(path_hash_bytes) = <[u8; 32]>::try_from(decoded) else {
+            warn!(
+                path_hash_hex = path_hash_hex,
+                "path_hash_hex has wrong byte length, skipping synced-paths upsert"
+            );
+            return;
+        };
+        let info = SyncedFileInfo::new(path_hash_bytes, Arc::from(arion_cid));
+        sync.upsert_synced_path(&label, rel_path.to_string(), info);
     })
 }
 

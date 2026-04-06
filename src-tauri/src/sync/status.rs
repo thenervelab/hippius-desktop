@@ -2,7 +2,7 @@
 //!
 //! These are thin wrappers that delegate to `SyncEngine` methods.
 
-use hcfs_client::engine::types::{CombinedSyncState, SyncActivityItem, SyncEngineHealth};
+use hcfs_client::engine::types::{CombinedSyncState, SyncActivityAction, SyncActivityItem, SyncEngineHealth};
 use serde::Serialize;
 use std::collections::HashSet;
 use tauri::{AppHandle, Wry};
@@ -61,16 +61,20 @@ fn normalize_activity_rows(items: &[SyncActivityItem]) -> Vec<SyncActivityRow> {
             continue;
         }
 
-        let status = match item.action.as_str() {
-            "deleted" => "deleted",
-            "uploading" => "uploading",
+        let status = match item.action {
+            SyncActivityAction::Deleted => "deleted",
+            // Uploaded, Downloaded, Conflict all map to "uploaded" in the
+            // UI — historical behaviour. The previous string-based code had
+            // an "uploading" arm but `SyncActivityItem.action` was never
+            // set to that value (it came from `FileStatus`, not from this
+            // struct).
             _ => "uploaded",
         };
 
         let raw_name = if item.file_name.is_empty() {
             "Unknown".to_string()
         } else {
-            item.file_name.clone()
+            item.file_name.to_string()
         };
         let file_name = shorten_name(&raw_name, 30);
 
@@ -81,7 +85,7 @@ fn normalize_activity_rows(items: &[SyncActivityItem]) -> Vec<SyncActivityRow> {
             status: status.to_string(),
             size: item.size_bytes,
             timestamp: Some(item.timestamp),
-            deleted: item.action == "deleted",
+            deleted: item.action == SyncActivityAction::Deleted,
         });
     }
 
@@ -108,41 +112,49 @@ pub fn app_close(app: AppHandle<Wry>) {
 mod tests {
     use super::*;
 
-    fn make_item(file_name: &str, action: &str, timestamp: i64) -> SyncActivityItem {
+    fn make_item(file_name: &str, action: SyncActivityAction, timestamp: i64) -> SyncActivityItem {
         SyncActivityItem {
-            file_name: file_name.to_string(),
-            action: action.to_string(),
+            file_name: std::sync::Arc::from(file_name),
+            action,
             timestamp,
             size_bytes: 100,
-            label: "default".to_string(),
+            label: std::sync::Arc::from("default"),
         }
     }
 
     #[test]
     fn normalize_deduplicates_by_action_and_name() {
-        let items = vec![make_item("file.txt", "uploaded", 1000), make_item("file.txt", "uploaded", 2000)];
+        let items = vec![
+            make_item("file.txt", SyncActivityAction::Uploaded, 1000),
+            make_item("file.txt", SyncActivityAction::Uploaded, 2000),
+        ];
         let rows = normalize_activity_rows(&items);
         assert_eq!(rows.len(), 1);
     }
 
     #[test]
     fn normalize_keeps_different_actions() {
-        let items = vec![make_item("file.txt", "uploaded", 1000), make_item("file.txt", "deleted", 2000)];
+        let items = vec![
+            make_item("file.txt", SyncActivityAction::Uploaded, 1000),
+            make_item("file.txt", SyncActivityAction::Deleted, 2000),
+        ];
         let rows = normalize_activity_rows(&items);
         assert_eq!(rows.len(), 2);
     }
 
     #[test]
     fn normalize_maps_status_correctly() {
+        // Activity items sort newest-first, so timestamps order results.
         let items = vec![
-            make_item("a.txt", "uploaded", 1),
-            make_item("b.txt", "deleted", 2),
-            make_item("c.txt", "uploading", 3),
-            make_item("d.txt", "downloaded", 4),
+            make_item("a.txt", SyncActivityAction::Uploaded, 1),
+            make_item("b.txt", SyncActivityAction::Deleted, 2),
+            make_item("c.txt", SyncActivityAction::Conflict, 3),
+            make_item("d.txt", SyncActivityAction::Downloaded, 4),
         ];
         let rows = normalize_activity_rows(&items);
-        assert_eq!(rows[0].status, "uploaded"); // downloaded → "uploaded"
-        assert_eq!(rows[1].status, "uploading");
+        // Sorted newest-first: d (4), c (3), b (2), a (1)
+        assert_eq!(rows[0].status, "uploaded"); // Downloaded → "uploaded"
+        assert_eq!(rows[1].status, "uploaded"); // Conflict → "uploaded"
         assert_eq!(rows[2].status, "deleted");
         assert_eq!(rows[3].status, "uploaded");
     }
@@ -150,9 +162,9 @@ mod tests {
     #[test]
     fn normalize_sorts_newest_first() {
         let items = vec![
-            make_item("old.txt", "uploaded", 100),
-            make_item("new.txt", "uploaded", 500),
-            make_item("mid.txt", "uploaded", 300),
+            make_item("old.txt", SyncActivityAction::Uploaded, 100),
+            make_item("new.txt", SyncActivityAction::Uploaded, 500),
+            make_item("mid.txt", SyncActivityAction::Uploaded, 300),
         ];
         let rows = normalize_activity_rows(&items);
         assert_eq!(rows[0].raw_name, "new.txt");
@@ -175,7 +187,7 @@ mod tests {
 
     #[test]
     fn normalize_empty_filename_becomes_unknown() {
-        let items = vec![make_item("", "uploaded", 1)];
+        let items = vec![make_item("", SyncActivityAction::Uploaded, 1)];
         let rows = normalize_activity_rows(&items);
         assert_eq!(rows[0].raw_name, "Unknown");
     }

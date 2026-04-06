@@ -23,8 +23,8 @@ import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDi
  */
 const MigrationChecker: React.FC = () => {
   const migrationCheck = useAtomValue(migrationCheckAtom);
-  const { polkadotAddress, getMnemonic } = useWalletAuth();
-  const migration = useMigration(getMnemonic);
+  const { polkadotAddress } = useWalletAuth();
+  const migration = useMigration();
 
   useEffect(() => {
     console.log("[MigrationChecker] useEffect fired — shouldCheck:", migrationCheck.shouldCheck, "currentStep:", migration.currentStep, "polkadotAddress:", !!polkadotAddress);

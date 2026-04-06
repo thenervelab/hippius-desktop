@@ -113,49 +113,80 @@ pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, pas
 /// Takes `&AppState` to access both the DB pool and the live drive registry
 /// without relying on global state.
 pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, account_id: &str) -> Result<String> {
-    let pool = app_state.pool()?;
-    let drive_password = get_drive_password(pool, account_id).await?;
-
-    // Prefer the master mnemonic at account level
-    let master_path = master_mnemonic_path(account_id)?;
-    if master_path.exists() {
-        let mnemonic = hcfs_client::auth::recover_mnemonic(&master_path, &drive_password)?;
-        return Ok(mnemonic.to_string());
+    // Stage 1: in-memory cache populated by login_with_mnemonic /
+    // unlock_with_passcode / set_session_mnemonic. Gated on the active
+    // account so a stale cache from a previous account never leaks.
+    {
+        let auth = app_state.auth.lock()?;
+        if auth.substrate_address.as_deref() == Some(account_id)
+            && let Some(ref cached) = auth.mnemonic
+        {
+            return Ok(cached.to_string());
+        }
     }
 
-    // Fallback: try the first active drive's folder mnemonic (pre-migration state).
+    let pool = app_state.pool()?;
+
+    // Stage 2: master mnemonic on disk.
+    let master_path = master_mnemonic_path(account_id)?;
+    if master_path.exists()
+        && let Ok(drive_password) = get_drive_password(pool, account_id).await
+    {
+        match hcfs_client::auth::recover_mnemonic(&master_path, &drive_password) {
+            Ok(mnemonic) => return Ok(mnemonic.to_string()),
+            Err(e) => {
+                // Wrong password / corrupt file — surface as recoverable
+                // precondition rather than a stringly Hcfs error so the
+                // frontend prompts the user to re-login.
+                warn!("Master mnemonic at {:?} failed to decrypt: {e}", master_path);
+                return Err(crate::error::AppError::NotReady(
+                    crate::error::NotReadyKind::MasterMnemonicUnrecoverable,
+                ));
+            }
+        }
+    }
+
+    // Stage 3: first active drive's folder mnemonic (pre-migration state).
     warn!("Master mnemonic not found at {:?}, falling back to per-folder mnemonic", master_path);
     let first_arc = {
         let guard = app_state.sync.drives.lock().await;
         guard.values().next().map(|slot| slot.manager.clone())
     };
-    if let Some(arc) = first_arc {
+    if let Some(arc) = first_arc
+        && let Ok(drive_password) = get_drive_password(pool, account_id).await
+    {
         let m = arc.lock().await;
-        if m.is_initialized() {
-            Ok(m.export_mnemonic(&drive_password)?)
-        } else {
-            Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::DriveNotInitialized))
-        }
-    } else {
-        // No active drive — try reading DB for any sync path
-        let owner = account_key(account_id);
-        let result: Option<(String, String)> = sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ? LIMIT 1")
-            .bind(&owner)
-            .fetch_optional(pool)
-            .await?;
-
-        if let Some((path, lbl)) = result {
-            let folder_dir = config_dir_for_folder(account_id, &lbl)?;
-            let manager = DriveManager::new(PathBuf::from(&path), folder_dir);
-            if manager.is_initialized() {
-                Ok(manager.export_mnemonic(&drive_password)?)
-            } else {
-                Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::DriveNotInitialized))
-            }
-        } else {
-            Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::SyncSetup))
+        if m.is_initialized()
+            && let Ok(mnemonic) = m.export_mnemonic(&drive_password)
+        {
+            return Ok(mnemonic);
         }
     }
+
+    // Stage 4: any sync path row in the DB.
+    let owner = account_key(account_id);
+    let result: Option<(String, String)> = sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ? LIMIT 1")
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await?;
+
+    if let Some((path, lbl)) = result
+        && let Ok(drive_password) = get_drive_password(pool, account_id).await
+    {
+        let folder_dir = config_dir_for_folder(account_id, &lbl)?;
+        let manager = DriveManager::new(PathBuf::from(&path), folder_dir);
+        if manager.is_initialized()
+            && let Ok(mnemonic) = manager.export_mnemonic(&drive_password)
+        {
+            return Ok(mnemonic);
+        }
+    }
+
+    // Stage 5: nothing recoverable. Frontend dispatches on this kind to
+    // prompt the user to log in again with their seed phrase.
+    Err(crate::error::AppError::NotReady(
+        crate::error::NotReadyKind::MasterMnemonicUnrecoverable,
+    ))
 }
 
 /// Tauri command wrapper: return the master BIP-39 mnemonic by decrypting it
@@ -184,49 +215,6 @@ pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppS
         &account_id[..8.min(account_id.len())]
     );
     crate::auth::login::generate_mnemonic()
-}
-
-/// Persist the master mnemonic to disk early (during login), even before any
-/// sync folder is configured. This prevents the fallback to a random master
-/// that would make cross-device sync impossible.
-///
-/// If a master already exists on disk but differs from the provided mnemonic,
-/// it is updated to match the login mnemonic (source of truth for cross-device
-/// sync). No-op if the HCFS drive password has not been set yet.
-#[tauri::command]
-pub async fn persist_master_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, mnemonic: String) -> Result<()> {
-    let pool = state.pool()?;
-    let master_path = master_mnemonic_path(&account_id)?;
-
-    let Ok(drive_password) = get_drive_password(pool, &account_id).await else {
-        // HCFS config not set up yet — nothing we can do.
-        // The master will be saved when initialize_sync runs.
-        return Ok(());
-    };
-
-    if master_path.exists() {
-        // Compare stored master with the login mnemonic. A mismatch means
-        // the master was generated randomly (e.g. app restart lost the
-        // in-memory mnemonic). Update it so initialize_sync's step 4b and
-        // ensure_derived_mnemonic can detect and fix folder key mismatches.
-        use zeroize::Zeroize;
-        let stored = hcfs_client::auth::recover_mnemonic(&master_path, &drive_password)?;
-        let mut stored_str = stored.to_string();
-        if stored_str == mnemonic {
-            stored_str.zeroize();
-            return Ok(());
-        }
-        stored_str.zeroize();
-        info!("Stored master differs from login mnemonic — updating early");
-    }
-
-    let acct_dir = account_dir(&account_id)?;
-    std::fs::create_dir_all(&acct_dir)?;
-
-    hcfs_client::auth::save_encrypted_mnemonic(&master_path, &mnemonic, &drive_password)?;
-
-    info!("Eagerly persisted master mnemonic for account {}", &account_id[..8.min(account_id.len())]);
-    Ok(())
 }
 
 /// Create a password-protected zip file containing the plaintext mnemonic.

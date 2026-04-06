@@ -71,6 +71,11 @@ pub enum NotReadyKind {
     NoEncryptionKey,
     /// HCFS config not found — sync not configured.
     ConfigMissing,
+    /// Master mnemonic could not be recovered from any source
+    /// (in-memory cache, disk, drive, or DB). User must re-login.
+    MasterMnemonicUnrecoverable,
+    /// Not enough disk space to complete the operation.
+    NotEnoughDiskSpace,
 }
 
 impl std::fmt::Display for NotReadyKind {
@@ -87,6 +92,15 @@ impl std::fmt::Display for NotReadyKind {
             }
             Self::ConfigMissing => {
                 write!(f, "HCFS config not found. Please set up sync first.")
+            }
+            Self::MasterMnemonicUnrecoverable => {
+                write!(
+                    f,
+                    "Master mnemonic could not be recovered. Please log out and log back in with your seed phrase."
+                )
+            }
+            Self::NotEnoughDiskSpace => {
+                write!(f, "Not enough disk space to complete this operation.")
             }
         }
     }
@@ -318,6 +332,8 @@ mod tests {
             (NotReadyKind::SyncInProgress, "SYNC_IN_PROGRESS"),
             (NotReadyKind::NoEncryptionKey, "NO_ENCRYPTION_KEY"),
             (NotReadyKind::ConfigMissing, "CONFIG_MISSING"),
+            (NotReadyKind::MasterMnemonicUnrecoverable, "MASTER_MNEMONIC_UNRECOVERABLE"),
+            (NotReadyKind::NotEnoughDiskSpace, "NOT_ENOUGH_DISK_SPACE"),
         ];
         for (kind, expected) in cases {
             let json = serde_json::to_value(&kind).expect("serialize");
@@ -453,6 +469,14 @@ mod tests {
             (NotReadyKind::SyncInProgress, "Sync is in progress, please wait"),
             (NotReadyKind::NoEncryptionKey, "No encryption key available"),
             (NotReadyKind::ConfigMissing, "HCFS config not found. Please set up sync first."),
+            (
+                NotReadyKind::MasterMnemonicUnrecoverable,
+                "Master mnemonic could not be recovered. Please log out and log back in with your seed phrase.",
+            ),
+            (
+                NotReadyKind::NotEnoughDiskSpace,
+                "Not enough disk space to complete this operation.",
+            ),
         ];
         for (kind, expected) in cases {
             assert_eq!(kind.to_string(), expected);

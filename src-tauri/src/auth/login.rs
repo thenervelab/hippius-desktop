@@ -66,6 +66,7 @@ pub async fn login_with_mnemonic(
         auth.sr25519_pair = Some(sr25519_pair);
         auth.substrate_address = Some(substrate_address.clone());
         auth.eth_address = Some(eth_address.clone());
+        auth.mnemonic = Some(mnemonic.clone());
     }
 
     let pool = state.pool()?;
@@ -283,6 +284,7 @@ pub async fn unlock_with_passcode(
         auth.sr25519_pair = Some(sr25519_pair);
         auth.substrate_address = Some(substrate_address.clone());
         auth.eth_address = Some(eth_address.clone());
+        auth.mnemonic = Some(mnemonic.clone());
     }
 
     let ltm = logout_time_minutes.unwrap_or(1440);
@@ -339,6 +341,7 @@ pub async fn auth_logout_internal(state: &crate::app_state::AppState, account_id
         auth.sr25519_pair = None;
         auth.substrate_address = None;
         auth.eth_address = None;
+        auth.mnemonic = None;
     }
 
     let pool = state.pool()?;
@@ -363,6 +366,31 @@ pub async fn auth_logout_internal(state: &crate::app_state::AppState, account_id
     .await?;
 
     info!("Logout complete");
+    Ok(())
+}
+
+/// Cache a session mnemonic in `AuthInfo` for the active account.
+///
+/// Used by the OAuth flow: after `ensure_sync_mnemonic` generates a fresh
+/// mnemonic for an OAuth user, the frontend calls this so subsequent
+/// `get_mnemonic_for_account` calls (e.g. migration) hit the in-memory cache
+/// instead of trying disk. Gated on the active account to prevent cross-
+/// account contamination.
+#[tauri::command]
+pub async fn set_session_mnemonic(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    mnemonic: String,
+) -> Result<(), AppError> {
+    let mnemonic = Zeroizing::new(mnemonic);
+    if bip39::Mnemonic::parse_in_normalized(bip39::Language::English, &mnemonic).is_err() {
+        return Err(AppError::Crypto("Invalid mnemonic supplied to set_session_mnemonic".into()));
+    }
+    let mut auth = state.auth.lock()?;
+    if auth.substrate_address.as_deref() != Some(account_id.as_str()) {
+        return Err(AppError::NotReady(crate::error::NotReadyKind::ConfigMissing));
+    }
+    auth.mnemonic = Some(mnemonic);
     Ok(())
 }
 

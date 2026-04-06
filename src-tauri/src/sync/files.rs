@@ -17,7 +17,7 @@ use crate::auth::account_key::account_key;
 use crate::error::Result;
 use hcfs_client::engine::manager::DriveManager;
 use hcfs_client::engine::runner::{SyncRunner, trigger_sync};
-use hcfs_client::engine::types::SyncActivityItem;
+use hcfs_client::engine::types::{SyncActivityAction, SyncActivityItem};
 
 /// Allow the given directory (recursively) in the Tauri asset protocol scope
 /// so the frontend can display files via `asset://localhost/...` URLs.
@@ -232,11 +232,11 @@ pub async fn remove_file(state: tauri::State<'_, crate::app_state::AppState>, sy
     if let Some(lbl) = label {
         state.sync.update_state(&lbl, |st| {
             st.add_activity(SyncActivityItem {
-                file_name: name.clone(),
-                action: "deleted".to_string(),
+                file_name: std::sync::Arc::from(name.as_str()),
+                action: SyncActivityAction::Deleted,
                 timestamp: chrono::Utc::now().timestamp(),
                 size_bytes,
-                label: lbl.clone(),
+                label: std::sync::Arc::from(lbl.as_str()),
             });
         });
     }
@@ -323,11 +323,11 @@ pub async fn delete_files(
                         if let Some(lbl) = &file.label {
                             state.sync.update_state(lbl, |st| {
                                 st.add_activity(SyncActivityItem {
-                                    file_name: relative_name.clone(),
-                                    action: "deleted".to_string(),
+                                    file_name: std::sync::Arc::from(relative_name.as_str()),
+                                    action: SyncActivityAction::Deleted,
                                     timestamp: chrono::Utc::now().timestamp(),
                                     size_bytes,
-                                    label: lbl.clone(),
+                                    label: std::sync::Arc::from(lbl.as_str()),
                                 });
                             });
                         }
@@ -485,7 +485,7 @@ async fn synced_paths_for_label(sync: &SyncRunner, label: &str) -> Option<HashMa
     // Try to lock the per-drive mutex; fall back to cache if syncing.
     match arc.try_lock() {
         Ok(manager) => {
-            let state = manager.load_sync_state().ok()?;
+            let state = manager.load_sync_state().await.ok()?;
             let paths = build_synced_paths_from_state(&state);
             sync.update_synced_paths_cache(label, paths.clone());
             Some(paths)
@@ -540,7 +540,7 @@ pub async fn get_synced_file_metadata(state: tauri::State<'_, crate::app_state::
             let mut out = Vec::new();
             for (label, arc) in &drive_arcs {
                 if let Ok(manager) = arc.try_lock() {
-                    if let Ok(st) = manager.load_sync_state() {
+                    if let Ok(st) = manager.load_sync_state().await {
                         let paths = build_synced_paths_from_state(&st);
                         sync.update_synced_paths_cache(label, paths.clone());
                         out.push((label.clone(), paths));
@@ -563,8 +563,8 @@ pub async fn get_synced_file_metadata(state: tauri::State<'_, crate::app_state::
                 file_name: rel_path.clone(),
                 relative_path: rel_path.clone(),
                 label: label.clone(),
-                arion_hash: info.path_hash_hex.clone(),
-                arion_cid: info.arion_cid.clone(),
+                arion_hash: info.path_hash_hex(),
+                arion_cid: info.arion_cid.to_string(),
                 uploaded_at: info.uploaded_at,
                 updated_at: info.updated_at,
             });
@@ -655,13 +655,13 @@ pub async fn get_recent_files(
     // 4. Filter deleted files
     let deleted_names: std::collections::HashSet<String> = items
         .iter()
-        .filter(|item| item.action == "deleted")
+        .filter(|item| item.action == SyncActivityAction::Deleted)
         .map(|item| format!("{}::{}", item.file_name, item.label))
         .collect();
 
     let non_deleted: Vec<_> = items
         .iter()
-        .filter(|item| item.action != "deleted" && !deleted_names.contains(&format!("{}::{}", item.file_name, item.label)))
+        .filter(|item| item.action != SyncActivityAction::Deleted && !deleted_names.contains(&format!("{}::{}", item.file_name, item.label)))
         .collect();
 
     if non_deleted.is_empty() {
@@ -680,7 +680,7 @@ pub async fn get_recent_files(
             continue;
         }
 
-        let sync_folder_path = label_to_path.get(&item.label);
+        let sync_folder_path = label_to_path.get(item.label.as_ref());
         let source = match sync_folder_path {
             Some(path) if !item.file_name.is_empty() => format!("{path}/{}", item.file_name),
             _ => String::new(),
@@ -705,8 +705,7 @@ pub async fn get_recent_files(
         };
 
         let file_type = {
-            let a = &item.action;
-            let mut chars = a.chars();
+            let mut chars = item.action.as_str().chars();
             match chars.next() {
                 Some(c) => c.to_uppercase().to_string() + chars.as_str(),
                 None => String::new(),
@@ -715,7 +714,7 @@ pub async fn get_recent_files(
 
         result.push(RecentFile {
             name: display_name,
-            actual_file_name: item.file_name.clone(),
+            actual_file_name: item.file_name.to_string(),
             size: item.size_bytes,
             created_at: created_at_ms,
             arion_hash,
@@ -729,7 +728,7 @@ pub async fn get_recent_files(
             file_type,
             is_erasure_coded: false,
             main_req_hash: String::new(),
-            label: item.label.clone(),
+            label: item.label.to_string(),
         });
     }
 
@@ -892,8 +891,8 @@ pub async fn list_sync_folder(
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs()),
             sync_status: sync_status.to_string(),
-            arion_hash: info.map_or_else(String::new, |i| i.path_hash_hex.clone()),
-            arion_cid: info.map_or_else(String::new, |i| i.arion_cid.clone()),
+            arion_hash: info.map_or_else(String::new, hcfs_client::engine::types::SyncedFileInfo::path_hash_hex),
+            arion_cid: info.map_or_else(String::new, |i| i.arion_cid.to_string()),
             file_count,
             uploaded_at: info.map_or(0, |i| i.uploaded_at),
             updated_at: info.map_or(0, |i| i.updated_at),
