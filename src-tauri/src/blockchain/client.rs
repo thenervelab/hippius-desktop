@@ -51,6 +51,13 @@ pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Res
                     Ok(client) => {
                         let arc = Arc::new(client);
                         let mut client_lock = lock.write().map_err(|e| format!("Substrate client lock failed: {e}"))?;
+
+                        // Double-check: another task may have connected while we waited for the write lock
+                        if let Some(existing) = client_lock.as_ref() {
+                            info!("Another task already connected — reusing existing client");
+                            return Ok(existing.clone());
+                        }
+
                         *client_lock = Some(arc.clone());
 
                         // Cache the RPC client for legacy methods (e.g. get_block_timestamp)
