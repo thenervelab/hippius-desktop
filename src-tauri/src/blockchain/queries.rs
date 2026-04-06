@@ -44,12 +44,15 @@ pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState
     let client = get_substrate_client(&state).await?;
     let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| format!("Invalid SS58 address: {address}"))?;
 
-    let balance_query = custom_runtime::storage().system().account(&account_id);
-    let balance_info = client
+    // Single RPC call — all queries use the same block snapshot
+    let storage = client
         .storage()
         .at_latest()
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
+        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?;
+
+    let balance_query = custom_runtime::storage().system().account(&account_id);
+    let balance_info = storage
         .fetch(&balance_query)
         .await
         .map_err(|e| crate::error::AppError::Other(format!("Balance query failed: {e}")))?;
@@ -61,22 +64,14 @@ pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState
     let mut unbonding_periods = Vec::new();
 
     let current_era_query = custom_runtime::storage().staking().current_era();
-    let current_era: u32 = client
-        .storage()
-        .at_latest()
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
+    let current_era: u32 = storage
         .fetch(&current_era_query)
         .await
         .map_err(|e| crate::error::AppError::Other(format!("Era query failed: {e}")))?
         .unwrap_or(0);
 
     let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
-    if let Ok(Some(ledger)) = client
-        .storage()
-        .at_latest()
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
+    if let Ok(Some(ledger)) = storage
         .fetch(&ledger_query)
         .await
     {
