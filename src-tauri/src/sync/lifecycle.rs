@@ -751,6 +751,18 @@ pub(crate) async fn initialize_sync_inner(
 
     // Create drive and set HCFS config
     let mut manager = DriveManager::new(PathBuf::from(&cfg.sync_path), folder_dir.clone());
+
+    // If the stored token is expired (or expires within 60s), refresh it
+    // before handing it to the drive. This avoids an immediate 401 on the
+    // first sync cycle after a long splash or resume-from-sleep.
+    const TOKEN_REFRESH_MARGIN_SECS: i64 = 60;
+    if crate::auth::tokens::is_token_expiring(pool, &account_id, TOKEN_REFRESH_MARGIN_SECS).await {
+        debug!("Stored token near expiry; refreshing before sync init");
+        if let Err(e) = crate::auth::service::refresh_auth_token_internal(pool, &app, &account_id).await {
+            warn!("Pre-init token refresh failed: {e} — will rely on runtime 401 handler");
+        }
+    }
+
     let bearer_token = get_api_token(pool, &account_id)
         .await?
         .ok_or_else(|| crate::error::AppError::Other("No authentication token found. Please log in again.".into()))?;
