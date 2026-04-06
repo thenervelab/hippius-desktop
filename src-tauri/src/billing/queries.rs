@@ -17,7 +17,7 @@ pub async fn get_billing_transactions(
     page: Option<i64>,
     limit: Option<i64>,
 ) -> Result<serde_json::Value, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
     let params = vec![("page", page_str.as_str()), ("limit", limit_str.as_str())];
@@ -29,7 +29,7 @@ pub async fn get_billing_transactions(
 /// Fetch the on-chain deposit address for adding credits via Substrate transfer.
 #[tauri::command]
 pub async fn get_deposit_address(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<serde_json::Value, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client.get::<serde_json::Value>("/api/billing/substrate-address/", &account_id).await?)
 }
 
@@ -39,8 +39,8 @@ pub async fn get_deposit_address(state: tauri::State<'_, crate::app_state::AppSt
 
 /// Fetch free credit allocations from the blockchain indexer.
 #[tauri::command]
-pub async fn get_indexer_credits(account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, AppError> {
-    let indexer = IndexerClient::from_env()?;
+pub async fn get_indexer_credits(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, AppError> {
+    let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
     let params = vec![
@@ -53,8 +53,8 @@ pub async fn get_indexer_credits(account_id: String, page: Option<i64>, limit: O
 
 /// Fetch marketplace credit consumption events (`CreditsConsumed`) from the indexer.
 #[tauri::command]
-pub async fn get_marketplace_credits(account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, AppError> {
-    let indexer = IndexerClient::from_env()?;
+pub async fn get_marketplace_credits(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, AppError> {
+    let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
     let params = vec![
@@ -68,8 +68,8 @@ pub async fn get_marketplace_credits(account_id: String, page: Option<i64>, limi
 
 /// Fetch historical system account balance snapshots for charting.
 #[tauri::command]
-pub async fn get_system_balance_history(account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, AppError> {
-    let indexer = IndexerClient::from_env()?;
+pub async fn get_system_balance_history(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, AppError> {
+    let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(30).to_string();
     let params = vec![
@@ -82,8 +82,8 @@ pub async fn get_system_balance_history(account_id: String, page: Option<i64>, l
 
 /// Fetch balance transfer events (both sent and received) from the indexer.
 #[tauri::command]
-pub async fn get_balance_transfers(account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, AppError> {
-    let indexer = IndexerClient::from_env()?;
+pub async fn get_balance_transfers(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, AppError> {
+    let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
     let params = vec![
@@ -96,8 +96,8 @@ pub async fn get_balance_transfers(account_id: String, page: Option<i64>, limit:
 
 /// Fetch `MintedAccountCredits` events (credit top-ups) from the indexer.
 #[tauri::command]
-pub async fn get_add_credit_events(account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, AppError> {
-    let indexer = IndexerClient::from_env()?;
+pub async fn get_add_credit_events(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<serde_json::Value, AppError> {
+    let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
     let params = vec![
@@ -111,8 +111,8 @@ pub async fn get_add_credit_events(account_id: String, page: Option<i64>, limit:
 
 /// Fetch total file size stored by an account over a time window.
 #[tauri::command]
-pub async fn get_files_size(account_id: String, days_ago: Option<i64>) -> Result<serde_json::Value, AppError> {
-    let indexer = IndexerClient::from_env()?;
+pub async fn get_files_size(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, days_ago: Option<i64>) -> Result<serde_json::Value, AppError> {
+    let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let days_str = days_ago.unwrap_or(30).to_string();
     let params = vec![("account_id", account_id.as_str()), ("days_ago", days_str.as_str())];
     Ok(indexer.get::<serde_json::Value>("/user-total-file-size", &params).await?)
@@ -120,8 +120,8 @@ pub async fn get_files_size(account_id: String, days_ago: Option<i64>) -> Result
 
 /// Fetch total file count for an account over a time window.
 #[tauri::command]
-pub async fn get_files_count(account_id: String, days_ago: Option<i64>) -> Result<serde_json::Value, AppError> {
-    let indexer = IndexerClient::from_env()?;
+pub async fn get_files_count(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, days_ago: Option<i64>) -> Result<serde_json::Value, AppError> {
+    let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let days_str = days_ago.unwrap_or(30).to_string();
     let params = vec![("account_id", account_id.as_str()), ("days_ago", days_str.as_str())];
     Ok(indexer.get::<serde_json::Value>("/user-total-files-count", &params).await?)
@@ -129,16 +129,16 @@ pub async fn get_files_count(account_id: String, days_ago: Option<i64>) -> Resul
 
 /// Look up which storage miner nodes hold a specific CID.
 #[tauri::command]
-pub async fn get_file_nodes(cid: String) -> Result<serde_json::Value, AppError> {
-    let indexer = IndexerClient::from_env()?;
+pub async fn get_file_nodes(state: tauri::State<'_, crate::app_state::AppState>, cid: String) -> Result<serde_json::Value, AppError> {
+    let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let params = vec![("cid", cid.as_str())];
     Ok(indexer.get::<serde_json::Value>("/files", &params).await?)
 }
 
 /// Fetch node metric data (location, uptime) for the network map.
 #[tauri::command]
-pub async fn get_node_locations(page: Option<i64>, limit: Option<i64>, miner_id: Option<String>) -> Result<serde_json::Value, AppError> {
-    let indexer = IndexerClient::from_env()?;
+pub async fn get_node_locations(state: tauri::State<'_, crate::app_state::AppState>, page: Option<i64>, limit: Option<i64>, miner_id: Option<String>) -> Result<serde_json::Value, AppError> {
+    let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(1).to_string();
     let mut params = vec![("page", page_str.as_str()), ("limit", limit_str.as_str())];
@@ -192,8 +192,8 @@ pub struct CreditObject {
 /// Fetch credits from the indexer, deduplicate to latest-per-day, and return
 /// UI-ready objects. Replaces the `select` callback in `useCredits.ts`.
 #[tauri::command]
-pub async fn get_credits_ui(account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<Vec<CreditObject>, AppError> {
-    let indexer = IndexerClient::from_env()?;
+pub async fn get_credits_ui(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<Vec<CreditObject>, AppError> {
+    let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(100_000).to_string();
     let params = vec![
@@ -251,8 +251,8 @@ pub struct BalanceObject {
 /// Fetch balance history, deduplicate to latest-per-day, return UI-ready.
 /// Replaces the `select` callback in `useSystemBalance.ts`.
 #[tauri::command]
-pub async fn get_system_balance_ui(account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<Vec<BalanceObject>, AppError> {
-    let indexer = IndexerClient::from_env()?;
+pub async fn get_system_balance_ui(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<Vec<BalanceObject>, AppError> {
+    let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(20_000).to_string();
     let params = vec![
@@ -314,8 +314,8 @@ pub struct TransferObject {
 /// Fetch balance transfers with parsed amounts and composite IDs.
 /// Replaces the `select` callback in `useBalanceTransactions.ts`.
 #[tauri::command]
-pub async fn get_balance_transfers_ui(account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<Vec<TransferObject>, AppError> {
-    let indexer = IndexerClient::from_env()?;
+pub async fn get_balance_transfers_ui(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<Vec<TransferObject>, AppError> {
+    let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
     let params = vec![
@@ -380,7 +380,7 @@ pub async fn get_billing_transactions_ui(
     page: Option<i64>,
     limit: Option<i64>,
 ) -> Result<Vec<BillingTransactionObject>, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
     let params = vec![("page", page_str.as_str()), ("limit", limit_str.as_str())];
@@ -429,8 +429,8 @@ pub struct CreditEventObject {
 /// Fetch credit events with fields remapped for the UI.
 /// Replaces the `select` callback in `useAddCreditEvent.ts`.
 #[tauri::command]
-pub async fn get_add_credit_events_ui(account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<Vec<CreditEventObject>, AppError> {
-    let indexer = IndexerClient::from_env()?;
+pub async fn get_add_credit_events_ui(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, page: Option<i64>, limit: Option<i64>) -> Result<Vec<CreditEventObject>, AppError> {
+    let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
     let params = vec![

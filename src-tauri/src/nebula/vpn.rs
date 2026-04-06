@@ -60,7 +60,7 @@ pub async fn toggle_vpn_status(state: tauri::State<'_, crate::app_state::AppStat
         let acct = state
             .current_account_id()
             .map_err(|_| AppError::Validation("Unable to verify credits. Please log in first.".into()))?;
-        let client = crate::api::client::ApiClient::new(pool.clone());
+        let client = crate::api::client::ApiClient::new(state.api_client.clone(), pool.clone());
         let resp = client
             .get::<serde_json::Value>("/api/billing/credits/balance/", &acct)
             .await
@@ -87,7 +87,7 @@ pub async fn toggle_vpn_status(state: tauri::State<'_, crate::app_state::AppStat
         }
 
         info!("Checking certificate status before enabling...");
-        if let Err(e) = crate::nebula::manager::check_and_update_certificate(pool).await {
+        if let Err(e) = crate::nebula::manager::check_and_update_certificate(&state.api_client, pool).await {
             error!("Certificate check failed: {}", e);
             return Err(AppError::Nebula(format!("Failed to verify/renew certificate: {e}")));
         }

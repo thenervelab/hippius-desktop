@@ -391,7 +391,7 @@ pub async fn add_files(
         && let Ok(acct) = state.current_account_id()
         && let Ok(pool) = state.pool()
     {
-        let client = crate::api::client::ApiClient::new(pool.clone());
+        let client = crate::api::client::ApiClient::new(state.api_client.clone(), pool.clone());
         if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
             let balance_str = resp.get("balance").and_then(|v| v.as_str()).unwrap_or("0");
             let balance: f64 = balance_str.parse().unwrap_or(0.0);

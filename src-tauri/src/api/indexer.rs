@@ -38,18 +38,18 @@ pub struct IndexerClient {
 }
 
 impl IndexerClient {
-    pub fn new(api_key: String) -> Self {
+    pub fn new(client: reqwest::Client, api_key: String) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client,
             base_url: indexer_base_url(),
             api_key,
         }
     }
 
     /// Create from the env var.
-    pub fn from_env() -> Result<Self, ApiError> {
+    pub fn from_env(client: reqwest::Client) -> Result<Self, ApiError> {
         let api_key = std::env::var("INDEXER_API_KEY").map_err(|_| ApiError::Other("INDEXER_API_KEY not set".into()))?;
-        Ok(Self::new(api_key))
+        Ok(Self::new(client, api_key))
     }
 
     /// GET with query parameters.

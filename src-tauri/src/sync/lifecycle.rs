@@ -685,20 +685,10 @@ fn init_new_drive(
 }
 
 /// Fire-and-log a health check against the HCFS server.
-async fn check_init_server_health(server_url: &str) {
+async fn check_init_server_health(client: &reqwest::Client, server_url: &str) {
     let test_url = format!("{server_url}/health");
     debug!("Testing connectivity to: {}", test_url);
-    let test_result = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .build()
-        .map(|c| c.get(&test_url).header("X-API-Key", "Arion").send());
-    let resp = match test_result {
-        Ok(fut) => fut.await,
-        Err(e) => {
-            warn!("Failed to build test client: {e}");
-            return;
-        }
-    };
+    let resp = client.get(&test_url).header("X-API-Key", "Arion").send().await;
     match resp {
         Ok(r) => debug!("Health check OK: status={}", r.status()),
         Err(e) => {
@@ -766,7 +756,7 @@ pub(crate) async fn initialize_sync_inner(
 
     // Validate user has credits/balance before allowing sync
     if let Ok(acct) = app_state.current_account_id() {
-        let client = crate::api::client::ApiClient::new(pool_owned.clone());
+        let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool_owned.clone());
         if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
             let balance: f64 = resp.get("balance").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0);
             if balance <= 0.0 {
@@ -850,7 +840,7 @@ pub(crate) async fn initialize_sync_inner(
         )));
     }
 
-    check_init_server_health(&cfg.server_url).await;
+    check_init_server_health(&app_state.health_client, &cfg.server_url).await;
     setup_progress_handlers(&app, &mut manager, &label, sync);
     sync.clear_cancel();
     register_drive(sync, manager, &label, &cfg.sync_path, &folder_dir).await;

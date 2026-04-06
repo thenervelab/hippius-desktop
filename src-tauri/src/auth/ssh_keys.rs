@@ -38,7 +38,7 @@ pub async fn list_ssh_keys(
     search: Option<String>,
     ordering: Option<String>,
 ) -> Result<SSHKeysResponse, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let mut params = Vec::new();
     let page_str = page.unwrap_or(1).to_string();
     let size_str = page_size.unwrap_or(10).to_string();
@@ -63,7 +63,7 @@ pub async fn create_ssh_key(
     public_key: String,
 ) -> Result<SSHKey, AppError> {
     info!(name = %name, "Creating SSH key");
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let body = serde_json::json!({
         "name": name,
         "public_key": public_key,
@@ -75,7 +75,7 @@ pub async fn create_ssh_key(
 #[tauri::command]
 pub async fn delete_ssh_key(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, key_id: i64) -> Result<(), AppError> {
     info!(key_id = key_id, "Deleting SSH key");
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let path = format!("/api/ssh-keys/{key_id}/");
     Ok(client.delete(&path, &account_id).await?)
 }

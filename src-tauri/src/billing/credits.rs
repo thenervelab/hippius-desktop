@@ -14,7 +14,7 @@ pub async fn get_user_credits_balance(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
 ) -> Result<serde_json::Value, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client.get::<serde_json::Value>("/api/billing/credits/balance/", &account_id).await?)
 }
 
@@ -49,7 +49,7 @@ fn credits_to_planck(balance_str: &str) -> String {
 /// `BigInt(planck)` without any float intermediary.
 #[tauri::command]
 pub async fn get_credits_planck(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let resp: serde_json::Value = client.get("/api/billing/credits/balance/", &account_id).await?;
     let balance_str = resp.get("balance").and_then(|v| v.as_str()).unwrap_or("0");
     Ok(credits_to_planck(balance_str))
@@ -97,7 +97,7 @@ pub async fn check_sync_eligibility(state: tauri::State<'_, crate::app_state::Ap
     }
 
     // Check marketplace credits
-    let client = ApiClient::new(pool.clone());
+    let client = ApiClient::new(state.api_client.clone(), pool.clone());
     let resp: serde_json::Value = client.get("/api/billing/credits/balance/", &account_id).await?;
     let credit_str = resp.get("balance").and_then(|v| v.as_str()).unwrap_or("0");
     let credits: f64 = credit_str.parse().unwrap_or(0.0);

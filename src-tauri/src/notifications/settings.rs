@@ -13,7 +13,7 @@ pub async fn get_notification_settings(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
 ) -> Result<serde_json::Value, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client.get::<serde_json::Value>("/api/notifications/settings/", &account_id).await?)
 }
 
@@ -24,7 +24,7 @@ pub async fn update_notification_settings(
     account_id: String,
     settings: serde_json::Value,
 ) -> Result<serde_json::Value, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client
         .patch::<serde_json::Value, _>("/api/notifications/settings/", &settings, &account_id)
         .await?)

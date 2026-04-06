@@ -125,9 +125,9 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(client: reqwest::Client, pool: SqlitePool) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client,
             base_url: api_base_url(),
             pool,
         }
@@ -231,10 +231,10 @@ impl ApiClient {
 
     async fn handle_response<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T, ApiError> {
         let status = resp.status();
-        let url = resp.url().path().to_string();
         if status.is_success() {
             resp.json::<T>().await.map_err(|e| ApiError::Other(format!("JSON parse error: {e}")))
         } else {
+            let url = resp.url().path().to_string();
             let body = resp.text().await.unwrap_or_default();
             warn!(
                 status = status.as_u16(),

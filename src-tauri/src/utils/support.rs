@@ -19,7 +19,7 @@ pub async fn list_support_tickets(
     search: Option<String>,
     ordering: Option<String>,
 ) -> Result<serde_json::Value, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
     let ordering_str = ordering.unwrap_or_else(|| "status".to_string());
@@ -47,7 +47,7 @@ pub async fn get_support_ticket_messages(
     search: Option<String>,
     ordering: Option<String>,
 ) -> Result<serde_json::Value, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let path = format!("/api/support/tickets/{ticket_id}/messages/");
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(50).to_string();
@@ -85,7 +85,7 @@ pub async fn create_support_ticket(
         category = %params.category,
         "Creating support ticket"
     );
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let body = serde_json::json!({
         "subject": params.subject,
         "priority": params.priority,
@@ -107,7 +107,7 @@ pub async fn post_ticket_message(
     body: String,
 ) -> Result<serde_json::Value, AppError> {
     info!(ticket_id = ticket_id, "Posting ticket message");
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let path = format!("/api/support/tickets/{ticket_id}/messages/");
     let payload = serde_json::json!({
         "message_type": message_type,
@@ -182,8 +182,7 @@ pub async fn upload_ticket_attachment(
     let mut form = reqwest::multipart::Form::new().part("file", file_part);
     form = form.text("filename", file_name);
 
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = state.api_client
         .post(&url)
         .header("Authorization", format!("Token {token}"))
         .multipart(form)
@@ -210,7 +209,7 @@ pub async fn update_support_ticket(
     ticket_id: i64,
     updates: serde_json::Value,
 ) -> Result<serde_json::Value, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let path = format!("/api/support/tickets/{ticket_id}/");
     Ok(client.patch::<serde_json::Value, _>(&path, &updates, &account_id).await?)
 }

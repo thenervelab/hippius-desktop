@@ -22,7 +22,7 @@ pub struct SubscriptionData {
 /// Fetch subscription data in a single call: active subscription + plans + derived flags.
 #[tauri::command]
 pub async fn get_subscription_data(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<SubscriptionData, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
 
     // Parallel fetch
     let (active_result, plans_result) = tokio::join!(
@@ -65,7 +65,7 @@ pub async fn get_subscription_data(state: tauri::State<'_, crate::app_state::App
 /// Fetch available Stripe subscription plans.
 #[tauri::command]
 pub async fn get_subscription_plans(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<serde_json::Value, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client
         .get::<serde_json::Value>("/api/billing/stripe/subscription-plans/", &account_id)
         .await?)
@@ -74,7 +74,7 @@ pub async fn get_subscription_plans(state: tauri::State<'_, crate::app_state::Ap
 /// Fetch the user's currently active Stripe subscription, if any.
 #[tauri::command]
 pub async fn get_active_subscription(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<serde_json::Value, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client
         .get::<serde_json::Value>("/api/billing/stripe/active-subscription/", &account_id)
         .await?)
@@ -92,7 +92,7 @@ pub async fn create_subscription(
     cancel_url: Option<String>,
 ) -> Result<serde_json::Value, AppError> {
     info!(price_id = %price_id, "Creating subscription");
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let body = serde_json::json!({
         "price_id": price_id,
         "success_url": success_url,
@@ -110,7 +110,7 @@ pub async fn get_customer_portal_url(
     account_id: String,
     return_url: Option<String>,
 ) -> Result<serde_json::Value, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let body = serde_json::json!({ "return_url": return_url });
     Ok(client
         .post::<serde_json::Value, _>("/api/billing/stripe/customer-portal/", &body, &account_id)

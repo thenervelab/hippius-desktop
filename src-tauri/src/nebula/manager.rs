@@ -262,10 +262,13 @@ pub async fn check_nebula_installation() -> Result<Option<String>> {
 }
 
 /// Fetch the latest Nebula release information from GitHub
-async fn fetch_latest_release() -> Result<GitHubRelease> {
-    let client = Client::builder().user_agent("hippius-desktop").timeout(Duration::from_secs(30)).build()?;
-
-    let response = client.get(NEBULA_GITHUB_API).send().await?;
+async fn fetch_latest_release(client: &Client) -> Result<GitHubRelease> {
+    let response = client
+        .get(NEBULA_GITHUB_API)
+        .header("User-Agent", "hippius-desktop")
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await?;
 
     if !response.status().is_success() {
         return Err(anyhow!("Failed to fetch latest release: HTTP {}", response.status()));
@@ -345,7 +348,8 @@ pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
     let installed_version = check_nebula_installation().await.map_err(|e| e.to_string())?;
 
     // Fetch latest release
-    let latest_release = fetch_latest_release().await.map_err(|e| e.to_string())?;
+    let client = &app.state::<crate::app_state::AppState>().api_client;
+    let latest_release = fetch_latest_release(client).await.map_err(|e| e.to_string())?;
     let latest_version = latest_release.tag_name.clone();
 
     debug!("Latest version: {}", latest_version);
@@ -398,13 +402,13 @@ pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
-    let (needs_update, download_url, latest_version) = {
+    let (needs_update, download_url, latest_version, client) = {
         let app_state = app.state::<crate::app_state::AppState>();
         let setup = app_state.nebula.setup.lock().unwrap_or_else(|p| {
             tracing::warn!("Poisoned mutex recovered in nebula setup");
             p.into_inner()
         });
-        (setup.needs_update, setup.download_url.clone(), setup.latest_version.clone())
+        (setup.needs_update, setup.download_url.clone(), setup.latest_version.clone(), app_state.api_client.clone())
     };
 
     if needs_update && let (Some(url), Some(version)) = (download_url, latest_version) {
@@ -419,9 +423,7 @@ pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
 
         debug!("Downloading to temp file: {}", temp_path.display());
 
-        let client = Client::builder().timeout(Duration::from_secs(300)).build().map_err(|e| e.to_string())?;
-
-        let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
+        let response = client.get(&url).timeout(Duration::from_secs(300)).send().await.map_err(|e| e.to_string())?;
 
         if !response.status().is_success() {
             return Err(format!("Download failed: HTTP {}", response.status()));
@@ -528,7 +530,7 @@ pub async fn install_nebula(state: tauri::State<'_, crate::app_state::AppState>,
 }
 
 /// Internal verify_nebula implementation that takes pool directly.
-pub async fn verify_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), String> {
+pub async fn verify_nebula_internal(client: &Client, pool: &sqlx::SqlitePool) -> Result<(), String> {
     // Verify binaries
     let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
     if !binary_path.exists() {
@@ -556,7 +558,7 @@ pub async fn verify_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), Strin
 
         if cert_exists {
             info!("Found existing certificate, checking validity...");
-            check_and_update_certificate(pool).await.map_err(|e| e.to_string())?;
+            check_and_update_certificate(client, pool).await.map_err(|e| e.to_string())?;
         } else {
             debug!("No existing certificate found and VPN is disabled. Skipping certificate generation.");
         }
@@ -581,14 +583,14 @@ pub async fn verify_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), Strin
 
     // Setup certificates from API
     info!("Checking certificate status...");
-    check_and_update_certificate(pool).await.map_err(|e| e.to_string())?;
+    check_and_update_certificate(client, pool).await.map_err(|e| e.to_string())?;
 
     Ok(())
 }
 
 #[tauri::command]
 pub async fn verify_nebula(state: tauri::State<'_, crate::app_state::AppState>, _app: AppHandle) -> Result<(), String> {
-    verify_nebula_internal(state.pool().map_err(|e| e.to_string())?).await
+    verify_nebula_internal(&state.api_client, state.pool().map_err(|e| e.to_string())?).await
 }
 
 /// Ensure the Nebula binary has elevated permissions required for VPN.
@@ -648,8 +650,7 @@ async fn get_api_auth_header(pool: &sqlx::SqlitePool) -> Result<(String, String)
     Ok((auth_header, account_id))
 }
 
-async fn fetch_certificate_from_api(auth_header: &str) -> Result<Option<CertificateResponse>> {
-    let client = Client::new();
+async fn fetch_certificate_from_api(client: &Client, auth_header: &str) -> Result<Option<CertificateResponse>> {
     let url = format!("{HIPPIUS_API_BASE}/infrastructure/certificates/");
     let response = client.get(&url).header(AUTHORIZATION, auth_header).send().await?;
     if response.status() == 404 {
@@ -684,8 +685,7 @@ async fn fetch_certificate_from_api(auth_header: &str) -> Result<Option<Certific
     Err(anyhow!("Failed to parse certificate response: {text}"))
 }
 
-async fn request_certificate_from_api(auth_header: &str) -> Result<CertificateResponse> {
-    let client = Client::new();
+async fn request_certificate_from_api(client: &Client, auth_header: &str) -> Result<CertificateResponse> {
     let url = format!("{HIPPIUS_API_BASE}/infrastructure/certificates/request/");
 
     let response = client.post(&url).header(AUTHORIZATION, auth_header).send().await?;
@@ -709,8 +709,7 @@ async fn request_certificate_from_api(auth_header: &str) -> Result<CertificateRe
     Ok(cert)
 }
 
-async fn renew_certificate_from_api(auth_header: &str) -> Result<CertificateResponse> {
-    let client = Client::new();
+async fn renew_certificate_from_api(client: &Client, auth_header: &str) -> Result<CertificateResponse> {
     let url = format!("{HIPPIUS_API_BASE}/infrastructure/certificates/renew/");
 
     debug!("Renewing certificate from: {}", url);
@@ -794,7 +793,7 @@ async fn update_certificate_db(pool: &sqlx::SqlitePool, cert: &CertificateRespon
 }
 
 #[expect(clippy::too_many_lines, reason = "certificate renewal flow with HTTP + DB + file I/O")]
-pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()> {
+pub async fn check_and_update_certificate(client: &Client, pool: &sqlx::SqlitePool) -> Result<()> {
     let (auth_header, account_id) = get_api_auth_header(pool).await?;
 
     // Check DB for existing certificate
@@ -819,7 +818,7 @@ pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()>
                     if !config_dir.join("host.crt").exists() {
                         info!("Certificate files missing but DB record exists. Re-fetching...");
                         // We can try to fetch the existing one
-                        if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
+                        if let Some(cert) = fetch_certificate_from_api(client, &auth_header).await? {
                             save_certificate_files(&cert, &account_id).await?;
                             update_certificate_db(pool, &cert).await?;
                         } else {
@@ -835,7 +834,7 @@ pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()>
             }
         } else {
             debug!("Certificate record exists but no expiration date. Fetching from API...");
-            if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
+            if let Some(cert) = fetch_certificate_from_api(client, &auth_header).await? {
                 save_certificate_files(&cert, &account_id).await?;
                 update_certificate_db(pool, &cert).await?;
 
@@ -854,7 +853,7 @@ pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()>
     } else {
         debug!("No certificate record in DB");
         // Check if we have one in API
-        if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
+        if let Some(cert) = fetch_certificate_from_api(client, &auth_header).await? {
             info!("Found existing certificate in API");
             save_certificate_files(&cert, &account_id).await?;
             update_certificate_db(pool, &cert).await?;
@@ -882,13 +881,13 @@ pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()>
 
         // Try to renew first, but if it fails (e.g. 404 because cert is too old or gone),
         // fallback to requesting a new one.
-        let cert_result = renew_certificate_from_api(&auth_header).await;
+        let cert_result = renew_certificate_from_api(client, &auth_header).await;
 
         let cert = match cert_result {
             Ok(c) => c,
             Err(e) => {
                 warn!("Renewal failed: {}. Attempting to request a new certificate...", e);
-                request_certificate_from_api(&auth_header).await?
+                request_certificate_from_api(client, &auth_header).await?
             }
         };
 
@@ -896,7 +895,7 @@ pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()>
         let mut final_cert = cert;
         if final_cert.expires_at.is_none() {
             debug!("Renew/Request response missing expiration, fetching details...");
-            if let Some(fetched) = fetch_certificate_from_api(&auth_header).await? {
+            if let Some(fetched) = fetch_certificate_from_api(client, &auth_header).await? {
                 final_cert = fetched;
             }
         }
@@ -906,12 +905,12 @@ pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()>
         info!("Certificate renewed/requested successfully");
     } else if should_request {
         debug!("Calling request_certificate_from_api...");
-        let cert = request_certificate_from_api(&auth_header).await?;
+        let cert = request_certificate_from_api(client, &auth_header).await?;
 
         let mut final_cert = cert;
         if final_cert.expires_at.is_none() {
             debug!("Request response missing expiration, fetching details...");
-            if let Some(fetched) = fetch_certificate_from_api(&auth_header).await? {
+            if let Some(fetched) = fetch_certificate_from_api(client, &auth_header).await? {
                 final_cert = fetched;
             }
         }
@@ -1740,10 +1739,10 @@ pub async fn get_nebula_status() -> Result<NebulaStatus, String> {
 }
 
 #[tauri::command]
-pub async fn check_nebula_update() -> Result<Option<String>, String> {
+pub async fn check_nebula_update(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Option<String>, String> {
     let installed = check_nebula_installation().await.map_err(|e| e.to_string())?;
 
-    let latest = fetch_latest_release().await.map_err(|e| e.to_string())?.tag_name;
+    let latest = fetch_latest_release(&state.api_client).await.map_err(|e| e.to_string())?.tag_name;
 
     match installed {
         Some(ref v) if v != &latest => Ok(Some(latest)),
@@ -1816,7 +1815,7 @@ pub async fn verify_nebula_setup(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let pool = app_state.pool().map_err(|e| e.to_string())?;
-    if let Err(e) = crate::nebula::manager::verify_nebula_internal(pool).await {
+    if let Err(e) = crate::nebula::manager::verify_nebula_internal(&app_state.api_client, pool).await {
         warn!("Nebula verification failed: {}", e);
         return Err("Nebula verification failed".into());
     }

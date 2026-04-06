@@ -58,28 +58,28 @@ pub struct VMInstance {
 /// List available VM hardware flavors for the account's billing tier.
 #[tauri::command]
 pub async fn list_vm_flavors(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMFlavor>, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client.get("/api/infrastructure/vm/flavors/", &account_id).await?)
 }
 
 /// List available base OS images for VM creation.
 #[tauri::command]
 pub async fn list_vm_images(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMImage>, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client.get("/api/infrastructure/vm/images/", &account_id).await?)
 }
 
 /// List pre-configured application stacks that can be installed on a VM.
 #[tauri::command]
 pub async fn list_vm_applications(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMApplication>, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client.get("/api/infrastructure/vm/applications/", &account_id).await?)
 }
 
 /// List all VM instances owned by the account.
 #[tauri::command]
 pub async fn list_vm_instances(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMInstance>, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client.get("/api/infrastructure/vm/instances/", &account_id).await?)
 }
 
@@ -90,7 +90,7 @@ pub async fn get_vm_instance(
     account_id: String,
     instance_id: i64,
 ) -> Result<VMInstance, AppError> {
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/");
     Ok(client.get(&path, &account_id).await?)
 }
@@ -129,7 +129,7 @@ pub async fn create_vm(
         image_id = params.image_id,
         "Creating VM instance"
     );
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let body = CreateVMBody {
         flavor_id: params.flavor_id,
         image_id: params.image_id,
@@ -148,7 +148,7 @@ pub async fn reboot_vm(
     instance_id: i64,
 ) -> Result<serde_json::Value, AppError> {
     info!(instance_id = instance_id, "Rebooting VM");
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/reboot/");
     Ok(client.post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id).await?)
 }
@@ -161,7 +161,7 @@ pub async fn start_vm(
     instance_id: i64,
 ) -> Result<serde_json::Value, AppError> {
     info!(instance_id = instance_id, "Starting VM");
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/start/");
     Ok(client.post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id).await?)
 }
@@ -174,7 +174,7 @@ pub async fn stop_vm(
     instance_id: i64,
 ) -> Result<serde_json::Value, AppError> {
     info!(instance_id = instance_id, "Stopping VM");
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/stop/");
     Ok(client.post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id).await?)
 }
@@ -187,7 +187,7 @@ pub async fn terminate_vm(
     instance_id: i64,
 ) -> Result<serde_json::Value, AppError> {
     info!(instance_id = instance_id, "Terminating VM");
-    let client = ApiClient::new(state.pool()?.clone());
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/terminate/");
     Ok(client.post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id).await?)
 }

@@ -638,7 +638,7 @@ pub async fn get_tray_menu_data(state: tauri::State<'_, crate::app_state::AppSta
     };
 
     let credits = if let Some(ref addr) = substrate_address {
-        match crate::api::client::ApiClient::new(pool.clone())
+        match crate::api::client::ApiClient::new(state.api_client.clone(), pool.clone())
             .get::<serde_json::Value>("/api/billing/credits/balance/", addr)
             .await
         {
