@@ -1,11 +1,14 @@
 //! Blockchain runtime state — RPC client and block subscription.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::Arc;
+use subxt::backend::rpc::RpcClient;
 
 /// Lazily-initialized Substrate RPC client connection.
 pub struct BlockchainState {
     pub client: std::sync::RwLock<Option<Arc<subxt::OnlineClient<subxt::PolkadotConfig>>>>,
+    /// Cached RPC client for legacy RPC methods (shares the same WebSocket).
+    pub rpc_client: std::sync::RwLock<Option<RpcClient>>,
 }
 
 impl Default for BlockchainState {
@@ -18,6 +21,7 @@ impl BlockchainState {
     pub fn new() -> Self {
         Self {
             client: std::sync::RwLock::new(None),
+            rpc_client: std::sync::RwLock::new(None),
         }
     }
 }

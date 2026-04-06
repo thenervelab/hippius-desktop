@@ -116,16 +116,18 @@ pub async fn get_block_timestamp(
     block_number: u64,
 ) -> Result<BlockTimestampResult, crate::error::AppError> {
     use subxt::backend::legacy::LegacyRpcMethods;
-    use subxt::backend::rpc::RpcClient;
 
     let client = get_substrate_client(&state).await?;
-    let rpc_url = crate::blockchain::client::get_current_wss_endpoint(state.pool()?)
-        .await
-        .unwrap_or_else(|_| crate::blockchain::client::WSS_ENDPOINT.to_string());
-    let rpc_client = RpcClient::from_url(&rpc_url)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("RPC connect failed: {e}")))?;
-    let legacy: LegacyRpcMethods<subxt::PolkadotConfig> = LegacyRpcMethods::new(rpc_client);
+
+    // Reuse the cached RPC client instead of opening a new WebSocket
+    let rpc = state
+        .blockchain
+        .rpc_client
+        .read()
+        .map_err(|e| crate::error::AppError::Other(format!("RPC lock failed: {e}")))?
+        .clone()
+        .ok_or_else(|| crate::error::AppError::Other("RPC client not initialized".into()))?;
+    let legacy: LegacyRpcMethods<subxt::PolkadotConfig> = LegacyRpcMethods::new(rpc);
 
     let block_hash = legacy
         .chain_get_block_hash(Some(block_number.into()))

@@ -9,6 +9,7 @@ use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
 use std::time::Duration;
+use subxt::backend::rpc::RpcClient;
 use subxt::{OnlineClient, PolkadotConfig};
 use tokio::time::sleep;
 use tracing::{info, warn};
@@ -44,17 +45,42 @@ pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Res
     let mut attempt = 0;
     loop {
         attempt += 1;
-        match OnlineClient::<PolkadotConfig>::from_url(&wss_endpoint).await {
-            Ok(client) => {
-                let arc = Arc::new(client);
-                let mut client_lock = lock.write().map_err(|e| format!("Substrate client lock failed: {e}"))?;
-                *client_lock = Some(arc.clone());
-                info!(
-                    attempt,
-                    endpoint = %wss_endpoint,
-                    "Connected to Substrate node"
-                );
-                return Ok(arc);
+        match RpcClient::from_url(&wss_endpoint).await {
+            Ok(rpc) => {
+                match OnlineClient::<PolkadotConfig>::from_rpc_client(rpc.clone()).await {
+                    Ok(client) => {
+                        let arc = Arc::new(client);
+                        let mut client_lock = lock.write().map_err(|e| format!("Substrate client lock failed: {e}"))?;
+                        *client_lock = Some(arc.clone());
+
+                        // Cache the RPC client for legacy methods (e.g. get_block_timestamp)
+                        if let Ok(mut rpc_lock) = app_state.blockchain.rpc_client.write() {
+                            *rpc_lock = Some(rpc);
+                        }
+
+                        info!(
+                            attempt,
+                            endpoint = %wss_endpoint,
+                            "Connected to Substrate node"
+                        );
+                        return Ok(arc);
+                    }
+                    Err(e) => {
+                        warn!(
+                            attempt,
+                            endpoint = %wss_endpoint,
+                            error = %e,
+                            "Failed to build OnlineClient from RPC"
+                        );
+                        if attempt >= MAX_RETRIES {
+                            return Err(format!("Failed to connect to Substrate node after {MAX_RETRIES} attempts: {e}"));
+                        }
+                        let base_delay = 2u64.pow(attempt.min(5) as u32);
+                        let jitter_ms = rand::random::<u64>() % 1000;
+                        let delay = Duration::from_millis(base_delay * 1000 + jitter_ms);
+                        sleep(delay).await;
+                    }
+                }
             }
             Err(e) => {
                 warn!(
@@ -66,7 +92,6 @@ pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Res
                 if attempt >= MAX_RETRIES {
                     return Err(format!("Failed to connect to Substrate node after {MAX_RETRIES} attempts: {e}"));
                 }
-                // Exponential backoff: 2^min(attempt,5) seconds + random jitter (0-1s)
                 let base_delay = 2u64.pow(attempt.min(5) as u32);
                 let jitter_ms = rand::random::<u64>() % 1000;
                 let delay = Duration::from_millis(base_delay * 1000 + jitter_ms);
@@ -84,6 +109,9 @@ pub fn clear_substrate_client(app_state: &crate::app_state::AppState) {
         info!("Cleared substrate client");
     } else {
         warn!("Failed to acquire write lock to clear substrate client");
+    }
+    if let Ok(mut rpc) = app_state.blockchain.rpc_client.write() {
+        *rpc = None;
     }
 }
 
