@@ -122,10 +122,7 @@ impl SyncEventHandler for TauriSyncBridge {
                 let _ = app.emit(events::SYNC_STOPPED, events::LabelPayload { label });
             }
             SyncEvent::SyncReset { account_id, message } => {
-                let _ = app.emit(
-                    events::SYNC_RESET,
-                    events::SyncResetPayload { account_id, message },
-                );
+                let _ = app.emit(events::SYNC_RESET, events::SyncResetPayload { account_id, message });
             }
             SyncEvent::PlanReady {
                 label,
@@ -154,10 +151,7 @@ impl SyncEventHandler for TauriSyncBridge {
                 );
             }
             SyncEvent::ConflictsPending { label, staged } => {
-                let _ = app.emit(
-                    events::CONFLICTS_PENDING,
-                    events::ConflictsPendingPayload { label, staged },
-                );
+                let _ = app.emit(events::CONFLICTS_PENDING, events::ConflictsPendingPayload { label, staged });
             }
             // Per-chunk transfer progress is served via the throttled
             // `sync_progress_snapshot` event emitted from
@@ -166,22 +160,13 @@ impl SyncEventHandler for TauriSyncBridge {
             // `handle_transfer_progress` for the live path.
             SyncEvent::UploadProgress { .. } | SyncEvent::DownloadProgress { .. } => {}
             SyncEvent::ScanProgress { label, scanned, path } => {
-                let _ = app.emit(
-                    events::SCAN_PROGRESS,
-                    events::ScanProgressPayload { label, scanned, path },
-                );
+                let _ = app.emit(events::SCAN_PROGRESS, events::ScanProgressPayload { label, scanned, path });
             }
             SyncEvent::FetchProgress { label, fetched, total } => {
-                let _ = app.emit(
-                    events::FETCH_PROGRESS,
-                    events::FetchProgressPayload { label, fetched, total },
-                );
+                let _ = app.emit(events::FETCH_PROGRESS, events::FetchProgressPayload { label, fetched, total });
             }
             SyncEvent::FileTransferComplete { label } => {
-                let _ = app.emit(
-                    events::FILE_TRANSFER_COMPLETE,
-                    events::LabelPayload { label },
-                );
+                let _ = app.emit(events::FILE_TRANSFER_COMPLETE, events::LabelPayload { label });
             }
             SyncEvent::HealthChanged { health } => {
                 let _ = app.emit(events::CONNECTIVITY_CHANGED, &health);
@@ -196,10 +181,7 @@ impl SyncEventHandler for TauriSyncBridge {
                 let _ = app.emit(events::ACTIVITY_UPDATED, ());
             }
             SyncEvent::AuthRequired { error } => {
-                let _ = app.emit(
-                    events::AUTH_RELOGIN_REQUIRED,
-                    events::AuthRequiredPayload { error },
-                );
+                let _ = app.emit(events::AUTH_RELOGIN_REQUIRED, events::AuthRequiredPayload { error });
             }
             SyncEvent::ProgressSnapshot { snapshot } => {
                 let _ = app.emit(events::PROGRESS_SNAPSHOT, &snapshot);

@@ -86,12 +86,10 @@ pub async fn check_low_credit_notification(
     let credit_balance = planck as f64 / 1e18;
 
     // Read both state flags in a single query (1 round-trip instead of 2)
-    let (first_time, above_half) = sqlx::query_as::<_, (i32, i32)>(
-        "SELECT is_first_time, is_above_half_credit FROM app_state WHERE id = 1",
-    )
-    .fetch_optional(pool)
-    .await?
-    .map_or((true, false), |(ft, ah)| (ft != 0, ah != 0));
+    let (first_time, above_half) = sqlx::query_as::<_, (i32, i32)>("SELECT is_first_time, is_above_half_credit FROM app_state WHERE id = 1")
+        .fetch_optional(pool)
+        .await?
+        .map_or((true, false), |(ft, ah)| (ft != 0, ah != 0));
 
     // Credits >= 0.5: update flags and return no notification
     if credit_balance >= 0.5 {
@@ -233,15 +231,12 @@ pub async fn process_credit_events(
 
     // Batch dedup: single query with IN clause instead of N per-event queries
     let placeholders: String = candidates.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-    let query_str = format!(
-        "SELECT notification_subtype FROM notifications WHERE notification_subtype IN ({placeholders})"
-    );
+    let query_str = format!("SELECT notification_subtype FROM notifications WHERE notification_subtype IN ({placeholders})");
     let mut query = sqlx::query_scalar::<_, String>(&query_str);
     for (_, subtype) in &candidates {
         query = query.bind(subtype);
     }
-    let existing: std::collections::HashSet<String> =
-        query.fetch_all(pool).await?.into_iter().collect();
+    let existing: std::collections::HashSet<String> = query.fetch_all(pool).await?.into_iter().collect();
 
     // Build notifications, skipping already-existing subtypes
     let mut notifications = Vec::new();
@@ -251,11 +246,7 @@ pub async fn process_credit_events(
         }
 
         // Parse amount from raw blockchain value
-        let clean_amount = event
-            .amount
-            .chars()
-            .filter(char::is_ascii_digit)
-            .collect::<String>();
+        let clean_amount = event.amount.chars().filter(char::is_ascii_digit).collect::<String>();
         let amount: f64 = if clean_amount.is_empty() {
             0.0
         } else {

@@ -641,12 +641,15 @@ pub async fn get_recent_files(
     let mut meta_map: HashMap<String, MetadataBundle> = HashMap::with_capacity(metadata.len());
     for entry in &metadata {
         let key = format!("{}::{}", entry.file_name, entry.label);
-        meta_map.insert(key, MetadataBundle {
-            arion_hash: entry.arion_hash.clone(),
-            arion_cid: entry.arion_cid.clone(),
-            uploaded_at: entry.uploaded_at,
-            updated_at: entry.updated_at,
-        });
+        meta_map.insert(
+            key,
+            MetadataBundle {
+                arion_hash: entry.arion_hash.clone(),
+                arion_cid: entry.arion_cid.clone(),
+                uploaded_at: entry.uploaded_at,
+                updated_at: entry.updated_at,
+            },
+        );
     }
 
     // 4. Filter deleted files
