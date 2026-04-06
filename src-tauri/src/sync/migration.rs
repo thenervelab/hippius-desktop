@@ -495,6 +495,7 @@ pub async fn start_migration_flow(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 #[tauri::command]
 pub async fn start_server_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -608,6 +609,55 @@ pub async fn start_server_migration(
 
     if !resp.status().is_success() {
         let text = resp.text().await.unwrap_or_default();
+
+        // If a previous job is still active, cancel it and retry once.
+        if text.contains("job_exists") {
+            tracing::warn!("[Migration] Existing job found — cancelling and retrying");
+            let cancel_url = format!("{}/migration/cancel", server_url.trim_end_matches('/'));
+            let _ = state
+                .migration
+                .client
+                .post(&cancel_url)
+                .json(&serde_json::json!({ "ss58_address": account_id }))
+                .send()
+                .await;
+
+            // Retry the start request
+            let retry_resp = state
+                .migration
+                .client
+                .post(&url)
+                .header("Authorization", format!("Bearer {api_token}"))
+                .timeout(std::time::Duration::from_secs(120))
+                .json(&serde_json::json!({
+                    "ss58_address": account_id,
+                    "folder_hash": folder_hash,
+                    "encryption_key_hex": encryption_key_hex,
+                    "path_prefix": path_prefix,
+                    "s3_access_key": s3_access_key,
+                    "s3_secret_key": s3_secret_key,
+                    "signature": signature.to_bytes().to_vec(),
+                    "signing_key": signing_key.verifying_key().to_bytes().to_vec(),
+                }))
+                .send()
+                .await
+                .map_err(|e| {
+                    tracing::error!("[Migration] Retry HTTP request failed: {e}");
+                    e
+                })?;
+
+            if !retry_resp.status().is_success() {
+                let retry_text = retry_resp.text().await.unwrap_or_default();
+                tracing::error!("[Migration] Retry also failed: {retry_text}");
+                return Err(crate::error::AppError::Other(format!("Migration start failed after retry: {retry_text}")));
+            }
+
+            let result: StartServerMigrationResult = retry_resp.json().await?;
+            let _ = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await;
+            tracing::info!("[Migration] Server migration started successfully (after cancel+retry)");
+            return Ok(result);
+        }
+
         tracing::error!("[Migration] Server returned error: {text}");
         return Err(crate::error::AppError::Other(format!("Migration start failed: {text}")));
     }
