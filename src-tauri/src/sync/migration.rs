@@ -166,7 +166,14 @@ fn derive_path_prefix(files: &[MigrationFile]) -> String {
 
 pub(crate) async fn fetch_migration_files(client: &reqwest::Client, server_url: &str, user_id: &str) -> Result<Vec<MigrationFile>> {
     let url = format!("{}/migration/{}", server_url.trim_end_matches('/'), user_id);
-    let resp = client.get(&url).send().await?;
+    // Per-request timeout: the file list can be huge (100k+ files) and the
+    // server may need minutes to enumerate the S3 bucket. The 30s client
+    // default is fine for status polls but far too short here.
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(600))
+        .send()
+        .await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -252,15 +259,18 @@ fn check_disk_space(_path: &std::path::Path, _required_bytes: u64) -> Result<()>
 
 #[tauri::command]
 pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<MigrationCheckResult> {
+    info!("[Migration] check_migration called for account: {}", &account_id);
     let pool = state.pool()?;
 
     let local_status = get_migration_status_db(pool, &account_id).await?;
+    info!("[Migration] Local DB status: {:?}", local_status.as_ref().map(|(s, ..)| s.as_str()));
 
     // Only respect explicit user dismissal (skipped/dismissed) or completed.
     // For everything else, the server is the source of truth.
     if let Some((ref status, ..)) = local_status
         && (status.eq_ignore_ascii_case("dismissed") || status.eq_ignore_ascii_case("skipped") || status.eq_ignore_ascii_case("completed"))
     {
+        info!("[Migration] Skipping server check — local status is terminal: {status}");
         return Ok(MigrationCheckResult {
             needs_migration: false,
             file_count: 0,
@@ -275,11 +285,27 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
 
     // Always check the server for pending migration files
     let server_url = get_server_url(pool, &account_id).await?;
-    let files = fetch_migration_files(&state.migration.client, &server_url, &account_id).await?;
+    info!("[Migration] Checking server at: {server_url}/migration/{account_id}");
+    let files = match fetch_migration_files(&state.migration.client, &server_url, &account_id).await {
+        Ok(f) => {
+            info!("[Migration] Server returned {} files", f.len());
+            f
+        }
+        Err(e) => {
+            tracing::error!("[Migration] Server check failed: {e}");
+            return Err(e);
+        }
+    };
     let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
+    info!("[Migration] {} pending files (total size: {} bytes)", pending.len(), pending.iter().map(|f| f.size_bytes).sum::<u64>());
     let total_size: u64 = pending.iter().map(|f| f.size_bytes).sum();
 
     if !pending.is_empty() {
+        // Cache the path prefix so start_server_migration doesn't refetch.
+        let prefix = derive_path_prefix(&pending);
+        *state.migration.cached_path_prefix.lock().await = Some(prefix);
+
+        info!("[Migration] Migration needed — returning {} pending files", pending.len());
         return Ok(MigrationCheckResult {
             needs_migration: true,
             file_count: pending.len() as u64,
@@ -490,21 +516,22 @@ pub async fn start_server_migration(
     let folder_hash = hcfs_client::drive::keys::folder_hash("default");
     let pool = state.pool()?;
 
-    // Derive path_prefix from server migration files (bucket name)
     let server_url = get_server_url(pool, &account_id).await.map_err(|e| {
         tracing::error!("[Migration] Failed to get server URL: {e}");
         e
     })?;
     tracing::info!("[Migration] Server URL: {server_url}");
 
-    let files = fetch_migration_files(&state.migration.client, &server_url, &account_id)
+    // Use the cached path prefix from check_migration instead of refetching
+    // the entire file list (which can be 100k+ files / tens of MB).
+    let path_prefix = state
+        .migration
+        .cached_path_prefix
+        .lock()
         .await
-        .map_err(|e| {
-            tracing::error!("[Migration] Failed to fetch migration files: {e}");
-            e
-        })?;
-    tracing::info!("[Migration] Found {} migration files", files.len());
-    let path_prefix = derive_path_prefix(&files);
+        .clone()
+        .unwrap_or_default();
+    tracing::info!("[Migration] Using path_prefix: {path_prefix}");
 
     // Check disk space — files will be downloaded locally after server migration
     let sync_path = crate::sync::config::get_sync_path_for_label(pool, &account_id, "default")
@@ -820,6 +847,9 @@ pub struct MigrationState {
     pub client: reqwest::Client,
     /// Handle for the background migration polling task (if running).
     pub poll_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Cached path prefix (bucket name) from the last `check_migration` call.
+    /// Avoids refetching the entire file list in `start_server_migration`.
+    pub cached_path_prefix: tokio::sync::Mutex<Option<String>>,
 }
 
 impl Default for MigrationState {
@@ -848,6 +878,7 @@ impl MigrationState {
             poll_failure_count: AtomicI32::new(0),
             client,
             poll_task: tokio::sync::Mutex::new(None),
+            cached_path_prefix: tokio::sync::Mutex::new(None),
         }
     }
 }
