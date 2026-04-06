@@ -1,7 +1,7 @@
 //! Staking transaction commands — bond, unbond, withdraw, claim rewards.
 
 use crate::blockchain::client::get_substrate_client;
-use crate::blockchain::helpers::{get_signer, get_substrate_address};
+use crate::blockchain::helpers::{get_signer, get_signer_and_address};
 use crate::blockchain::runtime::custom_runtime;
 use crate::blockchain::types::TxResult;
 use tracing::info;
@@ -9,9 +9,8 @@ use tracing::info;
 /// Bond tokens for staking. If already bonded, calls `bond_extra` instead.
 #[tauri::command]
 pub async fn stake_bond(state: tauri::State<'_, crate::app_state::AppState>, amount: String) -> Result<TxResult, crate::error::AppError> {
-    let signer = get_signer(&state)?;
+    let (signer, address) = get_signer_and_address(&state)?;
     let client = get_substrate_client(&state).await?;
-    let address = get_substrate_address(&state)?;
 
     let amount: u128 = amount
         .parse()
@@ -97,9 +96,8 @@ pub async fn stake_unbond(state: tauri::State<'_, crate::app_state::AppState>, a
 /// Withdraw unbonded tokens (after the unbonding period completes).
 #[tauri::command]
 pub async fn stake_withdraw_unbonded(state: tauri::State<'_, crate::app_state::AppState>) -> Result<TxResult, crate::error::AppError> {
-    let signer = get_signer(&state)?;
+    let (signer, address) = get_signer_and_address(&state)?;
     let client = get_substrate_client(&state).await?;
-    let address = get_substrate_address(&state)?;
 
     let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
 
@@ -139,9 +137,8 @@ pub async fn stake_withdraw_unbonded(state: tauri::State<'_, crate::app_state::A
 /// Claim staking rewards via `payout_stakers` for the previous era.
 #[tauri::command]
 pub async fn stake_claim_rewards(state: tauri::State<'_, crate::app_state::AppState>) -> Result<TxResult, crate::error::AppError> {
-    let signer = get_signer(&state)?;
+    let (signer, address) = get_signer_and_address(&state)?;
     let client = get_substrate_client(&state).await?;
-    let address = get_substrate_address(&state)?;
 
     let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
 
