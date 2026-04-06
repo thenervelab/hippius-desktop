@@ -239,9 +239,13 @@ export function useMigration(
       appStore.set(migrationLockAtom, true);
 
       try {
+        // Pass the in-memory mnemonic so start_server_migration doesn't
+        // depend on the on-disk master (which may not exist yet).
+        const mnemonic = getMnemonic ? await getMnemonic() : null;
         await invoke("start_server_migration", {
           accountId,
           totalSize,
+          existingMnemonic: mnemonic ?? null,
         });
 
         // Start polling for progress
@@ -258,7 +262,7 @@ export function useMigration(
         setCurrentStep("prompt");
       }
     },
-    [totalSize, startPolling]
+    [totalSize, startPolling, getMnemonic]
   );
 
   const startMigration = useCallback(

@@ -506,6 +506,7 @@ pub async fn start_server_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     total_size: u64,
+    existing_mnemonic: Option<String>,
 ) -> Result<StartServerMigrationResult> {
     tracing::info!("[Migration] Starting server migration for account {account_id}, total_size={total_size}");
     state.migration.in_progress.store(true, Ordering::SeqCst);
@@ -542,16 +543,24 @@ pub async fn start_server_migration(
         check_disk_space(sync_dir, total_size)?;
     }
 
-    // Recover the master mnemonic to derive the encryption key
-    let password = crate::sync::config::get_drive_password(pool, &account_id).await.map_err(|e| {
-        tracing::error!("[Migration] Failed to get drive password: {e}");
-        e
-    })?;
-    let mnemonic_path = crate::sync::mnemonic::master_mnemonic_path(&account_id)?;
-    let mnemonic = hcfs_client::auth::recover_mnemonic(&mnemonic_path, &password).map_err(|e| {
-        tracing::error!("[Migration] Failed to recover mnemonic: {e}");
-        crate::error::AppError::Other(format!("Failed to recover mnemonic: {e}"))
-    })?;
+    // Recover the master mnemonic to derive the encryption key.
+    // Prefer the mnemonic passed from the frontend (in-memory from login)
+    // since the on-disk master may not exist yet.
+    let mnemonic = if let Some(ref m) = existing_mnemonic {
+        tracing::info!("[Migration] Using mnemonic provided by frontend");
+        bip39::Mnemonic::parse_in_normalized(bip39::Language::English, m)
+            .map_err(|e| crate::error::AppError::Other(format!("Invalid mnemonic: {e}")))?
+    } else {
+        let password = crate::sync::config::get_drive_password(pool, &account_id).await.map_err(|e| {
+            tracing::error!("[Migration] Failed to get drive password: {e}");
+            e
+        })?;
+        let mnemonic_path = crate::sync::mnemonic::master_mnemonic_path(&account_id)?;
+        hcfs_client::auth::recover_mnemonic(&mnemonic_path, &password).map_err(|e| {
+            tracing::error!("[Migration] Failed to recover mnemonic from disk: {e}");
+            crate::error::AppError::Other(format!("Failed to recover mnemonic: {e}"))
+        })?
+    };
 
     let seed = mnemonic.to_seed("");
 
