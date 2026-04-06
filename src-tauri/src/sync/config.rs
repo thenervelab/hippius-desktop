@@ -54,11 +54,7 @@ pub async fn save_hcfs_config(
 }
 
 #[tauri::command]
-pub async fn update_hcfs_server_url(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    server_url: String,
-) -> Result<()> {
+pub async fn update_hcfs_server_url(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, server_url: String) -> Result<()> {
     let db = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -106,10 +102,7 @@ pub(crate) async fn get_hcfs_config_internal(pool: &SqlitePool, account_id: &str
 }
 
 #[tauri::command]
-pub async fn get_hcfs_config(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<HcfsConfigResult> {
+pub async fn get_hcfs_config(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<HcfsConfigResult> {
     get_hcfs_config_internal(state.pool()?, &account_id).await
 }
 
@@ -182,12 +175,7 @@ pub(crate) async fn load_sync_config(pool: &SqlitePool, account_id: &str, label:
 }
 
 /// Internal version of save_hcfs_config (no tauri::State wrapper).
-pub(crate) async fn save_hcfs_config_internal(
-    pool: &sqlx::SqlitePool,
-    account_id: &str,
-    server_url: &str,
-    drive_password: &str,
-) -> Result<()> {
+pub(crate) async fn save_hcfs_config_internal(pool: &sqlx::SqlitePool, account_id: &str, server_url: &str, drive_password: &str) -> Result<()> {
     let owner = account_key(account_id);
     sqlx::query(
         r"

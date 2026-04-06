@@ -71,10 +71,7 @@ pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState
         .unwrap_or(0);
 
     let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
-    if let Ok(Some(ledger)) = storage
-        .fetch(&ledger_query)
-        .await
-    {
+    if let Ok(Some(ledger)) = storage.fetch(&ledger_query).await {
         bonded = ledger.active.to_string();
         for chunk in &ledger.unlocking.0 {
             let unlock_era = chunk.era;

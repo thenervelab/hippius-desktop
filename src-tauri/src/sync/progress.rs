@@ -72,7 +72,10 @@ pub fn update_file_progress(
     action: FileAction,
     label: Option<String>,
 ) -> Result<Option<SyncFile>> {
-    let result = sync.progress.update_file_progress(path, bytes_transferred, total_bytes, action, label).map_err(AppError::Progress)?;
+    let result = sync
+        .progress
+        .update_file_progress(path, bytes_transferred, total_bytes, action, label)
+        .map_err(AppError::Progress)?;
     let is_file_complete = is_file_completion_tick(bytes_transferred, total_bytes);
     if try_claim_snapshot_emit(&LAST_THROTTLED_EMIT_MS, monotonic_now_ms(), is_file_complete, SNAPSHOT_THROTTLE_MS) {
         sync.emit_snapshot(false);
@@ -90,14 +93,16 @@ pub fn merge_into_session(
     file_list: Option<SessionFileList>,
     label: Option<String>,
 ) -> Result<()> {
-    sync.progress.merge_into_session(
-        expected_uploads,
-        expected_downloads,
-        expected_local_deletes,
-        expected_remote_deletes,
-        file_list,
-        label.as_deref(),
-    ).map_err(AppError::Progress)?;
+    sync.progress
+        .merge_into_session(
+            expected_uploads,
+            expected_downloads,
+            expected_local_deletes,
+            expected_remote_deletes,
+            file_list,
+            label.as_deref(),
+        )
+        .map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
@@ -126,21 +131,26 @@ pub fn start_session(
     file_list: Option<SessionFileList>,
     label: Option<String>,
 ) -> Result<SyncSession> {
-    let result = sync.progress.start_session(
-        expected_uploads,
-        expected_downloads,
-        expected_local_deletes,
-        expected_remote_deletes,
-        file_list,
-        label.as_deref(),
-    ).map_err(AppError::Progress)?;
+    let result = sync
+        .progress
+        .start_session(
+            expected_uploads,
+            expected_downloads,
+            expected_local_deletes,
+            expected_remote_deletes,
+            file_list,
+            label.as_deref(),
+        )
+        .map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(result)
 }
 
 /// Complete the current session.
 pub fn complete_session(sync: &SyncRunner, files_uploaded: u32, files_downloaded: u32) -> Result<()> {
-    sync.progress.complete_session(files_uploaded, files_downloaded).map_err(AppError::Progress)?;
+    sync.progress
+        .complete_session(files_uploaded, files_downloaded)
+        .map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
@@ -161,14 +171,18 @@ pub fn complete_pending_files(sync: &SyncRunner, label: &str) -> Result<()> {
 
 /// Mark excess pending files as failed.
 pub fn mark_pending_files_as_failed(sync: &SyncRunner, actual_uploads: u32, actual_downloads: u32, label: &str) -> Result<()> {
-    sync.progress.mark_pending_files_as_failed(actual_uploads, actual_downloads, label).map_err(AppError::Progress)?;
+    sync.progress
+        .mark_pending_files_as_failed(actual_uploads, actual_downloads, label)
+        .map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
 
 /// Mark every pending/in-progress file as failed.
 pub fn mark_all_pending_files_as_failed(sync: &SyncRunner, error_message: String) -> Result<()> {
-    sync.progress.mark_all_pending_files_as_failed(error_message).map_err(AppError::Progress)?;
+    sync.progress
+        .mark_all_pending_files_as_failed(error_message)
+        .map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }

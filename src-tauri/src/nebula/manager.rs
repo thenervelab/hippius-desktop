@@ -408,7 +408,12 @@ pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
             tracing::warn!("Poisoned mutex recovered in nebula setup");
             p.into_inner()
         });
-        (setup.needs_update, setup.download_url.clone(), setup.latest_version.clone(), app_state.api_client.clone())
+        (
+            setup.needs_update,
+            setup.download_url.clone(),
+            setup.latest_version.clone(),
+            app_state.api_client.clone(),
+        )
     };
 
     if needs_update && let (Some(url), Some(version)) = (download_url, latest_version) {
@@ -423,7 +428,12 @@ pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
 
         debug!("Downloading to temp file: {}", temp_path.display());
 
-        let response = client.get(&url).timeout(Duration::from_secs(300)).send().await.map_err(|e| e.to_string())?;
+        let response = client
+            .get(&url)
+            .timeout(Duration::from_secs(300))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
 
         if !response.status().is_success() {
             return Err(format!("Download failed: HTTP {}", response.status()));

@@ -1,7 +1,7 @@
 //! Blockchain runtime state — RPC client and block subscription.
 
-use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use subxt::backend::rpc::RpcClient;
 
 /// Lazily-initialized Substrate RPC client connection.

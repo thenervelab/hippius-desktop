@@ -67,10 +67,7 @@ struct ServerMigrationResponse {
 // DB helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn get_migration_status_db(
-    pool: &SqlitePool,
-    account_id: &str,
-) -> Result<Option<(String, i64, i64, String, String)>> {
+pub(crate) async fn get_migration_status_db(pool: &SqlitePool, account_id: &str) -> Result<Option<(String, i64, i64, String, String)>> {
     let row = sqlx::query(
         "SELECT status, total_files, completed_files, sync_path, server_url \
          FROM migration_status WHERE account_id = ?",
@@ -167,11 +164,7 @@ fn derive_path_prefix(files: &[MigrationFile]) -> String {
     files.first().map(|f| f.bucket_name.clone()).unwrap_or_default()
 }
 
-pub(crate) async fn fetch_migration_files(
-    client: &reqwest::Client,
-    server_url: &str,
-    user_id: &str,
-) -> Result<Vec<MigrationFile>> {
+pub(crate) async fn fetch_migration_files(client: &reqwest::Client, server_url: &str, user_id: &str) -> Result<Vec<MigrationFile>> {
     let url = format!("{}/migration/{}", server_url.trim_end_matches('/'), user_id);
     let resp = client.get(&url).send().await?;
 
@@ -258,10 +251,7 @@ fn check_disk_space(_path: &std::path::Path, _required_bytes: u64) -> Result<()>
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn check_migration(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<MigrationCheckResult> {
+pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<MigrationCheckResult> {
     let pool = state.pool()?;
 
     let local_status = get_migration_status_db(pool, &account_id).await?;
@@ -269,9 +259,7 @@ pub async fn check_migration(
     // Only respect explicit user dismissal (skipped/dismissed) or completed.
     // For everything else, the server is the source of truth.
     if let Some((ref status, ..)) = local_status
-        && (status.eq_ignore_ascii_case("dismissed")
-            || status.eq_ignore_ascii_case("skipped")
-            || status.eq_ignore_ascii_case("completed"))
+        && (status.eq_ignore_ascii_case("dismissed") || status.eq_ignore_ascii_case("skipped") || status.eq_ignore_ascii_case("completed"))
     {
         return Ok(MigrationCheckResult {
             needs_migration: false,
@@ -306,9 +294,7 @@ pub async fn check_migration(
 
     // No pending files — check if a server migration completed but the client
     // never ran complete_migration_transition (e.g. app restarted mid-migration).
-    let has_local_in_progress = local_status
-        .as_ref()
-        .is_some_and(|(s, ..)| s.eq_ignore_ascii_case("in_progress"));
+    let has_local_in_progress = local_status.as_ref().is_some_and(|(s, ..)| s.eq_ignore_ascii_case("in_progress"));
 
     const TERMINAL_STATUSES: &[&str] = &["completed", "failed", "cancelled"];
 
@@ -350,11 +336,7 @@ pub async fn check_migration(
 /// For completed migrations, use `complete_migration_transition` instead —
 /// it handles label promotion, drive stop, and default drive init atomically.
 #[tauri::command]
-pub async fn dismiss_migration(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    reason: String,
-) -> Result<()> {
+pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, reason: String) -> Result<()> {
     let pool = state.pool()?;
     let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
     let status = if reason.is_empty() { "dismissed" } else { &reason };
@@ -477,10 +459,7 @@ pub struct MigrationFlowResult {
 /// Returns "setup" if the user needs to set up encryption first, or "progress"
 /// if migration can start immediately.
 #[tauri::command]
-pub async fn start_migration_flow(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<MigrationFlowResult> {
+pub async fn start_migration_flow(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<MigrationFlowResult> {
     let pool = state.pool()?;
     let config = crate::sync::config::get_hcfs_config_internal(pool, &account_id).await?;
 
@@ -518,10 +497,12 @@ pub async fn start_server_migration(
     })?;
     tracing::info!("[Migration] Server URL: {server_url}");
 
-    let files = fetch_migration_files(&state.migration.client, &server_url, &account_id).await.map_err(|e| {
-        tracing::error!("[Migration] Failed to fetch migration files: {e}");
-        e
-    })?;
+    let files = fetch_migration_files(&state.migration.client, &server_url, &account_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("[Migration] Failed to fetch migration files: {e}");
+            e
+        })?;
     tracing::info!("[Migration] Found {} migration files", files.len());
     let path_prefix = derive_path_prefix(&files);
 
@@ -540,33 +521,30 @@ pub async fn start_server_migration(
         e
     })?;
     let mnemonic_path = crate::sync::mnemonic::master_mnemonic_path(&account_id)?;
-    let mnemonic = hcfs_client::auth::recover_mnemonic(&mnemonic_path, &password)
-        .map_err(|e| {
-            tracing::error!("[Migration] Failed to recover mnemonic: {e}");
-            crate::error::AppError::Other(format!("Failed to recover mnemonic: {e}"))
-        })?;
+    let mnemonic = hcfs_client::auth::recover_mnemonic(&mnemonic_path, &password).map_err(|e| {
+        tracing::error!("[Migration] Failed to recover mnemonic: {e}");
+        crate::error::AppError::Other(format!("Failed to recover mnemonic: {e}"))
+    })?;
 
     let seed = mnemonic.to_seed("");
 
     // Derive the folder-specific encryption key — the Drive decrypts using
     // a key derived from derive_folder_mnemonic(master, "default"), NOT the
     // raw master seed. The server must encrypt with the same derived key.
-    let folder_mnemonic_str = hcfs_client::drive::keys::derive_folder_mnemonic(&mnemonic.to_string(), "default")
-        .map_err(|e| {
-            tracing::error!("[Migration] Failed to derive folder mnemonic: {e}");
-            crate::error::AppError::Other(format!("Failed to derive folder mnemonic: {e}"))
-        })?;
+    let folder_mnemonic_str = hcfs_client::drive::keys::derive_folder_mnemonic(&mnemonic.to_string(), "default").map_err(|e| {
+        tracing::error!("[Migration] Failed to derive folder mnemonic: {e}");
+        crate::error::AppError::Other(format!("Failed to derive folder mnemonic: {e}"))
+    })?;
     let folder_mnemonic = bip39::Mnemonic::parse_in_normalized(bip39::Language::English, &folder_mnemonic_str)
         .map_err(|e| crate::error::AppError::Other(format!("Invalid folder mnemonic: {e}")))?;
     let folder_seed = folder_mnemonic.to_seed("");
     let encryption_key_hex = hex::encode(&folder_seed[..32]);
 
     // Derive Ed25519 signing key from the master seed (not the folder key)
-    let signing_key =
-        hcfs_client::auth::recover_signing_key(seed).map_err(|e| {
-            tracing::error!("[Migration] Failed to derive signing key: {e}");
-            crate::error::AppError::Other(format!("Failed to derive signing key: {e}"))
-        })?;
+    let signing_key = hcfs_client::auth::recover_signing_key(seed).map_err(|e| {
+        tracing::error!("[Migration] Failed to derive signing key: {e}");
+        crate::error::AppError::Other(format!("Failed to derive signing key: {e}"))
+    })?;
 
     // Sign the migration request
     let signing_text = format!(
@@ -685,10 +663,7 @@ pub async fn start_server_migration(
 }
 
 /// Internal poll — callable from both the IPC command and the background task.
-async fn poll_migration_status_internal(
-    state: &crate::app_state::AppState,
-    account_id: &str,
-) -> Result<ServerMigrationStatus> {
+async fn poll_migration_status_internal(state: &crate::app_state::AppState, account_id: &str) -> Result<ServerMigrationStatus> {
     let pool = state.pool()?;
     let server_url = get_server_url(pool, account_id).await?;
     let url = format!("{}/migration/{}/status", server_url.trim_end_matches('/'), account_id);
@@ -736,10 +711,7 @@ async fn poll_migration_status_internal(
 }
 
 #[tauri::command]
-pub async fn poll_migration_status(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<ServerMigrationStatus> {
+pub async fn poll_migration_status(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<ServerMigrationStatus> {
     poll_migration_status_internal(&state, &account_id).await
 }
 

@@ -67,13 +67,7 @@ fn validate_no_path_overlap(new_path: &Path, new_label: &str, existing: &[(Strin
 }
 
 /// Core DB upsert + macOS bookmark logic.
-pub(crate) async fn set_sync_path_internal(
-    pool: &SqlitePool,
-    account_id: &str,
-    path: &str,
-    is_public: bool,
-    label: Option<&str>,
-) -> Result<String> {
+pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, path: &str, is_public: bool, label: Option<&str>) -> Result<String> {
     let path_type = if is_public { "public" } else { "private" };
     let label = label.unwrap_or("default");
     let timestamp = Utc::now().timestamp();
@@ -228,10 +222,7 @@ pub async fn get_sync_path_internal(pool: &SqlitePool, is_public: bool, owner: &
 
 /// Fetch a single sync path via IPC.
 #[tauri::command]
-pub async fn get_sync_path(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    params: GetSyncPathParams,
-) -> Result<SyncPathResult> {
+pub async fn get_sync_path(state: tauri::State<'_, crate::app_state::AppState>, params: GetSyncPathParams) -> Result<SyncPathResult> {
     let Some(account_id) = params.account_id.or_else(|| state.current_account_id().ok()) else {
         return Ok(SyncPathResult {
             path: String::new(),
@@ -246,10 +237,7 @@ pub async fn get_sync_path(
 
 /// Fetch all sync paths for the current account.
 #[tauri::command]
-pub async fn get_all_sync_paths(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    params: GetSyncPathParams,
-) -> Result<Vec<SyncPathResult>> {
+pub async fn get_all_sync_paths(state: tauri::State<'_, crate::app_state::AppState>, params: GetSyncPathParams) -> Result<Vec<SyncPathResult>> {
     let Some(account_id) = params.account_id.or_else(|| state.current_account_id().ok()) else {
         return Ok(Vec::new());
     };
@@ -286,11 +274,7 @@ pub async fn get_all_sync_paths(
 
 /// Generate a unique folder label by appending a numeric suffix if needed.
 #[tauri::command]
-pub async fn generate_unique_label(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    base_name: String,
-) -> Result<String> {
+pub async fn generate_unique_label(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, base_name: String) -> Result<String> {
     let pool = state.pool()?;
     let owner = account_key(&account_id);
 

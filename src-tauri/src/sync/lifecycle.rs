@@ -6,8 +6,8 @@ use serde::Serialize;
 use tracing::{debug, error, info, warn};
 
 use crate::auth::account_key::account_key;
-use crate::error::Result;
 use crate::auth::tokens::get_api_token;
+use crate::error::Result;
 use crate::sync::config::{
     build_hcfs_config, get_drive_password, get_hcfs_config_internal, get_sync_path_for_label, load_sync_config, save_hcfs_config_internal,
 };
@@ -165,12 +165,7 @@ pub async fn add_local_sync_folder(
 /// a unique `user_id` on the server. This keeps folder namespaces isolated:
 /// switching folders won't download files from the previous folder.
 #[tauri::command]
-pub async fn initialize_sync(
-    app: tauri::AppHandle,
-    account_id: String,
-    label: String,
-    existing_mnemonic: Option<String>,
-) -> Result<InitSyncResult> {
+pub async fn initialize_sync(app: tauri::AppHandle, account_id: String, label: String, existing_mnemonic: Option<String>) -> Result<InitSyncResult> {
     initialize_sync_inner(app, account_id, label, existing_mnemonic, true).await
 }
 
@@ -273,10 +268,7 @@ async fn teardown_last_drive(sync: &SyncRunner, app: &AppHandle) {
         abort_sync_loop(sync).await;
     }
     {
-        let mut watcher_guard = sync
-            .watcher
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut watcher_guard = sync.watcher.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         *watcher_guard = None;
     }
     sync.clear_all_reviews();
@@ -301,10 +293,7 @@ async fn remove_drive_inmemory(sync: &SyncRunner, label: &str) -> (usize, Option
     sync.unregister_label_root(label);
 
     if let Some(path) = &removed_path {
-        let mut watcher_guard = sync
-            .watcher
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut watcher_guard = sync.watcher.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(w) = watcher_guard.as_mut() {
             let _ = w.unwatch(path);
         }
@@ -992,11 +981,7 @@ pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String
 /// IMPORTANT: This does NOT delete files in the sync folder - only HCFS metadata.
 /// Files on the server remain intact.
 #[tauri::command]
-pub async fn reset_sync_data(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    app: AppHandle,
-    account_id: String,
-) -> Result<()> {
+pub async fn reset_sync_data(state: tauri::State<'_, crate::app_state::AppState>, app: AppHandle, account_id: String) -> Result<()> {
     info!("Resetting sync data for account: {}", account_id);
 
     // First stop all active syncs
@@ -1248,7 +1233,9 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
         info!("{} complete [{}]: {} ({} bytes)", dir_name, ctx.label, display_name, total);
         let _ = ctx.app.emit(
             crate::sync::events::FILE_TRANSFER_COMPLETE,
-            crate::sync::events::LabelPayload { label: ctx.label.to_string() },
+            crate::sync::events::LabelPayload {
+                label: ctx.label.to_string(),
+            },
         );
         ctx.sync.add_pending_activity(SyncActivityItem {
             file_name: path_str.to_string(),
@@ -1367,25 +1354,14 @@ fn build_crypto_callback(
             info!("{direction_name} complete [{label}]: {p:?} ({t} bytes)");
         }
         if let Some(path_str) = p {
-            let _ = crate::sync::progress::update_file_progress(
-                &sync,
-                path_str.to_string(),
-                b,
-                t,
-                action.clone(),
-                Some(label.to_string()),
-            );
+            let _ = crate::sync::progress::update_file_progress(&sync, path_str.to_string(), b, t, action.clone(), Some(label.to_string()));
         }
     })
 }
 
 /// Build the `on_scan_progress` callback that logs scan progress and
 /// emits the `SCAN_PROGRESS` Tauri event.
-fn build_scan_callback(
-    sync: Arc<SyncRunner>,
-    app: AppHandle,
-    label: Arc<str>,
-) -> hcfs_client::sync::ScanProgressFn {
+fn build_scan_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) -> hcfs_client::sync::ScanProgressFn {
     Arc::new(move |n, p| {
         sync.touch_progress_time();
         info!("Scan [{label}]: {n} files scanned, current: {p:?}");
@@ -1402,11 +1378,7 @@ fn build_scan_callback(
 
 /// Build the `on_fetch_state_progress` callback that logs fetch state
 /// progress and emits the `FETCH_PROGRESS` Tauri event.
-fn build_fetch_callback(
-    sync: Arc<SyncRunner>,
-    app: AppHandle,
-    label: Arc<str>,
-) -> hcfs_client::sync::FetchProgressFn {
+fn build_fetch_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) -> hcfs_client::sync::FetchProgressFn {
     Arc::new(move |f, t| {
         sync.touch_progress_time();
         info!("Fetch state [{label}]: {f}/{t} entries");
@@ -1423,17 +1395,11 @@ fn build_fetch_callback(
 
 /// Build the `on_file_synced` callback that logs per-file completion
 /// and updates the synced-paths cache.
-fn build_file_synced_callback(
-    sync: Arc<SyncRunner>,
-    label: Arc<str>,
-) -> hcfs_client::sync::FileSyncedFn {
+fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_client::sync::FileSyncedFn {
     Arc::new(move |rel_path, path_hash_hex, arion_cid, action| {
         debug!("File synced [{label}]: {rel_path} ({action}) cid={arion_cid}");
         if !rel_path.is_empty() {
-            let info = SyncedFileInfo::new(
-                path_hash_hex.to_string(),
-                arion_cid.to_string(),
-            );
+            let info = SyncedFileInfo::new(path_hash_hex.to_string(), arion_cid.to_string());
             sync.upsert_synced_path(&label, rel_path.to_string(), info);
         }
     })
@@ -1671,8 +1637,7 @@ mod tests {
         // Pre-conditions: drive and label root exist.
         assert!(sync.drives.lock().await.contains_key(label));
 
-        let (remaining, removed_path) =
-            remove_drive_inmemory(&sync, label).await;
+        let (remaining, removed_path) = remove_drive_inmemory(&sync, label).await;
 
         assert_eq!(remaining, 0, "map should be empty after removing the only drive");
         assert_eq!(
@@ -1680,10 +1645,7 @@ mod tests {
             Some(sync_path.as_path()),
             "should return the sync path of the removed drive"
         );
-        assert!(
-            !sync.drives.lock().await.contains_key(label),
-            "drive should no longer be in the map"
-        );
+        assert!(!sync.drives.lock().await.contains_key(label), "drive should no longer be in the map");
     }
 
     #[tokio::test]
@@ -1712,30 +1674,20 @@ mod tests {
             );
         }
 
-        assert!(
-            !token_clone.is_cancelled(),
-            "token should not be cancelled before removal"
-        );
+        assert!(!token_clone.is_cancelled(), "token should not be cancelled before removal");
 
         let _ = remove_drive_inmemory(&sync, label).await;
 
-        assert!(
-            token_clone.is_cancelled(),
-            "token should be cancelled after removal"
-        );
+        assert!(token_clone.is_cancelled(), "token should be cancelled after removal");
     }
 
     #[tokio::test]
     async fn remove_drive_inmemory_returns_none_for_nonexistent_label() {
         let sync = test_sync_runner();
 
-        let (remaining, removed_path) =
-            remove_drive_inmemory(&sync, "nonexistent").await;
+        let (remaining, removed_path) = remove_drive_inmemory(&sync, "nonexistent").await;
 
         assert_eq!(remaining, 0, "empty map has zero remaining");
-        assert!(
-            removed_path.is_none(),
-            "nonexistent label should yield None path"
-        );
+        assert!(removed_path.is_none(), "nonexistent label should yield None path");
     }
 }

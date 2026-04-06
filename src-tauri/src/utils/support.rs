@@ -182,7 +182,8 @@ pub async fn upload_ticket_attachment(
     let mut form = reqwest::multipart::Form::new().part("file", file_part);
     form = form.text("filename", file_name);
 
-    let resp = state.api_client
+    let resp = state
+        .api_client
         .post(&url)
         .header("Authorization", format!("Token {token}"))
         .multipart(form)

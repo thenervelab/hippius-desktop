@@ -194,11 +194,7 @@ pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppS
 /// it is updated to match the login mnemonic (source of truth for cross-device
 /// sync). No-op if the HCFS drive password has not been set yet.
 #[tauri::command]
-pub async fn persist_master_mnemonic(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    mnemonic: String,
-) -> Result<()> {
+pub async fn persist_master_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, mnemonic: String) -> Result<()> {
     let pool = state.pool()?;
     let master_path = master_mnemonic_path(&account_id)?;
 

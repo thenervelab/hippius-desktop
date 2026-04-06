@@ -206,12 +206,7 @@ async fn add_folder_internal(sync_path: &str, folder_path: &str) -> Result<Strin
 /// When `label` is provided the deletion is recorded in the sync activity
 /// ring buffer so the frontend can immediately filter it from recent files.
 #[tauri::command]
-pub async fn remove_file(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    sync_path: String,
-    name: String,
-    label: Option<String>,
-) -> Result<()> {
+pub async fn remove_file(state: tauri::State<'_, crate::app_state::AppState>, sync_path: String, name: String, label: Option<String>) -> Result<()> {
     let parent = Path::new(&sync_path);
     let target = parent.join(&name);
     let target = ensure_within(parent, &target)?;
@@ -380,12 +375,7 @@ pub struct AddFilesResult {
 }
 
 #[tauri::command]
-pub async fn add_files(
-    app: AppHandle,
-    sync_path: String,
-    file_paths: Vec<String>,
-    subfolder: Option<String>,
-) -> Result<AddFilesResult> {
+pub async fn add_files(app: AppHandle, sync_path: String, file_paths: Vec<String>, subfolder: Option<String>) -> Result<AddFilesResult> {
     // Credit check — reject if user has no credits (defense-in-depth; TS also checks for UX).
     if let Some(state) = app.try_state::<crate::app_state::AppState>()
         && let Ok(acct) = state.current_account_id()
@@ -527,9 +517,7 @@ pub struct SyncedFileMetadata {
 /// files across all drives. Used by the recent-files view to look up
 /// arion hashes without needing to list every subfolder from disk.
 #[tauri::command]
-pub async fn get_synced_file_metadata(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<Vec<SyncedFileMetadata>> {
+pub async fn get_synced_file_metadata(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Vec<SyncedFileMetadata>> {
     let sync = &state.sync;
     let mut result = Vec::new();
 

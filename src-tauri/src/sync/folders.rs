@@ -8,8 +8,8 @@ use serde::Serialize;
 use tracing::{error, info, warn};
 
 use crate::auth::account_key::account_key;
-use crate::error::Result;
 use crate::auth::tokens::get_api_token;
+use crate::error::Result;
 use crate::sync::config::get_hcfs_config_internal;
 use crate::sync::lifecycle::start_sync_loop;
 use crate::sync::lifecycle::{initialize_sync_inner, stop_drive};
@@ -93,10 +93,7 @@ pub(crate) fn sanitize_label(label: &str) -> Result<String> {
 }
 
 /// Query all sync paths for an account directly from the DB (no Tauri state params).
-pub(crate) async fn get_all_sync_paths_internal(
-    pool: &SqlitePool,
-    account_id: &str,
-) -> Result<Vec<crate::sync::paths::SyncPathResult>> {
+pub(crate) async fn get_all_sync_paths_internal(pool: &SqlitePool, account_id: &str) -> Result<Vec<crate::sync::paths::SyncPathResult>> {
     use sqlx::Row;
     let owner = account_key(account_id);
     let rows = sqlx::query("SELECT path, type, label, is_paused FROM sync_paths WHERE owner = ?")
@@ -164,10 +161,7 @@ pub(crate) async fn list_remote_folders_internal(pool: &SqlitePool, account_id: 
 
 /// List all folders registered for the current account on the remote server.
 #[tauri::command]
-pub async fn list_remote_folders(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<Vec<RemoteFolderInfoResult>> {
+pub async fn list_remote_folders(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<RemoteFolderInfoResult>> {
     info!("Listing remote folders for account '{}'", account_id);
     let pool = state.pool()?;
     let config = get_hcfs_config_internal(pool, &account_id).await?;
@@ -383,10 +377,7 @@ pub async fn delete_remote_folder(
 /// that was doing parallel fetches, map creation, status checks, and sorting
 /// in TypeScript.
 #[tauri::command]
-pub async fn get_sync_folders_with_stats(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<SyncFoldersResult> {
+pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<SyncFoldersResult> {
     let pool = state.pool()?;
 
     // Parallel fetch: local paths + remote folders

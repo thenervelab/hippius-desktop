@@ -473,7 +473,10 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     })
 }
 
-#[expect(clippy::too_many_lines, reason = "Tauri app setup: plugin registration and lifecycle hooks must stay together for capture context")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Tauri app setup: plugin registration and lifecycle hooks must stay together for capture context"
+)]
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");
