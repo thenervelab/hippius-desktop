@@ -77,29 +77,6 @@ pub async fn update_hcfs_server_url(
 
     Ok(())
 }
-
-/// Update the bearer token on all live drives and persist it in the DB.
-///
-/// Called by the frontend after re-authenticating when the server returns
-/// 401 Unauthorized (expired token).
-#[tauri::command]
-pub async fn update_sync_bearer_token(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    bearer_token: String,
-) -> Result<(), crate::error::AppError> {
-    let pool = state.pool()?;
-    crate::auth::tokens::save_api_token(pool, &account_id, &bearer_token)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("Failed to persist token: {e}")))?;
-    state
-        .sync
-        .update_all_drive_tokens(&bearer_token)
-        .await
-        .map_err(crate::error::AppError::Other)?;
-    Ok(())
-}
-
 /// Internal helper that accepts a pool reference directly.
 /// Used by both the Tauri command and other internal callers.
 pub(crate) async fn get_hcfs_config_internal(pool: &SqlitePool, account_id: &str) -> Result<HcfsConfigResult, crate::error::AppError> {

@@ -244,7 +244,6 @@ fn main() {
             crate::sync::config::save_hcfs_config,
             crate::sync::config::get_hcfs_config,
             crate::sync::config::update_hcfs_server_url,
-            crate::sync::config::update_sync_bearer_token,
             // Selective sync (exclusion patterns)
             crate::sync::selective::list_exclude_patterns,
             crate::sync::selective::add_exclude_pattern,
