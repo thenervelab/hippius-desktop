@@ -254,6 +254,30 @@ async fn abort_sync_loop(sync: &SyncRunner) {
     }
 }
 
+/// Teardown path when the last drive is being removed.
+/// Mirrors `stop_sync`'s order: cancel → wait with grace → abort → clear watcher.
+///
+/// Note: each drive's per-drive `cancel_token` was already cancelled when the
+/// drive was removed from the map. This helper handles the GLOBAL cancel and
+/// sync-loop shutdown for when zero drives remain.
+async fn teardown_last_drive(sync: &SyncRunner, app: &AppHandle) {
+    sync.request_cancel();
+    const GRACEFUL_SHUTDOWN: std::time::Duration =
+        std::time::Duration::from_millis(500);
+    if !wait_for_sync_loop_exit(sync, GRACEFUL_SHUTDOWN).await {
+        abort_sync_loop(sync).await;
+    }
+    {
+        let mut watcher_guard = sync
+            .watcher
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *watcher_guard = None;
+    }
+    sync.clear_all_reviews();
+    let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
+}
+
 /// Pre-populate the synced-paths cache and store the manager in the drive
 /// registry so the first sync cycle sees correct state immediately.
 async fn register_drive(sync: &SyncRunner, manager: DriveManager, label: &str, sync_path: &str, folder_dir: &Path) {
@@ -899,22 +923,7 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), crate::erro
     }
 
     if remaining == 0 {
-        // No more drives — stop the sync loop entirely
-        sync.request_cancel();
-        let mut handle_guard = sync.loop_handle.lock().await;
-        if let Some(prev) = handle_guard.take() {
-            prev.abort();
-        }
-        // Clear the watcher since the loop is done
-        {
-            let mut watcher_guard = sync.watcher.lock().unwrap_or_else(|p| {
-                warn!("Poisoned watcher mutex recovered in stop_drive");
-                p.into_inner()
-            });
-            *watcher_guard = None;
-        }
-        sync.clear_all_reviews();
-        let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
+        teardown_last_drive(sync, &app).await;
     }
 
     info!("Stopped drive '{}', {} drives remaining", label, remaining);
@@ -962,17 +971,7 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<(), crate::err
     }
 
     if remaining == 0 {
-        sync.request_cancel();
-        let mut handle_guard = sync.loop_handle.lock().await;
-        if let Some(prev) = handle_guard.take() {
-            prev.abort();
-        }
-        {
-            let mut watcher_guard = sync.watcher.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            *watcher_guard = None;
-        }
-        sync.clear_all_reviews();
-        let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
+        teardown_last_drive(sync, &app).await;
     }
 
     info!("Paused drive '{}', {} drives remaining", label, remaining);
