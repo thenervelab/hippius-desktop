@@ -242,10 +242,18 @@ export function useMigration(
         // Pass the in-memory mnemonic so start_server_migration doesn't
         // depend on the on-disk master (which may not exist yet).
         const mnemonic = getMnemonic ? await getMnemonic() : null;
+        if (!mnemonic) {
+          appStore.set(migrationLockAtom, false);
+          toast.error(
+            "Seed phrase not available. Please log out and log back in with your seed phrase to start migration."
+          );
+          setCurrentStep("prompt");
+          return;
+        }
         await invoke("start_server_migration", {
           accountId,
           totalSize,
-          existingMnemonic: mnemonic ?? null,
+          existingMnemonic: mnemonic,
         });
 
         // Start polling for progress
