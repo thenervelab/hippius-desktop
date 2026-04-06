@@ -1646,4 +1646,105 @@ mod tests {
         abort_sync_loop(&sync).await;
         assert!(sync.loop_handle.lock().await.is_none());
     }
+
+    // ── remove_drive_inmemory tests ────────────────────────────────────
+
+    #[tokio::test]
+    async fn remove_drive_inmemory_cleans_up_registered_drive() {
+        let sync = test_sync_runner();
+        let label = "test-drive";
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sync_path = tmp.path().join("sync");
+        let config_dir = tmp.path().join("config");
+        std::fs::create_dir_all(&sync_path).expect("create sync dir");
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+
+        // Insert a drive slot with a real DriveManager.
+        {
+            let manager = DriveManager::new(sync_path.clone(), config_dir);
+            let token = CancellationToken::new();
+            let mut guard = sync.drives.lock().await;
+            guard.insert(
+                label.to_string(),
+                DriveSlot {
+                    manager: Arc::new(TokioMutex::new(manager)),
+                    cancel_token: token,
+                },
+            );
+        }
+
+        // Seed ancillary state so removal has something to clean up.
+        sync.register_label_root(label.to_string(), sync_path.clone());
+
+        // Pre-conditions: drive and label root exist.
+        assert!(sync.drives.lock().await.contains_key(label));
+
+        let (remaining, removed_path) =
+            remove_drive_inmemory(&sync, label).await;
+
+        assert_eq!(remaining, 0, "map should be empty after removing the only drive");
+        assert_eq!(
+            removed_path.as_deref(),
+            Some(sync_path.as_path()),
+            "should return the sync path of the removed drive"
+        );
+        assert!(
+            !sync.drives.lock().await.contains_key(label),
+            "drive should no longer be in the map"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_drive_inmemory_cancels_token() {
+        let sync = test_sync_runner();
+        let label = "cancel-me";
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sync_path = tmp.path().join("sync");
+        let config_dir = tmp.path().join("config");
+        std::fs::create_dir_all(&sync_path).expect("create sync dir");
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+
+        {
+            let manager = DriveManager::new(sync_path.clone(), config_dir);
+            let mut guard = sync.drives.lock().await;
+            guard.insert(
+                label.to_string(),
+                DriveSlot {
+                    manager: Arc::new(TokioMutex::new(manager)),
+                    cancel_token: token,
+                },
+            );
+        }
+
+        assert!(
+            !token_clone.is_cancelled(),
+            "token should not be cancelled before removal"
+        );
+
+        let _ = remove_drive_inmemory(&sync, label).await;
+
+        assert!(
+            token_clone.is_cancelled(),
+            "token should be cancelled after removal"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_drive_inmemory_returns_none_for_nonexistent_label() {
+        let sync = test_sync_runner();
+
+        let (remaining, removed_path) =
+            remove_drive_inmemory(&sync, "nonexistent").await;
+
+        assert_eq!(remaining, 0, "empty map has zero remaining");
+        assert!(
+            removed_path.is_none(),
+            "nonexistent label should yield None path"
+        );
+    }
 }
