@@ -51,7 +51,7 @@ fn monotonic_now_ms() -> u64 {
 
 // ── Inner functions (called from lifecycle.rs, auth/session.rs) ────────
 
-/// Update progress for a single file. Called from progress callbacks.
+/// Update per-file byte progress in the active sync session.
 ///
 /// The underlying `SyncRunner::emit_snapshot(false)` call is **trailing-edge
 /// throttled** to one emit per [`SNAPSHOT_THROTTLE_MS`] across the whole
@@ -64,7 +64,6 @@ fn monotonic_now_ms() -> u64 {
 /// `SyncSnapshot` JSON payloads per second, which blocks the macOS main
 /// thread in `NSString` UTF-8 decoding and hangs the app. See the bug report
 /// dated 2026-04-05 and the unit tests in `src/sync/logic.rs` for details.
-/// Update per-file byte progress in the active sync session.
 ///
 /// Accepts `&str` for `path` and `Option<&str>` for `label` to avoid
 /// heap-allocating on every progress tick — this is a hot path called

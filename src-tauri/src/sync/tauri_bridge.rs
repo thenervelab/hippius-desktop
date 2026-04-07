@@ -27,6 +27,10 @@ impl Default for TauriSyncBridge {
 }
 
 impl TauriSyncBridge {
+    /// Create a new bridge with no `AppHandle` set yet.
+    ///
+    /// Call [`set_app_handle`] once during app setup to wire in the handle
+    /// before the sync engine fires its first event.
     pub fn new() -> Self {
         Self { app: std::sync::OnceLock::new() }
     }
@@ -38,6 +42,11 @@ impl TauriSyncBridge {
         let _ = self.app.set(handle);
     }
 
+    /// Clone the stored `AppHandle`, if one has been set via [`set_app_handle`].
+    ///
+    /// Returns `None` before `set_app_handle` is called (i.e., during the brief
+    /// window between `AppState::new()` and the first `setup()` call). Event
+    /// handlers silently no-op when `None` is returned.
     fn app(&self) -> Option<AppHandle> {
         self.app.get().cloned()
     }
