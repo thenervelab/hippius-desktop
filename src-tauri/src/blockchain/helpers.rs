@@ -10,19 +10,11 @@ use subxt::tx::PairSigner;
 /// restored from disk that haven't been unlocked with a passcode yet.
 /// The frontend can dispatch on `kind === "NotReady"` + the structured
 /// message to show "this action requires your seed phrase".
-pub(crate) fn get_signer(
-    app_state: &crate::app_state::AppState,
-) -> Result<PairSigner<subxt::PolkadotConfig, sp_core::sr25519::Pair>, AppError> {
-    let auth = app_state
-        .auth
-        .lock()
-        .map_err(|e| AppError::Other(format!("Lock error: {e}")))?;
+pub(crate) fn get_signer(app_state: &crate::app_state::AppState) -> Result<PairSigner<subxt::PolkadotConfig, sp_core::sr25519::Pair>, AppError> {
+    let auth = app_state.auth.lock().map_err(|e| AppError::Other(format!("Lock error: {e}")))?;
     match auth.capabilities {
         AuthCapabilities::Full => {
-            let pair = auth
-                .sr25519_pair
-                .clone()
-                .ok_or(AppError::NotReady(NotReadyKind::SigningKeyUnavailable))?;
+            let pair = auth.sr25519_pair.clone().ok_or(AppError::NotReady(NotReadyKind::SigningKeyUnavailable))?;
             Ok(PairSigner::new(pair))
         }
         AuthCapabilities::OAuthOnly | AuthCapabilities::Restored => Err(AppError::NotReady(NotReadyKind::SigningKeyUnavailable)),
@@ -32,10 +24,7 @@ pub(crate) fn get_signer(
 
 /// Read the SS58 address from the in-memory auth state.
 pub(crate) fn get_substrate_address(app_state: &crate::app_state::AppState) -> Result<String, AppError> {
-    let auth = app_state
-        .auth
-        .lock()
-        .map_err(|e| AppError::Other(format!("Lock error: {e}")))?;
+    let auth = app_state.auth.lock().map_err(|e| AppError::Other(format!("Lock error: {e}")))?;
     auth.substrate_address
         .clone()
         .ok_or(AppError::Auth("Not authenticated — please log in first".into()))
@@ -49,16 +38,10 @@ pub(crate) fn get_substrate_address(app_state: &crate::app_state::AppState) -> R
 pub(crate) fn get_signer_and_address(
     app_state: &crate::app_state::AppState,
 ) -> Result<(PairSigner<subxt::PolkadotConfig, sp_core::sr25519::Pair>, String), AppError> {
-    let auth = app_state
-        .auth
-        .lock()
-        .map_err(|e| AppError::Other(format!("Lock error: {e}")))?;
+    let auth = app_state.auth.lock().map_err(|e| AppError::Other(format!("Lock error: {e}")))?;
     match auth.capabilities {
         AuthCapabilities::Full => {
-            let pair = auth
-                .sr25519_pair
-                .clone()
-                .ok_or(AppError::NotReady(NotReadyKind::SigningKeyUnavailable))?;
+            let pair = auth.sr25519_pair.clone().ok_or(AppError::NotReady(NotReadyKind::SigningKeyUnavailable))?;
             let address = auth
                 .substrate_address
                 .clone()

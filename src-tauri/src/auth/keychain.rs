@@ -88,8 +88,7 @@ mod tests {
     #[ignore = "touches the real OS keychain; run manually with --ignored"]
     fn store_load_delete_roundtrip() {
         const TEST_ACCOUNT: &str = "test-account-keychain-roundtrip";
-        let test_mnemonic =
-            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let test_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
         let _ = delete_mnemonic(TEST_ACCOUNT); // clean slate
 

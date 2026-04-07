@@ -13,7 +13,7 @@ use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 use zeroize::Zeroize;
 
-use crate::auth::service::{base_url, CHALLENGE_PATH, VERIFY_PATH};
+use crate::auth::service::{CHALLENGE_PATH, VERIFY_PATH, base_url};
 use crate::auth::tokens::{get_api_token, save_api_token};
 use crate::sync::mnemonic::get_mnemonic_for_account;
 use tracing::{info, warn};
@@ -49,9 +49,7 @@ struct VerifyResponse {
 /// Delegates to [`crate::auth::service::derive_keys`] and discards the
 /// sr25519 keypair (not needed for billing authentication).
 fn derive_keys(mnemonic: &str) -> Result<(String, PrivateKeySigner, String), crate::error::AppError> {
-    let (_pair, substrate_address, eth_signer, eth_address) =
-        crate::auth::service::derive_keys(mnemonic)
-            .map_err(crate::error::AppError::Crypto)?;
+    let (_pair, substrate_address, eth_signer, eth_address) = crate::auth::service::derive_keys(mnemonic).map_err(crate::error::AppError::Crypto)?;
     Ok((substrate_address, eth_signer, eth_address))
 }
 

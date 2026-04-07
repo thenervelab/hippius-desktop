@@ -4,7 +4,17 @@ import { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { StagedChanges, ConflictResolution } from "@/lib/types/syncTypes";
 
-export function useStagedChanges() {
+/**
+ * Hook for staging sync changes and resolving conflicts on a specific drive.
+ *
+ * @param label - The drive label to operate on. Defaults to "default" for
+ *   single-drive setups. When multi-drive UI is implemented, callers should
+ *   pass the actual drive label from their context.
+ */
+export function useStagedChanges(
+  // TODO: use actual drive label when multi-drive UI is implemented
+  label: string = "default"
+) {
   const [stagedChanges, setStagedChanges] = useState<StagedChanges | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -14,7 +24,7 @@ export function useStagedChanges() {
     setIsLoading(true);
     setError(null);
     try {
-      const changes = await invoke<StagedChanges>("stage_changes");
+      const changes = await invoke<StagedChanges>("stage_changes", { label });
       setStagedChanges(changes);
       return changes;
     } catch (e) {
@@ -24,14 +34,17 @@ export function useStagedChanges() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [label]);
 
   const syncWithResolutions = useCallback(
     async (resolutions: Record<string, ConflictResolution>) => {
       setIsSyncing(true);
       setError(null);
       try {
-        await invoke("sync_with_conflict_resolutions", { resolutions });
+        await invoke("sync_with_conflict_resolutions", {
+          label,
+          resolutions,
+        });
         setStagedChanges(null);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -40,7 +53,7 @@ export function useStagedChanges() {
         setIsSyncing(false);
       }
     },
-    []
+    [label]
   );
 
   const cancelReview = useCallback(async () => {

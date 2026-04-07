@@ -485,10 +485,7 @@ mod tests {
                 NotReadyKind::MasterMnemonicUnrecoverable,
                 "Master mnemonic could not be recovered. Please log out and log back in with your seed phrase.",
             ),
-            (
-                NotReadyKind::NotEnoughDiskSpace,
-                "Not enough disk space to complete this operation.",
-            ),
+            (NotReadyKind::NotEnoughDiskSpace, "Not enough disk space to complete this operation."),
             (
                 NotReadyKind::SigningKeyUnavailable,
                 "This action requires re-entering your seed phrase. Please log out and log in again with your seed phrase to continue.",

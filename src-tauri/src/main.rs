@@ -13,9 +13,9 @@
 mod api;
 mod app_state;
 pub mod auth;
-pub mod crypto;
 pub mod billing;
 pub mod blockchain;
+pub mod crypto;
 pub mod error;
 pub mod infra;
 pub mod nebula;
