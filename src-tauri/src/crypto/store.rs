@@ -7,6 +7,8 @@
 use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit};
 use hkdf::Hkdf;
 use sha2::Sha256;
+use sqlx::sqlite::SqlitePool;
+use tracing::info;
 use zeroize::Zeroizing;
 
 /// HKDF info strings for key separation.
@@ -95,6 +97,93 @@ pub fn decrypt(key: &[u8; 32], encoded: &str) -> Result<Zeroizing<String>, crate
         String::from_utf8(plaintext_bytes).map_err(|e| crate::error::AppError::Crypto(format!("decrypted data is not valid UTF-8: {e}")))?;
 
     Ok(Zeroizing::new(plaintext))
+}
+
+/// Encrypts all plaintext sensitive data for the given account.
+///
+/// Scans `sub_accounts` and `hcfs_config` for rows where
+/// `encryption_version = 0`, encrypts them in a single transaction,
+/// and sets `encryption_version = 1`. Safe to call repeatedly — rows
+/// already at version 1 are skipped.
+pub async fn migrate_if_needed(
+    pool: &SqlitePool,
+    mnemonic: &str,
+    account_id: &str,
+) -> Result<(), crate::error::AppError> {
+    let sub_key = derive_key(mnemonic, account_id, INFO_SUB_ACCOUNTS);
+    let drive_key = derive_key(mnemonic, account_id, INFO_DRIVE_PASSWORD);
+
+    let mut tx = pool.begin().await?;
+
+    // ── Sub-accounts ───────────────────────────────────────────────
+    let sub_rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, sub_account_seed_phrase FROM sub_accounts WHERE encryption_version = 0 AND sub_account_seed_phrase != ''"
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let sub_count = sub_rows.len();
+    for (id, plaintext) in &sub_rows {
+        if plaintext.trim().is_empty() {
+            continue;
+        }
+        let ciphertext = encrypt(&sub_key, plaintext)?;
+        sqlx::query("UPDATE sub_accounts SET sub_account_seed_phrase = ?, encryption_version = 1 WHERE id = ?")
+            .bind(&ciphertext)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    // ── Drive passwords ────────────────────────────────────────────
+    let owner = crate::auth::account_key::account_key(account_id);
+    let drive_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT owner, drive_password FROM hcfs_config WHERE encryption_version = 0 AND owner = ? AND drive_password != ''"
+    )
+    .bind(&owner)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let drive_count = drive_rows.len();
+    for (row_owner, plaintext) in &drive_rows {
+        if plaintext.trim().is_empty() {
+            continue;
+        }
+        let ciphertext = encrypt(&drive_key, plaintext)?;
+        sqlx::query("UPDATE hcfs_config SET drive_password = ?, encryption_version = 1 WHERE owner = ?")
+            .bind(&ciphertext)
+            .bind(row_owner)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
+
+    if sub_count > 0 || drive_count > 0 {
+        info!(
+            "Encryption migration complete: {sub_count} sub-account(s), {drive_count} drive password(s)"
+        );
+    }
+
+    Ok(())
+}
+
+/// Decrypts a value if `encryption_version == 1`, returns as-is if `0`.
+///
+/// Used at every read site to transparently handle mixed-version rows
+/// during the migration window.
+pub fn decrypt_or_plaintext(
+    key: &[u8; 32],
+    raw_value: &str,
+    encryption_version: i32,
+) -> Result<Zeroizing<String>, crate::error::AppError> {
+    match encryption_version {
+        0 => Ok(Zeroizing::new(raw_value.to_string())),
+        1 => decrypt(key, raw_value),
+        v => Err(crate::error::AppError::Crypto(format!(
+            "unknown encryption_version: {v}"
+        ))),
+    }
 }
 
 #[cfg(test)]
