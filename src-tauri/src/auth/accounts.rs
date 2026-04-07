@@ -116,12 +116,26 @@ pub async fn import_app_data(state: tauri::State<'_, crate::app_state::AppState>
                 continue;
             }
 
+            // Encrypt the seed phrase if the mnemonic is available.
+            let (stored_phrase, enc_version) = {
+                let guard = state.auth.lock()?;
+                match (guard.mnemonic.as_deref(), guard.substrate_address.as_deref()) {
+                    (Some(m), Some(acct)) => {
+                        let key = crate::crypto::store::sub_account_key(m, acct);
+                        let encrypted = crate::crypto::store::encrypt(&key, &account.sub_account_seed_phrase)?;
+                        (encrypted, 1i32)
+                    }
+                    _ => (account.sub_account_seed_phrase.clone(), 0i32),
+                }
+            };
+
             let _result = sqlx::query(
-                "INSERT INTO sub_accounts (account_id, sub_account_seed_phrase, created_at)
-                 VALUES (?, ?, COALESCE(?, CURRENT_TIMESTAMP))",
+                "INSERT INTO sub_accounts (account_id, sub_account_seed_phrase, encryption_version, created_at)
+                 VALUES (?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))",
             )
             .bind(&account.account_id)
-            .bind(&account.sub_account_seed_phrase)
+            .bind(&stored_phrase)
+            .bind(enc_version)
             .bind(account.created_at)
             .execute(&mut *tx)
             .await?;
@@ -170,22 +184,52 @@ pub async fn export_app_data(state: tauri::State<'_, crate::app_state::AppState>
         .collect();
 
     // Get sub-accounts
-    let sub_accounts_rows = sqlx::query("SELECT account_id, sub_account_seed_phrase, created_at FROM sub_accounts")
-        .fetch_all(pool)
-        .await?;
+    let sub_accounts_rows = sqlx::query(
+        "SELECT account_id, sub_account_seed_phrase, COALESCE(encryption_version, 0) as enc_ver, created_at FROM sub_accounts",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mnemonic_and_acct = {
+        let guard = state.auth.lock()?;
+        match (guard.mnemonic.as_deref().map(String::from), guard.substrate_address.clone()) {
+            (Some(m), Some(a)) => Some((m, a)),
+            _ => None,
+        }
+    };
 
     let sub_accounts = sub_accounts_rows
         .into_iter()
-        .map(|row| {
+        .filter_map(|row| {
             let account_id: String = row.get("account_id");
-            let sub_account_seed_phrase: String = row.get("sub_account_seed_phrase");
+            let raw_phrase: String = row.get("sub_account_seed_phrase");
+            let enc_ver: i32 = row.get("enc_ver");
             let created_at: Option<String> = row.get("created_at");
 
-            SubAccountExport {
+            let phrase = match enc_ver {
+                0 => raw_phrase,
+                1 => {
+                    let (m, acct) = mnemonic_and_acct.as_ref()?;
+                    let key = crate::crypto::store::sub_account_key(m, acct);
+                    match crate::crypto::store::decrypt(&key, &raw_phrase) {
+                        Ok(p) => (*p).clone(),
+                        Err(e) => {
+                            warn!("Failed to decrypt sub-account {account_id}: {e}");
+                            return None;
+                        }
+                    }
+                }
+                v => {
+                    warn!("Unknown encryption_version {v} for sub-account {account_id}");
+                    return None;
+                }
+            };
+
+            Some(SubAccountExport {
                 account_id,
-                sub_account_seed_phrase,
+                sub_account_seed_phrase: phrase,
                 created_at,
-            }
+            })
         })
         .collect::<Vec<_>>();
 
@@ -234,18 +278,54 @@ pub async fn reset_app(state: tauri::State<'_, crate::app_state::AppState>) -> R
 pub async fn get_all_subaccount_addresses(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Vec<(String, String)>, AppError> {
     let pool = state.pool()?;
 
-    let sub_accounts = sqlx::query_as::<_, (String, String)>("SELECT account_id, sub_account_seed_phrase FROM sub_accounts")
-        .fetch_all(pool)
-        .await?;
+    let mnemonic_and_acct = {
+        let guard = state.auth.lock()?;
+        match (guard.mnemonic.as_deref().map(String::from), guard.substrate_address.clone()) {
+            (Some(m), Some(a)) => Some((m, a)),
+            _ => None,
+        }
+    };
+
+    let sub_accounts = sqlx::query(
+        "SELECT account_id, sub_account_seed_phrase, COALESCE(encryption_version, 0) as enc_ver FROM sub_accounts",
+    )
+    .fetch_all(pool)
+    .await?;
 
     let mut result = Vec::new();
 
-    for (account_id, phrase) in sub_accounts {
+    for row in sub_accounts {
+        let account_id: String = row.get("account_id");
+        let raw_phrase: String = row.get("sub_account_seed_phrase");
+        let enc_ver: i32 = row.get("enc_ver");
+
+        let phrase = match enc_ver {
+            0 => raw_phrase,
+            1 => {
+                let Some((ref m, ref acct)) = mnemonic_and_acct else {
+                    warn!("Cannot decrypt sub-account {account_id} — mnemonic unavailable");
+                    continue;
+                };
+                let key = crate::crypto::store::sub_account_key(m, acct);
+                match crate::crypto::store::decrypt(&key, &raw_phrase) {
+                    Ok(p) => (*p).clone(),
+                    Err(e) => {
+                        warn!("Failed to decrypt sub-account {account_id}: {e}");
+                        continue;
+                    }
+                }
+            }
+            v => {
+                warn!("Unknown encryption_version {v} for sub-account {account_id}");
+                continue;
+            }
+        };
+
         if let Ok((pair, _seed)) = sr25519::Pair::from_phrase(&phrase, None) {
             let ss58 = pair.public().to_ss58check();
             result.push((account_id, ss58));
         } else {
-            warn!("Failed to create keypair from phrase for account_id: {}", account_id);
+            warn!("Failed to create keypair from phrase for account_id: {account_id}");
         }
     }
 
