@@ -574,6 +574,11 @@ struct RecoveryContext<'a> {
 /// create a fresh `DriveManager`, re-derive the mnemonic, and unlock.
 ///
 /// Returns `(new_manager, user_id, optional_master_mnemonic)`.
+///
+/// # Security
+/// `master_str` (the BIP-39 master mnemonic) and `derived` (the per-folder
+/// mnemonic) are wrapped in [`zeroize::Zeroizing`] so their heap memory is
+/// scrubbed when the values are dropped.
 async fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Result<(DriveManager, String, Option<String>)> {
     // Remove corrupted enc_mnemonic.json
     let enc_path = ctx.folder_dir.join("enc_mnemonic.json");
@@ -597,24 +602,24 @@ async fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Resu
 
     debug!("Creating fresh drive after recovery...");
 
-    let master_str = if let Some(imported) = ctx.existing_mnemonic {
+    let master_str: zeroize::Zeroizing<String> = if let Some(imported) = ctx.existing_mnemonic {
         debug!("Using login mnemonic as master for recovery");
-        imported.to_string()
+        zeroize::Zeroizing::new(imported.to_string())
     } else {
         let master = bip39::Mnemonic::generate(24).map_err(|e| crate::error::AppError::Crypto(e.to_string()))?;
         warn!("Generated new random master for recovery (no login mnemonic available)");
-        master.to_string()
+        zeroize::Zeroizing::new(master.to_string())
     };
-    hcfs_client::auth::save_encrypted_mnemonic(ctx.master_path, &master_str, ctx.drive_password)?;
-    let derived = derive_folder_mnemonic(&master_str, ctx.label)?;
+    hcfs_client::auth::save_encrypted_mnemonic(ctx.master_path, &*master_str, ctx.drive_password)?;
+    let derived = zeroize::Zeroizing::new(derive_folder_mnemonic(&*master_str, ctx.label)?);
 
-    let mut init_mnemonic = new_manager.init(ctx.drive_password, Some(&derived)).await?;
+    let mut init_mnemonic = new_manager.init(ctx.drive_password, Some(&*derived)).await?;
     zeroize::Zeroize::zeroize(&mut init_mnemonic);
 
     let uid = new_manager.unlock(ctx.drive_password)?;
     info!("Drive re-initialized and unlocked, derived user_id: {}", uid);
 
-    Ok((new_manager, uid, Some(master_str)))
+    Ok((new_manager, uid, Some((*master_str).clone())))
 }
 
 /// Initialize a brand-new folder: resolve the mnemonic source (imported
