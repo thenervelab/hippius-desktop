@@ -13,6 +13,7 @@
 mod api;
 mod app_state;
 pub mod auth;
+pub mod crypto;
 pub mod billing;
 pub mod blockchain;
 pub mod error;
