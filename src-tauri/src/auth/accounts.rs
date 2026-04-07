@@ -121,7 +121,7 @@ pub async fn import_app_data(state: tauri::State<'_, crate::app_state::AppState>
                 let guard = state.auth.lock()?;
                 match (guard.mnemonic.as_deref(), guard.substrate_address.as_deref()) {
                     (Some(m), Some(acct)) => {
-                        let key = crate::crypto::store::sub_account_key(m, acct);
+                        let key = crate::crypto::store::sub_account_key(m, acct)?;
                         let encrypted = crate::crypto::store::encrypt(&key, &account.sub_account_seed_phrase)?;
                         (encrypted, 1i32)
                     }
@@ -209,7 +209,13 @@ pub async fn export_app_data(state: tauri::State<'_, crate::app_state::AppState>
                 0 => raw_phrase,
                 1 => {
                     let (m, acct) = mnemonic_and_acct.as_ref()?;
-                    let key = crate::crypto::store::sub_account_key(m, acct);
+                    let key = match crate::crypto::store::sub_account_key(m, acct) {
+                        Ok(k) => k,
+                        Err(e) => {
+                            warn!("Failed to derive decryption key for sub-account {account_id}: {e}");
+                            return None;
+                        }
+                    };
                     match crate::crypto::store::decrypt(&key, &raw_phrase) {
                         Ok(p) => (*p).clone(),
                         Err(e) => {
@@ -303,7 +309,13 @@ pub async fn get_all_subaccount_addresses(state: tauri::State<'_, crate::app_sta
                     warn!("Cannot decrypt sub-account {account_id} — mnemonic unavailable");
                     continue;
                 };
-                let key = crate::crypto::store::sub_account_key(m, acct);
+                let key = match crate::crypto::store::sub_account_key(m, acct) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        warn!("Failed to derive decryption key for sub-account {account_id}: {e}");
+                        continue;
+                    }
+                };
                 match crate::crypto::store::decrypt(&key, &raw_phrase) {
                     Ok(p) => (*p).clone(),
                     Err(e) => {
