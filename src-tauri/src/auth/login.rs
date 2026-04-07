@@ -150,12 +150,28 @@ pub fn validate_mnemonic(mnemonic: String) -> bool {
     bip39::Mnemonic::parse_in_normalized(bip39::Language::English, &mnemonic).is_ok()
 }
 
-/// Generate a new 12-word BIP-39 mnemonic.
+/// Generates a new 12-word BIP-39 mnemonic.
+///
+/// Returns a [`zeroize::Zeroizing<String>`] so callers benefit from automatic
+/// memory wiping on drop, preventing the seed phrase from lingering in heap
+/// memory after use.
+pub fn generate_mnemonic_internal() -> Result<zeroize::Zeroizing<String>, AppError> {
+    use bip39::{Language, Mnemonic};
+    let mnemonic = Mnemonic::generate_in(Language::English, 12)
+        .map_err(|e| AppError::Crypto(format!("Failed to generate mnemonic: {e}")))?;
+    Ok(zeroize::Zeroizing::new(mnemonic.to_string()))
+}
+
+/// IPC command wrapper for [`generate_mnemonic_internal`].
+///
+/// Returns the mnemonic as a plain `String` for Tauri serialization.
+/// The caller (frontend) is responsible for handling the mnemonic securely.
+/// [`zeroize::Zeroizing<String>`] does not implement `serde::Serialize`, so
+/// the IPC boundary must unwrap to a plain `String`.
 #[tauri::command]
 pub fn generate_mnemonic() -> Result<String, AppError> {
-    use bip39::{Language, Mnemonic};
-    let mnemonic = Mnemonic::generate_in(Language::English, 12).map_err(|e| AppError::Crypto(format!("Failed to generate mnemonic: {e}")))?;
-    Ok(mnemonic.to_string())
+    let z = generate_mnemonic_internal()?;
+    Ok((*z).clone())
 }
 
 /// Silently refresh the auth token using the mnemonic from the encrypted Drive.

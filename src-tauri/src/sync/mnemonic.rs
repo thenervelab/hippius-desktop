@@ -215,16 +215,17 @@ pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppS
         "No drive mnemonic available, generating new one for account {}",
         &account_id[..8.min(account_id.len())]
     );
-    let generated = crate::auth::login::generate_mnemonic()?;
+    let generated = crate::auth::login::generate_mnemonic_internal()?;
 
     // Cache for the active session so subsequent get_mnemonic_for_account
     // calls (e.g. migration) hit Stage 1 immediately, regardless of whether
     // auto_init_sync has finished writing master_enc_mnemonic.json yet.
     // The helper is gated on the active substrate_address so a stale cache
     // from a previous account never leaks across logins.
-    state.auth.lock()?.cache_session_mnemonic(&account_id, generated.clone());
+    state.auth.lock()?.cache_session_mnemonic(&account_id, (*generated).clone());
 
-    Ok(generated)
+    // Return plain String for IPC serialization; `generated` is zeroized on drop.
+    Ok((*generated).clone())
 }
 
 /// Create a password-protected zip file containing the plaintext mnemonic.
