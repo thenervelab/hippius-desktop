@@ -4,14 +4,13 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
-import { MigrationFile } from "./MigrationProgressDialog";
 import { saveHcfsConfig } from "@/lib/utils/hcfsConfigUtils";
 import { syncEngineStatusAtom, isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
-import { migrationCheckAtom, migrationLockAtom } from "@/lib/global-atoms/migrationAtoms";
+import { migrationCheckAtom, migrationLockAtom, migrationProgressAtom } from "@/lib/global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
-export type MigrationStep = "prompt" | "skip-confirm" | "setup" | "progress" | "complete";
+export type MigrationStep = "prompt" | "skip-confirm" | "setup" | "complete";
 
 interface MigrationCheckResult {
   needs_migration: boolean;
@@ -27,10 +26,12 @@ interface MigrationCheckResult {
   }>;
   sync_path: string | null;
   is_resuming: boolean;
-  /** Server migration finished but client never ran complete_migration_transition */
   needs_completion: boolean;
-  /** When needs_completion is true, the server job's final status */
   completion_status: string | null;
+  is_in_progress: boolean;
+  progress_completed: number;
+  progress_total: number;
+  progress_failed: number;
 }
 
 interface PollMigrationStatusResult {
@@ -48,11 +49,7 @@ interface PollMigrationStatusResult {
 export interface UseMigrationReturn {
   currentStep: MigrationStep | null;
   setCurrentStep: (step: MigrationStep | null) => void;
-  files: MigrationFile[];
-  /** Total number of files to migrate (may exceed files.length for large sets). */
   fileCount: number;
-  currentFileIndex: number;
-  overallProgress: number;
   isCancelling: boolean;
   successCount: number;
   failedCount: number;
@@ -74,9 +71,6 @@ export interface UseMigrationReturn {
 export function useMigration(): UseMigrationReturn {
   const { authType } = useWalletAuth();
   const [currentStep, setCurrentStep] = useState<MigrationStep | null>(null);
-  const [files, setFiles] = useState<MigrationFile[]>([]);
-  const [currentFileIndex, setCurrentFileIndex] = useState(0);
-  const [overallProgress, setOverallProgress] = useState(0);
   const [isCancelling, setIsCancelling] = useState(false);
   const [totalSize, setTotalSize] = useState(0);
   const [fileCount, setFileCount] = useState(0);
@@ -93,12 +87,9 @@ export function useMigration(): UseMigrationReturn {
   const [failedFiles, setFailedFiles] = useState<
     Array<{ name: string; error: string }>
   >([]);
-  // Track whether the migration actually succeeded (vs failed/cancelled)
   const [migrationSucceeded, setMigrationSucceeded] = useState(false);
-  // Error from complete_migration_transition — shown in the complete dialog
   const [transitionError, setTransitionError] = useState<string | null>(null);
 
-  // Clean up event listener on unmount
   useEffect(() => {
     return () => {
       unlistenRef.current?.();
@@ -117,11 +108,9 @@ export function useMigration(): UseMigrationReturn {
     async (accountId: string) => {
       stopPolling();
 
-      // Listen for migration_progress events from Rust background task
       const unlisten = await listen<PollMigrationStatusResult>("migration_progress", (event) => {
         const result = event.payload;
 
-        // Handle poll failure flags from Rust
         if (result.should_warn) {
           toast.warning("Having trouble checking migration status. Retrying...");
         }
@@ -129,34 +118,21 @@ export function useMigration(): UseMigrationReturn {
           stopPolling();
           toast.error("Lost connection to migration server. Please check your network and try again.");
           appStore.set(migrationLockAtom, false);
+          appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0, failed: 0 });
           setMigrationSucceeded(false);
           setCurrentStep("complete");
           return;
         }
-        if (result.status === "poll_error") return; // Transient failure, Rust is counting
+        if (result.status === "poll_error") return;
 
         setSuccessCount(result.completed);
         setFailedCount(result.failed);
-        setCurrentFileIndex(result.completed);
 
-        if (result.total > 0) {
-          setOverallProgress((result.completed / result.total) * 100);
-        }
-
-        // Update per-file statuses — skip for large sets since the
-        // progress dialog only shows a summary (no per-file list).
-        setFiles((prev) => {
-          if (prev.length > 200) return prev;
-          return prev.map((f, index) => {
-            const key = f.serverKey ?? f.name;
-            if (result.failed_files.includes(key))
-              return f.status === "failed" ? f : { ...f, status: "failed" as const };
-            if (index < result.completed)
-              return f.status === "completed" ? f : { ...f, status: "completed" as const };
-            if (result.current_file && key === result.current_file)
-              return f.status === "migrating" ? f : { ...f, status: "migrating" as const };
-            return f;
-          });
+        appStore.set(migrationProgressAtom, {
+          active: true,
+          completed: result.completed,
+          total: result.total,
+          failed: result.failed,
         });
 
         if (result.failed_files.length > 0) {
@@ -170,15 +146,19 @@ export function useMigration(): UseMigrationReturn {
 
         if (result.is_terminal) {
           stopPolling();
-          setOverallProgress(100);
           setMigrationSucceeded(result.status === "completed");
           setCurrentStep("complete");
           appStore.set(migrationLockAtom, false);
+          appStore.set(migrationProgressAtom, {
+            active: false,
+            completed: result.completed,
+            total: result.total,
+            failed: result.failed,
+          });
         }
       });
       unlistenRef.current = unlisten;
 
-      // Start Rust background polling task
       await invoke("start_migration_polling", { accountId });
     },
     [stopPolling]
@@ -195,8 +175,7 @@ export function useMigration(): UseMigrationReturn {
           "check_migration",
           { accountId }
         );
-        // Server migration finished but client transition never ran
-        // (e.g. app restarted mid-migration) — show completion dialog.
+
         if (result.needs_completion) {
           setMigrationSucceeded(result.completion_status === "completed");
           activeAccountIdRef.current = accountId;
@@ -204,15 +183,21 @@ export function useMigration(): UseMigrationReturn {
           return true;
         }
 
+        // Server migration actively running — show banner and start polling
+        if (result.is_in_progress) {
+          appStore.set(migrationProgressAtom, {
+            active: true,
+            completed: result.progress_completed,
+            total: result.progress_total,
+            failed: result.progress_failed,
+          });
+          appStore.set(migrationLockAtom, true);
+          activeAccountIdRef.current = accountId;
+          startPolling(accountId);
+          return true;
+        }
+
         if (result.needs_migration) {
-          const migrationFiles: MigrationFile[] = result.files.map((f) => ({
-            arionHash: "",
-            name: `${f.bucket_name}/${f.key}`,
-            serverKey: f.key,
-            size: f.size_bytes,
-            status: "pending" as const,
-          }));
-          setFiles(migrationFiles);
           setFileCount(result.file_count);
           setTotalSize(result.total_size);
           setIsResuming(result.is_resuming);
@@ -226,26 +211,30 @@ export function useMigration(): UseMigrationReturn {
         return false;
       }
     },
-    []
+    [startPolling]
   );
 
   const launchServerMigration = useCallback(
     async (accountId: string) => {
-      setCurrentStep("progress");
-      setOverallProgress(0);
       setSuccessCount(0);
       setFailedCount(0);
       setFailedFiles([]);
-      setCurrentFileIndex(0);
       setMigrationSucceeded(false);
 
-      // Lock the app — block sync operations
       appStore.set(migrationLockAtom, true);
 
       try {
         await invoke("start_server_migration", { accountId, totalSize });
 
-        // Start polling for progress
+        // Dismiss any open dialogs and activate the banner
+        setCurrentStep(null);
+        appStore.set(migrationProgressAtom, {
+          active: true,
+          completed: 0,
+          total: fileCount,
+          failed: 0,
+        });
+
         startPolling(accountId);
       } catch (err) {
         console.error("[Migration] Start failed:", err);
@@ -253,7 +242,6 @@ export function useMigration(): UseMigrationReturn {
         // Structural dispatch on AppError.kind from Rust.
         const kind = (err as { kind?: string } | null)?.kind;
         if (kind === "NotReady") {
-          // NotReady wraps a NotReadyKind whose SCREAMING_SNAKE name is in the message.
           const message = (err as { message?: string }).message ?? "";
           if (message.includes("Not enough disk space")) {
             toast.error("Not enough disk space for migration. Please free up space and try again.");
@@ -276,12 +264,11 @@ export function useMigration(): UseMigrationReturn {
         setCurrentStep("prompt");
       }
     },
-    [totalSize, startPolling, authType]
+    [totalSize, fileCount, startPolling, authType]
   );
 
   const startMigration = useCallback(
     async (accountId: string) => {
-      // Rust checks HCFS config and returns which step to show
       const flow = await invoke<{ nextStep: string }>("start_migration_flow", { accountId });
       if (flow.nextStep === "setup") {
         setPendingAccountId(accountId);
@@ -324,6 +311,7 @@ export function useMigration(): UseMigrationReturn {
     }
     stopPolling();
     appStore.set(migrationLockAtom, false);
+    appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0, failed: 0 });
     setIsCancelling(false);
     setMigrationSucceeded(false);
     setCurrentStep(null);
@@ -350,6 +338,7 @@ export function useMigration(): UseMigrationReturn {
       totalSize: 0,
       shouldCheck: false,
     });
+    appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0, failed: 0 });
     setCurrentStep(null);
   }, []);
 
@@ -357,11 +346,8 @@ export function useMigration(): UseMigrationReturn {
     const accountId = activeAccountIdRef.current;
     stopPolling();
     setTransitionError(null);
-    // Close the dialog immediately so the user isn't blocked
     setCurrentStep(null);
 
-    // Complete the migration transition for any terminal state — even partial
-    // failures have successfully migrated files that should be accessible via sync.
     if (accountId) {
       try {
         await invoke("complete_migration_transition", { accountId });
@@ -371,14 +357,14 @@ export function useMigration(): UseMigrationReturn {
         console.error("[Migration] complete_migration_transition failed:", err);
         const errorMsg = err instanceof Error ? err.message : String(err);
         setTransitionError(errorMsg);
-        // Re-open the dialog so the user can retry
         setCurrentStep("complete");
         toast.error("Failed to set up file sync after migration. You can retry or close and set it up later.");
-        return; // Keep dialog open so user can retry
+        return;
       }
     }
 
     appStore.set(migrationLockAtom, false);
+    appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0, failed: 0 });
     appStore.set(migrationCheckAtom, {
       checked: true,
       needsMigration: false,
@@ -387,9 +373,6 @@ export function useMigration(): UseMigrationReturn {
       shouldCheck: false,
     });
     setCurrentStep(null);
-    setFiles([]);
-    setCurrentFileIndex(0);
-    setOverallProgress(0);
     setSuccessCount(0);
     setFailedCount(0);
     setFailedFiles([]);
@@ -403,9 +386,9 @@ export function useMigration(): UseMigrationReturn {
     activeAccountIdRef.current = null;
   }, [stopPolling]);
 
-  /** Dismiss the dialog after a transition error — user can set up sync manually. */
   const dismissAfterError = useCallback(() => {
     appStore.set(migrationLockAtom, false);
+    appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0, failed: 0 });
     appStore.set(migrationCheckAtom, {
       checked: true,
       needsMigration: false,
@@ -420,10 +403,7 @@ export function useMigration(): UseMigrationReturn {
   return {
     currentStep,
     setCurrentStep,
-    files,
     fileCount,
-    currentFileIndex,
-    overallProgress,
     isCancelling,
     successCount,
     failedCount,

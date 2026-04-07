@@ -6,6 +6,7 @@ import HeaderText from "@/components/dashboard-title-wrapper/HeaderText";
 import ProfileCard from "@/components/dashboard-title-wrapper/ProfileCard";
 import BlockChainStats from "@/components/dashboard-title-wrapper/BlockChainStats";
 import ConflictsBanner from "@/components/ui/ConflictsBanner";
+import MigrationBanner from "@/components/ui/MigrationBanner";
 
 export default function ResponsiveContent({
   children,
@@ -32,6 +33,7 @@ export default function ResponsiveContent({
             </div>
           </div>
           <ConflictsBanner />
+          <MigrationBanner />
         </div>
 
         {/* Scrollable content area — serves as container query context */}

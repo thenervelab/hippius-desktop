@@ -8,7 +8,6 @@ import {
   useMigration,
   MigrationPromptDialog,
   MigrationConfirmSkipDialog,
-  MigrationProgressDialog,
   MigrationCompleteDialog,
 } from "@/components/page-sections/files/migration";
 import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
@@ -27,13 +26,11 @@ const MigrationChecker: React.FC = () => {
   const migration = useMigration();
 
   useEffect(() => {
-    console.log("[MigrationChecker] useEffect fired — shouldCheck:", migrationCheck.shouldCheck, "currentStep:", migration.currentStep, "polkadotAddress:", !!polkadotAddress);
     if (
       migrationCheck.shouldCheck &&
       !migration.currentStep &&
       polkadotAddress
     ) {
-      console.log("[MigrationChecker] Calling checkMigration for:", polkadotAddress);
       migration.checkMigration(polkadotAddress);
     }
   }, [migrationCheck.shouldCheck, polkadotAddress]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -68,21 +65,6 @@ const MigrationChecker: React.FC = () => {
           onClose={() => migration.setCurrentStep("prompt")}
           onComplete={migration.onSetupComplete}
           loading={migration.isSettingUp}
-        />
-      )}
-      {migration.currentStep === "progress" && (
-        <MigrationProgressDialog
-          open
-          onCancel={migration.cancelMigration}
-          files={migration.files}
-          fileCount={migration.fileCount}
-          currentFileIndex={migration.currentFileIndex}
-          overallProgress={migration.overallProgress}
-          currentFileName={
-            migration.files[migration.currentFileIndex]?.name || ""
-          }
-          isCancelling={migration.isCancelling}
-          totalSize={migration.totalSize}
         />
       )}
       {migration.currentStep === "complete" && (
