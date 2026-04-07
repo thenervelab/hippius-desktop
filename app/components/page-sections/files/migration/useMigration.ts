@@ -16,14 +16,6 @@ interface MigrationCheckResult {
   needs_migration: boolean;
   file_count: number;
   total_size: number;
-  files: Array<{
-    user_id: string;
-    bucket_name: string;
-    key: string;
-    size_bytes: number;
-    is_public: boolean;
-    status: string;
-  }>;
   sync_path: string | null;
   is_resuming: boolean;
   needs_completion: boolean;

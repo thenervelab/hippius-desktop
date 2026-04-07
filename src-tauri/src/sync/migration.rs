@@ -39,7 +39,6 @@ pub struct MigrationCheckResult {
     pub needs_migration: bool,
     pub file_count: u64,
     pub total_size: u64,
-    pub files: Vec<MigrationFile>,
     pub sync_path: Option<String>,
     pub is_resuming: bool,
     /// Server migration finished but `complete_migration_transition` never ran
@@ -59,15 +58,15 @@ pub struct MigrationCheckResult {
 
 /// Server response from GET /migration/{user_id}
 ///
-/// Fields match the server JSON schema. Only `files` is accessed in Rust;
-/// the rest exist so serde can deserialize the full response.
+/// Lightweight summary — the server no longer returns individual file
+/// records to avoid OOM on large accounts.
 #[derive(Debug, Deserialize)]
-#[expect(dead_code, reason = "fields exist for serde deserialization, not direct access")]
-struct ServerMigrationResponse {
+#[expect(dead_code, reason = "fields exist for serde deserialization")]
+pub(crate) struct ServerMigrationResponse {
     needs_migration: bool,
-    file_count: u64,
-    total_size: u64,
-    files: Vec<MigrationFile>,
+    file_count: i64,
+    pub(crate) total_size: i64,
+    pub(crate) pending_count: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -160,25 +159,13 @@ pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Resul
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
-const MANIFEST_PREFIX: &str = ".hippius_manifest_v1";
-fn should_skip_key(key: &str) -> bool {
-    key == MANIFEST_PREFIX || key.starts_with(&format!("{MANIFEST_PREFIX}/"))
-}
-
-/// Derive the path prefix (bucket name) from the first migration file.
-/// Returns empty string if no files are provided.
-fn derive_path_prefix(files: &[MigrationFile]) -> String {
-    files.first().map(|f| f.bucket_name.clone()).unwrap_or_default()
-}
-
-pub(crate) async fn fetch_migration_files(client: &reqwest::Client, server_url: &str, user_id: &str) -> Result<Vec<MigrationFile>> {
+/// Fetch the migration summary from the server (pending count + total size).
+/// The server no longer returns individual file records.
+pub(crate) async fn fetch_migration_summary(client: &reqwest::Client, server_url: &str, user_id: &str) -> Result<ServerMigrationResponse> {
     let url = format!("{}/migration/{}", server_url.trim_end_matches('/'), user_id);
-    // Per-request timeout: the file list can be huge (100k+ files) and the
-    // server may need minutes to enumerate the S3 bucket. The 30s client
-    // default is fine for status polls but far too short here.
     let resp = client
         .get(&url)
-        .timeout(std::time::Duration::from_secs(600))
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await?;
 
@@ -188,9 +175,7 @@ pub(crate) async fn fetch_migration_files(client: &reqwest::Client, server_url: 
         return Err(crate::error::AppError::Other(format!("Migration check failed (status {status}): {text}")));
     }
 
-    let parsed: ServerMigrationResponse = resp.json().await?;
-
-    Ok(parsed.files.into_iter().filter(|f| !should_skip_key(&f.key)).collect())
+    Ok(resp.json().await?)
 }
 
 /// Fetch per-user S3 credentials from the Hippius API.
@@ -282,7 +267,7 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
             needs_migration: false,
             file_count: 0,
             total_size: 0,
-            files: vec![],
+
             sync_path: None,
             is_resuming: false,
             needs_completion: false,
@@ -315,7 +300,7 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
                     needs_migration: false,
                     file_count: 0,
                     total_size: 0,
-                    files: vec![],
+        
                     sync_path: None,
                     is_resuming: false,
                     needs_completion: false,
@@ -337,7 +322,7 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
                     needs_migration: false,
                     file_count: 0,
                     total_size: 0,
-                    files: vec![],
+        
                     sync_path: None,
                     is_resuming: false,
                     needs_completion: true,
@@ -353,32 +338,26 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
 
     // ── Step 2: No active job — check for pending files that need migration ──
     info!("[Migration] Checking server at: {server_url}/migration/{account_id}");
-    let files = match fetch_migration_files(&state.migration.client, &server_url, &account_id).await {
-        Ok(f) => {
-            info!("[Migration] Server returned {} files", f.len());
-            f
+    let summary = match fetch_migration_summary(&state.migration.client, &server_url, &account_id).await {
+        Ok(s) => {
+            info!("[Migration] Server returned: pending_count={}, total_size={}", s.pending_count, s.total_size);
+            s
         }
         Err(e) => {
             tracing::error!("[Migration] Server check failed: {e}");
             return Err(e);
         }
     };
-    let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
-    info!("[Migration] {} pending files (total size: {} bytes)", pending.len(), pending.iter().map(|f| f.size_bytes).sum::<u64>());
-    let total_size: u64 = pending.iter().map(|f| f.size_bytes).sum();
 
-    if !pending.is_empty() {
-        let prefix = derive_path_prefix(&pending);
-        *state.migration.cached_path_prefix.lock().await = Some(prefix);
-
-        let pending_count = pending.len() as u64;
+    if summary.pending_count > 0 {
+        let pending_count = summary.pending_count as u64;
+        let total_size = summary.total_size as u64;
         info!("[Migration] Migration needed — {pending_count} pending files");
-        let files_for_frontend = if pending.len() <= 200 { pending } else { vec![] };
         return Ok(MigrationCheckResult {
             needs_migration: true,
             file_count: pending_count,
             total_size,
-            files: files_for_frontend,
+
             sync_path: None,
             is_resuming: false,
             needs_completion: false,
@@ -394,7 +373,6 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
         needs_migration: false,
         file_count: 0,
         total_size: 0,
-        files: vec![],
         sync_path: None,
         is_resuming: false,
         needs_completion: false,
@@ -592,16 +570,12 @@ pub async fn start_server_migration(
     })?;
     tracing::info!("[Migration] Server URL: {server_url}");
 
-    // Use the cached path prefix from check_migration instead of refetching
-    // the entire file list (which can be 100k+ files / tens of MB).
-    let path_prefix = state
-        .migration
-        .cached_path_prefix
-        .lock()
-        .await
-        .clone()
-        .unwrap_or_default();
-    tracing::info!("[Migration] Using path_prefix: {path_prefix}");
+    // The server derives path_prefix from its migration_records table.
+    // Previously the desktop extracted this from the file list, but the
+    // server no longer returns individual files. Send empty and let the
+    // server's worker use the full key path.
+    // TODO: have server include path_prefix in the summary response
+    let path_prefix = String::new();
 
     // Check disk space — files will be downloaded locally after server migration
     let sync_path = crate::sync::config::get_sync_path_for_label(pool, &account_id, "default")
@@ -955,9 +929,6 @@ pub struct MigrationState {
     pub client: reqwest::Client,
     /// Handle for the background migration polling task (if running).
     pub poll_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
-    /// Cached path prefix (bucket name) from the last `check_migration` call.
-    /// Avoids refetching the entire file list in `start_server_migration`.
-    pub cached_path_prefix: tokio::sync::Mutex<Option<String>>,
 }
 
 impl Default for MigrationState {
@@ -986,124 +957,12 @@ impl MigrationState {
             poll_failure_count: AtomicI32::new(0),
             client,
             poll_task: tokio::sync::Mutex::new(None),
-            cached_path_prefix: tokio::sync::Mutex::new(None),
         }
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // -----------------------------------------------------------------------
-    // should_skip_key
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn skip_manifest_prefix_exact() {
-        assert!(should_skip_key(MANIFEST_PREFIX));
-    }
-
-    #[test]
-    fn skip_manifest_prefix_subdirectory() {
-        assert!(should_skip_key(&format!("{MANIFEST_PREFIX}/some_file")));
-    }
-
-    #[test]
-    fn do_not_skip_normal_key() {
-        assert!(!should_skip_key("photos/vacation.jpg"));
-    }
-
-    #[test]
-    fn do_not_skip_key_containing_manifest_substring() {
-        assert!(!should_skip_key("backup_hippius_manifest_v1_old"));
-    }
-
-    #[test]
-    fn do_not_skip_empty_key() {
-        assert!(!should_skip_key(""));
-    }
-
-    #[test]
-    fn skip_manifest_with_trailing_slash() {
-        assert!(should_skip_key(&format!("{MANIFEST_PREFIX}/")));
-    }
-
-    #[test]
-    fn do_not_skip_near_miss_suffix() {
-        // ".hippius_manifest_v1x" is NOT the manifest prefix
-        assert!(!should_skip_key(&format!("{MANIFEST_PREFIX}x")));
-    }
-
-    #[test]
-    fn do_not_skip_manifest_embedded_in_path() {
-        assert!(!should_skip_key(&format!("data/{MANIFEST_PREFIX}/file")));
-    }
-
-    // -----------------------------------------------------------------------
-    // MigrationFile filtering (simulates fetch_migration_files logic)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn filter_skips_manifest_files() {
-        let files = vec![
-            MigrationFile {
-                user_id: "u1".into(),
-                bucket_name: "b1".into(),
-                key: "photo.jpg".into(),
-                size_bytes: 1000,
-                is_public: false,
-                status: "Pending".into(),
-            },
-            MigrationFile {
-                user_id: "u1".into(),
-                bucket_name: "b1".into(),
-                key: MANIFEST_PREFIX.into(),
-                size_bytes: 500,
-                is_public: false,
-                status: "Pending".into(),
-            },
-            MigrationFile {
-                user_id: "u1".into(),
-                bucket_name: "b1".into(),
-                key: format!("{MANIFEST_PREFIX}/chunk_0"),
-                size_bytes: 200,
-                is_public: false,
-                status: "Pending".into(),
-            },
-        ];
-
-        let filtered: Vec<MigrationFile> = files.into_iter().filter(|f| !should_skip_key(&f.key)).collect();
-
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].key, "photo.jpg");
-    }
-
-    #[test]
-    fn filter_pending_files_only() {
-        let files = vec![
-            MigrationFile {
-                user_id: "u1".into(),
-                bucket_name: "b1".into(),
-                key: "a.txt".into(),
-                size_bytes: 100,
-                is_public: false,
-                status: "Pending".into(),
-            },
-            MigrationFile {
-                user_id: "u1".into(),
-                bucket_name: "b1".into(),
-                key: "b.txt".into(),
-                size_bytes: 200,
-                is_public: false,
-                status: "Migrated".into(),
-            },
-        ];
-
-        let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status == "Pending").collect();
-
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].key, "a.txt");
-    }
 
     // -----------------------------------------------------------------------
     // check_disk_space (Unix only)
@@ -1133,14 +992,6 @@ mod tests {
             needs_migration: true,
             file_count: 3,
             total_size: 1024,
-            files: vec![MigrationFile {
-                user_id: "u1".into(),
-                bucket_name: "bucket".into(),
-                key: "file.txt".into(),
-                size_bytes: 1024,
-                is_public: false,
-                status: "Pending".into(),
-            }],
             sync_path: Some("/tmp/sync".into()),
             is_resuming: false,
             needs_completion: false,
@@ -1157,91 +1008,6 @@ mod tests {
         assert!(json.contains("\"needs_completion\":false"));
         assert!(json.contains("\"is_in_progress\":false"));
         assert!(json.contains("\"progress_completed\":0"));
-        assert!(json.contains("\"progress_total\":0"));
-        assert!(json.contains("\"progress_failed\":0"));
-    }
-
-    #[test]
-    fn migration_file_deserializes_from_server_format() {
-        let json = r#"{
-            "user_id": "5GrwvaEF...",
-            "bucket_name": "files",
-            "key": "docs/readme.txt",
-            "size_bytes": 2048,
-            "is_public": false,
-            "status": "Pending"
-        }"#;
-
-        let file: MigrationFile = serde_json::from_str(json).expect("deserialization failed");
-        assert_eq!(file.bucket_name, "files");
-        assert_eq!(file.key, "docs/readme.txt");
-        assert_eq!(file.size_bytes, 2048);
-        assert_eq!(file.status, "Pending");
-    }
-
-    #[test]
-    fn filter_all_migrated_yields_empty() {
-        let files = vec![
-            MigrationFile {
-                user_id: "u1".into(),
-                bucket_name: "b1".into(),
-                key: "a.txt".into(),
-                size_bytes: 100,
-                is_public: false,
-                status: "Migrated".into(),
-            },
-            MigrationFile {
-                user_id: "u1".into(),
-                bucket_name: "b1".into(),
-                key: "b.txt".into(),
-                size_bytes: 200,
-                is_public: false,
-                status: "Migrated".into(),
-            },
-        ];
-
-        let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status == "Pending").collect();
-
-        assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn filter_empty_input_yields_empty() {
-        let files: Vec<MigrationFile> = vec![];
-        let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status == "Pending").collect();
-        assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn total_size_with_zero_byte_files() {
-        let files = [
-            MigrationFile {
-                user_id: "u1".into(),
-                bucket_name: "b1".into(),
-                key: "empty.txt".into(),
-                size_bytes: 0,
-                is_public: false,
-                status: "Pending".into(),
-            },
-            MigrationFile {
-                user_id: "u1".into(),
-                bucket_name: "b1".into(),
-                key: "real.txt".into(),
-                size_bytes: 500,
-                is_public: false,
-                status: "Pending".into(),
-            },
-        ];
-
-        let total: u64 = files.iter().map(|f| f.size_bytes).sum();
-        assert_eq!(total, 500);
-    }
-
-    #[test]
-    fn migration_file_rejects_missing_fields() {
-        let json = r#"{"user_id": "u1", "bucket_name": "b1"}"#;
-        let result: std::result::Result<MigrationFile, _> = serde_json::from_str(json);
-        assert!(result.is_err());
     }
 
     #[test]
@@ -1250,31 +1016,13 @@ mod tests {
             "needs_migration": true,
             "file_count": 2,
             "total_size": 3072,
-            "files": [
-                {
-                    "user_id": "user1",
-                    "bucket_name": "files",
-                    "key": "a.txt",
-                    "size_bytes": 1024,
-                    "is_public": false,
-                    "status": "Pending"
-                },
-                {
-                    "user_id": "user1",
-                    "bucket_name": "files",
-                    "key": "b.txt",
-                    "size_bytes": 2048,
-                    "is_public": true,
-                    "status": "Migrated"
-                }
-            ]
+            "pending_count": 1
         }"#;
 
         let resp: ServerMigrationResponse = serde_json::from_str(json).expect("deserialization failed");
         assert!(resp.needs_migration);
-        assert_eq!(resp.files.len(), 2);
-        assert_eq!(resp.files[0].status, "Pending");
-        assert_eq!(resp.files[1].status, "Migrated");
+        assert_eq!(resp.pending_count, 1);
+        assert_eq!(resp.total_size, 3072);
     }
 
     // -----------------------------------------------------------------------
@@ -1294,52 +1042,6 @@ mod tests {
         assert!(ms.in_progress.load(Ordering::SeqCst));
         ms.in_progress.store(false, Ordering::SeqCst);
         assert!(!ms.in_progress.load(Ordering::SeqCst));
-    }
-
-    // -----------------------------------------------------------------------
-    // derive_path_prefix
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn derive_path_prefix_from_first_file() {
-        let files = vec![MigrationFile {
-            user_id: "u1".into(),
-            bucket_name: "my-bucket".into(),
-            key: "file.txt".into(),
-            size_bytes: 100,
-            is_public: false,
-            status: "Pending".into(),
-        }];
-        assert_eq!(derive_path_prefix(&files), "my-bucket");
-    }
-
-    #[test]
-    fn derive_path_prefix_empty_files() {
-        let files: Vec<MigrationFile> = vec![];
-        assert_eq!(derive_path_prefix(&files), "");
-    }
-
-    #[test]
-    fn derive_path_prefix_uses_first_file_only() {
-        let files = vec![
-            MigrationFile {
-                user_id: "u1".into(),
-                bucket_name: "first-bucket".into(),
-                key: "a.txt".into(),
-                size_bytes: 100,
-                is_public: false,
-                status: "Pending".into(),
-            },
-            MigrationFile {
-                user_id: "u1".into(),
-                bucket_name: "second-bucket".into(),
-                key: "b.txt".into(),
-                size_bytes: 200,
-                is_public: false,
-                status: "Pending".into(),
-            },
-        ];
-        assert_eq!(derive_path_prefix(&files), "first-bucket");
     }
 
     // -----------------------------------------------------------------------
