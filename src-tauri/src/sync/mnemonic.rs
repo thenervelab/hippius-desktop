@@ -134,7 +134,7 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
     // Stage 2: master mnemonic on disk.
     let master_path = master_mnemonic_path(account_id)?;
     if master_path.exists()
-        && let Ok(drive_password) = get_drive_password(pool, account_id).await
+        && let Ok(drive_password) = get_drive_password(pool, account_id, None).await
     {
         match hcfs_client::auth::recover_mnemonic(&master_path, &drive_password) {
             Ok(mnemonic) => return Ok(zeroize::Zeroizing::new(mnemonic.to_string())),
@@ -155,7 +155,7 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
         guard.values().next().map(|slot| slot.manager.clone())
     };
     if let Some(arc) = first_arc
-        && let Ok(drive_password) = get_drive_password(pool, account_id).await
+        && let Ok(drive_password) = get_drive_password(pool, account_id, None).await
     {
         let m = arc.lock().await;
         if m.is_initialized()
@@ -173,7 +173,7 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
         .await?;
 
     if let Some((path, lbl)) = result
-        && let Ok(drive_password) = get_drive_password(pool, account_id).await
+        && let Ok(drive_password) = get_drive_password(pool, account_id, None).await
     {
         let folder_dir = config_dir_for_folder(account_id, &lbl)?;
         let manager = DriveManager::new(PathBuf::from(&path), folder_dir);

@@ -607,7 +607,7 @@ pub async fn start_server_migration(
     // gone after restart. If the drive password isn't set yet (the user
     // is at the migration setup step), this is a no-op and setup_and_init_sync
     // will write the master when the password becomes available.
-    if let Ok(drive_password) = crate::sync::config::get_drive_password(pool, &account_id).await {
+    if let Ok(drive_password) = crate::sync::config::get_drive_password(pool, &account_id, Some(&mnemonic_str)).await {
         let master_path = crate::sync::mnemonic::master_mnemonic_path(&account_id)?;
         if !master_path.exists() {
             let acct_dir = crate::sync::mnemonic::account_dir(&account_id)?;

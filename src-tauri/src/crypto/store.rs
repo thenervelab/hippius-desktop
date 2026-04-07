@@ -130,15 +130,25 @@ pub fn decrypt(key: &[u8; 32], encoded: &str) -> Result<Zeroizing<String>, crate
 /// ever added, a `parent_account_id` column will need to be introduced and
 /// this query scoped accordingly.
 ///
-/// # Note on drive passwords
+/// Encrypts all plaintext sub-account seed phrases and drive passwords
+/// for the given account.
 ///
-/// Drive passwords (`hcfs_config.drive_password`) are **not** migrated
-/// here. The read/write paths for `hcfs_config` were not updated to
-/// decrypt on read, so migrating those values would render them
-/// unreadable. Drive-password encryption must be added end-to-end
-/// (encrypt on write, decrypt on read) before a migration is safe.
+/// Scans `sub_accounts` and `hcfs_config` for rows where
+/// `encryption_version = 0`, encrypts them in a single transaction, and
+/// sets `encryption_version = 1`. Safe to call repeatedly — rows already
+/// at version 1 are skipped.
+///
+/// # Single-user assumption
+///
+/// This function selects ALL rows with `encryption_version = 0`,
+/// regardless of any parent-account column. This is intentional: Hippius
+/// Desktop is a single-user application — each SQLite database belongs to
+/// exactly one logged-in user. If multi-user support is ever added, a
+/// `parent_account_id` column will need to be introduced and this query
+/// scoped accordingly.
 pub async fn migrate_if_needed(pool: &SqlitePool, mnemonic: &str, account_id: &str) -> Result<(), crate::error::AppError> {
     let sub_key = derive_key(mnemonic, account_id, INFO_SUB_ACCOUNTS)?;
+    let drive_key = derive_key(mnemonic, account_id, INFO_DRIVE_PASSWORD)?;
 
     let mut tx = pool.begin().await?;
 
@@ -161,10 +171,29 @@ pub async fn migrate_if_needed(pool: &SqlitePool, mnemonic: &str, account_id: &s
             .await?;
     }
 
+    // ── Drive passwords ────────────────────────────────────────────
+    let drive_rows: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, drive_password FROM hcfs_config WHERE encryption_version = 0 AND drive_password != ''")
+            .fetch_all(&mut *tx)
+            .await?;
+
+    let drive_count = drive_rows.len();
+    for (id, plaintext) in &drive_rows {
+        if plaintext.trim().is_empty() {
+            continue;
+        }
+        let ciphertext = encrypt(&drive_key, plaintext)?;
+        sqlx::query("UPDATE hcfs_config SET drive_password = ?, encryption_version = 1 WHERE id = ?")
+            .bind(&ciphertext)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
     tx.commit().await?;
 
-    if sub_count > 0 {
-        info!("Encryption migration complete: {sub_count} sub-account(s)");
+    if sub_count > 0 || drive_count > 0 {
+        info!("Encryption migration complete: {sub_count} sub-account(s), {drive_count} drive password(s)");
     }
 
     Ok(())

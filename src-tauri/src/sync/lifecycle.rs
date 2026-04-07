@@ -100,11 +100,11 @@ pub async fn setup_and_init_sync(
     let pool = state.pool()?;
 
     // 1. Save HCFS config
-    save_hcfs_config_internal(pool, &account_id, &server_url, &password).await?;
+    save_hcfs_config_internal(pool, &account_id, &server_url, &password, mnemonic.as_deref()).await?;
 
     // 2. Persist master mnemonic (if available and config has a password now)
     if let Some(ref m) = mnemonic
-        && let Ok(pw) = get_drive_password(pool, &account_id).await
+        && let Ok(pw) = get_drive_password(pool, &account_id, Some(m)).await
     {
         let master_path = master_mnemonic_path(&account_id)?;
         let acct_dir = account_dir(&account_id)?;
@@ -726,6 +726,7 @@ fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, 
 /// `skip_credits_check` suppresses the HTTP call to `/api/billing/credits/balance/`.
 /// Pass `true` when the caller has already validated credits (e.g. `auto_init_sync`
 /// checks once before its per-drive loop to avoid N redundant requests).
+#[expect(clippy::too_many_lines, reason = "orchestrates drive setup, config, init/unlock, and event wiring")]
 pub(crate) async fn initialize_sync_inner(
     app: tauri::AppHandle,
     account_id: String,
@@ -767,8 +768,18 @@ pub(crate) async fn initialize_sync_inner(
 
     teardown_previous_drive(sync, &label).await;
 
-    // Load config, validate sync dir, prepare config dir
-    let cfg = load_sync_config(pool, &account_id, &label).await?;
+    // Load config (needs mnemonic to decrypt drive password)
+    let mnemonic_for_config = if let Some(ref m) = existing_mnemonic {
+        m.clone()
+    } else {
+        let guard = app_state.auth.lock()?;
+        guard
+            .mnemonic
+            .as_deref()
+            .ok_or_else(|| crate::error::AppError::Other("Mnemonic required to decrypt drive password".into()))?
+            .to_owned()
+    };
+    let cfg = load_sync_config(pool, &account_id, &label, &mnemonic_for_config).await?;
     crate::sync::files::allow_asset_directory(&app, &cfg.sync_path);
     check_deleted_sync_dir(pool, &account_id, &label, &cfg.sync_path).await?;
     create_dir_all_async(PathBuf::from(&cfg.sync_path)).await?;
@@ -1103,7 +1114,7 @@ pub async fn auto_init_sync(
 
     // 2. Persist master mnemonic early (no-op if already exists or no config)
     if let Some(ref m) = mnemonic
-        && let Ok(password) = get_drive_password(pool, &account_id).await
+        && let Ok(password) = get_drive_password(pool, &account_id, Some(m)).await
     {
         let master_path = master_mnemonic_path(&account_id)?;
         let acct_dir = account_dir(&account_id)?;
