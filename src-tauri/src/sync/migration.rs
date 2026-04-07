@@ -294,55 +294,14 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
         });
     }
 
-    // Always check the server for pending migration files
     let server_url = get_server_url(pool, &account_id).await?;
-    info!("[Migration] Checking server at: {server_url}/migration/{account_id}");
-    let files = match fetch_migration_files(&state.migration.client, &server_url, &account_id).await {
-        Ok(f) => {
-            info!("[Migration] Server returned {} files", f.len());
-            f
-        }
-        Err(e) => {
-            tracing::error!("[Migration] Server check failed: {e}");
-            return Err(e);
-        }
-    };
-    let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
-    info!("[Migration] {} pending files (total size: {} bytes)", pending.len(), pending.iter().map(|f| f.size_bytes).sum::<u64>());
-    let total_size: u64 = pending.iter().map(|f| f.size_bytes).sum();
 
-    if !pending.is_empty() {
-        // Cache the path prefix so start_server_migration doesn't refetch.
-        let prefix = derive_path_prefix(&pending);
-        *state.migration.cached_path_prefix.lock().await = Some(prefix);
-
-        let pending_count = pending.len() as u64;
-        info!("[Migration] Migration needed — {pending_count} pending files");
-        // Only send individual files for small sets. For large accounts
-        // the frontend shows a summary and the full list would be tens
-        // of MB of JSON over IPC, freezing the UI.
-        let files_for_frontend = if pending.len() <= 200 { pending } else { vec![] };
-        return Ok(MigrationCheckResult {
-            needs_migration: true,
-            file_count: pending_count,
-            total_size,
-            files: files_for_frontend,
-            sync_path: None,
-            is_resuming: false,
-            needs_completion: false,
-            completion_status: None,
-            is_in_progress: false,
-            progress_completed: 0,
-            progress_total: 0,
-            progress_failed: 0,
-        });
-    }
-
-    // No pending files — check if a server migration is still running or
-    // completed but the client never ran complete_migration_transition.
+    // ── Step 1: Check if a server migration job is already running ──
+    // This must come BEFORE the pending-files check because files remain
+    // "pending" on the listing endpoint while the job is actively
+    // migrating them. Without this check the user would see the "Start
+    // Migration" prompt even though migration is already in progress.
     let has_local_in_progress = local_status.as_ref().is_some_and(|(s, ..)| s.eq_ignore_ascii_case("in_progress"));
-
-    const TERMINAL_STATUSES: &[&str] = &["completed", "failed", "cancelled"];
 
     if has_local_in_progress {
         if let Ok(job_status) = poll_migration_status_internal(&state, &account_id).await {
@@ -367,6 +326,8 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
                     progress_failed: job_status.failed as u64,
                 });
             }
+
+            const TERMINAL_STATUSES: &[&str] = &["completed", "failed", "cancelled"];
             if TERMINAL_STATUSES.contains(&job_status.status.as_str()) {
                 info!(
                     status = %job_status.status,
@@ -388,6 +349,45 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
                 });
             }
         }
+    }
+
+    // ── Step 2: No active job — check for pending files that need migration ──
+    info!("[Migration] Checking server at: {server_url}/migration/{account_id}");
+    let files = match fetch_migration_files(&state.migration.client, &server_url, &account_id).await {
+        Ok(f) => {
+            info!("[Migration] Server returned {} files", f.len());
+            f
+        }
+        Err(e) => {
+            tracing::error!("[Migration] Server check failed: {e}");
+            return Err(e);
+        }
+    };
+    let pending: Vec<MigrationFile> = files.into_iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
+    info!("[Migration] {} pending files (total size: {} bytes)", pending.len(), pending.iter().map(|f| f.size_bytes).sum::<u64>());
+    let total_size: u64 = pending.iter().map(|f| f.size_bytes).sum();
+
+    if !pending.is_empty() {
+        let prefix = derive_path_prefix(&pending);
+        *state.migration.cached_path_prefix.lock().await = Some(prefix);
+
+        let pending_count = pending.len() as u64;
+        info!("[Migration] Migration needed — {pending_count} pending files");
+        let files_for_frontend = if pending.len() <= 200 { pending } else { vec![] };
+        return Ok(MigrationCheckResult {
+            needs_migration: true,
+            file_count: pending_count,
+            total_size,
+            files: files_for_frontend,
+            sync_path: None,
+            is_resuming: false,
+            needs_completion: false,
+            completion_status: None,
+            is_in_progress: false,
+            progress_completed: 0,
+            progress_total: 0,
+            progress_failed: 0,
+        });
     }
 
     Ok(MigrationCheckResult {
