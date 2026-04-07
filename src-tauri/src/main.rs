@@ -224,6 +224,7 @@ fn main() {
             crate::nebula::manager::verify_nebula,
             crate::nebula::manager::ensure_vpn_permissions,
             crate::nebula::manager::finish_setup,
+            crate::nebula::manager::setup_nebula_background,
             crate::nebula::manager::start_nebula,
             // Indexer
             crate::api::indexer::get_indexer_api_key,

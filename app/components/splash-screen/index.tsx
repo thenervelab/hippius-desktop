@@ -153,7 +153,7 @@ export default function SplashWrapper({
     setupStartedRef.current = true;
 
     const runSetupPhases = async () => {
-      // First, check if nebula is already installed
+      // Check if nebula is already installed (for UI display only)
       let isAlreadyInstalled = false;
       try {
         isAlreadyInstalled = await invoke<boolean>(
@@ -166,11 +166,9 @@ export default function SplashWrapper({
       }
 
       // ========== UPDATE CHECK PHASE (at 0% - before main phases) ==========
-      // This runs separately and doesn't affect progress percentage
       setIsUpdateCheckPhase(true);
       setPhase("checking_updates");
 
-      // Wait for update check to complete using polling with refs
       const updateCheckPromise = new Promise<void>((resolve) => {
         const checkInterval = setInterval(() => {
           if (updateCheckCompleteRef.current || updateDialogOpenRef.current) {
@@ -179,30 +177,26 @@ export default function SplashWrapper({
           }
         }, 50);
 
-        // Safety timeout after 10 seconds
         setTimeout(() => {
           clearInterval(checkInterval);
           resolve();
         }, 10000);
       });
 
-      // Only use minimum duration if not already installed
       if (isAlreadyInstalled) {
         await updateCheckPromise;
       } else {
         await runWithMinDuration(updateCheckPromise, MIN_PHASE_DURATION);
       }
 
-      // If update dialog opened, stop the setup
       if (updateDialogOpenRef.current) {
         return;
       }
 
-      // End update check phase
       setIsUpdateCheckPhase(false);
 
-      // ========== MAIN PHASES (contribute to progress) ==========
-      // Get the dynamic phase content based on installation state
+      // ========== MAIN PHASES (quick animation, no blocking) ==========
+      // Nebula download/install runs in the background — splash never blocks on it.
       const dynamicPhaseContent = getPhaseContent();
       const phaseNames = Object.keys(dynamicPhaseContent);
 
@@ -210,7 +204,6 @@ export default function SplashWrapper({
         const phaseName = phaseNames[i];
         console.log(`[Setup] Starting phase ${i + 1}/${phaseNames.length}: ${phaseName}`);
 
-        // STEP 1: Set up the phase
         setPhase(phaseName);
         setCurrentPhaseIndex(i);
         setPhaseInternalProgress(0);
@@ -225,168 +218,50 @@ export default function SplashWrapper({
           continue;
         }
 
-        // STEP 2: Animate to command trigger point, execute, then continue
         let progressIntervalId: NodeJS.Timeout | null = null;
-        const commandTriggerPercent = phaseContent.commandTriggerPercent;
 
         try {
-          // Determine which phases need real backend execution
-          const shouldExecuteCommand =
-            phaseName === "checking_binary" ||    // Always check
-            phaseName === "verifying_installation" || // Always verify
-            phaseName === "ready" ||              // Always finish setup
-            !isAlreadyInstalled;                  // Execute all if not installed
+          // Smooth fake progress for all phases — no blocking backend calls
+          let currentProgress = 0;
 
-          // Determine if this phase has backend progress events
-          const hasBackendProgress =
-            phaseName === "downloading_nebula" ||
-            phaseName === "installing_nebula";
-
-          if (isAlreadyInstalled && !shouldExecuteCommand) {
-            // VPN installed mode: Show fake smooth progress for download/install
-            console.log(`[Setup] VPN installed - showing fake progress for ${phaseName}`);
-
-            let currentProgress = 0;
-
-            // Animate through entire phase smoothly
-            progressIntervalId = setInterval(() => {
-              currentProgress += 3;
-              if (currentProgress <= 100) {
-                setPhaseInternalProgress(currentProgress);
-              } else {
-                if (progressIntervalId) {
-                  clearInterval(progressIntervalId);
-                  progressIntervalId = null;
-                }
-              }
-            }, 80);
-
-            // Wait for animation to complete
-            await new Promise<void>((resolve) => {
-              const checkInterval = setInterval(() => {
-                if (currentProgress >= 100) {
-                  clearInterval(checkInterval);
-                  if (progressIntervalId) {
-                    clearInterval(progressIntervalId);
-                    progressIntervalId = null;
-                  }
-                  resolve();
-                }
-              }, 50);
-            });
-
-            // Ensure we show 100%
-            setPhaseInternalProgress(100);
-
-          } else if (!shouldExecuteCommand) {
-            // Fast path for skipped phases when already installed
-            await invoke(phaseContent.command);
-          } else {
-            // Normal execution path (VPN not installed OR critical phases)
-            // PART A: Animate to command trigger point
-            console.log(`[Setup] Animating to ${commandTriggerPercent}%`);
-            let currentProgress = 0;
-            const targetProgress = commandTriggerPercent;
-
-            progressIntervalId = setInterval(() => {
-              currentProgress += 5;
-              if (currentProgress <= targetProgress) {
-                setPhaseInternalProgress(currentProgress);
-              } else {
-                if (progressIntervalId) {
-                  clearInterval(progressIntervalId);
-                  progressIntervalId = null;
-                }
-              }
-            }, 100);
-
-            // Wait until we reach trigger point
-            await new Promise<void>((resolve) => {
-              const checkInterval = setInterval(() => {
-                if (currentProgress >= targetProgress) {
-                  clearInterval(checkInterval);
-                  if (progressIntervalId) {
-                    clearInterval(progressIntervalId);
-                    progressIntervalId = null;
-                  }
-                  resolve();
-                }
-              }, 50);
-            });
-
-            // Ensure we're at exact trigger point
-            setPhaseInternalProgress(commandTriggerPercent);
-            console.log(`[Setup] Reached ${commandTriggerPercent}%, executing command...`);
-
-            // PART B: Execute the backend command
-            await runWithMinDuration(invoke(phaseContent.command));
-            console.log(`[Setup] Command completed`);
-
-            // PART C: Continue animation from trigger point to 100%
-            if (hasBackendProgress && !isAlreadyInstalled) {
-              // Backend will emit events to complete the phase
-              console.log(`[Setup] Waiting for backend progress events...`);
+          progressIntervalId = setInterval(() => {
+            currentProgress += 3;
+            if (currentProgress <= 100) {
+              setPhaseInternalProgress(currentProgress);
             } else {
-              // Animate from trigger point to 100%
-              console.log(`[Setup] Animating from ${commandTriggerPercent}% to 100%`);
-              currentProgress = commandTriggerPercent;
-
-              progressIntervalId = setInterval(() => {
-                currentProgress += 5;
-                if (currentProgress <= 100) {
-                  setPhaseInternalProgress(currentProgress);
-                } else {
-                  if (progressIntervalId) {
-                    clearInterval(progressIntervalId);
-                    progressIntervalId = null;
-                  }
-                }
-              }, 100);
-
-              // Wait until we reach 100%
-              await new Promise<void>((resolve) => {
-                const checkInterval = setInterval(() => {
-                  if (currentProgress >= 100) {
-                    clearInterval(checkInterval);
-                    if (progressIntervalId) {
-                      clearInterval(progressIntervalId);
-                      progressIntervalId = null;
-                    }
-                    resolve();
-                  }
-                }, 50);
-              });
+              if (progressIntervalId) {
+                clearInterval(progressIntervalId);
+                progressIntervalId = null;
+              }
             }
-          }
+          }, 80);
 
-          // STEP 3: Complete the phase
+          await new Promise<void>((resolve) => {
+            const checkInterval = setInterval(() => {
+              if (currentProgress >= 100) {
+                clearInterval(checkInterval);
+                if (progressIntervalId) {
+                  clearInterval(progressIntervalId);
+                  progressIntervalId = null;
+                }
+                resolve();
+              }
+            }, 50);
+          });
+
           setPhaseInternalProgress(100);
-
-          // Small delay to show 100% before moving to next phase
-          if (!isAlreadyInstalled) {
-            await wait(200);
-          } else {
-            await wait(150); // Slightly faster transitions when VPN installed
-          }
+          await wait(150);
 
           console.log(`[Setup] Completed phase: ${phaseName}`);
-
         } catch (error) {
           console.error(`[Setup] Error during phase ${phaseName}:`, error);
 
-          // Clean up interval on error
           if (progressIntervalId) {
             clearInterval(progressIntervalId);
           }
 
-          // Still mark as complete to continue setup
           setPhaseInternalProgress(100);
-
-          if (!isAlreadyInstalled) {
-            await wait(200);
-          }
         } finally {
-          // Ensure interval is cleaned up
           if (progressIntervalId) {
             clearInterval(progressIntervalId);
           }
@@ -394,7 +269,6 @@ export default function SplashWrapper({
           setPhaseCommandRunning(false);
         }
 
-        // Mark phase as completed before moving to next
         setCompletedPhases((prev: Set<string>) => {
           const newSet = new Set(prev);
           newSet.add(phaseName);
@@ -402,13 +276,14 @@ export default function SplashWrapper({
         });
       }
 
-      // Wait a bit for the final animation to complete before marking fully complete
-      // Only if not already installed
-      if (!isAlreadyInstalled) {
-        await wait(800);
-      }
       setIsFullyComplete(true);
       setSplashComplete(true);
+
+      // Fire off Nebula setup in the background (download, install, verify)
+      // This runs after the splash is dismissed so the user is never blocked.
+      invoke("setup_nebula_background").catch((err: unknown) => {
+        console.error("Background Nebula setup failed to start:", err);
+      });
     };
 
     runSetupPhases();

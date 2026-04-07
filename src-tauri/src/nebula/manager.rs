@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use sysinfo::Networks;
 use tauri::AppHandle;
+use tauri::Emitter;
 use tauri::Manager;
 use tokio::fs;
 use tracing::{debug, error, info, warn};
@@ -933,6 +934,295 @@ pub async fn finish_setup(state: tauri::State<'_, crate::app_state::AppState>) -
         // We don't return error here to not block the UI flow, just log it
     }
 
+    Ok(())
+}
+
+/// Run the full Nebula setup pipeline (check → download → install → verify
+/// → finish) in a background tokio task.  Returns immediately so the splash
+/// screen is never blocked by the download.
+#[tauri::command]
+pub async fn setup_nebula_background(app: AppHandle) -> Result<(), String> {
+    let app_clone = app.clone();
+    tokio::spawn(async move {
+        info!("Background Nebula setup started");
+
+        // 1. Check requirements
+        if let Err(e) = run_check_nebula_requirements(&app_clone).await {
+            warn!("Background Nebula check failed: {e}");
+            return;
+        }
+
+        // 2. Download
+        if let Err(e) = run_download_nebula(&app_clone).await {
+            warn!("Background Nebula download failed: {e}");
+            return;
+        }
+
+        // 3. Install
+        let state = app_clone.state::<crate::app_state::AppState>();
+        if let Err(e) = run_install_nebula(&state, &app_clone).await {
+            warn!("Background Nebula install failed: {e}");
+            return;
+        }
+
+        // 4. Verify
+        if let Err(e) = run_verify_nebula(&state).await {
+            warn!("Background Nebula verify failed: {e}");
+            return;
+        }
+
+        // 5. Finish (auto-start if VPN enabled)
+        if let Err(e) = run_finish_setup(&state).await {
+            warn!("Background Nebula finish_setup failed: {e}");
+            return;
+        }
+
+        info!("Background Nebula setup completed");
+        let _ = app_clone.emit("nebula_setup_complete", ());
+    });
+
+    Ok(())
+}
+
+// --- Internal helpers for background setup (avoid tauri::State) ---
+
+async fn run_check_nebula_requirements(app: &AppHandle) -> Result<(), String> {
+    let installed_version = check_nebula_installation()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let client = &app.state::<crate::app_state::AppState>().api_client;
+    let latest_release = fetch_latest_release(client)
+        .await
+        .map_err(|e| e.to_string())?;
+    let latest_version = latest_release.tag_name.clone();
+
+    let mut needs_install = false;
+    if installed_version.is_none() {
+        info!("Not installed, will install");
+        needs_install = true;
+    } else if let Some(ref installed) = installed_version {
+        let cert_binary_exists = get_nebula_cert_binary_path()
+            .map(|p| p.exists())
+            .unwrap_or(false);
+        if installed != &latest_version {
+            info!("Update available: {} -> {}", installed, latest_version);
+            needs_install = true;
+        } else if !cert_binary_exists {
+            info!("nebula-cert binary missing, will reinstall");
+            needs_install = true;
+        }
+    }
+
+    let mut download_url = None;
+    if needs_install {
+        let asset_name = get_asset_name().map_err(|e| e.to_string())?;
+        let asset = latest_release
+            .assets
+            .iter()
+            .find(|a| a.name == asset_name)
+            .ok_or_else(|| format!("Asset not found: {asset_name}"))?;
+        download_url = Some(asset.browser_download_url.clone());
+    }
+
+    let app_state = app.state::<crate::app_state::AppState>();
+    let mut setup = app_state.nebula.setup.lock().unwrap_or_else(|p| {
+        warn!("Poisoned mutex recovered in nebula setup");
+        p.into_inner()
+    });
+    setup.latest_version = Some(latest_version);
+    setup.download_url = download_url;
+    setup.needs_update = needs_install;
+
+    Ok(())
+}
+
+async fn run_download_nebula(app: &AppHandle) -> Result<(), String> {
+    let (needs_update, download_url, latest_version, client) = {
+        let app_state = app.state::<crate::app_state::AppState>();
+        let setup = app_state.nebula.setup.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in nebula setup");
+            p.into_inner()
+        });
+        (
+            setup.needs_update,
+            setup.download_url.clone(),
+            setup.latest_version.clone(),
+            app_state.api_client.clone(),
+        )
+    };
+
+    if needs_update && let (Some(url), Some(version)) = (download_url, latest_version) {
+        info!("Downloading Nebula version {}", version);
+        let nebula_dir = get_nebula_dir().map_err(|e| e.to_string())?;
+        fs::create_dir_all(&nebula_dir)
+            .await
+            .map_err(|e| e.to_string())?;
+        let temp_path = nebula_dir.join("temp_download.file");
+
+        let response = client
+            .get(&url)
+            .timeout(Duration::from_secs(300))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Download failed: HTTP {}",
+                response.status()
+            ));
+        }
+
+        let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+        fs::write(&temp_path, bytes)
+            .await
+            .map_err(|e| e.to_string())?;
+        info!("Download complete");
+    }
+
+    Ok(())
+}
+
+async fn run_install_nebula(
+    state: &crate::app_state::AppState,
+    _app: &AppHandle,
+) -> Result<(), String> {
+    let pool = state.pool().map_err(|e| e.to_string())?;
+    let (needs_update, latest_version) = {
+        let setup = state.nebula.setup.lock().unwrap_or_else(|p| {
+            warn!("Poisoned mutex recovered in nebula setup");
+            p.into_inner()
+        });
+        (setup.needs_update, setup.latest_version.clone())
+    };
+
+    if needs_update {
+        let nebula_dir = get_nebula_dir().map_err(|e| e.to_string())?;
+        let temp_path = nebula_dir.join("temp_download.file");
+
+        if temp_path.exists() {
+            info!("Installing from temp file...");
+            remove_existing_binaries(&nebula_dir).await;
+
+            let bytes = fs::read(&temp_path)
+                .await
+                .map_err(|e| e.to_string())?;
+            let asset_name =
+                get_asset_name().map_err(|e| e.to_string())?;
+
+            let asset_path = std::path::Path::new(&asset_name);
+            if asset_path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
+            {
+                let dir = nebula_dir.clone();
+                tokio::task::spawn_blocking(move || {
+                    extract_zip(&bytes, &dir)
+                })
+                .await
+                .map_err(|e| format!("Extract task panicked: {e}"))?
+                .map_err(|e| e.to_string())?;
+            } else if asset_name
+                .to_ascii_lowercase()
+                .ends_with(".tar.gz")
+            {
+                let dir = nebula_dir.clone();
+                tokio::task::spawn_blocking(move || {
+                    extract_tar_gz(&bytes, &dir)
+                })
+                .await
+                .map_err(|e| format!("Extract task panicked: {e}"))?
+                .map_err(|e| e.to_string())?;
+            }
+
+            let _ = fs::remove_file(temp_path).await;
+
+            #[cfg(unix)]
+            {
+                let binary_path =
+                    get_nebula_binary_path().map_err(|e| e.to_string())?;
+                if binary_path.exists() {
+                    let mut perms = fs::metadata(&binary_path)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .permissions();
+                    perms.set_mode(0o755);
+                    fs::set_permissions(&binary_path, perms)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+
+                let cert_binary_path = get_nebula_cert_binary_path()
+                    .map_err(|e| e.to_string())?;
+                if cert_binary_path.exists() {
+                    let mut perms = fs::metadata(&cert_binary_path)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .permissions();
+                    perms.set_mode(0o755);
+                    fs::set_permissions(&cert_binary_path, perms)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+
+            if let Some(v) = latest_version {
+                save_installed_version(&v)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+
+            if let Err(e) = sqlx::query(
+                "UPDATE nebula_binary_status \
+                 SET is_nebula_binary_installed = TRUE, \
+                     last_updated = CURRENT_TIMESTAMP \
+                 WHERE id = 1",
+            )
+            .execute(pool)
+            .await
+            {
+                error!("Failed to update binary installation status: {e}");
+            }
+        } else {
+            return Err(
+                "Installation failed: Downloaded file not found"
+                    .to_string(),
+            );
+        }
+    } else if let Err(e) = sqlx::query(
+        "UPDATE nebula_binary_status \
+         SET is_nebula_binary_installed = TRUE, \
+             last_updated = CURRENT_TIMESTAMP \
+         WHERE id = 1",
+    )
+    .execute(pool)
+    .await
+    {
+        error!("Failed to update binary installation status: {e}");
+    }
+
+    Ok(())
+}
+
+async fn run_verify_nebula(
+    state: &crate::app_state::AppState,
+) -> Result<(), String> {
+    let pool = state.pool().map_err(|e| e.to_string())?;
+    let account_id = state.current_account_id().map_err(|e| e.clone())?;
+    verify_nebula_internal(&state.api_client, pool, &account_id).await
+}
+
+async fn run_finish_setup(
+    state: &crate::app_state::AppState,
+) -> Result<(), String> {
+    let account_id = state.current_account_id().map_err(|e| e.clone())?;
+    let pool = state.pool().map_err(|e| e.to_string())?;
+    if let Err(e) =
+        start_nebula_internal(&state.nebula, pool, &account_id).await
+    {
+        warn!("Failed to auto-start in finish_setup: {e}");
+    }
     Ok(())
 }
 
