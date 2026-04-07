@@ -140,9 +140,13 @@ pub async fn login_with_mnemonic(
     })
 }
 
-/// Validate a BIP-39 mnemonic without performing any auth.
+/// Validates whether the given string is a valid BIP-39 mnemonic.
+///
+/// The input is zeroized after validation to prevent the mnemonic
+/// from lingering in freed heap memory.
 #[tauri::command]
 pub fn validate_mnemonic(mnemonic: String) -> bool {
+    let mnemonic = zeroize::Zeroizing::new(mnemonic);
     bip39::Mnemonic::parse_in_normalized(bip39::Language::English, &mnemonic).is_ok()
 }
 
@@ -180,4 +184,29 @@ pub fn get_polkadot_address(state: tauri::State<'_, crate::app_state::AppState>)
 pub fn get_eth_address(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Option<String>, AppError> {
     let auth = state.auth.lock()?;
     Ok(auth.eth_address.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_mnemonic;
+
+    /// A well-known 12-word BIP-39 mnemonic (test vector from the BIP-39 spec).
+    const VALID_MNEMONIC: &str =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    #[test]
+    fn validate_mnemonic_accepts_valid_12_word() {
+        assert!(
+            validate_mnemonic(VALID_MNEMONIC.to_string()),
+            "Expected a valid 12-word BIP-39 mnemonic to be accepted"
+        );
+    }
+
+    #[test]
+    fn validate_mnemonic_rejects_garbage() {
+        assert!(
+            !validate_mnemonic("this is not a valid mnemonic at all xyzzy".to_string()),
+            "Expected a garbage string to be rejected"
+        );
+    }
 }
