@@ -728,13 +728,6 @@ fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, 
 /// `skip_credits_check` suppresses the HTTP call to `/api/billing/credits/balance/`.
 /// Pass `true` when the caller has already validated credits (e.g. `auto_init_sync`
 /// checks once before its per-drive loop to avoid N redundant requests).
-#[expect(
-    clippy::too_many_lines,
-    reason = "Sequential init pipeline: config load, migration, token refresh, drive init/unlock/recover, \
-              health check, progress wiring, loop start, folder registration. Splitting at any natural \
-              boundary would require passing the intermediate `manager`/`folder_dir`/`bearer_token` state \
-              through helper return types, adding more boilerplate than lines saved."
-)]
 pub(crate) async fn initialize_sync_inner(
     app: tauri::AppHandle,
     account_id: String,

@@ -1071,12 +1071,6 @@ async fn run_download_nebula(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Handles three sequential install phases: extract archive (zip or tar.gz), set unix \
-              permissions, persist version and DB status. Splitting into helpers would require passing \
-              `pool`, `nebula_dir`, `latest_version` through multiple signatures for little gain."
-)]
 async fn run_install_nebula(state: &crate::app_state::AppState, _app: &AppHandle) -> Result<(), String> {
     let pool = state.pool().map_err(|e| e.to_string())?;
     let (needs_update, latest_version) = {
