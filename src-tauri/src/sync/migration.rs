@@ -279,27 +279,9 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
     let local_status = get_migration_status_db(pool, &account_id).await?;
     info!("[Migration] Local DB status: {:?}", local_status.as_ref().map(|(s, ..)| s.as_str()));
 
-    // Only respect explicit user dismissal (skipped/dismissed) or completed.
-    // For everything else, the server is the source of truth.
-    if let Some((ref status, ..)) = local_status
-        && (status.eq_ignore_ascii_case("dismissed") || status.eq_ignore_ascii_case("skipped") || status.eq_ignore_ascii_case("completed"))
-    {
-        info!("[Migration] Skipping server check — local status is terminal: {status}");
-        return Ok(MigrationCheckResult {
-            needs_migration: false,
-            file_count: 0,
-            total_size: 0,
-
-            sync_path: None,
-            is_resuming: false,
-            needs_completion: false,
-            completion_status: None,
-            is_in_progress: false,
-            progress_completed: 0,
-            progress_total: 0,
-            progress_failed: 0,
-        });
-    }
+    // The server is the sole source of truth for migration status.
+    // Even if local DB says dismissed/skipped/completed, always check
+    // the server — the user may have new files that need migrating.
 
     let server_url = get_server_url(pool, &account_id).await?;
 
