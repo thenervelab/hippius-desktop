@@ -247,31 +247,33 @@ pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppS
 
 /// Create a password-protected zip file containing the plaintext mnemonic.
 /// Uses AES-256 encryption on the zip entry.
+///
+/// Both `mnemonic` and `password` are wrapped in [`zeroize::Zeroizing`] so that
+/// their memory is wiped via [`Drop`] even if the zip operation panics during
+/// stack unwinding — the previous manual `zeroize()` calls would be skipped on panic.
 #[tauri::command]
-pub async fn create_encrypted_backup(mut mnemonic: String, mut password: String, output_path: String) -> Result<()> {
-    let result = (|| -> Result<()> {
-        let buf = Cursor::new(Vec::new());
-        let mut zip = zip::ZipWriter::new(buf);
+pub async fn create_encrypted_backup(mnemonic: String, password: String, output_path: String) -> Result<()> {
+    use zeroize::Zeroizing;
 
-        let options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated)
-            .with_aes_encryption(zip::AesMode::Aes256, &password);
+    let mnemonic = Zeroizing::new(mnemonic);
+    let password = Zeroizing::new(password);
 
-        zip.start_file("recovery-phrase.txt", options)
-            .map_err(|e| crate::error::AppError::Other(e.to_string()))?;
-        zip.write_all(mnemonic.as_bytes())?;
+    let buf = Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(buf);
 
-        let cursor = zip.finish().map_err(|e| crate::error::AppError::Other(e.to_string()))?;
-        std::fs::write(&output_path, cursor.into_inner())?;
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .with_aes_encryption(zip::AesMode::Aes256, &password);
 
-        Ok(())
-    })();
+    zip.start_file("recovery-phrase.txt", options)
+        .map_err(|e| crate::error::AppError::Other(e.to_string()))?;
+    zip.write_all(mnemonic.as_bytes())?;
 
-    // Clear sensitive data from memory before dropping.
-    zeroize::Zeroize::zeroize(&mut mnemonic);
-    zeroize::Zeroize::zeroize(&mut password);
+    let cursor = zip.finish().map_err(|e| crate::error::AppError::Other(e.to_string()))?;
+    std::fs::write(&output_path, cursor.into_inner())?;
 
-    result
+    // `mnemonic` and `password` are zeroized here via Drop, even on panic unwind.
+    Ok(())
 }
 
 #[cfg(test)]
