@@ -17,19 +17,23 @@ const WATCHER_REENABLE_DELAY: std::time::Duration = std::time::Duration::from_se
 
 /// Stage changes and return a preview of what will sync.
 /// Pauses auto-sync while the user reviews.
+///
+/// The `label` parameter identifies which drive to stage changes for.
+/// This must match a label that was registered via `set_sync_path`.
 #[tauri::command]
-pub async fn stage_changes(app: tauri::AppHandle) -> Result<StagedChanges> {
+pub async fn stage_changes(app: tauri::AppHandle, label: String) -> Result<StagedChanges> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    // For V1, stage the first available drive
-    let (label, first_arc) = {
+    let first_arc = {
         let guard = sync.drives.lock().await;
-        match guard.iter().next() {
-            Some((k, slot)) => (k.clone(), slot.manager.clone()),
-            None => return Err(crate::error::AppError::Other("Drive not initialized".into())),
-        }
+        guard
+            .get(&label)
+            .map(|slot| slot.manager.clone())
+            .ok_or_else(|| {
+                crate::error::AppError::Other(format!("No active drive with label '{label}'"))
+            })?
     };
 
     // RAII guard: sets review_mode for this drive, resets on drop unless commit()ed.
@@ -47,14 +51,20 @@ pub async fn stage_changes(app: tauri::AppHandle) -> Result<StagedChanges> {
 }
 
 /// Sync with user-provided conflict resolutions, then resume auto-sync.
-/// `resolutions` maps hex-encoded FileId → resolution string
+///
+/// The `label` parameter identifies which drive to resolve conflicts for.
+/// `resolutions` maps hex-encoded FileId to a resolution string
 /// (one of: "keep_local", "accept_remote", "keep_both", "skip").
 #[tauri::command]
 #[expect(
     clippy::implicit_hasher,
     reason = "Tauri commands cannot be generic; the hasher must be concrete because #[tauri::command] generates a non-generic handler"
 )]
-pub async fn sync_with_conflict_resolutions(app: AppHandle, resolutions: HashMap<String, String>) -> Result<()> {
+pub async fn sync_with_conflict_resolutions(
+    app: AppHandle,
+    label: String,
+    resolutions: HashMap<String, String>,
+) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
@@ -67,12 +77,6 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, resolutions: HashMap
             )));
         }
     }
-
-    // For V1, use the first drive's label
-    let label: String = {
-        let guard = sync.drives.lock().await;
-        guard.keys().next().cloned().unwrap_or_else(|| "default".to_string())
-    };
 
     // Mark syncing in shared state
     sync.update_state(&label, |s| {
@@ -227,36 +231,43 @@ pub fn is_drive_active(state: tauri::State<'_, crate::app_state::AppState>, labe
 
 /// Stop a drive and wait until it is truly inactive, with a timeout.
 ///
-/// Calls `stop_drive` internally then polls `is_drive_active` every 200ms.
-/// Returns `Ok(())` when the drive is gone, or an error on timeout.
-/// Replaces the 1-second polling loop in `UpdateSyncFolder.tsx`.
+/// Calls `stop_drive` internally, then waits for `AppState::drive_removed_notify`
+/// to be signalled (fired by `stop_drive` / `pause_drive` immediately after the
+/// drive is removed from the registry). Falls back to a timeout guard so the
+/// caller is never blocked indefinitely. Replaces the 200ms polling loop with
+/// an event-driven wake-up, eliminating both latency and unnecessary CPU cycles.
 #[tauri::command]
 pub async fn stop_drive_and_wait(app: AppHandle, label: String, timeout_ms: u64) -> Result<()> {
     use tauri::Manager;
-    stop_drive(app.clone(), label.clone()).await?;
-
+    let app_state = app.state::<crate::app_state::AppState>();
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_millis(timeout_ms);
 
+    stop_drive(app.clone(), label.clone()).await?;
+
     loop {
-        if start.elapsed() >= timeout {
+        // Check immediately before waiting — the drive may already be gone.
+        let still_active = match app_state.sync.drives.try_lock() {
+            Ok(guard) => guard.contains_key(&label),
+            // Lock contention means a sync cycle is in progress; treat as active.
+            Err(_) => true,
+        };
+        if !still_active {
+            return Ok(());
+        }
+
+        let remaining = timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
             return Err(crate::error::AppError::Other(format!(
                 "Timed out waiting for drive '{label}' to stop after {timeout_ms}ms"
             )));
         }
 
-        let active = {
-            let app_state = app.state::<crate::app_state::AppState>();
-            match app_state.sync.drives.try_lock() {
-                Ok(guard) => guard.contains_key(&label),
-                Err(_) => true,
-            }
-        };
-
-        if !active {
-            return Ok(());
+        // Wait for an explicit notification from stop_drive/pause_drive, or
+        // fall through to re-check when the timeout expires.
+        tokio::select! {
+            _ = app_state.drive_removed_notify.notified() => { /* re-check loop */ }
+            _ = tokio::time::sleep(remaining) => { /* timeout — re-check and return error */ }
         }
-
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 }

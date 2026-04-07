@@ -41,6 +41,9 @@ pub struct AppState {
     pub health_client: reqwest::Client,
     /// HTTP client for Hippius API calls (reuses connection pool + TLS cache).
     pub api_client: reqwest::Client,
+    /// Notified when a drive is removed from the registry, allowing
+    /// `stop_drive_and_wait` to wake without polling.
+    pub drive_removed_notify: tokio::sync::Notify,
 }
 
 impl AppState {
@@ -72,6 +75,7 @@ impl AppState {
             migration: MigrationState::new(),
             health_client,
             api_client: reqwest::Client::builder().build().expect("Failed to build API HTTP client"),
+            drive_removed_notify: tokio::sync::Notify::new(),
         }
     }
 
@@ -95,11 +99,7 @@ impl AppState {
     /// (`login::rehydrate_full_session`) write the full `AuthInfo`
     /// directly inside the same lock acquisition and don't call this
     /// helper.
-    pub fn set_active_account(
-        &self,
-        account_id: &str,
-        capabilities: crate::auth::state::AuthCapabilities,
-    ) -> Result<(), crate::error::AppError> {
+    pub fn set_active_account(&self, account_id: &str, capabilities: crate::auth::state::AuthCapabilities) -> Result<(), crate::error::AppError> {
         let mut auth = self.auth.lock()?;
         auth.substrate_address = Some(account_id.to_string());
         auth.capabilities = capabilities;

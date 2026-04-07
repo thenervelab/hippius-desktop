@@ -933,6 +933,10 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<()> {
 
     let (remaining, _removed_path) = remove_drive_inmemory(sync, &label).await;
 
+    // Wake any waiters in stop_drive_and_wait so they can re-check without
+    // sleeping through the full polling interval.
+    app_state.drive_removed_notify.notify_waiters();
+
     // Remove the DB row so the drive isn't resurrected on app restart.
     // Best-effort: if the account or pool isn't available, the in-memory
     // cleanup above still takes effect for this session.
@@ -960,6 +964,10 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
     let sync = &app_state.sync;
 
     let (remaining, _removed_path) = remove_drive_inmemory(sync, &label).await;
+
+    // Wake any waiters in stop_drive_and_wait so they can re-check without
+    // sleeping through the full polling interval.
+    app_state.drive_removed_notify.notify_waiters();
 
     // Mark as paused in DB (keep the row, unlike stop_drive which deletes it)
     if let (Ok(pool), Ok(acct)) = (app_state.pool(), app_state.current_account_id())
