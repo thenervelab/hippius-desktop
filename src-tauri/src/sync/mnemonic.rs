@@ -106,13 +106,20 @@ pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, pas
     Ok(())
 }
 
-/// Retrieve the master BIP-39 mnemonic for an account by decrypting it from
-/// disk. Shared implementation used by both the Tauri command and the billing
-/// auth module.
+/// Retrieves the master BIP-39 mnemonic for the given account.
+///
+/// Tries a 5-stage fallback chain: in-memory cache → encrypted master
+/// on disk → first active drive export → database row → error.
+///
+/// Returns [`zeroize::Zeroizing<String>`] to ensure the mnemonic is wiped from
+/// memory when the caller drops it.
 ///
 /// Takes `&AppState` to access both the DB pool and the live drive registry
 /// without relying on global state.
-pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, account_id: &str) -> Result<String> {
+pub async fn get_mnemonic_for_account(
+    app_state: &crate::app_state::AppState,
+    account_id: &str,
+) -> Result<zeroize::Zeroizing<String>> {
     // Stage 1: in-memory cache populated by login_with_mnemonic or
     // ensure_sync_mnemonic (OAuth). Gated on the active account so a
     // stale cache from a previous account never leaks.
@@ -121,7 +128,7 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
         if auth.substrate_address.as_deref() == Some(account_id)
             && let Some(ref cached) = auth.mnemonic
         {
-            return Ok(cached.to_string());
+            return Ok(zeroize::Zeroizing::new(cached.to_string()));
         }
     }
 
@@ -133,7 +140,7 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
         && let Ok(drive_password) = get_drive_password(pool, account_id).await
     {
         match hcfs_client::auth::recover_mnemonic(&master_path, &drive_password) {
-            Ok(mnemonic) => return Ok(mnemonic.to_string()),
+            Ok(mnemonic) => return Ok(zeroize::Zeroizing::new(mnemonic.to_string())),
             Err(e) => {
                 // Wrong password / corrupt file — surface as recoverable
                 // precondition rather than a stringly Hcfs error so the
@@ -159,7 +166,7 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
         if m.is_initialized()
             && let Ok(mnemonic) = m.export_mnemonic(&drive_password)
         {
-            return Ok(mnemonic);
+            return Ok(zeroize::Zeroizing::new(mnemonic));
         }
     }
 
@@ -178,7 +185,7 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
         if manager.is_initialized()
             && let Ok(mnemonic) = manager.export_mnemonic(&drive_password)
         {
-            return Ok(mnemonic);
+            return Ok(zeroize::Zeroizing::new(mnemonic));
         }
     }
 
@@ -191,9 +198,17 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
 
 /// Tauri command wrapper: return the master BIP-39 mnemonic by decrypting it
 /// from disk.
+///
+/// Unwraps the [`zeroize::Zeroizing<String>`] at the IPC boundary so that
+/// Tauri can serialize it as a plain `String`. The `Zeroizing` wrapper is
+/// dropped (and the in-process copy wiped) immediately after the clone.
 #[tauri::command]
-pub async fn get_drive_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String> {
-    get_mnemonic_for_account(&state, &account_id).await
+pub async fn get_drive_mnemonic(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<String> {
+    let z = get_mnemonic_for_account(&state, &account_id).await?;
+    Ok((*z).clone())
 }
 
 /// Ensure a BIP-39 mnemonic is available for HCFS sync.
@@ -203,11 +218,13 @@ pub async fn get_drive_mnemonic(state: tauri::State<'_, crate::app_state::AppSta
 /// the same fallback with a module-level dedup promise.
 #[tauri::command]
 pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String> {
-    // Try drive mnemonic first
+    // Try drive mnemonic first. Unwrap at the IPC return boundary so Tauri
+    // can serialize a plain `String`; the `Zeroizing` wrapper is dropped
+    // immediately after the clone, wiping the in-process copy.
     if let Ok(m) = get_mnemonic_for_account(&state, &account_id).await
         && !m.is_empty()
     {
-        return Ok(m);
+        return Ok((*m).clone());
     }
 
     // Fall back to generating a new mnemonic (OAuth users on first sync)

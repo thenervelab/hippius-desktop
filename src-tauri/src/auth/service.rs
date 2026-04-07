@@ -9,8 +9,6 @@ use alloy_signer_local::{MnemonicBuilder, PrivateKeySigner};
 use sqlx::sqlite::SqlitePool;
 use tauri::Emitter;
 use tracing::{info, warn};
-use zeroize::Zeroizing;
-
 use crate::auth::tokens::save_api_token;
 use crate::sync::mnemonic::get_mnemonic_for_account;
 
@@ -145,7 +143,10 @@ pub(crate) async fn refresh_auth_token_internal(pool: &SqlitePool, app: &tauri::
     let _guard = hcfs_client::engine::runner::TokenRefreshGuard::new(sync);
 
     let app_state = app.state::<crate::app_state::AppState>();
-    let mnemonic = Zeroizing::new(get_mnemonic_for_account(&app_state, account_id).await.map_err(|e| e.to_string())?);
+    // get_mnemonic_for_account now returns Zeroizing<String> directly — no double-wrap needed.
+    let mnemonic = get_mnemonic_for_account(&app_state, account_id)
+        .await
+        .map_err(|e| format!("get_mnemonic_for_account failed: {e}"))?;
 
     // Re-derive keys from the mnemonic. We can't reuse `AuthInfo.sr25519_pair`
     // alone because the challenge-response also needs the secp256k1

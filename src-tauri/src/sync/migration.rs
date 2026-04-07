@@ -462,7 +462,12 @@ pub async fn complete_migration_transition(
     // pass the resolved mnemonic explicitly — initialize_sync_inner does NOT
     // call get_mnemonic_for_account itself, it only consults its parameter
     // and the on-disk master_enc_mnemonic.json.
-    let mnemonic = crate::sync::mnemonic::get_mnemonic_for_account(&state, &account_id).await?;
+    // get_mnemonic_for_account returns Zeroizing<String>; deref-clone to unwrap
+    // into a plain String for initialize_sync (which takes Option<String>).
+    // The Zeroizing wrapper is dropped here, wiping the intermediate copy.
+    let mnemonic_z = crate::sync::mnemonic::get_mnemonic_for_account(&state, &account_id).await?;
+    let mnemonic = (*mnemonic_z).clone();
+    drop(mnemonic_z);
     let result = crate::sync::lifecycle::initialize_sync(app, account_id.clone(), "default".to_string(), Some(mnemonic)).await?;
 
     // 4. Mark migration as completed ONLY after sync init succeeds.

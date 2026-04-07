@@ -91,7 +91,10 @@ pub async fn billing_auth(
     info!("Billing auth initiated");
     let mut mnemonic = match mnemonic {
         Some(m) if !m.is_empty() => m,
-        _ => get_mnemonic_for_account(&state, &account_id).await?,
+        _ => {
+            let z = get_mnemonic_for_account(&state, &account_id).await?;
+            (*z).clone()
+        }
     };
 
     let derive_result = derive_keys(&mnemonic);
@@ -216,9 +219,14 @@ pub async fn ensure_billing_auth(state: tauri::State<'_, crate::app_state::AppSt
         return Ok(());
     }
 
-    // No token — perform billing auth and persist
+    // No token — perform billing auth and persist. Unwrap the Zeroizing
+    // wrapper into a plain `mut String` so we can call `.zeroize()` after
+    // key derivation; the original `Zeroizing` wrapper is dropped here,
+    // wiping the intermediate copy.
     info!("No existing billing auth token, performing challenge-response");
-    let mut mnemonic = get_mnemonic_for_account(&state, &account_id).await?;
+    let mnemonic_z = get_mnemonic_for_account(&state, &account_id).await?;
+    let mut mnemonic = (*mnemonic_z).clone();
+    drop(mnemonic_z);
     let derive_result = derive_keys(&mnemonic);
     mnemonic.zeroize();
     let (substrate_address, eth_signer, eth_address) = derive_result?;
