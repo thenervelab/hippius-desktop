@@ -21,3 +21,18 @@ export const showMigrationPromptAtom = atom(false);
 
 /** When true, sync cycles and drive operations are blocked (server-side migration in progress). */
 export const migrationLockAtom = atom(false);
+
+export interface MigrationProgress {
+  active: boolean;
+  completed: number;
+  total: number;
+  failed: number;
+}
+
+/** Tracks live migration progress for the banner. */
+export const migrationProgressAtom = atom<MigrationProgress>({
+  active: false,
+  completed: 0,
+  total: 0,
+  failed: 0,
+});
