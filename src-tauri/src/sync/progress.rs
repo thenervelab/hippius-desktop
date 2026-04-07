@@ -5,19 +5,19 @@
 //! `hcfs_client::sync::progress_tracker`.
 
 // Core types re-exported from library
-pub use hcfs_client::engine::progress::snapshot::{SyncSnapshot, build_snapshot};
+pub use hcfs_client::engine::progress::snapshot::{build_snapshot, SyncSnapshot};
 pub use hcfs_client::engine::progress::state::{
-    FileAction, FileProgress, FileProgressStatus, FileStatus, OverallProgress, RECENT_FILES_RETENTION_MS, RecentFile, SessionFileList, SyncFile,
-    SyncProgressState, SyncSession, SyncSessionHandle, count_expected_for_label,
+    count_expected_for_label, FileAction, FileProgress, FileProgressStatus, FileStatus, OverallProgress, RecentFile, SessionFileList, SyncFile,
+    SyncProgressState, SyncSession, SyncSessionHandle, RECENT_FILES_RETENTION_MS,
 };
 
 use hcfs_client::engine::runner::SyncRunner;
-use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use crate::error::{AppError, Result};
-use crate::sync::logic::{NEVER_EMITTED, is_file_completion_tick, try_claim_snapshot_emit};
+use crate::sync::logic::{is_file_completion_tick, try_claim_snapshot_emit, NEVER_EMITTED};
 
 /// Minimum milliseconds between throttled `emit_snapshot(false)` calls from
 /// the per-chunk progress hot path.
@@ -64,16 +64,23 @@ fn monotonic_now_ms() -> u64 {
 /// `SyncSnapshot` JSON payloads per second, which blocks the macOS main
 /// thread in `NSString` UTF-8 decoding and hangs the app. See the bug report
 /// dated 2026-04-05 and the unit tests in `src/sync/logic.rs` for details.
+/// Update per-file byte progress in the active sync session.
+///
+/// Accepts `&str` for `path` and `Option<&str>` for `label` to avoid
+/// heap-allocating on every progress tick — this is a hot path called
+/// hundreds of times per second during large transfers. The `String`
+/// conversions required by the inner `hcfs-client` API happen exactly once
+/// here, at the crate boundary.
 pub fn update_file_progress(
     sync: &SyncRunner,
-    path: String,
+    path: &str,
     bytes_transferred: u64,
     total_bytes: u64,
     action: FileAction,
-    label: Option<String>,
+    label: Option<&str>,
 ) -> Result<()> {
     sync.progress
-        .update_file_progress(path, bytes_transferred, total_bytes, action, label)
+        .update_file_progress(path.to_owned(), bytes_transferred, total_bytes, action, label.map(ToOwned::to_owned))
         .map_err(AppError::Progress)?;
     let is_file_complete = is_file_completion_tick(bytes_transferred, total_bytes);
     if try_claim_snapshot_emit(&LAST_THROTTLED_EMIT_MS, monotonic_now_ms(), is_file_complete, SNAPSHOT_THROTTLE_MS) {
@@ -283,7 +290,7 @@ pub fn sp_update_file_progress(
     action: FileAction,
     label: Option<String>,
 ) -> Result<()> {
-    update_file_progress(&state.sync, path, bytes_transferred, total_bytes, action, label)
+    update_file_progress(&state.sync, &path, bytes_transferred, total_bytes, action, label.as_deref())
 }
 
 #[tauri::command]

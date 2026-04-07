@@ -1227,7 +1227,7 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
                 info!("{} started [{}]: {} ({} bytes)", dir_name, ctx.label, file_name, total);
             }
         }
-        let _ = crate::sync::progress::update_file_progress(&ctx.sync, path_str.to_string(), bytes, total, file_action, Some(ctx.label.to_string()));
+        let _ = crate::sync::progress::update_file_progress(&ctx.sync, path_str, bytes, total, file_action, Some(&*ctx.label));
     }
     debug!("{} [{}]: {}/{} bytes, path: {:?}", dir_name, ctx.label, bytes, total, path);
 
@@ -1365,7 +1365,7 @@ fn build_crypto_callback(
             info!("{direction_name} complete [{label}]: {p:?} ({t} bytes)");
         }
         if let Some(path_str) = p {
-            let _ = crate::sync::progress::update_file_progress(&sync, path_str.to_string(), b, t, action.clone(), Some(label.to_string()));
+            let _ = crate::sync::progress::update_file_progress(&sync, path_str, b, t, action.clone(), Some(&*label));
         }
     })
 }
