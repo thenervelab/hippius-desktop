@@ -572,7 +572,7 @@ struct RecoveryContext<'a> {
 /// `master_str` (the BIP-39 master mnemonic) and `derived` (the per-folder
 /// mnemonic) are wrapped in [`zeroize::Zeroizing`] so their heap memory is
 /// scrubbed when the values are dropped.
-async fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Result<(DriveManager, String, Option<String>)> {
+async fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Result<(DriveManager, String, Option<zeroize::Zeroizing<String>>)> {
     // Remove corrupted enc_mnemonic.json
     let enc_path = ctx.folder_dir.join("enc_mnemonic.json");
     if enc_path.exists() {
@@ -612,7 +612,7 @@ async fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Resu
     let uid = new_manager.unlock(ctx.drive_password)?;
     info!("Drive re-initialized and unlocked, derived user_id: {}", uid);
 
-    Ok((new_manager, uid, Some((*master_str).clone())))
+    Ok((new_manager, uid, Some(master_str)))
 }
 
 /// Initialize a brand-new folder: resolve the mnemonic source (imported
@@ -635,41 +635,39 @@ async fn init_new_drive(
     );
 
     let (folder_mnemonic, master_for_backup, generated_new) = if let Some(imported) = existing_mnemonic {
-        use zeroize::Zeroize;
         if master_path.exists() {
             let stored =
                 hcfs_client::auth::recover_mnemonic(master_path, drive_password).map_err(|e| format!("Failed to recover master mnemonic: {e}"))?;
-            let mut stored_str = stored.to_string();
-            if stored_str == *imported {
+            let stored_str = zeroize::Zeroizing::new(stored.to_string());
+            if *stored_str == *imported {
                 debug!("Stored master matches login mnemonic");
             } else {
                 info!("Stored master differs from login mnemonic — updating master");
                 hcfs_client::auth::save_encrypted_mnemonic(master_path, imported, drive_password)?;
             }
-            stored_str.zeroize();
+            // stored_str is zeroized on drop here
         } else {
             hcfs_client::auth::save_encrypted_mnemonic(master_path, imported, drive_password)?;
             info!("Saved login mnemonic as master (new device)");
         }
-        let derived = derive_folder_mnemonic(imported, label)?;
+        let derived = zeroize::Zeroizing::new(derive_folder_mnemonic(imported, label)?);
         (derived, None, false)
     } else if master_path.exists() {
         let master =
             hcfs_client::auth::recover_mnemonic(master_path, drive_password).map_err(|e| format!("Failed to recover master mnemonic: {e}"))?;
-        let mut master_str = master.to_string();
-        let derived = derive_folder_mnemonic(&master_str, label)?;
-        zeroize::Zeroize::zeroize(&mut master_str);
+        let master_str = zeroize::Zeroizing::new(master.to_string());
+        let derived = zeroize::Zeroizing::new(derive_folder_mnemonic(&master_str, label)?);
         debug!("Derived folder mnemonic from existing master");
+        // master_str is zeroized on drop here
         (derived, None, false)
     } else {
         return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::NoEncryptionKey));
     };
 
-    let mut init_mnemonic = manager.init(drive_password, Some(&folder_mnemonic)).await?;
+    let mut init_mnemonic = manager.init(drive_password, Some(&*folder_mnemonic)).await?;
     zeroize::Zeroize::zeroize(&mut init_mnemonic);
     drop(init_mnemonic);
-    let mut folder_mnemonic = folder_mnemonic;
-    zeroize::Zeroize::zeroize(&mut folder_mnemonic);
+    // folder_mnemonic is zeroized on drop (Zeroizing wrapper)
 
     let uid = manager.unlock(drive_password)?;
     info!("Drive initialized and unlocked for '{}', derived user_id: {}", label, uid);
@@ -804,7 +802,7 @@ pub(crate) async fn initialize_sync_inner(
         match manager.unlock(&cfg.drive_password) {
             Ok(uid) => {
                 info!("Drive unlocked, user_id: {}", uid);
-                (uid, None, false)
+                (uid, None::<zeroize::Zeroizing<String>>, false)
             }
             Err(e) => {
                 error!("Unlock failed for '{}': {}", label, e);
@@ -827,7 +825,10 @@ pub(crate) async fn initialize_sync_inner(
             }
         }
     } else {
-        init_new_drive(&mut manager, &label, &master_path, &cfg.drive_password, existing_mnemonic.as_deref()).await?
+        {
+            let (uid, mnem, is_new) = init_new_drive(&mut manager, &label, &master_path, &cfg.drive_password, existing_mnemonic.as_deref()).await?;
+            (uid, mnem.map(zeroize::Zeroizing::new), is_new)
+        }
     };
 
     // Validate user_id
@@ -856,7 +857,9 @@ pub(crate) async fn initialize_sync_inner(
 
     Ok(InitSyncResult {
         user_id,
-        mnemonic,
+        // Unwrap Zeroizing at the IPC serialization boundary; the Zeroizing
+        // copy is dropped (and scrubbed) immediately after the clone.
+        mnemonic: mnemonic.map(|z| (*z).clone()),
         is_new_setup,
     })
 }
