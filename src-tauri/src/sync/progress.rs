@@ -5,19 +5,19 @@
 //! `hcfs_client::sync::progress_tracker`.
 
 // Core types re-exported from library
-pub use hcfs_client::engine::progress::snapshot::{build_snapshot, SyncSnapshot};
+pub use hcfs_client::engine::progress::snapshot::{SyncSnapshot, build_snapshot};
 pub use hcfs_client::engine::progress::state::{
-    count_expected_for_label, FileAction, FileProgress, FileProgressStatus, FileStatus, OverallProgress, RecentFile, SessionFileList, SyncFile,
-    SyncProgressState, SyncSession, SyncSessionHandle, RECENT_FILES_RETENTION_MS,
+    FileAction, FileProgress, FileProgressStatus, FileStatus, OverallProgress, RECENT_FILES_RETENTION_MS, RecentFile, SessionFileList, SyncFile,
+    SyncProgressState, SyncSession, SyncSessionHandle, count_expected_for_label,
 };
 
 use hcfs_client::engine::runner::SyncRunner;
-use std::sync::atomic::AtomicU64;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
 use crate::error::{AppError, Result};
-use crate::sync::logic::{is_file_completion_tick, try_claim_snapshot_emit, NEVER_EMITTED};
+use crate::sync::logic::{NEVER_EMITTED, is_file_completion_tick, try_claim_snapshot_emit};
 
 /// Minimum milliseconds between throttled `emit_snapshot(false)` calls from
 /// the per-chunk progress hot path.

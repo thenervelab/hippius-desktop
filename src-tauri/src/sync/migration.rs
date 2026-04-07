@@ -254,9 +254,7 @@ fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> Result<()> {
     let stat = nix::sys::statvfs::statvfs(path).map_err(|e| crate::error::AppError::Other(e.to_string()))?;
     let available = stat.block_size() as u64 * stat.blocks_available() as u64;
     if available < required_bytes {
-        return Err(crate::error::AppError::NotReady(
-            crate::error::NotReadyKind::NotEnoughDiskSpace,
-        ));
+        return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::NotEnoughDiskSpace));
     }
     Ok(())
 }
@@ -292,51 +290,49 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
     // Migration" prompt even though migration is already in progress.
     let has_local_in_progress = local_status.as_ref().is_some_and(|(s, ..)| s.eq_ignore_ascii_case("in_progress"));
 
-    if has_local_in_progress {
-        if let Ok(job_status) = poll_migration_status_internal(&state, &account_id).await {
-            if job_status.status == "in_progress" {
-                info!(
-                    completed = job_status.completed,
-                    total = job_status.total,
-                    "Server migration still in progress — resuming tracking"
-                );
-                return Ok(MigrationCheckResult {
-                    needs_migration: false,
-                    file_count: 0,
-                    total_size: 0,
-        
-                    sync_path: None,
-                    is_resuming: false,
-                    needs_completion: false,
-                    completion_status: None,
-                    is_in_progress: true,
-                    progress_completed: job_status.completed as u64,
-                    progress_total: job_status.total as u64,
-                    progress_failed: job_status.failed as u64,
-                });
-            }
+    if has_local_in_progress && let Ok(job_status) = poll_migration_status_internal(&state, &account_id).await {
+        if job_status.status == "in_progress" {
+            info!(
+                completed = job_status.completed,
+                total = job_status.total,
+                "Server migration still in progress — resuming tracking"
+            );
+            return Ok(MigrationCheckResult {
+                needs_migration: false,
+                file_count: 0,
+                total_size: 0,
 
-            const TERMINAL_STATUSES: &[&str] = &["completed", "failed", "cancelled"];
-            if TERMINAL_STATUSES.contains(&job_status.status.as_str()) {
-                info!(
-                    status = %job_status.status,
-                    "Server migration finished but client transition pending — prompting user"
-                );
-                return Ok(MigrationCheckResult {
-                    needs_migration: false,
-                    file_count: 0,
-                    total_size: 0,
-        
-                    sync_path: None,
-                    is_resuming: false,
-                    needs_completion: true,
-                    completion_status: Some(job_status.status),
-                    is_in_progress: false,
-                    progress_completed: 0,
-                    progress_total: 0,
-                    progress_failed: 0,
-                });
-            }
+                sync_path: None,
+                is_resuming: false,
+                needs_completion: false,
+                completion_status: None,
+                is_in_progress: true,
+                progress_completed: job_status.completed as u64,
+                progress_total: job_status.total as u64,
+                progress_failed: job_status.failed as u64,
+            });
+        }
+
+        const TERMINAL_STATUSES: &[&str] = &["completed", "failed", "cancelled"];
+        if TERMINAL_STATUSES.contains(&job_status.status.as_str()) {
+            info!(
+                status = %job_status.status,
+                "Server migration finished but client transition pending — prompting user"
+            );
+            return Ok(MigrationCheckResult {
+                needs_migration: false,
+                file_count: 0,
+                total_size: 0,
+
+                sync_path: None,
+                is_resuming: false,
+                needs_completion: true,
+                completion_status: Some(job_status.status),
+                is_in_progress: false,
+                progress_completed: 0,
+                progress_total: 0,
+                progress_failed: 0,
+            });
         }
     }
 
@@ -344,7 +340,10 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
     info!("[Migration] Checking server at: {server_url}/migration/{account_id}");
     let summary = match fetch_migration_summary(&state.migration.client, &server_url, &account_id).await {
         Ok(s) => {
-            info!("[Migration] Server returned: pending_count={}, total_size={}", s.pending_count, s.total_size);
+            info!(
+                "[Migration] Server returned: pending_count={}, total_size={}",
+                s.pending_count, s.total_size
+            );
             s
         }
         Err(e) => {
@@ -612,18 +611,10 @@ pub async fn start_server_migration(
         let master_path = crate::sync::mnemonic::master_mnemonic_path(&account_id)?;
         if !master_path.exists() {
             let acct_dir = crate::sync::mnemonic::account_dir(&account_id)?;
-            std::fs::create_dir_all(&acct_dir).map_err(|e| {
-                crate::error::AppError::Other(format!(
-                    "Failed to create account directory at {}: {e}",
-                    acct_dir.display()
-                ))
-            })?;
-            hcfs_client::auth::save_encrypted_mnemonic(&master_path, &mnemonic_str, &drive_password).map_err(|e| {
-                crate::error::AppError::Other(format!(
-                    "Failed to persist master mnemonic at {}: {e}",
-                    master_path.display()
-                ))
-            })?;
+            std::fs::create_dir_all(&acct_dir)
+                .map_err(|e| crate::error::AppError::Other(format!("Failed to create account directory at {}: {e}", acct_dir.display())))?;
+            hcfs_client::auth::save_encrypted_mnemonic(&master_path, &mnemonic_str, &drive_password)
+                .map_err(|e| crate::error::AppError::Other(format!("Failed to persist master mnemonic at {}: {e}", master_path.display())))?;
             info!("[Migration] Eagerly persisted master mnemonic for crash recovery");
         }
     }

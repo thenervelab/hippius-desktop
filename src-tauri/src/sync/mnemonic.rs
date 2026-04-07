@@ -116,10 +116,7 @@ pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, pas
 ///
 /// Takes `&AppState` to access both the DB pool and the live drive registry
 /// without relying on global state.
-pub async fn get_mnemonic_for_account(
-    app_state: &crate::app_state::AppState,
-    account_id: &str,
-) -> Result<zeroize::Zeroizing<String>> {
+pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, account_id: &str) -> Result<zeroize::Zeroizing<String>> {
     // Stage 1: in-memory cache populated by login_with_mnemonic or
     // ensure_sync_mnemonic (OAuth). Gated on the active account so a
     // stale cache from a previous account never leaks.
@@ -146,9 +143,7 @@ pub async fn get_mnemonic_for_account(
                 // precondition rather than a stringly Hcfs error so the
                 // frontend prompts the user to re-login.
                 warn!("Master mnemonic at {:?} failed to decrypt: {e}", master_path);
-                return Err(crate::error::AppError::NotReady(
-                    crate::error::NotReadyKind::MasterMnemonicUnrecoverable,
-                ));
+                return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::MasterMnemonicUnrecoverable));
             }
         }
     }
@@ -191,9 +186,7 @@ pub async fn get_mnemonic_for_account(
 
     // Stage 5: nothing recoverable. Frontend dispatches on this kind to
     // prompt the user to log in again with their seed phrase.
-    Err(crate::error::AppError::NotReady(
-        crate::error::NotReadyKind::MasterMnemonicUnrecoverable,
-    ))
+    Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::MasterMnemonicUnrecoverable))
 }
 
 /// Tauri command wrapper: return the master BIP-39 mnemonic by decrypting it
@@ -203,10 +196,7 @@ pub async fn get_mnemonic_for_account(
 /// Tauri can serialize it as a plain `String`. The `Zeroizing` wrapper is
 /// dropped (and the in-process copy wiped) immediately after the clone.
 #[tauri::command]
-pub async fn get_drive_mnemonic(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<String> {
+pub async fn get_drive_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String> {
     let z = get_mnemonic_for_account(&state, &account_id).await?;
     Ok((*z).clone())
 }

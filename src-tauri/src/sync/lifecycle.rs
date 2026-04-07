@@ -108,18 +108,11 @@ pub async fn setup_and_init_sync(
     {
         let master_path = master_mnemonic_path(&account_id)?;
         let acct_dir = account_dir(&account_id)?;
-        create_dir_all_async(acct_dir.clone()).await.map_err(|e| {
-            crate::error::AppError::Other(format!(
-                "Failed to create account directory at {}: {e}",
-                acct_dir.display()
-            ))
-        })?;
-        hcfs_client::auth::save_encrypted_mnemonic(&master_path, m, &pw).map_err(|e| {
-            crate::error::AppError::Other(format!(
-                "Failed to persist master mnemonic at {}: {e}",
-                master_path.display()
-            ))
-        })?;
+        create_dir_all_async(acct_dir.clone())
+            .await
+            .map_err(|e| crate::error::AppError::Other(format!("Failed to create account directory at {}: {e}", acct_dir.display())))?;
+        hcfs_client::auth::save_encrypted_mnemonic(&master_path, m, &pw)
+            .map_err(|e| crate::error::AppError::Other(format!("Failed to persist master mnemonic at {}: {e}", master_path.display())))?;
     }
 
     // 3. Initialize sync
@@ -610,8 +603,8 @@ async fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Resu
         warn!("Generated new random master for recovery (no login mnemonic available)");
         zeroize::Zeroizing::new(master.to_string())
     };
-    hcfs_client::auth::save_encrypted_mnemonic(ctx.master_path, &*master_str, ctx.drive_password)?;
-    let derived = zeroize::Zeroizing::new(derive_folder_mnemonic(&*master_str, ctx.label)?);
+    hcfs_client::auth::save_encrypted_mnemonic(ctx.master_path, &master_str, ctx.drive_password)?;
+    let derived = zeroize::Zeroizing::new(derive_folder_mnemonic(&master_str, ctx.label)?);
 
     let mut init_mnemonic = new_manager.init(ctx.drive_password, Some(&*derived)).await?;
     zeroize::Zeroize::zeroize(&mut init_mnemonic);
@@ -735,6 +728,13 @@ fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, 
 /// `skip_credits_check` suppresses the HTTP call to `/api/billing/credits/balance/`.
 /// Pass `true` when the caller has already validated credits (e.g. `auto_init_sync`
 /// checks once before its per-drive loop to avoid N redundant requests).
+#[expect(
+    clippy::too_many_lines,
+    reason = "Sequential init pipeline: config load, migration, token refresh, drive init/unlock/recover, \
+              health check, progress wiring, loop start, folder registration. Splitting at any natural \
+              boundary would require passing the intermediate `manager`/`folder_dir`/`bearer_token` state \
+              through helper return types, adding more boilerplate than lines saved."
+)]
 pub(crate) async fn initialize_sync_inner(
     app: tauri::AppHandle,
     account_id: String,
@@ -762,16 +762,14 @@ pub(crate) async fn initialize_sync_inner(
     // Validate user has credits/balance before allowing sync.
     // This is skipped when the caller has already performed the check (e.g.
     // `auto_init_sync` checks once before iterating all drives).
-    if !skip_credits_check {
-        if let Ok(acct) = app_state.current_account_id() {
-            let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool_owned.clone());
-            if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
-                let balance: f64 = resp.get("balance").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0);
-                if balance <= 0.0 {
-                    return Err(crate::error::AppError::Validation(
-                        "Insufficient credits. Please add credits to your account before syncing.".into(),
-                    ));
-                }
+    if !skip_credits_check && let Ok(acct) = app_state.current_account_id() {
+        let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool_owned.clone());
+        if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
+            let balance: f64 = resp.get("balance").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+            if balance <= 0.0 {
+                return Err(crate::error::AppError::Validation(
+                    "Insufficient credits. Please add credits to your account before syncing.".into(),
+                ));
             }
         }
     }
@@ -1179,11 +1177,7 @@ pub async fn auto_init_sync(
         let pool_owned = state.pool()?.clone();
         let client = crate::api::client::ApiClient::new(state.api_client.clone(), pool_owned);
         if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
-            let balance: f64 = resp
-                .get("balance")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0.0);
+            let balance: f64 = resp.get("balance").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0);
             if balance <= 0.0 {
                 return Err(crate::error::AppError::Validation(
                     "Insufficient credits. Please add credits to your account before syncing.".into(),
@@ -1252,10 +1246,7 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
     if let Some(path_str) = path {
         // Compute file_name once; reused for both the start/resume log and
         // the completion log below to avoid a second `Path::new` allocation.
-        let file_name = Path::new(path_str)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(path_str);
+        let file_name = Path::new(path_str).file_name().and_then(|n| n.to_str()).unwrap_or(path_str);
         if let Ok(mut set) = ctx.started_set.lock()
             && set.insert(path_str.to_string())
         {
@@ -1352,13 +1343,12 @@ fn build_plan_ready_callback(app: &AppHandle, label: Arc<str>, sync: &Arc<SyncRu
                 .chain(local_deletes.iter())
                 .chain(remote_deletes.iter())
             {
-                if f.size_bytes > 0 {
-                    if let Some(file) = session.files.get_mut(&f.path) {
-                        if file.total_bytes == 0 {
-                            file.total_bytes = f.size_bytes;
-                            patched += 1;
-                        }
-                    }
+                if f.size_bytes > 0
+                    && let Some(file) = session.files.get_mut(&f.path)
+                    && file.total_bytes == 0
+                {
+                    file.total_bytes = f.size_bytes;
+                    patched += 1;
                 }
             }
             if patched > 0 {

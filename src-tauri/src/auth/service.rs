@@ -3,14 +3,14 @@
 //! Extracted from `commands/auth.rs` so that `hcfs_drive.rs` can refresh tokens
 //! without importing the IPC layer.
 
+use crate::auth::tokens::save_api_token;
+use crate::sync::mnemonic::get_mnemonic_for_account;
 use alloy_signer::SignerSync;
 use alloy_signer_local::coins_bip39::English;
 use alloy_signer_local::{MnemonicBuilder, PrivateKeySigner};
 use sqlx::sqlite::SqlitePool;
 use tauri::Emitter;
 use tracing::{info, warn};
-use crate::auth::tokens::save_api_token;
-use crate::sync::mnemonic::get_mnemonic_for_account;
 
 pub(crate) const DEFAULT_BASE_URL: &str = "https://api.hippius.com";
 pub(crate) const CHALLENGE_PATH: &str = "/api/auth/mnemonic/";

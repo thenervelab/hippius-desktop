@@ -31,9 +31,7 @@ pub async fn stage_changes(app: tauri::AppHandle, label: String) -> Result<Stage
         guard
             .get(&label)
             .map(|slot| slot.manager.clone())
-            .ok_or_else(|| {
-                crate::error::AppError::Other(format!("No active drive with label '{label}'"))
-            })?
+            .ok_or_else(|| crate::error::AppError::Other(format!("No active drive with label '{label}'")))?
     };
 
     // RAII guard: sets review_mode for this drive, resets on drop unless commit()ed.
@@ -60,11 +58,7 @@ pub async fn stage_changes(app: tauri::AppHandle, label: String) -> Result<Stage
     clippy::implicit_hasher,
     reason = "Tauri commands cannot be generic; the hasher must be concrete because #[tauri::command] generates a non-generic handler"
 )]
-pub async fn sync_with_conflict_resolutions(
-    app: AppHandle,
-    label: String,
-    resolutions: HashMap<String, String>,
-) -> Result<()> {
+pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resolutions: HashMap<String, String>) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
@@ -266,8 +260,8 @@ pub async fn stop_drive_and_wait(app: AppHandle, label: String, timeout_ms: u64)
         // Wait for an explicit notification from stop_drive/pause_drive, or
         // fall through to re-check when the timeout expires.
         tokio::select! {
-            _ = app_state.drive_removed_notify.notified() => { /* re-check loop */ }
-            _ = tokio::time::sleep(remaining) => { /* timeout — re-check and return error */ }
+            () = app_state.drive_removed_notify.notified() => { /* re-check loop */ }
+            () = tokio::time::sleep(remaining) => { /* timeout — re-check and return error */ }
         }
     }
 }

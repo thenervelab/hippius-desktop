@@ -22,7 +22,9 @@ pub struct TauriSyncBridge {
 
 impl Default for TauriSyncBridge {
     fn default() -> Self {
-        Self { app: std::sync::OnceLock::new() }
+        Self {
+            app: std::sync::OnceLock::new(),
+        }
     }
 }
 
@@ -32,7 +34,9 @@ impl TauriSyncBridge {
     /// Call [`set_app_handle`] once during app setup to wire in the handle
     /// before the sync engine fires its first event.
     pub fn new() -> Self {
-        Self { app: std::sync::OnceLock::new() }
+        Self {
+            app: std::sync::OnceLock::new(),
+        }
     }
 
     /// Sets the Tauri app handle. Must be called exactly once during setup.
