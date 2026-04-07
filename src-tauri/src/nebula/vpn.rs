@@ -87,7 +87,7 @@ pub async fn toggle_vpn_status(state: tauri::State<'_, crate::app_state::AppStat
         }
 
         info!("Checking certificate status before enabling...");
-        if let Err(e) = crate::nebula::manager::check_and_update_certificate(&state.api_client, pool).await {
+        if let Err(e) = crate::nebula::manager::check_and_update_certificate(&state.api_client, pool, &acct).await {
             error!("Certificate check failed: {}", e);
             return Err(AppError::Nebula(format!("Failed to verify/renew certificate: {e}")));
         }
@@ -100,7 +100,12 @@ pub async fn toggle_vpn_status(state: tauri::State<'_, crate::app_state::AppStat
 
     if new_status {
         info!("VPN enabled, starting Nebula...");
-        if let Err(e) = crate::nebula::manager::start_nebula_internal(&state.nebula, pool).await {
+        // Resolve the active account; if it's missing, the user logged out
+        // mid-toggle and we shouldn't start nebula at all.
+        let acct = state
+            .current_account_id()
+            .map_err(|_| AppError::Validation("Cannot start VPN: no active account.".into()))?;
+        if let Err(e) = crate::nebula::manager::start_nebula_internal(&state.nebula, pool, &acct).await {
             // Don't return error — the DB toggle already succeeded, so the
             // UI should reflect the user's intent even if the process fails.
             warn!("Failed to start Nebula: {}", e);

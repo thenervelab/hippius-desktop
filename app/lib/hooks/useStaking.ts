@@ -99,14 +99,9 @@ export const useStaking = () => {
         claimRewards,
     };
 
-    // No longer need passcode unlock for signing — keypair is in Rust AUTH_STATE.
-    // If not authenticated, the Rust command will return an error.
-    const needsUnlock = false;
-
     return {
         stakingInfo,
         operations,
         refetch,
-        needsUnlock,
     };
 };

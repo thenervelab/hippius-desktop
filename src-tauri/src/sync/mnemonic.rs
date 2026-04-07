@@ -113,9 +113,9 @@ pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, pas
 /// Takes `&AppState` to access both the DB pool and the live drive registry
 /// without relying on global state.
 pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, account_id: &str) -> Result<String> {
-    // Stage 1: in-memory cache populated by login_with_mnemonic /
-    // unlock_with_passcode / set_session_mnemonic. Gated on the active
-    // account so a stale cache from a previous account never leaks.
+    // Stage 1: in-memory cache populated by login_with_mnemonic or
+    // ensure_sync_mnemonic (OAuth). Gated on the active account so a
+    // stale cache from a previous account never leaks.
     {
         let auth = app_state.auth.lock()?;
         if auth.substrate_address.as_deref() == Some(account_id)
@@ -204,9 +204,10 @@ pub async fn get_drive_mnemonic(state: tauri::State<'_, crate::app_state::AppSta
 #[tauri::command]
 pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String> {
     // Try drive mnemonic first
-    match get_mnemonic_for_account(&state, &account_id).await {
-        Ok(m) if !m.is_empty() => return Ok(m),
-        _ => {}
+    if let Ok(m) = get_mnemonic_for_account(&state, &account_id).await
+        && !m.is_empty()
+    {
+        return Ok(m);
     }
 
     // Fall back to generating a new mnemonic (OAuth users on first sync)
@@ -214,7 +215,16 @@ pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppS
         "No drive mnemonic available, generating new one for account {}",
         &account_id[..8.min(account_id.len())]
     );
-    crate::auth::login::generate_mnemonic()
+    let generated = crate::auth::login::generate_mnemonic()?;
+
+    // Cache for the active session so subsequent get_mnemonic_for_account
+    // calls (e.g. migration) hit Stage 1 immediately, regardless of whether
+    // auto_init_sync has finished writing master_enc_mnemonic.json yet.
+    // The helper is gated on the active substrate_address so a stale cache
+    // from a previous account never leaks across logins.
+    state.auth.lock()?.cache_session_mnemonic(&account_id, generated.clone());
+
+    Ok(generated)
 }
 
 /// Create a password-protected zip file containing the plaintext mnemonic.

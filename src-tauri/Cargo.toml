@@ -81,6 +81,12 @@ which = "4.4"
 hostname = "0.4"
 zeroize = "1"
 bip39 = { version = "2.2", features = ["rand"] }
+keyring = { version = "3", default-features = false, features = [
+    "apple-native",
+    "windows-native",
+    "sync-secret-service",
+    "crypto-rust",
+] }
 alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",

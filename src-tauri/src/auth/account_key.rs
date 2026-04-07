@@ -14,7 +14,21 @@ pub fn account_key(account_id: &str) -> String {
 /// Derive an 8-character hex account key (legacy format).
 ///
 /// Superseded by [`account_key`] which produces 16 chars. Retained for
-/// migration from the old storage format.
+/// migration from the old storage format — see
+/// [`crate::utils::schema::migrate_account_keys`], which runs on every
+/// app startup and rewrites legacy 8-char `owner` columns to the new
+/// 16-char format.
+///
+/// **Sunset criteria:** the migration shipped on **2026-03-13** (commit
+/// `68573962`). Delete this function, `account_key_legacy_is_8_chars` and
+/// `new_key_starts_with_legacy` tests, and the entire `migrate_account_keys`
+/// helper once any of these is true:
+/// 1. Six months have passed since 2026-03-13 (i.e. after **2026-09-13**)
+///    AND no `Migrating account key` warn log has been observed in
+///    production telemetry for 30+ days, OR
+/// 2. The minimum supported app version is bumped past a release that
+///    shipped after 2026-03-13 + a forced-upgrade window, OR
+/// 3. A schema migration is performed that resets owner columns anyway.
 pub fn account_key_legacy(account_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(account_id.as_bytes());

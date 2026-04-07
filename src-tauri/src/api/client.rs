@@ -14,8 +14,6 @@ use serde::de::DeserializeOwned;
 use sqlx::sqlite::SqlitePool;
 use tracing::warn;
 
-use crate::auth::account_key::account_key;
-
 /// Minimal percent-encoding for query parameter values.
 ///
 /// Encodes all characters except unreserved characters (RFC 3986):
@@ -97,17 +95,16 @@ pub(crate) fn api_base_url() -> String {
 // ---------------------------------------------------------------------------
 
 /// Read the auth token for an account from the `auth_session` DB table.
+///
+/// Routes through [`crate::auth::auth_session_repo::get_token_and_expiry`]
+/// so the repo stays the only direct reader of the table.
 pub async fn get_auth_token_for_account(pool: &SqlitePool, account_id: &str) -> Result<String, ApiError> {
-    let owner = account_key(account_id);
-
-    let row: Option<(String,)> = sqlx::query_as("SELECT auth_token FROM auth_session WHERE owner = ?")
-        .bind(&owner)
-        .fetch_optional(pool)
+    let row = crate::auth::auth_session_repo::get_token_and_expiry(pool, account_id)
         .await
         .map_err(|e| ApiError::Other(format!("DB error: {e}")))?;
 
     match row {
-        Some((token,)) if !token.is_empty() => Ok(token),
+        Some(crate::auth::auth_session_repo::TokenStatus { token: Some(token), .. }) if !token.is_empty() => Ok(token),
         _ => Err(ApiError::Other("No auth token found — please log in".into())),
     }
 }

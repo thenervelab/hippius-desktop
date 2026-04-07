@@ -93,16 +93,12 @@ pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> Result<Option
     }
 
     // Fall back to auth_session table (session restored from DB
-    // without populating objectstore_auth_scoped)
-    let owner = crate::auth::account_key::account_key(account_id);
-    let session = sqlx::query("SELECT auth_token FROM auth_session WHERE owner = ? AND auth_token IS NOT NULL")
-        .bind(&owner)
-        .fetch_optional(pool)
+    // without populating objectstore_auth_scoped). Goes through the
+    // repo so schema knowledge stays in one place.
+    let token_row = crate::auth::auth_session_repo::get_token_and_expiry(pool, account_id)
         .await
         .map_err(|e| format!("DB error fetching auth_session token: {e}"))?;
-    if let Some(row) = session
-        && let Some(token) = row.get::<Option<String>, _>("auth_token")
-    {
+    if let Some(crate::auth::auth_session_repo::TokenStatus { token: Some(token), .. }) = token_row {
         if let Err(e) = save_api_token(pool, account_id, &token).await {
             warn!("Failed to persist session token to scoped table: {e}");
         }
@@ -121,23 +117,12 @@ pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> Result<Option
 /// Returns `true` if the token should be refreshed (expired, expiring soon, or no session).
 /// Used by the sync loop to proactively refresh tokens before they cause 401 errors.
 pub async fn is_token_expiring(pool: &SqlitePool, account_id: &str, margin_secs: i64) -> bool {
-    let owner = crate::auth::account_key::account_key(account_id);
-    let row = sqlx::query("SELECT token_expiry FROM auth_session WHERE owner = ?")
-        .bind(&owner)
-        .fetch_optional(pool)
-        .await;
-
-    match row {
-        Ok(Some(r)) => {
-            let expiry: Option<i64> = r.get("token_expiry");
-            match expiry {
-                Some(exp) => {
-                    let now = chrono::Utc::now().timestamp_millis();
-                    exp - now < margin_secs * 1000
-                }
-                None => true,
-            }
+    match crate::auth::auth_session_repo::get_token_and_expiry(pool, account_id).await {
+        Ok(Some(crate::auth::auth_session_repo::TokenStatus { expiry_ms: Some(expiry), .. })) => {
+            let now = chrono::Utc::now().timestamp_millis();
+            expiry - now < margin_secs * 1000
         }
+        // No row, no expiry, or DB error → assume we need to refresh.
         _ => true,
     }
 }

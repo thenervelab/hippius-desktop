@@ -249,18 +249,20 @@ pub async fn ensure_billing_auth(state: tauri::State<'_, crate::app_state::AppSt
     // the response, so we assume 30 days to match the auth service's default.
     // If the server changes its token lifetime, this should be updated.
     let token_expiry = chrono::Utc::now().timestamp_millis() + 30_i64 * 24 * 60 * 60 * 1000;
-    crate::auth::service::persist_session(
+    crate::auth::auth_session_repo::upsert(
         pool,
-        &account_id,
-        &result.token,
-        token_expiry,
-        &result.user_id,
-        &result.username,
-        "mnemonic",
-        -1,
+        crate::auth::auth_session_repo::UpsertSession {
+            substrate_address: &account_id,
+            token: &result.token,
+            token_expiry_ms: token_expiry,
+            user_id: result.user_id.as_i64(),
+            username: &result.username,
+            provider: "mnemonic",
+            logout_time_minutes: None, // billing auth refresh — don't touch the user's preference
+        },
     )
     .await
-    .map_err(crate::error::AppError::Other)?;
+    .map_err(|e| crate::error::AppError::Other(format!("Failed to persist billing auth session: {e}")))?;
 
     info!("Billing auth token persisted for {account_id}");
     Ok(())

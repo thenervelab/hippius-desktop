@@ -28,7 +28,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub struct AppState {
     db: OnceLock<SqlitePool>,
     pub auth: Mutex<AuthInfo>,
-    pub active_account_id: Mutex<Option<String>>,
     pub sync: Arc<SyncRunner>,
     /// Tauri bridge for sync event emission and callbacks.
     /// Stored separately so `set_app_handle` can be called after construction.
@@ -64,7 +63,6 @@ impl AppState {
         Self {
             db: OnceLock::new(),
             auth: Mutex::new(AuthInfo::default()),
-            active_account_id: Mutex::new(None),
             sync,
             sync_bridge,
             blockchain: BlockchainState::new(),
@@ -87,17 +85,36 @@ impl AppState {
         self.db.get().ok_or_else(|| crate::error::AppError::Db(sqlx::Error::PoolClosed))
     }
 
-    /// Store the active account ID for background tasks to reference.
-    pub fn set_active_account(&self, account_id: &str) {
-        let mut guard = self.active_account_id.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = Some(account_id.to_string());
+    /// Set the active account by populating `AuthInfo.substrate_address`
+    /// and `AuthInfo.capabilities` together.
+    ///
+    /// Used by login/restore flows that don't write the full `AuthInfo`
+    /// themselves: `complete_oauth_flow` (OAuth) and `restore_session`
+    /// (the `Restored` / `OAuthOnly` paths). The mnemonic-login flow
+    /// (`login_with_mnemonic`) and keychain rehydration
+    /// (`login::rehydrate_full_session`) write the full `AuthInfo`
+    /// directly inside the same lock acquisition and don't call this
+    /// helper.
+    pub fn set_active_account(
+        &self,
+        account_id: &str,
+        capabilities: crate::auth::state::AuthCapabilities,
+    ) -> Result<(), crate::error::AppError> {
+        let mut auth = self.auth.lock()?;
+        auth.substrate_address = Some(account_id.to_string());
+        auth.capabilities = capabilities;
+        Ok(())
     }
 
     /// Retrieve the active account ID, or error if no user is logged in.
+    ///
+    /// Reads from `AuthInfo.substrate_address` — the single source of truth
+    /// for the active account.
     pub fn current_account_id(&self) -> Result<String, String> {
-        self.active_account_id
+        self.auth
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .map_err(|e| format!("auth lock poisoned: {e}"))?
+            .substrate_address
             .clone()
             .ok_or_else(|| "No active account set".to_string())
     }

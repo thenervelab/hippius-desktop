@@ -11,7 +11,6 @@ use tauri::Emitter;
 use tracing::{info, warn};
 use zeroize::Zeroizing;
 
-use crate::auth::account_key::account_key;
 use crate::auth::tokens::save_api_token;
 use crate::sync::mnemonic::get_mnemonic_for_account;
 
@@ -134,61 +133,6 @@ pub(crate) async fn challenge_response(
     Ok((vr.token, vr.user_id, vr.username, vr.is_new, token_expiry))
 }
 
-/// Upsert the auth session row in SQLite so it survives app restarts.
-///
-/// Uses `ON CONFLICT` to update existing sessions. The `logout_time_minutes`
-/// field is preserved via `COALESCE` when the new value is NULL, so a
-/// token refresh does not reset the user's timeout preference.
-#[expect(clippy::too_many_arguments)] // bundling into struct deferred to Phase 4
-pub(crate) async fn persist_session(
-    pool: &SqlitePool,
-    substrate_address: &str,
-    token: &str,
-    token_expiry: i64,
-    user_id: &serde_json::Value,
-    username: &str,
-    provider: &str,
-    logout_time_minutes: i64,
-) -> Result<(), String> {
-    let owner = account_key(substrate_address);
-
-    let user_id_i64 = user_id.as_i64();
-
-    sqlx::query(
-        r"
-        INSERT INTO auth_session (
-            owner, auth_token, token_expiry, user_id, username,
-            provider, substrate_address, logout_time_minutes,
-            last_login_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-        ON CONFLICT(owner) DO UPDATE SET
-            auth_token = excluded.auth_token,
-            token_expiry = excluded.token_expiry,
-            user_id = excluded.user_id,
-            username = excluded.username,
-            provider = excluded.provider,
-            substrate_address = excluded.substrate_address,
-            logout_time_minutes = COALESCE(excluded.logout_time_minutes, auth_session.logout_time_minutes),
-            last_login_at = excluded.last_login_at,
-            updated_at = datetime('now')
-        ",
-    )
-    .bind(&owner)
-    .bind(token)
-    .bind(token_expiry)
-    .bind(user_id_i64)
-    .bind(username)
-    .bind(provider)
-    .bind(substrate_address)
-    .bind(logout_time_minutes)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to save auth session: {e}"))?;
-
-    Ok(())
-}
-
 /// Internal implementation for token refresh, callable from both the Tauri
 /// command and the sync loop (which only has an AppHandle, not tauri::State).
 ///
@@ -203,12 +147,32 @@ pub(crate) async fn refresh_auth_token_internal(pool: &SqlitePool, app: &tauri::
     let app_state = app.state::<crate::app_state::AppState>();
     let mnemonic = Zeroizing::new(get_mnemonic_for_account(&app_state, account_id).await.map_err(|e| e.to_string())?);
 
+    // Re-derive keys from the mnemonic. We can't reuse `AuthInfo.sr25519_pair`
+    // alone because the challenge-response also needs the secp256k1
+    // `eth_signer` to sign the challenge — and we don't cache the
+    // `eth_signer` (only `eth_address`) in `AuthInfo`. The derive runs
+    // ~50ms and fires roughly every 4 hours, so the perf cost is
+    // negligible. If this becomes hot, cache `PrivateKeySigner` in
+    // `AuthInfo` alongside `eth_address`.
     let (_sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
 
     let (token, user_id, username, _is_new, token_expiry) =
         challenge_response(&app_state.api_client, &eth_signer, &eth_address, &substrate_address, None).await?;
 
-    persist_session(pool, &substrate_address, &token, token_expiry, &user_id, &username, "mnemonic", -1).await?;
+    crate::auth::auth_session_repo::upsert(
+        pool,
+        crate::auth::auth_session_repo::UpsertSession {
+            substrate_address: &substrate_address,
+            token: &token,
+            token_expiry_ms: token_expiry,
+            user_id: user_id.as_i64(),
+            username: &username,
+            provider: "mnemonic",
+            logout_time_minutes: None, // refresh path: don't clobber the user's preference
+        },
+    )
+    .await
+    .map_err(|e| format!("Failed to save auth session: {e}"))?;
 
     save_api_token(pool, &substrate_address, &token)
         .await

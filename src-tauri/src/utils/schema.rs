@@ -22,7 +22,6 @@ const EXPECTED_TABLES: &[&str] = &[
     "sync_paths",
     "wss_endpoint",
     "security_scoped_bookmarks",
-    "wallet_store",
     "auth_session",
     "hcfs_config",
     "objectstore_auth",
@@ -263,19 +262,6 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    // Wallet store — replaces frontend IndexedDB "wallet" table
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS wallet_store (
-            owner TEXT PRIMARY KEY,
-            encrypted_mnemonic TEXT NOT NULL,
-            passcode_hash TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )",
-    )
-    .execute(pool)
-    .await?;
-
     // Auth session — replaces frontend IndexedDB "session" table + localStorage tokens
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS auth_session (
@@ -502,11 +488,15 @@ pub async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> 
 
         // Only migrate if owner matches legacy format and differs from new
         if owner == &legacy && owner != &new_key {
-            info!(
-                "Migrating account key for {}: {} -> {}",
-                &substrate_address[..8.min(substrate_address.len())],
-                legacy,
-                new_key
+            // warn-level so we can see in production logs whether anyone
+            // is still hitting the legacy migration path. Goal: see this
+            // log stop firing for 30 days, then retire `account_key_legacy`
+            // entirely. See `account_key_legacy` doc for sunset criteria.
+            warn!(
+                addr_prefix = %&substrate_address[..8.min(substrate_address.len())],
+                legacy = %legacy,
+                new_key = %new_key,
+                "Hit legacy account key migration path — bake-time signal for retiring account_key_legacy"
             );
 
             let mut tx = pool.begin().await?;
@@ -519,7 +509,6 @@ pub async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> 
                 "user_preferences",
                 "address_book",
                 "notifications",
-                "wallet_store",
                 "hcfs_config",
             ];
 

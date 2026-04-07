@@ -146,7 +146,9 @@ pub async fn set_sync_path(
         params.path,
         params.is_public
     );
-    state.set_active_account(&params.account_id);
+    // `set_sync_path` is a Tauri command that fires after the user has
+    // already authenticated; login flows are the only writers to
+    // `AuthInfo`. No need to touch active account state here.
     let pool = state.pool()?;
     let result = set_sync_path_internal(pool, &params.account_id, &params.path, params.is_public, params.label.as_deref()).await?;
 

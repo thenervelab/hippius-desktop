@@ -23,7 +23,7 @@ import { migrationCheckAtom } from "./global-atoms/migrationAtoms";
 import { splashCompleteAtom } from "./global-atoms/splashAtoms";
 import { useAtomValue } from "jotai";
 
-/** Result from Rust login_with_mnemonic / unlock_with_passcode commands */
+/** Result from Rust login_with_mnemonic command */
 interface LoginResult {
   substrateAddress: string;
   ethAddress: string;
@@ -75,10 +75,6 @@ interface WalletContextType {
   ) => Promise<void>;
   setSession: (
     mnemonic: string,
-    logoutTimeInMinutes?: number
-  ) => Promise<boolean>;
-  unlockWithPasscode: (
-    passcode: string,
     logoutTimeInMinutes?: number
   ) => Promise<boolean>;
   logout: (redirectPath?: string) => Promise<void>;
@@ -325,46 +321,6 @@ export function WalletAuthProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logout, router]);
 
-  const unlockWithPasscode = async (
-    passcode: string,
-    logoutTimeInMinutes?: number
-  ): Promise<boolean> => {
-    if (!polkadotAddress) return false;
-    setIsLoading(true);
-    try {
-      const result = await invoke<LoginResult>("unlock_with_passcode", {
-        accountId: polkadotAddress,
-        passcode,
-        logoutTimeMinutes: logoutTimeInMinutes ?? 1440,
-      });
-
-      sessionMnemonicRef.current = null; // Rust holds it now
-      setPolkadotAddress(result.substrateAddress);
-      setAuthType("mnemonic");
-      setIsAuthenticated(true);
-
-      if (result.token) {
-        setOAuthSessionState(buildOAuthSession(result, "mnemonic"));
-      }
-
-      const effMinutes = logoutTimeInMinutes ?? 1440;
-      const timeRemaining = effMinutes === -1 ? Infinity : effMinutes * 60_000;
-      setSessionTimeRemaining(timeRemaining === Infinity ? null : timeRemaining);
-      scheduleLogout(timeRemaining);
-
-      initSync(result.substrateAddress);
-
-      return true;
-    } catch (err) {
-      if (err instanceof Error && err.message !== "Incorrect passcode") {
-        console.error("[unlockWithPasscode] ", err);
-      }
-      return false;
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const setSession = async (
     inputMnemonic: string,
     logoutTimeInMinutes?: number
@@ -508,7 +464,6 @@ export function WalletAuthProvider({
         login,
         setOAuthSession,
         setSession,
-        unlockWithPasscode,
         logout,
         resetHippiusDesktop,
         sessionTimeRemaining,

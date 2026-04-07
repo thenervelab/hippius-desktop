@@ -9,6 +9,7 @@ import { saveHcfsConfig } from "@/lib/utils/hcfsConfigUtils";
 import { syncEngineStatusAtom, isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { migrationCheckAtom, migrationLockAtom } from "@/lib/global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 export type MigrationStep = "prompt" | "skip-confirm" | "setup" | "progress" | "complete";
 
@@ -71,6 +72,7 @@ export interface UseMigrationReturn {
 }
 
 export function useMigration(): UseMigrationReturn {
+  const { authType } = useWalletAuth();
   const [currentStep, setCurrentStep] = useState<MigrationStep | null>(null);
   const [files, setFiles] = useState<MigrationFile[]>([]);
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
@@ -256,9 +258,15 @@ export function useMigration(): UseMigrationReturn {
           if (message.includes("Not enough disk space")) {
             toast.error("Not enough disk space for migration. Please free up space and try again.");
           } else if (message.includes("Master mnemonic")) {
-            toast.error(
-              "Seed phrase not available. Please log out and log back in with your seed phrase to start migration."
-            );
+            if (authType === "oauth") {
+              toast.error(
+                "Migration setup incomplete. Please complete sync setup before starting migration, or contact support if the problem persists."
+              );
+            } else {
+              toast.error(
+                "Seed phrase not available. Please log out and log back in with your seed phrase to start migration."
+              );
+            }
           } else {
             toast.error("Failed to start migration. Please try again.");
           }
@@ -268,7 +276,7 @@ export function useMigration(): UseMigrationReturn {
         setCurrentStep("prompt");
       }
     },
-    [totalSize, startPolling]
+    [totalSize, startPolling, authType]
   );
 
   const startMigration = useCallback(

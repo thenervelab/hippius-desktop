@@ -9,10 +9,13 @@ import { toast } from "sonner";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { invoke } from "@tauri-apps/api/core";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
 
 const Unstake = () => {
     const router = useRouter();
     const { stakingInfo, operations } = useStaking();
+    const { logout } = useWalletAuth();
     const [isLoading, setIsLoading] = useState(false);
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [pendingAmount, setPendingAmount] = useState("");
@@ -66,7 +69,9 @@ const Unstake = () => {
         } catch (error) {
             console.error("Unstaking failed:", error);
             toast.dismiss(loadingToast);
-            toast.error(`Unstaking failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+            if (!dispatchSigningError(error, () => logout("/"))) {
+                toast.error(`Unstaking failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+            }
         } finally {
             setIsLoading(false);
             setPendingAmount("");

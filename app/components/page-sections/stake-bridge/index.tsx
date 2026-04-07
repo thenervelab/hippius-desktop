@@ -9,6 +9,8 @@ import { toast } from "sonner";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { invoke } from "@tauri-apps/api/core";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
 import StakeConfirmationDialog from "../wallet/StakeConfirmationDialog";
 
 const StakeBridge = () => {
@@ -16,6 +18,7 @@ const StakeBridge = () => {
     const router = useRouter();
     const tabParam = searchParams.get("tab");
     const { stakingInfo, operations } = useStaking();
+    const { logout } = useWalletAuth();
 
     // Set initial tab based on URL parameter, default to "Stake hAlpha"
     const [activeTab, setActiveTab] = useState(() => {
@@ -94,7 +97,9 @@ const StakeBridge = () => {
         } catch (error) {
             console.error("Staking failed:", error);
             toast.dismiss(loadingToast);
-            toast.error(`Staking failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+            if (!dispatchSigningError(error, () => logout("/"))) {
+                toast.error(`Staking failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+            }
         } finally {
             setIsLoading(false);
             setPendingAmount("");

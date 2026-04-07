@@ -571,6 +571,35 @@ pub async fn start_server_migration(
     // in-memory AuthInfo cache first (populated at login/unlock), then
     // disk, drive, and DB before returning a typed MasterMnemonicUnrecoverable.
     let mnemonic_str = crate::sync::mnemonic::get_mnemonic_for_account(&state, &account_id).await?;
+
+    // Belt-and-suspenders: eagerly persist the master mnemonic to disk if
+    // we have a drive password and the file doesn't exist yet. Without
+    // this, an OAuth user who crashes after start_server_migration but
+    // before complete_migration_transition loses access to migrated files
+    // — the master only existed in the AuthInfo cache (in-memory) and is
+    // gone after restart. If the drive password isn't set yet (the user
+    // is at the migration setup step), this is a no-op and setup_and_init_sync
+    // will write the master when the password becomes available.
+    if let Ok(drive_password) = crate::sync::config::get_drive_password(pool, &account_id).await {
+        let master_path = crate::sync::mnemonic::master_mnemonic_path(&account_id)?;
+        if !master_path.exists() {
+            let acct_dir = crate::sync::mnemonic::account_dir(&account_id)?;
+            std::fs::create_dir_all(&acct_dir).map_err(|e| {
+                crate::error::AppError::Other(format!(
+                    "Failed to create account directory at {}: {e}",
+                    acct_dir.display()
+                ))
+            })?;
+            hcfs_client::auth::save_encrypted_mnemonic(&master_path, &mnemonic_str, &drive_password).map_err(|e| {
+                crate::error::AppError::Other(format!(
+                    "Failed to persist master mnemonic at {}: {e}",
+                    master_path.display()
+                ))
+            })?;
+            info!("[Migration] Eagerly persisted master mnemonic for crash recovery");
+        }
+    }
+
     let mnemonic = bip39::Mnemonic::parse_in_normalized(bip39::Language::English, &mnemonic_str)
         .map_err(|e| crate::error::AppError::Other(format!("Invalid mnemonic from cache: {e}")))?;
 

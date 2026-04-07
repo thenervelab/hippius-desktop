@@ -26,7 +26,6 @@ impl OAuthState {
     }
 }
 
-use crate::auth::account_key::account_key;
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
@@ -328,39 +327,37 @@ pub async fn complete_oauth_flow(
 
     if !substrate_address.is_empty() {
         let pool = state.pool()?;
-        let owner = account_key(&substrate_address);
 
-        sqlx::query(
-            "INSERT INTO auth_session (owner, auth_token, token_expiry, user_id, username, provider, substrate_address, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-             ON CONFLICT(owner) DO UPDATE SET
-               auth_token = excluded.auth_token,
-               token_expiry = excluded.token_expiry,
-               user_id = excluded.user_id,
-               username = excluded.username,
-               provider = excluded.provider,
-               substrate_address = excluded.substrate_address,
-               updated_at = datetime('now')",
+        // Route through the repo so OAuth sessions get the same
+        // COALESCE-on-NULL behavior for logout_time_minutes as mnemonic
+        // logins. Previously this raw INSERT silently nuked the user's
+        // logout-timeout preference on every OAuth callback.
+        crate::auth::auth_session_repo::upsert(
+            pool,
+            crate::auth::auth_session_repo::UpsertSession {
+                substrate_address: &substrate_address,
+                token: &token,
+                token_expiry_ms,
+                user_id: Some(user_id),
+                username: &username,
+                provider: &provider_name,
+                logout_time_minutes: None, // preserve existing preference
+            },
         )
-        .bind(&owner)
-        .bind(&token)
-        .bind(token_expiry_ms)
-        .bind(user_id)
-        .bind(&username)
-        .bind(&provider_name)
-        .bind(&substrate_address)
-        .execute(pool)
         .await?;
 
-        sqlx::query(
-            "INSERT INTO objectstore_auth_scoped (owner, temp_auth_key)
-             VALUES (?, ?)
-             ON CONFLICT(owner) DO UPDATE SET temp_auth_key = excluded.temp_auth_key",
-        )
-        .bind(&owner)
-        .bind(&token)
-        .execute(pool)
-        .await?;
+        // Persist the API token via the existing helper so there's one
+        // writer for `objectstore_auth_scoped` (shared with the mnemonic
+        // login flow).
+        crate::auth::tokens::save_api_token(pool, &substrate_address, &token)
+            .await
+            .map_err(AppError::Other)?;
+
+        // Populate AuthInfo so OAuth users participate in the same
+        // get_mnemonic_for_account cache path as mnemonic-login users.
+        // OAuth has no eth_address or sr25519_pair — those derive from a
+        // BIP-39 mnemonic which is generated later by ensure_sync_mnemonic.
+        state.set_active_account(&substrate_address, crate::auth::state::AuthCapabilities::OAuthOnly)?;
     }
 
     info!(

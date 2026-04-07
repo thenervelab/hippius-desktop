@@ -24,15 +24,10 @@ mod utils;
 
 use crate::auth::accounts::{export_app_data, get_all_subaccount_addresses, import_app_data, reset_app};
 use crate::auth::contacts::{add_contact, delete_contact, get_contacts, update_contact};
-use crate::auth::login::{
-    auth_logout, generate_mnemonic, get_eth_address, get_polkadot_address, login_with_mnemonic, refresh_auth_token, set_passcode,
-    set_session_mnemonic, unlock_with_passcode, validate_mnemonic,
-};
+use crate::auth::login::{generate_mnemonic, get_eth_address, get_polkadot_address, login_with_mnemonic, refresh_auth_token, validate_mnemonic};
+use crate::auth::logout::{auth_logout, logout_full};
 use crate::auth::oauth::{complete_oauth_flow, parse_oauth_deep_link, start_oauth_flow};
-use crate::auth::session::{
-    clear_auth_session, clear_wallet, get_auth_session, get_auth_token, get_last_auth_session, get_platform_info, get_tray_menu_data, get_wallet,
-    has_wallet, is_token_valid, logout_full, restore_session, save_api_token_command, save_auth_session, save_wallet, update_logout_time,
-};
+use crate::auth::session_restore::{is_token_valid, restore_session, update_logout_time};
 use crate::auth::ssh_keys::{create_ssh_key, delete_ssh_key, list_ssh_keys};
 use crate::billing::charts::{
     calculate_storage_capacity, calculate_storage_cost, format_balance_chart, format_credits_chart, format_storage_chart,
@@ -88,10 +83,12 @@ use crate::sync::progress::{
 };
 use crate::sync::remote::{download_remote_file, list_remote_folder_files};
 use crate::sync::status::{app_close, get_sync_activity, get_sync_activity_rows, get_sync_engine_health, get_sync_status};
+use crate::utils::platform_info::get_platform_info;
 use crate::utils::preferences::{get_user_preference, is_onboarding_done, save_user_preference, set_onboarding_done};
 use crate::utils::support::{
     create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message, update_support_ticket, upload_ticket_attachment,
 };
+use crate::utils::tray_menu::get_tray_menu_data;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use tauri::{Builder, Emitter, Manager, Wry, path::BaseDirectory};
@@ -230,8 +227,6 @@ fn main() {
             crate::nebula::manager::start_nebula,
             // Indexer
             crate::api::indexer::get_indexer_api_key,
-            // API token persistence
-            save_api_token_command,
             // HCFS mnemonic management
             get_drive_mnemonic,
             ensure_sync_mnemonic,
@@ -351,31 +346,19 @@ fn main() {
             parse_oauth_deep_link,
             // Authentication & crypto
             login_with_mnemonic,
-            unlock_with_passcode,
-            set_passcode,
-            set_session_mnemonic,
             validate_mnemonic,
             refresh_auth_token,
             auth_logout,
             get_polkadot_address,
             get_eth_address,
             generate_mnemonic,
-            // Session & wallet credential storage
-            save_wallet,
-            get_wallet,
-            has_wallet,
-            clear_wallet,
-            save_auth_session,
-            get_auth_session,
-            get_auth_token,
-            get_last_auth_session,
+            // Session lifecycle (Rust-managed; frontend gets data via these high-level commands)
             restore_session,
             logout_full,
-            get_tray_menu_data,
-            get_platform_info,
-            clear_auth_session,
             is_token_valid,
             update_logout_time,
+            get_tray_menu_data,
+            get_platform_info,
             // Local DB (notifications, address book, onboarding, preferences, app state)
             add_notification,
             list_notifications,

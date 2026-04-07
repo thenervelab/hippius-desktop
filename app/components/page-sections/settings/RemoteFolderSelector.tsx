@@ -7,7 +7,6 @@ import { toast } from "sonner";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { X, CloudDownload, Folder, Monitor, Clock, HardDrive } from "lucide-react";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { middleTruncate } from "@/lib/utils/middleTruncate";

@@ -76,6 +76,11 @@ pub enum NotReadyKind {
     MasterMnemonicUnrecoverable,
     /// Not enough disk space to complete the operation.
     NotEnoughDiskSpace,
+    /// Operation requires a private key the current session lacks
+    /// (e.g. blockchain extrinsic signing for OAuth users, or any
+    /// signing operation for a session restored from disk before the
+    /// user has unlocked with a passcode).
+    SigningKeyUnavailable,
 }
 
 impl std::fmt::Display for NotReadyKind {
@@ -101,6 +106,12 @@ impl std::fmt::Display for NotReadyKind {
             }
             Self::NotEnoughDiskSpace => {
                 write!(f, "Not enough disk space to complete this operation.")
+            }
+            Self::SigningKeyUnavailable => {
+                write!(
+                    f,
+                    "This action requires re-entering your seed phrase. Please log out and log in again with your seed phrase to continue."
+                )
             }
         }
     }
@@ -334,6 +345,7 @@ mod tests {
             (NotReadyKind::ConfigMissing, "CONFIG_MISSING"),
             (NotReadyKind::MasterMnemonicUnrecoverable, "MASTER_MNEMONIC_UNRECOVERABLE"),
             (NotReadyKind::NotEnoughDiskSpace, "NOT_ENOUGH_DISK_SPACE"),
+            (NotReadyKind::SigningKeyUnavailable, "SIGNING_KEY_UNAVAILABLE"),
         ];
         for (kind, expected) in cases {
             let json = serde_json::to_value(&kind).expect("serialize");
@@ -476,6 +488,10 @@ mod tests {
             (
                 NotReadyKind::NotEnoughDiskSpace,
                 "Not enough disk space to complete this operation.",
+            ),
+            (
+                NotReadyKind::SigningKeyUnavailable,
+                "This action requires re-entering your seed phrase. Please log out and log in again with your seed phrase to continue.",
             ),
         ];
         for (kind, expected) in cases {

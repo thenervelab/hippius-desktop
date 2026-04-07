@@ -1,28 +1,23 @@
-//! Authentication commands — mnemonic login, passcode lock/unlock, token refresh.
+//! Mnemonic-based login flow + small mnemonic utilities.
 //!
-//! All cryptographic operations (key derivation, signing, mnemonic encryption)
-//! happen in Rust. The frontend never touches key material — it sends intents
-//! ("login with this mnemonic", "unlock with this passcode") and gets back
-//! a session result.
+//! This module owns the BIP-39 mnemonic login path: validate the phrase,
+//! derive Substrate (sr25519) and Ethereum (secp256k1) keypairs, complete
+//! the EIP-191 challenge-response with the Hippius API, and persist the
+//! resulting session. The keypair is held in
+//! [`crate::app_state::AppState::auth`] for subsequent extrinsic signing.
 //!
-//! The authentication flow uses Ethereum EIP-191 challenge-response signing
-//! against the Hippius API. Both Substrate (sr25519) and Ethereum (secp256k1)
-//! keypairs are derived from the same BIP-39 mnemonic. After authentication,
-//! the sr25519 keypair is stored in [`crate::app_state::AppState::auth`] for
-//! signing blockchain transactions (staking, transfers).
-//!
-//! Passcode-based unlock re-derives keys from an AES-encrypted mnemonic stored
-//! in SQLite, using CryptoJS-compatible encryption for backward compatibility
-//! with mnemonics encrypted by the earlier TypeScript implementation.
+//! Sibling modules:
+//! - [`crate::auth::oauth`] — OAuth provider login
+//! - [`crate::auth::logout`] — logout flow
+//! - [`crate::auth::session_restore`] — restore session at app boot
+//! - [`crate::auth::keychain`] — OS keychain backend for mnemonic persistence
 
-use crate::error::AppError;
-use sha2::{Digest, Sha256};
-use tracing::info;
-use zeroize::Zeroizing;
-
-use crate::auth::account_key::account_key;
-use crate::auth::service::{challenge_response, derive_keys, persist_session};
+use crate::auth::auth_session_repo::{self, UpsertSession};
+use crate::auth::service::{challenge_response, derive_keys};
 use crate::auth::tokens::save_api_token;
+use crate::error::AppError;
+use tracing::{info, warn};
+use zeroize::Zeroizing;
 
 /// Successful authentication result returned to the frontend after login or unlock.
 ///
@@ -42,10 +37,40 @@ pub struct LoginResult {
     pub is_new: bool,
 }
 
+/// Populate `AuthInfo` from a verified mnemonic — the shared write
+/// path used by both `login_with_mnemonic` (fresh login) and
+/// `session_restore::rehydrate_or_restored` (boot-time keychain restore).
+///
+/// Derives the sr25519 + secp256k1 keypairs, acquires the auth lock
+/// once, writes all 5 fields atomically, and returns the substrate +
+/// eth addresses for the caller to use in result construction.
+///
+/// Caller is responsible for everything else (challenge-response, DB
+/// session upsert, API token persistence). This helper exists so the
+/// keychain-restore path doesn't have to duplicate the AuthInfo write.
+pub(crate) fn rehydrate_full_session(
+    state: &crate::app_state::AppState,
+    mnemonic: Zeroizing<String>,
+) -> Result<(String, String), AppError> {
+    let (sr25519_pair, substrate_address, _eth_signer, eth_address) = derive_keys(&mnemonic)?;
+
+    let mut auth = state.auth.lock()?;
+    auth.capabilities = crate::auth::state::AuthCapabilities::Full;
+    auth.sr25519_pair = Some(sr25519_pair);
+    auth.substrate_address = Some(substrate_address.clone());
+    auth.eth_address = Some(eth_address.clone());
+    auth.mnemonic = Some(mnemonic);
+
+    Ok((substrate_address, eth_address))
+}
+
 /// Full mnemonic login: validate → derive keys → challenge-response → persist session.
 ///
-/// The mnemonic is zeroized after key derivation. The derived keypair is held
-/// in `AppState.auth` for subsequent signing operations (staking, transfers).
+/// The mnemonic is held in `Zeroizing` and cached in `AuthInfo.mnemonic`
+/// for the session lifetime. The derived sr25519 keypair is held in
+/// `AppState.auth` for subsequent signing operations (staking, transfers).
+/// Also persisted to the OS keychain so returning users on this device
+/// don't have to re-enter their seed phrase to sign extrinsics.
 #[tauri::command]
 pub async fn login_with_mnemonic(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -56,26 +81,46 @@ pub async fn login_with_mnemonic(
     info!("Login initiated via mnemonic");
     let mnemonic = Zeroizing::new(mnemonic);
 
-    let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
-
+    // Run the challenge-response BEFORE writing AuthInfo, so a failed
+    // login leaves the previous session intact.
+    let (_sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
     let (token, user_id, username, is_new, token_expiry) =
         challenge_response(&state.api_client, &eth_signer, &eth_address, &substrate_address, referral_code.as_deref()).await?;
 
-    {
-        let mut auth = state.auth.lock()?;
-        auth.sr25519_pair = Some(sr25519_pair);
-        auth.substrate_address = Some(substrate_address.clone());
-        auth.eth_address = Some(eth_address.clone());
-        auth.mnemonic = Some(mnemonic.clone());
-    }
+    // Now write the full AuthInfo via the shared rehydrate helper.
+    rehydrate_full_session(&state, mnemonic.clone())?;
 
     let pool = state.pool()?;
-    let ltm = logout_time_minutes.unwrap_or(-1);
-    persist_session(pool, &substrate_address, &token, token_expiry, &user_id, &username, "mnemonic", ltm).await?;
+    auth_session_repo::upsert(
+        pool,
+        UpsertSession {
+            substrate_address: &substrate_address,
+            token: &token,
+            token_expiry_ms: token_expiry,
+            user_id: user_id.as_i64(),
+            username: &username,
+            provider: "mnemonic",
+            // Pass through whatever the caller provided. `None` means
+            // "preserve the existing preference" via the repo's COALESCE
+            // — defense in depth so a future caller passing `None` can't
+            // accidentally clobber the user's logout-timeout setting.
+            logout_time_minutes,
+        },
+    )
+    .await?;
 
     save_api_token(pool, &substrate_address, &token).await?;
 
-    state.set_active_account(&substrate_address);
+    // Persist the mnemonic in the OS keychain so returning users on
+    // this device don't have to re-enter their seed phrase to sign
+    // extrinsics. Failures are non-fatal — login still succeeds, the
+    // user just gets the seed-phrase prompt on the next restart.
+    if let Err(e) = crate::auth::keychain::store_mnemonic(&substrate_address, &mnemonic) {
+        warn!(
+            error = %e,
+            "Failed to persist mnemonic to OS keychain — sign-after-restart will require re-entering seed phrase"
+        );
+    }
 
     info!(
         address = %substrate_address,
@@ -109,207 +154,6 @@ pub fn generate_mnemonic() -> Result<String, AppError> {
     Ok(mnemonic.to_string())
 }
 
-/// Hash a passcode with SHA-256 (matches frontend's `hashPasscode`).
-fn hash_passcode(passcode: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(passcode.as_bytes());
-    hex::encode(hasher.finalize())
-}
-
-/// Set a passcode: hash it, AES-encrypt the mnemonic, store in wallet_store.
-///
-/// The mnemonic comes from the in-memory session (via `get_drive_mnemonic`)
-/// or is passed directly during initial setup.
-#[tauri::command]
-pub async fn set_passcode(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    passcode: String,
-    mnemonic: String,
-) -> Result<(), AppError> {
-    let mnemonic = Zeroizing::new(mnemonic);
-
-    info!("Setting passcode for account");
-    let passcode_hash = hash_passcode(&passcode);
-
-    let encrypted = {
-        use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
-
-        let salt: [u8; 8] = rand::random();
-        let (key, iv) = crypto_js_derive_key_iv(passcode.as_bytes(), &salt);
-
-        type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
-        let encryptor = Aes256CbcEnc::new(&key.into(), &iv.into());
-
-        let plaintext = mnemonic.as_bytes();
-        let mut buf = vec![0u8; plaintext.len() + 16];
-        buf[..plaintext.len()].copy_from_slice(plaintext);
-        let ciphertext = encryptor
-            .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
-            .map_err(|e| AppError::Crypto(format!("Encryption failed: {e}")))?;
-
-        // CryptoJS format: "Salted__" + salt + ciphertext, base64-encoded
-        let mut output = Vec::with_capacity(16 + ciphertext.len());
-        output.extend_from_slice(b"Salted__");
-        output.extend_from_slice(&salt);
-        output.extend_from_slice(ciphertext);
-        use base64::Engine;
-        base64::engine::general_purpose::STANDARD.encode(&output)
-    };
-
-    let pool = state.pool()?;
-    let owner = account_key(&account_id);
-
-    sqlx::query(
-        r"
-        INSERT INTO wallet_store (owner, encrypted_mnemonic, passcode_hash, updated_at)
-        VALUES (?, ?, ?, datetime('now'))
-        ON CONFLICT(owner) DO UPDATE SET
-            encrypted_mnemonic = excluded.encrypted_mnemonic,
-            passcode_hash = excluded.passcode_hash,
-            updated_at = datetime('now')
-        ",
-    )
-    .bind(&owner)
-    .bind(&encrypted)
-    .bind(&passcode_hash)
-    .execute(pool)
-    .await?;
-
-    Ok(())
-}
-
-/// CryptoJS-compatible key derivation (OpenSSL `EVP_BytesToKey` with MD5).
-///
-/// Produces a 32-byte AES key and 16-byte IV from a passphrase and salt
-/// by repeatedly hashing with MD5. This matches the default key derivation
-/// used by CryptoJS's `AES.encrypt`, ensuring backward compatibility with
-/// mnemonics encrypted by the earlier TypeScript frontend.
-fn crypto_js_derive_key_iv(passphrase: &[u8], salt: &[u8]) -> ([u8; 32], [u8; 16]) {
-    let mut key = [0u8; 32];
-    let mut iv = [0u8; 16];
-    let mut derived = Vec::new();
-    let mut prev_block: Vec<u8> = Vec::new();
-
-    while derived.len() < 48 {
-        let mut ctx = md5::Context::new();
-        if !prev_block.is_empty() {
-            ctx.consume(&prev_block);
-        }
-        ctx.consume(passphrase);
-        ctx.consume(salt);
-        prev_block = ctx.compute().to_vec();
-        derived.extend_from_slice(&prev_block);
-    }
-
-    key.copy_from_slice(&derived[..32]);
-    iv.copy_from_slice(&derived[32..48]);
-    (key, iv)
-}
-
-/// Decrypt a CryptoJS-AES encrypted mnemonic with a passcode.
-///
-/// Expects the CryptoJS wire format: base64("Salted__" + 8-byte salt + ciphertext).
-fn decrypt_mnemonic_aes(encrypted: &str, passcode: &str) -> Result<String, AppError> {
-    use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
-    use base64::Engine;
-
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(encrypted)
-        .map_err(|e| AppError::Crypto(format!("Base64 decode failed: {e}")))?;
-
-    if raw.len() < 16 || &raw[..8] != b"Salted__" {
-        return Err(AppError::Crypto("Invalid encrypted data format".into()));
-    }
-
-    let salt = &raw[8..16];
-    let ciphertext = &raw[16..];
-
-    let (key, iv) = crypto_js_derive_key_iv(passcode.as_bytes(), salt);
-
-    type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
-    let decryptor = Aes256CbcDec::new(&key.into(), &iv.into());
-
-    let mut buf = ciphertext.to_vec();
-    let plaintext = decryptor
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
-        .map_err(|_| AppError::Auth("Decryption failed (wrong passcode?)".into()))?;
-
-    String::from_utf8(plaintext.to_vec()).map_err(|e| AppError::Crypto(format!("Invalid UTF-8 after decrypt: {e}")))
-}
-
-/// Unlock with passcode: verify hash, decrypt mnemonic, derive keypair, restore session.
-///
-/// This is the returning-user flow: the encrypted mnemonic lives in SQLite's
-/// `wallet_store` table. After verifying the passcode hash, the mnemonic is
-/// decrypted, keys are derived, and a fresh API token is obtained via
-/// challenge-response. The mnemonic is zeroized immediately after use.
-#[tauri::command]
-pub async fn unlock_with_passcode(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    passcode: String,
-    logout_time_minutes: Option<i64>,
-) -> Result<LoginResult, AppError> {
-    info!("Passcode unlock initiated");
-    let pool = state.pool()?;
-    let owner = account_key(&account_id);
-
-    let row = sqlx::query_as::<_, (String, String)>("SELECT encrypted_mnemonic, passcode_hash FROM wallet_store WHERE owner = ?")
-        .bind(&owner)
-        .fetch_optional(pool)
-        .await?
-        .ok_or(AppError::Auth("No wallet record found".into()))?;
-
-    let (encrypted_mnemonic, stored_hash) = row;
-
-    let passcode_hash = hash_passcode(&passcode);
-    if passcode_hash != stored_hash {
-        return Err(AppError::Auth("Incorrect passcode".into()));
-    }
-
-    let mnemonic = Zeroizing::new(decrypt_mnemonic_aes(&encrypted_mnemonic, &passcode)?);
-
-    if bip39::Mnemonic::parse_in_normalized(bip39::Language::English, &mnemonic).is_err() {
-        return Err(AppError::Crypto("Decrypted mnemonic is invalid".into()));
-    }
-
-    let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
-
-    let (token, user_id, username, is_new, token_expiry) =
-        challenge_response(&state.api_client, &eth_signer, &eth_address, &substrate_address, None).await?;
-
-    {
-        let mut auth = state.auth.lock()?;
-        auth.sr25519_pair = Some(sr25519_pair);
-        auth.substrate_address = Some(substrate_address.clone());
-        auth.eth_address = Some(eth_address.clone());
-        auth.mnemonic = Some(mnemonic.clone());
-    }
-
-    let ltm = logout_time_minutes.unwrap_or(1440);
-    persist_session(pool, &substrate_address, &token, token_expiry, &user_id, &username, "mnemonic", ltm).await?;
-
-    save_api_token(pool, &substrate_address, &token).await?;
-
-    info!(address = %substrate_address, "Passcode unlock successful");
-
-    Ok(LoginResult {
-        substrate_address,
-        eth_address,
-        user_id,
-        username,
-        provider: "mnemonic".to_string(),
-        token,
-        token_expiry,
-        is_new,
-    })
-}
-
-/// Re-export so existing callers that still reference `crate::auth::login::refresh_auth_token_internal`
-/// (e.g. the `#[tauri::command]` wrapper below) can reach the moved function.
-pub(crate) use crate::auth::service::refresh_auth_token_internal;
-
 /// Silently refresh the auth token using the mnemonic from the encrypted Drive.
 ///
 /// Called when the sync engine detects a 401. No frontend round-trip needed
@@ -320,77 +164,7 @@ pub async fn refresh_auth_token(
     app: tauri::AppHandle,
     account_id: String,
 ) -> Result<(), AppError> {
-    refresh_auth_token_internal(state.pool()?, &app, &account_id).await?;
-    Ok(())
-}
-
-/// Logout: clear in-memory keypair and session.
-///
-/// Note: the frontend should call `stop_sync` separately before calling this.
-#[tauri::command]
-pub async fn auth_logout(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), AppError> {
-    auth_logout_internal(&state, &account_id).await
-}
-
-/// Internal logout — can be called from other Rust commands (e.g. `logout_full`).
-pub async fn auth_logout_internal(state: &crate::app_state::AppState, account_id: &str) -> Result<(), AppError> {
-    info!(account_id = %account_id, "Logout initiated");
-
-    {
-        let mut auth = state.auth.lock()?;
-        auth.sr25519_pair = None;
-        auth.substrate_address = None;
-        auth.eth_address = None;
-        auth.mnemonic = None;
-    }
-
-    let pool = state.pool()?;
-    let owner = account_key(account_id);
-
-    sqlx::query(
-        r"
-        UPDATE auth_session SET
-            auth_token = NULL,
-            token_expiry = NULL,
-            user_id = NULL,
-            username = NULL,
-            provider = NULL,
-            substrate_address = NULL,
-            last_login_at = NULL,
-            updated_at = datetime('now')
-        WHERE owner = ?
-        ",
-    )
-    .bind(&owner)
-    .execute(pool)
-    .await?;
-
-    info!("Logout complete");
-    Ok(())
-}
-
-/// Cache a session mnemonic in `AuthInfo` for the active account.
-///
-/// Used by the OAuth flow: after `ensure_sync_mnemonic` generates a fresh
-/// mnemonic for an OAuth user, the frontend calls this so subsequent
-/// `get_mnemonic_for_account` calls (e.g. migration) hit the in-memory cache
-/// instead of trying disk. Gated on the active account to prevent cross-
-/// account contamination.
-#[tauri::command]
-pub async fn set_session_mnemonic(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    mnemonic: String,
-) -> Result<(), AppError> {
-    let mnemonic = Zeroizing::new(mnemonic);
-    if bip39::Mnemonic::parse_in_normalized(bip39::Language::English, &mnemonic).is_err() {
-        return Err(AppError::Crypto("Invalid mnemonic supplied to set_session_mnemonic".into()));
-    }
-    let mut auth = state.auth.lock()?;
-    if auth.substrate_address.as_deref() != Some(account_id.as_str()) {
-        return Err(AppError::NotReady(crate::error::NotReadyKind::ConfigMissing));
-    }
-    auth.mnemonic = Some(mnemonic);
+    crate::auth::service::refresh_auth_token_internal(state.pool()?, &app, &account_id).await?;
     Ok(())
 }
 
