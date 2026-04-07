@@ -14,7 +14,6 @@ export interface MigrationCompleteDialogProps {
   totalCount: number;
   failedFiles?: Array<{ name: string; error: string }>;
   transitionError?: string | null;
-  onRetry?: () => void;
   onDismiss?: () => void;
 }
 
@@ -26,7 +25,6 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
   totalCount,
   failedFiles = [],
   transitionError,
-  onRetry,
   onDismiss,
 }) => {
   const effectiveFailedCount = Math.max(failedCount, failedFiles.length);
@@ -133,43 +131,28 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
               </p>
               <p className="text-xs text-grey-40">
                 Your files were migrated successfully but sync could not be
-                initialized. You can retry or set it up later from Settings.
+                initialized. You can set it up later from Settings.
               </p>
             </div>
           )}
 
-          {/* Action Buttons */}
-          {transitionError ? (
-            <div className="flex flex-col gap-2">
-              <CardButton
-                variant="primary"
-                className="w-full h-12 text-base font-medium"
-                onClick={onRetry ?? onClose}
-              >
-                Retry
-              </CardButton>
-              <CardButton
-                variant="secondary"
-                className="w-full h-10 text-sm font-medium border border-grey-80"
-                onClick={onDismiss ?? onClose}
-              >
-                Close Anyway
-              </CardButton>
-            </div>
-          ) : (
-            <CardButton
-              variant="primary"
-              className="w-full h-12 text-base font-medium"
-              onClick={() => {
+          {/* Action Button */}
+          <CardButton
+            variant="primary"
+            className="w-full h-12 text-base font-medium"
+            onClick={() => {
+              if (transitionError) {
+                onDismiss?.();
+              } else {
                 onClose();
                 if (isFullSuccess) {
                   router.push("/files");
                 }
-              }}
-            >
-              {isFullSuccess ? "Go to My Files" : "Close"}
-            </CardButton>
-          )}
+              }
+            }}
+          >
+            {isFullSuccess ? "Go to My Files" : "Close"}
+          </CardButton>
 
           {/* Help Text */}
           {effectiveFailedCount > 0 && !transitionError && (

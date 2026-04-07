@@ -50,7 +50,6 @@ export interface UseMigrationReturn {
   currentStep: MigrationStep | null;
   setCurrentStep: (step: MigrationStep | null) => void;
   fileCount: number;
-  isCancelling: boolean;
   successCount: number;
   failedCount: number;
   failedFiles: Array<{ name: string; error: string }>;
@@ -62,7 +61,6 @@ export interface UseMigrationReturn {
   startMigration: (accountId: string) => Promise<void>;
   onSetupComplete: (result: { serverUrl: string; password: string }) => Promise<void>;
   isSettingUp: boolean;
-  cancelMigration: () => Promise<void>;
   confirmSkip: () => Promise<void>;
   closeMigration: () => Promise<void>;
   dismissAfterError: () => void;
@@ -71,7 +69,6 @@ export interface UseMigrationReturn {
 export function useMigration(): UseMigrationReturn {
   const { authType } = useWalletAuth();
   const [currentStep, setCurrentStep] = useState<MigrationStep | null>(null);
-  const [isCancelling, setIsCancelling] = useState(false);
   const [totalSize, setTotalSize] = useState(0);
   const [fileCount, setFileCount] = useState(0);
   const [isResuming, setIsResuming] = useState(false);
@@ -298,25 +295,6 @@ export function useMigration(): UseMigrationReturn {
     [pendingAccountId, launchServerMigration]
   );
 
-  const cancelMigration = useCallback(async () => {
-    setIsCancelling(true);
-    try {
-      const accountId = activeAccountIdRef.current;
-      if (accountId) {
-        await invoke("cancel_server_migration", { accountId });
-      }
-    } catch (err) {
-      console.error("[Migration] Cancel failed:", err);
-      toast.error("Failed to cancel migration. The server may still be processing.");
-    }
-    stopPolling();
-    appStore.set(migrationLockAtom, false);
-    appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0, failed: 0 });
-    setIsCancelling(false);
-    setMigrationSucceeded(false);
-    setCurrentStep(null);
-  }, [stopPolling]);
-
   const confirmSkip = useCallback(async () => {
     try {
       const accountId = activeAccountIdRef.current;
@@ -358,7 +336,7 @@ export function useMigration(): UseMigrationReturn {
         const errorMsg = err instanceof Error ? err.message : String(err);
         setTransitionError(errorMsg);
         setCurrentStep("complete");
-        toast.error("Failed to set up file sync after migration. You can retry or close and set it up later.");
+        toast.error("Failed to set up file sync after migration. You can set it up later from Settings.");
         return;
       }
     }
@@ -404,7 +382,6 @@ export function useMigration(): UseMigrationReturn {
     currentStep,
     setCurrentStep,
     fileCount,
-    isCancelling,
     successCount,
     failedCount,
     failedFiles,
@@ -416,7 +393,6 @@ export function useMigration(): UseMigrationReturn {
     startMigration,
     onSetupComplete,
     isSettingUp,
-    cancelMigration,
     confirmSkip,
     closeMigration,
     dismissAfterError,
