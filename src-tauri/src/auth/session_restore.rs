@@ -143,7 +143,19 @@ pub async fn restore_session(
                         // means rehydrate already wrote `AuthInfo` and we
                         // must not double-write via `set_active_account`.
                         match rehydrate_or_restored(&state, addr, auth_type) {
-                            RehydrateOutcome::AlreadyWritten => {}
+                            RehydrateOutcome::AlreadyWritten => {
+                                // Mnemonic is in AuthInfo — run encryption migration.
+                                // Extract the mnemonic BEFORE awaiting (can't hold mutex across await).
+                                if let Ok(pool) = state.pool() {
+                                    let mnemonic_str = state.auth.lock().ok()
+                                        .and_then(|g| g.mnemonic.as_deref().map(String::from));
+                                    if let Some(m) = mnemonic_str {
+                                        if let Err(e) = crate::crypto::store::migrate_if_needed(pool, &m, addr).await {
+                                            warn!(error = %e, "Encryption migration failed — will retry on next login");
+                                        }
+                                    }
+                                }
+                            }
                             RehydrateOutcome::NeedsActiveAccount(cap) => {
                                 state.set_active_account(addr, cap)?;
                             }
@@ -242,7 +254,19 @@ pub async fn restore_session(
     if let Some(ref addr) = row.substrate_address {
         // Same flow as the OAuth-JSON branch above. See `rehydrate_or_restored`.
         match rehydrate_or_restored(&state, addr, auth_type) {
-            RehydrateOutcome::AlreadyWritten => {}
+            RehydrateOutcome::AlreadyWritten => {
+                // Mnemonic is in AuthInfo — run encryption migration.
+                // Extract the mnemonic BEFORE awaiting (can't hold mutex across await).
+                if let Ok(pool) = state.pool() {
+                    let mnemonic_str = state.auth.lock().ok()
+                        .and_then(|g| g.mnemonic.as_deref().map(String::from));
+                    if let Some(m) = mnemonic_str {
+                        if let Err(e) = crate::crypto::store::migrate_if_needed(pool, &m, addr).await {
+                            warn!(error = %e, "Encryption migration failed — will retry on next login");
+                        }
+                    }
+                }
+            }
             RehydrateOutcome::NeedsActiveAccount(cap) => {
                 state.set_active_account(addr, cap)?;
             }

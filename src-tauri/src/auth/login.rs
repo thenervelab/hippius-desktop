@@ -48,10 +48,7 @@ pub struct LoginResult {
 /// Caller is responsible for everything else (challenge-response, DB
 /// session upsert, API token persistence). This helper exists so the
 /// keychain-restore path doesn't have to duplicate the AuthInfo write.
-pub(crate) fn rehydrate_full_session(
-    state: &crate::app_state::AppState,
-    mnemonic: Zeroizing<String>,
-) -> Result<(String, String), AppError> {
+pub(crate) fn rehydrate_full_session(state: &crate::app_state::AppState, mnemonic: Zeroizing<String>) -> Result<(String, String), AppError> {
     let (sr25519_pair, substrate_address, _eth_signer, eth_address) = derive_keys(&mnemonic)?;
 
     let mut auth = state.auth.lock()?;
@@ -122,6 +119,12 @@ pub async fn login_with_mnemonic(
         );
     }
 
+    // Encrypt any plaintext sub-account seed phrases left by a pre-encryption version.
+    // Non-fatal — if it fails, rows stay plaintext and are retried next login.
+    if let Err(e) = crate::crypto::store::migrate_if_needed(pool, &mnemonic, &substrate_address).await {
+        warn!(error = %e, "Encryption migration failed — will retry on next login");
+    }
+
     info!(
         address = %substrate_address,
         is_new = is_new,
@@ -157,8 +160,7 @@ pub fn validate_mnemonic(mnemonic: String) -> bool {
 /// memory after use.
 pub fn generate_mnemonic_internal() -> Result<zeroize::Zeroizing<String>, AppError> {
     use bip39::{Language, Mnemonic};
-    let mnemonic = Mnemonic::generate_in(Language::English, 12)
-        .map_err(|e| AppError::Crypto(format!("Failed to generate mnemonic: {e}")))?;
+    let mnemonic = Mnemonic::generate_in(Language::English, 12).map_err(|e| AppError::Crypto(format!("Failed to generate mnemonic: {e}")))?;
     Ok(zeroize::Zeroizing::new(mnemonic.to_string()))
 }
 
@@ -207,8 +209,7 @@ mod tests {
     use super::validate_mnemonic;
 
     /// A well-known 12-word BIP-39 mnemonic (test vector from the BIP-39 spec).
-    const VALID_MNEMONIC: &str =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const VALID_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
     #[test]
     fn validate_mnemonic_accepts_valid_12_word() {
