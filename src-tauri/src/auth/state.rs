@@ -76,10 +76,17 @@ impl AuthInfo {
     /// Cache a session mnemonic if it belongs to the currently active
     /// account. No-op if `substrate_address` doesn't match (multi-account
     /// safety: prevents a stale cache from one account leaking into another).
+    ///
+    /// The `mnemonic` parameter is immediately wrapped in [`Zeroizing`] so
+    /// that the memory is overwritten with zeros on drop regardless of which
+    /// branch executes — including the mismatch path where the value would
+    /// otherwise be silently dropped as a plain `String`.
     pub fn cache_session_mnemonic(&mut self, account_id: &str, mnemonic: String) {
+        let mnemonic = Zeroizing::new(mnemonic);
         if self.substrate_address.as_deref() == Some(account_id) {
-            self.mnemonic = Some(Zeroizing::new(mnemonic));
+            self.mnemonic = Some(mnemonic);
         }
+        // On mismatch, `mnemonic` drops here and Zeroizing wipes the buffer.
     }
 }
 
@@ -121,20 +128,14 @@ mod tests {
             ..Default::default()
         };
         auth.cache_session_mnemonic("addr-B", "phrase".into());
-        assert!(
-            auth.mnemonic.is_none(),
-            "must not cache cross-account mnemonic"
-        );
+        assert!(auth.mnemonic.is_none(), "must not cache cross-account mnemonic");
     }
 
     #[test]
     fn cache_session_mnemonic_skips_when_no_active_account() {
         let mut auth = AuthInfo::default();
         auth.cache_session_mnemonic("addr-A", "phrase".into());
-        assert!(
-            auth.mnemonic.is_none(),
-            "must not cache when no active account is set"
-        );
+        assert!(auth.mnemonic.is_none(), "must not cache when no active account is set");
     }
 
     #[test]
