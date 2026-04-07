@@ -1212,9 +1212,12 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
     };
 
     if let Some(path_str) = path {
+        // Compute file_name once; reused for both the start/resume log and
+        // the completion log below to avoid a second `Path::new` allocation.
         let file_name = Path::new(path_str)
             .file_name()
-            .map_or_else(|| path_str.to_string(), |f| f.to_string_lossy().to_string());
+            .and_then(|n| n.to_str())
+            .unwrap_or(path_str);
         if let Ok(mut set) = ctx.started_set.lock()
             && set.insert(path_str.to_string())
         {
@@ -1228,34 +1231,29 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
             }
         }
         let _ = crate::sync::progress::update_file_progress(&ctx.sync, path_str, bytes, total, file_action, Some(&*ctx.label));
+
+        if crate::sync::logic::is_file_completion_tick(bytes, total) {
+            let action = match ctx.direction {
+                TransferDirection::Upload => SyncActivityAction::Uploaded,
+                TransferDirection::Download => SyncActivityAction::Downloaded,
+            };
+            info!("{} complete [{}]: {} ({} bytes)", dir_name, ctx.label, file_name, total);
+            let _ = ctx.app.emit(
+                crate::sync::events::FILE_TRANSFER_COMPLETE,
+                crate::sync::events::LabelPayload {
+                    label: ctx.label.to_string(),
+                },
+            );
+            ctx.sync.add_pending_activity(SyncActivityItem {
+                file_name: std::sync::Arc::from(path_str),
+                action,
+                timestamp: chrono::Utc::now().timestamp(),
+                size_bytes: total,
+                label: Arc::clone(&ctx.label),
+            });
+        }
     }
     debug!("{} [{}]: {}/{} bytes, path: {:?}", dir_name, ctx.label, bytes, total, path);
-
-    if crate::sync::logic::is_file_completion_tick(bytes, total)
-        && let Some(path_str) = path
-    {
-        let display_name = Path::new(path_str)
-            .file_name()
-            .map_or_else(|| path_str.to_string(), |f| f.to_string_lossy().to_string());
-        let action = match ctx.direction {
-            TransferDirection::Upload => SyncActivityAction::Uploaded,
-            TransferDirection::Download => SyncActivityAction::Downloaded,
-        };
-        info!("{} complete [{}]: {} ({} bytes)", dir_name, ctx.label, display_name, total);
-        let _ = ctx.app.emit(
-            crate::sync::events::FILE_TRANSFER_COMPLETE,
-            crate::sync::events::LabelPayload {
-                label: ctx.label.to_string(),
-            },
-        );
-        ctx.sync.add_pending_activity(SyncActivityItem {
-            file_name: std::sync::Arc::from(path_str),
-            action,
-            timestamp: chrono::Utc::now().timestamp(),
-            size_bytes: total,
-            label: Arc::clone(&ctx.label),
-        });
-    }
 }
 
 /// Build the `on_sync_plan_ready` callback that merges the sync plan into the
