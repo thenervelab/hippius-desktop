@@ -7,41 +7,39 @@
 use hcfs_client::engine::events::{SyncCallbacks, SyncEvent, SyncEventHandler};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Mutex as StdMutex;
 use tauri::{AppHandle, Emitter};
 
 use super::events;
 
-/// Tauri adapter that implements both sync traits.
+/// Bridge between the hcfs-client sync engine and Tauri's event system.
 ///
-/// Stores the `AppHandle` behind a mutex so it can be created before the
-/// handle is available (at `AppState::new()` time) and wired up later
-/// (in the Tauri setup callback).
+/// The `app` handle is set exactly once during app setup via [`set_app_handle`]
+/// and read on every sync event. [`OnceLock`] provides lock-free reads after
+/// initialization, eliminating contention on the hot event path.
 pub struct TauriSyncBridge {
-    app: StdMutex<Option<AppHandle>>,
+    app: std::sync::OnceLock<AppHandle>,
 }
 
 impl Default for TauriSyncBridge {
     fn default() -> Self {
-        Self { app: StdMutex::new(None) }
+        Self { app: std::sync::OnceLock::new() }
     }
 }
 
 impl TauriSyncBridge {
     pub fn new() -> Self {
-        Self::default()
+        Self { app: std::sync::OnceLock::new() }
     }
 
-    /// Register the Tauri `AppHandle` for use by sync callbacks and event emission.
-    /// Called exactly once from `main.rs` setup after the Tauri app is built.
+    /// Sets the Tauri app handle. Must be called exactly once during setup.
+    ///
+    /// Subsequent calls are silently ignored (the first handle wins).
     pub fn set_app_handle(&self, handle: AppHandle) {
-        if let Ok(mut guard) = self.app.lock() {
-            *guard = Some(handle);
-        }
+        let _ = self.app.set(handle);
     }
 
     fn app(&self) -> Option<AppHandle> {
-        self.app.lock().ok().and_then(|g| g.clone())
+        self.app.get().cloned()
     }
 }
 
