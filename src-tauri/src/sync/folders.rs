@@ -244,6 +244,7 @@ async fn restore_single_folder(
         label.to_string(),
         existing_mnemonic.map(String::from),
         false,
+        false,
     )
     .await?;
 

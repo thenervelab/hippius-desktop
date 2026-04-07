@@ -123,7 +123,7 @@ pub async fn setup_and_init_sync(
     }
 
     // 3. Initialize sync
-    initialize_sync_inner(app, account_id, label, mnemonic, true).await
+    initialize_sync_inner(app, account_id, label, mnemonic, true, false).await
 }
 
 /// Add a local folder to sync in one step.
@@ -162,7 +162,7 @@ pub async fn add_local_sync_folder(
     crate::sync::paths::set_sync_path_internal(pool, &account_id, &path, false, Some(&label)).await?;
 
     // 3. Initialize sync for this drive (start_loop = true)
-    initialize_sync_inner(app, account_id, label.clone(), mnemonic, true).await?;
+    initialize_sync_inner(app, account_id, label.clone(), mnemonic, true, false).await?;
 
     info!(label = %label, path = %path, "Local sync folder added");
     Ok(label)
@@ -172,7 +172,7 @@ pub async fn add_local_sync_folder(
 /// switching folders won't download files from the previous folder.
 #[tauri::command]
 pub async fn initialize_sync(app: tauri::AppHandle, account_id: String, label: String, existing_mnemonic: Option<String>) -> Result<InitSyncResult> {
-    initialize_sync_inner(app, account_id, label, existing_mnemonic, true).await
+    initialize_sync_inner(app, account_id, label, existing_mnemonic, true, false).await
 }
 
 /// Stop the existing drive with the given label, discard its pending activity
@@ -731,12 +731,17 @@ fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, 
 
 /// Core init logic. When `start_loop` is false the caller is responsible for
 /// starting the sync loop after all drives have been registered (batch restore).
+///
+/// `skip_credits_check` suppresses the HTTP call to `/api/billing/credits/balance/`.
+/// Pass `true` when the caller has already validated credits (e.g. `auto_init_sync`
+/// checks once before its per-drive loop to avoid N redundant requests).
 pub(crate) async fn initialize_sync_inner(
     app: tauri::AppHandle,
     account_id: String,
     label: String,
     existing_mnemonic: Option<String>,
     start_loop: bool,
+    skip_credits_check: bool,
 ) -> Result<InitSyncResult> {
     use tauri::Manager;
     let label = sanitize_label(&label)?;
@@ -754,15 +759,19 @@ pub(crate) async fn initialize_sync_inner(
     let pool = &pool_owned;
     info!("initialize_sync called for account: {}, label: '{}'", account_id, label);
 
-    // Validate user has credits/balance before allowing sync
-    if let Ok(acct) = app_state.current_account_id() {
-        let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool_owned.clone());
-        if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
-            let balance: f64 = resp.get("balance").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0);
-            if balance <= 0.0 {
-                return Err(crate::error::AppError::Validation(
-                    "Insufficient credits. Please add credits to your account before syncing.".into(),
-                ));
+    // Validate user has credits/balance before allowing sync.
+    // This is skipped when the caller has already performed the check (e.g.
+    // `auto_init_sync` checks once before iterating all drives).
+    if !skip_credits_check {
+        if let Ok(acct) = app_state.current_account_id() {
+            let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool_owned.clone());
+            if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
+                let balance: f64 = resp.get("balance").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                if balance <= 0.0 {
+                    return Err(crate::error::AppError::Validation(
+                        "Insufficient credits. Please add credits to your account before syncing.".into(),
+                    ));
+                }
             }
         }
     }
@@ -980,7 +989,7 @@ pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String
     crate::sync::paths::set_sync_path_paused(pool, &account_id, &label, false).await?;
 
     // Re-initialize the drive
-    initialize_sync_inner(app.clone(), account_id, label.clone(), mnemonic, true).await?;
+    initialize_sync_inner(app.clone(), account_id, label.clone(), mnemonic, true, false).await?;
 
     info!("Resumed drive '{}'", label);
     Ok(())
@@ -1154,10 +1163,31 @@ pub async fn auto_init_sync(
 
     info!(total = sync_paths.len(), active = regular.len(), "Auto-initializing sync paths");
 
-    // 8. Initialize each path
+    // 8. Check credits once before the drive loop — balance doesn't change
+    // between drives, so a single HTTP round-trip is sufficient.  If the
+    // check fails we return early; individual `initialize_sync_inner` calls
+    // below will skip the check via `skip_credits_check = true`.
+    if let Ok(acct) = state.current_account_id() {
+        let pool_owned = state.pool()?.clone();
+        let client = crate::api::client::ApiClient::new(state.api_client.clone(), pool_owned);
+        if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
+            let balance: f64 = resp
+                .get("balance")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0);
+            if balance <= 0.0 {
+                return Err(crate::error::AppError::Validation(
+                    "Insufficient credits. Please add credits to your account before syncing.".into(),
+                ));
+            }
+        }
+    }
+
+    // 9. Initialize each path (credits already validated above — skip per-drive check)
     let mut any_initialized = false;
     for sp in &regular {
-        match initialize_sync_inner(app.clone(), account_id.clone(), sp.label.clone(), mnemonic.clone(), true).await {
+        match initialize_sync_inner(app.clone(), account_id.clone(), sp.label.clone(), mnemonic.clone(), true, true).await {
             Ok(result) => {
                 info!(label = %sp.label, user_id = %result.user_id, "Sync initialized");
                 any_initialized = true;
