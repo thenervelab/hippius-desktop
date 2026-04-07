@@ -66,6 +66,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("account_id", "TEXT NOT NULL"),
                 ("sub_account_seed_phrase", "TEXT NOT NULL"),
                 ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+                ("encryption_version", "INTEGER NOT NULL DEFAULT 0"),
             ],
         ),
         (
@@ -292,6 +293,21 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    // Encryption-at-rest: add encryption_version to sub_accounts and hcfs_config.
+    // ALTER TABLE ADD COLUMN is idempotent in SQLite — the "duplicate column"
+    // error is expected and suppressed for databases that already have the column.
+    for stmt in [
+        "ALTER TABLE sub_accounts ADD COLUMN encryption_version INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE hcfs_config ADD COLUMN encryption_version INTEGER NOT NULL DEFAULT 0",
+    ] {
+        if let Err(e) = sqlx::query(stmt).execute(pool).await {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                warn!("Schema migration failed: {msg}");
+            }
+        }
+    }
 
     // Auth token + S3 credential tables (API auth token stored as temp_auth_key,
     // S3 credentials stored as master_access_key_id/master_secret for migration)
