@@ -1279,25 +1279,21 @@ fn build_plan_ready_callback(app: &AppHandle, label: Arc<str>, sync: &Arc<SyncRu
             renames.len()
         );
 
+        // Build path vecs once and move them into SessionFileList (no .clone()).
+        // The Tauri event payload is built separately by re-iterating the plan
+        // slices (which are still alive), so we never hold two full copies of
+        // the path strings simultaneously.
         let upload_paths: Vec<String> = uploads.iter().map(|f| f.path.clone()).collect();
         let download_paths: Vec<String> = downloads.iter().map(|f| f.path.clone()).collect();
         let local_delete_paths: Vec<String> = local_deletes.iter().map(|f| f.path.clone()).collect();
         let remote_delete_paths: Vec<String> = remote_deletes.iter().map(|f| f.path.clone()).collect();
 
-        let size_map: std::collections::HashMap<String, u64> = uploads
-            .iter()
-            .chain(downloads.iter())
-            .chain(local_deletes.iter())
-            .chain(remote_deletes.iter())
-            .filter(|f| f.size_bytes > 0)
-            .map(|f| (f.path.clone(), f.size_bytes))
-            .collect();
-
+        // Move path vecs into the file list — no redundant clone.
         let file_list = crate::sync::progress::SessionFileList {
-            upload_files: Some(upload_paths.clone()),
-            download_files: Some(download_paths.clone()),
-            local_delete_files: Some(local_delete_paths.clone()),
-            remote_delete_files: Some(remote_delete_paths.clone()),
+            upload_files: Some(upload_paths),
+            download_files: Some(download_paths),
+            local_delete_files: Some(local_delete_paths),
+            remote_delete_files: Some(remote_delete_paths),
         };
         let _ = crate::sync::progress::merge_into_session(
             &sync,
@@ -1309,26 +1305,38 @@ fn build_plan_ready_callback(app: &AppHandle, label: Arc<str>, sync: &Arc<SyncRu
             Some(label.to_string()),
         );
 
-        if !size_map.is_empty() {
-            let mut progress_state = sync.progress.lock();
-            if let Some(session) = progress_state.current_session.as_mut() {
-                let mut patched = 0usize;
-                for (path, size) in &size_map {
-                    if let Some(file) = session.files.get_mut(path)
-                        && file.total_bytes == 0
-                    {
-                        file.total_bytes = *size;
-                        patched += 1;
+        // Patch file sizes directly from plan items — eliminates the
+        // intermediate HashMap that previously cloned every path string.
+        let mut progress_state = sync.progress.lock();
+        if let Some(session) = progress_state.current_session.as_mut() {
+            let mut patched = 0u32;
+            for f in uploads
+                .iter()
+                .chain(downloads.iter())
+                .chain(local_deletes.iter())
+                .chain(remote_deletes.iter())
+            {
+                if f.size_bytes > 0 {
+                    if let Some(file) = session.files.get_mut(&f.path) {
+                        if file.total_bytes == 0 {
+                            file.total_bytes = f.size_bytes;
+                            patched += 1;
+                        }
                     }
                 }
-                if patched > 0 {
-                    info!(patched, total, label = %label, "Patched file sizes from sync plan");
-                }
             }
-            drop(progress_state);
+            if patched > 0 {
+                debug!("Patched sizes for {patched} files from sync plan");
+            }
+        }
+        let needs_snapshot = progress_state.current_session.is_some();
+        drop(progress_state);
+        if needs_snapshot {
             sync.emit_snapshot(true);
         }
 
+        // Build the event payload directly from plan slices — no extra allocs
+        // beyond the per-path clone that the JSON serialiser requires anyway.
         let _ = app.emit(
             crate::sync::events::SYNC_PLAN_READY,
             crate::sync::events::SyncPlanReadyPayload {
@@ -1337,10 +1345,10 @@ fn build_plan_ready_callback(app: &AppHandle, label: Arc<str>, sync: &Arc<SyncRu
                 downloads: downloads.len(),
                 local_deletes: local_deletes.len(),
                 remote_deletes: remote_deletes.len(),
-                upload_files: upload_paths,
-                download_files: download_paths,
-                local_delete_files: local_delete_paths,
-                remote_delete_files: remote_delete_paths,
+                upload_files: uploads.iter().map(|f| f.path.clone()).collect(),
+                download_files: downloads.iter().map(|f| f.path.clone()).collect(),
+                local_delete_files: local_deletes.iter().map(|f| f.path.clone()).collect(),
+                remote_delete_files: remote_deletes.iter().map(|f| f.path.clone()).collect(),
             },
         );
     })
