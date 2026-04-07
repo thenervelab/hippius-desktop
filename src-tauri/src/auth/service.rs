@@ -12,11 +12,11 @@ use tracing::{info, warn};
 use crate::auth::tokens::save_api_token;
 use crate::sync::mnemonic::get_mnemonic_for_account;
 
-const DEFAULT_BASE_URL: &str = "https://api.hippius.com";
-const CHALLENGE_PATH: &str = "/api/auth/mnemonic/";
-const VERIFY_PATH: &str = "/api/auth/verify/";
+pub(crate) const DEFAULT_BASE_URL: &str = "https://api.hippius.com";
+pub(crate) const CHALLENGE_PATH: &str = "/api/auth/mnemonic/";
+pub(crate) const VERIFY_PATH: &str = "/api/auth/verify/";
 
-fn base_url() -> String {
+pub(crate) fn base_url() -> String {
     std::env::var("HIPPIUS_API_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
 }
 

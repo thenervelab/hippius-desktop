@@ -10,23 +10,15 @@
 //! [`MAX_ATTEMPTS`] times to handle transient network failures.
 
 use alloy_signer::SignerSync;
-use alloy_signer_local::coins_bip39::English;
-use alloy_signer_local::{MnemonicBuilder, PrivateKeySigner};
-use sp_core::Pair as _;
+use alloy_signer_local::PrivateKeySigner;
 use zeroize::Zeroize;
 
+use crate::auth::service::{base_url, CHALLENGE_PATH, VERIFY_PATH};
 use crate::auth::tokens::{get_api_token, save_api_token};
 use crate::sync::mnemonic::get_mnemonic_for_account;
 use tracing::{info, warn};
 
 const MAX_ATTEMPTS: u32 = 3;
-const DEFAULT_BASE_URL: &str = "https://api.hippius.com";
-const CHALLENGE_PATH: &str = "/api/auth/mnemonic/";
-const VERIFY_PATH: &str = "/api/auth/verify/";
-
-fn base_url() -> String {
-    std::env::var("HIPPIUS_API_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
-}
 
 /// Short-lived billing auth result containing only the token and user info.
 ///
@@ -52,22 +44,14 @@ struct VerifyResponse {
     username: String,
 }
 
-/// Derive Substrate address and Ethereum signer from a mnemonic.
+/// Derives billing keys from a mnemonic.
 ///
-/// Returns only what billing auth needs (no sr25519 pair, since we don't
-/// sign blockchain transactions in this flow).
+/// Delegates to [`crate::auth::service::derive_keys`] and discards the
+/// sr25519 keypair (not needed for billing authentication).
 fn derive_keys(mnemonic: &str) -> Result<(String, PrivateKeySigner, String), crate::error::AppError> {
-    let (sr25519_pair, _) = sp_core::sr25519::Pair::from_phrase(mnemonic, None).map_err(|e| crate::error::AppError::Crypto(format!("{e:?}")))?;
-    let substrate_address = sp_core::crypto::Ss58Codec::to_ss58check(&sr25519_pair.public());
-
-    let eth_signer: PrivateKeySigner = MnemonicBuilder::<English>::default()
-        .phrase(mnemonic)
-        .index(0)
-        .map_err(|e| crate::error::AppError::Crypto(e.to_string()))?
-        .build()
-        .map_err(|e| crate::error::AppError::Crypto(e.to_string()))?;
-    let eth_address = format!("{}", eth_signer.address());
-
+    let (_pair, substrate_address, eth_signer, eth_address) =
+        crate::auth::service::derive_keys(mnemonic)
+            .map_err(crate::error::AppError::Crypto)?;
     Ok((substrate_address, eth_signer, eth_address))
 }
 
