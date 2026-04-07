@@ -147,12 +147,11 @@ pub async fn restore_session(
                                 // Mnemonic is in AuthInfo — run encryption migration.
                                 // Extract the mnemonic BEFORE awaiting (can't hold mutex across await).
                                 if let Ok(pool) = state.pool() {
-                                    let mnemonic_str = state.auth.lock().ok()
-                                        .and_then(|g| g.mnemonic.as_deref().map(String::from));
-                                    if let Some(m) = mnemonic_str {
-                                        if let Err(e) = crate::crypto::store::migrate_if_needed(pool, &m, addr).await {
-                                            warn!(error = %e, "Encryption migration failed — will retry on next login");
-                                        }
+                                    let mnemonic_str = state.auth.lock().ok().and_then(|g| g.mnemonic.as_deref().map(String::from));
+                                    if let Some(m) = mnemonic_str
+                                        && let Err(e) = crate::crypto::store::migrate_if_needed(pool, &m, addr).await
+                                    {
+                                        warn!(error = %e, "Encryption migration failed — will retry on next login");
                                     }
                                 }
                             }
@@ -258,12 +257,11 @@ pub async fn restore_session(
                 // Mnemonic is in AuthInfo — run encryption migration.
                 // Extract the mnemonic BEFORE awaiting (can't hold mutex across await).
                 if let Ok(pool) = state.pool() {
-                    let mnemonic_str = state.auth.lock().ok()
-                        .and_then(|g| g.mnemonic.as_deref().map(String::from));
-                    if let Some(m) = mnemonic_str {
-                        if let Err(e) = crate::crypto::store::migrate_if_needed(pool, &m, addr).await {
-                            warn!(error = %e, "Encryption migration failed — will retry on next login");
-                        }
+                    let mnemonic_str = state.auth.lock().ok().and_then(|g| g.mnemonic.as_deref().map(String::from));
+                    if let Some(m) = mnemonic_str
+                        && let Err(e) = crate::crypto::store::migrate_if_needed(pool, &m, addr).await
+                    {
+                        warn!(error = %e, "Encryption migration failed — will retry on next login");
                     }
                 }
             }

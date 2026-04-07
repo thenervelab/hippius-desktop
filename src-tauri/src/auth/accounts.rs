@@ -184,11 +184,10 @@ pub async fn export_app_data(state: tauri::State<'_, crate::app_state::AppState>
         .collect();
 
     // Get sub-accounts
-    let sub_accounts_rows = sqlx::query(
-        "SELECT account_id, sub_account_seed_phrase, COALESCE(encryption_version, 0) as enc_ver, created_at FROM sub_accounts",
-    )
-    .fetch_all(pool)
-    .await?;
+    let sub_accounts_rows =
+        sqlx::query("SELECT account_id, sub_account_seed_phrase, COALESCE(encryption_version, 0) as enc_ver, created_at FROM sub_accounts")
+            .fetch_all(pool)
+            .await?;
 
     let mnemonic_and_acct = {
         let guard = state.auth.lock()?;
@@ -286,11 +285,9 @@ pub async fn get_all_subaccount_addresses(state: tauri::State<'_, crate::app_sta
         }
     };
 
-    let sub_accounts = sqlx::query(
-        "SELECT account_id, sub_account_seed_phrase, COALESCE(encryption_version, 0) as enc_ver FROM sub_accounts",
-    )
-    .fetch_all(pool)
-    .await?;
+    let sub_accounts = sqlx::query("SELECT account_id, sub_account_seed_phrase, COALESCE(encryption_version, 0) as enc_ver FROM sub_accounts")
+        .fetch_all(pool)
+        .await?;
 
     let mut result = Vec::new();
 
