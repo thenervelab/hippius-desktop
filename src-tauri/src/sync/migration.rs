@@ -58,15 +58,22 @@ pub struct MigrationCheckResult {
 
 /// Server response from GET /migration/{user_id}
 ///
-/// Lightweight summary — the server no longer returns individual file
-/// records to avoid OOM on large accounts.
+/// Handles both old format (`files` array) and new format (`pending_count`).
+/// Old servers return `files` + no `pending_count`; new servers return
+/// `pending_count` + no `files`. Serde defaults make both work.
 #[derive(Debug, Deserialize)]
 #[expect(dead_code, reason = "fields exist for serde deserialization")]
 pub(crate) struct ServerMigrationResponse {
     needs_migration: bool,
     file_count: i64,
     pub(crate) total_size: i64,
+    /// New servers: count of pending files (preferred).
+    #[serde(default)]
     pub(crate) pending_count: i64,
+    /// Old servers: full file list. Only used to derive pending_count
+    /// when the server hasn't been upgraded yet.
+    #[serde(default)]
+    files: Vec<MigrationFile>,
 }
 
 // ---------------------------------------------------------------------------
@@ -159,13 +166,18 @@ pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Resul
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
-/// Fetch the migration summary from the server (pending count + total size).
-/// The server no longer returns individual file records.
+/// Fetch the migration summary from the server.
+///
+/// Handles both old servers (returns `files` array, no `pending_count`)
+/// and new servers (returns `pending_count`, no `files`). When the old
+/// format is detected, `pending_count` and `total_size` are derived
+/// from the file list.
 pub(crate) async fn fetch_migration_summary(client: &reqwest::Client, server_url: &str, user_id: &str) -> Result<ServerMigrationResponse> {
     let url = format!("{}/migration/{}", server_url.trim_end_matches('/'), user_id);
     let resp = client
         .get(&url)
-        .timeout(std::time::Duration::from_secs(30))
+        // Old servers may take a while enumerating large buckets
+        .timeout(std::time::Duration::from_secs(600))
         .send()
         .await?;
 
@@ -175,7 +187,17 @@ pub(crate) async fn fetch_migration_summary(client: &reqwest::Client, server_url
         return Err(crate::error::AppError::Other(format!("Migration check failed (status {status}): {text}")));
     }
 
-    Ok(resp.json().await?)
+    let mut summary: ServerMigrationResponse = resp.json().await?;
+
+    // Old server format: pending_count is 0 (default) but files[] is populated.
+    // Derive the counts from the file list.
+    if summary.pending_count == 0 && !summary.files.is_empty() {
+        let pending: Vec<&MigrationFile> = summary.files.iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
+        summary.pending_count = pending.len() as i64;
+        summary.total_size = pending.iter().map(|f| f.size_bytes as i64).sum();
+    }
+
+    Ok(summary)
 }
 
 /// Fetch per-user S3 credentials from the Hippius API.
