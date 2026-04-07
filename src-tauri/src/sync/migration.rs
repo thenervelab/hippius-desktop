@@ -48,6 +48,13 @@ pub struct MigrationCheckResult {
     /// When `needs_completion` is true, the server job's final status
     /// ("completed", "failed", "cancelled") so the frontend can determine success.
     pub completion_status: Option<String>,
+    /// Server migration is actively running (app was reopened mid-migration).
+    /// Frontend should show the progress banner and start polling.
+    pub is_in_progress: bool,
+    /// Current progress when `is_in_progress` is true.
+    pub progress_completed: u64,
+    pub progress_total: u64,
+    pub progress_failed: u64,
 }
 
 /// Server response from GET /migration/{user_id}
@@ -280,6 +287,10 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
             is_resuming: false,
             needs_completion: false,
             completion_status: None,
+            is_in_progress: false,
+            progress_completed: 0,
+            progress_total: 0,
+            progress_failed: 0,
         });
     }
 
@@ -320,33 +331,63 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
             is_resuming: false,
             needs_completion: false,
             completion_status: None,
+            is_in_progress: false,
+            progress_completed: 0,
+            progress_total: 0,
+            progress_failed: 0,
         });
     }
 
-    // No pending files — check if a server migration completed but the client
-    // never ran complete_migration_transition (e.g. app restarted mid-migration).
+    // No pending files — check if a server migration is still running or
+    // completed but the client never ran complete_migration_transition.
     let has_local_in_progress = local_status.as_ref().is_some_and(|(s, ..)| s.eq_ignore_ascii_case("in_progress"));
 
     const TERMINAL_STATUSES: &[&str] = &["completed", "failed", "cancelled"];
 
-    if has_local_in_progress
-        && let Ok(job_status) = poll_migration_status_internal(&state, &account_id).await
-        && TERMINAL_STATUSES.contains(&job_status.status.as_str())
-    {
-        info!(
-            status = %job_status.status,
-            "Server migration finished but client transition pending — prompting user"
-        );
-        return Ok(MigrationCheckResult {
-            needs_migration: false,
-            file_count: 0,
-            total_size: 0,
-            files: vec![],
-            sync_path: None,
-            is_resuming: false,
-            needs_completion: true,
-            completion_status: Some(job_status.status),
-        });
+    if has_local_in_progress {
+        if let Ok(job_status) = poll_migration_status_internal(&state, &account_id).await {
+            if job_status.status == "in_progress" {
+                info!(
+                    completed = job_status.completed,
+                    total = job_status.total,
+                    "Server migration still in progress — resuming tracking"
+                );
+                return Ok(MigrationCheckResult {
+                    needs_migration: false,
+                    file_count: 0,
+                    total_size: 0,
+                    files: vec![],
+                    sync_path: None,
+                    is_resuming: false,
+                    needs_completion: false,
+                    completion_status: None,
+                    is_in_progress: true,
+                    progress_completed: job_status.completed as u64,
+                    progress_total: job_status.total as u64,
+                    progress_failed: job_status.failed as u64,
+                });
+            }
+            if TERMINAL_STATUSES.contains(&job_status.status.as_str()) {
+                info!(
+                    status = %job_status.status,
+                    "Server migration finished but client transition pending — prompting user"
+                );
+                return Ok(MigrationCheckResult {
+                    needs_migration: false,
+                    file_count: 0,
+                    total_size: 0,
+                    files: vec![],
+                    sync_path: None,
+                    is_resuming: false,
+                    needs_completion: true,
+                    completion_status: Some(job_status.status),
+                    is_in_progress: false,
+                    progress_completed: 0,
+                    progress_total: 0,
+                    progress_failed: 0,
+                });
+            }
+        }
     }
 
     Ok(MigrationCheckResult {
@@ -358,6 +399,10 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
         is_resuming: false,
         needs_completion: false,
         completion_status: None,
+        is_in_progress: false,
+        progress_completed: 0,
+        progress_total: 0,
+        progress_failed: 0,
     })
 }
 
@@ -1100,12 +1145,20 @@ mod tests {
             is_resuming: false,
             needs_completion: false,
             completion_status: None,
+            is_in_progress: false,
+            progress_completed: 0,
+            progress_total: 0,
+            progress_failed: 0,
         };
 
         let json = serde_json::to_string(&result).expect("serialization failed");
         assert!(json.contains("\"needs_migration\":true"));
         assert!(json.contains("\"file_count\":3"));
         assert!(json.contains("\"needs_completion\":false"));
+        assert!(json.contains("\"is_in_progress\":false"));
+        assert!(json.contains("\"progress_completed\":0"));
+        assert!(json.contains("\"progress_total\":0"));
+        assert!(json.contains("\"progress_failed\":0"));
     }
 
     #[test]
