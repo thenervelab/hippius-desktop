@@ -6,7 +6,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { saveHcfsConfig } from "@/lib/utils/hcfsConfigUtils";
 import { syncEngineStatusAtom, isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
-import { migrationCheckAtom, migrationLockAtom, migrationProgressAtom } from "@/lib/global-atoms/migrationAtoms";
+import { migrationCheckAtom, migrationLockAtom, migrationProgressAtom, RESET_MIGRATION_CHECK_STATE } from "@/lib/global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
@@ -309,14 +309,7 @@ export function useMigration(): UseMigrationReturn {
       console.error("[Migration] Dismiss (skip) failed:", err);
       toast.error("Failed to save your choice. Please try again.");
     }
-    appStore.set(migrationCheckAtom, {
-      checked: true,
-      needsMigration: false,
-      fileCount: 0,
-      totalSize: 0,
-      shouldCheck: false,
-      syncPath: null,
-    });
+    appStore.set(migrationCheckAtom, RESET_MIGRATION_CHECK_STATE);
     appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0, failed: 0 });
     setCurrentStep(null);
   }, []);
@@ -348,14 +341,7 @@ export function useMigration(): UseMigrationReturn {
 
     appStore.set(migrationLockAtom, false);
     appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0, failed: 0 });
-    appStore.set(migrationCheckAtom, {
-      checked: true,
-      needsMigration: false,
-      fileCount: 0,
-      totalSize: 0,
-      shouldCheck: false,
-      syncPath: null,
-    });
+    appStore.set(migrationCheckAtom, RESET_MIGRATION_CHECK_STATE);
     setCurrentStep(null);
     setSuccessCount(0);
     setFailedCount(0);
@@ -374,14 +360,7 @@ export function useMigration(): UseMigrationReturn {
   const dismissAfterError = useCallback(() => {
     appStore.set(migrationLockAtom, false);
     appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0, failed: 0 });
-    appStore.set(migrationCheckAtom, {
-      checked: true,
-      needsMigration: false,
-      fileCount: 0,
-      totalSize: 0,
-      shouldCheck: false,
-      syncPath: null,
-    });
+    appStore.set(migrationCheckAtom, RESET_MIGRATION_CHECK_STATE);
     setCurrentStep(null);
     setTransitionError(null);
   }, []);

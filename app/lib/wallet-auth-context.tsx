@@ -19,7 +19,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useTrayInit, clearLoginStatusCache } from "./hooks/useTraySync";
 import { tryAutoInitSync } from "./hooks/useHcfsSync";
 import { appStore } from "./store/jotaiStore";
-import { migrationCheckAtom } from "./global-atoms/migrationAtoms";
+import { migrationCheckAtom, DEFAULT_MIGRATION_CHECK_STATE } from "./global-atoms/migrationAtoms";
 import { splashCompleteAtom } from "./global-atoms/splashAtoms";
 import { useAtomValue } from "jotai";
 
@@ -53,14 +53,7 @@ function buildOAuthSession(
 
 /** Signal MigrationChecker to run the single authoritative check_migration call. */
 function triggerMigrationCheck() {
-  appStore.set(migrationCheckAtom, {
-    checked: false,
-    needsMigration: false,
-    fileCount: 0,
-    totalSize: 0,
-    shouldCheck: true,
-    syncPath: null,
-  });
+  appStore.set(migrationCheckAtom, { ...DEFAULT_MIGRATION_CHECK_STATE, shouldCheck: true });
 }
 
 interface WalletContextType {

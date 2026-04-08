@@ -11,14 +11,22 @@ export interface MigrationCheckState {
   syncPath: string | null;
 }
 
-export const migrationCheckAtom = atom<MigrationCheckState>({
+export const DEFAULT_MIGRATION_CHECK_STATE: MigrationCheckState = {
   checked: false,
   needsMigration: false,
   fileCount: 0,
   totalSize: 0,
   shouldCheck: false,
   syncPath: null,
-});
+};
+
+/** Reset state used after migration completes, is skipped, or errors out. */
+export const RESET_MIGRATION_CHECK_STATE: MigrationCheckState = {
+  ...DEFAULT_MIGRATION_CHECK_STATE,
+  checked: true,
+};
+
+export const migrationCheckAtom = atom<MigrationCheckState>(DEFAULT_MIGRATION_CHECK_STATE);
 
 
 /** When true, sync cycles and drive operations are blocked (server-side migration in progress). */
