@@ -941,6 +941,9 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
         *watcher_guard = None;
     }
 
+    // 4b. Clean up session-skip exclude patterns before drives are removed.
+    crate::sync::failure_commands::cleanup_session_skips(&app_state).await;
+
     // 5. Clear drives map and reset in-memory state.
     {
         let mut guard = sync.drives.lock().await;

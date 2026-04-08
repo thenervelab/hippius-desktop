@@ -49,6 +49,8 @@ pub struct AppState {
     /// Notified when a drive is removed from the registry, allowing
     /// `stop_drive_and_wait` to wake without polling.
     pub drive_removed_notify: tokio::sync::Notify,
+    /// Per-file consecutive failure counters and session-skip state.
+    pub file_failures: crate::sync::failure_tracking::FileFailureState,
 }
 
 impl Default for AppState {
@@ -88,6 +90,7 @@ impl AppState {
             health_client,
             api_client: reqwest::Client::builder().build().expect("Failed to build API HTTP client"),
             drive_removed_notify: tokio::sync::Notify::new(),
+            file_failures: crate::sync::failure_tracking::FileFailureState::new(),
         }
     }
 

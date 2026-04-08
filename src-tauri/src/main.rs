@@ -245,6 +245,10 @@ fn main() {
             crate::sync::selective::remove_exclude_pattern,
             crate::sync::selective::is_file_excluded,
             crate::sync::selective::apply_sync_selection,
+            // Failure resolution (skip / exclude / retry)
+            crate::sync::failure_commands::sp_skip_file,
+            crate::sync::failure_commands::sp_exclude_file,
+            crate::sync::failure_commands::sp_retry_file,
             // Stage & conflict resolution
             crate::sync::control::stage_changes,
             crate::sync::control::sync_with_conflict_resolutions,

@@ -7,6 +7,8 @@ pub mod config;
 pub mod control;
 pub mod device;
 pub mod events;
+pub mod failure_commands;
+pub mod failure_tracking;
 pub mod files;
 pub mod folders;
 pub mod lifecycle;
