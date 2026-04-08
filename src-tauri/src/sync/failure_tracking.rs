@@ -97,13 +97,18 @@ impl FileFailureState {
     pub fn just_reached_threshold(&self, label: &str, path: &str) -> bool {
         let key = Self::key(label, path);
         let counts = self.counts.lock().expect("failure counts lock poisoned");
-        counts.get(&key).is_some_and(|(c, _)| *c == FAILURE_THRESHOLD)
+        counts
+            .get(&key)
+            .is_some_and(|(c, _)| *c >= FAILURE_THRESHOLD && *c % FAILURE_THRESHOLD == 0)
     }
 
     pub fn skip_file(&self, label: &str, path: &str) {
         let key = Self::key(label, path);
-        let mut skipped = self.skipped.lock().expect("skipped files lock poisoned");
-        skipped.insert(key.clone());
+        {
+            let mut skipped = self.skipped.lock().expect("skipped files lock poisoned");
+            skipped.insert(key.clone());
+        }
+        // Drop skipped guard before acquiring counts to avoid lock ordering issues.
         let mut counts = self.counts.lock().expect("failure counts lock poisoned");
         counts.remove(&key);
     }
@@ -141,5 +146,133 @@ impl FileFailureState {
 impl Default for FileFailureState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_failure_increments_count() {
+        let state = FileFailureState::new();
+        assert_eq!(state.record_failure("drive1", "docs/report.pdf", None), 1);
+        assert_eq!(state.record_failure("drive1", "docs/report.pdf", None), 2);
+        assert_eq!(state.record_failure("drive1", "docs/report.pdf", None), 3);
+    }
+
+    #[test]
+    fn clear_failure_resets_count() {
+        let state = FileFailureState::new();
+        state.record_failure("drive1", "a.txt", None);
+        state.record_failure("drive1", "a.txt", None);
+        state.clear_failure("drive1", "a.txt");
+        // After clearing, the next record_failure should start from 1 again.
+        assert_eq!(state.record_failure("drive1", "a.txt", None), 1);
+    }
+
+    #[test]
+    fn clear_all_for_label_only_affects_target() {
+        let state = FileFailureState::new();
+        state.record_failure("alpha", "file.txt", None);
+        state.record_failure("alpha", "file.txt", None);
+        state.record_failure("beta", "other.txt", None);
+        state.record_failure("beta", "other.txt", None);
+
+        state.clear_all_for_label("alpha");
+
+        // alpha entries should be gone; next failure starts at 1.
+        assert_eq!(state.record_failure("alpha", "file.txt", None), 1);
+        // beta should be untouched; next failure increments to 3.
+        assert_eq!(state.record_failure("beta", "other.txt", None), 3);
+    }
+
+    #[test]
+    fn files_at_threshold_returns_only_reached() {
+        let state = FileFailureState::new();
+        // Bring one file to threshold.
+        state.record_failure("drive1", "fail.rs", Some("io error".to_string()));
+        state.record_failure("drive1", "fail.rs", Some("io error".to_string()));
+        state.record_failure("drive1", "fail.rs", Some("io error".to_string()));
+        // Keep the other file below threshold.
+        state.record_failure("drive1", "ok.rs", None);
+        state.record_failure("drive1", "ok.rs", None);
+
+        let at_threshold = state.files_at_threshold();
+        assert_eq!(at_threshold.len(), 1);
+        assert_eq!(at_threshold[0].path, "fail.rs");
+        assert_eq!(at_threshold[0].failure_count, 3);
+    }
+
+    #[test]
+    fn just_reached_threshold_fires_periodically() {
+        let state = FileFailureState::new();
+        state.record_failure("drive1", "photo.png", None);
+        assert!(!state.just_reached_threshold("drive1", "photo.png"));
+
+        state.record_failure("drive1", "photo.png", None);
+        assert!(!state.just_reached_threshold("drive1", "photo.png"));
+
+        // Third failure hits FAILURE_THRESHOLD -- fires.
+        state.record_failure("drive1", "photo.png", None);
+        assert!(state.just_reached_threshold("drive1", "photo.png"));
+
+        // 4th and 5th: between thresholds -- does not fire.
+        state.record_failure("drive1", "photo.png", None);
+        assert!(!state.just_reached_threshold("drive1", "photo.png"));
+        state.record_failure("drive1", "photo.png", None);
+        assert!(!state.just_reached_threshold("drive1", "photo.png"));
+
+        // 6th failure: fires again (multiple of threshold).
+        state.record_failure("drive1", "photo.png", None);
+        assert!(state.just_reached_threshold("drive1", "photo.png"));
+    }
+
+    #[test]
+    fn skip_file_clears_counter_and_tracks() {
+        let state = FileFailureState::new();
+        state.record_failure("drive1", "video.mp4", None);
+        state.record_failure("drive1", "video.mp4", None);
+        state.record_failure("drive1", "video.mp4", None);
+
+        // File should be at threshold before skipping.
+        assert!(state.is_at_threshold("drive1", "video.mp4"));
+
+        state.skip_file("drive1", "video.mp4");
+
+        // Counter should be cleared after skipping.
+        assert!(!state.is_at_threshold("drive1", "video.mp4"));
+
+        // The file should appear in the skipped set.
+        let skipped = state.skipped_paths_for_label("drive1");
+        assert!(skipped.contains(&"video.mp4".to_string()));
+    }
+
+    #[test]
+    fn unskip_and_retry() {
+        let state = FileFailureState::new();
+        state.record_failure("drive1", "archive.zip", None);
+        state.skip_file("drive1", "archive.zip");
+
+        // Verify it is skipped.
+        assert!(!state.skipped_paths_for_label("drive1").is_empty());
+
+        state.unskip_file("drive1", "archive.zip");
+
+        // Skipped set should now be empty.
+        assert!(state.skipped_paths_for_label("drive1").is_empty());
+    }
+
+    #[test]
+    fn error_stored_with_latest_failure() {
+        let state = FileFailureState::new();
+        state.record_failure("drive1", "data.csv", Some("permission denied".to_string()));
+        state.record_failure("drive1", "data.csv", Some("disk full".to_string()));
+        state.record_failure("drive1", "data.csv", Some("network timeout".to_string()));
+
+        let at_threshold = state.files_at_threshold();
+        assert_eq!(at_threshold.len(), 1);
+        // The error field should hold the latest failure message.
+        assert_eq!(at_threshold[0].error.as_deref(), Some("network timeout"));
     }
 }

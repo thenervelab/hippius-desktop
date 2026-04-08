@@ -56,86 +56,68 @@ impl TauriSyncBridge {
         self.app.get().cloned()
     }
 
-    /// Inspect the progress tracker after a sync cycle completes to update
-    /// per-file failure counters. If any file reaches the threshold, emit
-    /// the `FILES_FAILED_REPEATEDLY` event to trigger the frontend modal.
-    #[allow(clippy::unused_self)]
-    fn update_failure_counts(
-        &self,
-        app: &AppHandle,
-        label: &str,
-        _files_uploaded: usize,
-        _files_downloaded: usize,
-    ) {
-        use hcfs_client::engine::progress::state::FileStatus;
-        use tauri::Manager;
+}
 
-        let app_state = app.state::<crate::app_state::AppState>();
-        let failure_state = &app_state.file_failures;
+/// Inspect the progress tracker after a sync cycle completes to update
+/// per-file failure counters. If any file reaches the threshold, emit
+/// the `FILES_FAILED_REPEATEDLY` event to trigger the frontend modal.
+fn update_failure_counts(app: &AppHandle, label: &str) {
+    use hcfs_client::engine::progress::state::FileStatus;
+    use tauri::Manager;
 
-        // If the cycle had no expected files, nothing to track.
-        let has_any_failures = {
-            let state = app_state.sync.progress.lock_state();
-            state.current_session.as_ref().is_some_and(|session| {
-                session.files.values().any(|f| {
-                    f.label.as_ref() == label && matches!(f.status, FileStatus::Error)
-                })
-            })
-        };
+    let app_state = app.state::<crate::app_state::AppState>();
+    let failure_state = &app_state.file_failures;
 
-        if !has_any_failures {
-            // All files succeeded for this label -- clear counters.
-            failure_state.clear_all_for_label(label);
+    // Single lock acquisition: extract failed and succeeded paths together
+    // so progress state can't change between reads.
+    let (failed_files, succeeded_paths): (Vec<(String, Option<String>)>, Vec<String>) = {
+        let state = app_state.sync.progress.lock_state();
+        let Some(session) = &state.current_session else {
             return;
-        }
-
-        // Collect failed files from the session.
-        let failed_files: Vec<(String, Option<String>)> = {
-            let state = app_state.sync.progress.lock_state();
-            state
-                .current_session
-                .as_ref()
-                .map(|session| {
-                    session
-                        .files
-                        .values()
-                        .filter(|f| f.label.as_ref() == label && matches!(f.status, FileStatus::Error))
-                        .map(|f| (f.path.to_string(), f.error.as_deref().map(str::to_owned)))
-                        .collect()
-                })
-                .unwrap_or_default()
         };
+        let failed: Vec<_> = session
+            .files
+            .values()
+            .filter(|f| f.label.as_ref() == label && matches!(f.status, FileStatus::Error))
+            .map(|f| (f.path.to_string(), f.error.as_deref().map(str::to_owned)))
+            .collect();
+        let succeeded: Vec<_> = session
+            .files
+            .values()
+            .filter(|f| f.label.as_ref() == label && matches!(f.status, FileStatus::Completed))
+            .map(|f| f.path.to_string())
+            .collect();
+        (failed, succeeded)
+    };
 
-        // Also clear counters for files that succeeded this cycle.
-        {
-            let state = app_state.sync.progress.lock_state();
-            if let Some(session) = &state.current_session {
-                for f in session.files.values() {
-                    if f.label.as_ref() == label && matches!(f.status, FileStatus::Completed) {
-                        failure_state.clear_failure(label, &f.path);
-                    }
-                }
-            }
+    if failed_files.is_empty() {
+        // All files succeeded for this label -- clear counters.
+        failure_state.clear_all_for_label(label);
+        return;
+    }
+
+    // Clear counters for files that succeeded this cycle.
+    for path in &succeeded_paths {
+        failure_state.clear_failure(label, path);
+    }
+
+    // Increment counters for failed files.
+    let mut any_newly_at_threshold = false;
+    for (path, error) in &failed_files {
+        failure_state.record_failure(label, path, error.clone());
+        if failure_state.just_reached_threshold(label, path) {
+            any_newly_at_threshold = true;
         }
+    }
 
-        // Increment counters for failed files.
-        let mut any_newly_at_threshold = false;
-        for (path, error) in &failed_files {
-            failure_state.record_failure(label, path, error.clone());
-            if failure_state.just_reached_threshold(label, path) {
-                any_newly_at_threshold = true;
-            }
-        }
-
-        // Emit the event if any file just reached the threshold.
-        if any_newly_at_threshold {
-            let at_threshold = failure_state.files_at_threshold();
-            if !at_threshold.is_empty() {
-                let _ = app.emit(
-                    super::events::FILES_FAILED_REPEATEDLY,
-                    super::events::FilesFailedRepeatedlyPayload { files: at_threshold },
-                );
-            }
+    // Emit the event if any file just reached the threshold.
+    if any_newly_at_threshold {
+        let at_threshold = failure_state.files_at_threshold();
+        if !at_threshold.is_empty() {
+            let _ = app.emit(
+                super::events::FILES_FAILED_REPEATEDLY,
+                super::events::FilesFailedRepeatedlyPayload { files: at_threshold },
+            );
         }
     }
 }
@@ -197,10 +179,10 @@ impl SyncEventHandler for TauriSyncBridge {
                     use tauri::Manager;
                     let app_state = app.state::<crate::app_state::AppState>();
                     app_state.sync.emit_snapshot(true);
-
-                    // Update per-file failure counters from the finalized session.
-                    self.update_failure_counts(&app, &label, files_uploaded, files_downloaded);
                 }
+
+                // Update per-file failure counters from the finalized session.
+                update_failure_counts(&app, &label);
 
                 let _ = app.emit(
                     events::SYNC_COMPLETED,

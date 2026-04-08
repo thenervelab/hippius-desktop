@@ -22,9 +22,8 @@ pub async fn sp_skip_file(
         let guard = state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
     };
-    if let Some(arc) = drive_arc
-        && let Ok(m) = arc.try_lock()
-    {
+    if let Some(arc) = drive_arc {
+        let m = arc.lock().await;
         let _ = m.add_exclude_pattern(&path);
     }
 
@@ -49,9 +48,8 @@ pub async fn sp_exclude_file(
         let guard = state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
     };
-    if let Some(arc) = drive_arc
-        && let Ok(m) = arc.try_lock()
-    {
+    if let Some(arc) = drive_arc {
+        let m = arc.lock().await;
         let _ = m.add_exclude_pattern(&path);
     }
 
@@ -77,9 +75,8 @@ pub async fn sp_retry_file(
         let guard = state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
     };
-    if let Some(arc) = drive_arc
-        && let Ok(m) = arc.try_lock()
-    {
+    if let Some(arc) = drive_arc {
+        let m = arc.lock().await;
         let _ = m.remove_exclude_pattern(&path);
     }
 
@@ -99,9 +96,8 @@ pub async fn cleanup_session_skips(state: &crate::app_state::AppState) {
             let guard = state.sync.drives.lock().await;
             guard.get(&label).map(|slot| slot.manager.clone())
         };
-        if let Some(arc) = drive_arc
-            && let Ok(m) = arc.try_lock()
-        {
+        if let Some(arc) = drive_arc {
+            let m = arc.lock().await;
             let _ = m.remove_exclude_pattern(&path);
         }
     }
