@@ -78,6 +78,7 @@ const MigrationChecker: React.FC = () => {
           transitionError={migration.transitionError}
           onDismiss={migration.dismissAfterError}
           migrationSucceeded={migration.migrationSucceeded}
+          isTransitioning={migration.isTransitioning}
         />
       )}
     </>

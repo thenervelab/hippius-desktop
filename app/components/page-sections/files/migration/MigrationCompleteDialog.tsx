@@ -17,6 +17,8 @@ export interface MigrationCompleteDialogProps {
   onDismiss?: () => void;
   /** Server-determined success state — overrides count-based computation when counts are unavailable (resume path). */
   migrationSucceeded?: boolean;
+  /** When true, the transition is in progress — disables the action button to prevent double-invocation. */
+  isTransitioning?: boolean;
 }
 
 const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
@@ -29,6 +31,7 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
   transitionError,
   onDismiss,
   migrationSucceeded,
+  isTransitioning,
 }) => {
   const effectiveFailedCount = Math.max(failedCount, failedFiles.length);
   // When migrationSucceeded is explicitly provided (resume path), use it as
@@ -145,6 +148,7 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
           <CardButton
             variant="primary"
             className="w-full h-12 text-base font-medium"
+            disabled={isTransitioning}
             onClick={() => {
               if (transitionError) {
                 onDismiss?.();

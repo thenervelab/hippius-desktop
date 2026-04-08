@@ -182,4 +182,13 @@ async fn migrate_skips_empty_phrases() {
     .await
     .unwrap();
     assert_eq!(ver_empty, 0, "Empty phrase should not be migrated");
+
+    // Whitespace-only row: selected by SQL (not empty string) but skipped by trim() check
+    let (ver_spaces,): (i32,) = sqlx::query_as(
+        "SELECT encryption_version FROM sub_accounts WHERE account_id = 'acct-spaces'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ver_spaces, 0, "Whitespace-only phrase should not be migrated");
 }

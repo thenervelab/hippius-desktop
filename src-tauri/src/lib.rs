@@ -1,8 +1,9 @@
 //! Library target for the Hippius Desktop Tauri backend.
 //!
-//! Re-exports modules needed by integration tests. The binary entry
-//! point is `main.rs`; this lib target exists so that `cargo test
-//! --test <name>` can import symbols like `crypto::store::*`.
+//! Re-exports modules so integration tests (`cargo test --test <name>`)
+//! can import symbols like `crypto::store::*`. This is a binary
+//! application, not a published library — the public surface here is
+//! only consumed by tests.
 
 pub mod api;
 pub mod app_state;
