@@ -55,6 +55,89 @@ impl TauriSyncBridge {
     fn app(&self) -> Option<AppHandle> {
         self.app.get().cloned()
     }
+
+    /// Inspect the progress tracker after a sync cycle completes to update
+    /// per-file failure counters. If any file reaches the threshold, emit
+    /// the `FILES_FAILED_REPEATEDLY` event to trigger the frontend modal.
+    #[allow(clippy::unused_self)]
+    fn update_failure_counts(
+        &self,
+        app: &AppHandle,
+        label: &str,
+        _files_uploaded: usize,
+        _files_downloaded: usize,
+    ) {
+        use hcfs_client::engine::progress::state::FileStatus;
+        use tauri::Manager;
+
+        let app_state = app.state::<crate::app_state::AppState>();
+        let failure_state = &app_state.file_failures;
+
+        // If the cycle had no expected files, nothing to track.
+        let has_any_failures = {
+            let state = app_state.sync.progress.lock_state();
+            state.current_session.as_ref().is_some_and(|session| {
+                session.files.values().any(|f| {
+                    f.label.as_ref() == label && matches!(f.status, FileStatus::Error)
+                })
+            })
+        };
+
+        if !has_any_failures {
+            // All files succeeded for this label -- clear counters.
+            failure_state.clear_all_for_label(label);
+            return;
+        }
+
+        // Collect failed files from the session.
+        let failed_files: Vec<(String, Option<String>)> = {
+            let state = app_state.sync.progress.lock_state();
+            state
+                .current_session
+                .as_ref()
+                .map(|session| {
+                    session
+                        .files
+                        .values()
+                        .filter(|f| f.label.as_ref() == label && matches!(f.status, FileStatus::Error))
+                        .map(|f| (f.path.to_string(), f.error.as_deref().map(str::to_owned)))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        // Also clear counters for files that succeeded this cycle.
+        {
+            let state = app_state.sync.progress.lock_state();
+            if let Some(session) = &state.current_session {
+                for f in session.files.values() {
+                    if f.label.as_ref() == label && matches!(f.status, FileStatus::Completed) {
+                        failure_state.clear_failure(label, &f.path);
+                    }
+                }
+            }
+        }
+
+        // Increment counters for failed files.
+        let mut any_newly_at_threshold = false;
+        for (path, error) in &failed_files {
+            failure_state.record_failure(label, path, error.clone());
+            if failure_state.just_reached_threshold(label, path) {
+                any_newly_at_threshold = true;
+            }
+        }
+
+        // Emit the event if any file just reached the threshold.
+        if any_newly_at_threshold {
+            let at_threshold = failure_state.files_at_threshold();
+            if !at_threshold.is_empty() {
+                let _ = app.emit(
+                    super::events::FILES_FAILED_REPEATEDLY,
+                    super::events::FilesFailedRepeatedlyPayload { files: at_threshold },
+                );
+            }
+        }
+    }
 }
 
 impl SyncEventHandler for TauriSyncBridge {
@@ -114,6 +197,9 @@ impl SyncEventHandler for TauriSyncBridge {
                     use tauri::Manager;
                     let app_state = app.state::<crate::app_state::AppState>();
                     app_state.sync.emit_snapshot(true);
+
+                    // Update per-file failure counters from the finalized session.
+                    self.update_failure_counts(&app, &label, files_uploaded, files_downloaded);
                 }
 
                 let _ = app.emit(

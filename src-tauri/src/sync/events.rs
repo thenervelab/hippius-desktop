@@ -36,6 +36,8 @@ pub const ACTIVITY_UPDATED: &str = "hcfs_activity_updated";
 pub const AUTH_RELOGIN_REQUIRED: &str = "hcfs_auth_relogin_required";
 /// Emitted with a full progress snapshot for the sync status widget.
 pub const PROGRESS_SNAPSHOT: &str = "sync_progress_snapshot";
+/// Emitted when files have repeatedly failed to sync (threshold reached).
+pub const FILES_FAILED_REPEATEDLY: &str = "hcfs_files_failed_repeatedly";
 
 // ── Payload structs for direct Tauri emission ──────────────────────────
 // Used by lifecycle.rs (progress callbacks) and control.rs (manual sync).
@@ -188,4 +190,11 @@ impl SyncStartedPayload {
 #[derive(Serialize, Clone)]
 pub struct AuthRequiredPayload {
     pub error: String,
+}
+
+/// Emitted when files have failed to sync repeatedly.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FilesFailedRepeatedlyPayload {
+    pub files: Vec<crate::sync::failure_tracking::FailedFileInfo>,
 }
