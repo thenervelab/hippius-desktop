@@ -46,3 +46,15 @@ export const DEFAULT_SYNC_ENGINE_HEALTH: SyncEngineHealthState = {
 export const syncEngineHealthAtom = atom<SyncEngineHealthState>(
   DEFAULT_SYNC_ENGINE_HEALTH
 );
+
+/** Info about a file that has repeatedly failed to sync. */
+export interface FailedFileInfo {
+  label: string;
+  path: string;
+  fileName: string;
+  error: string | null;
+  failureCount: number;
+}
+
+/** Files that have repeatedly failed to sync (null when no failures at threshold). */
+export const failedFilesAtom = atom<FailedFileInfo[] | null>(null);
