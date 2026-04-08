@@ -13,7 +13,7 @@ use zeroize::Zeroizing;
 
 /// HKDF info strings for key separation.
 pub const INFO_SUB_ACCOUNTS: &str = "hippius-sub-account-encryption";
-pub const INFO_DRIVE_PASSWORD: &str = "hippius-drive-password-encryption";
+
 
 /// Minimum length of `base64(nonce[12] || tag[16])` — no ciphertext.
 const MIN_DECODED_LEN: usize = 12 + 16;
@@ -49,14 +49,7 @@ pub fn sub_account_key(mnemonic: &str, account_id: &str) -> Result<Zeroizing<[u8
     derive_key(mnemonic, account_id, INFO_SUB_ACCOUNTS)
 }
 
-/// Derives the drive-password encryption key for the given mnemonic and account.
-///
-/// # Errors
-///
-/// Returns [`crate::error::AppError::Crypto`] if `mnemonic` is not a valid BIP-39 mnemonic.
-pub fn drive_password_key(mnemonic: &str, account_id: &str) -> Result<Zeroizing<[u8; 32]>, crate::error::AppError> {
-    derive_key(mnemonic, account_id, INFO_DRIVE_PASSWORD)
-}
+
 
 /// Encrypts a plaintext string with ChaCha20-Poly1305.
 ///
