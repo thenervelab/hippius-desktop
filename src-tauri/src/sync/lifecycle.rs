@@ -135,6 +135,16 @@ pub async fn add_local_sync_folder(
     let state = app.state::<crate::app_state::AppState>();
     let pool = state.pool()?;
 
+    // Enforce credit eligibility at the IPC boundary. Refuses to add a
+    // new sync folder if the user has zero marketplace credits — see
+    // `crate::billing::eligibility::thresholds::FOLDER_SYNC`.
+    crate::billing::eligibility::require_eligible(
+        &state,
+        &account_id,
+        crate::billing::eligibility::InsufficientCreditsAction::FolderSync,
+    )
+    .await?;
+
     // 1. Generate unique label
     let owner = account_key(&account_id);
     let rows = sqlx::query("SELECT label FROM sync_paths WHERE owner = ?")

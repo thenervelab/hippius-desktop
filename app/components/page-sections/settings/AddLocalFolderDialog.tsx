@@ -27,7 +27,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   onSuccess,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
-  const { hasSufficientCredits } = useCreditCheck();
+  const { checkEligibility } = useCreditCheck();
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [folderName, setFolderName] = useState<string>("");
   const [isAdding, setIsAdding] = useState(false);
@@ -106,7 +106,10 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
       return;
     }
 
-    if (!hasSufficientCredits("folder-sync")) {
+    // Live Rust eligibility check (replaces legacy stale-cache gate).
+    // The Rust `add_local_sync_folder` IPC also enforces this internally
+    // via `require_eligible(...)?` so the gate is impossible to bypass.
+    if (!(await checkEligibility("folder-sync"))) {
       handleClose();
       return;
     }

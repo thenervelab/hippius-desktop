@@ -41,10 +41,14 @@ type AddButtonProps = {
   defaultFolderLabel?: string | null;
 };
 
-// Add ref interface for parent components to trigger the dialog
+// Add ref interface for parent components to trigger the dialog.
+// `openWithFiles` and `openWithPaths` are async because they perform a
+// live credit-eligibility check via Rust before opening the dialog.
+// Callers that don't care about the result can fire-and-forget; the
+// hook handles surfacing the insufficient-credits dialog itself.
 export interface AddButtonRef {
-  openWithFiles: (files: FileList) => void;
-  openWithPaths: (paths: string[]) => void;
+  openWithFiles: (files: FileList) => Promise<void>;
+  openWithPaths: (paths: string[]) => Promise<void>;
   isDialogOpen: () => boolean;
 }
 
@@ -61,14 +65,14 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     );
     const isLoading = uploadingState !== "idle";
     const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
-    const { hasSufficientCredits } = useCreditCheck();
+    const { checkEligibility } = useCreditCheck();
 
     // Expose methods to parent components
     useImperativeHandle(
       ref,
       () => ({
-        openWithFiles: (files: FileList) => {
-          if (!hasSufficientCredits("file-upload")) return;
+        openWithFiles: async (files: FileList) => {
+          if (!(await checkEligibility("file-upload"))) return;
           if (syncEngineStatus === "stopped") {
             toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading files.");
             return;
@@ -77,8 +81,8 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           setDroppedFiles(files);
           setIsOpen(true);
         },
-        openWithPaths: (paths: string[]) => {
-          if (!hasSufficientCredits("file-upload")) return;
+        openWithPaths: async (paths: string[]) => {
+          if (!(await checkEligibility("file-upload"))) return;
           if (syncEngineStatus === "stopped") {
             toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading files.");
             return;
@@ -89,7 +93,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         },
         isDialogOpen: () => isOpen
       }),
-      [isOpen, syncEngineStatus, hasSufficientCredits]
+      [isOpen, syncEngineStatus, checkEligibility]
     );
 
     // Memoize title to prevent recalculation
@@ -155,8 +159,10 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       <>
         <CardButton
           className={cn("h-10 w-fit p-1", externalDisabled && "opacity-50 cursor-not-allowed", className)}
-          onClick={() => {
-            if (IS_SYNC_PAUSED) return;            if (!hasSufficientCredits("file-upload")) return;            if (syncEngineStatus === "stopped") {
+          onClick={async () => {
+            if (IS_SYNC_PAUSED) return;
+            if (!(await checkEligibility("file-upload"))) return;
+            if (syncEngineStatus === "stopped") {
               toast.warning("Syncing is stopped. Resume syncing from Settings → Sync & Storage before uploading files.");
               return;
             }

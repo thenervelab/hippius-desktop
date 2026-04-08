@@ -81,6 +81,15 @@ pub enum NotReadyKind {
     /// signing operation for a session restored from disk before the
     /// user has unlocked with a passcode).
     SigningKeyUnavailable,
+    /// User has insufficient credits to perform the requested action.
+    /// Raised by `crate::billing::eligibility::require_eligible` from
+    /// the IPC entry point of every gated action (file/folder upload,
+    /// folder sync, VM creation). The frontend dialog already knows
+    /// which action was attempted from the IPC name it called, so the
+    /// action discriminant is intentionally NOT carried in this variant
+    /// — keeping it as a unit variant preserves the existing
+    /// `screaming_snake_case` JSON wire format.
+    InsufficientCredits,
 }
 
 impl std::fmt::Display for NotReadyKind {
@@ -112,6 +121,9 @@ impl std::fmt::Display for NotReadyKind {
                     f,
                     "This action requires re-entering your seed phrase. Please log out and log in again with your seed phrase to continue."
                 )
+            }
+            Self::InsufficientCredits => {
+                write!(f, "Insufficient credits to perform this action.")
             }
         }
     }
@@ -346,6 +358,7 @@ mod tests {
             (NotReadyKind::MasterMnemonicUnrecoverable, "MASTER_MNEMONIC_UNRECOVERABLE"),
             (NotReadyKind::NotEnoughDiskSpace, "NOT_ENOUGH_DISK_SPACE"),
             (NotReadyKind::SigningKeyUnavailable, "SIGNING_KEY_UNAVAILABLE"),
+            (NotReadyKind::InsufficientCredits, "INSUFFICIENT_CREDITS"),
         ];
         for (kind, expected) in cases {
             let json = serde_json::to_value(&kind).expect("serialize");

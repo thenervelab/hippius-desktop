@@ -35,6 +35,7 @@ use crate::billing::charts::{
     transform_marketplace_credits,
 };
 use crate::billing::credits::{check_sync_eligibility, get_credits_planck, get_user_credits_balance};
+use crate::billing::eligibility::check_action_eligibility;
 use crate::billing::queries::{
     get_add_credit_events, get_add_credit_events_ui, get_balance_transfers, get_balance_transfers_ui, get_billing_transactions,
     get_billing_transactions_ui, get_credits_ui, get_deposit_address, get_file_nodes, get_files_count, get_files_size, get_indexer_credits,
@@ -315,6 +316,7 @@ fn main() {
             get_user_credits_balance,
             get_credits_planck,
             check_sync_eligibility,
+            check_action_eligibility,
             get_billing_transactions,
             get_subscription_plans,
             get_subscription_data,

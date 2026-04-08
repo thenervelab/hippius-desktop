@@ -69,48 +69,33 @@ pub struct SyncEligibility {
     pub reason: Option<String>,
 }
 
+/// **Backwards-compatible alias** for the original sync-eligibility check.
+///
+/// New code should call `check_action_eligibility` in `billing/eligibility.rs`
+/// directly with `InsufficientCreditsAction::FolderSync`. This wrapper exists
+/// so that any pre-existing FE caller of `check_sync_eligibility` keeps
+/// working without a behavior change — it returns the same `SyncEligibility`
+/// shape and the same legacy reason codes (`balance_zero` / `no_credits`).
 #[tauri::command]
 pub async fn check_sync_eligibility(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<SyncEligibility, AppError> {
-    let pool = state.pool()?;
+    use crate::billing::eligibility::{check_action_eligibility_inner, InsufficientCreditsAction};
 
-    // Check chain balance via substrate (if client is available).
-    // Clone the Arc and drop the lock guard before any .await.
-    let substrate_client = {
-        let guard = state.blockchain.client.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard.clone()
+    let result = check_action_eligibility_inner(&state, &account_id, InsufficientCreditsAction::FolderSync).await?;
+    if result.eligible {
+        return Ok(SyncEligibility { eligible: true, reason: None });
+    }
+    // Map the new `reason` codes back to the legacy ones the old IPC
+    // contract used. The new shape is richer (current_balance,
+    // required_balance) but legacy callers only consumed `reason`.
+    let legacy_reason = match result.reason.as_deref() {
+        Some("balance_zero") => "balance_zero",
+        // The legacy reason for "credits below threshold" was "no_credits",
+        // since the only legacy threshold was `> 0`. Preserve that name.
+        _ => "no_credits",
     };
-    if let Some(client) = substrate_client
-        && let Ok(acct) = account_id.parse::<subxt::utils::AccountId32>()
-    {
-        let query = crate::blockchain::runtime::custom_runtime::storage().system().account(&acct);
-        if let Ok(storage) = client.storage().at_latest().await
-            && let Ok(info) = storage.fetch(&query).await
-        {
-            let free = info.map_or(0, |i| i.data.free);
-            if free == 0 {
-                return Ok(SyncEligibility {
-                    eligible: false,
-                    reason: Some("balance_zero".into()),
-                });
-            }
-        }
-    }
-
-    // Check marketplace credits
-    let client = ApiClient::new(state.api_client.clone(), pool.clone());
-    let resp: serde_json::Value = client.get("/api/billing/credits/balance/", &account_id).await?;
-    let credit_str = resp.get("balance").and_then(|v| v.as_str()).unwrap_or("0");
-    let credits: f64 = credit_str.parse().unwrap_or(0.0);
-    if credits <= 0.0 {
-        return Ok(SyncEligibility {
-            eligible: false,
-            reason: Some("no_credits".into()),
-        });
-    }
-
     Ok(SyncEligibility {
-        eligible: true,
-        reason: None,
+        eligible: false,
+        reason: Some(legacy_reason.into()),
     })
 }
 

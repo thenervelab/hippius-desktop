@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { useUserFiles } from "@/app/lib/hooks/use-user-files";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useSetAtom, useAtomValue } from "jotai";
@@ -36,7 +35,6 @@ export type UploadOptions = {
 export function useFilesUpload(handlers: UploadFilesHandlers) {
   const { onSuccess, onError } = handlers;
   const setProgress = useSetAtom(uploadProgressAtom);
-  const { data: credits } = useUserCredits();
   const { refetch: refetchUserFiles } = useUserFiles();
   const { polkadotAddress } = useWalletAuth();
   const queryClient = useAtomValue(queryClientAtom);
@@ -84,13 +82,13 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     setProgress(0);
 
     try {
-      // Credits may still be loading on first app render; surface a clearer message.
-      if (credits === undefined) {
-        throw new Error("Credits are still loading. Please try again in a moment.");
-      }
-      if (credits <= BigInt(0)) {
-        throw new Error("Insufficient Credits. Please add credits.");
-      }
+      // NOTE: there used to be TS-side credit checks here that read from a
+      // `staleTime: Infinity` `useUserCredits` cache and threw on
+      // `credits <= 0n`. Both are gone — `useCreditCheck` (live Rust call)
+      // now gates at the click handler, AND the Rust `add_files` IPC
+      // enforces eligibility internally via `require_eligible(...)?` so
+      // any bypass surfaces a structured `NotReady(InsufficientCredits)`
+      // error in the catch block below.
 
       const syncPath = syncPathOverride ?? (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
       if (!syncPath) {

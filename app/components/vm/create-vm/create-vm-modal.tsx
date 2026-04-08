@@ -19,9 +19,7 @@ import useVMImages from "@/app/lib/hooks/api/useVMImages";
 import useCreateVM, {
   type CreateVMRequest,
 } from "@/app/lib/hooks/api/useCreateVM";
-import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
-import { useSetAtom } from "jotai";
-import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import useVMApplications from "@/app/lib/hooks/api/useVMApplications";
 
 type FieldName = "instanceName" | "operatingSystem" | "image" | "sshKey";
@@ -97,13 +95,14 @@ const CreateVMModal: React.FC<Props> = ({
   // Use create VM mutation
   const { mutateAsync: createVM, isPending: isCreatingVM } = useCreateVM();
 
-  // Fetch user credits
-  const {
-    data: credits,
-    isFetching: isCreditsFetching,
-    isLoading: isCreditsLoading,
-  } = useUserCredits();
-  const setInsufficientCreditsReason = useSetAtom(insufficientCreditsDialogOpenAtom);
+  // Live credit eligibility check (replaces the legacy hardcoded
+  // `creditsNumber < 10` JSX comparison and the stale-cache
+  // `useUserCredits` read). The threshold lives in Rust at
+  // `crate::billing::eligibility::thresholds::VM_CREATION` and the
+  // `create_vm` IPC also enforces it via `require_eligible(...)?`,
+  // so this gate is purely UX (so we don't navigate the user to the
+  // VM creation flow only to fail at the spawn step).
+  const { checkEligibility } = useCreditCheck();
 
   // Extract unique operating systems from VM images
   const operatingSystems = React.useMemo(() => {
@@ -280,23 +279,11 @@ const CreateVMModal: React.FC<Props> = ({
 
   const handleSubmit = async () => {
     try {
-      // Check if credits are loading
-      if (isCreditsLoading || isCreditsFetching) {
-        toast.error("Credits Loading", {
-          description: "Please wait while we load your credits balance.",
-          duration: Infinity,
-          closeButton: true,
-        });
+      // Live Rust eligibility check. Threshold (≥ 10 credits) lives in
+      // `crate::billing::eligibility::thresholds::VM_CREATION` — the
+      // only place that number is allowed to live now.
+      if (!(await checkEligibility("vm-creation"))) {
         return;
-      }
-
-      // Check if user has at least 10 credits
-      if (credits !== undefined) {
-        const creditsNumber = Number(credits) / Math.pow(10, 18);
-        if (creditsNumber < 10) {
-          setInsufficientCreditsReason("vm-creation");
-          return;
-        }
       }
 
       // Find the selected image ID from the slug
@@ -606,12 +593,7 @@ const CreateVMModal: React.FC<Props> = ({
                       <Button
                         className={`flex gap-x-2 items-center  h-[3.75rem] w-full`}
                         onClick={handleSubmit}
-                        disabled={
-                          isLoading ||
-                          isCreatingVM ||
-                          isCreditsLoading ||
-                          isCreditsFetching
-                        }
+                        disabled={isLoading || isCreatingVM}
                       >
                         {" "}
                         <div className="font-medium text-base leading-[1.375rem] tracking-tight">

@@ -95,7 +95,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const isFetching = isRecentFiles
     ? isRecentFilesFetching
     : isRegularFilesFetching;
-  const addButtonRef = useRef<{ openWithFiles(files: FileList): void; openWithPaths(paths: string[]): void; isDialogOpen(): boolean }>(null);
+  const addButtonRef = useRef<{ openWithFiles(files: FileList): Promise<void>; openWithPaths(paths: string[]): Promise<void>; isDialogOpen(): boolean }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
 
   // Folder upload dialog state (lifted from FilesHeader so context menus can trigger it)

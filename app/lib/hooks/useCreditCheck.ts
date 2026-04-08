@@ -1,27 +1,92 @@
 import { useCallback } from "react";
 import { useSetAtom } from "jotai";
-import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
-import { insufficientCreditsDialogOpenAtom, InsufficientCreditsReason } from "@/app/components/page-sections/files/atoms/query-atoms";
+import { invoke } from "@tauri-apps/api/core";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import {
+  insufficientCreditsDialogOpenAtom,
+  InsufficientCreditsReason,
+} from "@/app/components/page-sections/files/atoms/query-atoms";
 
 /**
- * Returns a function that checks whether the user has sufficient credits.
- * If credits are zero or unavailable, opens the InsufficientCreditsDialog
- * with the given reason and returns `false`. Otherwise returns `true`.
+ * Result shape returned by the Rust `check_action_eligibility` IPC.
+ * Mirrors `crate::billing::eligibility::ActionEligibility`.
+ */
+interface ActionEligibility {
+  eligible: boolean;
+  reason: string | null;
+  currentBalance: number;
+  requiredBalance: number;
+}
+
+/**
+ * Async credit-check hook backed by the Rust `check_action_eligibility`
+ * command. Replaces the legacy synchronous `hasSufficientCredits` helper
+ * that read from a `staleTime: Infinity` TanStack Query cache.
+ *
+ * Why this changed:
+ *
+ * - The old hook compared a cached `useUserCredits` value against `0n`
+ *   in the click handler. Since the cache never expired, the gate was
+ *   wrong in both directions: it blocked users who had just topped up
+ *   (cache says 0, server says 100) AND let through users who had just
+ *   spent down (cache says 100, server says 0).
+ * - Threshold logic (`creditsNumber < 10` for VM creation) was hardcoded
+ *   in JSX components. Adding a new gated action meant changing N
+ *   components instead of one Rust constant.
+ * - The gate was at the click handler only; nothing prevented bypassing
+ *   it by calling the IPC directly. Rust now also enforces inside the
+ *   action commands themselves (`require_eligible(...)?` as the first
+ *   line of `add_file`, `add_files`, `add_folder`, `add_local_sync_folder`,
+ *   and `create_vm`), so the gate is impossible to bypass.
+ *
+ * Usage from a click handler:
+ *
+ * ```ts
+ * const { checkEligibility } = useCreditCheck();
+ *
+ * async function onClick() {
+ *   if (!(await checkEligibility("file-upload"))) return;
+ *   // ... open the upload modal ...
+ * }
+ * ```
+ *
+ * The legacy synchronous `hasSufficientCredits` API has been removed —
+ * all 6 call sites have been migrated to the async `checkEligibility`
+ * shape. The async-ness adds one HTTP round-trip on click, which is the
+ * whole point: the gate is now decided against fresh server state
+ * instead of a possibly-stale TanStack Query cache.
  */
 export function useCreditCheck() {
-  const { data: credits } = useUserCredits();
-  const setInsufficientOpen = useSetAtom(insufficientCreditsDialogOpenAtom);
+  const { polkadotAddress } = useWalletAuth();
+  const setReason = useSetAtom(insufficientCreditsDialogOpenAtom);
 
-  const hasSufficientCredits = useCallback(
-    (reason: InsufficientCreditsReason = "file-upload"): boolean => {
-      if (credits === undefined || credits <= BigInt(0)) {
-        setInsufficientOpen(reason);
+  const checkEligibility = useCallback(
+    async (action: InsufficientCreditsReason): Promise<boolean> => {
+      if (!polkadotAddress) {
+        setReason(action);
         return false;
       }
-      return true;
+      try {
+        const result = await invoke<ActionEligibility>("check_action_eligibility", {
+          accountId: polkadotAddress,
+          action,
+        });
+        if (!result.eligible) {
+          setReason(action);
+          return false;
+        }
+        return true;
+      } catch (err) {
+        // Fail closed: any IPC error (network, auth, deserialize) is
+        // treated as ineligible. The action IPC will also enforce, so
+        // worst case the user just sees the dialog and can retry.
+        console.warn("[useCreditCheck] check_action_eligibility failed:", err);
+        setReason(action);
+        return false;
+      }
     },
-    [credits, setInsufficientOpen]
+    [polkadotAddress, setReason]
   );
 
-  return { hasSufficientCredits };
+  return { checkEligibility };
 }

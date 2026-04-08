@@ -37,8 +37,8 @@ interface FilesHeaderProps {
   handleRemoveFilter: (filter: ActiveFilter) => void;
   refetchUserFiles: () => void;
   addButtonRef: React.RefObject<{
-    openWithFiles(files: FileList): void;
-    openWithPaths(paths: string[]): void;
+    openWithFiles(files: FileList): Promise<void>;
+    openWithPaths(paths: string[]): Promise<void>;
     isDialogOpen(): boolean;
   } | null>;
   privateFileCount?: number;
@@ -92,7 +92,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   const isFolderUploadOpen = isFolderUploadOpenProp ?? isFolderUploadOpenLocal;
   const setIsFolderUploadOpen = onSetFolderUploadOpen ?? setIsFolderUploadOpenLocal;
   const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
-  const { hasSufficientCredits } = useCreditCheck();
+  const { checkEligibility } = useCreditCheck();
 
   const { navigateToFilesView } = useFilesNavigation();
   const { push } = useNavigationLoader();
@@ -213,8 +213,8 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             {/* Folder Upload button - disabled for recent files with no sync paths or when sync is paused */}
             {(!isRecentFiles || !hasNoSyncPaths) && !isSyncPathEmpty && (
               <button
-                onClick={() => {
-                  if (!hasSufficientCredits("folder-upload")) return;
+                onClick={async () => {
+                  if (!(await checkEligibility("folder-upload"))) return;
                   if (syncEngineStatus === "stopped") {
                     toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading folders.");
                     return;

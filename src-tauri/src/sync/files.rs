@@ -74,9 +74,11 @@ fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf> {
     hcfs_client::drive::files::ensure_within(parent, child).map_err(|e| crate::error::AppError::Other(e.to_string()))
 }
 
-/// Add file to sync folder (Drive auto-syncs)
-#[tauri::command]
-pub async fn add_file(sync_path: String, file_path: String) -> Result<String> {
+/// Pure file-copy implementation, no eligibility check. The check is
+/// performed at the IPC boundary by `add_file` (single-file path) or
+/// `add_files` (batch path), and the inner helper is called from both
+/// without re-checking — see the call sites for the rationale.
+async fn add_file_internal(sync_path: String, file_path: String) -> Result<String> {
     let source = Path::new(&file_path);
     let name = source
         .file_name()
@@ -109,9 +111,48 @@ pub async fn add_file(sync_path: String, file_path: String) -> Result<String> {
     Ok(name)
 }
 
+/// Add file to sync folder (Drive auto-syncs)
+#[tauri::command]
+pub async fn add_file(state: tauri::State<'_, crate::app_state::AppState>, sync_path: String, file_path: String) -> Result<String> {
+    // Enforce credit eligibility at the IPC boundary. Even if a stale
+    // FE cache let the user click the upload button, this fails the
+    // operation here so we never copy the file into the sync folder
+    // (and thus never trigger an upload that would silently fail
+    // server-side for billing reasons).
+    let account_id = state
+        .current_account_id()
+        .map_err(crate::error::AppError::Other)?;
+    crate::billing::eligibility::require_eligible(
+        &state,
+        &account_id,
+        crate::billing::eligibility::InsufficientCreditsAction::FileUpload,
+    )
+    .await?;
+
+    add_file_internal(sync_path, file_path).await
+}
+
 /// Add folder to sync folder
 #[tauri::command]
-pub async fn add_folder(app: AppHandle, sync_path: String, folder_path: String, subfolder: Option<String>) -> Result<String> {
+pub async fn add_folder(
+    app: AppHandle,
+    state: tauri::State<'_, crate::app_state::AppState>,
+    sync_path: String,
+    folder_path: String,
+    subfolder: Option<String>,
+) -> Result<String> {
+    // Enforce credit eligibility at the IPC boundary — same rationale
+    // as `add_file`.
+    let account_id = state
+        .current_account_id()
+        .map_err(crate::error::AppError::Other)?;
+    crate::billing::eligibility::require_eligible(
+        &state,
+        &account_id,
+        crate::billing::eligibility::InsufficientCreditsAction::FolderUpload,
+    )
+    .await?;
+
     let source = Path::new(&folder_path);
     let name = source
         .file_name()
@@ -375,23 +416,26 @@ pub struct AddFilesResult {
 }
 
 #[tauri::command]
-pub async fn add_files(app: AppHandle, sync_path: String, file_paths: Vec<String>, subfolder: Option<String>) -> Result<AddFilesResult> {
-    // Credit check — reject if user has no credits (defense-in-depth; TS also checks for UX).
-    if let Some(state) = app.try_state::<crate::app_state::AppState>()
-        && let Ok(acct) = state.current_account_id()
-        && let Ok(pool) = state.pool()
-    {
-        let client = crate::api::client::ApiClient::new(state.api_client.clone(), pool.clone());
-        if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
-            let balance_str = resp.get("balance").and_then(|v| v.as_str()).unwrap_or("0");
-            let balance: f64 = balance_str.parse().unwrap_or(0.0);
-            if balance <= 0.0 {
-                return Err(crate::error::AppError::Validation(
-                    "Insufficient credits. Please add credits before uploading files.".into(),
-                ));
-            }
-        }
-    }
+pub async fn add_files(
+    app: AppHandle,
+    state: tauri::State<'_, crate::app_state::AppState>,
+    sync_path: String,
+    file_paths: Vec<String>,
+    subfolder: Option<String>,
+) -> Result<AddFilesResult> {
+    // Enforce credit eligibility once for the whole batch at the IPC
+    // boundary. The per-file `add_file_internal` calls inside the loop
+    // below do NOT re-check — there's no point hammering the billing
+    // API once per file when the batch is treated as a single unit.
+    let account_id = state
+        .current_account_id()
+        .map_err(crate::error::AppError::Other)?;
+    crate::billing::eligibility::require_eligible(
+        &state,
+        &account_id,
+        crate::billing::eligibility::InsufficientCreditsAction::FileUpload,
+    )
+    .await?;
 
     // When a subfolder is specified, resolve the effective target directory.
     // This replaces the path-join logic that was previously in TypeScript.
@@ -430,7 +474,10 @@ pub async fn add_files(app: AppHandle, sync_path: String, file_paths: Vec<String
             // Don't trigger sync per-folder — add_files triggers once at the end.
             add_folder_internal(&target_path, file_path).await
         } else {
-            add_file(target_path.clone(), file_path.clone()).await
+            // Use the internal helper that skips the per-file eligibility
+            // check — the batch eligibility check at the top of `add_files`
+            // covers the whole operation.
+            add_file_internal(target_path.clone(), file_path.clone()).await
         };
         match result {
             Ok(name) => added.push(name),

@@ -42,7 +42,7 @@ export default function FolderUploadDialog({
     const { polkadotAddress } = useWalletAuth();
     const queryClient = useAtomValue(queryClientAtom);
     const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
-    const { hasSufficientCredits } = useCreditCheck();
+    const { checkEligibility } = useCreditCheck();
 
     const [folderPath, setFolderPath] = useState<string>("");
     const [folderError, setFolderError] = useState<string | null>(null);
@@ -81,7 +81,7 @@ export default function FolderUploadDialog({
             return;
         }
 
-        if (!hasSufficientCredits("folder-upload")) {
+        if (!(await checkEligibility("folder-upload"))) {
             handleClose();
             return;
         }

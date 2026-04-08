@@ -32,15 +32,15 @@ const AddFolderToFolderButton = forwardRef<unknown, AddFolderToFolderButtonProps
     ) => {
         const [isDialogOpen, setIsDialogOpen] = useState(false);
         const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
-        const { hasSufficientCredits } = useCreditCheck();
+        const { checkEligibility } = useCreditCheck();
 
         useImperativeHandle(ref, () => ({}));
 
         return (
             <>
                 <button
-                    onClick={() => {
-                        if (!hasSufficientCredits("folder-upload")) return;
+                    onClick={async () => {
+                        if (!(await checkEligibility("folder-upload"))) return;
                         if (syncEngineStatus === "stopped") {
                             toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before adding folders.");
                             return;

@@ -77,9 +77,24 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
   const resetFn = !isFolder ? props.reset : undefined;
   const { upload } = useFilesUpload({
     onError(err) {
+      // Tauri serializes `AppError` as `{ kind, message }`. When the
+      // Rust side raises `NotReady(InsufficientCredits)` from
+      // `require_eligible(...)?`, the catch block here receives the
+      // raw object, not an Error instance — match on the structured
+      // shape instead of the (legacy, brittle) substring on
+      // `err.message`. The kind discriminant comes from
+      // `crate::error::NotReadyKind::INSUFFICIENT_CREDITS` and the
+      // message is a stable string from the Display impl.
       if (
-        err instanceof Error &&
-        err.message.includes("Insufficient Credits")
+        typeof err === "object" &&
+        err !== null &&
+        "kind" in err &&
+        (err as { kind: string }).kind === "NotReady" &&
+        "message" in err &&
+        typeof (err as { message: unknown }).message === "string" &&
+        (err as { message: string }).message
+          .toLowerCase()
+          .includes("insufficient credits")
       ) {
         setInsufficient(isFolder ? "folder-upload" : "file-upload");
         resetFn?.();
@@ -95,7 +110,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
   // Folder-mode hooks
   const { polkadotAddress } = useWalletAuth();
   const syncBasePath = isFolder ? props.syncBasePath : undefined;
-  const { hasSufficientCredits } = useCreditCheck();
+  const { checkEligibility } = useCreditCheck();
 
   // ── Shared: populate file list from initial values ─────────────────────────
 
@@ -280,7 +295,10 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       return;
     }
 
-    if (!hasSufficientCredits("folder-upload")) {
+    // Live Rust eligibility check (replaces legacy stale-cache gate).
+    // The Rust `add_files` IPC also enforces this internally via
+    // `require_eligible(...)?` so the gate is impossible to bypass.
+    if (!(await checkEligibility("folder-upload"))) {
       props.onCancel();
       return;
     }
