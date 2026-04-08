@@ -12,6 +12,7 @@ use sp_core::crypto::Ss58Codec;
 use sp_core::sr25519;
 use sqlx::Row;
 use tracing::{error, info, warn};
+use zeroize::Zeroizing;
 
 /// A sync path entry for import/export serialization.
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -125,7 +126,10 @@ pub async fn import_app_data(state: tauri::State<'_, crate::app_state::AppState>
                         let encrypted = crate::crypto::store::encrypt(&key, &account.sub_account_seed_phrase)?;
                         (encrypted, 1i32)
                     }
-                    _ => (account.sub_account_seed_phrase.clone(), 0i32),
+                    _ => {
+                        warn!("Mnemonic unavailable — storing sub-account as plaintext (encryption_version=0). Will encrypt on next login.");
+                        (account.sub_account_seed_phrase.clone(), 0i32)
+                    }
                 }
             };
 
@@ -191,7 +195,7 @@ pub async fn export_app_data(state: tauri::State<'_, crate::app_state::AppState>
 
     let mnemonic_and_acct = {
         let guard = state.auth.lock()?;
-        match (guard.mnemonic.as_deref().map(String::from), guard.substrate_address.clone()) {
+        match (guard.mnemonic.as_deref().map(|s| Zeroizing::new(s.to_string())), guard.substrate_address.clone()) {
             (Some(m), Some(a)) => Some((m, a)),
             _ => None,
         }
@@ -205,34 +209,30 @@ pub async fn export_app_data(state: tauri::State<'_, crate::app_state::AppState>
             let enc_ver: i32 = row.get("enc_ver");
             let created_at: Option<String> = row.get("created_at");
 
-            let phrase = match enc_ver {
-                0 => raw_phrase,
-                1 => {
-                    let (m, acct) = mnemonic_and_acct.as_ref()?;
-                    let key = match crate::crypto::store::sub_account_key(m, acct) {
-                        Ok(k) => k,
-                        Err(e) => {
-                            warn!("Failed to derive decryption key for sub-account {account_id}: {e}");
-                            return None;
-                        }
-                    };
-                    match crate::crypto::store::decrypt(&key, &raw_phrase) {
-                        Ok(p) => (*p).clone(),
-                        Err(e) => {
-                            warn!("Failed to decrypt sub-account {account_id}: {e}");
-                            return None;
-                        }
+            let phrase = if enc_ver == 0 {
+                Zeroizing::new(raw_phrase)
+            } else {
+                let (m, acct) = mnemonic_and_acct.as_ref()?;
+                let key = match crate::crypto::store::sub_account_key(m, acct) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        warn!("Failed to derive decryption key for sub-account {account_id}: {e}");
+                        return None;
                     }
-                }
-                v => {
-                    warn!("Unknown encryption_version {v} for sub-account {account_id}");
-                    return None;
+                };
+                match crate::crypto::store::decrypt_or_plaintext(&key, &raw_phrase, enc_ver) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn!("Failed to decrypt sub-account {account_id}: {e}");
+                        return None;
+                    }
                 }
             };
 
             Some(SubAccountExport {
                 account_id,
-                sub_account_seed_phrase: phrase,
+                // IPC boundary: Tauri serializes to JSON — Zeroizing cannot protect beyond this point.
+                sub_account_seed_phrase: (*phrase).clone(),
                 created_at,
             })
         })
@@ -285,7 +285,7 @@ pub async fn get_all_subaccount_addresses(state: tauri::State<'_, crate::app_sta
 
     let mnemonic_and_acct = {
         let guard = state.auth.lock()?;
-        match (guard.mnemonic.as_deref().map(String::from), guard.substrate_address.clone()) {
+        match (guard.mnemonic.as_deref().map(|s| Zeroizing::new(s.to_string())), guard.substrate_address.clone()) {
             (Some(m), Some(a)) => Some((m, a)),
             _ => None,
         }
@@ -303,8 +303,8 @@ pub async fn get_all_subaccount_addresses(state: tauri::State<'_, crate::app_sta
         let enc_ver: i32 = row.get("enc_ver");
 
         let phrase = match enc_ver {
-            0 => raw_phrase,
-            1 => {
+            0 => Zeroizing::new(raw_phrase),
+            _ => {
                 let Some((ref m, ref acct)) = mnemonic_and_acct else {
                     warn!("Cannot decrypt sub-account {account_id} — mnemonic unavailable");
                     continue;
@@ -316,17 +316,13 @@ pub async fn get_all_subaccount_addresses(state: tauri::State<'_, crate::app_sta
                         continue;
                     }
                 };
-                match crate::crypto::store::decrypt(&key, &raw_phrase) {
-                    Ok(p) => (*p).clone(),
+                match crate::crypto::store::decrypt_or_plaintext(&key, &raw_phrase, enc_ver) {
+                    Ok(p) => p,
                     Err(e) => {
                         warn!("Failed to decrypt sub-account {account_id}: {e}");
                         continue;
                     }
                 }
-            }
-            v => {
-                warn!("Unknown encryption_version {v} for sub-account {account_id}");
-                continue;
             }
         };
 
