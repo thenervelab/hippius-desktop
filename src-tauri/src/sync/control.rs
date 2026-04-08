@@ -240,7 +240,12 @@ pub async fn stop_drive_and_wait(app: AppHandle, label: String, timeout_ms: u64)
     stop_drive(app.clone(), label.clone()).await?;
 
     loop {
-        // Check immediately before waiting — the drive may already be gone.
+        // Capture notification intent BEFORE checking — avoids lost wakeups
+        // when `stop_drive` fires `notify_waiters()` between our check and
+        // the `select!` park.
+        let notified = app_state.drive_removed_notify.notified();
+
+        // Check immediately — the drive may already be gone.
         let still_active = match app_state.sync.drives.try_lock() {
             Ok(guard) => guard.contains_key(&label),
             // Lock contention means a sync cycle is in progress; treat as active.
@@ -260,7 +265,7 @@ pub async fn stop_drive_and_wait(app: AppHandle, label: String, timeout_ms: u64)
         // Wait for an explicit notification from stop_drive/pause_drive, or
         // fall through to re-check when the timeout expires.
         tokio::select! {
-            () = app_state.drive_removed_notify.notified() => { /* re-check loop */ }
+            () = notified => { /* re-check loop */ }
             () = tokio::time::sleep(remaining) => { /* timeout — re-check and return error */ }
         }
     }
