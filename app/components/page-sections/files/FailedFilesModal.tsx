@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import DialogContainer from "@/components/ui/DialogContainer";
 import { failedFilesAtom, type FailedFileInfo } from "@/lib/store/syncAtoms";
 import { getFileIcon } from "@/lib/utils/fileTypeUtils";
+import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { getFilePartsFromFileName } from "@/lib/utils";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
 
@@ -19,12 +20,13 @@ function FileRow({
   onAction: (file: FailedFileInfo, action: "retry" | "skip" | "exclude") => void;
 }) {
   const { fileFormat } = getFilePartsFromFileName(file.fileName);
-  const IconComponent = getFileIcon(fileFormat);
+  const fileType = getFileTypeFromExtension(fileFormat || null) ?? undefined;
+  const { icon: Icon, color } = getFileIcon(fileType, false);
 
   return (
     <div className="flex items-center gap-3 py-3 px-4 border-b border-grey-80 last:border-b-0">
       <div className="flex-shrink-0 w-8 h-8 flex items-center justify-center">
-        <IconComponent className="w-6 h-6 text-grey-30" />
+        <Icon className={`w-6 h-6 ${color}`} />
       </div>
 
       <div className="flex-1 min-w-0">
