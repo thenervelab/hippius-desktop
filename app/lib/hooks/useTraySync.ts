@@ -149,6 +149,10 @@ export function useTrayInit(isAuthenticated: boolean) {
     if (!isAuthenticated) {
       void setTrayIconSyncing(false, false);
       void updateTraySyncLabel(null);
+      // Clear latched sync state so the next account starts fresh
+      latchedComplete = false;
+      latchedSnapshot = null;
+      lastSyncSummarySignature = "";
       if (lastUpdatedPercent !== null) {
         setLastUpdatedPercent(null);
       }

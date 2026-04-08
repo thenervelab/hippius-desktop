@@ -242,8 +242,37 @@ pub fn get_snapshot(sync: &SyncRunner) -> Result<SyncSnapshot> {
         snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
     }
     snapshot.last_error = sync.last_error.lock().ok().and_then(|g| g.clone());
+    fixup_stalled_completion(&mut snapshot);
     cap_snapshot_files(&mut snapshot);
     Ok(snapshot)
+}
+
+/// Detect and correct a stalled completion state.
+///
+/// The hcfs-client file watcher can detect the sync engine's own writes
+/// and set `changes_pending = true`, which prevents `complete_session`
+/// from being called even though all files are fully synced. This leaves
+/// `is_active = true` indefinitely with 100% progress.
+///
+/// When we detect this (active session, all files accounted for, 100%
+/// progress), override the display fields so the frontend shows
+/// "Complete" instead of "Syncing...".
+fn fixup_stalled_completion(snapshot: &mut SyncSnapshot) {
+    if !snapshot.is_active || snapshot.total_files == 0 {
+        return;
+    }
+    let all_files_done = snapshot.completed_files + snapshot.failed_files >= snapshot.total_files;
+    let progress_complete = snapshot.overall_percent >= 100;
+    if all_files_done && progress_complete {
+        snapshot.effective_in_progress = false;
+        snapshot.effective_completed = true;
+        snapshot.widget_state = "completed".to_string();
+        snapshot.status_variant = if snapshot.failed_files > 0 {
+            "error".to_string()
+        } else {
+            "success".to_string()
+        };
+    }
 }
 
 /// Record a deleted file in recent files.
@@ -374,4 +403,128 @@ pub fn sp_get_snapshot(state: tauri::State<'_, crate::app_state::AppState>) -> R
 pub fn sp_dismiss_sync_widget(state: tauri::State<'_, crate::app_state::AppState>) {
     state.sync.progress.dismiss();
     state.sync.emit_snapshot(true);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to create a minimal snapshot with sensible defaults.
+    fn base_snapshot() -> SyncSnapshot {
+        SyncSnapshot {
+            is_active: false,
+            overall_percent: 0,
+            progress_bytes: 0,
+            bytes_expected: 0,
+            total_files: 0,
+            completed_files: 0,
+            failed_files: 0,
+            retry_in_secs: 0,
+            last_error: None,
+            expected_uploads: 0,
+            expected_downloads: 0,
+            expected_local_deletes: 0,
+            expected_remote_deletes: 0,
+            started_at: None,
+            completed_at: None,
+            files: vec![],
+            widget_state: "idle".to_string(),
+            widget_visible: false,
+            combined_progress_bytes: 0,
+            combined_bytes_expected: 0,
+            deleted_count: 0,
+            synced_count: 0,
+            actual_total: 0,
+            status_variant: "progress".to_string(),
+            sync_direction: "upload".to_string(),
+            effective_in_progress: false,
+            effective_completed: false,
+        }
+    }
+
+    #[test]
+    fn fixup_corrects_stalled_active_session_with_all_files_done() {
+        let mut snap = base_snapshot();
+        snap.is_active = true;
+        snap.total_files = 3;
+        snap.completed_files = 3;
+        snap.failed_files = 0;
+        snap.overall_percent = 100;
+        snap.effective_in_progress = true;
+        snap.effective_completed = false;
+        snap.widget_state = "active".to_string();
+        snap.status_variant = "progress".to_string();
+
+        fixup_stalled_completion(&mut snap);
+
+        assert!(!snap.effective_in_progress);
+        assert!(snap.effective_completed);
+        assert_eq!(snap.widget_state, "completed");
+        assert_eq!(snap.status_variant, "success");
+    }
+
+    #[test]
+    fn fixup_preserves_error_variant_when_files_failed() {
+        let mut snap = base_snapshot();
+        snap.is_active = true;
+        snap.total_files = 3;
+        snap.completed_files = 2;
+        snap.failed_files = 1;
+        snap.overall_percent = 100;
+        snap.effective_in_progress = true;
+        snap.effective_completed = false;
+
+        fixup_stalled_completion(&mut snap);
+
+        assert!(snap.effective_completed);
+        assert_eq!(snap.status_variant, "error");
+    }
+
+    #[test]
+    fn fixup_does_not_modify_genuinely_in_progress_session() {
+        let mut snap = base_snapshot();
+        snap.is_active = true;
+        snap.total_files = 5;
+        snap.completed_files = 2;
+        snap.failed_files = 0;
+        snap.overall_percent = 40;
+        snap.effective_in_progress = true;
+        snap.effective_completed = false;
+        snap.widget_state = "active".to_string();
+
+        fixup_stalled_completion(&mut snap);
+
+        assert!(snap.effective_in_progress);
+        assert!(!snap.effective_completed);
+        assert_eq!(snap.widget_state, "active");
+    }
+
+    #[test]
+    fn fixup_does_not_modify_inactive_session() {
+        let mut snap = base_snapshot();
+        snap.is_active = false;
+        snap.total_files = 3;
+        snap.completed_files = 3;
+        snap.overall_percent = 100;
+        snap.effective_completed = true;
+
+        fixup_stalled_completion(&mut snap);
+
+        // Already correctly completed, no changes needed
+        assert!(snap.effective_completed);
+    }
+
+    #[test]
+    fn fixup_does_not_modify_empty_active_session() {
+        let mut snap = base_snapshot();
+        snap.is_active = true;
+        snap.total_files = 0;
+        snap.effective_in_progress = true;
+
+        fixup_stalled_completion(&mut snap);
+
+        // Empty heartbeat session, should not be marked complete
+        assert!(snap.effective_in_progress);
+        assert!(!snap.effective_completed);
+    }
 }
