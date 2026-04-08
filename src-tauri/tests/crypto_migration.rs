@@ -25,6 +25,18 @@ async fn setup_db() -> SqlitePool {
     .await
     .unwrap();
 
+    // migrate_if_needed also scans hcfs_config for drive passwords
+    sqlx::query(
+        "CREATE TABLE hcfs_config (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            drive_password TEXT NOT NULL DEFAULT '',
+            encryption_version INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
     pool
 }
 

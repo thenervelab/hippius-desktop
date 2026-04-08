@@ -759,7 +759,6 @@ fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, 
 /// `skip_credits_check` suppresses the HTTP call to `/api/billing/credits/balance/`.
 /// Pass `true` when the caller has already validated credits (e.g. `auto_init_sync`
 /// checks once before its per-drive loop to avoid N redundant requests).
-#[expect(clippy::too_many_lines, reason = "orchestrates drive setup, config, init/unlock, and event wiring")]
 pub(crate) async fn initialize_sync_inner(
     app: tauri::AppHandle,
     account_id: String,
