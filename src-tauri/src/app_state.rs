@@ -46,6 +46,12 @@ pub struct AppState {
     pub drive_removed_notify: tokio::sync::Notify,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         let sync_bridge = Arc::new(TauriSyncBridge::new());

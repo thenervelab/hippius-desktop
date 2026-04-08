@@ -120,16 +120,13 @@ pub async fn import_app_data(state: tauri::State<'_, crate::app_state::AppState>
             // Encrypt the seed phrase if the mnemonic is available.
             let (stored_phrase, enc_version) = {
                 let guard = state.auth.lock()?;
-                match (guard.mnemonic.as_deref(), guard.substrate_address.as_deref()) {
-                    (Some(m), Some(acct)) => {
-                        let key = crate::crypto::store::sub_account_key(m, acct)?;
-                        let encrypted = crate::crypto::store::encrypt(&key, &account.sub_account_seed_phrase)?;
-                        (encrypted, 1i32)
-                    }
-                    _ => {
-                        warn!("Mnemonic unavailable — storing sub-account as plaintext (encryption_version=0). Will encrypt on next login.");
-                        (account.sub_account_seed_phrase.clone(), 0i32)
-                    }
+                if let (Some(m), Some(acct)) = (guard.mnemonic.as_deref(), guard.substrate_address.as_deref()) {
+                    let key = crate::crypto::store::sub_account_key(m, acct)?;
+                    let encrypted = crate::crypto::store::encrypt(&key, &account.sub_account_seed_phrase)?;
+                    (encrypted, 1i32)
+                } else {
+                    warn!("Mnemonic unavailable — storing sub-account as plaintext (encryption_version=0). Will encrypt on next login.");
+                    (account.sub_account_seed_phrase.clone(), 0i32)
                 }
             };
 
@@ -195,7 +192,7 @@ pub async fn export_app_data(state: tauri::State<'_, crate::app_state::AppState>
 
     let mnemonic_and_acct = {
         let guard = state.auth.lock()?;
-        match (guard.mnemonic.as_deref().map(|s| Zeroizing::new(s.to_string())), guard.substrate_address.clone()) {
+        match (guard.mnemonic.as_deref().map(|s| Zeroizing::new(s.to_owned())), guard.substrate_address.clone()) {
             (Some(m), Some(a)) => Some((m, a)),
             _ => None,
         }
@@ -285,7 +282,7 @@ pub async fn get_all_subaccount_addresses(state: tauri::State<'_, crate::app_sta
 
     let mnemonic_and_acct = {
         let guard = state.auth.lock()?;
-        match (guard.mnemonic.as_deref().map(|s| Zeroizing::new(s.to_string())), guard.substrate_address.clone()) {
+        match (guard.mnemonic.as_deref().map(|s| Zeroizing::new(s.to_owned())), guard.substrate_address.clone()) {
             (Some(m), Some(a)) => Some((m, a)),
             _ => None,
         }
@@ -302,26 +299,25 @@ pub async fn get_all_subaccount_addresses(state: tauri::State<'_, crate::app_sta
         let raw_phrase: String = row.get("sub_account_seed_phrase");
         let enc_ver: i32 = row.get("enc_ver");
 
-        let phrase = match enc_ver {
-            0 => Zeroizing::new(raw_phrase),
-            _ => {
-                let Some((ref m, ref acct)) = mnemonic_and_acct else {
-                    warn!("Cannot decrypt sub-account {account_id} — mnemonic unavailable");
+        let phrase = if enc_ver == 0 {
+            Zeroizing::new(raw_phrase)
+        } else {
+            let Some((ref m, ref acct)) = mnemonic_and_acct else {
+                warn!("Cannot decrypt sub-account {account_id} — mnemonic unavailable");
+                continue;
+            };
+            let key = match crate::crypto::store::sub_account_key(m, acct) {
+                Ok(k) => k,
+                Err(e) => {
+                    warn!("Failed to derive decryption key for sub-account {account_id}: {e}");
                     continue;
-                };
-                let key = match crate::crypto::store::sub_account_key(m, acct) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        warn!("Failed to derive decryption key for sub-account {account_id}: {e}");
-                        continue;
-                    }
-                };
-                match crate::crypto::store::decrypt_or_plaintext(&key, &raw_phrase, enc_ver) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        warn!("Failed to decrypt sub-account {account_id}: {e}");
-                        continue;
-                    }
+                }
+            };
+            match crate::crypto::store::decrypt_or_plaintext(&key, &raw_phrase, enc_ver) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!("Failed to decrypt sub-account {account_id}: {e}");
+                    continue;
                 }
             }
         };

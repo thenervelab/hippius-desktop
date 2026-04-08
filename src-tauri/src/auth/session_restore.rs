@@ -147,7 +147,7 @@ pub async fn restore_session(
                                 // Mnemonic is in AuthInfo — run encryption migration.
                                 // Extract the mnemonic BEFORE awaiting (can't hold mutex across await).
                                 if let Ok(pool) = state.pool() {
-                                    let mnemonic_str = state.auth.lock().ok().and_then(|g| g.mnemonic.as_deref().map(|s| zeroize::Zeroizing::new(s.to_string())));
+                                    let mnemonic_str = state.auth.lock().ok().and_then(|g| g.mnemonic.as_deref().map(|s| zeroize::Zeroizing::new(s.to_owned())));
                                     if let Some(m) = mnemonic_str
                                         && let Err(e) = crate::crypto::store::migrate_if_needed(pool, &m, addr).await
                                     {
@@ -257,7 +257,7 @@ pub async fn restore_session(
                 // Mnemonic is in AuthInfo — run encryption migration.
                 // Extract the mnemonic BEFORE awaiting (can't hold mutex across await).
                 if let Ok(pool) = state.pool() {
-                    let mnemonic_str = state.auth.lock().ok().and_then(|g| g.mnemonic.as_deref().map(|s| zeroize::Zeroizing::new(s.to_string())));
+                    let mnemonic_str = state.auth.lock().ok().and_then(|g| g.mnemonic.as_deref().map(|s| zeroize::Zeroizing::new(s.to_owned())));
                     if let Some(m) = mnemonic_str
                         && let Err(e) = crate::crypto::store::migrate_if_needed(pool, &m, addr).await
                     {
