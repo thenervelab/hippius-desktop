@@ -297,6 +297,9 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
                 total = job_status.total,
                 "Server migration still in progress — resuming tracking"
             );
+            // Set the atomic flag so auto_init_sync (which reads this) won't
+            // race against the active server migration after an app restart.
+            state.migration.in_progress.store(true, std::sync::atomic::Ordering::SeqCst);
             return Ok(MigrationCheckResult {
                 needs_migration: false,
                 file_count: 0,
@@ -321,17 +324,16 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
             );
             return Ok(MigrationCheckResult {
                 needs_migration: false,
-                file_count: 0,
+                file_count: job_status.total as u64,
                 total_size: 0,
-
                 sync_path: None,
                 is_resuming: false,
                 needs_completion: true,
                 completion_status: Some(job_status.status),
                 is_in_progress: false,
-                progress_completed: 0,
-                progress_total: 0,
-                progress_failed: 0,
+                progress_completed: job_status.completed as u64,
+                progress_total: job_status.total as u64,
+                progress_failed: job_status.failed as u64,
             });
         }
     }

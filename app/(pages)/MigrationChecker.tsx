@@ -77,6 +77,7 @@ const MigrationChecker: React.FC = () => {
           failedFiles={migration.failedFiles}
           transitionError={migration.transitionError}
           onDismiss={migration.dismissAfterError}
+          migrationSucceeded={migration.migrationSucceeded}
         />
       )}
     </>

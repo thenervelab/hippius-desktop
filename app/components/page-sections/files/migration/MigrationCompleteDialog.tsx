@@ -15,6 +15,8 @@ export interface MigrationCompleteDialogProps {
   failedFiles?: Array<{ name: string; error: string }>;
   transitionError?: string | null;
   onDismiss?: () => void;
+  /** Server-determined success state — overrides count-based computation when counts are unavailable (resume path). */
+  migrationSucceeded?: boolean;
 }
 
 const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
@@ -26,10 +28,13 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
   failedFiles = [],
   transitionError,
   onDismiss,
+  migrationSucceeded,
 }) => {
   const effectiveFailedCount = Math.max(failedCount, failedFiles.length);
-  const isFullSuccess = effectiveFailedCount === 0;
-  const isPartialSuccess = successCount > 0 && effectiveFailedCount > 0;
+  // When migrationSucceeded is explicitly provided (resume path), use it as
+  // the source of truth. Otherwise compute from counts (normal path).
+  const isFullSuccess = migrationSucceeded ?? effectiveFailedCount === 0;
+  const isPartialSuccess = !isFullSuccess && successCount > 0 && effectiveFailedCount > 0;
   const router = useRouter();
 
   return (

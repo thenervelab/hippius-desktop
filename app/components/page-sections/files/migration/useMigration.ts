@@ -166,6 +166,9 @@ export function useMigration(): UseMigrationReturn {
         );
 
         if (result.needs_completion) {
+          setFileCount(result.file_count);
+          setSuccessCount(result.progress_completed);
+          setFailedCount(result.progress_failed);
           setMigrationSucceeded(result.completion_status === "completed");
           activeAccountIdRef.current = accountId;
           setCurrentStep("complete");
