@@ -15,7 +15,7 @@ use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use tracing::info;
+use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -484,6 +484,8 @@ pub async fn complete_migration_transition(
         let path_str = sync_path.to_string_lossy().to_string();
         crate::sync::paths::set_sync_path_internal(pool, &account_id, &path_str, false, Some("default")).await?;
         info!("Created default sync path at '{}' for migration completion", path_str);
+    } else if custom_sync_path.as_ref().is_some_and(|p| !p.is_empty()) {
+        warn!("custom_sync_path provided but sync path already exists for 'default'; ignoring custom path");
     }
 
     // 3. Initialize the "default" drive and start the sync loop.
@@ -1127,5 +1129,12 @@ mod tests {
             doc_dir.as_ref() == Some(&parent.to_path_buf()) || home_dir.as_ref() == Some(&parent.to_path_buf()),
             "Expected parent to be Documents or Home, got {parent:?}",
         );
+    }
+
+    #[test]
+    fn get_default_migration_path_returns_non_empty_string() {
+        let path_str = get_default_migration_path().expect("should return a path string");
+        assert!(!path_str.is_empty());
+        assert!(path_str.contains("Hippius-Migration-"));
     }
 }

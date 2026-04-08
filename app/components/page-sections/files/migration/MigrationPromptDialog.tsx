@@ -133,6 +133,7 @@ const MigrationPromptDialog: React.FC<MigrationPromptDialogProps> = ({
                             variant="dialog"
                             className="w-full h-12 text-base font-medium"
                             onClick={() => onMigrate(syncPath)}
+                            disabled={!syncPath}
                         >
                             <div className="flex items-center gap-2">
                                 <Icons.DocumentDownload className="size-5" />
