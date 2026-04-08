@@ -100,6 +100,8 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 
 **Tray sync state cleanup**: The tray menu in `useTraySync.ts` uses module-level latching variables (`latchedComplete`, `latchedSnapshot`, `lastSyncSummarySignature`) to keep completed sync info visible after backend resets. These are explicitly cleared in the `useTrayInit` logout cleanup effect to prevent stale data from a previous account appearing after account switch.
 
+**Migration folder picker**: The `MigrationPromptDialog` includes a folder picker pre-populated with the default migration path (`~/Documents/Hippius-Migration-YYYY-MM-DD`). The chosen path is stored in `migrationCheckAtom.syncPath` and passed to `complete_migration_transition` as `custom_sync_path`. If not provided, falls back to the auto-generated default.
+
 ## Testing
 
 ```bash
