@@ -199,6 +199,56 @@ pub fn mark_file_error(sync: &SyncRunner, path: String, error: String) -> Result
     Ok(())
 }
 
+/// Mark a single file as fully synced (download/upload + AEAD verification
+/// complete) and emit a snapshot.
+///
+/// Called from `build_file_synced_callback` in `lifecycle.rs`, which fires
+/// from hcfs-client's per-file `on_file_synced` callback. That callback is
+/// invoked from `drive/sync_flow.rs` only after the upload OR download task
+/// completes successfully — for downloads this happens AFTER chunked
+/// download AND AEAD-tag-verifying decryption have both succeeded.
+///
+/// Why this exists: hcfs-client's `update_file_progress` parks decrypted
+/// files in `Decrypting` status until `complete_pending_files` runs at
+/// end-of-cycle. The reasoning is sound — the on_decrypt_progress callback
+/// fires with `bytes == total` *during* the streaming decryption, before
+/// AEAD verification, so flipping to Completed at that moment would risk
+/// claiming success for a file that fails verification. But it conflates
+/// "AEAD verification complete" with "the entire sync cycle complete",
+/// which means a 493-byte file gets pinned at "Decrypting" while a 1 GB
+/// file finishes downloading alongside it. This helper resolves the
+/// individual file as soon as its own AEAD verification has succeeded,
+/// independent of other in-flight files.
+///
+/// No-op if there's no current session, no file at the given path, or the
+/// file is already Completed.
+pub fn mark_file_synced(sync: &SyncRunner, path: &str) -> Result<()> {
+    use hcfs_client::engine::progress::state::FileStatus;
+
+    {
+        let mut state = sync.progress.lock_state();
+        let Some(session) = state.current_session.as_mut() else {
+            return Ok(());
+        };
+        let Some(file) = session.files.get_mut(path) else {
+            return Ok(());
+        };
+        if file.status == FileStatus::Completed {
+            return Ok(());
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        file.status = FileStatus::Completed;
+        file.progress = 100;
+        file.completed_at = Some(now);
+        if file.total_bytes > 0 {
+            file.bytes_transferred = file.total_bytes;
+            file.bytes_encrypted = file.total_bytes;
+        }
+    }
+    sync.emit_snapshot(true);
+    Ok(())
+}
+
 /// Compute overall progress.
 pub fn get_overall_progress(sync: &SyncRunner) -> Result<OverallProgress> {
     sync.progress.get_overall_progress().map_err(AppError::Progress)

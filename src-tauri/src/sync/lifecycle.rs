@@ -1570,14 +1570,32 @@ fn build_fetch_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) 
     })
 }
 
-/// Build the `on_file_synced` callback that logs per-file completion
-/// and updates the synced-paths cache.
+/// Build the `on_file_synced` callback that logs per-file completion,
+/// updates the synced-paths cache, AND transitions the file's progress
+/// status to `Completed` so the sync widget reflects the file as done as
+/// soon as its individual AEAD verification has succeeded — instead of
+/// waiting for the entire sync cycle to finish. See
+/// [`crate::sync::progress::mark_file_synced`] for the full reasoning.
 fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_client::sync::FileSyncedFn {
     Arc::new(move |rel_path, path_hash_hex, arion_cid, action| {
         debug!("File synced [{label}]: {rel_path} ({action}) cid={arion_cid}");
         if rel_path.is_empty() {
             return;
         }
+
+        // Transition this file from Decrypting/Downloading/Encrypting to
+        // Completed in the progress tracker. The hcfs-client side fires
+        // this callback only after the per-file upload or download task
+        // returns Ok — for downloads that means chunked download AND
+        // AEAD-tag-verifying decryption have both succeeded — so it is
+        // safe to mark Completed here without waiting for end-of-cycle
+        // `complete_pending_files`. Without this, a small decrypted file
+        // gets stuck on "Decrypting" until the largest in-flight file
+        // also finishes.
+        if let Err(e) = crate::sync::progress::mark_file_synced(&sync, rel_path) {
+            warn!(label = %label, path = %rel_path, error = %e, "Failed to mark file synced in progress tracker");
+        }
+
         // hcfs's `FileSyncedFn` callback passes `path_hash_hex` as a hex
         // string. `SyncedFileInfo::new` now wants the raw 32-byte hash, so
         // we decode here. A future hcfs PR could pass `&[u8; 32]` directly

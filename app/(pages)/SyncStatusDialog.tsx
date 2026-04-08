@@ -571,7 +571,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             ref={fileListRef} 
             className="overflow-y-auto p-4 flex-1 min-h-0"
           >
-            {snapshot.files.map((file, index) => {
+            {snapshot.files.map((file) => {
               const isFileCompleted = file.status === "completed";
               const isFileDeleted = isFileCompleted && (file.action === "local_delete" || file.action === "remote_delete");
               const isEncryptingOrDecrypting = file.status === "encrypting" || file.status === "decrypting";
@@ -581,8 +581,18 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               const fileType = getFileTypeFromExtension(fileFormat || null);
               const { icon: Icon, color } = getFileIcon(fileType ? fileType : undefined, false);
               return (
+                // IMPORTANT: key is `file.path` ONLY (no index). `snapshot.files`
+                // is sorted by priority in hcfs-client's build_snapshot, so the
+                // array reorders whenever any file changes state. Including index
+                // in the key would change the key on every reorder, causing React
+                // to unmount + remount the row instead of moving the existing
+                // DOM node. The remount restarts the row's `transition-opacity`,
+                // and for 1-2 frames the GPU compositor paints both the old and
+                // new nodes at the same position — that's the ghosted text users
+                // see on rows whose neighbors just changed state. With a stable
+                // key, React moves the node in place and no transition restarts.
                 <div
-                  key={`${file.path}-${index}`}
+                  key={file.path}
                   className="mb-4 last:mb-0 transition-opacity duration-200"
                   data-file-item
                   data-testid="file-item"
