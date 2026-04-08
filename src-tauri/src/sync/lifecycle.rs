@@ -615,6 +615,39 @@ async fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Resu
     Ok((new_manager, uid, Some(master_str)))
 }
 
+/// Attempt to unlock an existing drive, falling back to full recovery or fresh init.
+///
+/// Takes ownership of `manager` and returns it (possibly replaced after recovery).
+/// The tuple contains `(manager, user_id, optional_master_mnemonic, is_new_setup)`.
+async fn init_or_unlock_drive(
+    mut manager: DriveManager,
+    label: &str,
+    master_path: &Path,
+    drive_password: &str,
+    existing_mnemonic: Option<&str>,
+    recovery_ctx: &RecoveryContext<'_>,
+) -> Result<(DriveManager, String, Option<zeroize::Zeroizing<String>>, bool)> {
+    if manager.is_initialized() {
+        debug!("Drive already initialized for '{}', unlocking...", label);
+        match manager.unlock(drive_password) {
+            Ok(uid) => {
+                info!("Drive unlocked, user_id: {}", uid);
+                Ok((manager, uid, None, false))
+            }
+            Err(e) => {
+                error!("Unlock failed for '{}': {}", label, e);
+                info!("Attempting recovery: cleaning up encrypted files...");
+                let (new_mgr, uid, master) = recover_drive(manager, recovery_ctx).await?;
+                Ok((new_mgr, uid, master, true))
+            }
+        }
+    } else {
+        let (uid, mnem, is_new) =
+            init_new_drive(&mut manager, label, master_path, drive_password, existing_mnemonic).await?;
+        Ok((manager, uid, mnem.map(zeroize::Zeroizing::new), is_new))
+    }
+}
+
 /// Initialize a brand-new folder: resolve the mnemonic source (imported
 /// login mnemonic, existing master on disk, or error), init the drive,
 /// and unlock it.
@@ -808,39 +841,21 @@ pub(crate) async fn initialize_sync_inner(
     manager.set_config(build_hcfs_config(&cfg.server_url, &bearer_token, &account_id, &fhash))?;
 
     // Init or unlock
-    let (user_id, mnemonic, is_new_setup) = if manager.is_initialized() {
-        debug!("Drive already initialized for '{}', unlocking...", label);
-        match manager.unlock(&cfg.drive_password) {
-            Ok(uid) => {
-                info!("Drive unlocked, user_id: {}", uid);
-                (uid, None::<zeroize::Zeroizing<String>>, false)
-            }
-            Err(e) => {
-                error!("Unlock failed for '{}': {}", label, e);
-                info!("Attempting recovery: cleaning up encrypted files...");
-                let ctx = RecoveryContext {
-                    sync_path: &cfg.sync_path,
-                    folder_dir: &folder_dir,
-                    master_path: &master_path,
-                    server_url: &cfg.server_url,
-                    bearer_token: &bearer_token,
-                    account_id: &account_id,
-                    fhash: &fhash,
-                    label: &label,
-                    drive_password: &cfg.drive_password,
-                    existing_mnemonic: existing_mnemonic.as_deref(),
-                };
-                let (new_mgr, uid, master) = recover_drive(manager, &ctx).await?;
-                manager = new_mgr;
-                (uid, master, true)
-            }
-        }
-    } else {
-        {
-            let (uid, mnem, is_new) = init_new_drive(&mut manager, &label, &master_path, &cfg.drive_password, existing_mnemonic.as_deref()).await?;
-            (uid, mnem.map(zeroize::Zeroizing::new), is_new)
-        }
+    let recovery_ctx = RecoveryContext {
+        sync_path: &cfg.sync_path,
+        folder_dir: &folder_dir,
+        master_path: &master_path,
+        server_url: &cfg.server_url,
+        bearer_token: &bearer_token,
+        account_id: &account_id,
+        fhash: &fhash,
+        label: &label,
+        drive_password: &cfg.drive_password,
+        existing_mnemonic: existing_mnemonic.as_deref(),
     };
+    let (manager, user_id, mnemonic, is_new_setup) =
+        init_or_unlock_drive(manager, &label, &master_path, &cfg.drive_password, existing_mnemonic.as_deref(), &recovery_ctx).await?;
+    let mut manager = manager;
 
     // Validate user_id
     let expected_user_id = format!("{account_id}_{fhash}");
