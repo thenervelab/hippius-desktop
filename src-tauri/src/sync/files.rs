@@ -996,18 +996,30 @@ pub async fn get_user_files(
         total_private_size += entries.iter().map(|e| e.size).sum::<u64>();
 
         for entry in entries.iter().filter(|e| e.sync_status != "excluded") {
+            let local_modified_ms = entry.modified.map_or(0, |m| m as i64 * 1000);
             let uploaded_at_ms = if entry.uploaded_at != 0 { entry.uploaded_at * 1000 } else { 0 };
             let updated_at_ms = if entry.updated_at != 0 { entry.updated_at * 1000 } else { 0 };
-            // created_at represents "DATE UPLOADED" in the UI. Only use the
-            // server-side uploaded_at timestamp; never fall back to local
-            // mtime — showing the file's local modification date under a
-            // "DATE UPLOADED" column is confusing (the frontend renders 0
-            // as "—" which is the correct placeholder for not-yet-uploaded).
-            let created_at_ms = uploaded_at_ms;
+            // created_at represents "DATE UPLOADED" in the UI. For files,
+            // only use the server-side uploaded_at timestamp — showing the
+            // local mtime under "DATE UPLOADED" is confusing (the frontend
+            // renders 0 as "—", the correct placeholder for not-yet-uploaded).
+            // Folders (including .app bundles on macOS) have no server-side
+            // timestamp, so fall back to local mtime for them.
+            let created_at_ms = if uploaded_at_ms != 0 {
+                uploaded_at_ms
+            } else if entry.is_folder {
+                local_modified_ms
+            } else {
+                0
+            };
             let last_charged_at_ms = if updated_at_ms != 0 {
                 updated_at_ms
-            } else {
+            } else if uploaded_at_ms != 0 {
                 uploaded_at_ms
+            } else if entry.is_folder {
+                local_modified_ms
+            } else {
+                0
             };
 
             // Detect encrypted file names (long hex strings or file_<hex> patterns)
