@@ -464,6 +464,7 @@ pub async fn complete_migration_transition(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
+    custom_sync_path: Option<String>,
 ) -> Result<crate::sync::lifecycle::InitSyncResult> {
     let pool = state.pool()?;
 
@@ -475,9 +476,12 @@ pub async fn complete_migration_transition(
     let has_sync_path = crate::sync::config::get_sync_path_for_label(pool, &account_id, "default").await.is_ok();
 
     if !has_sync_path {
-        let default_path = compute_default_sync_path()?;
-        std::fs::create_dir_all(&default_path)?;
-        let path_str = default_path.to_string_lossy().to_string();
+        let sync_path = match custom_sync_path.filter(|p| !p.is_empty()) {
+            Some(path) => std::path::PathBuf::from(path),
+            None => compute_default_sync_path()?,
+        };
+        std::fs::create_dir_all(&sync_path)?;
+        let path_str = sync_path.to_string_lossy().to_string();
         crate::sync::paths::set_sync_path_internal(pool, &account_id, &path_str, false, Some("default")).await?;
         info!("Created default sync path at '{}' for migration completion", path_str);
     }
