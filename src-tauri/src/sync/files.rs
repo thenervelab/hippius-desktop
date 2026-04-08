@@ -1012,14 +1012,12 @@ pub async fn get_user_files(
             } else {
                 0
             };
+            // last_charged_at_ms is a billing timestamp -- only use
+            // server-side values, never fall back to local mtime.
             let last_charged_at_ms = if updated_at_ms != 0 {
                 updated_at_ms
-            } else if uploaded_at_ms != 0 {
-                uploaded_at_ms
-            } else if entry.is_folder {
-                local_modified_ms
             } else {
-                0
+                uploaded_at_ms
             };
 
             // Detect encrypted file names (long hex strings or file_<hex> patterns)

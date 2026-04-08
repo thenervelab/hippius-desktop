@@ -438,8 +438,7 @@ pub(crate) fn compute_default_sync_path() -> Result<PathBuf> {
             return Ok(suffixed);
         }
     }
-    // Extremely unlikely: 100 migrations on the same day.
-    Ok(candidate)
+    Err(crate::error::AppError::Other("Too many migration folders exist for today's date".into()))
 }
 
 /// Return the auto-generated default migration sync path as a string.
