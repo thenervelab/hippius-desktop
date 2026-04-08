@@ -15,7 +15,7 @@ use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use tracing::info;
+use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -422,7 +422,7 @@ pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppStat
 /// Uses `~/Documents/Hippius-Migration-YYYY-MM-DD` (falling back to
 /// `~/Hippius-Migration-YYYY-MM-DD`). If that path already exists, a
 /// numeric suffix is appended (`-2`, `-3`, ...) to guarantee uniqueness.
-fn compute_default_sync_path() -> Result<PathBuf> {
+pub(crate) fn compute_default_sync_path() -> Result<PathBuf> {
     let base = dirs::document_dir()
         .or_else(dirs::home_dir)
         .ok_or_else(|| crate::error::AppError::Other("Could not determine a suitable directory for sync folder".into()))?;
@@ -442,6 +442,16 @@ fn compute_default_sync_path() -> Result<PathBuf> {
     Ok(candidate)
 }
 
+/// Return the auto-generated default migration sync path as a string.
+///
+/// Called by the frontend to pre-populate the folder picker in the
+/// migration prompt dialog.
+#[tauri::command]
+pub fn get_default_migration_path() -> Result<String> {
+    let path = compute_default_sync_path()?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 /// Complete the migration lifecycle: ensure a sync path exists, initialize
 /// the default drive, and mark migration as completed.
 ///
@@ -454,6 +464,7 @@ pub async fn complete_migration_transition(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
+    custom_sync_path: Option<String>,
 ) -> Result<crate::sync::lifecycle::InitSyncResult> {
     let pool = state.pool()?;
 
@@ -465,11 +476,16 @@ pub async fn complete_migration_transition(
     let has_sync_path = crate::sync::config::get_sync_path_for_label(pool, &account_id, "default").await.is_ok();
 
     if !has_sync_path {
-        let default_path = compute_default_sync_path()?;
-        std::fs::create_dir_all(&default_path)?;
-        let path_str = default_path.to_string_lossy().to_string();
+        let sync_path = match custom_sync_path.filter(|p| !p.is_empty()) {
+            Some(path) => std::path::PathBuf::from(path),
+            None => compute_default_sync_path()?,
+        };
+        std::fs::create_dir_all(&sync_path)?;
+        let path_str = sync_path.to_string_lossy().to_string();
         crate::sync::paths::set_sync_path_internal(pool, &account_id, &path_str, false, Some("default")).await?;
         info!("Created default sync path at '{}' for migration completion", path_str);
+    } else if custom_sync_path.as_ref().is_some_and(|p| !p.is_empty()) {
+        warn!("custom_sync_path provided but sync path already exists for 'default'; ignoring custom path");
     }
 
     // 3. Initialize the "default" drive and start the sync loop.
@@ -1113,5 +1129,12 @@ mod tests {
             doc_dir.as_ref() == Some(&parent.to_path_buf()) || home_dir.as_ref() == Some(&parent.to_path_buf()),
             "Expected parent to be Documents or Home, got {parent:?}",
         );
+    }
+
+    #[test]
+    fn get_default_migration_path_returns_non_empty_string() {
+        let path_str = get_default_migration_path().expect("should return a path string");
+        assert!(!path_str.is_empty());
+        assert!(path_str.contains("Hippius-Migration-"));
     }
 }

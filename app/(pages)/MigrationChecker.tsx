@@ -42,9 +42,9 @@ const MigrationChecker: React.FC = () => {
       {migration.currentStep === "prompt" && (
         <MigrationPromptDialog
           open
-          onMigrate={() =>
+          onMigrate={(syncPath: string) =>
             polkadotAddress &&
-            migration.startMigration(polkadotAddress)
+            migration.startMigration(polkadotAddress, syncPath)
           }
           onSkip={() => migration.setCurrentStep("skip-confirm")}
           fileCount={migration.fileCount}

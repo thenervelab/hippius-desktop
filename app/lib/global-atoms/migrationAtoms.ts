@@ -7,6 +7,8 @@ export interface MigrationCheckState {
   totalSize: number;
   /** When true, MigrationChecker should call check_migration. */
   shouldCheck: boolean;
+  /** User-chosen destination folder for migrated files. Null means use the default. */
+  syncPath: string | null;
 }
 
 export const migrationCheckAtom = atom<MigrationCheckState>({
@@ -15,6 +17,7 @@ export const migrationCheckAtom = atom<MigrationCheckState>({
   fileCount: 0,
   totalSize: 0,
   shouldCheck: false,
+  syncPath: null,
 });
 
 

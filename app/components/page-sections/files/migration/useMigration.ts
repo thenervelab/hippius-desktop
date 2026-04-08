@@ -51,7 +51,7 @@ export interface UseMigrationReturn {
   transitionError: string | null;
   isTransitioning: boolean;
   checkMigration: (accountId: string) => Promise<boolean>;
-  startMigration: (accountId: string) => Promise<void>;
+  startMigration: (accountId: string, syncPath?: string) => Promise<void>;
   onSetupComplete: (result: { serverUrl: string; password: string }) => Promise<void>;
   isSettingUp: boolean;
   confirmSkip: () => Promise<void>;
@@ -262,7 +262,10 @@ export function useMigration(): UseMigrationReturn {
   );
 
   const startMigration = useCallback(
-    async (accountId: string) => {
+    async (accountId: string, syncPath?: string) => {
+      // Persist the chosen destination path so closeMigration can pass it to Rust.
+      appStore.set(migrationCheckAtom, (prev) => ({ ...prev, syncPath: syncPath ?? null }));
+
       const flow = await invoke<{ nextStep: string }>("start_migration_flow", { accountId });
       if (flow.nextStep === "setup") {
         setPendingAccountId(accountId);
@@ -312,6 +315,7 @@ export function useMigration(): UseMigrationReturn {
       fileCount: 0,
       totalSize: 0,
       shouldCheck: false,
+      syncPath: null,
     });
     appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0, failed: 0 });
     setCurrentStep(null);
@@ -325,7 +329,11 @@ export function useMigration(): UseMigrationReturn {
 
     if (accountId) {
       try {
-        await invoke("complete_migration_transition", { accountId });
+        const migrationState = appStore.get(migrationCheckAtom);
+        await invoke("complete_migration_transition", {
+          accountId,
+          customSyncPath: migrationState.syncPath,
+        });
         appStore.set(syncEngineStatusAtom, "active");
         appStore.set(isSyncConfiguredAtom, true);
       } catch (err) {
@@ -346,6 +354,7 @@ export function useMigration(): UseMigrationReturn {
       fileCount: 0,
       totalSize: 0,
       shouldCheck: false,
+      syncPath: null,
     });
     setCurrentStep(null);
     setSuccessCount(0);
@@ -371,6 +380,7 @@ export function useMigration(): UseMigrationReturn {
       fileCount: 0,
       totalSize: 0,
       shouldCheck: false,
+      syncPath: null,
     });
     setCurrentStep(null);
     setTransitionError(null);
