@@ -59,6 +59,7 @@ function triggerMigrationCheck() {
     fileCount: 0,
     totalSize: 0,
     shouldCheck: true,
+    syncPath: null,
   });
 }
 
