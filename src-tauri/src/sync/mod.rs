@@ -18,5 +18,6 @@ pub mod progress;
 pub mod remote;
 pub mod selective;
 pub mod status;
+pub mod failure_commands;
 pub mod failure_tracking;
 pub mod tauri_bridge;
