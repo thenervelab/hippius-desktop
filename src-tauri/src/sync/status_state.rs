@@ -109,11 +109,21 @@ impl SyncStatusState {
         self.status.store(status.as_u8(), Ordering::Release);
     }
 
-    /// One-way latch flipped at the end of `auto_init_sync` (regardless of
-    /// outcome). Once true, never goes back to false for the lifetime of the
-    /// process.
+    /// Latch flipped to `true` at the end of `auto_init_sync` (regardless
+    /// of outcome). Allows `get_sync_engine_status` to distinguish "auto
+    /// init hasn't run yet" (Initializing) from "auto init ran and brought
+    /// up zero drives" (Stopped).
     pub fn mark_auto_init_complete(&self) {
         self.auto_init_complete.store(true, Ordering::Release);
+    }
+
+    /// Reset the latch back to `false`. Called from `stop_sync` (the
+    /// internal lifecycle cleanup invoked from login, logout, and reset)
+    /// so that the follow-up `auto_init_sync` transitions through
+    /// `Initializing` again instead of jumping straight to `Stopped` on
+    /// a logout-then-login within the same process.
+    pub fn reset_auto_init_complete(&self) {
+        self.auto_init_complete.store(false, Ordering::Release);
     }
 
     pub fn auto_init_complete(&self) -> bool {
@@ -194,12 +204,18 @@ mod tests {
     }
 
     #[test]
-    fn auto_init_latch_is_one_way() {
+    fn auto_init_latch_set_and_reset() {
         let state = SyncStatusState::new();
         assert!(!state.auto_init_complete());
         state.mark_auto_init_complete();
         assert!(state.auto_init_complete());
-        // Setting it again is a no-op (no API to clear it)
+        // Setting it again is idempotent.
+        state.mark_auto_init_complete();
+        assert!(state.auto_init_complete());
+        // Reset is what `stop_sync` calls before a follow-up auto-init.
+        state.reset_auto_init_complete();
+        assert!(!state.auto_init_complete());
+        // And re-marking after reset works.
         state.mark_auto_init_complete();
         assert!(state.auto_init_complete());
     }

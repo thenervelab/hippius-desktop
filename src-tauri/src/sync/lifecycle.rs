@@ -898,22 +898,37 @@ pub(crate) async fn initialize_sync_inner(
     })
 }
 
-/// Stop ALL drives (used on logout).
+/// Stop ALL drives. Used as **internal lifecycle cleanup** — not as a
+/// user-initiated "stop sync" action. Call sites:
+///
+/// - `wallet-auth-context.tsx::initSync` runs `invoke("stop_sync")` as
+///   defensive cleanup right before `tryAutoInitSync` on every login, so
+///   any drives left over from a previous session are cleared.
+/// - `auth/logout.rs::logout` calls it to drop drives during sign-out.
+/// - `lifecycle.rs::reset_sync_data` calls it before wiping local state.
+///
+/// **None of these represent user intent to stop syncing.** This function
+/// must NOT persist the user-stopped flag — that would cause auto-init to
+/// bail on the very next call (which is what happens on every login).
+/// The explicit user-pressed-Stop path lives in `stop_drive`, which is
+/// the only place that writes `write_user_stopped(true)`.
+///
+/// Status emits are also intentionally absent: the engine status will be
+/// re-derived on the next `get_sync_engine_status` query (driven by the
+/// drives map and the auto-init latch), and emitting Stopping → Stopped
+/// here would cause a brief alert flash on every login.
 #[tauri::command]
 pub async fn stop_sync(app: AppHandle) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    // Mark transition and persist the user-stopped flag — `stop_sync`
-    // clears every drive, which is functionally equivalent to the user
-    // pressing Stop on the last drive.
-    crate::sync::status::set_status_and_emit(&app, &app_state, crate::sync::status_state::SyncEngineStatus::Stopping);
-    if let Ok(pool) = app_state.pool()
-        && let Err(e) = crate::sync::status_state::write_user_stopped(pool, true).await
-    {
-        warn!("Failed to persist user-stopped flag in stop_sync: {e}");
-    }
+    // Reset the auto-init latch — a follow-up `auto_init_sync` is expected
+    // (login, post-reset, and the splash-after-logout-then-login flow all
+    // call this). Without resetting, `get_sync_engine_status` would jump
+    // straight from Active → Stopped during the cleanup window because
+    // the drives map is empty but the latch still says "auto init done".
+    app_state.sync_status.reset_auto_init_complete();
 
     // 1. Cancel every drive's cancellation token FIRST so the sync loop
     //    sees a clean shutdown signal and can persist state before exiting.
@@ -960,7 +975,10 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
     let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
 
-    crate::sync::status::set_status_and_emit(&app, &app_state, crate::sync::status_state::SyncEngineStatus::Stopped);
+    // NOTE: deliberately no `set_status_and_emit(Stopped)` here — see the
+    // function-level docstring. The engine status will be re-derived from
+    // the drives map (now empty) by the next `get_sync_engine_status` call,
+    // or pushed by the next `auto_init_sync` cycle.
 
     Ok(())
 }
