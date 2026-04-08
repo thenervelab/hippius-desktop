@@ -36,17 +36,18 @@ async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String> {
     }
 }
 
-async fn get_password(pool: &SqlitePool, account_id: &str) -> Result<String> {
-    let owner = account_key(account_id);
-    let result: Option<(String,)> = sqlx::query_as("SELECT drive_password FROM hcfs_config WHERE owner = ?")
-        .bind(&owner)
-        .fetch_optional(pool)
-        .await?;
-    result.map(|(p,)| p).ok_or(AppError::NotReady(crate::error::NotReadyKind::ConfigMissing))
-}
-
-async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &str) -> Result<[u8; 32]> {
-    let password = get_password(pool, account_id).await?;
+/// Derive the per-folder encryption key from the master mnemonic.
+///
+/// `mnemonic` is the user's session BIP-39 mnemonic, needed by
+/// `get_drive_password` to decrypt the `hcfs_config.drive_password` row
+/// when its `encryption_version = 1`. Without this, the raw base64
+/// ciphertext from the column would be passed to `recover_mnemonic`
+/// as if it were the plaintext password — which fails with
+/// "Decryption failed - wrong password?" and was the long-standing bug
+/// behind the "Failed to load remote files" error in the browse-folder
+/// dialog (and the matching failure in `download_remote_file`).
+async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &str, mnemonic: &str) -> Result<[u8; 32]> {
+    let password = crate::sync::config::get_drive_password(pool, account_id, Some(mnemonic)).await?;
     let master_path = master_mnemonic_path(account_id)?;
     let mut master_mnemonic = hcfs_client::auth::recover_mnemonic(&master_path, &password)
         .map_err(|e| AppError::Hcfs(format!("Failed to recover master mnemonic: {e}")))?
@@ -54,6 +55,21 @@ async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &s
     let key = hcfs_client::drive::remote::derive_encryption_key(&master_mnemonic, label).map_err(|e| AppError::Crypto(e.to_string()));
     master_mnemonic.zeroize();
     key
+}
+
+/// Pull the active session mnemonic out of `AppState.auth`. Returns
+/// `NoEncryptionKey` if no mnemonic is loaded (e.g. session restored
+/// from disk without keychain rehydration — see the cold-start
+/// "Mnemonic required" issue).
+fn session_mnemonic(state: &AppState) -> Result<String> {
+    let auth = state
+        .auth
+        .lock()
+        .map_err(|e| AppError::Other(format!("auth lock poisoned: {e}")))?;
+    auth.mnemonic
+        .as_ref()
+        .map(|z| z.as_str().to_string())
+        .ok_or(AppError::NotReady(crate::error::NotReadyKind::NoEncryptionKey))
 }
 
 async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Result<hcfs_client::client::HcfsClient> {
@@ -78,7 +94,8 @@ async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Resul
 pub async fn list_remote_folder_files(state: tauri::State<'_, AppState>, account_id: String, label: String) -> Result<Vec<RemoteFileInfo>> {
     info!(account_id = %account_id, label = %label, "Listing remote folder files");
     let pool = state.pool()?;
-    let encryption_key = encryption_key_for_label(pool, &account_id, &label).await?;
+    let mnemonic = session_mnemonic(&state)?;
+    let encryption_key = encryption_key_for_label(pool, &account_id, &label, &mnemonic).await?;
     let client = build_client(pool, &account_id, &label).await?;
     let fhash = folder_hash(&label);
 
@@ -103,7 +120,8 @@ pub async fn download_remote_file(
     info!(label = %label, file_id = %file_id, "Downloading remote file");
 
     let pool = state.pool()?;
-    let encryption_key = encryption_key_for_label(pool, &account_id, &label).await?;
+    let mnemonic = session_mnemonic(&state)?;
+    let encryption_key = encryption_key_for_label(pool, &account_id, &label, &mnemonic).await?;
     let client = build_client(pool, &account_id, &label).await?;
     let fhash = folder_hash(&label);
 
