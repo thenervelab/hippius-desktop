@@ -261,7 +261,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           ? W_COLLAPSED_DISCONNECTED
           : isRetrying
             ? W_COLLAPSED_RETRY
-            : effectiveCompleted || hasFailed
+            : effectiveCompleted || isCompleted || hasFailed
               ? W_COLLAPSED_DONE
               : W_COLLAPSED_ACTIVE
       }}
@@ -327,12 +327,12 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     "fill-none stroke-[4]",
                     isUnhealthy || hasFailed
                       ? "stroke-[#ef4444]"
-                      : effectiveCompleted
+                      : effectiveCompleted || isCompleted
                         ? "stroke-[#4ade80]"
                         : "stroke-[#4171e0]"
                   )}
                   strokeLinecap="round"
-                  strokeDasharray={isUnhealthy || hasFailed ? "138 138" : effectiveCompleted ? "138 138" : percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
+                  strokeDasharray={isUnhealthy || hasFailed ? "138 138" : (effectiveCompleted || isCompleted) ? "138 138" : percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
                 />
               </svg>
 
@@ -344,7 +344,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   </AbstractIconWrapper>
                 ) : (
                   <AbstractIconWrapper className="size-10 flex items-center justify-center rounded-[50%]">
-                    {effectiveCompleted ? (
+                    {effectiveCompleted || isCompleted ? (
                       <Icons.TickCircle className="size-6 relative text-success-50" />
                     ) : (
                       <Icons.Refresh className="size-6 relative animate-spin text-primary-50" />
@@ -401,7 +401,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     ? retryCountdown > 0 ? `Retry ${retryCountdown}s` : "Retrying..."
                     : hasFailed
                       ? "Failed"
-                      : effectiveCompleted
+                      : effectiveCompleted || isCompleted
                         ? "Complete"
                         : percentage !== null && percentage < 100
                           ? `Syncing ${percentage}%`

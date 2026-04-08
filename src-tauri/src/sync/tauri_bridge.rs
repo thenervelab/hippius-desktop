@@ -105,6 +105,17 @@ impl SyncEventHandler for TauriSyncBridge {
                 conflicts_resolved,
                 conflicts_skipped,
             } => {
+                // Emit a fresh snapshot so the frontend sees the finalized
+                // session state (is_active=false, effective_completed=true).
+                // `finalize_session_for_label` in hcfs-client updates progress
+                // state but does not emit a snapshot itself, so without this
+                // the UI would stay on the last pre-finalization snapshot.
+                {
+                    use tauri::Manager;
+                    let app_state = app.state::<crate::app_state::AppState>();
+                    app_state.sync.emit_snapshot(true);
+                }
+
                 let _ = app.emit(
                     events::SYNC_COMPLETED,
                     events::SyncCompletedPayload {

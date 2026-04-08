@@ -996,25 +996,18 @@ pub async fn get_user_files(
         total_private_size += entries.iter().map(|e| e.size).sum::<u64>();
 
         for entry in entries.iter().filter(|e| e.sync_status != "excluded") {
-            let local_modified_ms = entry.modified.map_or(0, |m| m as i64 * 1000);
             let uploaded_at_ms = if entry.uploaded_at != 0 { entry.uploaded_at * 1000 } else { 0 };
             let updated_at_ms = if entry.updated_at != 0 { entry.updated_at * 1000 } else { 0 };
-            let is_pending = entry.sync_status == "pending";
-            let created_at_ms = if uploaded_at_ms != 0 {
-                uploaded_at_ms
-            } else if is_pending {
-                0
-            } else {
-                local_modified_ms
-            };
+            // created_at represents "DATE UPLOADED" in the UI. Only use the
+            // server-side uploaded_at timestamp; never fall back to local
+            // mtime — showing the file's local modification date under a
+            // "DATE UPLOADED" column is confusing (the frontend renders 0
+            // as "—" which is the correct placeholder for not-yet-uploaded).
+            let created_at_ms = uploaded_at_ms;
             let last_charged_at_ms = if updated_at_ms != 0 {
                 updated_at_ms
-            } else if uploaded_at_ms != 0 {
-                uploaded_at_ms
-            } else if is_pending {
-                0
             } else {
-                local_modified_ms
+                uploaded_at_ms
             };
 
             // Detect encrypted file names (long hex strings or file_<hex> patterns)
