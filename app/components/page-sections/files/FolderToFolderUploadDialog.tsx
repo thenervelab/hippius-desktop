@@ -19,6 +19,7 @@ import { queryClientAtom } from "jotai-tanstack-query";
 import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
 import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { getLastBrowseDirectory, saveLastBrowseDirectory } from "@/lib/utils/userPreferencesDb";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
 type Props = {
     open: boolean;
@@ -44,6 +45,7 @@ export default function FolderToFolderUploadDialog({
     const { polkadotAddress } = useWalletAuth();
     const queryClient = useAtomValue(queryClientAtom);
     const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
+    const { hasSufficientCredits } = useCreditCheck();
 
     const [folderPath, setFolderPath] = useState<string>("");
     const [folderError, setFolderError] = useState<string | null>(null);
@@ -74,6 +76,11 @@ export default function FolderToFolderUploadDialog({
 
         if (!folderPath) {
             setFolderError("Please select a folder");
+            return;
+        }
+
+        if (!hasSufficientCredits("folder-upload")) {
+            handleClose();
             return;
         }
 

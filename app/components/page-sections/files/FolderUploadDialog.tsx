@@ -22,6 +22,7 @@ import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert
 import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
 import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { getLastBrowseDirectory, saveLastBrowseDirectory } from "@/lib/utils/userPreferencesDb";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
 type Props = {
     open: boolean;
@@ -41,6 +42,7 @@ export default function FolderUploadDialog({
     const { polkadotAddress } = useWalletAuth();
     const queryClient = useAtomValue(queryClientAtom);
     const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
+    const { hasSufficientCredits } = useCreditCheck();
 
     const [folderPath, setFolderPath] = useState<string>("");
     const [folderError, setFolderError] = useState<string | null>(null);
@@ -76,6 +78,11 @@ export default function FolderUploadDialog({
 
         if (!folderPath) {
             setFolderError("Please select a folder");
+            return;
+        }
+
+        if (!hasSufficientCredits("folder-upload")) {
+            handleClose();
             return;
         }
 

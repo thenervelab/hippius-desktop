@@ -5,6 +5,7 @@ import SyncEventLogger from "./SyncEventLogger";
 import ConflictEventListener from "./ConflictEventListener";
 import SyncFilesHandler from "./SyncFilesHandler";
 import MigrationChecker from "./MigrationChecker";
+import InsufficientCreditsDialog from "@/components/page-sections/files/InsufficientCreditsDialog";
 export default function ProtectedLayout({
   children,
 }: Readonly<{
@@ -15,6 +16,7 @@ export default function ProtectedLayout({
       <SyncEventLogger />
       <ConflictEventListener />
       <MigrationChecker />
+      <InsufficientCreditsDialog />
       <div className="flex min-h-screen w-full">
         <SyncFilesHandler />
         <Sidebar />

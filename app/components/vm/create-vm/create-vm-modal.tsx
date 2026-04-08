@@ -20,6 +20,8 @@ import useCreateVM, {
   type CreateVMRequest,
 } from "@/app/lib/hooks/api/useCreateVM";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
+import { useSetAtom } from "jotai";
+import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
 import useVMApplications from "@/app/lib/hooks/api/useVMApplications";
 
 type FieldName = "instanceName" | "operatingSystem" | "image" | "sshKey";
@@ -101,6 +103,7 @@ const CreateVMModal: React.FC<Props> = ({
     isFetching: isCreditsFetching,
     isLoading: isCreditsLoading,
   } = useUserCredits();
+  const setInsufficientCreditsReason = useSetAtom(insufficientCreditsDialogOpenAtom);
 
   // Extract unique operating systems from VM images
   const operatingSystems = React.useMemo(() => {
@@ -291,11 +294,7 @@ const CreateVMModal: React.FC<Props> = ({
       if (credits !== undefined) {
         const creditsNumber = Number(credits) / Math.pow(10, 18);
         if (creditsNumber < 10) {
-          toast.error("Insufficient Credits", {
-            description: "You need at least 10 credits to create a VM.",
-            duration: Infinity,
-            closeButton: true,
-          });
+          setInsufficientCreditsReason("vm-creation");
           return;
         }
       }

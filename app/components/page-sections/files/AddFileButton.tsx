@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { toast } from "sonner";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
 // Custom event name for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -60,12 +61,14 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     );
     const isLoading = uploadingState !== "idle";
     const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
+    const { hasSufficientCredits } = useCreditCheck();
 
     // Expose methods to parent components
     useImperativeHandle(
       ref,
       () => ({
         openWithFiles: (files: FileList) => {
+          if (!hasSufficientCredits("file-upload")) return;
           if (syncEngineStatus === "stopped") {
             toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading files.");
             return;
@@ -75,6 +78,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           setIsOpen(true);
         },
         openWithPaths: (paths: string[]) => {
+          if (!hasSufficientCredits("file-upload")) return;
           if (syncEngineStatus === "stopped") {
             toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading files.");
             return;
@@ -85,7 +89,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         },
         isDialogOpen: () => isOpen
       }),
-      [isOpen, syncEngineStatus]
+      [isOpen, syncEngineStatus, hasSufficientCredits]
     );
 
     // Memoize title to prevent recalculation
@@ -152,8 +156,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         <CardButton
           className={cn("h-10 w-fit p-1", externalDisabled && "opacity-50 cursor-not-allowed", className)}
           onClick={() => {
-            if (IS_SYNC_PAUSED) return;
-            if (syncEngineStatus === "stopped") {
+            if (IS_SYNC_PAUSED) return;            if (!hasSufficientCredits("file-upload")) return;            if (syncEngineStatus === "stopped") {
               toast.warning("Syncing is stopped. Resume syncing from Settings → Sync & Storage before uploading files.");
               return;
             }

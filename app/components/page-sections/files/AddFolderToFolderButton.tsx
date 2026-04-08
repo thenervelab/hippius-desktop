@@ -6,6 +6,7 @@ import FolderToFolderUploadDialog from "./FolderToFolderUploadDialog";
 import { useAtomValue } from "jotai";
 import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { toast } from "sonner";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
 interface AddFolderToFolderButtonProps {
     className?: string;
@@ -31,6 +32,7 @@ const AddFolderToFolderButton = forwardRef<unknown, AddFolderToFolderButtonProps
     ) => {
         const [isDialogOpen, setIsDialogOpen] = useState(false);
         const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
+        const { hasSufficientCredits } = useCreditCheck();
 
         useImperativeHandle(ref, () => ({}));
 
@@ -38,6 +40,7 @@ const AddFolderToFolderButton = forwardRef<unknown, AddFolderToFolderButtonProps
             <>
                 <button
                     onClick={() => {
+                        if (!hasSufficientCredits("folder-upload")) return;
                         if (syncEngineStatus === "stopped") {
                             toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before adding folders.");
                             return;

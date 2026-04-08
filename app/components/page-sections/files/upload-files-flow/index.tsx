@@ -16,6 +16,7 @@ import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
 // ── Shared types ───────────────────────────────────────────────────────────────
 
@@ -80,7 +81,8 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
         err instanceof Error &&
         err.message.includes("Insufficient Credits")
       ) {
-        setInsufficient(true);
+        setInsufficient(isFolder ? "folder-upload" : "file-upload");
+        resetFn?.();
       }
       setIsUploading(false);
     },
@@ -93,6 +95,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
   // Folder-mode hooks
   const { polkadotAddress } = useWalletAuth();
   const syncBasePath = isFolder ? props.syncBasePath : undefined;
+  const { hasSufficientCredits } = useCreditCheck();
 
   // ── Shared: populate file list from initial values ─────────────────────────
 
@@ -274,6 +277,11 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
 
     if (!polkadotAddress) {
       toast.error("Wallet not connected. Please connect your wallet.");
+      return;
+    }
+
+    if (!hasSufficientCredits("folder-upload")) {
+      props.onCancel();
       return;
     }
 

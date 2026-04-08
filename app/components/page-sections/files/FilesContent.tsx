@@ -14,7 +14,6 @@ import { WaitAMoment } from "@/components/ui";
 import FilesTable from "./files-table";
 import CardView from "./card-view";
 import IPFSNoEntriesFound from "./files-table/NoEntriesFound";
-import InsufficientCreditsDialog from "./InsufficientCreditsDialog";
 import UploadStatusWidget from "./UploadStatusWidget";
 import SidebarDialog from "@/app/components/ui/SidebarDialog";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
@@ -445,7 +444,6 @@ const FilesContent: FC<FilesContentProps> = ({
         />
       )}
 
-      <InsufficientCreditsDialog />
       <UploadStatusWidget />
 
       <SidebarDialog

@@ -10,6 +10,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
 import { getHcfsConfig, saveHcfsConfig } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import { syncEngineStatusAtom, isSyncConfiguredAtom, SYNC_STOPPED_STORAGE_KEY } from "@/app/lib/global-atoms/unpinAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 import DialogContainer from "@/components/ui/DialogContainer";
@@ -26,6 +27,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   onSuccess,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
+  const { hasSufficientCredits } = useCreditCheck();
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [folderName, setFolderName] = useState<string>("");
   const [isAdding, setIsAdding] = useState(false);
@@ -102,6 +104,11 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
 
     if (!selectedPath) {
       toast.error("Please select a folder first");
+      return;
+    }
+
+    if (!hasSufficientCredits("folder-sync")) {
+      handleClose();
       return;
     }
 

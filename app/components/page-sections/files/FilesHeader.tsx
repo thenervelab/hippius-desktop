@@ -20,6 +20,7 @@ import { IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import { useAtomValue } from "jotai";
 import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { toast } from "sonner";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
 
 interface FilesHeaderProps {
@@ -91,6 +92,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   const isFolderUploadOpen = isFolderUploadOpenProp ?? isFolderUploadOpenLocal;
   const setIsFolderUploadOpen = onSetFolderUploadOpen ?? setIsFolderUploadOpenLocal;
   const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
+  const { hasSufficientCredits } = useCreditCheck();
 
   const { navigateToFilesView } = useFilesNavigation();
   const { push } = useNavigationLoader();
@@ -212,6 +214,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             {(!isRecentFiles || !hasNoSyncPaths) && !isSyncPathEmpty && (
               <button
                 onClick={() => {
+                  if (!hasSufficientCredits("folder-upload")) return;
                   if (syncEngineStatus === "stopped") {
                     toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading folders.");
                     return;
