@@ -36,6 +36,10 @@ pub const ACTIVITY_UPDATED: &str = "hcfs_activity_updated";
 pub const AUTH_RELOGIN_REQUIRED: &str = "hcfs_auth_relogin_required";
 /// Emitted with a full progress snapshot for the sync status widget.
 pub const PROGRESS_SNAPSHOT: &str = "sync_progress_snapshot";
+/// Emitted whenever the authoritative sync engine status changes
+/// (Initializing → Active, Active → Stopping, etc.). Payload is a
+/// camelCase `SyncEngineStatus` string. See `sync/status_state.rs`.
+pub const SYNC_ENGINE_STATUS_CHANGED: &str = "hcfs_sync_engine_status_changed";
 
 // ── Payload structs for direct Tauri emission ──────────────────────────
 // Used by lifecycle.rs (progress callbacks) and control.rs (manual sync).

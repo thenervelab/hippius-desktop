@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { InView } from "react-intersection-observer";
 import SectionHeader from "./SectionHeader";
 import SyncFolderSelector from "@/app/components/page-sections/files/SyncFolderSelector";
@@ -15,6 +15,10 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import StopSyncDialog, { type SyncType } from "./StopSyncDialog";
 import { useAtomValue, useSetAtom } from "jotai";
 import { triggerSyncPathRefreshAtom, syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+// NOTE: this component used to set `syncEngineStatusAtom` directly and to
+// persist a `localStorage["hippius_sync_stopped"]` flag. Both have moved to
+// Rust — `useSyncEngineStatus` (mounted in SyncEventLogger) is now the only
+// producer of the atom, and the persistence lives in `user_preferences`.
 import { SyncStoppedAlert } from "@/components/ui/SyncStoppedAlert";
 import { SyncConnectivityAlert } from "@/components/ui/SyncConnectivityAlert";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
@@ -33,17 +37,10 @@ const UpdateSyncFolder: React.FC = () => {
   const [stopSyncTarget, setStopSyncTarget] = useState<SyncType | null>(null);
   const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
   const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
-  const setSyncEngineStatus = useSetAtom(syncEngineStatusAtom);
 
   const isSyncActive = syncEngineStatus === "active";
   const isStopping = syncEngineStatus === "stopping";
   const [isStarting, setIsStarting] = useState(false);
-
-  // Ref to read the latest syncEngineStatus without re-triggering effects
-  const statusRef = useRef(syncEngineStatus);
-  useEffect(() => {
-    statusRef.current = syncEngineStatus;
-  }, [syncEngineStatus]);
 
   const {
     setupAndInitialize,
@@ -59,7 +56,12 @@ const UpdateSyncFolder: React.FC = () => {
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
   const [showMnemonicBackup, setShowMnemonicBackup] = useState(false);
 
-  // Load folder path and check sync status on mount only
+  // Load folder path on mount.
+  //
+  // The previous mount effect also fired an `is_drive_active` IPC and a
+  // separate "wait for stopping" effect that called `stop_drive_and_wait`
+  // and manually flipped the atom. Both are gone — sync engine status now
+  // comes exclusively from the Rust-owned `useSyncEngineStatus` listener.
   useEffect(() => {
     (async () => {
       try {
@@ -72,44 +74,16 @@ const UpdateSyncFolder: React.FC = () => {
         console.error("Failed to load sync folder:", err);
       }
     })();
-
-    // Only check drive status if we're not in the middle of stopping
-    if (statusRef.current !== "stopping" && statusRef.current !== "stopped") {
-      (async () => {
-        try {
-          const active = await invoke<boolean>("is_drive_active");
-          // Re-check after await; status might have changed
-          if (statusRef.current === "stopping" || statusRef.current === "stopped") return;
-          setSyncEngineStatus(active ? "active" : "stopped");
-        } catch {
-          // If we can't check, leave status as-is
-        }
-      })();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [polkadotAddress]);
 
-  // When stopping, wait for the drive to actually drop (Rust handles the polling)
+  // When the user has just confirmed Stop and we observe the transition to
+  // "stopped", refresh the sync paths panel so any UI bound to that trigger
+  // re-reads. The transition itself comes from Rust via the
+  // SYNC_ENGINE_STATUS_CHANGED event.
   useEffect(() => {
-    if (syncEngineStatus !== "stopping") return;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        await invoke("stop_drive_and_wait", { label: "default", timeoutMs: 30000 });
-        if (!cancelled) {
-          toast.success("Syncing stopped");
-          setSyncEngineStatus("stopped");
-          triggerSyncPathRefresh((prev) => prev + 1);
-        }
-      } catch {
-        if (!cancelled) {
-          toast.error("Timed out waiting for sync to stop");
-          setSyncEngineStatus("stopped");
-        }
-      }
-    })();
-    return () => { cancelled = true; };
+    if (syncEngineStatus === "stopped") {
+      triggerSyncPathRefresh((prev) => prev + 1);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncEngineStatus]);
 
@@ -135,9 +109,8 @@ const UpdateSyncFolder: React.FC = () => {
         // Config exists — show success immediately, sync in background
         toast.success("Sync folder set — syncing started!");
         setShowSelector(false);
-        // Clear stopped flag — selecting a new folder means user wants sync running
-        localStorage.removeItem("hippius_sync_stopped");
-        setSyncEngineStatus("active");
+        // Engine status flips to "active" via the SYNC_ENGINE_STATUS_CHANGED
+        // event from Rust once `change_sync_folder` initializes the drive.
 
         // Single Rust call: stops old drive, sets path, initializes new drive
         const mnemonic = (await getMnemonic()) ?? undefined;
@@ -173,7 +146,8 @@ const UpdateSyncFolder: React.FC = () => {
 
       if (initResult) {
         toast.success("Sync folder set — syncing started!");
-        setSyncEngineStatus("active");
+        // Engine status flips to "active" via the SYNC_ENGINE_STATUS_CHANGED
+        // event from Rust.
         if (initResult.mnemonic) {
           setShowMnemonicBackup(true);
         }
@@ -200,18 +174,15 @@ const UpdateSyncFolder: React.FC = () => {
       return;
     }
 
-    setSyncEngineStatus("stopping");
     setStopSyncTarget(null); // close dialog immediately
     try {
+      // Rust's `stop_drive` emits Stopping → Stopped via the event bus AND
+      // persists the user-stopped flag in `user_preferences`. The frontend
+      // does not need to mirror either of those side-effects.
       await invoke("stop_drive", { label: "default" });
-      // Persist the stopped state so auto-init is skipped on next app launch
-      localStorage.setItem("hippius_sync_stopped", "true");
-      // The "stopping" → "stopped" transition is handled by the polling useEffect.
-      // We just need to fire off the Rust command; the effect will detect when
-      // is_drive_active() returns false and set status to "stopped" + show toast.
+      toast.success("Syncing stopped");
     } catch {
       toast.error("Failed to stop syncing for this folder");
-      setSyncEngineStatus("active");
     }
   };
 
@@ -223,13 +194,12 @@ const UpdateSyncFolder: React.FC = () => {
 
     setIsStarting(true);
     try {
-      // Clear the stopped flag — user explicitly wants sync running
-      localStorage.removeItem("hippius_sync_stopped");
       const mnemonic = (await getMnemonic()) ?? undefined;
       const success = await tryInitializeSync(polkadotAddress, "default", mnemonic ?? undefined);
       if (success) {
         toast.success("Syncing started!");
-        setSyncEngineStatus("active");
+        // Engine status flips to "active" via the SYNC_ENGINE_STATUS_CHANGED
+        // event from Rust.
         triggerSyncPathRefresh((prev) => prev + 1);
       } else {
         // If needsSetup is true, the user needs to complete setup first

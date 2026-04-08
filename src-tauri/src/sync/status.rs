@@ -5,7 +5,7 @@
 use hcfs_client::engine::types::{CombinedSyncState, SyncActivityAction, SyncActivityItem, SyncEngineHealth};
 use serde::Serialize;
 use std::collections::HashSet;
-use tauri::{AppHandle, Wry};
+use tauri::{AppHandle, Emitter, Wry};
 
 /// Return the combined sync state across all drives.
 #[tauri::command]
@@ -106,6 +106,81 @@ fn shorten_name(name: &str, max_len: usize) -> String {
 #[tauri::command]
 pub fn app_close(app: AppHandle<Wry>) {
     app.exit(0);
+}
+
+// ── Sync engine status (Rust-owned, replaces FE atom race) ──────────────
+
+use crate::error::AppError;
+use crate::sync::status_state::{read_user_stopped, SyncEngineStatus};
+
+/// Single helper that updates the in-memory status AND emits the
+/// `SYNC_ENGINE_STATUS_CHANGED` Tauri event.
+///
+/// Use this instead of `state.sync_status.set(...)` directly so the emission
+/// can't be forgotten by future callers — every status transition the
+/// frontend cares about goes through here.
+pub fn set_status_and_emit(app: &AppHandle<Wry>, state: &crate::app_state::AppState, new: SyncEngineStatus) {
+    let prev = state.sync_status.get();
+    if prev == new {
+        // No change, no emit. Avoids spamming the FE listener with redundant
+        // events when callers idempotently set the current state.
+        return;
+    }
+    state.sync_status.set(new);
+    let _ = app.emit(crate::sync::events::SYNC_ENGINE_STATUS_CHANGED, new);
+}
+
+/// Return the authoritative sync engine status.
+///
+/// Resolution order:
+/// 1. If the persisted user-stopped flag is set in `user_preferences`,
+///    return `Stopped` regardless of in-memory state. This makes the
+///    user's explicit "Stop" decision survive process restarts.
+/// 2. If `auto_init_sync` has not yet completed for this process, return
+///    `Initializing`. The frontend treats this like Active for the
+///    purposes of the "Stopped" alert.
+/// 3. If the in-memory status is `Stopping`, return that — a stop is
+///    in flight, mid-transition.
+/// 4. Otherwise, derive from whether any drives are loaded:
+///    `Active` if at least one, `Stopped` if zero.
+///
+/// This function is the FE's source of truth — the new
+/// `useSyncEngineStatus` hook calls it on mount and trusts the answer.
+#[tauri::command]
+pub async fn get_sync_engine_status(state: tauri::State<'_, crate::app_state::AppState>) -> Result<SyncEngineStatus, AppError> {
+    let pool = state.pool()?;
+
+    // 1. Persisted user-stopped flag wins. We check this BEFORE the latch
+    //    because the user's explicit Stop decision must survive a restart
+    //    even if auto-init hasn't run yet (otherwise the user briefly sees
+    //    "Initializing" then "Stopped" which looks like a flicker).
+    if read_user_stopped(pool).await.unwrap_or(false) {
+        return Ok(SyncEngineStatus::Stopped);
+    }
+
+    // 2. Auto-init has not run yet — we don't know whether drives will
+    //    load successfully or not. Don't lie either direction.
+    if !state.sync_status.auto_init_complete() {
+        return Ok(SyncEngineStatus::Initializing);
+    }
+
+    // 3. Mid-transition — respect the in-flight state.
+    let stored = state.sync_status.get();
+    if matches!(stored, SyncEngineStatus::Stopping) {
+        return Ok(SyncEngineStatus::Stopping);
+    }
+
+    // 4. Derived from the drives map. `try_lock` failure means a sync cycle
+    //    is currently holding the lock — that's still Active.
+    let drives_loaded = match state.sync.drives.try_lock() {
+        Ok(guard) => !guard.is_empty(),
+        Err(_) => true,
+    };
+    Ok(if drives_loaded {
+        SyncEngineStatus::Active
+    } else {
+        SyncEngineStatus::Stopped
+    })
 }
 
 #[cfg(test)]

@@ -44,9 +44,7 @@ import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import {
   triggerSyncPathRefreshAtom,
-  syncEngineStatusAtom,
   isSyncConfiguredAtom,
-  SYNC_STOPPED_STORAGE_KEY,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
@@ -142,61 +140,12 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
   const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
-  const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
-  const setSyncEngineStatus = useSetAtom(syncEngineStatusAtom);
   const isSyncConfigured = useAtomValue(isSyncConfiguredAtom);
 
-  // Ref to track current status without creating effect dependencies
-  const syncStatusRef = useRef(syncEngineStatus);
-  useEffect(() => {
-    syncStatusRef.current = syncEngineStatus;
-  }, [syncEngineStatus]);
-
-  // Check if sync engine is active on mount and when sync path refreshes.
-  // Does NOT depend on syncEngineStatus to avoid re-running on every status change.
-  useEffect(() => {
-    // Skip check if user is in the process of stopping or has stopped sync
-    if (syncStatusRef.current === "stopping" || syncStatusRef.current === "stopped") return;
-
-    (async () => {
-      try {
-        const active = await invoke<boolean>("is_drive_active");
-        // Re-check after async gap — user may have clicked stop while await was pending
-        if (syncStatusRef.current === "stopping" || syncStatusRef.current === "stopped") return;
-        setSyncEngineStatus(active ? "active" : "stopped");
-      } catch {
-        // If we can't check, leave status as-is
-      }
-    })();
-  }, [setSyncEngineStatus, syncPathRefreshTrigger]);
-
-  // While stopping, keep checking until the drive is actually dropped
-  useEffect(() => {
-    if (syncEngineStatus !== "stopping") return;
-
-    let cancelled = false;
-
-    const poll = async () => {
-      while (!cancelled) {
-        await new Promise((r) => setTimeout(r, 1000));
-        try {
-          const active = await invoke<boolean>("is_drive_active");
-          if (!active && !cancelled) {
-            setSyncEngineStatus("stopped");
-            break;
-          }
-        } catch {
-          // Ignore transient failures and keep polling
-        }
-      }
-    };
-
-    poll();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [syncEngineStatus, setSyncEngineStatus]);
+  // Sync engine status is owned by Rust and pushed via the
+  // `useSyncEngineStatus` hook mounted in `SyncEventLogger`. The previous
+  // mount-time `is_drive_active` race + polling loop is gone — see
+  // `docs/follow-ups/fix-plan-sync-widget-and-engine-status.md`.
 
   // HCFS sync integration
   const {
@@ -668,8 +617,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
         try {
           const mnemonic = (await getMnemonic()) ?? undefined;
           await invoke("resume_drive", { label, mnemonic });
-          localStorage.removeItem(SYNC_STOPPED_STORAGE_KEY);
-          appStore.set(syncEngineStatusAtom, "active");
+          // Status flips to "active" via the SYNC_ENGINE_STATUS_CHANGED
+          // event from Rust — see useSyncEngineStatus.
           appStore.set(isSyncConfiguredAtom, true);
           toast.success(`Sync resumed for "${label}"`);
           setPausedLabels(prev => prev.filter(l => l !== label));

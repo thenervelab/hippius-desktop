@@ -8,20 +8,25 @@ export const triggerSyncPathRefreshAtom = atom<number>(0);
 // Used to differentiate "stopped by user" vs "never set up".
 export const isSyncConfiguredAtom = atom<boolean>(false);
 
-// Atom to track sync engine status.
-// "active"   = drive is loaded and syncing
-// "stopping" = user pressed stop, waiting for engine to finish
-// "stopped"  = engine fully stopped
-export type SyncEngineStatus = "active" | "stopping" | "stopped";
+/**
+ * Sync engine status, mirrored from the Rust backend.
+ *
+ * The atom is owned by `useSyncEngineStatus` (mounted once at the protected
+ * layout root). All transitions originate from Rust — never set this atom
+ * directly from a click handler. Use the `stop_drive` / `initialize_sync*`
+ * Tauri commands and let the backend's `SYNC_ENGINE_STATUS_CHANGED` event
+ * propagate the change back.
+ *
+ * - `initializing` — process started but `auto_init_sync` hasn't completed
+ *   yet. UI components MUST treat this like `active` for purposes of the
+ *   "Stopped" alert (i.e. don't render it). On cold start the atom holds
+ *   this value until the first event from Rust arrives.
+ * - `active` — at least one drive is loaded and the sync loop is running.
+ * - `stopping` — `stop_drive` is in flight; teardown in progress.
+ * - `stopped` — user explicitly stopped sync (persisted in
+ *   `user_preferences.sync_user_stopped`), or auto-init found no drives to
+ *   bring up.
+ */
+export type SyncEngineStatus = "initializing" | "active" | "stopping" | "stopped";
 
-/** localStorage key used to persist the user's explicit "stop sync" choice across app restarts. */
-export const SYNC_STOPPED_STORAGE_KEY = "hippius_sync_stopped";
-
-// Read persisted state: if the user explicitly stopped sync before quitting,
-// start in "stopped" so auto-init is skipped.
-const initialSyncStatus: SyncEngineStatus =
-  typeof window !== "undefined" && localStorage.getItem(SYNC_STOPPED_STORAGE_KEY) === "true"
-    ? "stopped"
-    : "active";
-
-export const syncEngineStatusAtom = atom<SyncEngineStatus>(initialSyncStatus);
+export const syncEngineStatusAtom = atom<SyncEngineStatus>("initializing");

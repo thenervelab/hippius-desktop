@@ -880,6 +880,15 @@ pub(crate) async fn initialize_sync_inner(
     );
     spawn_folder_registration(&cfg.server_url, &bearer_token, &label, &account_id, &fhash, pool);
 
+    // The user has just successfully started a drive — clear the persisted
+    // user-stopped flag so a future cold start auto-inits cleanly. Best-
+    // effort: a write failure is non-fatal because the in-memory status is
+    // still set to Active below.
+    if let Err(e) = crate::sync::status_state::write_user_stopped(pool, false).await {
+        warn!("Failed to clear user-stopped flag after init: {e}");
+    }
+    crate::sync::status::set_status_and_emit(&app, &app_state, crate::sync::status_state::SyncEngineStatus::Active);
+
     Ok(InitSyncResult {
         user_id,
         // Unwrap Zeroizing at the IPC serialization boundary; the Zeroizing
@@ -895,6 +904,16 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
+
+    // Mark transition and persist the user-stopped flag — `stop_sync`
+    // clears every drive, which is functionally equivalent to the user
+    // pressing Stop on the last drive.
+    crate::sync::status::set_status_and_emit(&app, &app_state, crate::sync::status_state::SyncEngineStatus::Stopping);
+    if let Ok(pool) = app_state.pool()
+        && let Err(e) = crate::sync::status_state::write_user_stopped(pool, true).await
+    {
+        warn!("Failed to persist user-stopped flag in stop_sync: {e}");
+    }
 
     // 1. Cancel every drive's cancellation token FIRST so the sync loop
     //    sees a clean shutdown signal and can persist state before exiting.
@@ -938,6 +957,8 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
     let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
 
+    crate::sync::status::set_status_and_emit(&app, &app_state, crate::sync::status_state::SyncEngineStatus::Stopped);
+
     Ok(())
 }
 
@@ -949,6 +970,10 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
+
+    // Mark the engine as transitioning. The FE renders this as "Stopping…"
+    // until the in-flight teardown finishes.
+    crate::sync::status::set_status_and_emit(&app, &app_state, crate::sync::status_state::SyncEngineStatus::Stopping);
 
     let (remaining, _removed_path) = remove_drive_inmemory(sync, &label).await;
 
@@ -965,9 +990,28 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<()> {
         warn!("Failed to remove sync path for '{}' from DB: {e}", label);
     }
 
+    // Persist the user's explicit Stop decision so it survives a restart.
+    // Only persist when no drives remain — stopping a single drive in a
+    // multi-drive setup is not the same as "user stopped sync entirely".
+    if remaining == 0
+        && let Ok(pool) = app_state.pool()
+        && let Err(e) = crate::sync::status_state::write_user_stopped(pool, true).await
+    {
+        warn!("Failed to persist user-stopped flag: {e}");
+    }
+
     if remaining == 0 {
         teardown_last_drive(sync, &app).await;
     }
+
+    // Final status: Stopped if no drives remain, otherwise Active (the
+    // remaining drives are still running).
+    let new_status = if remaining == 0 {
+        crate::sync::status_state::SyncEngineStatus::Stopped
+    } else {
+        crate::sync::status_state::SyncEngineStatus::Active
+    };
+    crate::sync::status::set_status_and_emit(&app, &app_state, new_status);
 
     info!("Stopped drive '{}', {} drives remaining", label, remaining);
     Ok(())
@@ -1101,17 +1145,57 @@ pub async fn change_sync_folder(
 ///
 /// This replaces the 9-step `tryAutoInitSync()` orchestration that was in
 /// TypeScript. All business logic (migration lock, mnemonic persistence,
-/// path filtering, HCFS config check, sequential init) is now in Rust.
+/// path filtering, HCFS config check, sequential init) lives in Rust.
 ///
-/// `user_stopped_sync` is passed from the frontend (read from localStorage)
-/// since Rust cannot access browser storage.
+/// The user-stopped flag is read from `user_preferences.sync_user_stopped`
+/// inside `auto_init_sync_inner` — the frontend no longer passes it.
 #[tauri::command]
 pub async fn auto_init_sync(
     app: AppHandle,
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     mnemonic: Option<String>,
-    user_stopped_sync: bool,
+) -> Result<AutoInitResult> {
+    let result = auto_init_sync_inner(app.clone(), &state, account_id, mnemonic).await;
+
+    // Always mark the auto-init latch — the FE's `get_sync_engine_status`
+    // uses this to decide between `Initializing` and `Stopped`. The one
+    // exception is the "migration in progress" early-return: that path is
+    // transient and auto_init_sync will be called again after migration
+    // completes, so we leave the latch alone in that single case.
+    let migration_blocked = matches!(
+        &result,
+        Ok(r) if r.skipped_reason.as_deref() == Some("Migration in progress"),
+    );
+    if !migration_blocked {
+        state.sync_status.mark_auto_init_complete();
+    }
+
+    // Map the inner result to a status and emit the change.
+    let new_status = match &result {
+        Ok(r) if r.any_initialized => crate::sync::status_state::SyncEngineStatus::Active,
+        // Migration block is transient — leave the in-memory status alone
+        // (it will be `Initializing` from the previous call) so the FE
+        // doesn't briefly flash to `Stopped` mid-migration.
+        Ok(_) if migration_blocked => state.sync_status.get(),
+        // Anything else (no paths, no password, user stopped, all drive
+        // inits failed, or an Err) means there's nothing live → Stopped.
+        _ => crate::sync::status_state::SyncEngineStatus::Stopped,
+    };
+    crate::sync::status::set_status_and_emit(&app, &state, new_status);
+
+    result
+}
+
+/// Inner body of `auto_init_sync` — returns the same shape as the public
+/// command but doesn't touch `sync_status`. The outer wrapper handles all
+/// status transitions and the auto-init latch so we can't forget on a new
+/// return path.
+async fn auto_init_sync_inner(
+    app: AppHandle,
+    state: &tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    mnemonic: Option<String>,
 ) -> Result<AutoInitResult> {
     use std::sync::atomic::Ordering;
 
@@ -1176,8 +1260,11 @@ pub async fn auto_init_sync(
         });
     }
 
-    // 6. If user explicitly stopped sync, respect that
-    if user_stopped_sync {
+    // 6. Respect the user-stopped flag from the persisted user_preferences
+    //    table. This replaces the old `localStorage["hippius_sync_stopped"]`
+    //    that the frontend used to pass via the `user_stopped_sync`
+    //    parameter — that's now ignored.
+    if crate::sync::status_state::read_user_stopped(pool).await.unwrap_or(false) {
         return Ok(AutoInitResult {
             any_initialized: false,
             is_configured: true,

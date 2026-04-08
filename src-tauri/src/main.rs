@@ -64,7 +64,7 @@ use crate::notifications::crud::{
     update_local_notification_preferences,
 };
 use crate::notifications::settings::{get_notification_settings, update_notification_settings};
-use crate::sync::control::{is_drive_active, stop_drive_and_wait, trigger_sync_now};
+use crate::sync::control::{stop_drive_and_wait, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::files::{
     add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, get_recent_files, get_synced_file_metadata, get_user_files,
@@ -83,7 +83,7 @@ use crate::sync::progress::{
     sp_remove_files_for_label, sp_start_session, sp_stop_session, sp_update_file_progress,
 };
 use crate::sync::remote::{download_remote_file, list_remote_folder_files};
-use crate::sync::status::{app_close, get_sync_activity, get_sync_activity_rows, get_sync_engine_health, get_sync_status};
+use crate::sync::status::{app_close, get_sync_activity, get_sync_activity_rows, get_sync_engine_health, get_sync_engine_status, get_sync_status};
 use crate::utils::platform_info::get_platform_info;
 use crate::utils::preferences::{get_user_preference, is_onboarding_done, save_user_preference, set_onboarding_done};
 use crate::utils::support::{
@@ -171,12 +171,12 @@ fn main() {
             change_sync_folder,
             auto_init_sync,
             get_sync_folders_with_stats,
-            is_drive_active,
             // Sync status
             get_sync_status,
             get_sync_activity,
             get_sync_activity_rows,
             get_sync_engine_health,
+            get_sync_engine_status,
             // File operations
             add_file,
             add_files,

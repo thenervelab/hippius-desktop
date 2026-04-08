@@ -205,24 +205,6 @@ pub async fn trigger_sync_now(app: AppHandle) -> Result<()> {
     Ok(())
 }
 
-/// Check whether the HCFS sync engine is active.
-/// With optional label: checks if that specific drive is active.
-/// Without label: checks if any drive is active.
-#[tauri::command]
-pub fn is_drive_active(state: tauri::State<'_, crate::app_state::AppState>, label: Option<String>) -> bool {
-    match state.sync.drives.try_lock() {
-        Ok(guard) => {
-            if let Some(lbl) = label {
-                guard.contains_key(&lbl)
-            } else {
-                !guard.is_empty()
-            }
-        }
-        // If the lock is held, the drive is in use (sync in progress) → active
-        Err(_) => true,
-    }
-}
-
 /// Stop a drive and wait until it is truly inactive, with a timeout.
 ///
 /// Calls `stop_drive` internally, then waits for `AppState::drive_removed_notify`

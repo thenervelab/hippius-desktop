@@ -21,10 +21,8 @@ import {
 } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
 import {
-  syncEngineStatusAtom,
   isSyncConfiguredAtom,
   triggerSyncPathRefreshAtom,
-  SYNC_STOPPED_STORAGE_KEY,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 import {
@@ -232,8 +230,8 @@ export default function MultiFolderSyncManager() {
       const mnemonic = (await getMnemonic()) ?? undefined;
       await invoke("resume_drive", { label: folder.id, mnemonic });
 
-      localStorage.removeItem(SYNC_STOPPED_STORAGE_KEY);
-      appStore.set(syncEngineStatusAtom, "active");
+      // Engine status flips to "active" via the SYNC_ENGINE_STATUS_CHANGED
+      // event from Rust — see useSyncEngineStatus.
       appStore.set(isSyncConfiguredAtom, true);
 
       toast.success(`Sync resumed for "${folder.folderName}"`);
@@ -298,8 +296,8 @@ export default function MultiFolderSyncManager() {
         throw new Error(result.error ?? "Unknown error");
       }
 
-      localStorage.removeItem(SYNC_STOPPED_STORAGE_KEY);
-      appStore.set(syncEngineStatusAtom, "active");
+      // Engine status flips to "active" via the SYNC_ENGINE_STATUS_CHANGED
+      // event from Rust — see useSyncEngineStatus.
       appStore.set(isSyncConfiguredAtom, true);
 
       // Apply any pending exclusion patterns from the browse dialog

@@ -8,7 +8,7 @@ import {
   type HcfsConfigResult,
 } from "../utils/hcfsConfigUtils";
 import { invoke } from "@tauri-apps/api/core";
-import { isSyncConfiguredAtom, syncEngineStatusAtom } from "../global-atoms/unpinAtoms";
+import { isSyncConfiguredAtom } from "../global-atoms/unpinAtoms";
 import { migrationLockAtom } from "../global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 
@@ -168,30 +168,27 @@ interface AutoInitResult {
  * Standalone function for use outside React components (e.g., in wallet-auth-context).
  *
  * All business logic (migration lock, mnemonic persistence, path queries,
- * HCFS config check, path filtering, sequential init) is in Rust.
- * This function reads localStorage (browser-only), calls Rust, and updates atoms.
+ * HCFS config check, path filtering, user-stopped flag, sequential init)
+ * lives in Rust. This function is a thin wrapper that calls Rust and
+ * updates the `isSyncConfigured` atom — engine status is mirrored from
+ * Rust by `useSyncEngineStatus`.
  */
 export async function tryAutoInitSync(
   accountId: string,
   mnemonic?: string
 ): Promise<boolean> {
   try {
-    const userStoppedSync =
-      typeof window !== "undefined" &&
-      localStorage.getItem("hippius_sync_stopped") === "true";
-
     const result = await invoke<AutoInitResult>("auto_init_sync", {
       accountId,
       mnemonic: mnemonic ?? null,
-      userStoppedSync,
     });
 
     if (result.isConfigured) {
       appStore.set(isSyncConfiguredAtom, true);
     }
-    if (result.anyInitialized) {
-      appStore.set(syncEngineStatusAtom, "active");
-    }
+    // Engine status is no longer set here — `auto_init_sync` emits the
+    // status via `set_status_and_emit` in Rust and the `useSyncEngineStatus`
+    // listener picks it up.
 
     return result.anyInitialized;
   } catch (err) {

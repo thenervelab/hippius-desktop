@@ -15,7 +15,7 @@ import type { RemoteFolder } from "@/app/lib/types/sync-folder";
 import { restoreRemoteFolders } from "@/app/lib/utils/restoreUtils";
 import { getHcfsConfig, saveHcfsConfig } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
-import { syncEngineStatusAtom, isSyncConfiguredAtom, SYNC_STOPPED_STORAGE_KEY } from "@/app/lib/global-atoms/unpinAtoms";
+import { isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 
 interface RemoteFolderSelectorProps {
@@ -94,9 +94,8 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
         throw new Error(result.error ?? "Unknown error");
       }
 
-      // Clear "sync stopped" state — syncing a remote folder means the user wants sync running
-      localStorage.removeItem(SYNC_STOPPED_STORAGE_KEY);
-      appStore.set(syncEngineStatusAtom, "active");
+      // Engine status flips to "active" via the SYNC_ENGINE_STATUS_CHANGED
+      // event from Rust — see useSyncEngineStatus.
       appStore.set(isSyncConfiguredAtom, true);
 
       toast.success(`Started syncing ${selectedFolder.folderName}`);

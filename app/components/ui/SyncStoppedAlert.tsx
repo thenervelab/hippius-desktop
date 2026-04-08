@@ -30,10 +30,20 @@ export const SyncStoppedAlert: React.FC<SyncStoppedAlertProps> = ({
   const isSyncConfigured = useAtomValue(isSyncConfiguredAtom);
 
   // Only show when:
-  // 1. Sync is stopped/stopping (not active)
+  // 1. Sync is stopped/stopping (not active and not initializing)
   // 2. Sync has been configured (HCFS password exists)
   // 3. At least one sync folder exists (hasSyncPaths)
-  if (syncStatus === "active" || !isSyncConfigured || hasSyncPaths === false) return null;
+  //
+  // `initializing` is treated like `active` here: on cold start the atom
+  // holds `initializing` until the Rust backend reports its first status,
+  // and we don't want to flash the "Stopped" banner during that window.
+  if (
+    syncStatus === "active" ||
+    syncStatus === "initializing" ||
+    !isSyncConfigured ||
+    hasSyncPaths === false
+  )
+    return null;
 
   const isStopping = syncStatus === "stopping";
 
