@@ -31,9 +31,10 @@ const MIN_DECODED_LEN: usize = 12 + 16;
 pub fn derive_key(mnemonic: &str, account_id: &str, info: &str) -> Result<Zeroizing<[u8; 32]>, crate::error::AppError> {
     let parsed = bip39::Mnemonic::parse_normalized(mnemonic)
         .map_err(|e| crate::error::AppError::Crypto(format!("invalid mnemonic in derive_key: {e}")))?;
-    let seed = parsed.to_seed("");
+    // Wrap the 64-byte seed so it is wiped from the stack on drop.
+    let seed = Zeroizing::new(parsed.to_seed(""));
 
-    let hk = Hkdf::<Sha256>::new(Some(account_id.as_bytes()), &seed);
+    let hk = Hkdf::<Sha256>::new(Some(account_id.as_bytes()), seed.as_ref());
     let mut okm = Zeroizing::new([0u8; 32]);
     hk.expand(info.as_bytes(), okm.as_mut())
         .expect("32 bytes is a valid HKDF-SHA256 output length");
