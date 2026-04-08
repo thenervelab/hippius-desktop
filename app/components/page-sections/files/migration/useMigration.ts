@@ -49,6 +49,7 @@ export interface UseMigrationReturn {
   isResuming: boolean;
   migrationSucceeded: boolean;
   transitionError: string | null;
+  isTransitioning: boolean;
   checkMigration: (accountId: string) => Promise<boolean>;
   startMigration: (accountId: string) => Promise<void>;
   onSetupComplete: (result: { serverUrl: string; password: string }) => Promise<void>;
@@ -78,6 +79,7 @@ export function useMigration(): UseMigrationReturn {
   >([]);
   const [migrationSucceeded, setMigrationSucceeded] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
+  const [isTransitioning, setIsTransitioning] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -319,7 +321,7 @@ export function useMigration(): UseMigrationReturn {
     const accountId = activeAccountIdRef.current;
     stopPolling();
     setTransitionError(null);
-    setCurrentStep(null);
+    setIsTransitioning(true);
 
     if (accountId) {
       try {
@@ -330,7 +332,7 @@ export function useMigration(): UseMigrationReturn {
         console.error("[Migration] complete_migration_transition failed:", err);
         const errorMsg = err instanceof Error ? err.message : String(err);
         setTransitionError(errorMsg);
-        setCurrentStep("complete");
+        setIsTransitioning(false);
         toast.error("Failed to set up file sync after migration. You can set it up later from Settings.");
         return;
       }
@@ -356,6 +358,7 @@ export function useMigration(): UseMigrationReturn {
     setTransitionError(null);
     setPendingAccountId(null);
     setIsSettingUp(false);
+    setIsTransitioning(false);
     activeAccountIdRef.current = null;
   }, [stopPolling]);
 
@@ -384,6 +387,7 @@ export function useMigration(): UseMigrationReturn {
     isResuming,
     migrationSucceeded,
     transitionError,
+    isTransitioning,
     checkMigration,
     startMigration,
     onSetupComplete,
