@@ -420,14 +420,26 @@ pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppStat
 /// hasn't explicitly chosen one (e.g., during migration completion).
 ///
 /// Uses `~/Documents/Hippius-Migration-YYYY-MM-DD` (falling back to
-/// `~/Hippius-Migration-YYYY-MM-DD`) so each migration gets a unique,
-/// conflict-free folder.
+/// `~/Hippius-Migration-YYYY-MM-DD`). If that path already exists, a
+/// numeric suffix is appended (`-2`, `-3`, ...) to guarantee uniqueness.
 fn compute_default_sync_path() -> Result<PathBuf> {
     let base = dirs::document_dir()
         .or_else(dirs::home_dir)
         .ok_or_else(|| crate::error::AppError::Other("Could not determine a suitable directory for sync folder".into()))?;
-    let today = chrono::Local::now().format("%Y-%m-%d");
-    Ok(base.join(format!("Hippius-Migration-{today}")))
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let stem = format!("Hippius-Migration-{today}");
+    let candidate = base.join(&stem);
+    if !candidate.exists() {
+        return Ok(candidate);
+    }
+    for i in 2..=100 {
+        let suffixed = base.join(format!("{stem}-{i}"));
+        if !suffixed.exists() {
+            return Ok(suffixed);
+        }
+    }
+    // Extremely unlikely: 100 migrations on the same day.
+    Ok(candidate)
 }
 
 /// Complete the migration lifecycle: ensure a sync path exists, initialize
@@ -1084,9 +1096,11 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn default_sync_path_ends_with_hippius() {
+    fn default_sync_path_ends_with_hippius_migration_date() {
         let path = compute_default_sync_path().expect("should resolve a default path");
-        assert_eq!(path.file_name().and_then(|n| n.to_str()), Some("Hippius"),);
+        let name = path.file_name().and_then(|n| n.to_str()).expect("should have a folder name");
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        assert_eq!(name, format!("Hippius-Migration-{today}"));
     }
 
     #[test]

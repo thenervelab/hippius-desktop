@@ -10,6 +10,7 @@ use std::pin::Pin;
 use tauri::{AppHandle, Emitter};
 
 use super::events;
+use crate::sync::progress::{cap_file_list, cap_snapshot_files};
 
 /// Bridge between the hcfs-client sync engine and Tauri's event system.
 ///
@@ -71,11 +72,15 @@ impl SyncEventHandler for TauriSyncBridge {
                 downloads,
                 local_deletes,
                 remote_deletes,
-                upload_files,
-                download_files,
-                local_delete_files,
-                remote_delete_files,
+                mut upload_files,
+                mut download_files,
+                mut local_delete_files,
+                mut remote_delete_files,
             } => {
+                cap_file_list(&mut upload_files);
+                cap_file_list(&mut download_files);
+                cap_file_list(&mut local_delete_files);
+                cap_file_list(&mut remote_delete_files);
                 let _ = app.emit(
                     events::SYNC_STARTED,
                     events::SyncStartedPayload {
@@ -141,11 +146,15 @@ impl SyncEventHandler for TauriSyncBridge {
                 downloads,
                 local_deletes,
                 remote_deletes,
-                upload_files,
-                download_files,
-                local_delete_files,
-                remote_delete_files,
+                mut upload_files,
+                mut download_files,
+                mut local_delete_files,
+                mut remote_delete_files,
             } => {
+                cap_file_list(&mut upload_files);
+                cap_file_list(&mut download_files);
+                cap_file_list(&mut local_delete_files);
+                cap_file_list(&mut remote_delete_files);
                 let _ = app.emit(
                     events::SYNC_PLAN_READY,
                     events::SyncPlanReadyPayload {
@@ -194,7 +203,8 @@ impl SyncEventHandler for TauriSyncBridge {
             SyncEvent::AuthRequired { error } => {
                 let _ = app.emit(events::AUTH_RELOGIN_REQUIRED, events::AuthRequiredPayload { error });
             }
-            SyncEvent::ProgressSnapshot { snapshot } => {
+            SyncEvent::ProgressSnapshot { mut snapshot } => {
+                cap_snapshot_files(&mut snapshot);
                 let _ = app.emit(events::PROGRESS_SNAPSHOT, &snapshot);
             }
         }

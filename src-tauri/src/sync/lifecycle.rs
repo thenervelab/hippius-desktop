@@ -1382,8 +1382,11 @@ fn build_plan_ready_callback(app: &AppHandle, label: Arc<str>, sync: &Arc<SyncRu
             sync.emit_snapshot(true);
         }
 
-        // Build the event payload directly from plan slices — no extra allocs
-        // beyond the per-path clone that the JSON serialiser requires anyway.
+        // Build the event payload directly from plan slices. File-path vectors
+        // are capped to avoid oversized JSON payloads that freeze the webview
+        // when a migration produces thousands of files. The counts are always
+        // the true totals; only the path arrays are truncated.
+        let cap = crate::sync::progress::MAX_EVENT_FILES;
         let _ = app.emit(
             crate::sync::events::SYNC_PLAN_READY,
             crate::sync::events::SyncPlanReadyPayload {
@@ -1392,10 +1395,10 @@ fn build_plan_ready_callback(app: &AppHandle, label: Arc<str>, sync: &Arc<SyncRu
                 downloads: downloads.len(),
                 local_deletes: local_deletes.len(),
                 remote_deletes: remote_deletes.len(),
-                upload_files: uploads.iter().map(|f| f.path.clone()).collect(),
-                download_files: downloads.iter().map(|f| f.path.clone()).collect(),
-                local_delete_files: local_deletes.iter().map(|f| f.path.clone()).collect(),
-                remote_delete_files: remote_deletes.iter().map(|f| f.path.clone()).collect(),
+                upload_files: uploads.iter().take(cap).map(|f| f.path.clone()).collect(),
+                download_files: downloads.iter().take(cap).map(|f| f.path.clone()).collect(),
+                local_delete_files: local_deletes.iter().take(cap).map(|f| f.path.clone()).collect(),
+                remote_delete_files: remote_deletes.iter().take(cap).map(|f| f.path.clone()).collect(),
             },
         );
     })

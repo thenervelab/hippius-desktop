@@ -5,19 +5,19 @@
 //! `hcfs_client::sync::progress_tracker`.
 
 // Core types re-exported from library
-pub use hcfs_client::engine::progress::snapshot::{SyncSnapshot, build_snapshot};
+pub use hcfs_client::engine::progress::snapshot::{build_snapshot, SyncSnapshot};
 pub use hcfs_client::engine::progress::state::{
-    FileAction, FileProgress, FileProgressStatus, FileStatus, OverallProgress, RECENT_FILES_RETENTION_MS, RecentFile, SessionFileList, SyncFile,
-    SyncProgressState, SyncSession, SyncSessionHandle, count_expected_for_label,
+    count_expected_for_label, FileAction, FileProgress, FileProgressStatus, FileStatus, OverallProgress, RecentFile, SessionFileList, SyncFile,
+    SyncProgressState, SyncSession, SyncSessionHandle, RECENT_FILES_RETENTION_MS,
 };
 
 use hcfs_client::engine::runner::SyncRunner;
-use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use crate::error::{AppError, Result};
-use crate::sync::logic::{NEVER_EMITTED, is_file_completion_tick, try_claim_snapshot_emit};
+use crate::sync::logic::{is_file_completion_tick, try_claim_snapshot_emit, NEVER_EMITTED};
 
 /// Minimum milliseconds between throttled `emit_snapshot(false)` calls from
 /// the per-chunk progress hot path.
@@ -204,6 +204,32 @@ pub fn get_overall_progress(sync: &SyncRunner) -> Result<OverallProgress> {
     sync.progress.get_overall_progress().map_err(AppError::Progress)
 }
 
+/// Maximum number of per-file or per-path entries sent to the frontend in a
+/// single Tauri event payload.
+///
+/// Applies to `SyncSnapshot.files`, `SyncPlanReadyPayload.*_files`, and
+/// `SyncStartedPayload.*_files`.  Aggregate counters remain accurate; only the
+/// detailed arrays are truncated.  This prevents massive JSON payloads from
+/// flooding `webview.eval` and freezing the macOS main thread when a migration
+/// produces thousands of files.
+pub(crate) const MAX_EVENT_FILES: usize = 50;
+
+/// Truncate `snapshot.files` to at most [`MAX_EVENT_FILES`] entries while
+/// preserving the priority order already established by `build_snapshot`
+/// (errors, then in-progress, then pending, then completed). Aggregate
+/// counters on the snapshot are untouched.
+pub(crate) fn cap_snapshot_files(snapshot: &mut SyncSnapshot) {
+    if snapshot.files.len() <= MAX_EVENT_FILES {
+        return;
+    }
+    snapshot.files.truncate(MAX_EVENT_FILES);
+}
+
+/// Truncate a file-path vector to at most [`MAX_EVENT_FILES`] entries.
+pub(crate) fn cap_file_list(v: &mut Vec<String>) {
+    v.truncate(MAX_EVENT_FILES);
+}
+
 /// Get a full snapshot with retry state injected.
 pub fn get_snapshot(sync: &SyncRunner) -> Result<SyncSnapshot> {
     let mut snapshot = sync.progress.build_snapshot();
@@ -216,6 +242,7 @@ pub fn get_snapshot(sync: &SyncRunner) -> Result<SyncSnapshot> {
         snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
     }
     snapshot.last_error = sync.last_error.lock().ok().and_then(|g| g.clone());
+    cap_snapshot_files(&mut snapshot);
     Ok(snapshot)
 }
 
