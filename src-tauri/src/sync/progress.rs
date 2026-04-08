@@ -222,6 +222,13 @@ pub fn mark_file_error(sync: &SyncRunner, path: String, error: String) -> Result
 ///
 /// No-op if there's no current session, no file at the given path, or the
 /// file is already Completed.
+///
+/// As of hcfs-client `33048ff5bc9228939b521c8a147533dcb221dfb5` (PR #110),
+/// `path_for_progress` in `drive/download.rs` always uses the full
+/// decrypted relative path, so the key passed to the per-chunk decrypt
+/// callback matches the key passed to `on_file_synced`. A simple
+/// `session.files.get_mut(path)` lookup is sufficient — no basename
+/// fallback needed.
 pub fn mark_file_synced(sync: &SyncRunner, path: &str) -> Result<()> {
     use hcfs_client::engine::progress::state::FileStatus;
 
