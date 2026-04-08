@@ -268,6 +268,7 @@ fn main() {
             // Migration
             crate::sync::migration::check_migration,
             crate::sync::migration::dismiss_migration,
+            crate::sync::migration::get_default_migration_path,
             crate::sync::migration::complete_migration_transition,
             crate::sync::migration::start_migration_flow,
             crate::sync::migration::start_server_migration,

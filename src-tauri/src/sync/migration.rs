@@ -422,7 +422,7 @@ pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppStat
 /// Uses `~/Documents/Hippius-Migration-YYYY-MM-DD` (falling back to
 /// `~/Hippius-Migration-YYYY-MM-DD`). If that path already exists, a
 /// numeric suffix is appended (`-2`, `-3`, ...) to guarantee uniqueness.
-fn compute_default_sync_path() -> Result<PathBuf> {
+pub(crate) fn compute_default_sync_path() -> Result<PathBuf> {
     let base = dirs::document_dir()
         .or_else(dirs::home_dir)
         .ok_or_else(|| crate::error::AppError::Other("Could not determine a suitable directory for sync folder".into()))?;
@@ -440,6 +440,16 @@ fn compute_default_sync_path() -> Result<PathBuf> {
     }
     // Extremely unlikely: 100 migrations on the same day.
     Ok(candidate)
+}
+
+/// Return the auto-generated default migration sync path as a string.
+///
+/// Called by the frontend to pre-populate the folder picker in the
+/// migration prompt dialog.
+#[tauri::command]
+pub fn get_default_migration_path() -> Result<String> {
+    let path = compute_default_sync_path()?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 /// Complete the migration lifecycle: ensure a sync path exists, initialize
