@@ -419,19 +419,22 @@ pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppStat
 /// Compute a sensible default directory for the sync folder when the user
 /// hasn't explicitly chosen one (e.g., during migration completion).
 ///
-/// Prefers `~/Documents/Hippius`, falling back to `~/Hippius`.
+/// Uses `~/Documents/Hippius-Migration-YYYY-MM-DD` (falling back to
+/// `~/Hippius-Migration-YYYY-MM-DD`) so each migration gets a unique,
+/// conflict-free folder.
 fn compute_default_sync_path() -> Result<PathBuf> {
     let base = dirs::document_dir()
         .or_else(dirs::home_dir)
         .ok_or_else(|| crate::error::AppError::Other("Could not determine a suitable directory for sync folder".into()))?;
-    Ok(base.join("Hippius"))
+    let today = chrono::Local::now().format("%Y-%m-%d");
+    Ok(base.join(format!("Hippius-Migration-{today}")))
 }
 
 /// Complete the migration lifecycle: ensure a sync path exists, initialize
 /// the default drive, and mark migration as completed.
 ///
 /// If no sync path for "default" exists (common for new users going through
-/// migration), one is created automatically at `~/Documents/Hippius`.
+/// migration), one is created automatically at `~/Documents/Hippius-Migration-YYYY-MM-DD`.
 /// The migration status is marked "completed" only after `initialize_sync`
 /// succeeds, so a failed init can be retried.
 #[tauri::command]
