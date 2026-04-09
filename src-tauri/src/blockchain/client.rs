@@ -24,23 +24,63 @@ pub const WSS_ENDPOINT: &str = "wss://rpc.hippius.network";
 const MAX_RETRIES: usize = 10;
 
 /// Get or create the shared Substrate RPC client from `AppState.blockchain.client`.
+///
+/// Uses `connect_guard` to serialize connection attempts — only one task
+/// connects at a time; concurrent callers wait and reuse the result.
 pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Result<Arc<OnlineClient<PolkadotConfig>>, String> {
-    let lock = &app_state.blockchain.client;
-
-    // Check if we have an existing client
-    let existing_client = {
-        let client = lock.read().map_err(|e| format!("Substrate client lock failed: {e}"))?;
-        client.clone()
-    };
-
-    if let Some(client) = existing_client {
+    // Fast path: return cached client without acquiring the connection guard.
+    if let Some(client) = read_cached_client(app_state)? {
         return Ok(client);
     }
 
-    let pool = app_state.pool().map_err(|e| e.to_string())?;
+    // Slow path: acquire the connection guard so only one task retries.
+    let _guard = app_state.blockchain.connect_guard.lock().await;
 
-    // Get the current WSS endpoint from database, fallback to default constant
-    let wss_endpoint = get_current_wss_endpoint(pool).await.unwrap_or_else(|_| WSS_ENDPOINT.to_string());
+    // Re-check: another task may have connected while we waited.
+    if let Some(client) = read_cached_client(app_state)? {
+        return Ok(client);
+    }
+
+    connect_and_cache(app_state).await
+}
+
+/// Read the cached client without modifying state.
+fn read_cached_client(
+    app_state: &crate::app_state::AppState,
+) -> Result<Option<Arc<OnlineClient<PolkadotConfig>>>, String> {
+    let client = app_state
+        .blockchain
+        .client
+        .read()
+        .map_err(|e| format!("Substrate client lock failed: {e}"))?;
+    Ok(client.clone())
+}
+
+/// Returns `true` when the error string indicates HTTP 429 rate-limiting.
+fn is_rate_limited(error: &str) -> bool {
+    error.contains("429")
+}
+
+/// Compute retry delay with exponential backoff and jitter.
+/// Rate-limited (429) errors use a 30s minimum to let the limit window reset.
+fn retry_delay(attempt: usize, rate_limited: bool) -> Duration {
+    // Normal: 2s, 4s, 8s, 16s, 32s (capped)
+    let base_secs = 2u64.pow(attempt.min(5) as u32);
+    // 429: floor at 30s so we don't hammer a rate-limited endpoint
+    let base_secs = if rate_limited { base_secs.max(30) } else { base_secs };
+    let jitter_ms = rand::random::<u64>() % 1000;
+    Duration::from_millis(base_secs * 1000 + jitter_ms)
+}
+
+/// Connect to the RPC endpoint and cache the client.
+/// Called while holding `connect_guard` — no other task is connecting.
+async fn connect_and_cache(
+    app_state: &crate::app_state::AppState,
+) -> Result<Arc<OnlineClient<PolkadotConfig>>, String> {
+    let pool = app_state.pool().map_err(|e| e.to_string())?;
+    let wss_endpoint = get_current_wss_endpoint(pool)
+        .await
+        .unwrap_or_else(|_| WSS_ENDPOINT.to_string());
 
     let mut attempt = 0;
     loop {
@@ -50,17 +90,13 @@ pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Res
                 match OnlineClient::<PolkadotConfig>::from_rpc_client(rpc.clone()).await {
                     Ok(client) => {
                         let arc = Arc::new(client);
-                        let mut client_lock = lock.write().map_err(|e| format!("Substrate client lock failed: {e}"))?;
-
-                        // Double-check: another task may have connected while we waited for the write lock
-                        if let Some(existing) = client_lock.as_ref() {
-                            info!("Another task already connected — reusing existing client");
-                            return Ok(existing.clone());
-                        }
-
+                        let mut client_lock = app_state
+                            .blockchain
+                            .client
+                            .write()
+                            .map_err(|e| format!("Substrate client lock failed: {e}"))?;
                         *client_lock = Some(arc.clone());
 
-                        // Cache the RPC client for legacy methods (e.g. get_block_timestamp)
                         if let Ok(mut rpc_lock) = app_state.blockchain.rpc_client.write() {
                             *rpc_lock = Some(rpc);
                         } else {
@@ -75,36 +111,40 @@ pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Res
                         return Ok(arc);
                     }
                     Err(e) => {
+                        let err_str = e.to_string();
+                        let rate_limited = is_rate_limited(&err_str);
                         warn!(
                             attempt,
                             endpoint = %wss_endpoint,
-                            error = %e,
+                            error = %err_str,
+                            rate_limited,
                             "Failed to build OnlineClient from RPC"
                         );
                         if attempt >= MAX_RETRIES {
-                            return Err(format!("Failed to connect to Substrate node after {MAX_RETRIES} attempts: {e}"));
+                            return Err(format!(
+                                "Failed to connect to Substrate node after {MAX_RETRIES} attempts: {err_str}"
+                            ));
                         }
-                        let base_delay = 2u64.pow(attempt.min(5) as u32);
-                        let jitter_ms = rand::random::<u64>() % 1000;
-                        let delay = Duration::from_millis(base_delay * 1000 + jitter_ms);
-                        sleep(delay).await;
+                        sleep(retry_delay(attempt, rate_limited)).await;
                     }
                 }
             }
             Err(e) => {
+                let err_str = e.to_string();
+                let rate_limited = is_rate_limited(&err_str);
                 warn!(
                     attempt,
                     endpoint = %wss_endpoint,
-                    error = %e,
+                    error = %err_str,
+                    rate_limited,
                     "Failed to connect to Substrate node"
                 );
                 if attempt >= MAX_RETRIES {
-                    return Err(format!("Failed to connect to Substrate node after {MAX_RETRIES} attempts: {e}"));
+                    return Err(format!(
+                        "Failed to connect to Substrate node after {MAX_RETRIES} attempts: {err_str}"
+                    ));
                 }
-                let base_delay = 2u64.pow(attempt.min(5) as u32);
-                let jitter_ms = rand::random::<u64>() % 1000;
-                let delay = Duration::from_millis(base_delay * 1000 + jitter_ms);
-                sleep(delay).await;
+                sleep(retry_delay(attempt, rate_limited)).await;
             }
         }
     }

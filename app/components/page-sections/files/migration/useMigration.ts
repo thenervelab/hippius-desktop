@@ -42,6 +42,7 @@ export interface UseMigrationReturn {
   successCount: number;
   totalSize: number;
   isResuming: boolean;
+  migrationSucceeded: boolean;
   transitionError: string | null;
   isTransitioning: boolean;
   checkMigration: (accountId: string) => Promise<boolean>;
@@ -67,6 +68,7 @@ export function useMigration(): UseMigrationReturn {
   const unlistenRef = useRef<UnlistenFn | null>(null);
 
   const [successCount, setSuccessCount] = useState(0);
+  const [migrationSucceeded, setMigrationSucceeded] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
   const [isTransitioning, setIsTransitioning] = useState(false);
 
@@ -116,7 +118,7 @@ export function useMigration(): UseMigrationReturn {
 
         if (result.is_terminal) {
           stopPolling();
-
+          setMigrationSucceeded(result.status !== "cancelled");
           setCurrentStep("complete");
           appStore.set(migrationLockAtom, false);
           appStore.set(migrationProgressAtom, {
@@ -148,7 +150,7 @@ export function useMigration(): UseMigrationReturn {
         if (result.needs_completion) {
           setFileCount(result.file_count);
           setSuccessCount(result.progress_completed);
-
+          setMigrationSucceeded(result.completion_status !== "cancelled");
           activeAccountIdRef.current = accountId;
           setCurrentStep("complete");
           return true;
@@ -187,6 +189,7 @@ export function useMigration(): UseMigrationReturn {
   const launchServerMigration = useCallback(
     async (accountId: string) => {
       setSuccessCount(0);
+      setMigrationSucceeded(false);
 
       appStore.set(migrationLockAtom, true);
 
@@ -319,6 +322,7 @@ export function useMigration(): UseMigrationReturn {
     setTotalSize(0);
     setFileCount(0);
     setIsResuming(false);
+    setMigrationSucceeded(false);
     setTransitionError(null);
     setPendingAccountId(null);
     setIsSettingUp(false);
@@ -341,6 +345,7 @@ export function useMigration(): UseMigrationReturn {
     successCount,
     totalSize,
     isResuming,
+    migrationSucceeded,
     transitionError,
     isTransitioning,
     checkMigration,

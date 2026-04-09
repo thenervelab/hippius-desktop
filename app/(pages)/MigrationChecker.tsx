@@ -42,7 +42,7 @@ const MigrationChecker: React.FC = () => {
       {migration.currentStep === "prompt" && (
         <MigrationPromptDialog
           open
-          onMigrate={(syncPath: string) =>
+          onMigrate={(syncPath) =>
             polkadotAddress &&
             migration.startMigration(polkadotAddress, syncPath)
           }
@@ -73,6 +73,7 @@ const MigrationChecker: React.FC = () => {
           onClose={migration.closeMigration}
           successCount={migration.successCount}
           totalCount={migration.fileCount}
+          migrationSucceeded={migration.migrationSucceeded}
           transitionError={migration.transitionError}
           onDismiss={migration.dismissAfterError}
           isTransitioning={migration.isTransitioning}

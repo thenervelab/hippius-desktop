@@ -9,6 +9,9 @@ pub struct BlockchainState {
     pub client: std::sync::RwLock<Option<Arc<subxt::OnlineClient<subxt::PolkadotConfig>>>>,
     /// Cached RPC client for legacy RPC methods (shares the same WebSocket).
     pub rpc_client: std::sync::RwLock<Option<RpcClient>>,
+    /// Serializes connection attempts so only one task connects at a time.
+    /// Other callers wait on this lock and reuse the resulting client.
+    pub connect_guard: tokio::sync::Mutex<()>,
 }
 
 impl Default for BlockchainState {
@@ -22,6 +25,7 @@ impl BlockchainState {
         Self {
             client: std::sync::RwLock::new(None),
             rpc_client: std::sync::RwLock::new(None),
+            connect_guard: tokio::sync::Mutex::new(()),
         }
     }
 }

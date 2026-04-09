@@ -11,6 +11,7 @@ export interface MigrationCompleteDialogProps {
   onClose: () => void;
   successCount: number;
   totalCount: number;
+  migrationSucceeded: boolean;
   transitionError?: string | null;
   onDismiss?: () => void;
   /** When true, the transition is in progress — disables the action button to prevent double-invocation. */
@@ -22,6 +23,7 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
   onClose,
   successCount,
   totalCount,
+  migrationSucceeded,
   transitionError,
   onDismiss,
   isTransitioning,
@@ -38,27 +40,35 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
             <div className="size-14 flex justify-center items-center relative">
               <Graphsheet
                 majorCell={{
-                  lineColor: [34, 197, 94, 1.0],
+                  lineColor: migrationSucceeded ? [34, 197, 94, 1.0] : [239, 68, 68, 1.0],
                   lineWidth: 2,
                   cellDim: 200,
                 }}
                 minorCell={{
-                  lineColor: [74, 222, 128, 1.0],
+                  lineColor: migrationSucceeded ? [74, 222, 128, 1.0] : [248, 113, 113, 1.0],
                   lineWidth: 1,
                   cellDim: 20,
                 }}
                 className="absolute w-full h-full duration-500 opacity-30 z-0"
               />
               <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
-              <div className="h-8 w-8 bg-success-50 rounded-lg flex items-center justify-center z-20">
-                <Icons.TickCircle className="size-5 text-white" />
+              <div className={`h-8 w-8 rounded-lg flex items-center justify-center z-20 ${
+                migrationSucceeded ? "bg-success-50" : "bg-error-50"
+              }`}>
+                {migrationSucceeded ? (
+                  <Icons.TickCircle className="size-5 text-white" />
+                ) : (
+                  <Icons.CloseCircle className="size-5 text-white" />
+                )}
               </div>
             </div>
             <h2 className="text-xl font-semibold text-grey-10">
-              Migration Complete!
+              {migrationSucceeded ? "Migration Complete!" : "Migration Failed"}
             </h2>
             <p className="text-sm text-grey-50 max-w-sm">
-              All your files have been successfully migrated to Hippius Drive.
+              {migrationSucceeded
+                ? "All your files have been successfully migrated to Hippius Drive."
+                : "The migration could not be completed. Please try again later."}
             </p>
           </div>
 
@@ -97,11 +107,13 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
                 onDismiss?.();
               } else {
                 onClose();
-                router.push("/files");
+                if (migrationSucceeded) {
+                  router.push("/files");
+                }
               }
             }}
           >
-            Go to My Files
+            {migrationSucceeded ? "Go to My Files" : "Close"}
           </CardButton>
         </div>
       </DialogContainer>

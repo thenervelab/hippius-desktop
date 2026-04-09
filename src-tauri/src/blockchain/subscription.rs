@@ -40,6 +40,7 @@ pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), Strin
 
     let handle = tokio::spawn(async move {
         let app = app_for_spawn;
+        let mut consecutive_failures: u32 = 0;
         loop {
             // Re-acquire state each iteration (app_state borrows are scoped)
             {
@@ -52,7 +53,23 @@ pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), Strin
             match subscribe_blocks(&app).await {
                 Ok(()) => break,
                 Err(e) => {
-                    warn!("Block subscription error: {e}, reconnecting in 5s...");
+                    consecutive_failures += 1;
+                    // Exponential backoff: 5s, 10s, 20s, 40s, capped at 60s
+                    let delay_secs = 5u64
+                        .saturating_mul(
+                            2u64.saturating_pow(consecutive_failures.saturating_sub(1).min(4)),
+                        )
+                        .min(60);
+                    let is_rate_limited = e.contains("429");
+                    let delay_secs = if is_rate_limited { delay_secs.max(30) } else { delay_secs };
+
+                    warn!(
+                        error = %e,
+                        delay_secs,
+                        consecutive_failures,
+                        rate_limited = is_rate_limited,
+                        "Block subscription error, reconnecting after backoff"
+                    );
                     let app_state = app.state::<crate::app_state::AppState>();
                     let bsub = &app_state.block_sub;
                     bsub.is_connected.store(false, Ordering::SeqCst);
@@ -65,7 +82,7 @@ pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), Strin
                     );
                     // Clear the substrate client so it reconnects
                     crate::blockchain::client::clear_substrate_client(&app_state);
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
                 }
             }
         }
