@@ -194,14 +194,22 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     return [];
   }, [regularFilesData]);
 
-  // Track paused labels for tab context menu
+  // Track paused labels and label→folder-name mapping for tab display
   const [pausedLabels, setPausedLabels] = useState<string[]>([]);
+  const [labelDisplayNames, setLabelDisplayNames] = useState<Record<string, string>>({});
   useEffect(() => {
     if (!polkadotAddress || syncFolderLabels.length === 0) return;
     (async () => {
       try {
         const allPaths = await getAllSyncPaths(polkadotAddress);
         setPausedLabels(allPaths.filter(p => p.isPaused).map(p => p.label));
+        const names: Record<string, string> = {};
+        for (const p of allPaths) {
+          const segments = p.path.replace(/[/\\]+$/, "").split(/[/\\]/);
+          const folderName = segments[segments.length - 1];
+          if (folderName) names[p.label] = folderName;
+        }
+        setLabelDisplayNames(names);
       } catch {
         // ignore
       }
@@ -922,6 +930,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           {!isRecentFiles && (
             <SyncFolderTabs
               labels={syncFolderLabels}
+              displayNames={labelDisplayNames}
               selectedTab={selectedFolderTab}
               onTabChange={setSelectedFolderTab}
               onBrowseContents={handleTabBrowseContents}

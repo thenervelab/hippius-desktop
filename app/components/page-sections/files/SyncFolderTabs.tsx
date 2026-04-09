@@ -9,6 +9,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 interface SyncFolderTabsProps {
   labels: string[];
+  /** Map of label → display name (derived from folder path). */
+  displayNames?: Record<string, string>;
   selectedTab: string | null;
   onTabChange: (tab: string | null) => void;
   onBrowseContents?: (label: string) => void;
@@ -21,14 +23,10 @@ interface SyncFolderTabsProps {
 
 const ALL_TAB = "All";
 
-/** Map internal label to user-friendly display name. */
-function displayName(label: string): string {
-  if (label === "default") return "My Files";
-  return label;
-}
 
 const SyncFolderTabs: FC<SyncFolderTabsProps> = ({
   labels,
+  displayNames = {},
   selectedTab,
   onTabChange,
   onBrowseContents,
@@ -49,7 +47,7 @@ const SyncFolderTabs: FC<SyncFolderTabsProps> = ({
       { tabName: ALL_TAB, icon: <Icons.Folder2 /> },
       ...labels.map((label) => ({
         tabName: label,
-        displayName: displayName(label),
+        displayName: displayNames[label] ?? label,
         icon: <Icons.FolderCloud />,
       })),
     ],
