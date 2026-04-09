@@ -127,11 +127,13 @@ export function useSyncEvents() {
         ["hcfs_sync_stopped", () => {
           setSyncEngineHealthAtom(DEFAULT_SYNC_ENGINE_HEALTH);
         }],
-        // Full reset — show setup UI
+        // Full reset — show setup UI. The "is configured?" state is
+        // derived from driveStatusesAtom (via hasConfiguredDrivesAtom),
+        // which empties on its own when Rust emits hcfs_drive_removed
+        // for each drive during the reset.
         ["hcfs_sync_reset", () => {
           invoke("sp_clear_all_data").catch(() => {});
           setSyncEngineHealthAtom(DEFAULT_SYNC_ENGINE_HEALTH);
-          setIsSyncConfiguredAtom(false);
         }],
       ];
 
