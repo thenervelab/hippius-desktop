@@ -73,18 +73,9 @@ pub async fn toggle_vpn_status(state: tauri::State<'_, crate::app_state::AppStat
         }
 
         info!("Checking VPN binary permissions before enabling...");
-        let binary_path = crate::nebula::manager::get_nebula_binary_path().map_err(|e| AppError::Nebula(e.to_string()))?;
-
-        let has_perms = crate::nebula::manager::check_permissions(&binary_path)
+        crate::nebula::manager::ensure_vpn_permissions_internal()
             .await
-            .map_err(|e| AppError::Nebula(format!("Failed to check permissions: {e}")))?;
-
-        if !has_perms {
-            info!("Requesting elevated permissions for VPN...");
-            crate::nebula::manager::grant_permissions(&binary_path)
-                .await
-                .map_err(|e| AppError::Nebula(e.to_string()))?;
-        }
+            .map_err(AppError::Nebula)?;
 
         info!("Checking certificate status before enabling...");
         if let Err(e) = crate::nebula::manager::check_and_update_certificate(&state.api_client, pool, &acct).await {

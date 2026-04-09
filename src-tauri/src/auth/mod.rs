@@ -4,7 +4,6 @@
 //! key derivation, challenge-response signing, and session persistence.
 
 pub mod account_key;
-pub mod accounts;
 pub mod auth_session_repo;
 pub mod billing_auth;
 pub mod contacts;

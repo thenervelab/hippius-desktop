@@ -39,18 +39,6 @@ pub(crate) async fn start_sync_loop(app: tauri::AppHandle) {
 /// Remove a directory tree without blocking the Tokio runtime.
 ///
 /// `std::fs::remove_dir_all` walks the tree synchronously and can block
-/// a worker for hundreds of milliseconds on large caches. Offloading to
-/// `spawn_blocking` keeps the runtime responsive.
-///
-/// The caller is responsible for guarding against missing paths; this
-/// helper propagates `ENOENT` from libstd rather than hiding it.
-async fn remove_dir_all_async(path: PathBuf) -> Result<()> {
-    tokio::task::spawn_blocking(move || std::fs::remove_dir_all(path))
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("Join error removing directory: {e}")))??;
-    Ok(())
-}
-
 /// Create a directory (recursively) without blocking the Tokio runtime.
 ///
 /// `std::fs::create_dir_all` can perform many synchronous syscalls on
@@ -145,7 +133,8 @@ pub async fn add_local_sync_folder(
     )
     .await?;
 
-    // 1. Generate unique label
+    // 1. Generate unique label — single source of truth in
+    // `crate::sync::paths::generate_unique_label_internal`.
     let owner = account_key(&account_id);
     let rows = sqlx::query("SELECT label FROM sync_paths WHERE owner = ?")
         .bind(&owner)
@@ -154,12 +143,7 @@ pub async fn add_local_sync_folder(
         .map_err(|e| crate::error::AppError::Other(format!("DB error: {e}")))?;
     use sqlx::Row;
     let existing: std::collections::HashSet<String> = rows.iter().map(|r| r.get::<String, _>("label")).collect();
-    let mut label = folder_name.clone();
-    let mut suffix = 2u32;
-    while existing.contains(&label) {
-        label = format!("{folder_name}-{suffix}");
-        suffix += 1;
-    }
+    let label = crate::sync::paths::generate_unique_label_internal(&existing, &folder_name);
 
     // 2. Set sync path in DB
     crate::sync::paths::set_sync_path_internal(pool, &account_id, &path, false, Some(&label)).await?;
@@ -1127,50 +1111,6 @@ pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String
 /// Reset sync data for an account, clearing all local sync state.
 /// This allows starting fresh without corrupted or stale sync data.
 ///
-/// IMPORTANT: This does NOT delete files in the sync folder - only HCFS metadata.
-/// Files on the server remain intact.
-#[tauri::command]
-pub async fn reset_sync_data(state: tauri::State<'_, crate::app_state::AppState>, app: AppHandle, account_id: String) -> Result<()> {
-    info!("Resetting sync data for account: {}", account_id);
-
-    // First stop all active syncs
-    stop_sync(app.clone()).await?;
-
-    // Get the account directory
-    let acct_dir = account_dir(&account_id)?;
-
-    debug!("Reset: Deleting account directory: {:?}", acct_dir);
-
-    // Delete the entire account directory (contains sync state, encrypted mnemonic, etc.).
-    // `remove_dir_all_async` offloads the blocking walk to `spawn_blocking` so the Tokio
-    // runtime stays responsive on large caches.
-    if acct_dir.exists() {
-        remove_dir_all_async(acct_dir).await?;
-        debug!("Reset: Deleted account directory");
-    }
-
-    // Also clear the hcfs_config from database so user goes through setup again
-    let db = state.pool()?;
-    let owner = account_key(&account_id);
-
-    sqlx::query("DELETE FROM hcfs_config WHERE owner = ?").bind(&owner).execute(db).await?;
-
-    debug!("Reset: Cleared database config");
-
-    // Emit event so frontend knows to show setup UI
-    let _ = app.emit(
-        crate::sync::events::SYNC_RESET,
-        crate::sync::events::SyncResetPayload {
-            account_id: account_id.clone(),
-            message: "Sync data has been reset. Please set up sync again.".to_string(),
-        },
-    );
-
-    info!("Reset complete for account: {}", account_id);
-
-    Ok(())
-}
-
 /// Stop the current drive for a label, set a new sync path, and initialize
 /// the drive with the new path — all in one atomic command.
 ///
@@ -1716,37 +1656,6 @@ mod tests {
         };
         assert_eq!(name, "Download");
         assert_eq!(action, crate::sync::progress::FileAction::Download);
-    }
-
-    // ── remove_dir_all_async helper ──────────────────────────────────────
-    //
-    // `remove_dir_all_async` is the shared helper called by `reset_sync_data`
-    // (and future callers) to remove a directory tree off the Tokio runtime.
-    // These tests exercise the helper directly so a regression that reverts
-    // the `spawn_blocking` wrap, changes the error type, or swallows ENOENT
-    // would fail here.
-
-    #[tokio::test]
-    async fn remove_dir_all_async_removes_nested_directory() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let target = tmp.path().join("to-delete");
-        std::fs::create_dir_all(target.join("a/b/c")).expect("mkdirs");
-        std::fs::write(target.join("a/b/c/file.bin"), [0u8; 1024]).expect("write");
-        assert!(target.exists());
-
-        remove_dir_all_async(target.clone()).await.expect("remove");
-
-        assert!(!target.exists(), "target should be gone after async remove");
-    }
-
-    #[tokio::test]
-    async fn remove_dir_all_async_is_ok_on_missing_path() {
-        // `remove_dir_all` returns an error on missing path; document that the
-        // helper propagates it so callers know to guard with `path.exists()` first.
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let missing = tmp.path().join("does-not-exist");
-        let result = remove_dir_all_async(missing).await;
-        assert!(result.is_err(), "helper should surface ENOENT from libstd");
     }
 
     #[tokio::test]

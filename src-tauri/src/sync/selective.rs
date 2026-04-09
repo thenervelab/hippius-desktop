@@ -7,7 +7,6 @@
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 use hcfs_client::engine::runner::trigger_sync;
-use std::path::Path;
 use tauri::AppHandle;
 use tracing::{debug, info};
 
@@ -112,30 +111,6 @@ pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: t
         );
     }
     Ok(removed)
-}
-
-/// Check whether a relative path is excluded by the drive's current rules.
-#[tauri::command]
-pub async fn is_file_excluded(label: String, path: String, is_dir: bool, app_state: tauri::State<'_, AppState>) -> Result<bool> {
-    let drive_arc = {
-        let guard = app_state.sync.drives.lock().await;
-        guard.get(&label).map(|slot| slot.manager.clone())
-    };
-
-    let Some(arc) = drive_arc else {
-        return Err(AppError::NotReady(crate::error::NotReadyKind::DriveNotInitialized));
-    };
-
-    let manager = arc.lock().await;
-    let excluded = manager.is_excluded(Path::new(&path), is_dir);
-    debug!(
-        label = %label,
-        path = %path,
-        is_dir = is_dir,
-        excluded = excluded,
-        "Checked file exclusion",
-    );
-    Ok(excluded)
 }
 
 /// Apply a batch of inclusion/exclusion pattern changes atomically.

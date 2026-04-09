@@ -237,28 +237,47 @@ pub async fn get_sync_path(state: tauri::State<'_, crate::app_state::AppState>, 
     get_sync_path_internal(state.pool()?, params.is_public, &owner).await
 }
 
-/// Generate a unique folder label by appending a numeric suffix if needed.
-#[tauri::command]
-pub async fn generate_unique_label(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, base_name: String) -> Result<String> {
-    let pool = state.pool()?;
-    let owner = account_key(&account_id);
-
-    let rows = sqlx::query("SELECT label FROM sync_paths WHERE owner = ?")
-        .bind(&owner)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("DB error: {e}")))?;
-
-    let existing: std::collections::HashSet<String> = rows.iter().map(|r| r.get("label")).collect();
-
-    let mut label = base_name.clone();
+/// Pure helper: pick the first non-conflicting label by appending a numeric
+/// suffix when `base` already exists in `existing`.
+///
+/// Used by `add_local_sync_folder` (`lifecycle.rs`) so the folder-uniqueness
+/// loop has exactly one source of truth.
+pub(crate) fn generate_unique_label_internal(existing: &std::collections::HashSet<String>, base: &str) -> String {
+    let mut label = base.to_string();
     let mut suffix = 2u32;
     while existing.contains(&label) {
-        label = format!("{base_name}-{suffix}");
+        label = format!("{base}-{suffix}");
         suffix += 1;
     }
+    label
+}
 
-    Ok(label)
+#[cfg(test)]
+mod label_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn returns_base_when_no_conflict() {
+        let existing = HashSet::new();
+        assert_eq!(generate_unique_label_internal(&existing, "Photos"), "Photos");
+    }
+
+    #[test]
+    fn appends_numeric_suffix_on_conflict() {
+        let mut existing = HashSet::new();
+        existing.insert("Photos".to_string());
+        assert_eq!(generate_unique_label_internal(&existing, "Photos"), "Photos-2");
+    }
+
+    #[test]
+    fn keeps_incrementing_until_free() {
+        let mut existing = HashSet::new();
+        existing.insert("Photos".to_string());
+        existing.insert("Photos-2".to_string());
+        existing.insert("Photos-3".to_string());
+        assert_eq!(generate_unique_label_internal(&existing, "Photos"), "Photos-4");
+    }
 }
 
 /// Set the `is_paused` flag for a sync path in the DB.

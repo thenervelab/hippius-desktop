@@ -601,11 +601,12 @@ pub async fn verify_nebula(state: tauri::State<'_, crate::app_state::AppState>, 
 }
 
 /// Ensure the Nebula binary has elevated permissions required for VPN.
-/// Called by the frontend before enabling the VPN. Returns Ok if
-/// permissions are already present or were successfully granted.
-/// Returns Err if the user cancels the authorization dialog.
-#[tauri::command]
-pub async fn ensure_vpn_permissions() -> Result<(), String> {
+///
+/// Called from `vpn::toggle_vpn_status` whenever the user enables the VPN.
+/// Returns `Ok` if permissions are already present or were successfully
+/// granted; returns `Err` if the user cancels the authorization dialog or
+/// the binary is missing.
+pub(crate) async fn ensure_vpn_permissions_internal() -> Result<(), String> {
     let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
 
     if !binary_path.exists() {
@@ -1174,12 +1175,6 @@ async fn run_finish_setup(state: &crate::app_state::AppState) -> Result<(), Stri
     Ok(())
 }
 
-#[tauri::command]
-pub async fn start_nebula(state: tauri::State<'_, crate::app_state::AppState>) -> Result<(), String> {
-    let account_id = state.current_account_id().map_err(|e| e.clone())?;
-    start_nebula_internal(&state.nebula, state.pool().map_err(|e| e.to_string())?, &account_id).await
-}
-
 pub async fn start_nebula_internal(
     nebula_state: &crate::nebula::state::NebulaState,
     pool: &sqlx::SqlitePool,
@@ -1627,14 +1622,6 @@ fn stop_ping_task(nebula_state: &crate::nebula::state::NebulaState) {
     }
 }
 
-#[tauri::command]
-pub async fn get_nebula_version() -> Result<String, String> {
-    check_nebula_installation()
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Nebula not installed".to_string())
-}
-
 pub async fn get_nebula_ip_internal(account_id: &str) -> Result<String> {
     let config_dir = get_nebula_config_dir(account_id)?;
     // Use host.crt from API instead of hostname-based cert
@@ -1978,18 +1965,6 @@ pub async fn get_nebula_status() -> Result<NebulaStatus, String> {
         has_interface,
         message,
     })
-}
-
-#[tauri::command]
-pub async fn check_nebula_update(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Option<String>, String> {
-    let installed = check_nebula_installation().await.map_err(|e| e.to_string())?;
-
-    let latest = fetch_latest_release(&state.api_client).await.map_err(|e| e.to_string())?.tag_name;
-
-    match installed {
-        Some(ref v) if v != &latest => Ok(Some(latest)),
-        _ => Ok(None),
-    }
 }
 
 #[tauri::command]

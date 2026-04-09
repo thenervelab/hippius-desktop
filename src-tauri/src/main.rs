@@ -23,12 +23,11 @@ pub mod notifications;
 pub mod sync;
 mod utils;
 
-use crate::auth::accounts::{export_app_data, get_all_subaccount_addresses, import_app_data, reset_app};
 use crate::auth::contacts::{add_contact, delete_contact, get_contacts, update_contact};
-use crate::auth::login::{generate_mnemonic, get_eth_address, get_polkadot_address, login_with_mnemonic, refresh_auth_token, validate_mnemonic};
-use crate::auth::logout::{auth_logout, logout_full};
+use crate::auth::login::{login_with_mnemonic, validate_mnemonic};
+use crate::auth::logout::logout_full;
 use crate::auth::oauth::{complete_oauth_flow, parse_oauth_deep_link, start_oauth_flow};
-use crate::auth::session_restore::{is_token_valid, restore_session, update_logout_time};
+use crate::auth::session_restore::{is_token_valid, restore_session};
 use crate::auth::ssh_keys::{create_ssh_key, delete_ssh_key, list_ssh_keys};
 use crate::billing::charts::{
     calculate_storage_capacity, calculate_storage_cost, format_balance_chart, format_credits_chart, format_storage_chart,
@@ -41,12 +40,12 @@ use crate::billing::queries::{
     get_marketplace_credits, get_system_balance,
 };
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
-use crate::blockchain::convert::{from_plancks, get_explorer_url, to_plancks};
+use crate::blockchain::convert::to_plancks;
 use crate::blockchain::queries::{get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address};
-use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, transfer_balance_tauri, update_wss_endpoint_command};
+use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, update_wss_endpoint_command};
 use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded};
-use crate::blockchain::subscription::{get_current_block_number, start_block_subscription, stop_block_subscription};
-use crate::blockchain::transfers::{transfer_balance, validate_and_convert_transfer, validate_send_balance};
+use crate::blockchain::subscription::start_block_subscription;
+use crate::blockchain::transfers::{transfer_balance, validate_send_balance};
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
@@ -62,22 +61,21 @@ use crate::notifications::crud::{
     update_local_notification_preferences,
 };
 use crate::notifications::settings::{get_notification_settings, update_notification_settings};
-use crate::sync::control::{remove_drive_and_wait, reveal_drive_in_finder, trigger_sync_now};
+use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::files::{
-    add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, get_recent_files, get_synced_file_metadata, get_user_files,
-    list_sync_folder, remove_file, resolve_file_info, resolve_file_path,
+    add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, get_recent_files, get_user_files, list_sync_folder,
+    resolve_file_info, resolve_file_path,
 };
 use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
 use crate::sync::lifecycle::{
-    add_local_sync_folder, auto_init_sync, change_sync_folder, initialize_sync, pause_drive, remove_drive, reset_sync_data, resume_drive,
-    setup_and_init_sync, stop_sync,
+    add_local_sync_folder, auto_init_sync, change_sync_folder, initialize_sync, pause_drive, remove_drive, resume_drive, setup_and_init_sync, stop_sync,
 };
 use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
-use crate::sync::paths::{generate_unique_label, get_sync_path, remove_sync_path, set_sync_path};
+use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
 use crate::sync::remote::{download_remote_file, list_remote_folder_files};
-use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity, get_sync_activity_rows, get_sync_engine_health, get_sync_status};
+use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
 use crate::utils::platform_info::get_platform_info;
 use crate::utils::preferences::{get_user_preference, is_onboarding_done, save_user_preference, set_onboarding_done};
 use crate::utils::support::{
@@ -159,16 +157,12 @@ fn main() {
             remove_drive,
             pause_drive,
             resume_drive,
-            reset_sync_data,
             trigger_sync_now,
-            remove_drive_and_wait,
             reveal_drive_in_finder,
             change_sync_folder,
             auto_init_sync,
             get_sync_folders_with_stats,
             // Sync status
-            get_sync_status,
-            get_sync_activity,
             get_sync_activity_rows,
             get_sync_engine_health,
             get_all_drive_statuses,
@@ -176,10 +170,8 @@ fn main() {
             add_file,
             add_files,
             add_folder,
-            remove_file,
             delete_files,
             list_sync_folder,
-            get_synced_file_metadata,
             get_recent_files,
             get_user_files,
             export_file,
@@ -190,21 +182,12 @@ fn main() {
             app_close,
             // Substrate / blockchain
             get_sync_path,
-            generate_unique_label,
             set_sync_path,
             remove_sync_path,
-            transfer_balance_tauri,
             get_wss_endpoint,
             update_wss_endpoint_command,
             test_rpc_endpoint_command,
-            // Account management
-            reset_app,
-            get_all_subaccount_addresses,
-            import_app_data,
-            export_app_data,
             // VPN / Nebula
-            crate::nebula::manager::get_nebula_version,
-            crate::nebula::manager::check_nebula_update,
             crate::nebula::manager::get_nebula_ip,
             crate::nebula::manager::get_nebula_stats,
             crate::nebula::manager::get_nebula_status,
@@ -217,27 +200,20 @@ fn main() {
             crate::nebula::manager::download_nebula,
             crate::nebula::manager::install_nebula,
             crate::nebula::manager::verify_nebula,
-            crate::nebula::manager::ensure_vpn_permissions,
             crate::nebula::manager::finish_setup,
             crate::nebula::manager::setup_nebula_background,
-            crate::nebula::manager::start_nebula,
-            // Indexer
-            crate::api::indexer::get_indexer_api_key,
             // HCFS mnemonic management
             get_drive_mnemonic,
             ensure_sync_mnemonic,
             // Billing auth (Ethereum challenge-response)
-            crate::auth::billing_auth::billing_auth,
             crate::auth::billing_auth::ensure_billing_auth,
             // HCFS config commands
             crate::sync::config::save_hcfs_config,
             crate::sync::config::get_hcfs_config,
-            crate::sync::config::update_hcfs_server_url,
             // Selective sync (exclusion patterns)
             crate::sync::selective::list_exclude_patterns,
             crate::sync::selective::add_exclude_pattern,
             crate::sync::selective::remove_exclude_pattern,
-            crate::sync::selective::is_file_excluded,
             crate::sync::selective::apply_sync_selection,
             // Failure resolution (skip / exclude / retry)
             crate::sync::failure_commands::sp_skip_file,
@@ -266,10 +242,8 @@ fn main() {
             crate::sync::migration::complete_migration_transition,
             crate::sync::migration::start_migration_flow,
             crate::sync::migration::start_server_migration,
-            crate::sync::migration::poll_migration_status,
             crate::sync::migration::start_migration_polling,
             crate::sync::migration::stop_migration_polling,
-            crate::sync::migration::cancel_server_migration,
             // Blockchain queries & transactions
             get_account_balance,
             get_staking_info,
@@ -280,16 +254,11 @@ fn main() {
             stake_claim_rewards,
             transfer_balance,
             validate_address,
-            validate_and_convert_transfer,
             validate_send_balance,
             get_referral_links,
             to_plancks,
-            from_plancks,
-            get_explorer_url,
             // Block subscription
             start_block_subscription,
-            stop_block_subscription,
-            get_current_block_number,
             // VM management
             list_vm_flavors,
             list_vm_images,
@@ -338,16 +307,10 @@ fn main() {
             // Authentication & crypto
             login_with_mnemonic,
             validate_mnemonic,
-            refresh_auth_token,
-            auth_logout,
-            get_polkadot_address,
-            get_eth_address,
-            generate_mnemonic,
             // Session lifecycle (Rust-managed; frontend gets data via these high-level commands)
             restore_session,
             logout_full,
             is_token_valid,
-            update_logout_time,
             get_tray_menu_data,
             get_platform_info,
             // Local DB (notifications, address book, onboarding, preferences, app state)

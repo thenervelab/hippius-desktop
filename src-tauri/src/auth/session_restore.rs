@@ -283,16 +283,6 @@ pub async fn restore_session(
     })
 }
 
-/// Update the logout timeout preference (minutes). Pass -1 for "never expire".
-#[tauri::command]
-pub async fn update_logout_time(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    logout_time_minutes: i64,
-) -> Result<(), AppError> {
-    auth_session_repo::update_logout_time(state.pool()?, &account_id, logout_time_minutes).await
-}
-
 /// Server-side token expiry check. Returns `true` if the token exists
 /// in `auth_session` and has not expired, `false` otherwise.
 ///

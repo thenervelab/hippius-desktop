@@ -137,26 +137,3 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Stop the block subscription.
-#[tauri::command]
-pub async fn stop_block_subscription(app: tauri::AppHandle) {
-    use tauri::Manager;
-    let app_state = app.state::<crate::app_state::AppState>();
-    let bsub = &app_state.block_sub;
-
-    bsub.running.store(false, Ordering::SeqCst);
-    if let Some(handle) = bsub.handle.lock().await.take() {
-        handle.abort();
-    }
-    bsub.is_connected.store(false, Ordering::SeqCst);
-}
-
-/// Get the latest cached block number (0 if not yet subscribed).
-#[tauri::command]
-pub fn get_current_block_number(state: tauri::State<'_, crate::app_state::AppState>) -> BlockUpdate {
-    let bsub = &state.block_sub;
-    BlockUpdate {
-        block_number: bsub.latest_block.load(Ordering::SeqCst),
-        is_connected: bsub.is_connected.load(Ordering::SeqCst),
-    }
-}

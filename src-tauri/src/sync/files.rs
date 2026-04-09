@@ -242,49 +242,6 @@ async fn add_folder_internal(sync_path: &str, folder_path: &str) -> Result<Strin
     Ok(name)
 }
 
-/// Remove file/folder from sync folder.
-///
-/// When `label` is provided the deletion is recorded in the sync activity
-/// ring buffer so the frontend can immediately filter it from recent files.
-#[tauri::command]
-pub async fn remove_file(state: tauri::State<'_, crate::app_state::AppState>, sync_path: String, name: String, label: Option<String>) -> Result<()> {
-    let parent = Path::new(&sync_path);
-    let target = parent.join(&name);
-    let target = ensure_within(parent, &target)?;
-
-    // Grab size before deleting so the activity entry is meaningful.
-    let size_bytes = if target.is_dir() {
-        0
-    } else {
-        tokio::fs::metadata(&target).await.map(|m| m.len()).unwrap_or(0)
-    };
-
-    if target.is_dir() {
-        tokio::fs::remove_dir_all(&target)
-            .await
-            .map_err(|e| crate::error::AppError::Other(format!("Remove failed: {e}")))?;
-    } else if target.exists() {
-        tokio::fs::remove_file(&target)
-            .await
-            .map_err(|e| crate::error::AppError::Other(format!("Remove failed: {e}")))?;
-    }
-
-    // Record "deleted" activity so recent-files filtering works immediately.
-    if let Some(lbl) = label {
-        state.sync.update_state(&lbl, |st| {
-            st.add_activity(SyncActivityItem {
-                file_name: std::sync::Arc::from(name.as_str()),
-                action: SyncActivityAction::Deleted,
-                timestamp: chrono::Utc::now().timestamp(),
-                size_bytes,
-                label: std::sync::Arc::from(lbl.as_str()),
-            });
-        });
-    }
-
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Batch operations
 // ---------------------------------------------------------------------------
@@ -578,9 +535,8 @@ pub struct SyncedFileMetadata {
 }
 
 /// Return sync metadata (arion hashes, CIDs, timestamps) for all synced
-/// files across all drives. Used by the recent-files view to look up
-/// arion hashes without needing to list every subfolder from disk.
-#[tauri::command]
+/// files across all drives. Used internally by `get_user_files` to look
+/// up arion hashes without needing to list every subfolder from disk.
 pub async fn get_synced_file_metadata(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Vec<SyncedFileMetadata>> {
     let sync = &state.sync;
     let mut result = Vec::new();

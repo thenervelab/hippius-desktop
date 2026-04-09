@@ -44,15 +44,6 @@ pub async fn auth_logout_internal(state: &crate::app_state::AppState, account_id
     Ok(())
 }
 
-/// Tauri command wrapper for [`auth_logout_internal`].
-///
-/// Note: the frontend should call `stop_sync` separately before calling
-/// this, OR use [`logout_full`] which orchestrates both steps.
-#[tauri::command]
-pub async fn auth_logout(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), AppError> {
-    auth_logout_internal(&state, &account_id).await
-}
-
 /// Full logout: stops sync, clears auth state, clears sync progress.
 ///
 /// Replaces the 3-sequential-invoke pattern in wallet-auth-context.tsx.

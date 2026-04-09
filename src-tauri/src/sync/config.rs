@@ -70,27 +70,6 @@ pub async fn save_hcfs_config(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn update_hcfs_server_url(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, server_url: String) -> Result<()> {
-    let db = state.pool()?;
-    let owner = account_key(&account_id);
-
-    let result = sqlx::query(
-        r"
-        UPDATE hcfs_config SET server_url = ?, updated_at = CURRENT_TIMESTAMP WHERE owner = ?
-        ",
-    )
-    .bind(&server_url)
-    .bind(&owner)
-    .execute(db)
-    .await?;
-
-    if result.rows_affected() == 0 {
-        return Err(crate::error::AppError::Other("HCFS config not found. Please set up sync first.".into()));
-    }
-
-    Ok(())
-}
 /// Internal helper that accepts a pool reference directly.
 /// Used by both the Tauri command and other internal callers.
 pub(crate) async fn get_hcfs_config_internal(pool: &SqlitePool, account_id: &str) -> Result<HcfsConfigResult> {

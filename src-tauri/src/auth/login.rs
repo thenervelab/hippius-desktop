@@ -164,45 +164,6 @@ pub fn generate_mnemonic_internal() -> Result<zeroize::Zeroizing<String>, AppErr
     Ok(zeroize::Zeroizing::new(mnemonic.to_string()))
 }
 
-/// IPC command wrapper for [`generate_mnemonic_internal`].
-///
-/// Returns the mnemonic as a plain `String` for Tauri serialization.
-/// The caller (frontend) is responsible for handling the mnemonic securely.
-/// [`zeroize::Zeroizing<String>`] does not implement `serde::Serialize`, so
-/// the IPC boundary must unwrap to a plain `String`.
-#[tauri::command]
-pub fn generate_mnemonic() -> Result<String, AppError> {
-    let z = generate_mnemonic_internal()?;
-    Ok((*z).clone())
-}
-
-/// Silently refresh the auth token using the mnemonic from the encrypted Drive.
-///
-/// Called when the sync engine detects a 401. No frontend round-trip needed
-/// for mnemonic-based sessions.
-#[tauri::command]
-pub async fn refresh_auth_token(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    app: tauri::AppHandle,
-    account_id: String,
-) -> Result<(), AppError> {
-    crate::auth::service::refresh_auth_token_internal(state.pool()?, &app, &account_id).await?;
-    Ok(())
-}
-
-/// Return the SS58 address for the currently authenticated session.
-#[tauri::command]
-pub fn get_polkadot_address(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Option<String>, AppError> {
-    let auth = state.auth.lock()?;
-    Ok(auth.substrate_address.clone())
-}
-
-/// Return the Ethereum address for the currently authenticated session.
-#[tauri::command]
-pub fn get_eth_address(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Option<String>, AppError> {
-    let auth = state.auth.lock()?;
-    Ok(auth.eth_address.clone())
-}
 
 #[cfg(test)]
 mod tests {

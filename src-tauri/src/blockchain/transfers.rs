@@ -49,39 +49,6 @@ pub async fn transfer_balance(
     })
 }
 
-/// Validate a transfer amount and convert to planck.
-#[tauri::command]
-pub fn validate_and_convert_transfer(amount: String, available_balance_planck: String, fee_planck: String) -> Result<String, crate::error::AppError> {
-    if amount.trim().is_empty() {
-        return Err(crate::error::AppError::Validation("Amount is required".into()));
-    }
-
-    let num: f64 = amount
-        .parse()
-        .map_err(|_| crate::error::AppError::Validation("Amount must be a valid number".into()))?;
-
-    if num <= 0.0 {
-        return Err(crate::error::AppError::Validation("Amount must be greater than zero".into()));
-    }
-
-    let planck = to_plancks(amount)?;
-    let planck_u128: u128 = planck.parse().unwrap_or(0);
-    let balance_u128: u128 = available_balance_planck.parse().unwrap_or(0);
-    let fee_u128: u128 = fee_planck.parse().unwrap_or(0);
-
-    if planck_u128 > balance_u128 {
-        return Err(crate::error::AppError::Validation("Amount exceeds your available balance".into()));
-    }
-
-    if planck_u128.saturating_add(fee_u128) > balance_u128 {
-        return Err(crate::error::AppError::Validation(
-            "Amount (incl. transaction fee) exceeds your balance".into(),
-        ));
-    }
-
-    Ok(planck)
-}
-
 /// Validate a balance transfer in a single call — fetches balance from chain.
 #[tauri::command]
 pub async fn validate_send_balance(
@@ -132,48 +99,3 @@ pub async fn validate_send_balance(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn transfer_valid_amount() {
-        let result = validate_and_convert_transfer("1.0".into(), "2000000000000000000".into(), "270233151".into());
-        assert_eq!(result.unwrap(), "1000000000000000000");
-    }
-
-    #[test]
-    fn transfer_empty_amount() {
-        let result = validate_and_convert_transfer(String::new(), "1000".into(), "0".into());
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("required"));
-    }
-
-    #[test]
-    fn transfer_invalid_number() {
-        let result = validate_and_convert_transfer("abc".into(), "1000".into(), "0".into());
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("valid number"));
-    }
-
-    #[test]
-    fn transfer_zero_amount() {
-        let result = validate_and_convert_transfer("0".into(), "1000".into(), "0".into());
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("greater than zero"));
-    }
-
-    #[test]
-    fn transfer_exceeds_balance() {
-        let result = validate_and_convert_transfer("3.0".into(), "2000000000000000000".into(), "0".into());
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("exceeds"));
-    }
-
-    #[test]
-    fn transfer_exceeds_with_fee() {
-        let result = validate_and_convert_transfer("2.0".into(), "2000000000000000000".into(), "270233151".into());
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("fee"));
-    }
-}

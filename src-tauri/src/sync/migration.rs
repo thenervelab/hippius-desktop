@@ -836,11 +836,6 @@ async fn poll_migration_status_internal(state: &crate::app_state::AppState, acco
     }
 }
 
-#[tauri::command]
-pub async fn poll_migration_status(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<ServerMigrationStatus> {
-    poll_migration_status_internal(&state, &account_id).await
-}
-
 /// Terminal migration statuses — no more polling needed.
 const TERMINAL_STATUSES: &[&str] = &["completed", "failed", "cancelled"];
 
@@ -907,41 +902,6 @@ pub async fn stop_migration_polling(app: tauri::AppHandle) -> Result<()> {
     if let Some(handle) = guard.take() {
         handle.abort();
     }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn cancel_server_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<()> {
-    state.migration.in_progress.store(false, Ordering::SeqCst);
-
-    // Abort the background poll task internally — the frontend no
-    // longer needs to call stop_migration_polling separately.
-    {
-        let mut guard = state.migration.poll_task.lock().await;
-        if let Some(handle) = guard.take() {
-            handle.abort();
-        }
-    }
-
-    let pool = state.pool()?;
-    let server_url = get_server_url(pool, &account_id).await?;
-    let url = format!("{}/migration/cancel", server_url.trim_end_matches('/'));
-
-    let resp = state
-        .migration
-        .client
-        .post(&url)
-        .json(&serde_json::json!({
-            "ss58_address": account_id,
-        }))
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(crate::error::AppError::Other(format!("Cancel failed: {text}")));
-    }
-
     Ok(())
 }
 

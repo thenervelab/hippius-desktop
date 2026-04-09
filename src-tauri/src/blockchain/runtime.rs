@@ -3,9 +3,8 @@
 //! Houses the `subxt`-generated [`custom_runtime`] module (from `metadata.scale`)
 //! which provides type-safe access to all Hippius chain pallets.
 
-use crate::blockchain::client::{get_current_wss_endpoint, get_substrate_client, update_wss_endpoint};
+use crate::blockchain::client::{get_current_wss_endpoint, update_wss_endpoint};
 use serde::Deserialize;
-use tracing::info;
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
@@ -48,49 +47,6 @@ impl From<FileInputWrapper> for FileInput {
             file_name: wrapper.file_name,
         }
     }
-}
-
-/// Legacy transfer command that accepts a raw seed phrase.
-///
-/// Prefer [`crate::blockchain::transfers::transfer_balance`] which uses the
-/// in-memory keypair instead of requiring the seed to be passed over IPC.
-#[tauri::command]
-pub async fn transfer_balance_tauri(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    sender_seed: String,
-    recipient_address: String,
-    amount: String,
-) -> Result<String, crate::error::AppError> {
-    use sp_core::{Pair, crypto::Ss58Codec, sr25519};
-    use subxt::tx::PairSigner;
-
-    let amount: u128 = amount
-        .parse()
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid amount: {e}")))?;
-
-    let pair =
-        sr25519::Pair::from_string(&sender_seed, None).map_err(|e| crate::error::AppError::Other(format!("Failed to create signer pair: {e:?}")))?;
-    let signer = PairSigner::new(pair);
-
-    let recipient = sp_core::crypto::AccountId32::from_ss58check(&recipient_address)
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid recipient address: {e:?}")))?;
-
-    let api = get_substrate_client(&state).await?;
-    let tx = custom_runtime::tx().balances().transfer_keep_alive(recipient.into(), amount);
-
-    info!("Submitting balance transfer transaction...");
-    let tx_hash = api
-        .tx()
-        .sign_and_submit_then_watch_default(&tx, &signer)
-        .await
-        .map_err(|e| crate::error::AppError::Substrate(e.to_string()))?
-        .wait_for_finalized_success()
-        .await
-        .map_err(|e| crate::error::AppError::Substrate(format!("Transaction failed: {e}")))?
-        .extrinsic_hash();
-
-    info!("Transfer submitted with hash: {:?}", tx_hash);
-    Ok(format!("Transfer submitted successfully! Finalized in block: {tx_hash}"))
 }
 
 /// Fetch the current WSS endpoint.

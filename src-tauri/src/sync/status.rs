@@ -2,22 +2,10 @@
 //!
 //! These are thin wrappers that delegate to `SyncEngine` methods.
 
-use hcfs_client::engine::types::{CombinedSyncState, SyncActivityAction, SyncActivityItem, SyncEngineHealth};
+use hcfs_client::engine::types::{SyncActivityAction, SyncActivityItem, SyncEngineHealth};
 use serde::Serialize;
 use std::collections::HashSet;
 use tauri::{AppHandle, Emitter, Wry};
-
-/// Return the combined sync state across all drives.
-#[tauri::command]
-pub fn get_sync_status(state: tauri::State<'_, crate::app_state::AppState>) -> CombinedSyncState {
-    state.sync.get_sync_status()
-}
-
-/// Return recent sync activity, optionally filtered by drive label.
-#[tauri::command]
-pub fn get_sync_activity(state: tauri::State<'_, crate::app_state::AppState>, limit: Option<usize>, label: Option<String>) -> Vec<SyncActivityItem> {
-    state.sync.get_sync_activity(limit, label)
-}
 
 /// Return the current server connectivity health status.
 #[tauri::command]

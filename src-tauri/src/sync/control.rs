@@ -4,7 +4,6 @@
 use tracing::{debug, info};
 
 use crate::error::Result;
-use crate::sync::lifecycle::remove_drive;
 use hcfs_client::engine::manager::StagedChanges;
 use hcfs_client::engine::runner::{ReviewModeGuard, trigger_sync};
 use std::collections::HashMap;
@@ -203,54 +202,6 @@ pub async fn trigger_sync_now(app: AppHandle) -> Result<()> {
     let sync = app.state::<crate::app_state::AppState>().sync.clone();
     trigger_sync(&sync).await;
     Ok(())
-}
-
-/// Remove a drive and wait until it is truly torn down, with a timeout.
-///
-/// Calls `remove_drive` internally, then waits for `AppState::drive_removed_notify`
-/// to be signalled (fired by `remove_drive` / `pause_drive` immediately after the
-/// drive is removed from the registry). Falls back to a timeout guard so the
-/// caller is never blocked indefinitely. Replaces the 200ms polling loop with
-/// an event-driven wake-up, eliminating both latency and unnecessary CPU cycles.
-#[tauri::command]
-pub async fn remove_drive_and_wait(app: AppHandle, label: String, timeout_ms: u64) -> Result<()> {
-    use tauri::Manager;
-    let app_state = app.state::<crate::app_state::AppState>();
-    let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_millis(timeout_ms);
-
-    remove_drive(app.clone(), label.clone()).await?;
-
-    loop {
-        // Capture notification intent BEFORE checking — avoids lost wakeups
-        // when `remove_drive` fires `notify_waiters()` between our check and
-        // the `select!` park.
-        let notified = app_state.drive_removed_notify.notified();
-
-        // Check immediately — the drive may already be gone.
-        let still_active = match app_state.sync.drives.try_lock() {
-            Ok(guard) => guard.contains_key(&label),
-            // Lock contention means a sync cycle is in progress; treat as active.
-            Err(_) => true,
-        };
-        if !still_active {
-            return Ok(());
-        }
-
-        let remaining = timeout.saturating_sub(start.elapsed());
-        if remaining.is_zero() {
-            return Err(crate::error::AppError::Other(format!(
-                "Timed out waiting for drive '{label}' to stop after {timeout_ms}ms"
-            )));
-        }
-
-        // Wait for an explicit notification from remove_drive/pause_drive, or
-        // fall through to re-check when the timeout expires.
-        tokio::select! {
-            () = notified => { /* re-check loop */ }
-            () = tokio::time::sleep(remaining) => { /* timeout — re-check and return error */ }
-        }
-    }
 }
 
 /// Pure helper: pick the on-disk path for `label` out of a list of sync-path rows.

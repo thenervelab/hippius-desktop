@@ -64,45 +64,6 @@ fn derive_keys(mnemonic: &str) -> Result<(String, PrivateKeySigner, String), cra
 /// `mnemonic` — optional plaintext mnemonic for use during initial login
 /// before the HCFS Drive is set up. If omitted, the mnemonic is read from
 /// the encrypted Drive on disk.
-#[tauri::command]
-pub async fn billing_auth(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    mnemonic: Option<String>,
-) -> Result<BillingAuthResult, crate::error::AppError> {
-    info!("Billing auth initiated");
-    let mut mnemonic = match mnemonic {
-        Some(m) if !m.is_empty() => m,
-        _ => {
-            let z = get_mnemonic_for_account(&state, &account_id).await?;
-            (*z).clone()
-        }
-    };
-
-    let derive_result = derive_keys(&mnemonic);
-    mnemonic.zeroize();
-    let (substrate_address, eth_signer, eth_address) = derive_result?;
-
-    let client = state.api_client.clone();
-    let base = base_url();
-    let challenge_url = format!("{base}{CHALLENGE_PATH}");
-    let verify_url = format!("{base}{VERIFY_PATH}");
-
-    let mut last_err = crate::error::AppError::Auth("Billing auth failed".into());
-
-    for _ in 0..MAX_ATTEMPTS {
-        match attempt(&client, &challenge_url, &verify_url, &eth_signer, &eth_address, &substrate_address).await {
-            Ok(result) => {
-                info!("Billing auth successful");
-                return Ok(result);
-            }
-            Err(e) => last_err = e,
-        }
-    }
-
-    Err(last_err)
-}
-
 /// Execute a single challenge-response attempt against the billing API.
 async fn attempt(
     client: &reqwest::Client,
