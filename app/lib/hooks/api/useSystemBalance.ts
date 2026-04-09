@@ -22,7 +22,7 @@ export default function useSystemBalance(
   const limit = params?.limit ?? 20000;
 
   return useInvokeQuery<BalanceObject[], BalanceObject[]>({
-    command: "get_system_balance_ui",
+    command: "get_system_balance",
     queryKey: (addr) => ["balance-daily", addr, page, limit],
     params: (polkadotAddress) => ({
       accountId: polkadotAddress,

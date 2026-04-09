@@ -23,7 +23,7 @@ export default function useAddCreditEvent(
   const limit = params?.limit || 10;
 
   return useInvokeQuery<CreditEventObject[], CreditEventObject[]>({
-    command: "get_add_credit_events_ui",
+    command: "get_add_credit_events",
     queryKey: (addr) => ["creditEvents", addr, page, limit],
     params: (polkadotAddress) => ({
       accountId: polkadotAddress,

@@ -24,7 +24,7 @@ export default function useBalanceTransactions(
   const limit = params?.limit || 10;
 
   return useInvokeQuery<TransactionObject[], TransactionObject[]>({
-    command: "get_balance_transfers_ui",
+    command: "get_balance_transfers",
     queryKey: (addr) => ["transfers", addr, page, limit],
     params: (polkadotAddress) => ({
       accountId: polkadotAddress,

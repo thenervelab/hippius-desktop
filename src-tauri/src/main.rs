@@ -34,16 +34,13 @@ use crate::billing::charts::{
     calculate_storage_capacity, calculate_storage_cost, format_balance_chart, format_credits_chart, format_storage_chart,
     transform_marketplace_credits,
 };
-use crate::billing::credits::{check_sync_eligibility, get_credits_planck, get_user_credits_balance};
+use crate::billing::credits::{check_sync_eligibility, get_credits_planck};
 use crate::billing::eligibility::check_action_eligibility;
 use crate::billing::queries::{
-    get_add_credit_events, get_add_credit_events_ui, get_balance_transfers, get_balance_transfers_ui, get_billing_transactions,
-    get_billing_transactions_ui, get_credits_ui, get_deposit_address, get_file_nodes, get_files_count, get_files_size, get_indexer_credits,
-    get_marketplace_credits, get_node_locations, get_system_balance_history, get_system_balance_ui,
+    get_add_credit_events, get_balance_transfers, get_billing_transactions, get_credits, get_deposit_address, get_files_count, get_files_size,
+    get_marketplace_credits, get_system_balance,
 };
-use crate::billing::subscriptions::{
-    create_subscription, get_active_subscription, get_customer_portal_url, get_subscription_data, get_subscription_plans,
-};
+use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
 use crate::blockchain::convert::{from_plancks, get_explorer_url, to_plancks};
 use crate::blockchain::queries::{get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address};
 use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, transfer_balance_tauri, update_wss_endpoint_command};
@@ -309,32 +306,21 @@ fn main() {
             create_ssh_key,
             delete_ssh_key,
             // Billing & credits
-            get_user_credits_balance,
+            get_credits,
             get_credits_planck,
             check_sync_eligibility,
             check_action_eligibility,
             get_billing_transactions,
-            get_subscription_plans,
             get_subscription_data,
-            get_active_subscription,
             create_subscription,
             get_customer_portal_url,
-            get_indexer_credits,
             get_marketplace_credits,
-            get_system_balance_history,
+            get_system_balance,
             get_balance_transfers,
             get_add_credit_events,
             get_files_size,
             get_files_count,
-            get_file_nodes,
-            get_node_locations,
             get_deposit_address,
-            // Billing UI-ready typed commands
-            get_credits_ui,
-            get_system_balance_ui,
-            get_balance_transfers_ui,
-            get_billing_transactions_ui,
-            get_add_credit_events_ui,
             // Notifications
             get_notification_settings,
             update_notification_settings,

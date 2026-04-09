@@ -8,16 +8,6 @@ use serde::Serialize;
 // Credits & transactions (API)
 // ---------------------------------------------------------------------------
 
-/// Fetch the current marketplace credit balance for an account.
-#[tauri::command]
-pub async fn get_user_credits_balance(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<serde_json::Value, AppError> {
-    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
-    Ok(client.get::<serde_json::Value>("/api/billing/credits/balance/", &account_id).await?)
-}
-
 /// Convert a decimal credit string (e.g. "1.5") to its planck representation
 /// (18 decimals) without floating-point intermediary. Returns the integer as a
 /// string so TypeScript can convert to BigInt losslessly.

@@ -10,7 +10,7 @@ export interface TransactionObject {
 
 export default function useBillingTransactions() {
   const query = useInvokeQuery<TransactionObject[], TransactionObject[]>({
-    command: "get_billing_transactions_ui",
+    command: "get_billing_transactions",
     queryKey: (addr) => ["billing-transactions", addr],
   });
 

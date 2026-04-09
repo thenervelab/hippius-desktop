@@ -22,7 +22,7 @@ export default function useCredits(
   const limit = params?.limit || 100000;
 
   return useInvokeQuery<CreditObject[], CreditObject[]>({
-    command: "get_credits_ui",
+    command: "get_credits",
     queryKey: (addr) => ["credits", addr, page, limit],
     params: (polkadotAddress) => ({
       accountId: polkadotAddress,

@@ -62,24 +62,6 @@ pub async fn get_subscription_data(state: tauri::State<'_, crate::app_state::App
     })
 }
 
-/// Fetch available Stripe subscription plans.
-#[tauri::command]
-pub async fn get_subscription_plans(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<serde_json::Value, AppError> {
-    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
-    Ok(client
-        .get::<serde_json::Value>("/api/billing/stripe/subscription-plans/", &account_id)
-        .await?)
-}
-
-/// Fetch the user's currently active Stripe subscription, if any.
-#[tauri::command]
-pub async fn get_active_subscription(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<serde_json::Value, AppError> {
-    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
-    Ok(client
-        .get::<serde_json::Value>("/api/billing/stripe/active-subscription/", &account_id)
-        .await?)
-}
-
 /// Initiate a Stripe checkout session for a new subscription.
 ///
 /// Returns a Stripe checkout URL that the frontend opens in the system browser.
