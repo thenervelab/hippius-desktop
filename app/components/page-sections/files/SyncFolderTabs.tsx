@@ -21,6 +21,12 @@ interface SyncFolderTabsProps {
 
 const ALL_TAB = "All";
 
+/** Map internal label to user-friendly display name. */
+function displayName(label: string): string {
+  if (label === "default") return "My Files";
+  return label;
+}
+
 const SyncFolderTabs: FC<SyncFolderTabsProps> = ({
   labels,
   selectedTab,
@@ -43,6 +49,7 @@ const SyncFolderTabs: FC<SyncFolderTabsProps> = ({
       { tabName: ALL_TAB, icon: <Icons.Folder2 /> },
       ...labels.map((label) => ({
         tabName: label,
+        displayName: displayName(label),
         icon: <Icons.FolderCloud />,
       })),
     ],
