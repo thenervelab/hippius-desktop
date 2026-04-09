@@ -541,6 +541,12 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 warn!("Account key migration failed (non-fatal): {}", e);
             }
 
+            // Collapse the legacy global `sync_user_stopped` preference
+            // into per-drive `sync_paths.is_paused`. Idempotent — runs
+            // every launch and short-circuits when already migrated.
+            // See `sync::user_stopped_migration` for details.
+            crate::sync::user_stopped_migration::run_at_startup(&pool).await;
+
             // Check if autoconnect is enabled
             let autoconnect_enabled: bool = sqlx::query("SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1")
                 .fetch_optional(&pool)

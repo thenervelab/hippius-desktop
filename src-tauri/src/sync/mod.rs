@@ -22,3 +22,4 @@ pub mod selective;
 pub mod status;
 pub mod status_state;
 pub mod tauri_bridge;
+pub mod user_stopped_migration;
