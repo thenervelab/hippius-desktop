@@ -28,6 +28,7 @@ import {
   driveStatusesAtom,
   type DriveEntry,
 } from "@/app/lib/global-atoms/unpinAtoms";
+import { toast } from "sonner";
 import { vpnConnectedAtom } from "@/components/dashboard-title-wrapper/vpn-menu/vpnAtoms";
 import type { SyncSnapshot } from "../types/syncSnapshot";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
@@ -420,9 +421,10 @@ async function rebuildDriveSubmenu(
 
     for (const [label, entry] of entries) {
       const isPaused = entry.status.kind === "paused";
+      const folderName = entry.folderName;
       const text = isPaused
-        ? `${entry.folderName} — Resume`
-        : `${entry.folderName} — Pause`;
+        ? `${folderName} — Resume`
+        : `${folderName} — Pause`;
       const item = await MenuItem.new({
         id: `drive-row:${label}`,
         text,
@@ -434,10 +436,15 @@ async function rebuildDriveSubmenu(
               // import). The Rust resume path falls back to the
               // persisted master mnemonic for the active account, so
               // resume from the tray works for any drive that's been
-              // unlocked at least once in this session.
+              // unlocked at least once in this session. If the master
+              // mnemonic isn't available (fresh launch, account never
+              // unlocked), `resume_drive` errors and we surface that
+              // via toast — see the catch block below.
               await invoke("resume_drive", { label, mnemonic: null });
+              toast.success(`Sync resumed for "${folderName}"`);
             } else {
               await invoke("pause_drive", { label });
+              toast.success(`Sync paused for "${folderName}"`);
             }
             // No local state mutation needed: Rust emits
             // hcfs_drive_status_changed which updates the atom which
@@ -447,6 +454,18 @@ async function rebuildDriveSubmenu(
               `[Tray] Failed to ${isPaused ? "resume" : "pause"} drive '${label}':`,
               err
             );
+            // The most likely cause for resume failures is that the
+            // master mnemonic isn't accessible to the tray (the
+            // account hasn't been unlocked in this session). The
+            // toast directs the user to the main app where the wallet
+            // auth context is available.
+            if (isPaused) {
+              toast.error(
+                `Failed to resume "${folderName}". Open the Settings page and try from there.`
+              );
+            } else {
+              toast.error(`Failed to pause "${folderName}".`);
+            }
           }
         },
       });

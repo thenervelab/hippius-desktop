@@ -1277,6 +1277,12 @@ async fn auto_init_sync_inner(
     // start without having to call `get_all_drive_statuses` separately.
     // This pre-populates the per-drive status map before the init loop
     // below starts emitting `Active` for the regular paths.
+    //
+    // IMPORTANT: this loop must run BEFORE the init loop below. The
+    // FE's `driveStatusesAtom` listener relies on Paused arriving
+    // first so per-folder UI doesn't briefly flash "Active" for
+    // paused drives while their entries are still missing from the
+    // map. Reordering these two loops is a behavior change.
     for sp in sync_paths.iter().filter(|sp| sp.label != "migration" && sp.is_paused) {
         crate::sync::status::emit_drive_status(&app, &sp.label, crate::sync::drive_status::DriveStatus::Paused);
     }
