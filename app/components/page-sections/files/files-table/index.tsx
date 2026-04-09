@@ -151,26 +151,41 @@ const FilesTable: FC<FilesTableProps> = memo(
     onHeaderContextMenu,
   }) => {
     const { polkadotAddress } = useWalletAuth();
-    // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads
+    // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads.
+    // Also suppress the "pending" upload arrow for files that just finished downloading
+    // (they appear locally before the synced-set updates, so the backend marks them "pending").
     const snapshot = useSyncSnapshot();
     const enrichedAllFiles = useMemo(() => {
       if (!snapshot.isActive && snapshot.files.length === 0) return allFiles;
-      // Build a lookup from fileName → action for active/pending files
+
+      // Active/pending files → show directional arrow
       const actionByName = new Map<string, "upload" | "download">();
+      // Recently-completed downloads → suppress false "pending upload" arrow
+      const completedDownloads = new Set<string>();
+
       for (const f of snapshot.files) {
         if (f.status !== "completed" && (f.action === "upload" || f.action === "download")) {
           actionByName.set(f.fileName, f.action);
+        } else if (f.status === "completed" && f.action === "download") {
+          completedDownloads.add(f.fileName);
         }
       }
-      if (actionByName.size === 0) return allFiles;
+      if (actionByName.size === 0 && completedDownloads.size === 0) return allFiles;
 
       return allFiles.map((file) => {
         const actualName = file.actualFileName || file.name;
         const action = actionByName.get(actualName);
-        if (!action) return file;
-        const liveSyncStatus: FormattedUserFile["syncStatus"] =
-          action === "download" ? "downloading" : "uploading";
-        return { ...file, syncStatus: liveSyncStatus };
+        if (action) {
+          const liveSyncStatus: FormattedUserFile["syncStatus"] =
+            action === "download" ? "downloading" : "uploading";
+          return { ...file, syncStatus: liveSyncStatus };
+        }
+        // File just finished downloading but backend still reports "pending"
+        // because the synced-set hasn't refreshed yet — mark as synced.
+        if (file.syncStatus === "pending" && completedDownloads.has(actualName)) {
+          return { ...file, syncStatus: "synced" as const };
+        }
+        return file;
       });
     }, [allFiles, snapshot.isActive, snapshot.files]);
 

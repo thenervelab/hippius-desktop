@@ -537,21 +537,28 @@ fn prepare_config_dir(
     let master_path = master_mnemonic_path(account_id)?;
     run_migration(sync_path, &acct_dir, &folder_dir, &master_path)?;
 
-    // If the login mnemonic is available, ensure the stored master matches.
-    if let Some(imported) = existing_mnemonic
-        && master_path.exists()
-    {
-        use zeroize::Zeroize;
-        let stored = hcfs_client::auth::recover_mnemonic(&master_path, drive_password)?;
-        let mut stored_str = stored.to_string();
-        if stored_str != *imported {
-            info!(
-                "Stored master differs from login mnemonic — \
-                 updating master before derivation check"
-            );
+    // If the login mnemonic is available, ensure the stored master matches
+    // (or create it when missing — e.g. keychain-less session restore where
+    // the drive was initialized in a prior session but the master file was
+    // never written or was lost).
+    if let Some(imported) = existing_mnemonic {
+        if master_path.exists() {
+            use zeroize::Zeroize;
+            let stored = hcfs_client::auth::recover_mnemonic(&master_path, drive_password)?;
+            let mut stored_str = stored.to_string();
+            if stored_str != *imported {
+                info!(
+                    "Stored master differs from login mnemonic — \
+                     updating master before derivation check"
+                );
+                hcfs_client::auth::save_encrypted_mnemonic(&master_path, imported, drive_password)?;
+            }
+            stored_str.zeroize();
+        } else {
+            std::fs::create_dir_all(&acct_dir)?;
             hcfs_client::auth::save_encrypted_mnemonic(&master_path, imported, drive_password)?;
+            info!("Persisted master mnemonic (was missing on disk)");
         }
-        stored_str.zeroize();
     }
 
     ensure_derived_mnemonic(&folder_dir, &master_path, drive_password, label)?;
@@ -833,7 +840,7 @@ pub(crate) async fn initialize_sync_inner(
     create_dir_all_async(PathBuf::from(&cfg.sync_path)).await?;
 
     let (_acct_dir, folder_dir, master_path) =
-        prepare_config_dir(&account_id, &label, &cfg.sync_path, &cfg.drive_password, existing_mnemonic.as_deref())?;
+        prepare_config_dir(&account_id, &label, &cfg.sync_path, &cfg.drive_password, Some(&mnemonic_for_config))?;
 
     // Create drive and set HCFS config
     let mut manager = DriveManager::new(PathBuf::from(&cfg.sync_path), folder_dir.clone());
@@ -866,10 +873,10 @@ pub(crate) async fn initialize_sync_inner(
         fhash: &fhash,
         label: &label,
         drive_password: &cfg.drive_password,
-        existing_mnemonic: existing_mnemonic.as_deref(),
+        existing_mnemonic: Some(&mnemonic_for_config),
     };
     let (manager, user_id, mnemonic, is_new_setup) =
-        init_or_unlock_drive(manager, &label, &master_path, &cfg.drive_password, existing_mnemonic.as_deref(), &recovery_ctx).await?;
+        init_or_unlock_drive(manager, &label, &master_path, &cfg.drive_password, Some(&mnemonic_for_config), &recovery_ctx).await?;
     let mut manager = manager;
 
     // Validate user_id
