@@ -30,6 +30,7 @@ import {
 import {
   isSyncConfiguredAtom,
   triggerSyncPathRefreshAtom,
+  driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 import { useAtomValue } from "jotai";
@@ -43,7 +44,26 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
+  const driveStatuses = useAtomValue(driveStatusesAtom);
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
+
+  // Reconcile each SyncFolder.status with the per-drive atom on every
+  // change. This makes the per-folder pause/resume buttons reflect
+  // pauses initiated from ANY surface (settings, tray submenu,
+  // sibling components) instead of only the local handlers below.
+  // The previous local-only mutations would silently lie when the
+  // user paused from another surface.
+  useEffect(() => {
+    setSyncFolders((prev) =>
+      prev.map((f) => {
+        const entry = driveStatuses.get(f.id);
+        if (!entry) return f;
+        const newStatus =
+          entry.status.kind === "paused" ? "paused" : "syncing";
+        return f.status === newStatus ? f : { ...f, status: newStatus };
+      })
+    );
+  }, [driveStatuses]);
   const [remoteFolders, setRemoteFolders] = useState<RemoteFolder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -189,11 +209,9 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
     try {
       await invoke("pause_drive", { label: folder.id });
       toast.success(`Sync paused for "${folder.folderName}"`);
-      setSyncFolders((prev) =>
-        prev.map((f) =>
-          f.id === folder.id ? { ...f, status: "paused" as const } : f
-        )
-      );
+      // The per-drive Paused status from Rust lands in
+      // driveStatusesAtom and the reconciliation effect above
+      // flips this folder's status — no manual mutation needed.
     } catch (error) {
       console.error("Failed to pause sync:", error);
       toast.error("Failed to pause sync");
@@ -214,11 +232,8 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
       appStore.set(isSyncConfiguredAtom, true);
 
       toast.success(`Sync resumed for "${folder.folderName}"`);
-      setSyncFolders((prev) =>
-        prev.map((f) =>
-          f.id === folder.id ? { ...f, status: "syncing" as const } : f
-        )
-      );
+      // Per-drive Active status from Rust lands in driveStatusesAtom
+      // and the reconciliation effect flips this folder's status.
     } catch (error) {
       console.error("Failed to resume sync:", error);
       toast.error("Failed to resume sync");

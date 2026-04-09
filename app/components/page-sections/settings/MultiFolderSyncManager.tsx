@@ -23,8 +23,10 @@ import { HcfsSetupDialog } from "./HcfsSetupDialog";
 import {
   isSyncConfiguredAtom,
   triggerSyncPathRefreshAtom,
+  driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
+import { useAtomValue } from "jotai";
 import {
   LocalFoldersSection,
   RemoteFoldersSection,
@@ -38,7 +40,27 @@ import {
 export default function MultiFolderSyncManager() {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const queryClient = useQueryClient();
+  const driveStatuses = useAtomValue(driveStatusesAtom);
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
+
+  // Reconcile each SyncFolder.status with the per-drive atom on every
+  // change. The pause/resume buttons in this manager and in sibling
+  // surfaces (the tray submenu, FilesContainer's tab menu,
+  // FilesOnboarding) all flow through the same Rust events, which
+  // land in driveStatusesAtom — this effect makes the local list
+  // reflect them without optimistic mutations that would lie when
+  // the user pauses from another surface.
+  useEffect(() => {
+    setSyncFolders((prev) =>
+      prev.map((f) => {
+        const entry = driveStatuses.get(f.id);
+        if (!entry) return f;
+        const newStatus =
+          entry.status.kind === "paused" ? "paused" : "syncing";
+        return f.status === newStatus ? f : { ...f, status: newStatus };
+      })
+    );
+  }, [driveStatuses]);
   const [remoteFolders, setRemoteFolders] = useState<RemoteFolder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -210,11 +232,7 @@ export default function MultiFolderSyncManager() {
     try {
       await invoke("pause_drive", { label: folder.id });
       toast.success(`Sync paused for "${folder.folderName}"`);
-      setSyncFolders((prev) =>
-        prev.map((f) =>
-          f.id === folder.id ? { ...f, status: "paused" as const } : f
-        )
-      );
+      // Status flips via the driveStatusesAtom reconciliation effect.
     } catch (error) {
       console.error("Failed to pause sync:", error);
       toast.error("Failed to pause sync");
@@ -235,11 +253,7 @@ export default function MultiFolderSyncManager() {
       appStore.set(isSyncConfiguredAtom, true);
 
       toast.success(`Sync resumed for "${folder.folderName}"`);
-      setSyncFolders((prev) =>
-        prev.map((f) =>
-          f.id === folder.id ? { ...f, status: "syncing" as const } : f
-        )
-      );
+      // Status flips via the driveStatusesAtom reconciliation effect.
     } catch (error) {
       console.error("Failed to resume sync:", error);
       toast.error("Failed to resume sync");

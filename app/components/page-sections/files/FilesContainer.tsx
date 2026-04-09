@@ -45,6 +45,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import {
   triggerSyncPathRefreshAtom,
   isSyncConfiguredAtom,
+  driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
@@ -192,27 +193,28 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     return [];
   }, [regularFilesData]);
 
-  // Track paused labels and label→folder-name mapping for tab display
-  const [pausedLabels, setPausedLabels] = useState<string[]>([]);
-  const [labelDisplayNames, setLabelDisplayNames] = useState<Record<string, string>>({});
-  useEffect(() => {
-    if (!polkadotAddress || syncFolderLabels.length === 0) return;
-    (async () => {
-      try {
-        const allPaths = await getAllSyncPaths(polkadotAddress);
-        setPausedLabels(allPaths.filter(p => p.isPaused).map(p => p.label));
-        const names: Record<string, string> = {};
-        for (const p of allPaths) {
-          const segments = p.path.replace(/[/\\]+$/, "").split(/[/\\]/);
-          const folderName = segments[segments.length - 1];
-          if (folderName) names[p.label] = folderName;
-        }
-        setLabelDisplayNames(names);
-      } catch {
-        // ignore
-      }
-    })();
-  }, [polkadotAddress, syncFolderLabels]);
+  // Paused labels and label → display name are derived from
+  // driveStatusesAtom (the per-drive source of truth, mirrored from
+  // Rust by useDriveStatuses). The previous local state + manual
+  // get_all_sync_paths fetch was a stale mirror that lied whenever
+  // the user paused / resumed from another surface (settings,
+  // tray submenu, FilesOnboarding). Reading from the atom keeps
+  // every per-drive UI in sync without round-trips.
+  const driveStatuses = useAtomValue(driveStatusesAtom);
+  const pausedLabels = useMemo(
+    () =>
+      Array.from(driveStatuses.entries())
+        .filter(([, entry]) => entry.status.kind === "paused")
+        .map(([label]) => label),
+    [driveStatuses]
+  );
+  const labelDisplayNames = useMemo(() => {
+    const names: Record<string, string> = {};
+    for (const [label, entry] of driveStatuses.entries()) {
+      names[label] = entry.folderName;
+    }
+    return names;
+  }, [driveStatuses]);
 
   // Get the appropriate data based on view mode
   const allData = useMemo(() => {
@@ -624,10 +626,11 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           const mnemonic = (await getMnemonic()) ?? undefined;
           await invoke("resume_drive", { label, mnemonic });
           // Per-drive Active status is emitted by Rust via the
-          // hcfs_drive_status_changed event — see useDriveStatuses.
+          // hcfs_drive_status_changed event and lands in
+          // driveStatusesAtom — pausedLabels is a memo over that
+          // atom, so the tab badge updates without any local state.
           appStore.set(isSyncConfiguredAtom, true);
           toast.success(`Sync resumed for "${label}"`);
-          setPausedLabels(prev => prev.filter(l => l !== label));
         } catch (err) {
           console.error("Failed to resume sync:", err);
           toast.error("Failed to resume sync");
@@ -646,7 +649,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     try {
       await invoke("pause_drive", { label });
       toast.success(`Sync paused for "${label}"`);
-      setPausedLabels(prev => [...prev, label]);
+      // Atom updates via the hcfs_drive_status_changed event from
+      // Rust — pausedLabels is a memo over driveStatusesAtom.
     } catch (err) {
       console.error("Failed to pause sync:", err);
       toast.error("Failed to pause sync");
