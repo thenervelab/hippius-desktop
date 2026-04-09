@@ -341,110 +341,22 @@ pub fn record_deleted_file(sync: &SyncRunner, file_name: String, size_bytes: u64
 }
 
 // ── Tauri IPC Wrappers ─────────────────────────────────────────────────
-
-#[tauri::command]
-pub fn sp_start_session(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    expected_uploads: u32,
-    expected_downloads: u32,
-    expected_local_deletes: u32,
-    expected_remote_deletes: u32,
-    file_list: Option<SessionFileList>,
-    label: Option<String>,
-) -> Result<SyncSessionHandle> {
-    start_session(
-        &state.sync,
-        expected_uploads,
-        expected_downloads,
-        expected_local_deletes,
-        expected_remote_deletes,
-        file_list,
-        label,
-    )
-}
-
-#[tauri::command]
-pub fn sp_merge_into_session(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    expected_uploads: u32,
-    expected_downloads: u32,
-    expected_local_deletes: u32,
-    expected_remote_deletes: u32,
-    file_list: Option<SessionFileList>,
-    label: Option<String>,
-) -> Result<()> {
-    merge_into_session(
-        &state.sync,
-        expected_uploads,
-        expected_downloads,
-        expected_local_deletes,
-        expected_remote_deletes,
-        file_list,
-        label,
-    )
-}
-
-#[tauri::command]
-pub fn sp_complete_session(state: tauri::State<'_, crate::app_state::AppState>, files_uploaded: u32, files_downloaded: u32) -> Result<()> {
-    complete_session(&state.sync, files_uploaded, files_downloaded)
-}
-
-#[tauri::command]
-pub fn sp_stop_session(state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
-    stop_session(&state.sync)
-}
-
-#[tauri::command]
-pub fn sp_update_file_progress(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    path: String,
-    bytes_transferred: u64,
-    total_bytes: u64,
-    action: FileAction,
-    label: Option<String>,
-) -> Result<()> {
-    update_file_progress(&state.sync, &path, bytes_transferred, total_bytes, action, label.as_deref())
-}
-
-#[tauri::command]
-pub fn sp_complete_pending_files(state: tauri::State<'_, crate::app_state::AppState>, label: Option<String>) -> Result<()> {
-    complete_pending_files(&state.sync, label.as_deref().unwrap_or("default"))
-}
-
-#[tauri::command]
-pub fn sp_mark_pending_files_as_failed(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    actual_uploads: u32,
-    actual_downloads: u32,
-    label: Option<String>,
-) -> Result<()> {
-    mark_pending_files_as_failed(&state.sync, actual_uploads, actual_downloads, label.as_deref().unwrap_or("default"))
-}
-
-#[tauri::command]
-pub fn sp_mark_all_pending_files_as_failed(state: tauri::State<'_, crate::app_state::AppState>, error_message: String) -> Result<()> {
-    mark_all_pending_files_as_failed(&state.sync, error_message)
-}
-
-#[tauri::command]
-pub fn sp_mark_file_error(state: tauri::State<'_, crate::app_state::AppState>, path: String, error: String) -> Result<()> {
-    mark_file_error(&state.sync, path, error)
-}
-
-#[tauri::command]
-pub fn sp_get_overall_progress(state: tauri::State<'_, crate::app_state::AppState>) -> Result<OverallProgress> {
-    get_overall_progress(&state.sync)
-}
-
-#[tauri::command]
-pub fn sp_record_deleted_file(state: tauri::State<'_, crate::app_state::AppState>, file_name: String, size_bytes: u64) -> Result<()> {
-    record_deleted_file(&state.sync, file_name, size_bytes)
-}
-
-#[tauri::command]
-pub fn sp_remove_files_for_label(state: tauri::State<'_, crate::app_state::AppState>, label: String) -> Result<()> {
-    remove_files_for_label(&state.sync, label)
-}
+//
+// Only three `sp_*` commands remain exposed to the frontend:
+//
+// - `sp_get_snapshot` — bootstrap fetch on widget mount, before the first
+//   `sync_progress_snapshot` event arrives.
+// - `sp_dismiss_sync_widget` — user closes the floating sync widget.
+// - `sp_clear_all_data` — full reset path during logout / `hcfs_sync_reset`.
+//
+// The rest of the session-management primitives (`start_session`,
+// `merge_into_session`, `complete_session`, `update_file_progress`, the
+// `mark_*` family, `record_deleted_file`, `remove_files_for_label`, etc.)
+// used to be exposed as `sp_*` IPCs back when the frontend drove session
+// lifecycle. hcfs-client now owns the session lifecycle entirely — those
+// inner functions are still called from `lifecycle.rs` and the
+// hcfs-client callback wiring, but their Tauri wrappers were dead and
+// have been removed (2026-04-09).
 
 #[tauri::command]
 pub fn sp_clear_all_data(state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {

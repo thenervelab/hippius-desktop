@@ -78,11 +78,7 @@ use crate::sync::lifecycle::{
 };
 use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
 use crate::sync::paths::{generate_unique_label, get_sync_path, remove_sync_path, set_sync_path};
-use crate::sync::progress::{
-    sp_clear_all_data, sp_complete_pending_files, sp_complete_session, sp_dismiss_sync_widget, sp_get_overall_progress, sp_get_snapshot,
-    sp_mark_all_pending_files_as_failed, sp_mark_file_error, sp_mark_pending_files_as_failed, sp_merge_into_session, sp_record_deleted_file,
-    sp_remove_files_for_label, sp_start_session, sp_stop_session, sp_update_file_progress,
-};
+use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
 use crate::sync::remote::{download_remote_file, list_remote_folder_files};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity, get_sync_activity_rows, get_sync_engine_health, get_sync_status};
 use crate::utils::platform_info::get_platform_info;
@@ -404,18 +400,6 @@ fn main() {
             get_user_preference,
             save_user_preference,
             // Sync progress (in-memory tracking)
-            sp_start_session,
-            sp_merge_into_session,
-            sp_complete_session,
-            sp_stop_session,
-            sp_update_file_progress,
-            sp_complete_pending_files,
-            sp_mark_pending_files_as_failed,
-            sp_mark_all_pending_files_as_failed,
-            sp_mark_file_error,
-            sp_get_overall_progress,
-            sp_record_deleted_file,
-            sp_remove_files_for_label,
             sp_clear_all_data,
             sp_get_snapshot,
             sp_dismiss_sync_widget,
