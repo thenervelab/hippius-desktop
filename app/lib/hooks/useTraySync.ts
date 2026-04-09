@@ -4,6 +4,7 @@ import {
   Menu,
   MenuItem,
   PredefinedMenuItem,
+  Submenu,
 } from "@tauri-apps/api/menu";
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -22,7 +23,11 @@ import {
 import {
   lastUpdatedPercentAtom,
 } from "@/app/lib/store/syncAtoms";
-import { useAtom, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import {
+  driveStatusesAtom,
+  type DriveEntry,
+} from "@/app/lib/global-atoms/unpinAtoms";
 import { vpnConnectedAtom } from "@/components/dashboard-title-wrapper/vpn-menu/vpnAtoms";
 import type { SyncSnapshot } from "../types/syncSnapshot";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
@@ -63,6 +68,23 @@ const syncRowItems = new Map<string, MenuItem>(); // legacy rows (cleaned up on 
 let syncProgressItem: MenuItem | null = null; // "X of Y files synced" row
 let syncSizeItem: MenuItem | null = null; // "208 MB / 1 GB" row
 let syncDeleteItem: MenuItem | null = null; // "X files deleted" row
+
+/* ─ Per-drive submenu — Sync Folders ─────────────────────────── */
+//
+// The "Sync Folders" submenu lists every configured drive with a
+// per-drive Pause / Resume action. It's appended to the main tray
+// menu after the menu is built (see useTrayInit), and rebuilt
+// whenever `driveStatusesAtom` changes via the effect at the bottom
+// of useTrayInit.
+//
+// Item identity: each drive's submenu item is keyed by label so we
+// can swap one row in place during a status transition without
+// rebuilding the whole submenu.
+let driveSubmenu: Submenu | null = null;
+const driveSubmenuItems = new Map<string, MenuItem>();
+const DRIVE_SUBMENU_ID = "drive-submenu";
+const DRIVE_SUBMENU_EMPTY_ID = "drive-submenu-empty";
+let driveSubmenuEmptyItem: MenuItem | null = null;
 
 /* ─ Latching state — keeps completed info visible after backend resets snapshot */
 let latchedComplete = false;
@@ -308,6 +330,22 @@ export function useTrayInit(isAuthenticated: boolean) {
       // Start login status watcher (updates tray menu on login/logout)
       startLoginStatusWatcher(setVpnState);
 
+      // Build the per-drive Sync Folders submenu. Initially shows
+      // a placeholder "(no folders)" entry; the effect at the bottom
+      // of useTrayInit subscribes to `driveStatusesAtom` and rebuilds
+      // the contents whenever drive statuses change.
+      driveSubmenuEmptyItem = await MenuItem.new({
+        id: DRIVE_SUBMENU_EMPTY_ID,
+        text: "(no sync folders)",
+        enabled: false,
+      });
+      driveSubmenu = await Submenu.new({
+        id: DRIVE_SUBMENU_ID,
+        text: "Sync Folders",
+        items: [driveSubmenuEmptyItem],
+      });
+      await menu.append(driveSubmenu);
+
       // Add separator before quit
       if (!openItemsSeparator) {
         openItemsSeparator = await PredefinedMenuItem.new({
@@ -322,6 +360,102 @@ export function useTrayInit(isAuthenticated: boolean) {
       return menu;
     })(setVpnConnected);
   }, [setVpnConnected]);
+
+  // Subscribe to per-drive status changes and rebuild the Sync Folders
+  // submenu whenever the map changes. Mounted in the same hook so the
+  // submenu lifecycle stays tied to the tray itself.
+  const driveStatuses = useAtomValue(driveStatusesAtom);
+  useEffect(() => {
+    void rebuildDriveSubmenu(driveStatuses);
+  }, [driveStatuses]);
+}
+
+/**
+ * Replace the contents of the Sync Folders submenu to reflect the
+ * current per-drive status map. Called from a useAtomValue effect on
+ * every change to `driveStatusesAtom`.
+ *
+ * Strategy: drop every existing item from the submenu and re-build
+ * from the map. This is simpler than diffing and the submenu rarely
+ * has more than a handful of items, so the cost is negligible. The
+ * placeholder "(no sync folders)" entry is restored when the map is
+ * empty so the submenu is never visually broken.
+ *
+ * Click handlers fire `pause_drive` / `resume_drive` directly. Rust
+ * emits `hcfs_drive_status_changed` after the operation succeeds,
+ * which round-trips through `useDriveStatuses` → `driveStatusesAtom`
+ * → this effect → `rebuildDriveSubmenu`, flipping the row label.
+ */
+async function rebuildDriveSubmenu(
+  statuses: Map<string, DriveEntry>
+): Promise<void> {
+  if (!driveSubmenu) return;
+
+  try {
+    // 1. Drain the existing items. We can't use `Submenu.removeAt` in
+    //    a loop because the indices shift; iterate over the snapshot
+    //    and remove by reference.
+    const existing = await driveSubmenu.items();
+    for (const item of existing) {
+      await driveSubmenu.remove(item);
+    }
+    driveSubmenuItems.clear();
+
+    // 2. Empty case: restore the placeholder so the submenu shows
+    //    something instead of being empty.
+    if (statuses.size === 0) {
+      driveSubmenuEmptyItem = await MenuItem.new({
+        id: DRIVE_SUBMENU_EMPTY_ID,
+        text: "(no sync folders)",
+        enabled: false,
+      });
+      await driveSubmenu.append(driveSubmenuEmptyItem);
+      return;
+    }
+
+    // 3. Sort by folder name for stable ordering.
+    const entries = Array.from(statuses.entries()).sort((a, b) =>
+      a[1].folderName.localeCompare(b[1].folderName)
+    );
+
+    for (const [label, entry] of entries) {
+      const isPaused = entry.status.kind === "paused";
+      const text = isPaused
+        ? `${entry.folderName} — Resume`
+        : `${entry.folderName} — Pause`;
+      const item = await MenuItem.new({
+        id: `drive-row:${label}`,
+        text,
+        action: async () => {
+          try {
+            if (isPaused) {
+              // Mnemonic is intentionally not passed: the tray has no
+              // access to wallet auth context (would create a circular
+              // import). The Rust resume path falls back to the
+              // persisted master mnemonic for the active account, so
+              // resume from the tray works for any drive that's been
+              // unlocked at least once in this session.
+              await invoke("resume_drive", { label, mnemonic: null });
+            } else {
+              await invoke("pause_drive", { label });
+            }
+            // No local state mutation needed: Rust emits
+            // hcfs_drive_status_changed which updates the atom which
+            // triggers our rebuild effect.
+          } catch (err) {
+            console.error(
+              `[Tray] Failed to ${isPaused ? "resume" : "pause"} drive '${label}':`,
+              err
+            );
+          }
+        },
+      });
+      driveSubmenuItems.set(label, item);
+      await driveSubmenu.append(item);
+    }
+  } catch (err) {
+    console.error("[Tray] Failed to rebuild drive submenu:", err);
+  }
 }
 
 // Add these explicit debug logs

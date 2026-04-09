@@ -126,6 +126,26 @@ async fn maps_is_paused_to_paused_status() {
 }
 
 #[tokio::test]
+async fn folder_name_is_basename_of_sync_path() {
+    // The tray submenu and per-drive settings rows display
+    // `folder_name`, not the internal `label`. Pin the basename
+    // extraction so a path like `/tmp/photos` shows as "photos".
+    let pool = make_pool().await;
+    let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+    insert_path(&pool, account, "drive_a", false).await;
+    insert_path(&pool, account, "drive_b", true).await;
+
+    let state = make_state_with_account(pool, account);
+    let mut result = get_all_drive_statuses_inner(&state).await.unwrap();
+    result.sort_by(|a, b| a.label.cmp(&b.label));
+
+    // insert_path uses `/tmp/{label}` as the path, so the basename is
+    // the label string. Verifies the basename plumbing end-to-end.
+    assert_eq!(result[0].folder_name, "drive_a");
+    assert_eq!(result[1].folder_name, "drive_b");
+}
+
+#[tokio::test]
 async fn filters_out_internal_migration_pseudo_drive() {
     let pool = make_pool().await;
     let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";

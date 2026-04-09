@@ -49,10 +49,18 @@ pub enum DriveStatus {
 }
 
 /// One row in the response from `get_all_drive_statuses`.
+///
+/// `folder_name` is the basename of the configured sync path
+/// (e.g. `/Users/me/Documents/Hippius` → `"Hippius"`). It's the
+/// user-facing name shown in tray submenus, settings rows, and any
+/// other UI surface that displays a drive — much friendlier than the
+/// internal `label`, which is sometimes the literal string `"default"`
+/// for the legacy single-drive setup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DriveStatusEntry {
     pub label: String,
+    pub folder_name: String,
     pub status: DriveStatus,
 }
 
@@ -106,10 +114,14 @@ mod tests {
     fn drive_status_entry_serializes_camel_case() {
         let entry = DriveStatusEntry {
             label: "default".to_string(),
+            folder_name: "Hippius".to_string(),
             status: DriveStatus::Active,
         };
         let json = serde_json::to_string(&entry).unwrap();
         // Field names are camelCase even though Rust uses snake_case.
-        assert_eq!(json, r#"{"label":"default","status":{"kind":"active"}}"#);
+        assert_eq!(
+            json,
+            r#"{"label":"default","folderName":"Hippius","status":{"kind":"active"}}"#
+        );
     }
 }

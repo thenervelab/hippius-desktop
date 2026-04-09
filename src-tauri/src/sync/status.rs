@@ -165,9 +165,19 @@ pub async fn get_all_drive_statuses_inner(
         // Skip the internal "migration" pseudo-drive — it's not user-
         // facing and shouldn't appear in any per-drive UI.
         .filter(|p| p.label != "migration")
-        .map(|p| DriveStatusEntry {
-            label: p.label,
-            status: status_from_is_paused(p.is_paused),
+        .map(|p| {
+            // Folder name = basename of the sync path. Falls back to
+            // the label if for some reason the path has no basename
+            // (e.g. it's just `/`), so we never serve an empty string.
+            let folder_name = std::path::Path::new(&p.path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map_or_else(|| p.label.clone(), ToString::to_string);
+            DriveStatusEntry {
+                label: p.label,
+                folder_name,
+                status: status_from_is_paused(p.is_paused),
+            }
         })
         .collect())
 }

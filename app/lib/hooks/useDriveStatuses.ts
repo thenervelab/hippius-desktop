@@ -32,6 +32,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   driveStatusesAtom,
   driveStatusesLoadedAtom,
+  type DriveEntry,
   type DriveStatus,
   type DriveStatusEntry,
 } from "@/app/lib/global-atoms/unpinAtoms";
@@ -66,9 +67,12 @@ export function useDriveStatuses() {
           "get_all_drive_statuses"
         );
         if (cancelled) return;
-        const map = new Map<string, DriveStatus>();
+        const map = new Map<string, DriveEntry>();
         for (const entry of entries) {
-          map.set(entry.label, entry.status);
+          map.set(entry.label, {
+            folderName: entry.folderName,
+            status: entry.status,
+          });
         }
         setDriveStatuses(map);
       } catch (err) {
@@ -84,14 +88,24 @@ export function useDriveStatuses() {
       if (cancelled) return;
 
       // 2. Per-drive status updates. Always create a new Map reference
-      //    so Jotai/React observers re-render.
+      //    so Jotai/React observers re-render. The event payload only
+      //    carries `label + status`; we look up the existing entry's
+      //    `folderName` and preserve it. If the entry doesn't exist
+      //    yet (a new drive was just configured at runtime), fall
+      //    back to the label as the display name — the next
+      //    `get_all_drive_statuses` round-trip will populate the
+      //    real basename.
       const statusHandle = await listen<DriveStatusChangedPayload>(
         DRIVE_STATUS_CHANGED,
         (event) => {
           if (cancelled) return;
           setDriveStatuses((prev) => {
             const next = new Map(prev);
-            next.set(event.payload.label, event.payload.status);
+            const existing = prev.get(event.payload.label);
+            next.set(event.payload.label, {
+              folderName: existing?.folderName ?? event.payload.label,
+              status: event.payload.status,
+            });
             return next;
           });
         }

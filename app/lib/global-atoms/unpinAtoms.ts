@@ -17,10 +17,24 @@ export const isSyncConfiguredAtom = atom<boolean>(false);
 export type DriveStatus = { kind: "active" } | { kind: "paused" };
 
 /**
- * One row in `driveStatusesAtom`. Mirrors the Rust `DriveStatusEntry`.
+ * One row in the response from `get_all_drive_statuses`. Mirrors the
+ * Rust `DriveStatusEntry`. The atom itself stores a richer
+ * `DriveEntry` (with `folderName`) so consumers like the tray submenu
+ * can show user-facing folder names without a second IPC round-trip.
  */
 export interface DriveStatusEntry {
   label: string;
+  folderName: string;
+  status: DriveStatus;
+}
+
+/**
+ * One row in `driveStatusesAtom`. Bundles status with the user-facing
+ * folder name so per-drive UI surfaces (tray submenu, settings) can
+ * render the friendly name without re-fetching the sync paths.
+ */
+export interface DriveEntry {
+  folderName: string;
   status: DriveStatus;
 }
 
@@ -36,7 +50,7 @@ export interface DriveStatusEntry {
  * `hcfs_drive_status_changed` / `hcfs_drive_removed` events propagate
  * the change.
  */
-export const driveStatusesAtom = atom<Map<string, DriveStatus>>(new Map());
+export const driveStatusesAtom = atom<Map<string, DriveEntry>>(new Map());
 
 /**
  * Latch flipped to `true` after `useDriveStatuses` completes its first
