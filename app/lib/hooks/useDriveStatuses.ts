@@ -42,6 +42,8 @@ const DRIVE_REMOVED = "hcfs_drive_removed";
 
 interface DriveStatusChangedPayload {
   label: string;
+  folderName: string;
+  path: string;
   status: DriveStatus;
 }
 
@@ -71,6 +73,7 @@ export function useDriveStatuses() {
         for (const entry of entries) {
           map.set(entry.label, {
             folderName: entry.folderName,
+            path: entry.path,
             status: entry.status,
           });
         }
@@ -88,22 +91,21 @@ export function useDriveStatuses() {
       if (cancelled) return;
 
       // 2. Per-drive status updates. Always create a new Map reference
-      //    so Jotai/React observers re-render. The event payload only
-      //    carries `label + status`; we look up the existing entry's
-      //    `folderName` and preserve it. If the entry doesn't exist
-      //    yet (a new drive was just configured at runtime), fall
-      //    back to the label as the display name — the next
-      //    `get_all_drive_statuses` round-trip will populate the
-      //    real basename.
+      //    so Jotai/React observers re-render. The event payload now
+      //    carries the full `{label, folderName, path, status}` shape
+      //    so newly-configured drives populate correctly without a
+      //    second `get_all_drive_statuses` round-trip — every consumer
+      //    (tray, folder picker, "Reveal in Finder") gets a fully
+      //    hydrated entry the moment Rust emits it.
       const statusHandle = await listen<DriveStatusChangedPayload>(
         DRIVE_STATUS_CHANGED,
         (event) => {
           if (cancelled) return;
           setDriveStatuses((prev) => {
             const next = new Map(prev);
-            const existing = prev.get(event.payload.label);
             next.set(event.payload.label, {
-              folderName: existing?.folderName ?? event.payload.label,
+              folderName: event.payload.folderName,
+              path: event.payload.path,
               status: event.payload.status,
             });
             return next;

@@ -64,12 +64,17 @@ pub struct LabelPayload {
     pub label: String,
 }
 
-/// Payload for `DRIVE_STATUS_CHANGED`. Carries the drive label and its
-/// new status. The frontend uses this to update its per-drive status
-/// map without re-fetching `get_all_drive_statuses`.
+/// Payload for `DRIVE_STATUS_CHANGED`. Carries the full drive entry
+/// (label, basename, on-disk path, new status) so the frontend can
+/// update its per-drive status map without re-fetching
+/// `get_all_drive_statuses` AND without holding a stale `path` mirror
+/// for newly-configured drives.
 #[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct DriveStatusChangedPayload {
     pub label: String,
+    pub folder_name: String,
+    pub path: String,
     pub status: crate::sync::drive_status::DriveStatus,
 }
 

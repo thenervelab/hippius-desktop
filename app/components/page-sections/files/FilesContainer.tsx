@@ -15,7 +15,6 @@ import FilesOnboarding from "./FilesOnboarding";
 import {
   getPrivateSyncPath,
   removeSyncPath,
-  getAllSyncPaths,
 } from "@/lib/utils/syncPathUtils";
 import { deleteRemoteFolder } from "@/app/lib/utils/restoreUtils";
 import SyncFolderTabs from "./SyncFolderTabs";
@@ -44,7 +43,7 @@ import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import {
   triggerSyncPathRefreshAtom,
-  isSyncConfiguredAtom,
+  hasConfiguredDrivesAtom,
   driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
@@ -61,7 +60,6 @@ import {
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { appStore } from "@/lib/store/jotaiStore";
 
 const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
@@ -140,7 +138,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
   const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
-  const isSyncConfigured = useAtomValue(isSyncConfiguredAtom);
+  const isSyncConfigured = useAtomValue(hasConfiguredDrivesAtom);
 
   // Per-drive sync status is owned by Rust and pushed via the
   // `useDriveStatuses` hook mounted in `SyncEventLogger`. The previous
@@ -587,21 +585,20 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     setSettingsDialogOpen(true);
   }, [setActiveSettingsTab, setSettingsDialogOpen]);
 
-  // Tab context menu handlers (operate on folder label strings)
+  // Tab context menu handlers (operate on folder label strings).
+  //
+  // Path resolution + reveal-in-file-manager happens entirely in Rust
+  // (`reveal_drive_in_finder`), so the FE never reads the `sync_paths`
+  // table or imports the opener plugin just to figure out which on-disk
+  // folder backs a label.
   const handleTabOpenInFinder = useCallback(async (label: string) => {
-    if (!polkadotAddress) return;
     try {
-      const allPaths = await getAllSyncPaths(polkadotAddress);
-      const match = allPaths.find((p) => p.label === label);
-      if (match) {
-        const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-        await revealItemInDir(match.path);
-      }
+      await invoke("reveal_drive_in_finder", { label });
     } catch (err) {
       console.error("Failed to open folder:", err);
       toast.error("Failed to open folder");
     }
-  }, [polkadotAddress]);
+  }, []);
 
   // Tab context menu: open dialogs instead of executing directly
   const handleTabRemoveFromSync = useCallback((label: string) => {
@@ -629,7 +626,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           // hcfs_drive_status_changed event and lands in
           // driveStatusesAtom — pausedLabels is a memo over that
           // atom, so the tab badge updates without any local state.
-          appStore.set(isSyncConfiguredAtom, true);
+          // hasConfiguredDrivesAtom recomputes from the same source.
           toast.success(`Sync resumed for "${label}"`);
         } catch (err) {
           console.error("Failed to resume sync:", err);

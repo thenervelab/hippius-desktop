@@ -64,19 +64,6 @@ export async function setPublicSyncPath(
     }
 }
 
-export async function getAllSyncPaths(
-    accountId?: string,
-): Promise<SyncPathResult[]> {
-    try {
-        return await invoke<SyncPathResult[]>("get_all_sync_paths", {
-            params: { isPublic: false, accountId },
-        });
-    } catch (error) {
-        console.error("Error fetching all sync paths:", error);
-        throw new Error(error instanceof Error ? error.message : `${error}`);
-    }
-}
-
 export async function removeSyncPath(
     accountId: string,
     label: string,

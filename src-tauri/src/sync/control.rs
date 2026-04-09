@@ -252,3 +252,97 @@ pub async fn remove_drive_and_wait(app: AppHandle, label: String, timeout_ms: u6
         }
     }
 }
+
+/// Pure helper: pick the on-disk path for `label` out of a list of sync-path rows.
+///
+/// Extracted so the lookup is unit-testable without touching the Tauri state,
+/// the SQLite pool, or the opener plugin.
+pub(crate) fn resolve_drive_path(
+    paths: Vec<crate::sync::paths::SyncPathResult>,
+    label: &str,
+) -> Result<String> {
+    paths
+        .into_iter()
+        .find(|p| p.label == label)
+        .map(|p| p.path)
+        .ok_or_else(|| {
+            crate::error::AppError::Other(format!("No sync path with label '{label}'"))
+        })
+}
+
+/// Reveal the on-disk folder for a configured drive in the OS file
+/// manager (Finder on macOS, Explorer on Windows, the default file
+/// manager on Linux).
+///
+/// Looks up the `sync_paths` row by `(owner, label)` for the currently
+/// logged-in account, then hands the resolved path to
+/// `tauri_plugin_opener::reveal_item_in_dir`. Path resolution lives in
+/// Rust so the frontend never reads the `sync_paths` table just to
+/// figure out which folder backs a label.
+///
+/// Errors:
+/// - `NotReady` (no logged-in account)
+/// - `Other("No sync path with label '...'")` when the label is unknown
+/// - `Other("Failed to reveal ...")` when the opener plugin call fails
+#[tauri::command]
+pub async fn reveal_drive_in_finder(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    label: String,
+) -> Result<()> {
+    let pool = state.pool()?;
+    let account_id = state
+        .current_account_id()
+        .map_err(crate::error::AppError::Other)?;
+
+    let paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id).await?;
+    let path = resolve_drive_path(paths, &label)?;
+
+    tauri_plugin_opener::reveal_item_in_dir(&path)
+        .map_err(|e| crate::error::AppError::Other(format!("Failed to reveal '{path}': {e}")))?;
+
+    info!("Revealed drive '{}' at '{}' in file manager", label, path);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync::paths::SyncPathResult;
+
+    fn row(label: &str, path: &str) -> SyncPathResult {
+        SyncPathResult {
+            path: path.to_string(),
+            is_public: false,
+            label: label.to_string(),
+            is_paused: false,
+        }
+    }
+
+    #[test]
+    fn resolve_drive_path_matches_by_label() {
+        let rows = vec![
+            row("default", "/Users/me/Hippius"),
+            row("photos", "/Users/me/Pictures"),
+            row("docs", "/Users/me/Documents"),
+        ];
+        assert_eq!(
+            resolve_drive_path(rows, "photos").unwrap(),
+            "/Users/me/Pictures"
+        );
+    }
+
+    #[test]
+    fn resolve_drive_path_errors_on_unknown_label() {
+        let rows = vec![row("default", "/Users/me/Hippius")];
+        let err = resolve_drive_path(rows, "missing").unwrap_err();
+        // The error message must mention the missing label so the FE
+        // toast and the logs are unambiguous.
+        assert!(err.to_string().contains("missing"));
+    }
+
+    #[test]
+    fn resolve_drive_path_errors_on_empty_list() {
+        let err = resolve_drive_path(Vec::new(), "anything").unwrap_err();
+        assert!(err.to_string().contains("anything"));
+    }
+}

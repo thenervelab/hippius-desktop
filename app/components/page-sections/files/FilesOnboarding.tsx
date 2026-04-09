@@ -28,11 +28,9 @@ import {
   RemoteFolderBrowser,
 } from "@/components/page-sections/settings/multi-folder-sync";
 import {
-  isSyncConfiguredAtom,
   triggerSyncPathRefreshAtom,
   driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
-import { appStore } from "@/lib/store/jotaiStore";
 import { useAtomValue } from "jotai";
 
 interface FilesOnboardingProps {
@@ -229,7 +227,7 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
 
       // Per-drive Active status is emitted by Rust via the
       // hcfs_drive_status_changed event — see useDriveStatuses.
-      appStore.set(isSyncConfiguredAtom, true);
+      // hasConfiguredDrivesAtom recomputes from that automatically.
 
       toast.success(`Sync resumed for "${folder.folderName}"`);
       // Per-drive Active status from Rust lands in driveStatusesAtom
@@ -322,7 +320,7 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
 
       // Per-drive Active status is emitted by Rust via the
       // hcfs_drive_status_changed event — see useDriveStatuses.
-      appStore.set(isSyncConfiguredAtom, true);
+      // hasConfiguredDrivesAtom recomputes from that automatically.
 
       // Apply any pending exclusion patterns from the browse dialog
       if (pendingExclusions.length > 0) {

@@ -8,7 +8,6 @@ import {
   type HcfsConfigResult,
 } from "../utils/hcfsConfigUtils";
 import { invoke } from "@tauri-apps/api/core";
-import { isSyncConfiguredAtom } from "../global-atoms/unpinAtoms";
 import { migrationLockAtom } from "../global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 
@@ -183,12 +182,10 @@ export async function tryAutoInitSync(
       mnemonic: mnemonic ?? null,
     });
 
-    if (result.isConfigured) {
-      appStore.set(isSyncConfiguredAtom, true);
-    }
     // Per-drive Active status is emitted by Rust from `auto_init_sync`
     // for each successful drive init — useDriveStatuses picks them up
-    // via the hcfs_drive_status_changed event.
+    // via the hcfs_drive_status_changed event, which feeds
+    // hasConfiguredDrivesAtom (the source of truth for "configured?").
 
     return result.anyInitialized;
   } catch (err) {

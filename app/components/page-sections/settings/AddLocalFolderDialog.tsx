@@ -11,8 +11,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { getHcfsConfig, saveHcfsConfig } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
-import { isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
-import { appStore } from "@/lib/store/jotaiStore";
 import DialogContainer from "@/components/ui/DialogContainer";
 
 interface AddLocalFolderDialogProps {
@@ -78,7 +76,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
 
       // Per-drive Active status is emitted by Rust via the
       // hcfs_drive_status_changed event — see useDriveStatuses.
-      appStore.set(isSyncConfiguredAtom, true);
+      // hasConfiguredDrivesAtom recomputes from that automatically.
 
       toast.success("Folder added to sync");
       setSelectedPath("");

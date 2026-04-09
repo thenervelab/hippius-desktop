@@ -56,12 +56,31 @@ pub enum DriveStatus {
 /// other UI surface that displays a drive — much friendlier than the
 /// internal `label`, which is sometimes the literal string `"default"`
 /// for the legacy single-drive setup.
+///
+/// `path` is the absolute on-disk location of the synced folder. It
+/// rides on every entry so the frontend never needs to call back into
+/// the `sync_paths` table to resolve a label → path mapping (folder
+/// pickers, "Reveal in Finder" wiring, the files-folder breadcrumbs).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DriveStatusEntry {
     pub label: String,
     pub folder_name: String,
+    pub path: String,
     pub status: DriveStatus,
+}
+
+/// Pure helper: derive the user-facing folder name from a sync path.
+///
+/// Returns the basename of `path` (e.g. `/Users/me/Hippius` → `"Hippius"`).
+/// Falls back to `label` when the path has no basename — typically only
+/// hits for the literal `"/"` or empty paths, and we'd rather show the
+/// label than an empty string.
+pub fn derive_folder_name(path: &str, label: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map_or_else(|| label.to_string(), ToString::to_string)
 }
 
 /// Translate the persisted `is_paused` column into a `DriveStatus`.
@@ -91,6 +110,21 @@ mod tests {
     }
 
     #[test]
+    fn derive_folder_name_uses_basename() {
+        assert_eq!(derive_folder_name("/Users/me/Hippius", "default"), "Hippius");
+        assert_eq!(
+            derive_folder_name("/Users/me/Documents/Photos", "photos"),
+            "Photos"
+        );
+    }
+
+    #[test]
+    fn derive_folder_name_falls_back_to_label_when_no_basename() {
+        assert_eq!(derive_folder_name("/", "default"), "default");
+        assert_eq!(derive_folder_name("", "my-label"), "my-label");
+    }
+
+    #[test]
     fn drive_status_serializes_as_tagged_kind() {
         // The wire format is `{"kind": "active"}` (not just `"active"`)
         // so a future `Error { message }` variant can be added without
@@ -115,13 +149,14 @@ mod tests {
         let entry = DriveStatusEntry {
             label: "default".to_string(),
             folder_name: "Hippius".to_string(),
+            path: "/Users/me/Documents/Hippius".to_string(),
             status: DriveStatus::Active,
         };
         let json = serde_json::to_string(&entry).unwrap();
         // Field names are camelCase even though Rust uses snake_case.
         assert_eq!(
             json,
-            r#"{"label":"default","folderName":"Hippius","status":{"kind":"active"}}"#
+            r#"{"label":"default","folderName":"Hippius","path":"/Users/me/Documents/Hippius","status":{"kind":"active"}}"#
         );
     }
 }

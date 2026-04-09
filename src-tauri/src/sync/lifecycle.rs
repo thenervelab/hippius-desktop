@@ -906,7 +906,7 @@ pub(crate) async fn initialize_sync_inner(
     // Emit a per-drive Active status so any FE listener (settings page,
     // tray submenu) updates this one drive without re-fetching the
     // whole list. Other drives are unaffected.
-    crate::sync::status::emit_drive_status(&app, &label, crate::sync::drive_status::DriveStatus::Active);
+    crate::sync::status::emit_drive_status(&app, &label, &cfg.sync_path, crate::sync::drive_status::DriveStatus::Active);
 
     Ok(InitSyncResult {
         user_id,
@@ -1043,15 +1043,21 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    let (remaining, _removed_path) = remove_drive_inmemory(sync, &label).await;
+    let (remaining, removed_path) = remove_drive_inmemory(sync, &label).await;
 
     // Wake any waiters in remove_drive_and_wait so they can re-check without
     // sleeping through the full polling interval.
     app_state.drive_removed_notify.notify_waiters();
 
-    // Mark as paused in DB (keep the row, unlike stop_drive which deletes it)
-    if let (Ok(pool), Ok(acct)) = (app_state.pool(), app_state.current_account_id())
-        && let Err(e) = crate::sync::paths::set_sync_path_paused(pool, &acct, &label, true).await
+    // Mark as paused in DB (keep the row, unlike stop_drive which deletes it).
+    // Capture pool/account for both the persist call AND the path
+    // lookup used by the per-drive status emit below.
+    let pool_and_acct = match (app_state.pool(), app_state.current_account_id()) {
+        (Ok(pool), Ok(acct)) => Some((pool, acct)),
+        _ => None,
+    };
+    if let Some((pool, acct)) = &pool_and_acct
+        && let Err(e) = crate::sync::paths::set_sync_path_paused(pool, acct, &label, true).await
     {
         warn!("Failed to mark '{}' as paused in DB: {e}", label);
     }
@@ -1060,9 +1066,32 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
         teardown_last_drive(sync, &app).await;
     }
 
+    // Resolve the on-disk path so the per-drive status payload carries
+    // it (the FE relies on that field to keep its drive entry hydrated
+    // — see `useDriveStatuses`). Prefer the path captured by
+    // `remove_drive_inmemory`; fall back to a DB lookup when the drive
+    // wasn't in the in-memory map (e.g. pausing an already-removed
+    // drive after a crash recovery).
+    let drive_path = if let Some(path) = removed_path.as_ref() {
+        path.to_string_lossy().into_owned()
+    } else if let Some((pool, acct)) = &pool_and_acct {
+        crate::sync::folders::get_all_sync_paths_internal(pool, acct)
+            .await
+            .ok()
+            .and_then(|paths| paths.into_iter().find(|p| p.label == label).map(|p| p.path))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
     // Emit a per-drive Paused status so the FE updates this single
     // drive without re-fetching the list. Other drives are unaffected.
-    crate::sync::status::emit_drive_status(&app, &label, crate::sync::drive_status::DriveStatus::Paused);
+    crate::sync::status::emit_drive_status(
+        &app,
+        &label,
+        &drive_path,
+        crate::sync::drive_status::DriveStatus::Paused,
+    );
 
     info!("Paused drive '{}', {} drives remaining", label, remaining);
     Ok(())
@@ -1284,7 +1313,12 @@ async fn auto_init_sync_inner(
     // paused drives while their entries are still missing from the
     // map. Reordering these two loops is a behavior change.
     for sp in sync_paths.iter().filter(|sp| sp.label != "migration" && sp.is_paused) {
-        crate::sync::status::emit_drive_status(&app, &sp.label, crate::sync::drive_status::DriveStatus::Paused);
+        crate::sync::status::emit_drive_status(
+            &app,
+            &sp.label,
+            &sp.path,
+            crate::sync::drive_status::DriveStatus::Paused,
+        );
     }
 
     info!(total = sync_paths.len(), active = regular.len(), "Auto-initializing sync paths");

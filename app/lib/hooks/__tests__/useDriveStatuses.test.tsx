@@ -63,11 +63,13 @@ describe("useDriveStatuses", () => {
       {
         label: "default",
         folderName: "Hippius",
+        path: "/Users/me/Hippius",
         status: { kind: "active" },
       },
       {
         label: "photos",
         folderName: "Photos",
+        path: "/Users/me/Pictures/Photos",
         status: { kind: "paused" },
       },
     ];
@@ -82,10 +84,12 @@ describe("useDriveStatuses", () => {
     expect(map.size).toBe(2);
     expect(map.get("default")).toEqual({
       folderName: "Hippius",
+      path: "/Users/me/Hippius",
       status: { kind: "active" },
     });
     expect(map.get("photos")).toEqual({
       folderName: "Photos",
+      path: "/Users/me/Pictures/Photos",
       status: { kind: "paused" },
     });
   });
@@ -108,6 +112,7 @@ describe("useDriveStatuses", () => {
       {
         label: "default",
         folderName: "Hippius",
+        path: "/Users/me/Hippius",
         status: { kind: "active" },
       },
     ];
@@ -123,51 +128,27 @@ describe("useDriveStatuses", () => {
 
     await act(async () => {
       handler!({
-        payload: { label: "default", status: { kind: "paused" } },
+        payload: {
+          label: "default",
+          folderName: "Hippius",
+          path: "/Users/me/Hippius",
+          status: { kind: "paused" },
+        },
       });
     });
 
     const map = store.get(driveStatusesAtom);
     expect(map.get("default")).toEqual({
       folderName: "Hippius",
+      path: "/Users/me/Hippius",
       status: { kind: "paused" },
     });
   });
 
-  it("preserves folderName across status events when entry exists", async () => {
-    // The DRIVE_STATUS_CHANGED payload only carries label + status.
-    // The hook must look up the existing entry's folderName so the
-    // tray submenu doesn't suddenly show the cryptic label instead.
-    nextInvokeResult = [
-      {
-        label: "default",
-        folderName: "Documents",
-        status: { kind: "active" },
-      },
-    ];
-
-    const { store } = renderWithStore();
-
-    await waitFor(() => {
-      expect(store.get(driveStatusesAtom).size).toBe(1);
-    });
-
-    const handler = listenHandlers.get("hcfs_drive_status_changed");
-    await act(async () => {
-      handler!({
-        payload: { label: "default", status: { kind: "paused" } },
-      });
-    });
-
-    expect(store.get(driveStatusesAtom).get("default")?.folderName).toBe(
-      "Documents"
-    );
-  });
-
-  it("falls back to label as folderName for new drives mid-session", async () => {
-    // Brand-new drive added at runtime: no existing entry to look up.
-    // The hook uses the label as a temporary display name; the next
-    // get_all_drive_statuses round-trip will populate the real basename.
+  it("hydrates a brand-new drive entry from the event payload alone", async () => {
+    // Brand-new drive added at runtime: no existing entry in the map.
+    // The DRIVE_STATUS_CHANGED payload now carries folderName + path,
+    // so the hook can populate the entry without a follow-up fetch.
     nextInvokeResult = [];
 
     const { store } = renderWithStore();
@@ -179,12 +160,18 @@ describe("useDriveStatuses", () => {
     const handler = listenHandlers.get("hcfs_drive_status_changed");
     await act(async () => {
       handler!({
-        payload: { label: "brand_new", status: { kind: "active" } },
+        payload: {
+          label: "brand_new",
+          folderName: "Brand New",
+          path: "/Users/me/Documents/Brand New",
+          status: { kind: "active" },
+        },
       });
     });
 
     expect(store.get(driveStatusesAtom).get("brand_new")).toEqual({
-      folderName: "brand_new",
+      folderName: "Brand New",
+      path: "/Users/me/Documents/Brand New",
       status: { kind: "active" },
     });
   });
@@ -194,11 +181,13 @@ describe("useDriveStatuses", () => {
       {
         label: "default",
         folderName: "Hippius",
+        path: "/Users/me/Hippius",
         status: { kind: "active" },
       },
       {
         label: "photos",
         folderName: "Photos",
+        path: "/Users/me/Pictures/Photos",
         status: { kind: "active" },
       },
     ];
@@ -229,6 +218,7 @@ describe("useDriveStatuses", () => {
       {
         label: "default",
         folderName: "Hippius",
+        path: "/Users/me/Hippius",
         status: { kind: "active" },
       },
     ];

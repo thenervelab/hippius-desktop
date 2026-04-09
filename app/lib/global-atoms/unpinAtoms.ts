@@ -3,11 +3,6 @@ import { atom } from "jotai";
 // Atom to trigger sync path updates refresh
 export const triggerSyncPathRefreshAtom = atom<number>(0);
 
-// Atom to track whether HCFS sync has been configured (has password).
-// This is set when sync is initialised successfully, or when we confirm config exists.
-// Used to differentiate "stopped by user" vs "never set up".
-export const isSyncConfiguredAtom = atom<boolean>(false);
-
 /**
  * Per-drive sync status. Mirrors the Rust backend's `DriveStatus` enum
  * (see `src-tauri/src/sync/drive_status.rs`). Wire format is the tagged
@@ -19,22 +14,27 @@ export type DriveStatus = { kind: "active" } | { kind: "paused" };
 /**
  * One row in the response from `get_all_drive_statuses`. Mirrors the
  * Rust `DriveStatusEntry`. The atom itself stores a richer
- * `DriveEntry` (with `folderName`) so consumers like the tray submenu
- * can show user-facing folder names without a second IPC round-trip.
+ * `DriveEntry` (with `folderName` and `path`) so consumers like the
+ * tray submenu, folder pickers, and "Reveal in Finder" wiring can
+ * render user-facing data without a second IPC round-trip into the
+ * `sync_paths` table.
  */
 export interface DriveStatusEntry {
   label: string;
   folderName: string;
+  path: string;
   status: DriveStatus;
 }
 
 /**
  * One row in `driveStatusesAtom`. Bundles status with the user-facing
- * folder name so per-drive UI surfaces (tray submenu, settings) can
- * render the friendly name without re-fetching the sync paths.
+ * folder name and on-disk path so per-drive UI surfaces (tray submenu,
+ * settings, folder pickers) can render the friendly name and resolve
+ * label → path without re-fetching the sync paths.
  */
 export interface DriveEntry {
   folderName: string;
+  path: string;
   status: DriveStatus;
 }
 
@@ -82,3 +82,4 @@ export const hasConfiguredDrivesAtom = atom((get) => {
   if (!loaded) return true;
   return get(driveStatusesAtom).size > 0;
 });
+

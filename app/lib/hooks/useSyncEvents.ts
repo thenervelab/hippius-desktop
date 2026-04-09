@@ -6,7 +6,6 @@
  * Session lifecycle (start, merge, complete, mark-failed) is managed entirely
  * by the Rust backend.  This hook only:
  *  - Tracks connectivity health (syncEngineHealthAtom)
- *  - Marks sync as configured (isSyncConfiguredAtom)
  *  - Invalidates queries on sync completion
  *  - Resets atoms on stop / full reset
  */
@@ -21,7 +20,6 @@ import {
   DEFAULT_SYNC_ENGINE_HEALTH,
   type SyncEngineHealthState,
 } from "../store/syncAtoms";
-import { isSyncConfiguredAtom } from "../global-atoms/unpinAtoms";
 import { queryClientAtom } from "jotai-tanstack-query";
 import { REMOTE_STORAGE_STATS_QUERY_KEY } from "./api/useRemoteStorageStats";
 
@@ -38,7 +36,6 @@ interface SyncOutcome {
 export function useSyncEvents() {
   const queryClient = useAtomValue(queryClientAtom);
   const setSyncEngineHealthAtom = useSetAtom(syncEngineHealthAtom);
-  const setIsSyncConfiguredAtom = useSetAtom(isSyncConfiguredAtom);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,11 +69,9 @@ export function useSyncEvents() {
 
     const register = async () => {
       const handlers: Array<[string, (e: import("@tauri-apps/api/event").Event<unknown>) => void]> = [
-        // Mark sync as configured when sync starts
-        ["hcfs_sync_started", () => {
-          setIsSyncConfiguredAtom(true);
-        }],
         // Invalidate queries when sync completes with file changes
+        // (no-op for `hcfs_sync_started` — drive-configured state is
+        // derived from `driveStatusesAtom` via `hasConfiguredDrivesAtom`)
         ["hcfs_sync_completed", (e) => {
           const p = e.payload as SyncOutcome;
           const totalCompleted =
@@ -158,5 +153,5 @@ export function useSyncEvents() {
       if (fileCompletionTimer) clearTimeout(fileCompletionTimer);
       unsubs.forEach((u) => u());
     };
-  }, [setSyncEngineHealthAtom, setIsSyncConfiguredAtom, queryClient]);
+  }, [setSyncEngineHealthAtom, queryClient]);
 }

@@ -15,8 +15,6 @@ import type { RemoteFolder } from "@/app/lib/types/sync-folder";
 import { restoreRemoteFolders } from "@/app/lib/utils/restoreUtils";
 import { getHcfsConfig, saveHcfsConfig } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
-import { isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
-import { appStore } from "@/lib/store/jotaiStore";
 
 interface RemoteFolderSelectorProps {
   open: boolean;
@@ -96,7 +94,7 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
 
       // Per-drive Active status is emitted by Rust via the
       // hcfs_drive_status_changed event — see useDriveStatuses.
-      appStore.set(isSyncConfiguredAtom, true);
+      // hasConfiguredDrivesAtom recomputes from that automatically.
 
       toast.success(`Started syncing ${selectedFolder.folderName}`);
       setSelectedFolder(null);

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use std::path::Path;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 /// Parameters for registering or updating a sync folder via IPC.
 #[derive(Deserialize)]
@@ -235,43 +235,6 @@ pub async fn get_sync_path(state: tauri::State<'_, crate::app_state::AppState>, 
     };
     let owner = account_key(&account_id);
     get_sync_path_internal(state.pool()?, params.is_public, &owner).await
-}
-
-/// Fetch all sync paths for the current account.
-#[tauri::command]
-pub async fn get_all_sync_paths(state: tauri::State<'_, crate::app_state::AppState>, params: GetSyncPathParams) -> Result<Vec<SyncPathResult>> {
-    let Some(account_id) = params.account_id.or_else(|| state.current_account_id().ok()) else {
-        return Ok(Vec::new());
-    };
-    let owner = account_key(&account_id);
-
-    let pool = state.pool()?;
-    let rows = sqlx::query("SELECT path, type, label, is_paused FROM sync_paths WHERE owner = ?")
-        .bind(&owner)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("DB error: {e}")))?;
-
-    let results: Vec<SyncPathResult> = rows
-        .iter()
-        .map(|row| {
-            let path_type: String = row.get("type");
-            let paused_int: i32 = row.try_get("is_paused").unwrap_or(0);
-            SyncPathResult {
-                path: row.get("path"),
-                is_public: path_type == "public",
-                label: row.try_get("label").unwrap_or_else(|_| "default".to_string()),
-                is_paused: paused_int != 0,
-            }
-        })
-        .collect();
-
-    info!("Retrieved {} sync path(s) for account '{}'", results.len(), account_id);
-    for sp in &results {
-        debug!("  Sync path: label='{}', path='{}', is_public={}", sp.label, sp.path, sp.is_public);
-    }
-
-    Ok(results)
 }
 
 /// Generate a unique folder label by appending a numeric suffix if needed.

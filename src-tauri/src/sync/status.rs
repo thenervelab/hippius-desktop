@@ -111,7 +111,9 @@ pub fn app_close(app: AppHandle<Wry>) {
 // ── Per-drive status (replaces the old global SyncEngineStatus) ────────
 
 use crate::error::AppError;
-use crate::sync::drive_status::{status_from_is_paused, DriveStatus, DriveStatusEntry};
+use crate::sync::drive_status::{
+    derive_folder_name, status_from_is_paused, DriveStatus, DriveStatusEntry,
+};
 use crate::sync::events::{DriveStatusChangedPayload, DRIVE_REMOVED, DRIVE_STATUS_CHANGED};
 
 /// Emit a `DRIVE_STATUS_CHANGED` event for a single drive.
@@ -120,12 +122,19 @@ use crate::sync::events::{DriveStatusChangedPayload, DRIVE_REMOVED, DRIVE_STATUS
 /// status (init success, pause, resume) so the frontend can update
 /// its per-drive status map without re-fetching the full list.
 ///
+/// Callers must pass the drive's on-disk `path` so the FE can populate
+/// the entry without a fallback DB read. `folder_name` is derived from
+/// the path here so the helper has exactly one source of truth for
+/// basename derivation (`derive_folder_name`).
+///
 /// This is fire-and-forget — emit failures are swallowed because they
 /// only happen when the app is shutting down, in which case the FE
 /// will rebuild from `get_all_drive_statuses` on next mount anyway.
-pub fn emit_drive_status(app: &AppHandle<Wry>, label: &str, status: DriveStatus) {
+pub fn emit_drive_status(app: &AppHandle<Wry>, label: &str, path: &str, status: DriveStatus) {
     let payload = DriveStatusChangedPayload {
         label: label.to_string(),
+        folder_name: derive_folder_name(path, label),
+        path: path.to_string(),
         status,
     };
     let _ = app.emit(DRIVE_STATUS_CHANGED, payload);
@@ -166,16 +175,15 @@ pub async fn get_all_drive_statuses_inner(
         // facing and shouldn't appear in any per-drive UI.
         .filter(|p| p.label != "migration")
         .map(|p| {
-            // Folder name = basename of the sync path. Falls back to
-            // the label if for some reason the path has no basename
-            // (e.g. it's just `/`), so we never serve an empty string.
-            let folder_name = std::path::Path::new(&p.path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map_or_else(|| p.label.clone(), ToString::to_string);
+            // Folder name is derived via the shared helper so the
+            // bootstrap fetch and the per-drive `emit_drive_status`
+            // event always produce the same basename for the same
+            // path.
+            let folder_name = derive_folder_name(&p.path, &p.label);
             DriveStatusEntry {
                 label: p.label,
                 folder_name,
+                path: p.path,
                 status: status_from_is_paused(p.is_paused),
             }
         })

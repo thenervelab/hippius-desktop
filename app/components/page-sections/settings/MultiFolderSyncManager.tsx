@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
 import { AddLocalFolderDialog } from "./AddLocalFolderDialog";
-import { getAllSyncPaths, removeSyncPath } from "@/app/lib/utils/syncPathUtils";
+import { removeSyncPath } from "@/app/lib/utils/syncPathUtils";
 import {
   deleteRemoteFolder,
   restoreRemoteFolders,
@@ -21,7 +21,6 @@ import {
 } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
 import {
-  isSyncConfiguredAtom,
   triggerSyncPathRefreshAtom,
   driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
@@ -108,18 +107,19 @@ export default function MultiFolderSyncManager() {
   // Exclusion paths from browse → sync flow
   const [pendingExclusions, setPendingExclusions] = useState<string[]>([]);
 
-  /** Check remaining sync folders; if none left, reset onboarding state. */
-  const checkAndResetIfNoFolders = useCallback(async () => {
-    if (!polkadotAddress) return;
-    const remainingPaths = await getAllSyncPaths(polkadotAddress).catch((err: unknown) => {
-      console.warn("getAllSyncPaths failed:", err);
-      return [];
-    });
-    if (remainingPaths.length === 0) {
-      appStore.set(isSyncConfiguredAtom, false);
-    }
+  /**
+   * Trigger a refresh after a folder list change.
+   *
+   * No need to peek `sync_paths` and toggle a "configured" flag — the
+   * `hasConfiguredDrivesAtom` is derived from `driveStatusesAtom`, which
+   * Rust keeps in sync via `hcfs_drive_status_changed` /
+   * `hcfs_drive_removed` events. When the last drive is removed,
+   * `driveStatusesAtom` empties and the derived atom flips to `false`
+   * automatically.
+   */
+  const checkAndResetIfNoFolders = useCallback(() => {
     appStore.set(triggerSyncPathRefreshAtom, (prev) => prev + 1);
-  }, [polkadotAddress]);
+  }, []);
 
   // ── Data loading ──────────────────────────────────────────────────────
 
@@ -214,7 +214,7 @@ export default function MultiFolderSyncManager() {
       toast.success("Folder removed from sync");
       refreshFoldersAndStats();
 
-      await checkAndResetIfNoFolders();
+      checkAndResetIfNoFolders();
     } catch (error) {
       console.error("Failed to remove folder:", error);
       toast.error("Failed to remove folder");
@@ -250,7 +250,7 @@ export default function MultiFolderSyncManager() {
 
       // Per-drive Active status is emitted by Rust via the
       // hcfs_drive_status_changed event — see useDriveStatuses.
-      appStore.set(isSyncConfiguredAtom, true);
+      // hasConfiguredDrivesAtom recomputes from that automatically.
 
       toast.success(`Sync resumed for "${folder.folderName}"`);
       // Status flips via the driveStatusesAtom reconciliation effect.
@@ -312,7 +312,7 @@ export default function MultiFolderSyncManager() {
 
       // Per-drive Active status is emitted by Rust via the
       // hcfs_drive_status_changed event — see useDriveStatuses.
-      appStore.set(isSyncConfiguredAtom, true);
+      // hasConfiguredDrivesAtom recomputes from that automatically.
 
       // Apply any pending exclusion patterns from the browse dialog
       if (pendingExclusions.length > 0) {

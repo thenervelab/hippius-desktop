@@ -65,7 +65,7 @@ use crate::notifications::crud::{
     update_local_notification_preferences,
 };
 use crate::notifications::settings::{get_notification_settings, update_notification_settings};
-use crate::sync::control::{remove_drive_and_wait, trigger_sync_now};
+use crate::sync::control::{remove_drive_and_wait, reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::files::{
     add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, get_recent_files, get_synced_file_metadata, get_user_files,
@@ -77,7 +77,7 @@ use crate::sync::lifecycle::{
     setup_and_init_sync, stop_sync,
 };
 use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
-use crate::sync::paths::{generate_unique_label, get_all_sync_paths, get_sync_path, remove_sync_path, set_sync_path};
+use crate::sync::paths::{generate_unique_label, get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{
     sp_clear_all_data, sp_complete_pending_files, sp_complete_session, sp_dismiss_sync_widget, sp_get_overall_progress, sp_get_snapshot,
     sp_mark_all_pending_files_as_failed, sp_mark_file_error, sp_mark_pending_files_as_failed, sp_merge_into_session, sp_record_deleted_file,
@@ -169,6 +169,7 @@ fn main() {
             reset_sync_data,
             trigger_sync_now,
             remove_drive_and_wait,
+            reveal_drive_in_finder,
             change_sync_folder,
             auto_init_sync,
             get_sync_folders_with_stats,
@@ -196,7 +197,6 @@ fn main() {
             app_close,
             // Substrate / blockchain
             get_sync_path,
-            get_all_sync_paths,
             generate_unique_label,
             set_sync_path,
             remove_sync_path,

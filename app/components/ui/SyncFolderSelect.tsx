@@ -1,8 +1,11 @@
 "use client";
 
-import { FC, useEffect, useState, useRef } from "react";
-import { getAllSyncPaths, SyncPathResult } from "@/lib/utils/syncPathUtils";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { FC, useEffect, useState, useRef, useMemo } from "react";
+import { useAtomValue } from "jotai";
+import {
+  driveStatusesAtom,
+  driveStatusesLoadedAtom,
+} from "@/app/lib/global-atoms/unpinAtoms";
 import { cn } from "@/lib/utils";
 import { Icons } from "@/components/ui";
 
@@ -13,43 +16,49 @@ interface SyncFolderSelectProps {
   className?: string;
 }
 
+interface SyncFolderOption {
+  label: string;
+  path: string;
+}
+
 const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
   value,
   onChange,
   defaultLabel,
   className,
 }) => {
-  const { polkadotAddress } = useWalletAuth();
-  const [syncPaths, setSyncPaths] = useState<SyncPathResult[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Read configured drives from the per-drive status atom (single source
+  // of truth, hydrated by `useDriveStatuses`). No DB round-trip needed —
+  // every entry already carries `label + path`.
+  const driveStatuses = useAtomValue(driveStatusesAtom);
+  const driveStatusesLoaded = useAtomValue(driveStatusesLoadedAtom);
+  const syncPaths = useMemo<SyncFolderOption[]>(
+    () =>
+      Array.from(driveStatuses.entries())
+        .filter(([, entry]) => !!entry.path)
+        .map(([label, entry]) => ({ label, path: entry.path })),
+    [driveStatuses]
+  );
+
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Resolve initial selection: prefer the controlled `value`, then
+  // `defaultLabel`, then the first drive. Runs whenever the drive list
+  // or controlled value changes.
   useEffect(() => {
-    (async () => {
-      try {
-        const paths = await getAllSyncPaths(polkadotAddress || undefined);
-        setSyncPaths(paths.filter((sp) => !!sp.path));
-
-        if (paths.length > 0) {
-          // If a value is already set (e.g. from the selected tab), resolve its path.
-          // Otherwise fall back to defaultLabel or the first folder.
-          const match = value
-            ? paths.find((sp) => sp.label === value)
-            : (paths.find((sp) => sp.label === defaultLabel) ?? paths[0]);
-          if (match?.path) {
-            onChange(match.label, match.path);
-          }
-        }
-      } catch {
-        console.error("Failed to load sync paths");
-      } finally {
-        setLoading(false);
-      }
-    })();
-    // Only run on mount and when account changes
+    if (!driveStatusesLoaded || syncPaths.length === 0) return;
+    const match = value
+      ? syncPaths.find((sp) => sp.label === value)
+      : (syncPaths.find((sp) => sp.label === defaultLabel) ?? syncPaths[0]);
+    if (match?.path) {
+      onChange(match.label, match.path);
+    }
+    // `onChange` is intentionally excluded — callers commonly pass
+    // inline functions and we don't want to thrash the selection on
+    // every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [polkadotAddress]);
+  }, [driveStatusesLoaded, syncPaths, value, defaultLabel]);
 
   // Close on outside click
   useEffect(() => {
@@ -63,7 +72,7 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  if (loading || syncPaths.length < 2) return null;
+  if (!driveStatusesLoaded || syncPaths.length < 2) return null;
 
   const selectedLabel = syncPaths.find((sp) => sp.label === value)?.label;
 
