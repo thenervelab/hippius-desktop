@@ -36,10 +36,17 @@ pub const ACTIVITY_UPDATED: &str = "hcfs_activity_updated";
 pub const AUTH_RELOGIN_REQUIRED: &str = "hcfs_auth_relogin_required";
 /// Emitted with a full progress snapshot for the sync status widget.
 pub const PROGRESS_SNAPSHOT: &str = "sync_progress_snapshot";
-/// Emitted whenever the authoritative sync engine status changes
-/// (Initializing → Active, Active → Stopping, etc.). Payload is a
-/// camelCase `SyncEngineStatus` string. See `sync/status_state.rs`.
-pub const SYNC_ENGINE_STATUS_CHANGED: &str = "hcfs_sync_engine_status_changed";
+/// Emitted whenever a single drive's status changes (Active → Paused,
+/// Paused → Active, init success/failure, etc.). Payload is a
+/// `DriveStatusChangedPayload`. See `sync/drive_status.rs`.
+///
+/// Replaces the old global `SYNC_ENGINE_STATUS_CHANGED` event which
+/// collapsed multi-drive state into a single global enum.
+pub const DRIVE_STATUS_CHANGED: &str = "hcfs_drive_status_changed";
+/// Emitted when `remove_drive` deletes a drive's `sync_paths` row.
+/// Payload is a `LabelPayload`. The frontend uses this to drop the
+/// entry from its per-drive status map.
+pub const DRIVE_REMOVED: &str = "hcfs_drive_removed";
 /// Emitted when files have repeatedly failed to sync (threshold reached).
 pub const FILES_FAILED_REPEATEDLY: &str = "hcfs_files_failed_repeatedly";
 
@@ -55,6 +62,15 @@ use serde::Serialize;
 #[derive(Serialize, Clone)]
 pub struct LabelPayload {
     pub label: String,
+}
+
+/// Payload for `DRIVE_STATUS_CHANGED`. Carries the drive label and its
+/// new status. The frontend uses this to update its per-drive status
+/// map without re-fetching `get_all_drive_statuses`.
+#[derive(Serialize, Clone)]
+pub struct DriveStatusChangedPayload {
+    pub label: String,
+    pub status: crate::sync::drive_status::DriveStatus,
 }
 
 /// Emitted when a sync cycle finishes successfully.

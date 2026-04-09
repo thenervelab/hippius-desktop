@@ -108,79 +108,84 @@ pub fn app_close(app: AppHandle<Wry>) {
     app.exit(0);
 }
 
-// ── Sync engine status (Rust-owned, replaces FE atom race) ──────────────
+// ── Per-drive status (replaces the old global SyncEngineStatus) ────────
 
 use crate::error::AppError;
-use crate::sync::status_state::{read_user_stopped, SyncEngineStatus};
+use crate::sync::drive_status::{status_from_is_paused, DriveStatus, DriveStatusEntry};
+use crate::sync::events::{DriveStatusChangedPayload, DRIVE_REMOVED, DRIVE_STATUS_CHANGED};
 
-/// Single helper that updates the in-memory status AND emits the
-/// `SYNC_ENGINE_STATUS_CHANGED` Tauri event.
+/// Emit a `DRIVE_STATUS_CHANGED` event for a single drive.
 ///
-/// Use this instead of `state.sync_status.set(...)` directly so the emission
-/// can't be forgotten by future callers — every status transition the
-/// frontend cares about goes through here.
-pub fn set_status_and_emit(app: &AppHandle<Wry>, state: &crate::app_state::AppState, new: SyncEngineStatus) {
-    let prev = state.sync_status.get();
-    if prev == new {
-        // No change, no emit. Avoids spamming the FE listener with redundant
-        // events when callers idempotently set the current state.
-        return;
-    }
-    state.sync_status.set(new);
-    let _ = app.emit(crate::sync::events::SYNC_ENGINE_STATUS_CHANGED, new);
+/// Use this from any lifecycle transition that changes a drive's
+/// status (init success, pause, resume) so the frontend can update
+/// its per-drive status map without re-fetching the full list.
+///
+/// This is fire-and-forget — emit failures are swallowed because they
+/// only happen when the app is shutting down, in which case the FE
+/// will rebuild from `get_all_drive_statuses` on next mount anyway.
+pub fn emit_drive_status(app: &AppHandle<Wry>, label: &str, status: DriveStatus) {
+    let payload = DriveStatusChangedPayload {
+        label: label.to_string(),
+        status,
+    };
+    let _ = app.emit(DRIVE_STATUS_CHANGED, payload);
 }
 
-/// Return the authoritative sync engine status.
-///
-/// Resolution order:
-/// 1. If the persisted user-stopped flag is set in `user_preferences`,
-///    return `Stopped` regardless of in-memory state. This makes the
-///    user's explicit "Stop" decision survive process restarts.
-/// 2. If `auto_init_sync` has not yet completed for this process, return
-///    `Initializing`. The frontend treats this like Active for the
-///    purposes of the "Stopped" alert.
-/// 3. If the in-memory status is `Stopping`, return that — a stop is
-///    in flight, mid-transition.
-/// 4. Otherwise, derive from whether any drives are loaded:
-///    `Active` if at least one, `Stopped` if zero.
-///
-/// This function is the FE's source of truth — the new
-/// `useSyncEngineStatus` hook calls it on mount and trusts the answer.
-#[tauri::command]
-pub async fn get_sync_engine_status(state: tauri::State<'_, crate::app_state::AppState>) -> Result<SyncEngineStatus, AppError> {
+/// Emit a `DRIVE_REMOVED` event for a single drive. Called by
+/// `remove_drive` after the `sync_paths` row is deleted. The FE
+/// listener drops the entry from its per-drive status map.
+pub fn emit_drive_removed(app: &AppHandle<Wry>, label: &str) {
+    let payload = crate::sync::events::LabelPayload {
+        label: label.to_string(),
+    };
+    let _ = app.emit(DRIVE_REMOVED, payload);
+}
+
+/// Inner body of `get_all_drive_statuses` — takes a borrowed `AppState`
+/// directly so integration tests can exercise the per-drive query
+/// without constructing a `tauri::State` wrapper. The IPC command
+/// below is a one-liner that delegates here.
+pub async fn get_all_drive_statuses_inner(
+    state: &crate::app_state::AppState,
+) -> Result<Vec<DriveStatusEntry>, AppError> {
     let pool = state.pool()?;
 
-    // 1. Persisted user-stopped flag wins. We check this BEFORE the latch
-    //    because the user's explicit Stop decision must survive a restart
-    //    even if auto-init hasn't run yet (otherwise the user briefly sees
-    //    "Initializing" then "Stopped" which looks like a flicker).
-    if read_user_stopped(pool).await.unwrap_or(false) {
-        return Ok(SyncEngineStatus::Stopped);
-    }
-
-    // 2. Auto-init has not run yet — we don't know whether drives will
-    //    load successfully or not. Don't lie either direction.
-    if !state.sync_status.auto_init_complete() {
-        return Ok(SyncEngineStatus::Initializing);
-    }
-
-    // 3. Mid-transition — respect the in-flight state.
-    let stored = state.sync_status.get();
-    if matches!(stored, SyncEngineStatus::Stopping) {
-        return Ok(SyncEngineStatus::Stopping);
-    }
-
-    // 4. Derived from the drives map. `try_lock` failure means a sync cycle
-    //    is currently holding the lock — that's still Active.
-    let drives_loaded = match state.sync.drives.try_lock() {
-        Ok(guard) => !guard.is_empty(),
-        Err(_) => true,
+    // No account → empty list. The FE shouldn't be calling this when
+    // logged out, but be defensive.
+    let Ok(account_id) = state.current_account_id() else {
+        return Ok(Vec::new());
     };
-    Ok(if drives_loaded {
-        SyncEngineStatus::Active
-    } else {
-        SyncEngineStatus::Stopped
-    })
+
+    let paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
+        .await
+        .unwrap_or_default();
+
+    Ok(paths
+        .into_iter()
+        // Skip the internal "migration" pseudo-drive — it's not user-
+        // facing and shouldn't appear in any per-drive UI.
+        .filter(|p| p.label != "migration")
+        .map(|p| DriveStatusEntry {
+            label: p.label,
+            status: status_from_is_paused(p.is_paused),
+        })
+        .collect())
+}
+
+/// Return the per-drive status for every configured `sync_paths` row
+/// belonging to the current account.
+///
+/// Called by the frontend on mount to bootstrap its per-drive status
+/// map. After mount, the FE listens for `DRIVE_STATUS_CHANGED` /
+/// `DRIVE_REMOVED` events to keep the map in sync without re-polling.
+///
+/// Returns an empty list when no account is logged in (the FE renders
+/// nothing in that case anyway).
+#[tauri::command]
+pub async fn get_all_drive_statuses(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<Vec<DriveStatusEntry>, AppError> {
+    get_all_drive_statuses_inner(&state).await
 }
 
 #[cfg(test)]

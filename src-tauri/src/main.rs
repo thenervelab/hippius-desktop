@@ -65,7 +65,7 @@ use crate::notifications::crud::{
     update_local_notification_preferences,
 };
 use crate::notifications::settings::{get_notification_settings, update_notification_settings};
-use crate::sync::control::{stop_drive_and_wait, trigger_sync_now};
+use crate::sync::control::{remove_drive_and_wait, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::files::{
     add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, get_recent_files, get_synced_file_metadata, get_user_files,
@@ -73,8 +73,8 @@ use crate::sync::files::{
 };
 use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
 use crate::sync::lifecycle::{
-    add_local_sync_folder, auto_init_sync, change_sync_folder, initialize_sync, pause_drive, reset_sync_data, resume_drive, setup_and_init_sync,
-    stop_drive, stop_sync,
+    add_local_sync_folder, auto_init_sync, change_sync_folder, initialize_sync, pause_drive, remove_drive, reset_sync_data, resume_drive,
+    setup_and_init_sync, stop_sync,
 };
 use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
 use crate::sync::paths::{generate_unique_label, get_all_sync_paths, get_sync_path, remove_sync_path, set_sync_path};
@@ -84,7 +84,7 @@ use crate::sync::progress::{
     sp_remove_files_for_label, sp_start_session, sp_stop_session, sp_update_file_progress,
 };
 use crate::sync::remote::{download_remote_file, list_remote_folder_files};
-use crate::sync::status::{app_close, get_sync_activity, get_sync_activity_rows, get_sync_engine_health, get_sync_engine_status, get_sync_status};
+use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity, get_sync_activity_rows, get_sync_engine_health, get_sync_status};
 use crate::utils::platform_info::get_platform_info;
 use crate::utils::preferences::{get_user_preference, is_onboarding_done, save_user_preference, set_onboarding_done};
 use crate::utils::support::{
@@ -163,12 +163,12 @@ fn main() {
             add_local_sync_folder,
             setup_and_init_sync,
             stop_sync,
-            stop_drive,
+            remove_drive,
             pause_drive,
             resume_drive,
             reset_sync_data,
             trigger_sync_now,
-            stop_drive_and_wait,
+            remove_drive_and_wait,
             change_sync_folder,
             auto_init_sync,
             get_sync_folders_with_stats,
@@ -177,7 +177,7 @@ fn main() {
             get_sync_activity,
             get_sync_activity_rows,
             get_sync_engine_health,
-            get_sync_engine_status,
+            get_all_drive_statuses,
             // File operations
             add_file,
             add_files,

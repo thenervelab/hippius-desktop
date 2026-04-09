@@ -903,14 +903,10 @@ pub(crate) async fn initialize_sync_inner(
     );
     spawn_folder_registration(&cfg.server_url, &bearer_token, &label, &account_id, &fhash, pool, &cfg.sync_path);
 
-    // The user has just successfully started a drive — clear the persisted
-    // user-stopped flag so a future cold start auto-inits cleanly. Best-
-    // effort: a write failure is non-fatal because the in-memory status is
-    // still set to Active below.
-    if let Err(e) = crate::sync::status_state::write_user_stopped(pool, false).await {
-        warn!("Failed to clear user-stopped flag after init: {e}");
-    }
-    crate::sync::status::set_status_and_emit(&app, &app_state, crate::sync::status_state::SyncEngineStatus::Active);
+    // Emit a per-drive Active status so any FE listener (settings page,
+    // tray submenu) updates this one drive without re-fetching the
+    // whole list. Other drives are unaffected.
+    crate::sync::status::emit_drive_status(&app, &label, crate::sync::drive_status::DriveStatus::Active);
 
     Ok(InitSyncResult {
         user_id,
@@ -921,47 +917,28 @@ pub(crate) async fn initialize_sync_inner(
     })
 }
 
-/// Stop ALL drives. Used as **internal lifecycle cleanup** — not as a
-/// user-initiated "stop sync" action. Call sites:
+/// Stop ALL drives. **Internal lifecycle cleanup** — not user intent.
+/// Call sites:
 ///
-/// - `wallet-auth-context.tsx::initSync` runs `invoke("stop_sync")` as
-///   defensive cleanup right before `tryAutoInitSync` on every login, so
-///   any drives left over from a previous session are cleared.
+/// - `wallet-auth-context.tsx::initSync` runs this as defensive cleanup
+///   right before `tryAutoInitSync` on every login, so any drives left
+///   over from a previous session are cleared.
 /// - `auth/logout.rs::logout` calls it to drop drives during sign-out.
 /// - `lifecycle.rs::reset_sync_data` calls it before wiping local state.
 ///
-/// **None of these represent user intent to stop syncing.** This function
-/// must NOT persist the user-stopped flag — that would cause auto-init to
-/// bail on the very next call (which is what happens on every login).
-/// The explicit user-pressed-Stop path lives in `stop_drive`, which is
-/// the only place that writes `write_user_stopped(true)`.
-///
-/// Status emits are also intentionally absent: the engine status will be
-/// re-derived on the next `get_sync_engine_status` query (driven by the
-/// drives map and the auto-init latch), and emitting Stopping → Stopped
-/// here would cause a brief alert flash on every login.
+/// In the per-drive status model this function does NOT touch any
+/// persisted state — `sync_paths.is_paused` rows are left untouched
+/// because they represent user intent that must survive logout/login.
+/// It also does not emit any per-drive status events: drives are about
+/// to be re-loaded by `auto_init_sync` (in the login/reset case) or
+/// the user has been signed out (logout case), and either way the FE
+/// will rebuild its per-drive map from `get_all_drive_statuses` after
+/// the dust settles.
 #[tauri::command]
 pub async fn stop_sync(app: AppHandle) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
-
-    // Reset the auto-init latch — a follow-up `auto_init_sync` is expected
-    // (login, post-reset, and the splash-after-logout-then-login flow all
-    // call this). Without resetting, `get_sync_engine_status` would jump
-    // straight from Active → Stopped during the cleanup window because
-    // the drives map is empty but the latch still says "auto init done".
-    app_state.sync_status.reset_auto_init_complete();
-
-    // Clear the persisted user-stopped flag. A previous bug (pre-8b4e5b7)
-    // wrote user_stopped=true here on every login, which stuck in the DB
-    // and caused auto_init_sync to bail permanently. Since stop_sync is
-    // internal cleanup (not user intent), the flag must always be cleared.
-    if let Ok(pool) = app_state.pool() {
-        if let Err(e) = crate::sync::status_state::write_user_stopped(pool, false).await {
-            warn!("Failed to clear stale user-stopped flag: {e}");
-        }
-    }
 
     // 1. Cancel every drive's cancellation token FIRST so the sync loop
     //    sees a clean shutdown signal and can persist state before exiting.
@@ -1008,34 +985,35 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
     let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
 
-    // NOTE: deliberately no `set_status_and_emit(Stopped)` here — see the
-    // function-level docstring. The engine status will be re-derived from
-    // the drives map (now empty) by the next `get_sync_engine_status` call,
-    // or pushed by the next `auto_init_sync` cycle.
-
     Ok(())
 }
 
-/// Stop a single drive by label. If no drives remain, also stops the sync loop.
-/// Also removes the corresponding sync_paths DB row so the drive is not
-/// resurrected on restart (prevents ghost sync paths).
+/// Permanently remove a single drive by label. Tears down its in-memory
+/// state, deletes the corresponding `sync_paths` DB row, and emits a
+/// `DRIVE_REMOVED` event so the FE drops it from the per-drive status
+/// map. **Files on disk are left untouched** — only the sync engine
+/// stops tracking this folder.
+///
+/// This is the destructive sibling of `pause_drive` (which preserves
+/// the row + `is_paused=true`). Renamed from `stop_drive` in the
+/// per-drive status migration to make the destructive intent explicit.
+///
+/// Used for the 3-dot menu's "Remove from sync" action and for
+/// `change_sync_folder`'s teardown step before re-initializing with a
+/// new path.
 #[tauri::command]
-pub async fn stop_drive(app: AppHandle, label: String) -> Result<()> {
+pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    // Mark the engine as transitioning. The FE renders this as "Stopping…"
-    // until the in-flight teardown finishes.
-    crate::sync::status::set_status_and_emit(&app, &app_state, crate::sync::status_state::SyncEngineStatus::Stopping);
-
     let (remaining, _removed_path) = remove_drive_inmemory(sync, &label).await;
 
-    // Wake any waiters in stop_drive_and_wait so they can re-check without
+    // Wake any waiters in remove_drive_and_wait so they can re-check without
     // sleeping through the full polling interval.
     app_state.drive_removed_notify.notify_waiters();
 
-    // Remove the DB row so the drive isn't resurrected on app restart.
+    // Delete the DB row so the drive isn't resurrected on app restart.
     // Best-effort: if the account or pool isn't available, the in-memory
     // cleanup above still takes effect for this session.
     if let (Ok(pool), Ok(acct)) = (app_state.pool(), app_state.current_account_id())
@@ -1044,30 +1022,15 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<()> {
         warn!("Failed to remove sync path for '{}' from DB: {e}", label);
     }
 
-    // Persist the user's explicit Stop decision so it survives a restart.
-    // Only persist when no drives remain — stopping a single drive in a
-    // multi-drive setup is not the same as "user stopped sync entirely".
-    if remaining == 0
-        && let Ok(pool) = app_state.pool()
-        && let Err(e) = crate::sync::status_state::write_user_stopped(pool, true).await
-    {
-        warn!("Failed to persist user-stopped flag: {e}");
-    }
-
     if remaining == 0 {
         teardown_last_drive(sync, &app).await;
     }
 
-    // Final status: Stopped if no drives remain, otherwise Active (the
-    // remaining drives are still running).
-    let new_status = if remaining == 0 {
-        crate::sync::status_state::SyncEngineStatus::Stopped
-    } else {
-        crate::sync::status_state::SyncEngineStatus::Active
-    };
-    crate::sync::status::set_status_and_emit(&app, &app_state, new_status);
+    // Tell the FE to drop this drive's entry from its per-drive status
+    // map. Other drives are unaffected and keep their existing status.
+    crate::sync::status::emit_drive_removed(&app, &label);
 
-    info!("Stopped drive '{}', {} drives remaining", label, remaining);
+    info!("Removed drive '{}', {} drives remaining", label, remaining);
     Ok(())
 }
 
@@ -1082,7 +1045,7 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
 
     let (remaining, _removed_path) = remove_drive_inmemory(sync, &label).await;
 
-    // Wake any waiters in stop_drive_and_wait so they can re-check without
+    // Wake any waiters in remove_drive_and_wait so they can re-check without
     // sleeping through the full polling interval.
     app_state.drive_removed_notify.notify_waiters();
 
@@ -1097,11 +1060,19 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
         teardown_last_drive(sync, &app).await;
     }
 
+    // Emit a per-drive Paused status so the FE updates this single
+    // drive without re-fetching the list. Other drives are unaffected.
+    crate::sync::status::emit_drive_status(&app, &label, crate::sync::drive_status::DriveStatus::Paused);
+
     info!("Paused drive '{}', {} drives remaining", label, remaining);
     Ok(())
 }
 
-/// Resume a paused sync folder: clear the paused flag and re-initialize.
+/// Resume a paused sync folder: clear `is_paused`, re-initialize the
+/// drive, and emit a per-drive Active status. The persisted user-stopped
+/// flag no longer exists (deleted in the per-drive status migration),
+/// so this function only touches `sync_paths.is_paused` and the
+/// in-memory drive registry.
 #[tauri::command]
 pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String>) -> Result<()> {
     use tauri::Manager;
@@ -1110,17 +1081,14 @@ pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String
     let account_id = app_state.current_account_id()?;
     let pool = app_state.pool()?;
 
-    // Clear the paused flag first
+    // Clear the paused flag in the DB before kicking off init. Doing it
+    // first means even if init fails the row reflects user intent
+    // (Active), so the next auto_init_sync attempt will pick it up.
     crate::sync::paths::set_sync_path_paused(pool, &account_id, &label, false).await?;
 
-    // Clear the user-stopped flag so get_sync_engine_status doesn't
-    // return Stopped even after a successful resume. Done before init
-    // so the flag is cleared even if init fails.
-    if let Err(e) = crate::sync::status_state::write_user_stopped(pool, false).await {
-        warn!("Failed to clear user-stopped flag in resume_drive: {e}");
-    }
-
-    // Re-initialize the drive
+    // Re-initialize the drive. `initialize_sync_inner` emits the
+    // per-drive Active status on success, so we don't need to do it
+    // again here.
     initialize_sync_inner(app.clone(), account_id, label.clone(), mnemonic, true, false).await?;
 
     info!("Resumed drive '{}'", label);
@@ -1190,8 +1158,9 @@ pub async fn change_sync_folder(
 ) -> Result<InitSyncResult> {
     let pool = state.pool()?;
 
-    // Stop existing drive (fire and forget if it doesn't exist)
-    let _ = stop_drive(app.clone(), label.clone()).await;
+    // Tear down the existing drive (fire and forget if it doesn't
+    // exist) so we can re-initialize it with the new path.
+    let _ = remove_drive(app.clone(), label.clone()).await;
 
     // Set the new sync path in the DB
     crate::sync::paths::set_sync_path_internal(pool, &account_id, &new_path, false, Some(&label)).await?;
@@ -1204,12 +1173,15 @@ pub async fn change_sync_folder(
 
 /// Auto-initialize all configured sync paths on login.
 ///
-/// This replaces the 9-step `tryAutoInitSync()` orchestration that was in
+/// Replaces the 9-step `tryAutoInitSync()` orchestration that was in
 /// TypeScript. All business logic (migration lock, mnemonic persistence,
 /// path filtering, HCFS config check, sequential init) lives in Rust.
 ///
-/// The user-stopped flag is read from `user_preferences.sync_user_stopped`
-/// inside `auto_init_sync_inner` — the frontend no longer passes it.
+/// In the per-drive status model this is a thin wrapper that delegates
+/// to `auto_init_sync_inner`. There is no global engine status to
+/// update — each successful per-drive init inside the loop emits its
+/// own `DRIVE_STATUS_CHANGED` event with `Active`, and paused paths
+/// emit `Paused` (so the FE sees them on cold start).
 #[tauri::command]
 pub async fn auto_init_sync(
     app: AppHandle,
@@ -1217,35 +1189,7 @@ pub async fn auto_init_sync(
     account_id: String,
     mnemonic: Option<String>,
 ) -> Result<AutoInitResult> {
-    let result = auto_init_sync_inner(app.clone(), &state, account_id, mnemonic).await;
-
-    // Always mark the auto-init latch — the FE's `get_sync_engine_status`
-    // uses this to decide between `Initializing` and `Stopped`. The one
-    // exception is the "migration in progress" early-return: that path is
-    // transient and auto_init_sync will be called again after migration
-    // completes, so we leave the latch alone in that single case.
-    let migration_blocked = matches!(
-        &result,
-        Ok(r) if r.skipped_reason.as_deref() == Some("Migration in progress"),
-    );
-    if !migration_blocked {
-        state.sync_status.mark_auto_init_complete();
-    }
-
-    // Map the inner result to a status and emit the change.
-    let new_status = match &result {
-        Ok(r) if r.any_initialized => crate::sync::status_state::SyncEngineStatus::Active,
-        // Migration block is transient — leave the in-memory status alone
-        // (it will be `Initializing` from the previous call) so the FE
-        // doesn't briefly flash to `Stopped` mid-migration.
-        Ok(_) if migration_blocked => state.sync_status.get(),
-        // Anything else (no paths, no password, user stopped, all drive
-        // inits failed, or an Err) means there's nothing live → Stopped.
-        _ => crate::sync::status_state::SyncEngineStatus::Stopped,
-    };
-    crate::sync::status::set_status_and_emit(&app, &state, new_status);
-
-    result
+    auto_init_sync_inner(app.clone(), &state, account_id, mnemonic).await
 }
 
 /// Inner body of `auto_init_sync` — returns the same shape as the public
@@ -1321,20 +1265,21 @@ async fn auto_init_sync_inner(
         });
     }
 
-    // 6. Respect the user-stopped flag from the persisted user_preferences
-    //    table. This replaces the old `localStorage["hippius_sync_stopped"]`
-    //    that the frontend used to pass via the `user_stopped_sync`
-    //    parameter — that's now ignored.
-    if crate::sync::status_state::read_user_stopped(pool).await.unwrap_or(false) {
-        return Ok(AutoInitResult {
-            any_initialized: false,
-            is_configured: true,
-            skipped_reason: Some("User explicitly stopped sync".into()),
-        });
-    }
-
-    // 7. Filter: exclude "migration" label and paused paths
+    // 6. Filter: exclude the internal "migration" pseudo-drive and any
+    //    paths the user has paused. The legacy global `user_stopped`
+    //    flag was deleted in the per-drive status migration — paused
+    //    state is now per-drive in `sync_paths.is_paused`, which the
+    //    Phase 0 migration ensured is correctly populated for any
+    //    user upgrading from the old global model.
     let regular: Vec<_> = sync_paths.iter().filter(|sp| sp.label != "migration" && !sp.is_paused).collect();
+
+    // Emit `Paused` for every paused path so the FE sees them on cold
+    // start without having to call `get_all_drive_statuses` separately.
+    // This pre-populates the per-drive status map before the init loop
+    // below starts emitting `Active` for the regular paths.
+    for sp in sync_paths.iter().filter(|sp| sp.label != "migration" && sp.is_paused) {
+        crate::sync::status::emit_drive_status(&app, &sp.label, crate::sync::drive_status::DriveStatus::Paused);
+    }
 
     info!(total = sync_paths.len(), active = regular.len(), "Auto-initializing sync paths");
 

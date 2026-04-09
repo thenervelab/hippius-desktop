@@ -12,7 +12,7 @@ use crate::auth::tokens::get_api_token;
 use crate::error::Result;
 use crate::sync::config::get_hcfs_config_internal;
 use crate::sync::lifecycle::start_sync_loop;
-use crate::sync::lifecycle::{initialize_sync_inner, stop_drive};
+use crate::sync::lifecycle::{initialize_sync_inner, remove_drive};
 use crate::sync::mnemonic::{config_dir_for_folder, folder_hash};
 use hcfs_client::client::HcfsClientConfig;
 use sqlx::sqlite::SqlitePool;
@@ -353,8 +353,8 @@ pub async fn delete_remote_folder(
     }; // map lock released
 
     if was_local {
-        if let Err(e) = stop_drive(app, label.clone()).await {
-            warn!("Failed to stop drive '{}' during remote folder deletion: {e}", label);
+        if let Err(e) = remove_drive(app, label.clone()).await {
+            warn!("Failed to remove drive '{}' during remote folder deletion: {e}", label);
         }
         if let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, &account_id, &label).await {
             warn!("Failed to remove sync path '{}' during remote folder deletion: {e}", label);

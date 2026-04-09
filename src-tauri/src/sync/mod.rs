@@ -6,6 +6,7 @@
 pub mod config;
 pub mod control;
 pub mod device;
+pub mod drive_status;
 pub mod events;
 pub mod failure_commands;
 pub mod failure_tracking;
@@ -20,6 +21,5 @@ pub mod progress;
 pub mod remote;
 pub mod selective;
 pub mod status;
-pub mod status_state;
 pub mod tauri_bridge;
 pub mod user_stopped_migration;

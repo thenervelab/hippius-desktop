@@ -4,7 +4,7 @@
 use tracing::{debug, info};
 
 use crate::error::Result;
-use crate::sync::lifecycle::stop_drive;
+use crate::sync::lifecycle::remove_drive;
 use hcfs_client::engine::manager::StagedChanges;
 use hcfs_client::engine::runner::{ReviewModeGuard, trigger_sync};
 use std::collections::HashMap;
@@ -205,25 +205,25 @@ pub async fn trigger_sync_now(app: AppHandle) -> Result<()> {
     Ok(())
 }
 
-/// Stop a drive and wait until it is truly inactive, with a timeout.
+/// Remove a drive and wait until it is truly torn down, with a timeout.
 ///
-/// Calls `stop_drive` internally, then waits for `AppState::drive_removed_notify`
-/// to be signalled (fired by `stop_drive` / `pause_drive` immediately after the
+/// Calls `remove_drive` internally, then waits for `AppState::drive_removed_notify`
+/// to be signalled (fired by `remove_drive` / `pause_drive` immediately after the
 /// drive is removed from the registry). Falls back to a timeout guard so the
 /// caller is never blocked indefinitely. Replaces the 200ms polling loop with
 /// an event-driven wake-up, eliminating both latency and unnecessary CPU cycles.
 #[tauri::command]
-pub async fn stop_drive_and_wait(app: AppHandle, label: String, timeout_ms: u64) -> Result<()> {
+pub async fn remove_drive_and_wait(app: AppHandle, label: String, timeout_ms: u64) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_millis(timeout_ms);
 
-    stop_drive(app.clone(), label.clone()).await?;
+    remove_drive(app.clone(), label.clone()).await?;
 
     loop {
         // Capture notification intent BEFORE checking — avoids lost wakeups
-        // when `stop_drive` fires `notify_waiters()` between our check and
+        // when `remove_drive` fires `notify_waiters()` between our check and
         // the `select!` park.
         let notified = app_state.drive_removed_notify.notified();
 
@@ -244,7 +244,7 @@ pub async fn stop_drive_and_wait(app: AppHandle, label: String, timeout_ms: u64)
             )));
         }
 
-        // Wait for an explicit notification from stop_drive/pause_drive, or
+        // Wait for an explicit notification from remove_drive/pause_drive, or
         // fall through to re-check when the timeout expires.
         tokio::select! {
             () = notified => { /* re-check loop */ }

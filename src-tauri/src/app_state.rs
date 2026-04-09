@@ -13,7 +13,6 @@ use crate::auth::state::AuthInfo;
 use crate::blockchain::state::{BlockSubscriptionState, BlockchainState};
 use crate::nebula::state::NebulaState;
 use crate::sync::migration::MigrationState;
-use crate::sync::status_state::SyncStatusState;
 use crate::sync::tauri_bridge::TauriSyncBridge;
 use hcfs_client::engine::runner::SyncRunner;
 
@@ -38,16 +37,12 @@ pub struct AppState {
     pub oauth: OAuthState,
     pub nebula: NebulaState,
     pub migration: MigrationState,
-    /// Authoritative sync engine status, owned by Rust. Replaces the
-    /// frontend `syncEngineStatusAtom` cold-start race. See
-    /// `sync/status_state.rs` for the state machine.
-    pub sync_status: SyncStatusState,
     /// HTTP client for HCFS health checks (accepts self-signed certs in debug).
     pub health_client: reqwest::Client,
     /// HTTP client for Hippius API calls (reuses connection pool + TLS cache).
     pub api_client: reqwest::Client,
     /// Notified when a drive is removed from the registry, allowing
-    /// `stop_drive_and_wait` to wake without polling.
+    /// `remove_drive_and_wait` to wake without polling.
     pub drive_removed_notify: tokio::sync::Notify,
     /// Per-file consecutive failure counters and session-skip state.
     pub file_failures: crate::sync::failure_tracking::FileFailureState,
@@ -86,7 +81,6 @@ impl AppState {
             oauth: OAuthState::new(),
             nebula: NebulaState::new(),
             migration: MigrationState::new(),
-            sync_status: SyncStatusState::new(),
             health_client,
             api_client: reqwest::Client::builder().build().expect("Failed to build API HTTP client"),
             drive_removed_notify: tokio::sync::Notify::new(),

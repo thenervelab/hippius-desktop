@@ -348,9 +348,9 @@ pub async fn remove_sync_path(
             format!("Failed to remove sync path: {e}")
         })?;
 
-    crate::sync::lifecycle::stop_drive(app, label.clone()).await?;
+    crate::sync::lifecycle::remove_drive(app, label.clone()).await?;
 
-    info!("Sync path removed and drive stopped for label '{}'", label);
+    info!("Sync path removed and drive torn down for label '{}'", label);
     Ok(())
 }
 
