@@ -940,6 +940,16 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     // the drives map is empty but the latch still says "auto init done".
     app_state.sync_status.reset_auto_init_complete();
 
+    // Clear the persisted user-stopped flag. A previous bug (pre-8b4e5b7)
+    // wrote user_stopped=true here on every login, which stuck in the DB
+    // and caused auto_init_sync to bail permanently. Since stop_sync is
+    // internal cleanup (not user intent), the flag must always be cleared.
+    if let Ok(pool) = app_state.pool() {
+        if let Err(e) = crate::sync::status_state::write_user_stopped(pool, false).await {
+            warn!("Failed to clear stale user-stopped flag: {e}");
+        }
+    }
+
     // 1. Cancel every drive's cancellation token FIRST so the sync loop
     //    sees a clean shutdown signal and can persist state before exiting.
     cancel_all_drive_tokens(sync).await;
