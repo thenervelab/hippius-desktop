@@ -626,6 +626,15 @@ pub async fn start_server_migration(
         check_disk_space(sync_dir, total_size)?;
     }
 
+    // Derive the display label from the sync path's directory name.
+    // Sent to the server so the folder registry shows the user's
+    // chosen folder name instead of "default".
+    let display_label = sync_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("default")
+        .to_string();
+
     // Recover the master mnemonic via the unified resolver. It checks the
     // in-memory AuthInfo cache first (populated at login/unlock), then
     // disk, drive, and DB before returning a typed MasterMnemonicUnrecoverable.
@@ -717,6 +726,7 @@ pub async fn start_server_migration(
             "s3_secret_key": s3_secret_key,
             "signature": signature.to_bytes().to_vec(),
             "signing_key": signing_key.verifying_key().to_bytes().to_vec(),
+            "label": display_label,
         }))
         .send()
         .await
@@ -756,6 +766,7 @@ pub async fn start_server_migration(
                     "s3_secret_key": s3_secret_key,
                     "signature": signature.to_bytes().to_vec(),
                     "signing_key": signing_key.verifying_key().to_bytes().to_vec(),
+                    "label": display_label,
                 }))
                 .send()
                 .await
