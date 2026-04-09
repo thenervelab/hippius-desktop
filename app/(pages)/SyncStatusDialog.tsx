@@ -84,7 +84,7 @@ const SyncFileItem = memo<SyncFileItemProps>(function SyncFileItem({
 
   return (
     <div
-      className="mb-4 last:mb-0 transition-opacity duration-200"
+      className="mb-4 last:mb-0"
       data-file-item
       data-testid="file-item"
     >
@@ -225,7 +225,6 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   open,
   onClose,
 }) => {
-  const fileListRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const engineHealth = useAtomValue(syncEngineHealthAtom);
 
@@ -362,35 +361,25 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     return () => clearInterval(timer);
   }, [snapshot.retryInSecs]);
 
-  useEffect(() => {
-    const fileList = fileListRef.current;
-    if (!fileList || !isExpanded) return;
-
-    const handleScroll = () => {
-      const { clientHeight } = fileList;
-      const topFade = 20;
-      const bottomFade = 20;
-      fileList
-        .querySelectorAll<HTMLElement>("[data-file-item]")
-        .forEach((el) => {
-          const { top, height } = el.getBoundingClientRect();
-          const offsetTop = top - fileList.getBoundingClientRect().top;
-          const offsetBottom = offsetTop + height;
-          if (offsetTop < topFade) {
-            el.style.opacity = `${Math.max(0.3, offsetTop / topFade)}`;
-          } else if (offsetBottom > clientHeight - bottomFade) {
-            el.style.opacity = `${Math.max(
-              0.3,
-              (clientHeight - offsetTop) / bottomFade
-            )}`;
-          } else {
-            el.style.opacity = "1";
-          }
-        });
-    };
-    fileList.addEventListener("scroll", handleScroll);
-    return () => fileList.removeEventListener("scroll", handleScroll);
-  }, [isExpanded]);
+  // NOTE: a previous scroll-fade implementation lived here. It iterated
+  // `[data-file-item]` rows on every scroll event and set inline
+  // `el.style.opacity` based on each row's position. It had three bugs:
+  //
+  //   1. The bottom-edge formula `(clientHeight - offsetTop) / bottomFade`
+  //      could produce values WAY larger than 1 (e.g. opacity: 2.8) for
+  //      rows nowhere near the bottom edge.
+  //   2. The handler only ran on `scroll` events, but the inline opacity
+  //      it set was persistent. When React re-rendered the file list,
+  //      the stale inline opacities stuck to whichever DOM nodes React
+  //      reused — assigning random opacities to rows that were no longer
+  //      near the fade band.
+  //   3. The opacity transition combined with text-content updates caused
+  //      the GPU compositor to re-rasterize each row's text on every
+  //      frame, producing a visible "doubled text" artifact on macOS
+  //      WebKit during mid-animation.
+  //
+  // Replaced with a CSS mask gradient on the scroll container (see the
+  // file-list `<div>` below). Pure CSS, no JS, no inline styles.
 
   const toggleExpanded = useCallback(() => {
     setIsExpanded((v) => {
@@ -728,10 +717,19 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             </div>
           )}
 
-          {/* File list — flex-1 + min-h-0 lets it fill remaining space and scroll */}
-          <div 
-            ref={fileListRef} 
+          {/* File list — flex-1 + min-h-0 lets it fill remaining space and
+              scroll. The mask-image gradient fades content at the top and
+              bottom edges purely in CSS — replaces the buggy JS scroll
+              handler that previously set inline opacity per row and caused
+              the doubled-text rendering artifact. */}
+          <div
             className="overflow-y-auto p-4 flex-1 min-h-0"
+            style={{
+              maskImage:
+                "linear-gradient(to bottom, transparent 0, black 1.25rem, black calc(100% - 1.25rem), transparent 100%)",
+              WebkitMaskImage:
+                "linear-gradient(to bottom, transparent 0, black 1.25rem, black calc(100% - 1.25rem), transparent 100%)",
+            }}
           >
             {snapshot.files.map((file) => (
               <SyncFileItem
