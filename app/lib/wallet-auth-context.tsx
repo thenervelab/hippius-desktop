@@ -201,10 +201,13 @@ export function WalletAuthProvider({
     }
     syncInitialized.current = true;
     pendingSyncInit.current = null;
-    invoke("stop_sync").catch(() => { });
-    tryAutoInitSync(accountId, mnemonic).catch((err) =>
-      console.error("[WalletAuth] Failed to start sync:", err)
-    );
+    invoke("stop_sync")
+      .catch(() => { })
+      .then(() => {
+        tryAutoInitSync(accountId, mnemonic).catch((err) =>
+          console.error("[WalletAuth] Failed to start sync:", err)
+        );
+      });
     triggerMigrationCheck();
   }
 

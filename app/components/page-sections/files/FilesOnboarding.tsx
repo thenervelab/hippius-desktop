@@ -187,7 +187,7 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
 
     setIsPausing(true);
     try {
-      await invoke("stop_drive", { label: folder.id });
+      await invoke("pause_drive", { label: folder.id });
       toast.success(`Sync paused for "${folder.folderName}"`);
       setSyncFolders((prev) =>
         prev.map((f) =>

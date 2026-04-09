@@ -1100,6 +1100,13 @@ pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String
     // Clear the paused flag first
     crate::sync::paths::set_sync_path_paused(pool, &account_id, &label, false).await?;
 
+    // Clear the user-stopped flag so get_sync_engine_status doesn't
+    // return Stopped even after a successful resume. Done before init
+    // so the flag is cleared even if init fails.
+    if let Err(e) = crate::sync::status_state::write_user_stopped(pool, false).await {
+        warn!("Failed to clear user-stopped flag in resume_drive: {e}");
+    }
+
     // Re-initialize the drive
     initialize_sync_inner(app.clone(), account_id, label.clone(), mnemonic, true, false).await?;
 
