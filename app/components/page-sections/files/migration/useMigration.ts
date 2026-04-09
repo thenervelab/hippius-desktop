@@ -99,8 +99,9 @@ export function useMigration(): UseMigrationReturn {
           toast.error("Lost connection to migration server. Please check your network and try again.");
           appStore.set(migrationLockAtom, false);
           appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0 });
-
-          setCurrentStep("complete");
+          // Don't show the success dialog -- dismiss the banner and let
+          // MigrationChecker re-detect the in-progress job on next check.
+          setCurrentStep(null);
           return;
         }
         if (result.status === "poll_error") return;
