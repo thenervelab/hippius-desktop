@@ -16,8 +16,9 @@
 //!
 //! [`should_emit_snapshot`] and [`try_claim_snapshot_emit`] implement a
 //! trailing-edge throttle so that only the first call in any `min_interval_ms`
-//! window triggers an emit. File-completion ticks bypass the throttle to keep
-//! per-file UI updates snappy.
+//! window triggers an emit. File-completion ticks use a shorter 100 ms window
+//! ([`COMPLETION_THROTTLE_MS`]) to batch burst completions while remaining
+//! visually responsive at 10 Hz.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -33,10 +34,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// risk of an honest timestamp being misinterpreted as the sentinel.
 pub const NEVER_EMITTED: u64 = u64::MAX;
 
+/// Shorter throttle window for file-completion ticks.
+/// Batches burst completions (many files finishing within milliseconds)
+/// while still being responsive — 10 Hz is visually smooth.
+const COMPLETION_THROTTLE_MS: u64 = 100;
+
 /// Decide whether a throttled snapshot emit should fire.
 ///
 /// Returns `true` when either:
-/// - the caller is reporting a file completion (`is_file_complete`), or
+/// - the caller is reporting a file completion (`is_file_complete`) and at
+///   least [`COMPLETION_THROTTLE_MS`] have elapsed, or
 /// - at least `min_interval_ms` have elapsed since the previous emit.
 ///
 /// Pure function with no side effects — safe to call from any thread.
@@ -46,12 +53,16 @@ pub const NEVER_EMITTED: u64 = u64::MAX;
 ///   Monotonic. Callers should derive this from [`std::time::Instant`], not
 ///   wall-clock time, so that backward NTP jumps cannot stall the throttle.
 /// * `is_file_complete` — `true` when this tick represents `bytes == total`
-///   for a file. Completion ticks always emit so the UI reflects the final
-///   progress of each file immediately.
+///   for a file. Completion ticks use a shorter 100 ms window so burst
+///   completions are batched without flooding the WebKit eval queue.
 /// * `min_interval_ms` — minimum gap between throttled emits. `0` disables
 ///   the throttle entirely (every call emits).
 pub const fn should_emit_snapshot(elapsed_since_last_ms: u64, is_file_complete: bool, min_interval_ms: u64) -> bool {
-    is_file_complete || elapsed_since_last_ms >= min_interval_ms
+    if is_file_complete {
+        elapsed_since_last_ms >= COMPLETION_THROTTLE_MS
+    } else {
+        elapsed_since_last_ms >= min_interval_ms
+    }
 }
 
 /// Attempt to claim a throttled snapshot emit slot.
@@ -134,18 +145,27 @@ mod tests {
     }
 
     #[test]
-    fn completion_always_bypasses_throttle() {
-        // Zero elapsed, but the file just finished — must emit so the UI
-        // shows the final per-file state without waiting for the next window.
-        assert!(should_emit_snapshot(0, true, 250));
-        assert!(should_emit_snapshot(5, true, 10_000));
+    fn completion_uses_shorter_throttle() {
+        // 0ms elapsed — within 100ms completion window → block
+        assert!(!should_emit_snapshot(0, true, 250));
+        // 50ms elapsed — still within window → block
+        assert!(!should_emit_snapshot(50, true, 250));
+        // 100ms elapsed — at boundary → allow
+        assert!(should_emit_snapshot(100, true, 250));
+        // 200ms elapsed — past window → allow
+        assert!(should_emit_snapshot(200, true, 250));
     }
 
     #[test]
     fn zero_interval_disables_throttle() {
-        // Escape hatch: setting min_interval_ms = 0 means "emit on every tick".
+        // Escape hatch: setting min_interval_ms = 0 means "emit on every
+        // non-completion tick". Completions still respect their own 100 ms
+        // window.
         assert!(should_emit_snapshot(0, false, 0));
-        assert!(should_emit_snapshot(0, true, 0));
+        // Completion at 0 ms elapsed is still within the 100 ms window.
+        assert!(!should_emit_snapshot(0, true, 0));
+        // Completion past the window emits normally.
+        assert!(should_emit_snapshot(100, true, 0));
     }
 
     // ── is_file_completion_tick ────────────────────────────────────────
@@ -234,17 +254,26 @@ mod tests {
     }
 
     #[test]
-    fn completion_claims_even_inside_window_without_blocking_later_completions() {
-        // Two file completions 10 ms apart must both emit; a non-completion
-        // tick between them must still be blocked.
+    fn completion_uses_100ms_window_inside_normal_throttle() {
+        // Completions use COMPLETION_THROTTLE_MS (100 ms), not the normal
+        // 250 ms window. A completion within 100 ms of the last emit is
+        // batched; one at or past 100 ms emits.
         let cursor = AtomicU64::new(5_000);
-        assert!(try_claim_snapshot_emit(&cursor, 5_050, true, 250));
-        assert_eq!(cursor.load(Ordering::Relaxed), 5_050);
+        // 50 ms after cursor — within 100 ms completion window → blocked.
+        assert!(!try_claim_snapshot_emit(&cursor, 5_050, true, 250));
+        assert_eq!(cursor.load(Ordering::Relaxed), 5_000);
+        // Non-completion also blocked (within 250 ms window).
         assert!(!try_claim_snapshot_emit(&cursor, 5_060, false, 250));
-        // Cursor unchanged by the rejected call.
-        assert_eq!(cursor.load(Ordering::Relaxed), 5_050);
-        assert!(try_claim_snapshot_emit(&cursor, 5_070, true, 250));
-        assert_eq!(cursor.load(Ordering::Relaxed), 5_070);
+        assert_eq!(cursor.load(Ordering::Relaxed), 5_000);
+        // Completion at exactly 100 ms → emits.
+        assert!(try_claim_snapshot_emit(&cursor, 5_100, true, 250));
+        assert_eq!(cursor.load(Ordering::Relaxed), 5_100);
+        // Another completion 50 ms later → within window again → blocked.
+        assert!(!try_claim_snapshot_emit(&cursor, 5_150, true, 250));
+        assert_eq!(cursor.load(Ordering::Relaxed), 5_100);
+        // Completion 100 ms after last emit → emits.
+        assert!(try_claim_snapshot_emit(&cursor, 5_200, true, 250));
+        assert_eq!(cursor.load(Ordering::Relaxed), 5_200);
     }
 
     #[test]

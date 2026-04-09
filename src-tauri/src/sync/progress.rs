@@ -56,8 +56,9 @@ fn monotonic_now_ms() -> u64 {
 /// The underlying `SyncRunner::emit_snapshot(false)` call is **trailing-edge
 /// throttled** to one emit per [`SNAPSHOT_THROTTLE_MS`] across the whole
 /// process. File-completion ticks (`bytes_transferred == total_bytes` with
-/// `total_bytes > 0`) bypass the throttle so the UI reflects per-file
-/// completion without waiting for the next window.
+/// `total_bytes > 0`) use a shorter 100 ms window (see
+/// [`crate::sync::logic::COMPLETION_THROTTLE_MS`]) to batch burst
+/// completions while remaining responsive.
 ///
 /// Without this throttle, upload/download/encrypt/decrypt callbacks fired by
 /// `hcfs-client` can flood `webview.eval` with hundreds of large

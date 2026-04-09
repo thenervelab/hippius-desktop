@@ -7,6 +7,7 @@ import {
 } from "@tauri-apps/api/menu";
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { resolveResource } from "@tauri-apps/api/path";
 import {
   openAppWindow,
@@ -720,15 +721,16 @@ function startLoginStatusWatcher(setVpnState?: (enabled: boolean) => void) {
 let lastSyncSummarySignature = "";
 
 function startSyncActivityWatcher() {
-  const INTERVAL_MS = 2000;
-
   // Clear any old watcher from HMR
   if (typeof window !== "undefined") {
     // @ts-expect-error custom watcher handle
-    if (window.__hippiusSyncWatcher) clearInterval(window.__hippiusSyncWatcher);
+    if (window.__hippiusSyncWatcherUnsub) {
+      // @ts-expect-error custom watcher handle
+      (window.__hippiusSyncWatcherUnsub as () => void)();
+    }
   }
 
-  const tick = async () => {
+  const tick = async (progress: SyncSnapshot) => {
     try {
       const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
       if (!menu) return;
@@ -754,9 +756,6 @@ function startSyncActivityWatcher() {
 
       // Clean up any legacy per-file rows from old implementation
       await removeAllSyncActivityRows(menu);
-
-      // Read progress snapshot directly from Rust backend
-      const progress = await invoke<SyncSnapshot>("sp_get_snapshot");
       const inProgressCount = progress.files.filter(
         (f) => f.status === "inProgress" || f.status === "pending"
       ).length;
@@ -994,12 +993,22 @@ function startSyncActivityWatcher() {
     }
   };
 
-  void tick();
-  const h = setInterval(tick, INTERVAL_MS);
-  if (typeof window !== "undefined") {
-    // @ts-expect-error custom watcher handle
-    window.__hippiusSyncWatcher = h;
-  }
+  // Seed from current state, then subscribe to push events.
+  // Replaces the old 2s polling loop — push events arrive at ≤4 Hz
+  // from the Rust backend, which is more responsive AND eliminates
+  // a redundant sp_get_snapshot IPC roundtrip every 2 seconds.
+  invoke<SyncSnapshot>("sp_get_snapshot")
+    .then((snapshot) => void tick(snapshot))
+    .catch((err: unknown) => console.error("[TraySync] Initial snapshot:", err));
+
+  listen<SyncSnapshot>("sync_progress_snapshot", (e) => {
+    void tick(e.payload);
+  }).then((unsub) => {
+    if (typeof window !== "undefined") {
+      // @ts-expect-error custom watcher handle
+      window.__hippiusSyncWatcherUnsub = unsub;
+    }
+  }).catch((err: unknown) => console.error("[TraySync] listen failed:", err));
 }
 
 /* ─ Remove all sync-activity rows ────────────────────────────── */

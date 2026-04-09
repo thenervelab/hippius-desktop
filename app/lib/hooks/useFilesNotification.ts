@@ -9,6 +9,8 @@ import {
 } from "@/components/page-sections/notifications/notificationStore";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import type { SyncSnapshot } from "@/lib/types/syncSnapshot";
+import { snapshotAtom } from "@/lib/hooks/useSyncSnapshot";
+import { appStore } from "@/lib/store/jotaiStore";
 
 /** Serialisable summary of a synced file stored inside releaseNotes JSON. */
 export interface SyncedFileDetail {
@@ -82,22 +84,19 @@ export function useFilesNotification() {
       await refreshUnread();
     };
 
-    /** Capture completed file details from the snapshot. */
-    const captureFileDetails = async () => {
-      try {
-        const snapshot = await invoke<SyncSnapshot>("sp_get_snapshot");
-        const completedFiles: SyncedFileDetail[] = snapshot.files
-          .filter((f) => f.status === "completed")
-          .map((f) => ({
-            fileName: f.fileName,
-            totalBytes: f.totalBytes,
-            action: f.action,
-          }));
-        if (completedFiles.length > 0) {
-          pendingFilesRef.current.push(...completedFiles);
-        }
-      } catch {
-        // Supplementary data — non-critical
+    /** Capture completed file details from the in-memory snapshot atom
+     *  instead of making a redundant sp_get_snapshot IPC call. */
+    const captureFileDetails = () => {
+      const snapshot = appStore.get(snapshotAtom);
+      const completedFiles: SyncedFileDetail[] = snapshot.files
+        .filter((f) => f.status === "completed")
+        .map((f) => ({
+          fileName: f.fileName,
+          totalBytes: f.totalBytes,
+          action: f.action,
+        }));
+      if (completedFiles.length > 0) {
+        pendingFilesRef.current.push(...completedFiles);
       }
     };
 

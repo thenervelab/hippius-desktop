@@ -1361,7 +1361,6 @@ struct TransferContext {
     sync: Arc<SyncRunner>,
     app: AppHandle,
     label: Arc<str>,
-    started_set: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     direction: TransferDirection,
 }
 
@@ -1383,20 +1382,14 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
     };
 
     if let Some(path_str) = path {
-        // Compute file_name once; reused for both the start/resume log and
-        // the completion log below to avoid a second `Path::new` allocation.
         let file_name = Path::new(path_str).file_name().and_then(|n| n.to_str()).unwrap_or(path_str);
-        if let Ok(mut set) = ctx.started_set.lock()
-            && set.insert(path_str.to_string())
-        {
-            if bytes > 0 {
-                info!(
-                    "{} resuming [{}]: {} from {} bytes ({} total)",
-                    dir_name, ctx.label, file_name, bytes, total
-                );
-            } else {
-                info!("{} started [{}]: {} ({} bytes)", dir_name, ctx.label, file_name, total);
-            }
+        // Log the first chunk of each transfer. Using bytes == 0 avoids
+        // the old started_set Mutex that was contended on every chunk.
+        // Trade-off: resumed transfers (first chunk has bytes > 0) won't
+        // get a "started" log — acceptable since the completion log still
+        // fires and resume is rare.
+        if bytes == 0 {
+            info!("{} started [{}]: {} ({} bytes)", dir_name, ctx.label, file_name, total);
         }
         let _ = crate::sync::progress::update_file_progress(&ctx.sync, path_str, bytes, total, file_action, Some(&*ctx.label));
 
@@ -1642,22 +1635,16 @@ fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_cl
 pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManager, label: &str, sync: &Arc<SyncRunner>) {
     let label: Arc<str> = Arc::from(label);
 
-    let upload_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
-    let download_started: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
-        Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
-
     let upload_ctx = Arc::new(TransferContext {
         sync: sync.clone(),
         app: app.clone(),
         label: Arc::clone(&label),
-        started_set: Arc::clone(&upload_started),
         direction: TransferDirection::Upload,
     });
     let download_ctx = Arc::new(TransferContext {
         sync: sync.clone(),
         app: app.clone(),
         label: Arc::clone(&label),
-        started_set: Arc::clone(&download_started),
         direction: TransferDirection::Download,
     });
 
