@@ -31,6 +31,32 @@ interface TauriError {
  * }
  * ```
  */
+/**
+ * Match a Tauri-serialized `AppError` against the structured
+ * `{ kind: "NotReady", message: <substring> }` shape. Use this in catch
+ * blocks instead of ad-hoc `err.message.includes(...)` checks — `err`
+ * from `invoke()` failures is a plain object (not an `Error` instance),
+ * so substring matching against `err.message` is brittle and easy to
+ * get wrong.
+ *
+ * `messageSubstring` is matched case-insensitively against the Display
+ * output of the corresponding `NotReadyKind` variant — e.g. pass
+ * `"insufficient credits"` to detect `NotReadyKind::InsufficientCredits`.
+ * Omit it (or pass `undefined`) to match any `NotReady` variant.
+ */
+export function isNotReady(
+  error: unknown,
+  messageSubstring?: string
+): boolean {
+  const e = error as TauriError | null;
+  if (e?.kind !== "NotReady") return false;
+  if (messageSubstring === undefined) return true;
+  return (
+    typeof e.message === "string" &&
+    e.message.toLowerCase().includes(messageSubstring.toLowerCase())
+  );
+}
+
 export function dispatchSigningError(
   error: unknown,
   onReAuth: () => void

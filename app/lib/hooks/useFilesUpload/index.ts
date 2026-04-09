@@ -95,8 +95,16 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         throw new Error("Sync path not configured. Please set a sync folder first.");
       }
 
-      // Single Rust call: adds all files + triggers sync
-      const result = await invoke<{ added: string[]; failed: Array<{ name: string; error: string }> }>("add_files", { syncPath, filePaths });
+      // Single Rust call: adds all files + triggers sync.
+      // `forFolder: false` because this hook is used for loose
+      // multi-file uploads (drag/drop, file picker) — never for the
+      // folder-upload flow which goes through `UploadFilesFlow`. The
+      // IPC enforces `FileUpload` credit eligibility accordingly.
+      const result = await invoke<{ added: string[]; failed: Array<{ name: string; error: string }> }>("add_files", {
+        syncPath,
+        filePaths,
+        forFolder: false,
+      });
 
       // Show result AFTER the work completes
       toast.dismiss(localToastId);

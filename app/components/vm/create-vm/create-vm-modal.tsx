@@ -95,6 +95,13 @@ const CreateVMModal: React.FC<Props> = ({
   // Use create VM mutation
   const { mutateAsync: createVM, isPending: isCreatingVM } = useCreateVM();
 
+  // Tracks the in-flight `check_action_eligibility` IPC so the submit
+  // button shows a disabled/loading state during the round-trip. Without
+  // this the button would appear instantly clickable while the live
+  // balance check is running, which regressed the legacy
+  // `isCreditsLoading || isCreditsFetching` UX.
+  const [isChecking, setIsChecking] = useState(false);
+
   // Live credit eligibility check (replaces the legacy hardcoded
   // `creditsNumber < 10` JSX comparison and the stale-cache
   // `useUserCredits` read). The threshold lives in Rust at
@@ -282,7 +289,14 @@ const CreateVMModal: React.FC<Props> = ({
       // Live Rust eligibility check. Threshold (≥ 10 credits) lives in
       // `crate::billing::eligibility::thresholds::VM_CREATION` — the
       // only place that number is allowed to live now.
-      if (!(await checkEligibility("vm-creation"))) {
+      setIsChecking(true);
+      let eligible = false;
+      try {
+        eligible = await checkEligibility("vm-creation");
+      } finally {
+        setIsChecking(false);
+      }
+      if (!eligible) {
         return;
       }
 
@@ -593,11 +607,13 @@ const CreateVMModal: React.FC<Props> = ({
                       <Button
                         className={`flex gap-x-2 items-center  h-[3.75rem] w-full`}
                         onClick={handleSubmit}
-                        disabled={isLoading || isCreatingVM}
+                        disabled={isLoading || isCreatingVM || isChecking}
                       >
                         {" "}
                         <div className="font-medium text-base leading-[1.375rem] tracking-tight">
-                          {isCreatingVM
+                          {isChecking
+                            ? "Checking credits..."
+                            : isCreatingVM
                             ? "Creating..."
                             : "Create Virtual Machine"}
                         </div>
@@ -606,7 +622,7 @@ const CreateVMModal: React.FC<Props> = ({
                       <Button2
                         className="bg-grey-100  border border-grey-80 text-grey-10 w-full my-4 text-lg font-medium h-[3.5rem] hover:bg-grey-80 transition"
                         onClick={handleBack}
-                        disabled={isLoading || isCreatingVM}
+                        disabled={isLoading || isCreatingVM || isChecking}
                       >
                         Go Back
                       </Button2>

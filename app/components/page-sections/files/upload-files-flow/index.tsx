@@ -17,6 +17,7 @@ import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
+import { isNotReady } from "@/lib/utils/dispatchTauriError";
 
 // ── Shared types ───────────────────────────────────────────────────────────────
 
@@ -77,25 +78,12 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
   const resetFn = !isFolder ? props.reset : undefined;
   const { upload } = useFilesUpload({
     onError(err) {
-      // Tauri serializes `AppError` as `{ kind, message }`. When the
-      // Rust side raises `NotReady(InsufficientCredits)` from
-      // `require_eligible(...)?`, the catch block here receives the
-      // raw object, not an Error instance — match on the structured
-      // shape instead of the (legacy, brittle) substring on
-      // `err.message`. The kind discriminant comes from
-      // `crate::error::NotReadyKind::INSUFFICIENT_CREDITS` and the
-      // message is a stable string from the Display impl.
-      if (
-        typeof err === "object" &&
-        err !== null &&
-        "kind" in err &&
-        (err as { kind: string }).kind === "NotReady" &&
-        "message" in err &&
-        typeof (err as { message: unknown }).message === "string" &&
-        (err as { message: string }).message
-          .toLowerCase()
-          .includes("insufficient credits")
-      ) {
+      // The Rust `require_eligible(...)?` gate inside `add_files` raises
+      // `NotReady(InsufficientCredits)` when the user can't afford the
+      // upload. `invoke()` failures arrive here as plain objects, not
+      // `Error` instances, so match on the structured `{ kind, message }`
+      // shape via `isNotReady` instead of brittle substring checks.
+      if (isNotReady(err, "insufficient credits")) {
         setInsufficient(isFolder ? "folder-upload" : "file-upload");
         resetFn?.();
       }
@@ -330,11 +318,15 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       const baseSyncPath =
         syncBasePath || ((await getPrivateSyncPath(polkadotAddress ?? undefined))?.path ?? "");
 
-      // Single batch call — Rust handles subfolder join, file copy, and sync trigger
+      // Single batch call — Rust handles subfolder join, file copy, and sync trigger.
+      // `forFolder: true` because this code path is reached only from the
+      // folder-upload flow (`uploadFilesFolder` above bails for non-folder
+      // mode), so the IPC enforces `FolderUpload` credit eligibility.
       const result = await invoke<{ added: string[]; failed: Array<{ name: string; error: string }> }>("add_files", {
         syncPath: baseSyncPath,
         filePaths: processedPaths,
         subfolder: props.subfolder ?? null,
+        forFolder: true,
       });
 
       toast.dismiss(loadingToastId);

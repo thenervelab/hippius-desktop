@@ -130,6 +130,12 @@ pub struct ActionEligibility {
 /// `require_eligible` helper). Returns the structured eligibility
 /// rather than an error so it can be used for both proactive UI
 /// queries and IPC enforcement.
+///
+/// Order matters: marketplace credits are fetched FIRST (always), so
+/// `ActionEligibility::current_balance` is always accurate regardless
+/// of which check fails. The chain-balance check happens AFTER and only
+/// for actions that need to sign an extrinsic — and even then, an
+/// already-failed credit check short-circuits.
 pub(crate) async fn check_action_eligibility_inner(
     state: &crate::app_state::AppState,
     account_id: &str,
@@ -138,9 +144,35 @@ pub(crate) async fn check_action_eligibility_inner(
     let pool = state.pool()?;
     let required = action.min_credits();
 
-    // 1. Chain balance check (only for actions that sign extrinsics).
-    //    Mirrors the existing `check_sync_eligibility` substrate path.
-    //    Clone the Arc and drop the lock guard before any .await.
+    // 1. Live marketplace credit fetch. NO caching — the whole point of
+    //    moving this to Rust is to fix the staleness bug. Done first
+    //    so `current_balance` is always populated even when a later
+    //    check fails.
+    let client = ApiClient::new(state.api_client.clone(), pool.clone());
+    let resp: serde_json::Value = client.get("/api/billing/credits/balance/", account_id).await?;
+    let credit_str = resp.get("balance").and_then(|v| v.as_str()).unwrap_or("0");
+    let credits: f64 = credit_str.parse().unwrap_or(0.0);
+
+    // 2. Threshold comparison. The user must always have a strictly
+    //    positive balance (matches legacy `credits <= BigInt(0)` blocks
+    //    in `useCreditCheck`), AND if there's a non-zero threshold the
+    //    balance must meet it (matches legacy `creditsNumber < 10` for
+    //    VM creation). Both legacy semantics combined into one check
+    //    that doesn't require a float-equality comparison against zero.
+    let credits_ok = credits > 0.0 && (required <= 0.0 || credits >= required);
+    if !credits_ok {
+        return Ok(ActionEligibility {
+            eligible: false,
+            reason: Some("insufficient_credits".into()),
+            current_balance: credits,
+            required_balance: required,
+        });
+    }
+
+    // 3. Chain balance check (only for actions that sign extrinsics —
+    //    currently just `VmCreation`). Mirrors the existing
+    //    `check_sync_eligibility` substrate path. Clone the Arc and
+    //    drop the lock guard before any .await.
     if action.requires_chain_balance() {
         let substrate_client = {
             let guard = state.blockchain.client.read().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -158,7 +190,11 @@ pub(crate) async fn check_action_eligibility_inner(
                     return Ok(ActionEligibility {
                         eligible: false,
                         reason: Some("balance_zero".into()),
-                        current_balance: 0.0,
+                        // `current_balance` correctly reflects the
+                        // marketplace credit balance (not zero) — the
+                        // user has credits, they just don't have chain
+                        // balance to pay the extrinsic fee.
+                        current_balance: credits,
                         required_balance: required,
                     });
                 }
@@ -166,36 +202,12 @@ pub(crate) async fn check_action_eligibility_inner(
         }
     }
 
-    // 2. Live marketplace credit fetch. NO caching — the whole point of
-    //    moving this to Rust is to fix the staleness bug.
-    let client = ApiClient::new(state.api_client.clone(), pool.clone());
-    let resp: serde_json::Value = client.get("/api/billing/credits/balance/", account_id).await?;
-    let credit_str = resp.get("balance").and_then(|v| v.as_str()).unwrap_or("0");
-    let credits: f64 = credit_str.parse().unwrap_or(0.0);
-
-    // 3. Threshold comparison. The user must always have a strictly
-    //    positive balance (matches legacy `credits <= BigInt(0)` blocks
-    //    in `useCreditCheck`), AND if there's a non-zero threshold the
-    //    balance must meet it (matches legacy `creditsNumber < 10` for
-    //    VM creation). Both legacy semantics combined into one check
-    //    that doesn't require a float-equality comparison against zero.
-    let eligible = credits > 0.0 && (required <= 0.0 || credits >= required);
-
-    if eligible {
-        Ok(ActionEligibility {
-            eligible: true,
-            reason: None,
-            current_balance: credits,
-            required_balance: required,
-        })
-    } else {
-        Ok(ActionEligibility {
-            eligible: false,
-            reason: Some("insufficient_credits".into()),
-            current_balance: credits,
-            required_balance: required,
-        })
-    }
+    Ok(ActionEligibility {
+        eligible: true,
+        reason: None,
+        current_balance: credits,
+        required_balance: required,
+    })
 }
 
 /// Tauri command for the proactive eligibility check. Called by the

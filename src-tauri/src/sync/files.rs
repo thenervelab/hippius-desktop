@@ -415,6 +415,22 @@ pub struct AddFilesResult {
     pub failed: Vec<FileDeleteError>,
 }
 
+/// Batch file/folder add operation. Used by both the loose multi-file
+/// upload path (`useFilesUpload::upload` — drag/drop, multi-select) and
+/// the folder-upload path (`UploadFilesFlow::uploadFilesFolder`).
+///
+/// The `for_folder` parameter classifies the batch so the credit
+/// eligibility check uses the right action. FE callers MUST set it
+/// correctly:
+///
+/// - `false` for loose multi-file uploads → `FileUpload` action
+/// - `true` for folder uploads (the entire folder is one billable
+///   unit) → `FolderUpload` action
+///
+/// The thresholds for both actions are identical today (`> 0`), but
+/// pricing for folder uploads can diverge in the future and the gate
+/// would silently use the wrong threshold if the FE classified
+/// incorrectly.
 #[tauri::command]
 pub async fn add_files(
     app: AppHandle,
@@ -422,6 +438,7 @@ pub async fn add_files(
     sync_path: String,
     file_paths: Vec<String>,
     subfolder: Option<String>,
+    for_folder: bool,
 ) -> Result<AddFilesResult> {
     // Enforce credit eligibility once for the whole batch at the IPC
     // boundary. The per-file `add_file_internal` calls inside the loop
@@ -430,12 +447,12 @@ pub async fn add_files(
     let account_id = state
         .current_account_id()
         .map_err(crate::error::AppError::Other)?;
-    crate::billing::eligibility::require_eligible(
-        &state,
-        &account_id,
-        crate::billing::eligibility::InsufficientCreditsAction::FileUpload,
-    )
-    .await?;
+    let action = if for_folder {
+        crate::billing::eligibility::InsufficientCreditsAction::FolderUpload
+    } else {
+        crate::billing::eligibility::InsufficientCreditsAction::FileUpload
+    };
+    crate::billing::eligibility::require_eligible(&state, &account_id, action).await?;
 
     // When a subfolder is specified, resolve the effective target directory.
     // This replaces the path-join logic that was previously in TypeScript.
