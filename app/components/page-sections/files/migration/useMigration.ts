@@ -193,8 +193,13 @@ export function useMigration(): UseMigrationReturn {
 
       appStore.set(migrationLockAtom, true);
 
+      // Derive the folder label from the user-chosen sync path directory name.
+      const migrationState = appStore.get(migrationCheckAtom);
+      const syncPath = migrationState.syncPath;
+      const label = syncPath ? syncPath.split("/").filter(Boolean).pop() ?? "default" : "default";
+
       try {
-        await invoke("start_server_migration", { accountId, totalSize });
+        await invoke("start_server_migration", { accountId, totalSize, label });
 
         // Dismiss any open dialogs and activate the banner
         setCurrentStep(null);
@@ -298,9 +303,12 @@ export function useMigration(): UseMigrationReturn {
     if (accountId) {
       try {
         const migrationState = appStore.get(migrationCheckAtom);
+        const syncPath = migrationState.syncPath;
+        const label = syncPath ? syncPath.split("/").filter(Boolean).pop() ?? "default" : "default";
         await invoke("complete_migration_transition", {
           accountId,
-          customSyncPath: migrationState.syncPath,
+          customSyncPath: syncPath,
+          label,
         });
         appStore.set(syncEngineStatusAtom, "active");
         appStore.set(isSyncConfiguredAtom, true);

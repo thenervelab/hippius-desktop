@@ -454,25 +454,28 @@ pub fn get_default_migration_path() -> Result<String> {
 /// Complete the migration lifecycle: ensure a sync path exists, initialize
 /// the default drive, and mark migration as completed.
 ///
-/// If no sync path for "default" exists (common for new users going through
-/// migration), one is created automatically at `~/Documents/Hippius-Migration-YYYY-MM-DD`.
-/// The migration status is marked "completed" only after `initialize_sync`
-/// succeeds, so a failed init can be retried.
+/// If no sync path for the given label exists (common for new users going
+/// through migration), one is created automatically at
+/// `~/Documents/Hippius-Migration-YYYY-MM-DD`. The migration status is
+/// marked "completed" only after `initialize_sync` succeeds, so a failed
+/// init can be retried.
 #[tauri::command]
 pub async fn complete_migration_transition(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     custom_sync_path: Option<String>,
+    label: String,
 ) -> Result<crate::sync::lifecycle::InitSyncResult> {
+    let label = crate::sync::folders::sanitize_label(&label)?;
     let pool = state.pool()?;
 
     // 1. Clear migration-in-progress flag so initialize_sync isn't blocked.
     state.migration.in_progress.store(false, Ordering::SeqCst);
 
-    // 2. Ensure a sync path exists for "default". New migration users won't
+    // 2. Ensure a sync path exists for the label. New migration users won't
     //    have one yet; existing users who already configured sync will.
-    let has_sync_path = crate::sync::config::get_sync_path_for_label(pool, &account_id, "default").await.is_ok();
+    let has_sync_path = crate::sync::config::get_sync_path_for_label(pool, &account_id, &label).await.is_ok();
 
     if !has_sync_path {
         let sync_path = match custom_sync_path.filter(|p| !p.is_empty()) {
@@ -481,32 +484,22 @@ pub async fn complete_migration_transition(
         };
         std::fs::create_dir_all(&sync_path)?;
         let path_str = sync_path.to_string_lossy().to_string();
-        crate::sync::paths::set_sync_path_internal(pool, &account_id, &path_str, false, Some("default")).await?;
-        info!("Created default sync path at '{}' for migration completion", path_str);
+        crate::sync::paths::set_sync_path_internal(pool, &account_id, &path_str, false, Some(&label)).await?;
+        info!("Created sync path at '{}' for migration label '{}'", path_str, label);
     } else if custom_sync_path.as_ref().is_some_and(|p| !p.is_empty()) {
-        warn!("custom_sync_path provided but sync path already exists for 'default'; ignoring custom path");
+        warn!("custom_sync_path provided but sync path already exists for '{}'; ignoring custom path", label);
     }
 
-    // 3. Initialize the "default" drive and start the sync loop.
-    // Resolve the mnemonic via the unified chain (cache → disk → drive → DB).
-    // For fresh migration users the master file isn't on disk yet, so we must
-    // pass the resolved mnemonic explicitly — initialize_sync_inner does NOT
-    // call get_mnemonic_for_account itself, it only consults its parameter
-    // and the on-disk master_enc_mnemonic.json.
-    // get_mnemonic_for_account returns Zeroizing<String>; deref-clone to unwrap
-    // into a plain String for initialize_sync (which takes Option<String>).
-    // The Zeroizing wrapper is dropped here, wiping the intermediate copy.
+    // 3. Initialize the drive for the migration label.
     let mnemonic_z = crate::sync::mnemonic::get_mnemonic_for_account(&state, &account_id).await?;
     let mnemonic = (*mnemonic_z).clone();
     drop(mnemonic_z);
-    let result = crate::sync::lifecycle::initialize_sync(app, account_id.clone(), "default".to_string(), Some(mnemonic)).await?;
+    let result = crate::sync::lifecycle::initialize_sync(app, account_id.clone(), label.clone(), Some(mnemonic)).await?;
 
     // 4. Mark migration as completed ONLY after sync init succeeds.
-    //    If init fails, the ? above propagates the error and this line
-    //    never runs — the user can retry or set up sync manually.
     let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
     upsert_migration_status(pool, &account_id, "completed", 0, 0, "[]", "", &server_url).await?;
-    info!("Migration completed for account {account_id}");
+    info!("Migration completed for account {account_id}, label '{label}'");
 
     Ok(result)
 }
@@ -594,14 +587,14 @@ pub async fn start_server_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     total_size: u64,
+    label: String,
 ) -> Result<StartServerMigrationResult> {
-    tracing::info!("[Migration] Starting server migration for account {account_id}, total_size={total_size}");
+    let label = crate::sync::folders::sanitize_label(&label)?;
+    tracing::info!("[Migration] Starting server migration for account {account_id}, label={label}, total_size={total_size}");
     state.migration.in_progress.store(true, Ordering::SeqCst);
     state.migration.poll_failure_count.store(0, Ordering::SeqCst);
 
-    // Migrated files always land in the "default" folder — the only
-    // user-visible drive label after migration completes.
-    let folder_hash = hcfs_client::drive::keys::folder_hash("default");
+    let folder_hash = hcfs_client::drive::keys::folder_hash(&label);
     let pool = state.pool()?;
 
     let server_url = get_server_url(pool, &account_id).await.map_err(|e| {
@@ -618,22 +611,13 @@ pub async fn start_server_migration(
     let path_prefix = String::new();
 
     // Check disk space — files will be downloaded locally after server migration
-    let sync_path = crate::sync::config::get_sync_path_for_label(pool, &account_id, "default")
+    let sync_path = crate::sync::config::get_sync_path_for_label(pool, &account_id, &label)
         .await
         .unwrap_or_else(|_| dirs::home_dir().map(|h| h.to_string_lossy().to_string()).unwrap_or_default());
     let sync_dir = std::path::Path::new(&sync_path);
     if sync_dir.exists() {
         check_disk_space(sync_dir, total_size)?;
     }
-
-    // Derive the display label from the sync path's directory name.
-    // Sent to the server so the folder registry shows the user's
-    // chosen folder name instead of "default".
-    let display_label = sync_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("default")
-        .to_string();
 
     // Recover the master mnemonic via the unified resolver. It checks the
     // in-memory AuthInfo cache first (populated at login/unlock), then
@@ -666,9 +650,9 @@ pub async fn start_server_migration(
     let seed = mnemonic.to_seed("");
 
     // Derive the folder-specific encryption key — the Drive decrypts using
-    // a key derived from derive_folder_mnemonic(master, "default"), NOT the
+    // a key derived from derive_folder_mnemonic(master, label), NOT the
     // raw master seed. The server must encrypt with the same derived key.
-    let folder_mnemonic_str = hcfs_client::drive::keys::derive_folder_mnemonic(&mnemonic.to_string(), "default").map_err(|e| {
+    let folder_mnemonic_str = hcfs_client::drive::keys::derive_folder_mnemonic(&mnemonic.to_string(), &label).map_err(|e| {
         tracing::error!("[Migration] Failed to derive folder mnemonic: {e}");
         crate::error::AppError::Other(format!("Failed to derive folder mnemonic: {e}"))
     })?;
@@ -726,7 +710,7 @@ pub async fn start_server_migration(
             "s3_secret_key": s3_secret_key,
             "signature": signature.to_bytes().to_vec(),
             "signing_key": signing_key.verifying_key().to_bytes().to_vec(),
-            "label": display_label,
+            "label": label,
         }))
         .send()
         .await
@@ -766,7 +750,7 @@ pub async fn start_server_migration(
                     "s3_secret_key": s3_secret_key,
                     "signature": signature.to_bytes().to_vec(),
                     "signing_key": signing_key.verifying_key().to_bytes().to_vec(),
-                    "label": display_label,
+                    "label": label,
                 }))
                 .send()
                 .await
