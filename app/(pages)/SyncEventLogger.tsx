@@ -2,21 +2,21 @@
 
 import { useSyncEvents } from "@/lib/hooks/useSyncEvents";
 import { useSyncSnapshotListener } from "@/lib/hooks/useSyncSnapshot";
-import { useSyncEngineStatus } from "@/lib/hooks/useSyncEngineStatus";
+import { useDriveStatuses } from "@/lib/hooks/useDriveStatuses";
 
 /**
  * Invisible component that mounts the cross-cutting sync hooks:
  * - `useSyncEvents()` — Tauri event listeners for sync lifecycle logging.
  * - `useSyncSnapshotListener()` — push-based progress snapshots.
- * - `useSyncEngineStatus()` — single producer for `syncEngineStatusAtom`,
- *   subscribed to the Rust-owned status. Replaces the old
- *   `is_drive_active` race in `FilesContainer.tsx`.
+ * - `useDriveStatuses()` — single producer for `driveStatusesAtom`,
+ *   subscribed to the per-drive Rust events. Replaces the old global
+ *   per-drive status hook (replaces the deleted global engine-status hook).
  *
  * Must be rendered within an authenticated layout.
  */
 export default function SyncEventLogger() {
   useSyncEvents();
   useSyncSnapshotListener();
-  useSyncEngineStatus();
+  useDriveStatuses();
   return null;
 }

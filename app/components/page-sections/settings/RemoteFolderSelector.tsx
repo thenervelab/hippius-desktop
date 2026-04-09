@@ -94,8 +94,8 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
         throw new Error(result.error ?? "Unknown error");
       }
 
-      // Engine status flips to "active" via the SYNC_ENGINE_STATUS_CHANGED
-      // event from Rust — see useSyncEngineStatus.
+      // Per-drive Active status is emitted by Rust via the
+      // hcfs_drive_status_changed event — see useDriveStatuses.
       appStore.set(isSyncConfiguredAtom, true);
 
       toast.success(`Started syncing ${selectedFolder.folderName}`);

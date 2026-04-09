@@ -76,8 +76,8 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
         mnemonic: mnemonic ?? null,
       });
 
-      // Engine status flips to "active" via the SYNC_ENGINE_STATUS_CHANGED
-      // event from Rust — see useSyncEngineStatus.
+      // Per-drive Active status is emitted by Rust via the
+      // hcfs_drive_status_changed event — see useDriveStatuses.
       appStore.set(isSyncConfiguredAtom, true);
 
       toast.success("Folder added to sync");

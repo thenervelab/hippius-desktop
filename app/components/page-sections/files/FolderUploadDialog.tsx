@@ -20,7 +20,7 @@ import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteSto
 import { GET_USER_IPFS_FILES_QUERY_KEY } from "@/app/lib/hooks/use-user-files";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
-import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { getLastBrowseDirectory, saveLastBrowseDirectory } from "@/lib/utils/userPreferencesDb";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
@@ -41,7 +41,7 @@ export default function FolderUploadDialog({
 }: Props) {
     const { polkadotAddress } = useWalletAuth();
     const queryClient = useAtomValue(queryClientAtom);
-    const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
+    const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
     const { checkEligibility } = useCreditCheck();
 
     const [folderPath, setFolderPath] = useState<string>("");
@@ -86,8 +86,8 @@ export default function FolderUploadDialog({
             return;
         }
 
-        if (syncEngineStatus === "stopped") {
-            toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading folders.");
+        if (!hasConfiguredDrives) {
+            toast.warning("Set up a sync folder in Settings \u2192 Sync & Storage before uploading.");
             return;
         }
 

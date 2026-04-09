@@ -23,7 +23,7 @@ import PrivacyBadge from "@/components/ui/PrivacyBadge";
 
 import { cn } from "@/lib/utils";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
-import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
@@ -64,7 +64,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       uploadToIpfsAndSubmitToBlockcahinRequestStateAtom
     );
     const isLoading = uploadingState !== "idle";
-    const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
+    const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
     const { checkEligibility } = useCreditCheck();
 
     // Expose methods to parent components
@@ -73,8 +73,8 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       () => ({
         openWithFiles: async (files: FileList) => {
           if (!(await checkEligibility("file-upload"))) return;
-          if (syncEngineStatus === "stopped") {
-            toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading files.");
+          if (!hasConfiguredDrives) {
+            toast.warning("Set up a sync folder in Settings \u2192 Sync & Storage before uploading.");
             return;
           }
           setDroppedPaths(null);
@@ -83,8 +83,8 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         },
         openWithPaths: async (paths: string[]) => {
           if (!(await checkEligibility("file-upload"))) return;
-          if (syncEngineStatus === "stopped") {
-            toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading files.");
+          if (!hasConfiguredDrives) {
+            toast.warning("Set up a sync folder in Settings \u2192 Sync & Storage before uploading.");
             return;
           }
           setDroppedFiles(null);
@@ -93,7 +93,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         },
         isDialogOpen: () => isOpen
       }),
-      [isOpen, syncEngineStatus, checkEligibility]
+      [isOpen, hasConfiguredDrives, checkEligibility]
     );
 
     // Memoize title to prevent recalculation
@@ -162,8 +162,8 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           onClick={async () => {
             if (IS_SYNC_PAUSED) return;
             if (!(await checkEligibility("file-upload"))) return;
-            if (syncEngineStatus === "stopped") {
-              toast.warning("Syncing is stopped. Resume syncing from Settings → Sync & Storage before uploading files.");
+            if (!hasConfiguredDrives) {
+              toast.warning("Set up a sync folder in Settings → Sync & Storage before uploading.");
               return;
             }
             setDroppedFiles(null);

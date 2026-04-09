@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { saveHcfsConfig } from "@/lib/utils/hcfsConfigUtils";
-import { syncEngineStatusAtom, isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { migrationCheckAtom, migrationLockAtom, migrationProgressAtom, RESET_MIGRATION_CHECK_STATE } from "@/lib/global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -310,7 +310,10 @@ export function useMigration(): UseMigrationReturn {
           customSyncPath: syncPath,
           label,
         });
-        appStore.set(syncEngineStatusAtom, "active");
+        // Per-drive Active status is emitted by Rust automatically
+        // when complete_migration_transition kicks off the sync init —
+        // useDriveStatuses picks it up via the DRIVE_STATUS_CHANGED
+        // event. No FE-side write needed.
         appStore.set(isSyncConfiguredAtom, true);
       } catch (err) {
         console.error("[Migration] complete_migration_transition failed:", err);

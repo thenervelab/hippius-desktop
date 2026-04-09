@@ -230,8 +230,8 @@ export default function MultiFolderSyncManager() {
       const mnemonic = (await getMnemonic()) ?? undefined;
       await invoke("resume_drive", { label: folder.id, mnemonic });
 
-      // Engine status flips to "active" via the SYNC_ENGINE_STATUS_CHANGED
-      // event from Rust — see useSyncEngineStatus.
+      // Per-drive Active status is emitted by Rust via the
+      // hcfs_drive_status_changed event — see useDriveStatuses.
       appStore.set(isSyncConfiguredAtom, true);
 
       toast.success(`Sync resumed for "${folder.folderName}"`);
@@ -296,8 +296,8 @@ export default function MultiFolderSyncManager() {
         throw new Error(result.error ?? "Unknown error");
       }
 
-      // Engine status flips to "active" via the SYNC_ENGINE_STATUS_CHANGED
-      // event from Rust — see useSyncEngineStatus.
+      // Per-drive Active status is emitted by Rust via the
+      // hcfs_drive_status_changed event — see useDriveStatuses.
       appStore.set(isSyncConfiguredAtom, true);
 
       // Apply any pending exclusion patterns from the browse dialog

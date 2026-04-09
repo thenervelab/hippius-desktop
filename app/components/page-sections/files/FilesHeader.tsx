@@ -18,7 +18,7 @@ import FilterPills from "./FilterPills";
 import { FileTypes } from "@/lib/types/fileTypes";
 import { IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import { useAtomValue } from "jotai";
-import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
@@ -91,7 +91,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   const [isFolderUploadOpenLocal, setIsFolderUploadOpenLocal] = useState(false);
   const isFolderUploadOpen = isFolderUploadOpenProp ?? isFolderUploadOpenLocal;
   const setIsFolderUploadOpen = onSetFolderUploadOpen ?? setIsFolderUploadOpenLocal;
-  const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
+  const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
   const { checkEligibility } = useCreditCheck();
 
   const { navigateToFilesView } = useFilesNavigation();
@@ -215,8 +215,8 @@ const FilesHeader: FC<FilesHeaderProps> = ({
               <button
                 onClick={async () => {
                   if (!(await checkEligibility("folder-upload"))) return;
-                  if (syncEngineStatus === "stopped") {
-                    toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading folders.");
+                  if (!hasConfiguredDrives) {
+                    toast.warning("Set up a sync folder in Settings \u2192 Sync & Storage before uploading.");
                     return;
                   }
                   setIsFolderUploadOpen(true);

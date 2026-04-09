@@ -48,7 +48,6 @@ import {
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
-import { SyncStoppedAlert } from "@/components/ui/SyncStoppedAlert";
 import { SyncConnectivityAlert } from "@/components/ui/SyncConnectivityAlert";
 import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
 import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
@@ -142,10 +141,9 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
   const isSyncConfigured = useAtomValue(isSyncConfiguredAtom);
 
-  // Sync engine status is owned by Rust and pushed via the
-  // `useSyncEngineStatus` hook mounted in `SyncEventLogger`. The previous
-  // mount-time `is_drive_active` race + polling loop is gone — see
-  // `docs/follow-ups/fix-plan-sync-widget-and-engine-status.md`.
+  // Per-drive sync status is owned by Rust and pushed via the
+  // `useDriveStatuses` hook mounted in `SyncEventLogger`. The previous
+  // global engine-status atom and its mount-time race are gone.
 
   // HCFS sync integration
   const {
@@ -625,8 +623,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
         try {
           const mnemonic = (await getMnemonic()) ?? undefined;
           await invoke("resume_drive", { label, mnemonic });
-          // Status flips to "active" via the SYNC_ENGINE_STATUS_CHANGED
-          // event from Rust — see useSyncEngineStatus.
+          // Per-drive Active status is emitted by Rust via the
+          // hcfs_drive_status_changed event — see useDriveStatuses.
           appStore.set(isSyncConfiguredAtom, true);
           toast.success(`Sync resumed for "${label}"`);
           setPausedLabels(prev => prev.filter(l => l !== label));
@@ -884,13 +882,12 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             </div>
           )}
 
-          {/* Sync connectivity and stopped alerts */}
+          {/* Sync connectivity alert. The "Syncing is currently stopped"
+              banner that used to live here was deleted in the per-drive
+              status migration — pause is per-drive now and surfaces in
+              the 3-dot menu / settings page, not as a global banner. */}
           <div className="mb-4 space-y-2">
             <SyncConnectivityAlert variant={isRecentFiles ? "compact" : "banner"} />
-            <SyncStoppedAlert
-              variant={isRecentFiles ? "compact" : "banner"}
-              hasSyncPaths={isRecentFiles ? hasAnySyncPath : (isSyncPathConfigured ?? false)}
-            />
           </div>
 
           <FilesHeader

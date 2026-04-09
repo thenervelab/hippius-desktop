@@ -168,10 +168,10 @@ interface AutoInitResult {
  * Standalone function for use outside React components (e.g., in wallet-auth-context).
  *
  * All business logic (migration lock, mnemonic persistence, path queries,
- * HCFS config check, path filtering, user-stopped flag, sequential init)
- * lives in Rust. This function is a thin wrapper that calls Rust and
- * updates the `isSyncConfigured` atom — engine status is mirrored from
- * Rust by `useSyncEngineStatus`.
+ * HCFS config check, path filtering, sequential init) lives in Rust.
+ * This function is a thin wrapper that calls Rust and updates the
+ * `isSyncConfigured` atom — per-drive sync status is mirrored from
+ * Rust by `useDriveStatuses`.
  */
 export async function tryAutoInitSync(
   accountId: string,
@@ -186,9 +186,9 @@ export async function tryAutoInitSync(
     if (result.isConfigured) {
       appStore.set(isSyncConfiguredAtom, true);
     }
-    // Engine status is no longer set here — `auto_init_sync` emits the
-    // status via `set_status_and_emit` in Rust and the `useSyncEngineStatus`
-    // listener picks it up.
+    // Per-drive Active status is emitted by Rust from `auto_init_sync`
+    // for each successful drive init — useDriveStatuses picks them up
+    // via the hcfs_drive_status_changed event.
 
     return result.anyInitialized;
   } catch (err) {
