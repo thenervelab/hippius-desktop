@@ -28,6 +28,7 @@ import {
   driveStatusesAtom,
   type DriveEntry,
 } from "@/app/lib/global-atoms/unpinAtoms";
+import { appStore } from "@/lib/store/jotaiStore";
 import { toast } from "sonner";
 import { vpnConnectedAtom } from "@/components/dashboard-title-wrapper/vpn-menu/vpnAtoms";
 import type { SyncSnapshot } from "../types/syncSnapshot";
@@ -74,18 +75,34 @@ let syncDeleteItem: MenuItem | null = null; // "X files deleted" row
 //
 // The "Sync Folders" submenu lists every configured drive with a
 // per-drive Pause / Resume action. It's appended to the main tray
-// menu after the menu is built (see useTrayInit), and rebuilt
-// whenever `driveStatusesAtom` changes via the effect at the bottom
-// of useTrayInit.
+// menu after the menu is built (see useTrayInit), and updated
+// incrementally whenever `driveStatusesAtom` changes via the effect
+// at the bottom of useTrayInit.
 //
-// Item identity: each drive's submenu item is keyed by label so we
-// can swap one row in place during a status transition without
-// rebuilding the whole submenu.
+// Item identity: each drive's submenu item is keyed by label in
+// `driveSubmenuItems` so a status flip becomes a single setText()
+// call against the existing item, preserving its click handler.
+// This is hot-path code (every per-drive event triggers a
+// reconciliation), so the diff/patch pattern below is worth the
+// complexity over the previous full-rebuild approach.
 let driveSubmenu: Submenu | null = null;
 const driveSubmenuItems = new Map<string, MenuItem>();
+// Cached rendered text per label so we can detect when a row needs
+// a setText() (folder rename or status flip). Both kinds of change
+// are visible in the rendered string, so a single cache covers both.
+const driveSubmenuRenderedText = new Map<string, string>();
 const DRIVE_SUBMENU_ID = "drive-submenu";
 const DRIVE_SUBMENU_EMPTY_ID = "drive-submenu-empty";
 let driveSubmenuEmptyItem: MenuItem | null = null;
+
+// Serialization for rebuildDriveSubmenu. Two events firing in quick
+// succession (e.g. pause + status refresh) used to interleave their
+// `submenu.items()` calls and could miss rows. The flag below makes
+// rebuilds run one at a time; the slot coalesces multiple incoming
+// updates while a rebuild is in flight into a single tail call so
+// the latest state is always rendered.
+let isRebuildingDriveSubmenu = false;
+let pendingDriveSubmenuStatuses: Map<string, DriveEntry> | null = null;
 
 /* ─ Latching state — keeps completed info visible after backend resets snapshot */
 let latchedComplete = false;
@@ -372,109 +389,253 @@ export function useTrayInit(isAuthenticated: boolean) {
 }
 
 /**
- * Replace the contents of the Sync Folders submenu to reflect the
- * current per-drive status map. Called from a useAtomValue effect on
- * every change to `driveStatusesAtom`.
+ * Reconcile the Sync Folders submenu with the current per-drive
+ * status map. Called from a useAtomValue effect on every change to
+ * `driveStatusesAtom`.
  *
- * Strategy: drop every existing item from the submenu and re-build
- * from the map. This is simpler than diffing and the submenu rarely
- * has more than a handful of items, so the cost is negligible. The
- * placeholder "(no sync folders)" entry is restored when the map is
- * empty so the submenu is never visually broken.
+ * Strategy: incremental diff against `driveSubmenuItems`:
+ *   - Status flip on existing row → setText() in place. Cheap, the
+ *     existing click handler stays alive.
+ *   - Folder rename on existing row → setText() in place.
+ *   - Drive removed → submenu.remove() the item.
+ *   - Drive added → create a new MenuItem at the alphabetically
+ *     correct position. Maintaining sort order on insert means
+ *     removing every item from the insertion point onward and
+ *     re-appending them along with the new item; that's still
+ *     cheaper than the previous full-rebuild approach because the
+ *     common case (status flip) is now a single setText().
  *
- * Click handlers fire `pause_drive` / `resume_drive` directly. Rust
- * emits `hcfs_drive_status_changed` after the operation succeeds,
- * which round-trips through `useDriveStatuses` → `driveStatusesAtom`
- * → this effect → `rebuildDriveSubmenu`, flipping the row label.
+ * Click handlers read the current status from `appStore` at click
+ * time rather than capturing it from the outer scope, so setText-
+ * only updates can't leave a stale `isPaused` value behind.
+ *
+ * Concurrency: serialized via `isRebuildingDriveSubmenu`. If a
+ * second update arrives mid-rebuild, the latest one is recorded in
+ * `pendingDriveSubmenuStatuses` and processed as a tail call once
+ * the in-flight rebuild commits. This both (a) prevents two
+ * `submenu.items()` calls from interleaving and (b) coalesces a
+ * burst of N events into a single rebuild for the final state.
  */
 async function rebuildDriveSubmenu(
   statuses: Map<string, DriveEntry>
 ): Promise<void> {
   if (!driveSubmenu) return;
 
+  // Coalesce rapid updates into the in-flight rebuild's tail call.
+  if (isRebuildingDriveSubmenu) {
+    pendingDriveSubmenuStatuses = statuses;
+    return;
+  }
+  isRebuildingDriveSubmenu = true;
+
   try {
-    // 1. Drain the existing items. We can't use `Submenu.removeAt` in
-    //    a loop because the indices shift; iterate over the snapshot
-    //    and remove by reference.
-    const existing = await driveSubmenu.items();
-    for (const item of existing) {
+    await reconcileDriveSubmenu(statuses);
+  } catch (err) {
+    console.error("[Tray] Failed to reconcile drive submenu:", err);
+  } finally {
+    isRebuildingDriveSubmenu = false;
+  }
+
+  // Drain any state that arrived during the rebuild. Recursive call
+  // is safe — `isRebuildingDriveSubmenu` is false again by now and
+  // we're past the await boundary.
+  if (pendingDriveSubmenuStatuses) {
+    const next = pendingDriveSubmenuStatuses;
+    pendingDriveSubmenuStatuses = null;
+    void rebuildDriveSubmenu(next);
+  }
+}
+
+/**
+ * Pure-ish reconciliation step: assumes the rebuild lock is held by
+ * the caller. Mutates `driveSubmenu`, `driveSubmenuItems`, and
+ * `driveSubmenuRenderedText` to converge on `statuses`.
+ */
+async function reconcileDriveSubmenu(
+  statuses: Map<string, DriveEntry>
+): Promise<void> {
+  if (!driveSubmenu) return;
+
+  // Empty case: tear down everything and restore the placeholder.
+  // This intentionally short-circuits even if we were already in the
+  // empty state — checking for the placeholder's presence costs an
+  // extra round-trip and the empty case is rare enough not to matter.
+  if (statuses.size === 0) {
+    for (const item of driveSubmenuItems.values()) {
       await driveSubmenu.remove(item);
     }
     driveSubmenuItems.clear();
-
-    // 2. Empty case: restore the placeholder so the submenu shows
-    //    something instead of being empty.
-    if (statuses.size === 0) {
-      driveSubmenuEmptyItem = await MenuItem.new({
-        id: DRIVE_SUBMENU_EMPTY_ID,
-        text: "(no sync folders)",
-        enabled: false,
-      });
-      await driveSubmenu.append(driveSubmenuEmptyItem);
-      return;
+    driveSubmenuRenderedText.clear();
+    if (driveSubmenuEmptyItem) {
+      // Make sure no stale placeholder lingers in the submenu.
+      try {
+        await driveSubmenu.remove(driveSubmenuEmptyItem);
+      } catch {
+        // Already removed — fine.
+      }
     }
-
-    // 3. Sort by folder name for stable ordering.
-    const entries = Array.from(statuses.entries()).sort((a, b) =>
-      a[1].folderName.localeCompare(b[1].folderName)
-    );
-
-    for (const [label, entry] of entries) {
-      const isPaused = entry.status.kind === "paused";
-      const folderName = entry.folderName;
-      const text = isPaused
-        ? `${folderName} — Resume`
-        : `${folderName} — Pause`;
-      const item = await MenuItem.new({
-        id: `drive-row:${label}`,
-        text,
-        action: async () => {
-          try {
-            if (isPaused) {
-              // Mnemonic is intentionally not passed: the tray has no
-              // access to wallet auth context (would create a circular
-              // import). The Rust resume path falls back to the
-              // persisted master mnemonic for the active account, so
-              // resume from the tray works for any drive that's been
-              // unlocked at least once in this session. If the master
-              // mnemonic isn't available (fresh launch, account never
-              // unlocked), `resume_drive` errors and we surface that
-              // via toast — see the catch block below.
-              await invoke("resume_drive", { label, mnemonic: null });
-              toast.success(`Sync resumed for "${folderName}"`);
-            } else {
-              await invoke("pause_drive", { label });
-              toast.success(`Sync paused for "${folderName}"`);
-            }
-            // No local state mutation needed: Rust emits
-            // hcfs_drive_status_changed which updates the atom which
-            // triggers our rebuild effect.
-          } catch (err) {
-            console.error(
-              `[Tray] Failed to ${isPaused ? "resume" : "pause"} drive '${label}':`,
-              err
-            );
-            // The most likely cause for resume failures is that the
-            // master mnemonic isn't accessible to the tray (the
-            // account hasn't been unlocked in this session). The
-            // toast directs the user to the main app where the wallet
-            // auth context is available.
-            if (isPaused) {
-              toast.error(
-                `Failed to resume "${folderName}". Open the Settings page and try from there.`
-              );
-            } else {
-              toast.error(`Failed to pause "${folderName}".`);
-            }
-          }
-        },
-      });
-      driveSubmenuItems.set(label, item);
-      await driveSubmenu.append(item);
-    }
-  } catch (err) {
-    console.error("[Tray] Failed to rebuild drive submenu:", err);
+    driveSubmenuEmptyItem = await MenuItem.new({
+      id: DRIVE_SUBMENU_EMPTY_ID,
+      text: "(no sync folders)",
+      enabled: false,
+    });
+    await driveSubmenu.append(driveSubmenuEmptyItem);
+    return;
   }
+
+  // We're transitioning out of (or staying out of) the empty state.
+  // Drop the placeholder if it's still attached.
+  if (driveSubmenuEmptyItem) {
+    try {
+      await driveSubmenu.remove(driveSubmenuEmptyItem);
+    } catch {
+      // Already removed — fine.
+    }
+    driveSubmenuEmptyItem = null;
+  }
+
+  // Remove drives that no longer exist in the map.
+  for (const [label, item] of Array.from(driveSubmenuItems.entries())) {
+    if (!statuses.has(label)) {
+      await driveSubmenu.remove(item);
+      driveSubmenuItems.delete(label);
+      driveSubmenuRenderedText.delete(label);
+    }
+  }
+
+  // Update text on rows whose folder name or status changed. We
+  // compare against the cached rendered text — setText only fires
+  // when the displayed string actually needs to change.
+  for (const [label, entry] of statuses) {
+    const item = driveSubmenuItems.get(label);
+    if (!item) continue;
+    const desiredText = renderDriveSubmenuText(entry);
+    if (driveSubmenuRenderedText.get(label) !== desiredText) {
+      try {
+        await item.setText(desiredText);
+        driveSubmenuRenderedText.set(label, desiredText);
+      } catch (err) {
+        console.error(
+          `[Tray] Failed to update drive row '${label}':`,
+          err
+        );
+      }
+    }
+  }
+
+  // Add drives that aren't in the submenu yet. To preserve
+  // alphabetical order on insert, we remove all items that should
+  // appear after the new one and re-append them along with the
+  // new item. Status flips and renames hit the cheap path above;
+  // only true adds pay this cost, and adding a drive is rare.
+  const sortedLabels = Array.from(statuses.entries())
+    .sort(([, a], [, b]) => a.folderName.localeCompare(b.folderName))
+    .map(([label]) => label);
+
+  const missing: string[] = sortedLabels.filter(
+    (label) => !driveSubmenuItems.has(label)
+  );
+  if (missing.length === 0) return;
+
+  // Find the earliest insertion point: the first label in the
+  // sorted list that's missing from the current submenu. Everything
+  // at or after that index needs to come off so we can re-append
+  // in order.
+  const firstMissingIndex = sortedLabels.findIndex(
+    (label) => !driveSubmenuItems.has(label)
+  );
+  const labelsToReappend = sortedLabels.slice(firstMissingIndex);
+
+  // Remove existing items from the tail (those that are already in
+  // the submenu but need to come after a new sibling).
+  for (const label of labelsToReappend) {
+    const existingItem = driveSubmenuItems.get(label);
+    if (existingItem) {
+      await driveSubmenu.remove(existingItem);
+      driveSubmenuItems.delete(label);
+      driveSubmenuRenderedText.delete(label);
+    }
+  }
+
+  // Re-append everything from the insertion point in alphabetical
+  // order. New items are created here; previously-existing items
+  // are recreated (their old MenuItem references were dropped from
+  // the submenu above and the click handlers go with them, but the
+  // new handlers below capture the same label and read the current
+  // status from appStore at click time).
+  for (const label of labelsToReappend) {
+    const entry = statuses.get(label);
+    if (!entry) continue;
+    const item = await createDriveRowItem(label, entry);
+    driveSubmenuItems.set(label, item);
+    driveSubmenuRenderedText.set(label, renderDriveSubmenuText(entry));
+    await driveSubmenu.append(item);
+  }
+}
+
+function renderDriveSubmenuText(entry: DriveEntry): string {
+  return entry.status.kind === "paused"
+    ? `${entry.folderName} — Resume`
+    : `${entry.folderName} — Pause`;
+}
+
+/**
+ * Build a single drive row MenuItem. Click handler reads the current
+ * status from `appStore.get(driveStatusesAtom)` at click time so
+ * setText-only updates above don't leave a stale `isPaused` capture.
+ */
+async function createDriveRowItem(
+  label: string,
+  entry: DriveEntry
+): Promise<MenuItem> {
+  const text = renderDriveSubmenuText(entry);
+  return MenuItem.new({
+    id: `drive-row:${label}`,
+    text,
+    action: async () => {
+      // Read the current entry from the atom at click time. setText
+      // updates above keep the menu text in sync but don't replace
+      // the click handler, so capturing `isPaused` from the outer
+      // scope would let the user click "Pause" on a row whose
+      // current text says "Resume" if Rust raced ahead.
+      const currentMap = appStore.get(driveStatusesAtom);
+      const current = currentMap.get(label);
+      if (!current) {
+        // Drive disappeared between rebuild and click. Nothing to
+        // do; the next rebuild will drop the row.
+        return;
+      }
+      const folderName = current.folderName;
+      const isPaused = current.status.kind === "paused";
+      try {
+        if (isPaused) {
+          // Mnemonic is intentionally not passed: the tray has no
+          // access to wallet auth context (would create a circular
+          // import). The Rust resume path falls back to the
+          // persisted master mnemonic for the active account, so
+          // resume from the tray works for any drive that's been
+          // unlocked at least once in this session.
+          await invoke("resume_drive", { label, mnemonic: null });
+          toast.success(`Sync resumed for "${folderName}"`);
+        } else {
+          await invoke("pause_drive", { label });
+          toast.success(`Sync paused for "${folderName}"`);
+        }
+      } catch (err) {
+        console.error(
+          `[Tray] Failed to ${isPaused ? "resume" : "pause"} drive '${label}':`,
+          err
+        );
+        if (isPaused) {
+          toast.error(
+            `Failed to resume "${folderName}". Open the Settings page and try from there.`
+          );
+        } else {
+          toast.error(`Failed to pause "${folderName}".`);
+        }
+      }
+    },
+  });
 }
 
 // Add these explicit debug logs
