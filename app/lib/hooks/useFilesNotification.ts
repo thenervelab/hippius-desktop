@@ -8,7 +8,6 @@ import {
   refreshEnabledTypesAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import type { SyncSnapshot } from "@/lib/types/syncSnapshot";
 import { snapshotAtom } from "@/lib/hooks/useSyncSnapshot";
 import { appStore } from "@/lib/store/jotaiStore";
 
