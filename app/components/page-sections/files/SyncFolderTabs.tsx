@@ -51,7 +51,7 @@ const SyncFolderTabs: FC<SyncFolderTabsProps> = ({
         icon: <Icons.FolderCloud />,
       })),
     ],
-    [labels]
+    [labels, displayNames]
   );
 
   const [fileManagerLabel, setFileManagerLabel] = useState("Finder");
