@@ -23,15 +23,12 @@ interface MigrationCheckResult {
   is_in_progress: boolean;
   progress_completed: number;
   progress_total: number;
-  progress_failed: number;
 }
 
 interface PollMigrationStatusResult {
   status: string;
   total: number;
   completed: number;
-  failed: number;
-  failed_files: string[];
   current_file: string | null;
   should_warn: boolean;
   should_abort: boolean;
