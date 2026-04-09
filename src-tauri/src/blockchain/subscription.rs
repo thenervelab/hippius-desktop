@@ -80,8 +80,13 @@ pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), Strin
                             is_connected: false,
                         },
                     );
-                    // Clear the substrate client so it reconnects
-                    crate::blockchain::client::clear_substrate_client(&app_state);
+                    // Only clear the cached client on real disconnections.
+                    // On 429 the endpoint is reachable but rejecting us —
+                    // clearing the client would trigger a fresh connect_and_cache
+                    // retry loop that hammers the endpoint even harder.
+                    if !is_rate_limited {
+                        crate::blockchain::client::clear_substrate_client(&app_state);
+                    }
                     tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
                 }
             }

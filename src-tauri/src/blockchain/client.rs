@@ -22,6 +22,9 @@ use tracing::{info, warn};
 pub const WSS_ENDPOINT: &str = "wss://rpc.hippius.network";
 
 const MAX_RETRIES: usize = 10;
+/// Fewer retries for 429 — the endpoint is actively rejecting us,
+/// so hammering it with 10 attempts over 5+ minutes is wasteful.
+const MAX_RETRIES_RATE_LIMITED: usize = 3;
 
 /// Get or create the shared Substrate RPC client from `AppState.blockchain.client`.
 ///
@@ -113,16 +116,18 @@ async fn connect_and_cache(
                     Err(e) => {
                         let err_str = e.to_string();
                         let rate_limited = is_rate_limited(&err_str);
+                        let max = if rate_limited { MAX_RETRIES_RATE_LIMITED } else { MAX_RETRIES };
                         warn!(
                             attempt,
+                            max_retries = max,
                             endpoint = %wss_endpoint,
                             error = %err_str,
                             rate_limited,
                             "Failed to build OnlineClient from RPC"
                         );
-                        if attempt >= MAX_RETRIES {
+                        if attempt >= max {
                             return Err(format!(
-                                "Failed to connect to Substrate node after {MAX_RETRIES} attempts: {err_str}"
+                                "Failed to connect to Substrate node after {max} attempts: {err_str}"
                             ));
                         }
                         sleep(retry_delay(attempt, rate_limited)).await;
@@ -132,16 +137,18 @@ async fn connect_and_cache(
             Err(e) => {
                 let err_str = e.to_string();
                 let rate_limited = is_rate_limited(&err_str);
+                let max = if rate_limited { MAX_RETRIES_RATE_LIMITED } else { MAX_RETRIES };
                 warn!(
                     attempt,
+                    max_retries = max,
                     endpoint = %wss_endpoint,
                     error = %err_str,
                     rate_limited,
                     "Failed to connect to Substrate node"
                 );
-                if attempt >= MAX_RETRIES {
+                if attempt >= max {
                     return Err(format!(
-                        "Failed to connect to Substrate node after {MAX_RETRIES} attempts: {err_str}"
+                        "Failed to connect to Substrate node after {max} attempts: {err_str}"
                     ));
                 }
                 sleep(retry_delay(attempt, rate_limited)).await;
