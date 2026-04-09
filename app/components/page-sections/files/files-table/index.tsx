@@ -154,27 +154,31 @@ const FilesTable: FC<FilesTableProps> = memo(
     // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads.
     // Also suppress the "pending" upload arrow for files that just finished downloading
     // (they appear locally before the synced-set updates, so the backend marks them "pending").
+    //
+    // Matching uses the snapshot `path` field (full relative path from sync root,
+    // e.g. "subfolder/file.txt") against `actualFileName` — NOT `fileName` (basename
+    // only) which would collide across subfolders.
     const snapshot = useSyncSnapshot();
     const enrichedAllFiles = useMemo(() => {
       if (!snapshot.isActive && snapshot.files.length === 0) return allFiles;
 
       // Active/pending files → show directional arrow
-      const actionByName = new Map<string, "upload" | "download">();
+      const actionByPath = new Map<string, "upload" | "download">();
       // Recently-completed downloads → suppress false "pending upload" arrow
       const completedDownloads = new Set<string>();
 
       for (const f of snapshot.files) {
         if (f.status !== "completed" && (f.action === "upload" || f.action === "download")) {
-          actionByName.set(f.fileName, f.action);
+          actionByPath.set(f.path, f.action);
         } else if (f.status === "completed" && f.action === "download") {
-          completedDownloads.add(f.fileName);
+          completedDownloads.add(f.path);
         }
       }
-      if (actionByName.size === 0 && completedDownloads.size === 0) return allFiles;
+      if (actionByPath.size === 0 && completedDownloads.size === 0) return allFiles;
 
       return allFiles.map((file) => {
-        const actualName = file.actualFileName || file.name;
-        const action = actionByName.get(actualName);
+        const relativePath = file.actualFileName || file.name;
+        const action = actionByPath.get(relativePath);
         if (action) {
           const liveSyncStatus: FormattedUserFile["syncStatus"] =
             action === "download" ? "downloading" : "uploading";
@@ -182,7 +186,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         }
         // File just finished downloading but backend still reports "pending"
         // because the synced-set hasn't refreshed yet — mark as synced.
-        if (file.syncStatus === "pending" && completedDownloads.has(actualName)) {
+        if (file.syncStatus === "pending" && completedDownloads.has(relativePath)) {
           return { ...file, syncStatus: "synced" as const };
         }
         return file;
