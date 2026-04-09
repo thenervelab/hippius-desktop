@@ -36,7 +36,6 @@ export interface MigrationProgress {
   active: boolean;
   completed: number;
   total: number;
-  failed: number;
 }
 
 /** Tracks live migration progress for the banner. */
@@ -44,5 +43,4 @@ export const migrationProgressAtom = atom<MigrationProgress>({
   active: false,
   completed: 0,
   total: 0,
-  failed: 0,
 });

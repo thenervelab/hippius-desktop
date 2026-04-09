@@ -10,13 +10,9 @@ export interface MigrationCompleteDialogProps {
   open: boolean;
   onClose: () => void;
   successCount: number;
-  failedCount: number;
   totalCount: number;
-  failedFiles?: Array<{ name: string; error: string }>;
   transitionError?: string | null;
   onDismiss?: () => void;
-  /** Server-determined success state — overrides count-based computation when counts are unavailable (resume path). */
-  migrationSucceeded?: boolean;
   /** When true, the transition is in progress — disables the action button to prevent double-invocation. */
   isTransitioning?: boolean;
 }
@@ -25,19 +21,11 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
   open,
   onClose,
   successCount,
-  failedCount,
   totalCount,
-  failedFiles = [],
   transitionError,
   onDismiss,
-  migrationSucceeded,
   isTransitioning,
 }) => {
-  const effectiveFailedCount = Math.max(failedCount, failedFiles.length);
-  // When migrationSucceeded is explicitly provided (resume path), use it as
-  // the source of truth. Otherwise compute from counts (normal path).
-  const isFullSuccess = migrationSucceeded ?? effectiveFailedCount === 0;
-  const isPartialSuccess = !isFullSuccess && successCount > 0 && effectiveFailedCount > 0;
   const router = useRouter();
 
   return (
@@ -50,48 +38,32 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
             <div className="size-14 flex justify-center items-center relative">
               <Graphsheet
                 majorCell={{
-                  lineColor: isFullSuccess ? [34, 197, 94, 1.0] : isPartialSuccess ? [234, 179, 8, 1.0] : [239, 68, 68, 1.0],
+                  lineColor: [34, 197, 94, 1.0],
                   lineWidth: 2,
                   cellDim: 200,
                 }}
                 minorCell={{
-                  lineColor: isFullSuccess ? [74, 222, 128, 1.0] : isPartialSuccess ? [250, 204, 21, 1.0] : [248, 113, 113, 1.0],
+                  lineColor: [74, 222, 128, 1.0],
                   lineWidth: 1,
                   cellDim: 20,
                 }}
                 className="absolute w-full h-full duration-500 opacity-30 z-0"
               />
               <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
-              <div className={`h-8 w-8 rounded-lg flex items-center justify-center z-20 ${
-                isFullSuccess ? "bg-success-50" : isPartialSuccess ? "bg-warning-50" : "bg-error-50"
-              }`}>
-                {isFullSuccess ? (
-                  <Icons.TickCircle className="size-5 text-white" />
-                ) : isPartialSuccess ? (
-                  <Icons.OctagonAlert className="size-5 text-white" />
-                ) : (
-                  <Icons.CloseCircle className="size-5 text-white" />
-                )}
+              <div className="h-8 w-8 bg-success-50 rounded-lg flex items-center justify-center z-20">
+                <Icons.TickCircle className="size-5 text-white" />
               </div>
             </div>
             <h2 className="text-xl font-semibold text-grey-10">
-              {isFullSuccess
-                ? "Migration Complete!"
-                : isPartialSuccess
-                ? "Migration Partially Complete"
-                : "Migration Failed"}
+              Migration Complete!
             </h2>
             <p className="text-sm text-grey-50 max-w-sm">
-              {isFullSuccess
-                ? "All your files have been successfully migrated to Hippius Drive."
-                : isPartialSuccess
-                ? "Some files could not be migrated. You can find them in your original S3 storage."
-                : "The migration could not be completed. Please try again later."}
+              All your files have been successfully migrated to Hippius Drive.
             </p>
           </div>
 
           {/* Stats */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <div className="bg-grey-95 border border-grey-80 rounded-lg p-3 text-center">
               <p className="text-2xl font-bold text-grey-20">{totalCount}</p>
               <p className="text-xs text-grey-50">Total Files</p>
@@ -100,36 +72,7 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
               <p className="text-2xl font-bold text-success-50">{successCount}</p>
               <p className="text-xs text-grey-50">Migrated</p>
             </div>
-            <div
-              className={`rounded-lg p-3 text-center ${
-                effectiveFailedCount > 0 ? "bg-error-50/10 border border-error-50/30" : "bg-grey-95 border border-grey-80"
-              }`}
-            >
-              <p
-                className={`text-2xl font-bold ${
-                  effectiveFailedCount > 0 ? "text-error-50" : "text-grey-40"
-                }`}
-              >
-                {effectiveFailedCount}
-              </p>
-              <p className="text-xs text-grey-50">Failed</p>
-            </div>
           </div>
-
-          {/* Failed Files List */}
-          {failedFiles.length > 0 && (
-            <div className="bg-error-50/5 border border-error-50/20 rounded-lg p-3 max-h-[9.375rem] overflow-y-auto">
-              <p className="text-xs font-medium text-error-50 mb-2">Failed Files</p>
-              <div className="space-y-2">
-                {failedFiles.map((file, index) => (
-                  <div key={index} className="flex flex-col gap-0.5">
-                    <span className="text-xs text-grey-30 truncate">{file.name}</span>
-                    <span className="text-xs text-error-50/70">{file.error}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* Transition Error Banner */}
           {transitionError && (
@@ -154,21 +97,12 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
                 onDismiss?.();
               } else {
                 onClose();
-                if (isFullSuccess) {
-                  router.push("/files");
-                }
+                router.push("/files");
               }
             }}
           >
-            {isFullSuccess ? "Go to My Files" : "Close"}
+            Go to My Files
           </CardButton>
-
-          {/* Help Text */}
-          {effectiveFailedCount > 0 && !transitionError && (
-            <p className="text-xs text-grey-60 text-center">
-              Failed files can still be accessed from your original S3 storage.
-            </p>
-          )}
         </div>
       </DialogContainer>
     </Dialog.Root>

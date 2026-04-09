@@ -43,11 +43,8 @@ export interface UseMigrationReturn {
   setCurrentStep: (step: MigrationStep | null) => void;
   fileCount: number;
   successCount: number;
-  failedCount: number;
-  failedFiles: Array<{ name: string; error: string }>;
   totalSize: number;
   isResuming: boolean;
-  migrationSucceeded: boolean;
   transitionError: string | null;
   isTransitioning: boolean;
   checkMigration: (accountId: string) => Promise<boolean>;
@@ -73,11 +70,6 @@ export function useMigration(): UseMigrationReturn {
   const unlistenRef = useRef<UnlistenFn | null>(null);
 
   const [successCount, setSuccessCount] = useState(0);
-  const [failedCount, setFailedCount] = useState(0);
-  const [failedFiles, setFailedFiles] = useState<
-    Array<{ name: string; error: string }>
-  >([]);
-  const [migrationSucceeded, setMigrationSucceeded] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
   const [isTransitioning, setIsTransitioning] = useState(false);
 
@@ -109,42 +101,30 @@ export function useMigration(): UseMigrationReturn {
           stopPolling();
           toast.error("Lost connection to migration server. Please check your network and try again.");
           appStore.set(migrationLockAtom, false);
-          appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0, failed: 0 });
-          setMigrationSucceeded(false);
+          appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0 });
+
           setCurrentStep("complete");
           return;
         }
         if (result.status === "poll_error") return;
 
         setSuccessCount(result.completed);
-        setFailedCount(result.failed);
 
         appStore.set(migrationProgressAtom, {
           active: true,
           completed: result.completed,
           total: result.total,
-          failed: result.failed,
         });
-
-        if (result.failed_files.length > 0) {
-          setFailedFiles(
-            result.failed_files.map((name) => ({
-              name,
-              error: "Migration failed on server",
-            }))
-          );
-        }
 
         if (result.is_terminal) {
           stopPolling();
-          setMigrationSucceeded(result.status === "completed");
+
           setCurrentStep("complete");
           appStore.set(migrationLockAtom, false);
           appStore.set(migrationProgressAtom, {
             active: false,
             completed: result.completed,
             total: result.total,
-            failed: result.failed,
           });
         }
       });
@@ -170,8 +150,7 @@ export function useMigration(): UseMigrationReturn {
         if (result.needs_completion) {
           setFileCount(result.file_count);
           setSuccessCount(result.progress_completed);
-          setFailedCount(result.progress_failed);
-          setMigrationSucceeded(result.completion_status === "completed");
+
           activeAccountIdRef.current = accountId;
           setCurrentStep("complete");
           return true;
@@ -183,7 +162,6 @@ export function useMigration(): UseMigrationReturn {
             active: true,
             completed: result.progress_completed,
             total: result.progress_total,
-            failed: result.progress_failed,
           });
           appStore.set(migrationLockAtom, true);
           activeAccountIdRef.current = accountId;
@@ -211,9 +189,6 @@ export function useMigration(): UseMigrationReturn {
   const launchServerMigration = useCallback(
     async (accountId: string) => {
       setSuccessCount(0);
-      setFailedCount(0);
-      setFailedFiles([]);
-      setMigrationSucceeded(false);
 
       appStore.set(migrationLockAtom, true);
 
@@ -226,7 +201,6 @@ export function useMigration(): UseMigrationReturn {
           active: true,
           completed: 0,
           total: fileCount,
-          failed: 0,
         });
 
         startPolling(accountId);
@@ -310,7 +284,7 @@ export function useMigration(): UseMigrationReturn {
       toast.error("Failed to save your choice. Please try again.");
     }
     appStore.set(migrationCheckAtom, RESET_MIGRATION_CHECK_STATE);
-    appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0, failed: 0 });
+    appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0 });
     setCurrentStep(null);
   }, []);
 
@@ -340,16 +314,13 @@ export function useMigration(): UseMigrationReturn {
     }
 
     appStore.set(migrationLockAtom, false);
-    appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0, failed: 0 });
+    appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0 });
     appStore.set(migrationCheckAtom, RESET_MIGRATION_CHECK_STATE);
     setCurrentStep(null);
     setSuccessCount(0);
-    setFailedCount(0);
-    setFailedFiles([]);
     setTotalSize(0);
     setFileCount(0);
     setIsResuming(false);
-    setMigrationSucceeded(false);
     setTransitionError(null);
     setPendingAccountId(null);
     setIsSettingUp(false);
@@ -359,7 +330,7 @@ export function useMigration(): UseMigrationReturn {
 
   const dismissAfterError = useCallback(() => {
     appStore.set(migrationLockAtom, false);
-    appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0, failed: 0 });
+    appStore.set(migrationProgressAtom, { active: false, completed: 0, total: 0 });
     appStore.set(migrationCheckAtom, RESET_MIGRATION_CHECK_STATE);
     setCurrentStep(null);
     setTransitionError(null);
@@ -370,11 +341,8 @@ export function useMigration(): UseMigrationReturn {
     setCurrentStep,
     fileCount,
     successCount,
-    failedCount,
-    failedFiles,
     totalSize,
     isResuming,
-    migrationSucceeded,
     transitionError,
     isTransitioning,
     checkMigration,

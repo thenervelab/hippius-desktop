@@ -28,11 +28,6 @@ export default function MigrationBanner() {
           </span>
           <span className="text-xs text-grey-50">
             {formatCount(progress.completed)} / {formatCount(progress.total)}
-            {progress.failed > 0 && (
-              <span className="text-error-50 ml-2">
-                {formatCount(progress.failed)} failed
-              </span>
-            )}
           </span>
         </div>
         <ProgressBar value={percentage} className="h-1.5" />
