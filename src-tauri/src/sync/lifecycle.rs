@@ -740,9 +740,15 @@ async fn check_init_server_health(client: &reqwest::Client, server_url: &str) {
 
 /// Spawn a background task to register the folder with the server for
 /// cross-device discovery.
-fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, account_id: &str, fhash: &str, pool: &SqlitePool) {
+fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, account_id: &str, fhash: &str, pool: &SqlitePool, sync_path: &str) {
     let config = build_hcfs_config(server_url, bearer_token, account_id, fhash);
-    let reg_label = label.to_string();
+    // Use the folder's directory name as the display label for the server
+    // registry instead of the internal label (e.g. "default").
+    let reg_label = std::path::Path::new(sync_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(label)
+        .to_string();
     let reg_ss58 = account_id.to_string();
     let reg_fhash = fhash.to_string();
     let reg_pool = pool.clone();
@@ -888,7 +894,7 @@ pub(crate) async fn initialize_sync_inner(
         "Sync initialized successfully for '{}'. User ID: {}, New setup: {}",
         label, user_id, is_new_setup
     );
-    spawn_folder_registration(&cfg.server_url, &bearer_token, &label, &account_id, &fhash, pool);
+    spawn_folder_registration(&cfg.server_url, &bearer_token, &label, &account_id, &fhash, pool, &cfg.sync_path);
 
     // The user has just successfully started a drive — clear the persisted
     // user-stopped flag so a future cold start auto-inits cleanly. Best-
