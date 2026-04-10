@@ -1130,24 +1130,30 @@ pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String
             Ok(())
         }
         Err(e) => {
-            warn!(label = %label, error = %e, "Resume failed; emitting Error state");
-            // Resolve the on-disk path for the Error payload so the FE's
-            // drive entry stays hydrated. Fall back to an empty string
-            // if the path lookup also fails — the payload is still
-            // useful because label + status drive the UI affordance.
-            let drive_path = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
-                .await
-                .ok()
-                .and_then(|paths| paths.into_iter().find(|p| p.label == label).map(|p| p.path))
-                .unwrap_or_default();
-            crate::sync::status::emit_drive_status(
-                &app,
-                &label,
-                &drive_path,
-                crate::sync::drive_status::DriveStatus::Error {
-                    message: format!("Failed to resume: {e}"),
-                },
-            );
+            warn!(label = %label, error = %e, "Resume failed");
+            // Only emit `Error` for non-recoverable failures.
+            // `NotReady(*)` errors are recoverable preconditions (auth
+            // not ready, signing key unavailable, config missing) —
+            // they have their own retry mechanism and must not poison
+            // the per-drive cache, which would render the drive as
+            // "paused" in the FE via the widened `kind !== "active"`
+            // check and mislead the user into thinking they manually
+            // paused it.
+            if !matches!(e, crate::error::AppError::NotReady(_)) {
+                let drive_path = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
+                    .await
+                    .ok()
+                    .and_then(|paths| paths.into_iter().find(|p| p.label == label).map(|p| p.path))
+                    .unwrap_or_default();
+                crate::sync::status::emit_drive_status(
+                    &app,
+                    &label,
+                    &drive_path,
+                    crate::sync::drive_status::DriveStatus::Error {
+                        message: format!("Failed to resume: {e}"),
+                    },
+                );
+            }
             Err(e)
         }
     }
@@ -1399,18 +1405,38 @@ async fn auto_init_sync_inner(
         None => match crate::sync::mnemonic::get_mnemonic_for_account(state.inner(), &account_id).await {
             Ok(m) => m,
             Err(e) => {
-                warn!(
-                    error = %e,
-                    "auto_init_sync: mnemonic unavailable; emitting Error for all regular drives. FE will retry on hippius_auth_ready."
-                );
-                let msg = "Waiting for authentication to complete. This will retry automatically.".to_string();
-                for sp in &regular {
-                    crate::sync::status::emit_drive_status(
-                        &app,
-                        &sp.label,
-                        &sp.path,
-                        crate::sync::drive_status::DriveStatus::Error { message: msg.clone() },
+                // `NotReady(MasterMnemonicUnrecoverable)` is a recoverable
+                // precondition, not a drive failure. The FE's retry
+                // ladder in `useHcfsSync.ts::tryAutoInitSync` listens on
+                // `hippius_auth_ready` and re-invokes this command when
+                // auth state lands. Emitting `DriveStatus::Error` here
+                // would poison the per-drive cache and cause every drive
+                // to render as "paused" via the widened FE check
+                // (`kind !== "active"`) for the entire retry window —
+                // and forever if the user's keychain doesn't have the
+                // mnemonic (which is the common Restored-capability
+                // session-restore path). Instead, leave the drives in
+                // their bootstrap-Active state and let the retry handle
+                // recovery.
+                if matches!(e, crate::error::AppError::NotReady(_)) {
+                    warn!(
+                        error = %e,
+                        "auto_init_sync: mnemonic not ready yet — FE will retry on hippius_auth_ready. No Error status emitted."
                     );
+                } else {
+                    warn!(
+                        error = %e,
+                        "auto_init_sync: mnemonic resolution failed with non-recoverable error; emitting Error for all regular drives."
+                    );
+                    let msg = format!("Failed to resolve mnemonic: {e}");
+                    for sp in &regular {
+                        crate::sync::status::emit_drive_status(
+                            &app,
+                            &sp.label,
+                            &sp.path,
+                            crate::sync::drive_status::DriveStatus::Error { message: msg.clone() },
+                        );
+                    }
                 }
                 return Err(e);
             }
@@ -1457,17 +1483,24 @@ async fn auto_init_sync_inner(
             }
             Err(e) => {
                 warn!(label = %sp.label, error = %e, "Failed to init sync");
-                // Surface the failure to the FE so the user sees a retry
-                // affordance instead of a silently missing drive. Prior
-                // to this, per-drive init failures were only logged.
-                crate::sync::status::emit_drive_status(
-                    &app,
-                    &sp.label,
-                    &sp.path,
-                    crate::sync::drive_status::DriveStatus::Error {
-                        message: format!("Failed to initialize: {e}"),
-                    },
-                );
+                // Only emit `Error` for non-recoverable failures.
+                // `NotReady(*)` errors (mnemonic unavailable, signing
+                // key missing, config missing, etc.) have their own
+                // retry paths via the FE auth-ready listener or
+                // user-initiated resume — leave the drive in its
+                // bootstrap-Active state so the FE doesn't render it
+                // as "paused" via the widened `kind !== "active"`
+                // check while the retry is in flight.
+                if !matches!(e, crate::error::AppError::NotReady(_)) {
+                    crate::sync::status::emit_drive_status(
+                        &app,
+                        &sp.label,
+                        &sp.path,
+                        crate::sync::drive_status::DriveStatus::Error {
+                            message: format!("Failed to initialize: {e}"),
+                        },
+                    );
+                }
             }
         }
     }
