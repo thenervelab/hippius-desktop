@@ -26,6 +26,18 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
  */
 const SYNC_NOTIFICATION_AGGREGATION_MS = 10_000;
 
+/**
+ * Hard cap on the `pendingFilesRef` buffer so a pathological burst of
+ * sync cycles within the debounce window can't grow it unbounded.
+ * Matches the Rust-side `MAX_NOTIFICATION_FILES = 200` cap in
+ * `src-tauri/src/sync/progress.rs`; the notification detail view only
+ * renders a scrollable list this long anyway, and the file summary
+ * counters (the "N uploaded" badges) would double-count after the cap
+ * if the buffer grew past 200, which is why we truncate here rather
+ * than silently drop.
+ */
+const MAX_PENDING_NOTIFICATION_FILES = 200;
+
 /** Serialisable summary of a synced file stored inside releaseNotes JSON. */
 export interface SyncedFileDetail {
   fileName: string;
@@ -131,6 +143,16 @@ export function useFilesNotification() {
             // `MAX_EVENT_FILES = 50` and caused the 84-vs-48 mismatch.
             if (o.files && o.files.length > 0) {
               pendingFilesRef.current.push(...o.files);
+              // Bound the buffer so a runaway burst (many cycles inside
+              // the aggregation window) can't grow it past the Rust-side
+              // cap. The counts in `pendingCountsRef` remain accurate
+              // regardless; only the detailed list is truncated.
+              if (pendingFilesRef.current.length > MAX_PENDING_NOTIFICATION_FILES) {
+                pendingFilesRef.current = pendingFilesRef.current.slice(
+                  0,
+                  MAX_PENDING_NOTIFICATION_FILES
+                );
+              }
             }
 
             // Sliding-window debounce: reset on every event received.

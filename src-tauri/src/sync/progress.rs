@@ -555,4 +555,213 @@ mod tests {
         assert!(snap.effective_in_progress);
         assert!(!snap.effective_completed);
     }
+
+    // ── collect_cycle_files_for_label ───────────────────────────────
+    //
+    // These tests build a fake `SyncRunner` via the same helper used
+    // by the existing `remove_drive_inmemory` tests in lifecycle.rs,
+    // then seed `current_session.files` directly and exercise the
+    // helper end-to-end. They pin the filter+sort+cap contract that
+    // `sync/tauri_bridge.rs::on_event::SyncCompleted` relies on to
+    // prevent the count-vs-list mismatch in the FE notification.
+    //
+    // The tests deliberately do NOT go through
+    // `ProgressTracker::update_file_progress` / `start_session` etc.
+    // — they reach into `state.current_session` directly so a
+    // regression in `collect_cycle_files_for_label` can be isolated
+    // from unrelated changes in the upstream progress tracker.
+
+    use hcfs_client::engine::progress::state::{FileAction, FileStatus, SyncFile, SyncSession};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn test_runner() -> Arc<hcfs_client::engine::runner::SyncRunner> {
+        use hcfs_client::engine::{NoopCallbacks, NoopEventHandler};
+        Arc::new(hcfs_client::engine::runner::SyncRunner::new(
+            Arc::new(NoopEventHandler),
+            Arc::new(NoopCallbacks),
+            reqwest::Client::new(),
+        ))
+    }
+
+    fn make_file(path: &str, label: &str, status: FileStatus, completed_at: Option<i64>, total_bytes: u64, action: FileAction) -> SyncFile {
+        SyncFile {
+            id: Arc::from(path),
+            path: Arc::from(path),
+            file_name: Arc::from(path.rsplit('/').next().unwrap_or(path)),
+            label: Arc::from(label),
+            action,
+            status,
+            progress: if completed_at.is_some() { 100 } else { 0 },
+            bytes_encrypted: total_bytes,
+            bytes_transferred: total_bytes,
+            total_bytes,
+            resumed_from_bytes: None,
+            started_at: 0,
+            completed_at,
+            error: None,
+        }
+    }
+
+    /// Seed `current_session.files` with the given files. Overwrites
+    /// any existing session.
+    fn seed_session(sync: &hcfs_client::engine::runner::SyncRunner, files: Vec<SyncFile>) {
+        let mut state = sync.progress.lock_state();
+        let file_map: HashMap<String, SyncFile> = files.into_iter().map(|f| (f.path.to_string(), f)).collect();
+        state.current_session = Some(SyncSession {
+            session_id: Arc::from("test-session"),
+            started_at: 0,
+            completed_at: None,
+            is_active: true,
+            expected_uploads: 0,
+            expected_downloads: 0,
+            expected_local_deletes: 0,
+            expected_remote_deletes: 0,
+            files: file_map,
+        });
+    }
+
+    #[test]
+    fn collect_cycle_files_returns_empty_when_no_session() {
+        let sync = test_runner();
+        // Deliberately do not seed a session.
+        let result = collect_cycle_files_for_label(&sync, "default", 10);
+        assert!(result.is_empty(), "expected empty vec, got {} files", result.len());
+    }
+
+    #[test]
+    fn collect_cycle_files_returns_empty_when_max_files_zero() {
+        let sync = test_runner();
+        seed_session(
+            &sync,
+            vec![make_file("a.txt", "default", FileStatus::Completed, Some(100), 1024, FileAction::Upload)],
+        );
+        let result = collect_cycle_files_for_label(&sync, "default", 0);
+        assert!(result.is_empty(), "expected empty vec for max_files=0, got {} files", result.len());
+    }
+
+    #[test]
+    fn collect_cycle_files_filters_by_label() {
+        let sync = test_runner();
+        seed_session(
+            &sync,
+            vec![
+                make_file("match1.txt", "target", FileStatus::Completed, Some(100), 10, FileAction::Upload),
+                make_file("match2.txt", "target", FileStatus::Completed, Some(200), 20, FileAction::Upload),
+                make_file("other.txt", "different", FileStatus::Completed, Some(300), 30, FileAction::Upload),
+            ],
+        );
+        let result = collect_cycle_files_for_label(&sync, "target", 10);
+        assert_eq!(result.len(), 2);
+        let names: Vec<&str> = result.iter().map(|f| f.file_name.as_str()).collect();
+        assert!(names.contains(&"match1.txt"));
+        assert!(names.contains(&"match2.txt"));
+        assert!(!names.contains(&"other.txt"));
+    }
+
+    #[test]
+    fn collect_cycle_files_filters_out_non_completed() {
+        let sync = test_runner();
+        seed_session(
+            &sync,
+            vec![
+                make_file("done.txt", "default", FileStatus::Completed, Some(100), 10, FileAction::Upload),
+                make_file("uploading.txt", "default", FileStatus::Uploading, None, 20, FileAction::Upload),
+                make_file("errored.txt", "default", FileStatus::Error, Some(200), 30, FileAction::Upload),
+                make_file("pending.txt", "default", FileStatus::Pending, None, 40, FileAction::Upload),
+            ],
+        );
+        let result = collect_cycle_files_for_label(&sync, "default", 10);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].file_name, "done.txt");
+    }
+
+    #[test]
+    fn collect_cycle_files_sorts_by_completed_at_descending() {
+        // Multi-cycle residue scenario: old files from a previous
+        // cycle share the label with newer files from the current
+        // cycle. The helper must return the most-recent ones first
+        // so that a `max_files` cap keeps the current cycle's files.
+        let sync = test_runner();
+        seed_session(
+            &sync,
+            vec![
+                make_file("old.txt", "default", FileStatus::Completed, Some(100), 10, FileAction::Upload),
+                make_file("newer.txt", "default", FileStatus::Completed, Some(300), 20, FileAction::Upload),
+                make_file("newest.txt", "default", FileStatus::Completed, Some(500), 30, FileAction::Upload),
+                make_file("middle.txt", "default", FileStatus::Completed, Some(200), 40, FileAction::Upload),
+            ],
+        );
+        let result = collect_cycle_files_for_label(&sync, "default", 10);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0].file_name, "newest.txt");
+        assert_eq!(result[1].file_name, "newer.txt");
+        assert_eq!(result[2].file_name, "middle.txt");
+        assert_eq!(result[3].file_name, "old.txt");
+    }
+
+    #[test]
+    fn collect_cycle_files_caps_at_max_files_keeping_newest() {
+        // Over-reporting guard: when `max_files` is smaller than the
+        // matching set (multi-cycle residue from a long-running
+        // session), keep the newest entries by `completed_at`.
+        let sync = test_runner();
+        seed_session(
+            &sync,
+            vec![
+                make_file("old.txt", "default", FileStatus::Completed, Some(100), 10, FileAction::Upload),
+                make_file("mid.txt", "default", FileStatus::Completed, Some(200), 20, FileAction::Upload),
+                make_file("newest.txt", "default", FileStatus::Completed, Some(300), 30, FileAction::Upload),
+            ],
+        );
+        let result = collect_cycle_files_for_label(&sync, "default", 2);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].file_name, "newest.txt");
+        assert_eq!(result[1].file_name, "mid.txt");
+    }
+
+    #[test]
+    fn collect_cycle_files_treats_missing_completed_at_as_oldest() {
+        // Defensive: if a file landed in `Completed` without a
+        // `completed_at` timestamp (partial-update race), the sort
+        // fallback treats `None` as 0, pushing it to the end.
+        let sync = test_runner();
+        seed_session(
+            &sync,
+            vec![
+                make_file("no_ts.txt", "default", FileStatus::Completed, None, 10, FileAction::Upload),
+                make_file("with_ts.txt", "default", FileStatus::Completed, Some(500), 20, FileAction::Upload),
+            ],
+        );
+        let result = collect_cycle_files_for_label(&sync, "default", 10);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].file_name, "with_ts.txt");
+        assert_eq!(result[1].file_name, "no_ts.txt");
+    }
+
+    #[test]
+    fn collect_cycle_files_preserves_action_variant() {
+        // The FE `FileAction` union expects snake_case strings
+        // ("upload", "download", "local_delete", "remote_delete"),
+        // and serde produces those via `#[serde(rename_all)]` on the
+        // upstream enum. Ensure the helper carries the variant
+        // through unchanged.
+        let sync = test_runner();
+        seed_session(
+            &sync,
+            vec![
+                make_file("up.txt", "default", FileStatus::Completed, Some(100), 10, FileAction::Upload),
+                make_file("down.txt", "default", FileStatus::Completed, Some(200), 20, FileAction::Download),
+                make_file("ldel.txt", "default", FileStatus::Completed, Some(300), 30, FileAction::LocalDelete),
+                make_file("rdel.txt", "default", FileStatus::Completed, Some(400), 40, FileAction::RemoteDelete),
+            ],
+        );
+        let result = collect_cycle_files_for_label(&sync, "default", 10);
+        assert_eq!(result.len(), 4);
+        // Sorted newest first: rdel (400), ldel (300), down (200), up (100)
+        assert_eq!(result[0].action, FileAction::RemoteDelete);
+        assert_eq!(result[1].action, FileAction::LocalDelete);
+        assert_eq!(result[2].action, FileAction::Download);
+        assert_eq!(result[3].action, FileAction::Upload);
+    }
 }

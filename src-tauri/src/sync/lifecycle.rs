@@ -1118,12 +1118,39 @@ pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String
     crate::sync::paths::set_sync_path_paused(pool, &account_id, &label, false).await?;
 
     // Re-initialize the drive. `initialize_sync_inner` emits the
-    // per-drive Active status on success, so we don't need to do it
-    // again here.
-    initialize_sync_inner(app.clone(), account_id, label.clone(), mnemonic, true, false).await?;
-
-    info!("Resumed drive '{}'", label);
-    Ok(())
+    // per-drive Active status on success. On failure, we must emit an
+    // `Error` status ourselves — otherwise the `drive_status_cache`
+    // retains whatever it held before this click (typically `Paused`
+    // or a stale `Error`) while the DB already says `is_paused=false`.
+    // The FE would then read a stale entry from `get_all_drive_statuses`
+    // on its next mount/bootstrap.
+    match initialize_sync_inner(app.clone(), account_id.clone(), label.clone(), mnemonic, true, false).await {
+        Ok(_) => {
+            info!("Resumed drive '{}'", label);
+            Ok(())
+        }
+        Err(e) => {
+            warn!(label = %label, error = %e, "Resume failed; emitting Error state");
+            // Resolve the on-disk path for the Error payload so the FE's
+            // drive entry stays hydrated. Fall back to an empty string
+            // if the path lookup also fails — the payload is still
+            // useful because label + status drive the UI affordance.
+            let drive_path = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
+                .await
+                .ok()
+                .and_then(|paths| paths.into_iter().find(|p| p.label == label).map(|p| p.path))
+                .unwrap_or_default();
+            crate::sync::status::emit_drive_status(
+                &app,
+                &label,
+                &drive_path,
+                crate::sync::drive_status::DriveStatus::Error {
+                    message: format!("Failed to resume: {e}"),
+                },
+            );
+            Err(e)
+        }
+    }
 }
 
 /// Reset sync data for an account, clearing all local sync state.
