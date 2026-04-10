@@ -322,17 +322,20 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
                 status = %job_status.status,
                 "Server migration finished but client transition pending — prompting user"
             );
+            // Prefer the logical file count (real file_records) over the
+            // S3 object count so the completion dialog shows a meaningful number.
+            let logical_count = job_status.logical_file_count.map_or(job_status.total as u64, |c| c as u64);
             return Ok(MigrationCheckResult {
                 needs_migration: false,
-                file_count: job_status.total as u64,
+                file_count: logical_count,
                 total_size: 0,
                 sync_path: None,
                 is_resuming: false,
                 needs_completion: true,
                 completion_status: Some(job_status.status),
                 is_in_progress: false,
-                progress_completed: job_status.completed as u64,
-                progress_total: job_status.total as u64,
+                progress_completed: logical_count.min(job_status.completed as u64),
+                progress_total: logical_count,
                 progress_failed: job_status.failed as u64,
             });
         }
@@ -526,6 +529,9 @@ struct RawServerMigrationStatus {
     pub failed: i32,
     pub failed_files: Vec<String>,
     pub current_file: Option<String>,
+    /// Real file count from `file_records`, set when migration completes.
+    #[serde(default)]
+    pub logical_file_count: Option<i32>,
 }
 
 /// Poll result returned to the frontend, enriched with retry flags.
@@ -541,6 +547,10 @@ pub struct ServerMigrationStatus {
     pub failed: i32,
     pub failed_files: Vec<String>,
     pub current_file: Option<String>,
+    /// Real file count from `file_records`, set when migration completes.
+    /// The `total`/`completed` fields count S3 objects, which may differ
+    /// from the number of logical user files.
+    pub logical_file_count: Option<i32>,
     /// True when 3+ consecutive poll failures (frontend should show warning toast)
     pub should_warn: bool,
     /// True when 10+ consecutive poll failures (frontend should abort polling)
@@ -814,6 +824,7 @@ async fn poll_migration_status_internal(state: &crate::app_state::AppState, acco
             failed: raw.failed,
             failed_files: raw.failed_files,
             current_file: raw.current_file,
+            logical_file_count: raw.logical_file_count,
             should_warn: false,
             should_abort: false,
             is_terminal,
@@ -832,6 +843,7 @@ async fn poll_migration_status_internal(state: &crate::app_state::AppState, acco
             failed: 0,
             failed_files: Vec::new(),
             current_file: None,
+            logical_file_count: None,
             should_warn,
             should_abort,
             is_terminal: false,

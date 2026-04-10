@@ -29,6 +29,8 @@ interface PollMigrationStatusResult {
   total: number;
   completed: number;
   current_file: string | null;
+  /** Real file count from file_records, set when migration completes. */
+  logical_file_count: number | null;
   should_warn: boolean;
   should_abort: boolean;
   is_terminal: boolean;
@@ -118,12 +120,17 @@ export function useMigration(): UseMigrationReturn {
         if (result.is_terminal) {
           stopPolling();
           setMigrationSucceeded(result.status !== "cancelled");
+          // Use the real file count (from file_records) when available,
+          // falling back to the S3 object count for older servers.
+          const realCount = result.logical_file_count ?? result.total;
+          setFileCount(realCount);
+          setSuccessCount(Math.min(result.completed, realCount));
           setCurrentStep("complete");
           appStore.set(migrationLockAtom, false);
           appStore.set(migrationProgressAtom, {
             active: false,
-            completed: result.completed,
-            total: result.total,
+            completed: Math.min(result.completed, realCount),
+            total: realCount,
           });
         }
       });
