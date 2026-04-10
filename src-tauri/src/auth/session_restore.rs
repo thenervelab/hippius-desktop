@@ -80,6 +80,18 @@ pub struct SessionRestoreResult {
     pub needs_sync_mnemonic: bool,
     /// Where to navigate: "/" for home, "/login" for login, null for no navigation
     pub redirect_to: Option<String>,
+    /// True when the session was restored successfully BUT the OS
+    /// keychain did not contain the user's BIP-39 mnemonic, so
+    /// `AuthInfo.mnemonic` is `None` and the sync engine is wedged
+    /// behind the encrypted `drive_password` chicken-and-egg lock.
+    ///
+    /// Only set for mnemonic-auth users (OAuth users use
+    /// `ensure_sync_mnemonic` to generate a mnemonic on demand and
+    /// aren't affected by this state). The frontend surfaces this
+    /// as a persistent banner (`SyncReauthRequiredAlert`) with a
+    /// call-to-action that routes to `/login` for re-entering the
+    /// seed phrase — the only recovery path.
+    pub sync_requires_reauth: bool,
 }
 
 /// Restore the user's session at app boot.
@@ -126,6 +138,7 @@ pub async fn restore_session(
                                 should_clear_oauth: true,
                                 needs_sync_mnemonic: false,
                                 redirect_to: Some("/login".into()),
+                                sync_requires_reauth: false,
                             });
                         }
                     }
@@ -134,6 +147,7 @@ pub async fn restore_session(
                     let auth_type = if provider == "mnemonic" { "mnemonic" } else { "oauth" };
                     let needs_mnemonic = provider != "mnemonic";
 
+                    let mut sync_requires_reauth = false;
                     if let Some(ref addr) = substrate_address {
                         // For mnemonic users: try the OS keychain — if it
                         // has the seed phrase, fully rehydrate AuthInfo
@@ -142,7 +156,13 @@ pub async fn restore_session(
                         // always OAuthOnly. The `AlreadyWritten` outcome
                         // means rehydrate already wrote `AuthInfo` and we
                         // must not double-write via `set_active_account`.
-                        match rehydrate_or_restored(&state, addr, auth_type) {
+                        let outcome = rehydrate_or_restored(&state, addr, auth_type);
+                        // The `Restored` capability is specifically the
+                        // mnemonic-user-with-keychain-miss case (see
+                        // `rehydrate_or_restored`); flag it so the FE
+                        // shows the reauth banner.
+                        sync_requires_reauth = matches!(outcome, RehydrateOutcome::NeedsActiveAccount(AuthCapabilities::Restored));
+                        match outcome {
                             RehydrateOutcome::AlreadyWritten => {
                                 // Mnemonic is in AuthInfo — run encryption migration.
                                 // Extract the mnemonic BEFORE awaiting (can't hold mutex across await).
@@ -179,6 +199,7 @@ pub async fn restore_session(
                         should_clear_oauth: false,
                         needs_sync_mnemonic: needs_mnemonic,
                         redirect_to: None,
+                        sync_requires_reauth,
                     });
                 }
                 Err(e) => {
@@ -207,6 +228,7 @@ pub async fn restore_session(
             should_clear_oauth: should_clear,
             needs_sync_mnemonic: false,
             redirect_to: None,
+            sync_requires_reauth: false,
         });
     };
 
@@ -220,6 +242,7 @@ pub async fn restore_session(
             should_clear_oauth: should_clear,
             needs_sync_mnemonic: false,
             redirect_to: None,
+            sync_requires_reauth: false,
         });
     };
 
@@ -241,6 +264,7 @@ pub async fn restore_session(
             should_clear_oauth: should_clear,
             needs_sync_mnemonic: false,
             redirect_to: Some("/login".into()),
+            sync_requires_reauth: false,
         });
     }
 
@@ -259,9 +283,12 @@ pub async fn restore_session(
     let eff_minutes = row.logout_time_minutes.unwrap_or(1440);
     let logout_time_ms = if eff_minutes == -1 { None } else { Some(eff_minutes * 60_000) };
 
+    let mut sync_requires_reauth = false;
     if let Some(ref addr) = row.substrate_address {
         // Same flow as the OAuth-JSON branch above. See `rehydrate_or_restored`.
-        match rehydrate_or_restored(&state, addr, auth_type) {
+        let outcome = rehydrate_or_restored(&state, addr, auth_type);
+        sync_requires_reauth = matches!(outcome, RehydrateOutcome::NeedsActiveAccount(AuthCapabilities::Restored));
+        match outcome {
             RehydrateOutcome::AlreadyWritten => {
                 // Mnemonic is in AuthInfo — run encryption migration.
                 // Extract the mnemonic BEFORE awaiting (can't hold mutex across await).
@@ -297,6 +324,7 @@ pub async fn restore_session(
         should_clear_oauth: should_clear,
         needs_sync_mnemonic: row.provider.as_deref() != Some("mnemonic"),
         redirect_to: Some("/".into()),
+        sync_requires_reauth,
     })
 }
 

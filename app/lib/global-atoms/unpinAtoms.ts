@@ -88,3 +88,29 @@ export const hasConfiguredDrivesAtom = atom((get) => {
   return get(driveStatusesAtom).size > 0;
 });
 
+/**
+ * Set to `true` when Rust's `restore_session` successfully rehydrated
+ * the session but the OS keychain didn't contain the user's BIP-39
+ * mnemonic — so `AuthInfo.mnemonic` is `None` and the sync engine is
+ * wedged behind the encrypted `drive_password` chicken-and-egg lock.
+ *
+ * This specifically matches `AuthCapabilities::Restored` for mnemonic
+ * users. OAuth users use `ensure_sync_mnemonic` to generate a mnemonic
+ * on demand and don't hit this state.
+ *
+ * Owned by `wallet-auth-context.tsx`:
+ *   - written from `result.syncRequiresReauth` after `restore_session`
+ *     returns;
+ *   - cleared to `false` after a successful `login_with_mnemonic`
+ *     (which populates `AuthInfo.mnemonic` and the keychain).
+ *
+ * Consumed by `<SyncReauthRequiredAlert />` which renders a banner
+ * with a call-to-action that routes to `/login` for re-entering the
+ * seed phrase — the only recovery path.
+ *
+ * Parallel to the deleted `SyncStoppedAlert` UI (commit `6f467abe`)
+ * but scoped to the specific "mnemonic lost" case rather than the
+ * old global engine-stopped state.
+ */
+export const syncRequiresReauthAtom = atom<boolean>(false);
+

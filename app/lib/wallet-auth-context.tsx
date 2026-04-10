@@ -21,6 +21,7 @@ import { tryAutoInitSync } from "./hooks/useHcfsSync";
 import { appStore } from "./store/jotaiStore";
 import { migrationCheckAtom, DEFAULT_MIGRATION_CHECK_STATE } from "./global-atoms/migrationAtoms";
 import { splashCompleteAtom } from "./global-atoms/splashAtoms";
+import { syncRequiresReauthAtom } from "./global-atoms/unpinAtoms";
 import { useAtomValue } from "jotai";
 
 /** Result from Rust login_with_mnemonic command */
@@ -164,6 +165,9 @@ export function WalletAuthProvider({
       setSessionTimeRemaining(null);
       syncInitialized.current = false;
       sessionMnemonicRef.current = null;
+      // Clear the reauth banner on logout so a brand-new login
+      // session starts with a clean slate.
+      appStore.set(syncRequiresReauthAtom, false);
 
       if (redirectPath && typeof window !== "undefined") {
         router.push(redirectPath);
@@ -255,6 +259,10 @@ export function WalletAuthProvider({
         shouldClearOauth: boolean;
         needsSyncMnemonic: boolean;
         redirectTo: string | null;
+        /** True when the OS keychain didn't contain the mnemonic on
+         *  restore, so sync is wedged until the user re-enters their
+         *  seed phrase. Surfaces the <SyncReauthRequiredAlert /> banner. */
+        syncRequiresReauth: boolean;
       }>("restore_session", {
         oauthSessionJson: storedSession ?? null,
         oauthExpiryMs: oauthExpiryMs ?? null,
@@ -271,6 +279,8 @@ export function WalletAuthProvider({
           await logout("/login");
         }
         setSessionTimeRemaining(null);
+        // Not authenticated → banner state is irrelevant, clear it.
+        appStore.set(syncRequiresReauthAtom, false);
         return;
       }
 
@@ -283,6 +293,11 @@ export function WalletAuthProvider({
       if (result.oauthSession) {
         setOAuthSessionState(result.oauthSession as unknown as import("@/app/lib/types/oAuth").OAuthSession);
       }
+      // Write the reauth banner atom from Rust's authoritative answer.
+      // True only for mnemonic users where the OS keychain didn't
+      // return the seed phrase on restore — the only recovery is to
+      // re-enter the mnemonic via the login form.
+      appStore.set(syncRequiresReauthAtom, result.syncRequiresReauth ?? false);
 
       // Schedule logout timer (browser setTimeout — can't do in Rust)
       if (result.logoutTimeMs !== null) {
@@ -344,6 +359,12 @@ export function WalletAuthProvider({
       if (result.token) {
         setOAuthSessionState(buildOAuthSession(result, "mnemonic"));
       }
+
+      // Clear the reauth banner on successful mnemonic login. Rust's
+      // login_with_mnemonic populates both `AuthInfo.mnemonic` AND
+      // the OS keychain, so any subsequent restore_session will land
+      // in `AlreadyWritten` and sync will unlock normally.
+      appStore.set(syncRequiresReauthAtom, false);
 
       if (logoutTimerRef.current) {
         clearTimeout(logoutTimerRef.current);
