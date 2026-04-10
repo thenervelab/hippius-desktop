@@ -49,7 +49,6 @@ import {
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import { SyncConnectivityAlert } from "@/components/ui/SyncConnectivityAlert";
-import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert";
 import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
 import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
 import {
@@ -889,17 +888,11 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             </div>
           )}
 
-          {/* Sync alerts stack. The "Syncing is currently stopped"
-              banner that used to live here was deleted in the per-drive
-              status migration — pause is per-drive now and surfaces in
-              the 3-dot menu / settings page, not as a global banner.
-              `SyncReauthRequiredAlert` is the narrower successor: it
-              only fires when Rust's `restore_session` lands in the
-              `Restored` capability for a mnemonic user (keychain miss),
-              and routes the user to `/login` for seed-phrase re-entry. */}
+          {/* Sync connectivity alert. `SyncReauthRequiredAlert` is
+              mounted globally in `ResponsiveContent` so it's visible
+              on every authenticated route (not just /files). */}
           <div className="mb-4 space-y-2">
             <SyncConnectivityAlert variant={isRecentFiles ? "compact" : "banner"} />
-            <SyncReauthRequiredAlert variant={isRecentFiles ? "compact" : "banner"} />
           </div>
 
           <FilesHeader

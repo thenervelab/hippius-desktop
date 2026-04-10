@@ -1131,15 +1131,29 @@ pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String
         }
         Err(e) => {
             warn!(label = %label, error = %e, "Resume failed");
-            // Only emit `Error` for non-recoverable failures.
-            // `NotReady(*)` errors are recoverable preconditions (auth
-            // not ready, signing key unavailable, config missing) —
-            // they have their own retry mechanism and must not poison
-            // the per-drive cache, which would render the drive as
-            // "paused" in the FE via the widened `kind !== "active"`
-            // check and mislead the user into thinking they manually
-            // paused it.
-            if !matches!(e, crate::error::AppError::NotReady(_)) {
+            if matches!(e, crate::error::AppError::NotReady(_)) {
+                // Recoverable precondition (mnemonic unavailable,
+                // signing key missing, etc.) — don't emit `Error`,
+                // but we MUST prune any lingering cache entry for
+                // this label. Otherwise a user who paused this drive
+                // earlier in the session would still see the stale
+                // `Paused` value in the cache, and `get_all_drive_statuses`
+                // would keep rendering the drive as "paused" via the
+                // widened `kind !== "active"` check — stuck in a
+                // Resume-click loop because the UI never reflects
+                // the DB's new `is_paused=false` state. Dropping the
+                // cache entry makes the FE fall through to
+                // `status_from_is_paused` which returns `Active`,
+                // matching the DB intent. The reauth banner at the
+                // top of the layout already tells the user what to
+                // do to actually finish the resume.
+                if let Ok(mut cache) = app_state.drive_status_cache.lock() {
+                    cache.remove(&label);
+                }
+            } else {
+                // Non-recoverable: emit `Error` so the FE surfaces a
+                // retry affordance and the drive visibly flags the
+                // failure.
                 let drive_path = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
                     .await
                     .ok()

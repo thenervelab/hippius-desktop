@@ -411,6 +411,13 @@ export function WalletAuthProvider({
       setOAuthSessionState(session);
       setAuthType("mnemonic");
       setIsAuthenticated(true);
+      // `AccessKeyLoginForm` reaches this function (not `setSession`) via
+      // the reauth banner's "Re-enter seed phrase" CTA. Clearing the
+      // atom here is what makes the banner disappear after a successful
+      // seed-phrase re-entry — without it, the banner lingers until the
+      // next restore_session or page reload, defeating the recovery
+      // flow.
+      appStore.set(syncRequiresReauthAtom, false);
 
       initSync(result.substrateAddress, inputMnemonic);
 
@@ -448,6 +455,12 @@ export function WalletAuthProvider({
     setPolkadotAddress(session.substrateAddress || null);
     setAuthType("oauth");
     setIsAuthenticated(true);
+    // Belt-and-braces: OAuth users never land in the Restored-capability
+    // state (rehydrate_or_restored returns OAuthOnly for them), so
+    // syncRequiresReauthAtom should already be false. Clear explicitly
+    // so a future refactor that changes OAuth capability mapping can't
+    // leak a stale `true` from an earlier mnemonic session.
+    appStore.set(syncRequiresReauthAtom, false);
 
     logger.debug("[WalletAuth] OAuth session persisted and state updated");
 

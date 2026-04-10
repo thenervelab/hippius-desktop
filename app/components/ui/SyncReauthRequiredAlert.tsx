@@ -55,10 +55,11 @@ export const SyncReauthRequiredAlert: React.FC<SyncReauthRequiredAlertProps> = (
           "flex items-center gap-2 px-3 py-2 rounded-lg bg-orange-50 border border-orange-200 text-orange-800",
           className
         )}
+        role="alert"
       >
         <KeyRound className="size-4 flex-shrink-0" />
         <span className="text-sm font-medium flex-1">
-          Sync paused — re-enter your seed phrase to continue.
+          Sync needs your seed phrase to continue.
         </span>
         <button
           type="button"
@@ -77,18 +78,19 @@ export const SyncReauthRequiredAlert: React.FC<SyncReauthRequiredAlertProps> = (
         "flex items-start gap-3 p-3 rounded-lg bg-orange-50 border border-orange-200",
         className
       )}
+      role="alert"
     >
       <div className="flex-shrink-0 mt-0.5">
         <KeyRound className="size-5 text-orange-600" />
       </div>
       <div className="flex-1">
         <p className="text-sm font-medium text-orange-800">
-          Sync is paused — seed phrase not available on this device
+          Sync needs your seed phrase
         </p>
         <p className="text-xs mt-1 text-orange-700">
-          Your session is still active, but your seed phrase is no longer
-          cached locally and sync can&apos;t unlock your files. Re-enter
-          it to resume.
+          Your session is still active, but your seed phrase isn&apos;t
+          cached on this device, so sync can&apos;t unlock your files.
+          Re-enter it to continue.
         </p>
       </div>
       <button
