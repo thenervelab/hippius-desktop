@@ -84,7 +84,32 @@ pub struct DriveStatusChangedPayload {
     pub status: crate::sync::drive_status::DriveStatus,
 }
 
+/// One file from a completed sync cycle, carried in
+/// [`SyncCompletedPayload::files`] so the notification layer never has to
+/// scrape the snapshot atom (which is truncated to
+/// [`crate::sync::progress::MAX_EVENT_FILES`] entries and causes
+/// count-vs-list mismatches for cycles with more than that many files).
+///
+/// `action` is the upstream [`hcfs_client::engine::progress::state::FileAction`]
+/// which serde-renames to `snake_case` ("upload", "download",
+/// "local_delete", "remote_delete") — matching the FE
+/// `FileAction` union in `app/lib/types/syncSnapshot.ts`.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncedFileDetail {
+    pub file_name: String,
+    pub total_bytes: u64,
+    pub action: hcfs_client::engine::progress::state::FileAction,
+}
+
 /// Emitted when a sync cycle finishes successfully.
+///
+/// `files` carries the list of files this cycle completed (up to
+/// [`crate::sync::progress::MAX_NOTIFICATION_FILES`] entries, sorted by
+/// `completed_at` descending). The FE notification hook reads this
+/// field directly instead of scraping the snapshot atom, so the
+/// description header ("84 files uploaded") and the detail badge
+/// ("48 uploaded") can't diverge.
 #[derive(Serialize, Clone)]
 pub struct SyncCompletedPayload {
     pub label: String,
@@ -94,6 +119,10 @@ pub struct SyncCompletedPayload {
     pub files_deleted_remotely: usize,
     pub conflicts_resolved: usize,
     pub conflicts_skipped: usize,
+    /// Files completed in this cycle. Populated by
+    /// `collect_cycle_files_for_label` at emit time. Callers that don't
+    /// have session-state access (e.g. `zeros`) leave this empty.
+    pub files: Vec<SyncedFileDetail>,
 }
 
 impl SyncCompletedPayload {
@@ -106,6 +135,7 @@ impl SyncCompletedPayload {
             files_deleted_remotely: o.files_deleted_remotely,
             conflicts_resolved: o.conflicts_resolved,
             conflicts_skipped: o.conflicts_skipped,
+            files: Vec::new(),
         }
     }
 
@@ -118,6 +148,7 @@ impl SyncCompletedPayload {
             files_deleted_remotely: 0,
             conflicts_resolved: 0,
             conflicts_skipped: 0,
+            files: Vec::new(),
         }
     }
 }

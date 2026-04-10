@@ -8,8 +8,23 @@ import {
   refreshEnabledTypesAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { snapshotAtom } from "@/lib/hooks/useSyncSnapshot";
-import { appStore } from "@/lib/store/jotaiStore";
+
+/**
+ * Aggregation window for the "Sync Complete" notification. The sync
+ * engine can run several cycles back-to-back for a single user action
+ * (e.g. an initial scan finishes with 2 files, then a rescan picks up
+ * 84 more) — this window bundles them into one notification instead
+ * of producing one per cycle.
+ *
+ * Also acts as a coalescing window across drives: if two drives
+ * complete within this interval, the counts merge into a single
+ * "N files uploaded" row.
+ *
+ * 10 seconds is a tradeoff: long enough to catch the "initial scan
+ * then rescan" pattern we're fixing, short enough that the user still
+ * sees the notification promptly after clicking away.
+ */
+const SYNC_NOTIFICATION_AGGREGATION_MS = 10_000;
 
 /** Serialisable summary of a synced file stored inside releaseNotes JSON. */
 export interface SyncedFileDetail {
@@ -24,6 +39,18 @@ interface SyncOutcome {
   files_downloaded: number;
   files_deleted_locally: number;
   files_deleted_remotely: number;
+  /**
+   * Per-file details for this cycle, populated by Rust from the
+   * `sync.progress.current_session.files` HashMap in
+   * `tauri_bridge::on_event::SyncCompleted`. This is the single source
+   * of truth for the notification's file list — previously the FE
+   * scraped `snapshotAtom`, which is truncated to `MAX_EVENT_FILES`
+   * (50) entries and caused count/list mismatches for cycles with
+   * more than 50 files. Always present on current Rust builds but
+   * typed as optional for forward compatibility with any stray
+   * consumer that may not populate it yet.
+   */
+  files?: SyncedFileDetail[];
 }
 
 interface SyncError {
@@ -83,22 +110,6 @@ export function useFilesNotification() {
       await refreshUnread();
     };
 
-    /** Capture completed file details from the in-memory snapshot atom
-     *  instead of making a redundant sp_get_snapshot IPC call. */
-    const captureFileDetails = () => {
-      const snapshot = appStore.get(snapshotAtom);
-      const completedFiles: SyncedFileDetail[] = snapshot.files
-        .filter((f) => f.status === "completed")
-        .map((f) => ({
-          fileName: f.fileName,
-          totalBytes: f.totalBytes,
-          action: f.action,
-        }));
-      if (completedFiles.length > 0) {
-        pendingFilesRef.current.push(...completedFiles);
-      }
-    };
-
     (async () => {
       try {
         const results = await Promise.all([
@@ -112,16 +123,26 @@ export function useFilesNotification() {
             pendingCountsRef.current.downloaded += o.files_downloaded;
             pendingCountsRef.current.deletedLocally += o.files_deleted_locally;
             pendingCountsRef.current.deletedRemotely += o.files_deleted_remotely;
-            captureFileDetails();
 
-            // Debounce: aggregate across drives for 2 seconds
+            // File details are carried on the event payload itself,
+            // populated by Rust from the session state. This is the
+            // authoritative source for both count and list — previously
+            // the FE scraped `snapshotAtom`, which is capped at
+            // `MAX_EVENT_FILES = 50` and caused the 84-vs-48 mismatch.
+            if (o.files && o.files.length > 0) {
+              pendingFilesRef.current.push(...o.files);
+            }
+
+            // Sliding-window debounce: reset on every event received.
+            // Aggregates across multiple cycles of the same folder AND
+            // across concurrent drives into a single notification.
             if (debounceTimerRef.current) {
               clearTimeout(debounceTimerRef.current);
             }
             debounceTimerRef.current = setTimeout(() => {
               debounceTimerRef.current = null;
               flushNotification();
-            }, 2000);
+            }, SYNC_NOTIFICATION_AGGREGATION_MS);
           }),
           listen<SyncError>("hcfs_sync_error", async (e) => {
             if (cancelled || !userAddress) return;

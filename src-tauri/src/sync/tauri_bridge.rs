@@ -183,6 +183,8 @@ impl SyncEventHandler for TauriSyncBridge {
                 conflicts_resolved,
                 conflicts_skipped,
             } => {
+                use tauri::Manager;
+
                 // Belt-and-suspenders snapshot emit. As of hcfs >= a26f4296,
                 // `finalize_session_for_label` already emits a snapshot at
                 // its exit, so the success and conflicts-skipped code paths
@@ -192,14 +194,21 @@ impl SyncEventHandler for TauriSyncBridge {
                 // `finalize_session_for_label` — without it the UI would
                 // miss the conflict-pending transition. Idempotent if the
                 // upstream emit already fired this cycle.
-                {
-                    use tauri::Manager;
-                    let app_state = app.state::<crate::app_state::AppState>();
-                    app_state.sync.emit_snapshot(true);
-                }
+                let app_state = app.state::<crate::app_state::AppState>();
+                app_state.sync.emit_snapshot(true);
 
                 // Update per-file failure counters from the finalized session.
                 update_failure_counts(&app, &label);
+
+                // Snapshot the cycle's completed files from the session
+                // state BEFORE the next cycle starts. `MAX_NOTIFICATION_FILES`
+                // caps the payload so a 10k-file migration doesn't blow up
+                // the webview. The second cap — the reported completion
+                // counts — prevents a multi-cycle residue of stale
+                // Completed files in the session map from over-reporting.
+                let reported_count = files_uploaded + files_downloaded + files_deleted_locally + files_deleted_remotely;
+                let max_files = reported_count.min(crate::sync::progress::MAX_NOTIFICATION_FILES);
+                let files = crate::sync::progress::collect_cycle_files_for_label(&app_state.sync, &label, max_files);
 
                 let _ = app.emit(
                     events::SYNC_COMPLETED,
@@ -211,6 +220,7 @@ impl SyncEventHandler for TauriSyncBridge {
                         files_deleted_remotely,
                         conflicts_resolved,
                         conflicts_skipped,
+                        files,
                     },
                 );
             }

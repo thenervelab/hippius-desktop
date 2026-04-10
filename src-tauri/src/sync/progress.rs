@@ -272,6 +272,15 @@ pub fn get_overall_progress(sync: &SyncRunner) -> Result<OverallProgress> {
 /// produces thousands of files.
 pub(crate) const MAX_EVENT_FILES: usize = 50;
 
+/// Maximum number of per-file entries carried in a
+/// [`crate::sync::events::SyncCompletedPayload`]. Separate from
+/// [`MAX_EVENT_FILES`] because the sync-completed event is only
+/// emitted once per cycle and is read by the notification layer,
+/// which can render a longer scrollable list than the per-tick
+/// snapshot widget can reasonably handle. Still capped so a
+/// 10,000-file migration doesn't produce a 2 MB JSON payload.
+pub(crate) const MAX_NOTIFICATION_FILES: usize = 200;
+
 /// Truncate `snapshot.files` to at most [`MAX_EVENT_FILES`] entries while
 /// preserving the priority order already established by `build_snapshot`
 /// (errors, then in-progress, then pending, then completed). Aggregate
@@ -286,6 +295,55 @@ pub(crate) fn cap_snapshot_files(snapshot: &mut SyncSnapshot) {
 /// Truncate a file-path vector to at most [`MAX_EVENT_FILES`] entries.
 pub(crate) fn cap_file_list(v: &mut Vec<String>) {
     v.truncate(MAX_EVENT_FILES);
+}
+
+/// Snapshot the files completed in the most recent cycle for a given
+/// drive label, suitable for attaching to a
+/// [`crate::sync::events::SyncCompletedPayload`] before emission.
+///
+/// Reads `sync.progress.current_session.files` — the internal session
+/// state, which is NOT truncated by [`MAX_EVENT_FILES`] — and filters to
+/// entries whose `label` matches and whose status is `Completed`.
+/// Sorts by `completed_at` descending so the newest cycle's files win
+/// over lingering entries from earlier cycles (the session may persist
+/// completed files across cycles for the UI's recent-activity panel).
+///
+/// Capped at `max_files` (typically
+/// [`MAX_NOTIFICATION_FILES`] intersected with the event's own reported
+/// count — passing `files_uploaded + files_downloaded + …` is the usual
+/// caller choice so a multi-cycle residue can't over-report).
+///
+/// Returns an empty vec if there is no active session. The notification
+/// hook treats an empty `files` field as "no detail available" and
+/// still writes the description row, so an empty result is not fatal.
+pub fn collect_cycle_files_for_label(sync: &SyncRunner, label: &str, max_files: usize) -> Vec<crate::sync::events::SyncedFileDetail> {
+    use hcfs_client::engine::progress::state::FileStatus;
+
+    if max_files == 0 {
+        return Vec::new();
+    }
+    let state = sync.progress.lock_state();
+    let Some(session) = state.current_session.as_ref() else {
+        return Vec::new();
+    };
+    let mut matching: Vec<&hcfs_client::engine::progress::state::SyncFile> = session
+        .files
+        .values()
+        .filter(|f| f.label.as_ref() == label && f.status == FileStatus::Completed)
+        .collect();
+    // Most recently completed first, so a truncation to `max_files`
+    // always keeps the cycle that just finished. `completed_at` is
+    // `Option<i64>`; treat `None` as 0 so unmarked files sort last.
+    matching.sort_by(|a, b| b.completed_at.unwrap_or(0).cmp(&a.completed_at.unwrap_or(0)));
+    matching
+        .into_iter()
+        .take(max_files)
+        .map(|f| crate::sync::events::SyncedFileDetail {
+            file_name: f.file_name.to_string(),
+            total_bytes: f.total_bytes,
+            action: f.action.clone(),
+        })
+        .collect()
 }
 
 /// Get a full snapshot with retry state injected.
