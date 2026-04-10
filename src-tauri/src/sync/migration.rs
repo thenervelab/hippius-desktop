@@ -70,6 +70,11 @@ pub(crate) struct ServerMigrationResponse {
     /// New servers: count of pending files (preferred).
     #[serde(default)]
     pub(crate) pending_count: i64,
+    /// Logical file count from `file_records` — the real number of user
+    /// files, excluding S3 chunks and metadata objects. Preferred over
+    /// `pending_count` for display when available.
+    #[serde(default)]
+    pub(crate) logical_file_count: Option<i64>,
     /// Old servers: full file list. Only used to derive pending_count
     /// when the server hasn't been upgraded yet.
     #[serde(default)]
@@ -269,6 +274,7 @@ fn check_disk_space(_path: &std::path::Path, _required_bytes: u64) -> Result<()>
 // Commands
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_lines)]
 #[tauri::command]
 pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<MigrationCheckResult> {
     info!("[Migration] check_migration called for account: {}", &account_id);
@@ -358,12 +364,22 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
     };
 
     if summary.pending_count > 0 {
-        let pending_count = summary.pending_count as u64;
+        // Prefer the logical file count (real user files) over the raw S3
+        // object count which includes multipart chunks, metadata objects, etc.
+        let display_count = summary
+            .logical_file_count
+            .filter(|&c| c > 0)
+            .map_or(summary.pending_count as u64, |c| c as u64);
         let total_size = summary.total_size as u64;
-        info!("[Migration] Migration needed — {pending_count} pending files");
+        info!(
+            pending_s3 = summary.pending_count,
+            logical = ?summary.logical_file_count,
+            display = display_count,
+            "[Migration] Migration needed"
+        );
         return Ok(MigrationCheckResult {
             needs_migration: true,
-            file_count: pending_count,
+            file_count: display_count,
             total_size,
 
             sync_path: None,
@@ -1025,6 +1041,23 @@ mod tests {
         assert!(resp.needs_migration);
         assert_eq!(resp.pending_count, 1);
         assert_eq!(resp.total_size, 3072);
+        assert_eq!(resp.logical_file_count, None);
+    }
+
+    #[test]
+    fn server_migration_response_with_logical_count() {
+        let json = r#"{
+            "needs_migration": true,
+            "file_count": 66,
+            "total_size": 3072,
+            "pending_count": 66,
+            "logical_file_count": 15
+        }"#;
+
+        let resp: ServerMigrationResponse = serde_json::from_str(json).expect("deserialization failed");
+        assert!(resp.needs_migration);
+        assert_eq!(resp.pending_count, 66);
+        assert_eq!(resp.logical_file_count, Some(15));
     }
 
     // -----------------------------------------------------------------------
