@@ -5,8 +5,7 @@
 
 use sqlx::sqlite::SqlitePool;
 
-const TEST_MNEMONIC: &str =
-    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const TEST_ACCOUNT_ID: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
 
 async fn setup_db() -> SqlitePool {
@@ -65,12 +64,10 @@ async fn migrate_encrypts_plaintext_rows() {
         .await
         .unwrap();
 
-    let rows: Vec<(String, i32)> = sqlx::query_as(
-        "SELECT sub_account_seed_phrase, encryption_version FROM sub_accounts ORDER BY id",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let rows: Vec<(String, i32)> = sqlx::query_as("SELECT sub_account_seed_phrase, encryption_version FROM sub_accounts ORDER BY id")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(rows.len(), 2);
     for (ciphertext, ver) in &rows {
@@ -91,12 +88,10 @@ async fn migrate_round_trips_correctly() {
         .await
         .unwrap();
 
-    let (ciphertext,): (String,) = sqlx::query_as(
-        "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = 'acct-1'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (ciphertext,): (String,) = sqlx::query_as("SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = 'acct-1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     let key = tauri_project_lib::crypto::store::sub_account_key(TEST_MNEMONIC, TEST_ACCOUNT_ID).unwrap();
     let decrypted = tauri_project_lib::crypto::store::decrypt_or_plaintext(&key, &ciphertext, 1).unwrap();
@@ -115,24 +110,20 @@ async fn migrate_is_idempotent() {
         .await
         .unwrap();
 
-    let (after_first,): (String,) = sqlx::query_as(
-        "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = 'acct-1'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (after_first,): (String,) = sqlx::query_as("SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = 'acct-1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     // Second migration — should be a no-op
     tauri_project_lib::crypto::store::migrate_if_needed(&pool, TEST_MNEMONIC, TEST_ACCOUNT_ID)
         .await
         .unwrap();
 
-    let (after_second,): (String,) = sqlx::query_as(
-        "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = 'acct-1'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (after_second,): (String,) = sqlx::query_as("SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = 'acct-1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(after_first, after_second, "Second migration should not change the ciphertext");
 
@@ -153,12 +144,10 @@ async fn decrypt_with_wrong_mnemonic_fails() {
         .await
         .unwrap();
 
-    let (ciphertext,): (String,) = sqlx::query_as(
-        "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = 'acct-1'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (ciphertext,): (String,) = sqlx::query_as("SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = 'acct-1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     // Different mnemonic -> different key -> decryption should fail
     let wrong_mnemonic = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
@@ -179,28 +168,22 @@ async fn migrate_skips_empty_phrases() {
         .await
         .unwrap();
 
-    let (ver,): (i32,) = sqlx::query_as(
-        "SELECT encryption_version FROM sub_accounts WHERE account_id = 'acct-real'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (ver,): (i32,) = sqlx::query_as("SELECT encryption_version FROM sub_accounts WHERE account_id = 'acct-real'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(ver, 1);
 
-    let (ver_empty,): (i32,) = sqlx::query_as(
-        "SELECT encryption_version FROM sub_accounts WHERE account_id = 'acct-empty'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (ver_empty,): (i32,) = sqlx::query_as("SELECT encryption_version FROM sub_accounts WHERE account_id = 'acct-empty'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(ver_empty, 0, "Empty phrase should not be migrated");
 
     // Whitespace-only row: selected by SQL (not empty string) but skipped by trim() check
-    let (ver_spaces,): (i32,) = sqlx::query_as(
-        "SELECT encryption_version FROM sub_accounts WHERE account_id = 'acct-spaces'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (ver_spaces,): (i32,) = sqlx::query_as("SELECT encryption_version FROM sub_accounts WHERE account_id = 'acct-spaces'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(ver_spaces, 0, "Whitespace-only phrase should not be migrated");
 }

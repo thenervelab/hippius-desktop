@@ -29,8 +29,8 @@ const MIN_DECODED_LEN: usize = 12 + 16;
 /// Returns [`crate::error::AppError::Crypto`] if `mnemonic` is not a valid
 /// BIP-39 mnemonic. This can happen when the stored mnemonic is corrupted.
 pub fn derive_key(mnemonic: &str, account_id: &str, info: &str) -> Result<Zeroizing<[u8; 32]>, crate::error::AppError> {
-    let parsed = bip39::Mnemonic::parse_normalized(mnemonic)
-        .map_err(|e| crate::error::AppError::Crypto(format!("invalid mnemonic in derive_key: {e}")))?;
+    let parsed =
+        bip39::Mnemonic::parse_normalized(mnemonic).map_err(|e| crate::error::AppError::Crypto(format!("invalid mnemonic in derive_key: {e}")))?;
     // Wrap the 64-byte seed so it is wiped from the stack on drop.
     let seed = Zeroizing::new(parsed.to_seed(""));
 
@@ -245,7 +245,10 @@ mod tests {
         let result = derive_key("this is not a valid bip39 mnemonic phrase at all", TEST_ACCOUNT, "test");
         assert!(result.is_err(), "invalid mnemonic must return Err, not panic");
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("invalid mnemonic"), "error message should mention 'invalid mnemonic', got: {err_msg}");
+        assert!(
+            err_msg.contains("invalid mnemonic"),
+            "error message should mention 'invalid mnemonic', got: {err_msg}"
+        );
     }
 
     #[test]

@@ -208,17 +208,12 @@ pub async fn trigger_sync_now(app: AppHandle) -> Result<()> {
 ///
 /// Extracted so the lookup is unit-testable without touching the Tauri state,
 /// the SQLite pool, or the opener plugin.
-pub(crate) fn resolve_drive_path(
-    paths: Vec<crate::sync::paths::SyncPathResult>,
-    label: &str,
-) -> Result<String> {
+pub(crate) fn resolve_drive_path(paths: Vec<crate::sync::paths::SyncPathResult>, label: &str) -> Result<String> {
     paths
         .into_iter()
         .find(|p| p.label == label)
         .map(|p| p.path)
-        .ok_or_else(|| {
-            crate::error::AppError::Other(format!("No sync path with label '{label}'"))
-        })
+        .ok_or_else(|| crate::error::AppError::Other(format!("No sync path with label '{label}'")))
 }
 
 /// Reveal the on-disk folder for a configured drive in the OS file
@@ -236,20 +231,14 @@ pub(crate) fn resolve_drive_path(
 /// - `Other("No sync path with label '...'")` when the label is unknown
 /// - `Other("Failed to reveal ...")` when the opener plugin call fails
 #[tauri::command]
-pub async fn reveal_drive_in_finder(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    label: String,
-) -> Result<()> {
+pub async fn reveal_drive_in_finder(state: tauri::State<'_, crate::app_state::AppState>, label: String) -> Result<()> {
     let pool = state.pool()?;
-    let account_id = state
-        .current_account_id()
-        .map_err(crate::error::AppError::Other)?;
+    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
 
     let paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id).await?;
     let path = resolve_drive_path(paths, &label)?;
 
-    tauri_plugin_opener::reveal_item_in_dir(&path)
-        .map_err(|e| crate::error::AppError::Other(format!("Failed to reveal '{path}': {e}")))?;
+    tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|e| crate::error::AppError::Other(format!("Failed to reveal '{path}': {e}")))?;
 
     info!("Revealed drive '{}' at '{}' in file manager", label, path);
     Ok(())
@@ -276,10 +265,7 @@ mod tests {
             row("photos", "/Users/me/Pictures"),
             row("docs", "/Users/me/Documents"),
         ];
-        assert_eq!(
-            resolve_drive_path(rows, "photos").unwrap(),
-            "/Users/me/Pictures"
-        );
+        assert_eq!(resolve_drive_path(rows, "photos").unwrap(), "/Users/me/Pictures");
     }
 
     #[test]

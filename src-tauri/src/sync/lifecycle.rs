@@ -126,12 +126,7 @@ pub async fn add_local_sync_folder(
     // Enforce credit eligibility at the IPC boundary. Refuses to add a
     // new sync folder if the user has zero marketplace credits — see
     // `crate::billing::eligibility::thresholds::FOLDER_SYNC`.
-    crate::billing::eligibility::require_eligible(
-        &state,
-        &account_id,
-        crate::billing::eligibility::InsufficientCreditsAction::FolderSync,
-    )
-    .await?;
+    crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FolderSync).await?;
 
     // 1. Generate unique label — single source of truth in
     // `crate::sync::paths::generate_unique_label_internal`.
@@ -643,8 +638,7 @@ async fn init_or_unlock_drive(
             }
         }
     } else {
-        let (uid, mnem, is_new) =
-            init_new_drive(&mut manager, label, master_path, drive_password, existing_mnemonic).await?;
+        let (uid, mnem, is_new) = init_new_drive(&mut manager, label, master_path, drive_password, existing_mnemonic).await?;
         Ok((manager, uid, mnem.map(zeroize::Zeroizing::new), is_new))
     }
 }
@@ -807,16 +801,23 @@ pub(crate) async fn initialize_sync_inner(
 
     teardown_previous_drive(sync, &label).await;
 
-    // Load config (needs mnemonic to decrypt drive password)
+    // Load config (needs mnemonic to decrypt drive password).
+    //
+    // When no caller-supplied mnemonic is available, we resolve it via the
+    // full 5-stage `get_mnemonic_for_account` fallback chain (in-memory
+    // cache → encrypted master on disk → live drive export → DB row).
+    // The previous `auth.lock().mnemonic` fallback failed on slow systems
+    // where the FE triggered `auto_init_sync` before post-login
+    // `rehydrate_full_session` had finished writing `AuthInfo.mnemonic`,
+    // even though `master_enc_mnemonic.json` was already on disk. Going
+    // through the helper also converts the failure mode from an
+    // unstructured `AppError::Other(String)` to the machine-readable
+    // `NotReady(MasterMnemonicUnrecoverable)` that the FE can retry on.
     let mnemonic_for_config = if let Some(ref m) = existing_mnemonic {
         m.clone()
     } else {
-        let guard = app_state.auth.lock()?;
-        guard
-            .mnemonic
-            .as_deref()
-            .ok_or_else(|| crate::error::AppError::Other("Mnemonic required to decrypt drive password".into()))?
-            .to_owned()
+        let resolved = crate::sync::mnemonic::get_mnemonic_for_account(app_state.inner(), &account_id).await?;
+        resolved.as_str().to_owned()
     };
     let cfg = load_sync_config(pool, &account_id, &label, &mnemonic_for_config).await?;
     crate::sync::files::allow_asset_directory(&app, &cfg.sync_path);
@@ -859,8 +860,15 @@ pub(crate) async fn initialize_sync_inner(
         drive_password: &cfg.drive_password,
         existing_mnemonic: Some(&mnemonic_for_config),
     };
-    let (manager, user_id, mnemonic, is_new_setup) =
-        init_or_unlock_drive(manager, &label, &master_path, &cfg.drive_password, Some(&mnemonic_for_config), &recovery_ctx).await?;
+    let (manager, user_id, mnemonic, is_new_setup) = init_or_unlock_drive(
+        manager,
+        &label,
+        &master_path,
+        &cfg.drive_password,
+        Some(&mnemonic_for_config),
+        &recovery_ctx,
+    )
+    .await?;
     let mut manager = manager;
 
     // Validate user_id
@@ -923,6 +931,21 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
+
+    // 0. Release the auto-init latch if a hung auto_init_sync was still
+    //    holding it when the user hit logout. Without this, a subsequent
+    //    login's auto-init would bail with "already in progress" forever
+    //    until the app was restarted. The `AutoInitGuard` itself clears
+    //    on normal Drop, but a hang inside `auto_init_sync_inner` (e.g.
+    //    a stuck HCFS health check) can keep it held for minutes.
+    AUTO_INIT_IN_PROGRESS.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    // 0b. Wipe the per-drive status cache so the next login starts fresh.
+    //     The cache is the source of truth for `get_all_drive_statuses`
+    //     now that it remembers Error states across FE re-mounts.
+    if let Ok(mut cache) = app_state.drive_status_cache.lock() {
+        cache.clear();
+    }
 
     // 1. Cancel every drive's cancellation token FIRST so the sync loop
     //    sees a clean shutdown signal and can persist state before exiting.
@@ -1070,12 +1093,7 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
 
     // Emit a per-drive Paused status so the FE updates this single
     // drive without re-fetching the list. Other drives are unaffected.
-    crate::sync::status::emit_drive_status(
-        &app,
-        &label,
-        &drive_path,
-        crate::sync::drive_status::DriveStatus::Paused,
-    );
+    crate::sync::status::emit_drive_status(&app, &label, &drive_path, crate::sync::drive_status::DriveStatus::Paused);
 
     info!("Paused drive '{}', {} drives remaining", label, remaining);
     Ok(())
@@ -1161,10 +1179,46 @@ pub async fn auto_init_sync(
     auto_init_sync_inner(app.clone(), &state, account_id, mnemonic).await
 }
 
+// =========================================================================
+// Auto-init concurrency guard
+// =========================================================================
+
+/// Module-level latch that prevents two `auto_init_sync_inner` runs from
+/// overlapping. On slow systems the FE retries auto-init after the
+/// `hippius_auth_ready` event (see `useHcfsSync.ts::tryAutoInitSync`),
+/// so concurrent calls are now an expected condition — the guard makes
+/// the race a no-op by having the second caller bail with a skipped
+/// reason instead of re-entering the init loop on top of the first.
+static AUTO_INIT_IN_PROGRESS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// RAII guard for [`AUTO_INIT_IN_PROGRESS`]. Clears the latch on drop,
+/// including early-return and panic paths, so a failed run never leaves
+/// the latch stuck.
+struct AutoInitGuard;
+
+impl AutoInitGuard {
+    fn try_acquire() -> Option<Self> {
+        AUTO_INIT_IN_PROGRESS
+            .compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst)
+            .ok()
+            .map(|_| Self)
+    }
+}
+
+impl Drop for AutoInitGuard {
+    fn drop(&mut self) {
+        AUTO_INIT_IN_PROGRESS.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Inner body of `auto_init_sync` — returns the same shape as the public
 /// command but doesn't touch `sync_status`. The outer wrapper handles all
 /// status transitions and the auto-init latch so we can't forget on a new
 /// return path.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Linear auto-init pipeline — concurrency guard, migration check, mnemonic persistence, path fetch, scope expansion, HCFS config check, paused emit, mnemonic resolution, credits check, init loop. Splitting fragments the early-return error paths and obscures the ordering constraint between the paused-emit loop and the init loop (FE listener relies on that order)."
+)]
 async fn auto_init_sync_inner(
     app: AppHandle,
     state: &tauri::State<'_, crate::app_state::AppState>,
@@ -1172,6 +1226,45 @@ async fn auto_init_sync_inner(
     mnemonic: Option<String>,
 ) -> Result<AutoInitResult> {
     use std::sync::atomic::Ordering;
+
+    // 0. Concurrency guard. The FE now retries `auto_init_sync` on the
+    //    `hippius_auth_ready` event, so overlapping calls are expected
+    //    on slow cold starts. Bail early from the second caller instead
+    //    of re-entering the init loop on top of the first — the in-
+    //    flight run will emit per-drive Active/Error events on its own.
+    let Some(_guard) = AutoInitGuard::try_acquire() else {
+        debug!("auto_init_sync already in progress — skipping concurrent call");
+        return Ok(AutoInitResult {
+            any_initialized: false,
+            is_configured: true,
+            skipped_reason: Some("Auto-init already in progress".into()),
+        });
+    };
+
+    // 0b. Cross-account leak guard. `tryAutoInitSync` captures the
+    //     account_id in its closure and retries after the
+    //     `hippius_auth_ready` event. If the user logs out of account A
+    //     and logs back in as account B during the retry wait, the
+    //     retry fires with A's account_id even though the active
+    //     session is now B. Without this check, `auto_init_sync_inner`
+    //     would initialize A's drives under B's session via the disk
+    //     fallback in `get_mnemonic_for_account` — a cross-account
+    //     leak. Compare the FE-supplied account_id against the
+    //     currently active one and bail if they differ.
+    if let Ok(current) = state.current_account_id()
+        && current != account_id
+    {
+        warn!(
+            requested = %account_id,
+            current = %current,
+            "auto_init_sync called with stale account_id (session changed mid-retry); aborting"
+        );
+        return Ok(AutoInitResult {
+            any_initialized: false,
+            is_configured: false,
+            skipped_reason: Some("Stale account_id".into()),
+        });
+    }
 
     // 1. Block if migration in progress
     if state.migration.in_progress.load(Ordering::SeqCst) {
@@ -1253,15 +1346,49 @@ async fn auto_init_sync_inner(
     // paused drives while their entries are still missing from the
     // map. Reordering these two loops is a behavior change.
     for sp in sync_paths.iter().filter(|sp| sp.label != "migration" && sp.is_paused) {
-        crate::sync::status::emit_drive_status(
-            &app,
-            &sp.label,
-            &sp.path,
-            crate::sync::drive_status::DriveStatus::Paused,
-        );
+        crate::sync::status::emit_drive_status(&app, &sp.label, &sp.path, crate::sync::drive_status::DriveStatus::Paused);
     }
 
     info!(total = sync_paths.len(), active = regular.len(), "Auto-initializing sync paths");
+
+    // 7. Resolve the mnemonic exactly once — BEFORE the init loop — and
+    //    pass it explicitly to every `initialize_sync_inner` call below.
+    //
+    //    This bypasses the `AppState.auth.lock()` fallback inside
+    //    `initialize_sync_inner`, which on slow-system cold starts could
+    //    read `AuthInfo.mnemonic == None` if `rehydrate_full_session`
+    //    hadn't yet populated it. `get_mnemonic_for_account` has a
+    //    5-stage fallback chain (in-memory cache → encrypted master on
+    //    disk → live drive export → DB row) that is robust to that
+    //    ordering.
+    //
+    //    On failure, emit `DriveStatus::Error` for every regular drive
+    //    so the FE can render a retry affordance. The FE will retry
+    //    `auto_init_sync` on the next `hippius_auth_ready` event, which
+    //    fires after `rehydrate_full_session` finishes writing the
+    //    mnemonic.
+    let resolved_mnemonic: zeroize::Zeroizing<String> = match mnemonic.clone() {
+        Some(m) => zeroize::Zeroizing::new(m),
+        None => match crate::sync::mnemonic::get_mnemonic_for_account(state.inner(), &account_id).await {
+            Ok(m) => m,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "auto_init_sync: mnemonic unavailable; emitting Error for all regular drives. FE will retry on hippius_auth_ready."
+                );
+                let msg = "Waiting for authentication to complete. This will retry automatically.".to_string();
+                for sp in &regular {
+                    crate::sync::status::emit_drive_status(
+                        &app,
+                        &sp.label,
+                        &sp.path,
+                        crate::sync::drive_status::DriveStatus::Error { message: msg.clone() },
+                    );
+                }
+                return Err(e);
+            }
+        },
+    };
 
     // 8. Check credits once before the drive loop — balance doesn't change
     // between drives, so a single HTTP round-trip is sufficient.  If the
@@ -1280,16 +1407,40 @@ async fn auto_init_sync_inner(
         }
     }
 
-    // 9. Initialize each path (credits already validated above — skip per-drive check)
+    // 9. Initialize each path with the pre-resolved mnemonic. Passing
+    //    `Some(..)` guarantees every drive takes the `existing_mnemonic`
+    //    branch of `initialize_sync_inner` and never touches the auth
+    //    lock fallback — the loop is fully deterministic even if the
+    //    auth state churns underneath it.
     let mut any_initialized = false;
     for sp in &regular {
-        match initialize_sync_inner(app.clone(), account_id.clone(), sp.label.clone(), mnemonic.clone(), true, true).await {
+        match initialize_sync_inner(
+            app.clone(),
+            account_id.clone(),
+            sp.label.clone(),
+            Some(resolved_mnemonic.as_str().to_owned()),
+            true,
+            true,
+        )
+        .await
+        {
             Ok(result) => {
                 info!(label = %sp.label, user_id = %result.user_id, "Sync initialized");
                 any_initialized = true;
             }
             Err(e) => {
                 warn!(label = %sp.label, error = %e, "Failed to init sync");
+                // Surface the failure to the FE so the user sees a retry
+                // affordance instead of a silently missing drive. Prior
+                // to this, per-drive init failures were only logged.
+                crate::sync::status::emit_drive_status(
+                    &app,
+                    &sp.label,
+                    &sp.path,
+                    crate::sync::drive_status::DriveStatus::Error {
+                        message: format!("Failed to initialize: {e}"),
+                    },
+                );
             }
         }
     }

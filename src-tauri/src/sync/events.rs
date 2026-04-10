@@ -34,6 +34,12 @@ pub const CONFLICTS_PENDING: &str = "hcfs_conflicts_pending";
 pub const ACTIVITY_UPDATED: &str = "hcfs_activity_updated";
 /// Emitted when the backend detects credentials are invalid and re-login is needed.
 pub const AUTH_RELOGIN_REQUIRED: &str = "hcfs_auth_relogin_required";
+/// Emitted when `AuthInfo` has been fully populated post-login (mnemonic
+/// login or keychain-backed session restore). The frontend uses this as
+/// a retry trigger for `auto_init_sync` on slow systems where the FE
+/// invokes auto-init before Rust has finished writing `AuthInfo.mnemonic`.
+/// Payload is empty — it's a pure signal.
+pub const AUTH_READY: &str = "hippius_auth_ready";
 /// Emitted with a full progress snapshot for the sync status widget.
 pub const PROGRESS_SNAPSHOT: &str = "sync_progress_snapshot";
 /// Emitted whenever a single drive's status changes (Active → Paused,

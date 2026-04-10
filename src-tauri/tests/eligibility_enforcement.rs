@@ -32,9 +32,7 @@ use tokio::net::TcpListener;
 
 use tauri_project_lib::app_state::AppState;
 use tauri_project_lib::auth::auth_session_repo::{UpsertSession, upsert};
-use tauri_project_lib::billing::eligibility::{
-    InsufficientCreditsAction, require_eligible,
-};
+use tauri_project_lib::billing::eligibility::{InsufficientCreditsAction, require_eligible};
 use tauri_project_lib::error::{AppError, NotReadyKind};
 
 /// Shared state for the mock balance endpoint. The credit value is
@@ -61,9 +59,7 @@ async fn spawn_mock_server() -> (String, MockBilling) {
         .route("/api/billing/credits/balance/", get(balance_handler))
         .with_state(state.clone());
 
-    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-        .await
-        .expect("bind mock server");
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await.expect("bind mock server");
     let addr = listener.local_addr().expect("local addr");
 
     tokio::spawn(async move {

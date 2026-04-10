@@ -99,26 +99,44 @@ pub fn app_close(app: AppHandle<Wry>) {
 // ── Per-drive status (replaces the old global SyncEngineStatus) ────────
 
 use crate::error::AppError;
-use crate::sync::drive_status::{
-    derive_folder_name, status_from_is_paused, DriveStatus, DriveStatusEntry,
-};
-use crate::sync::events::{DriveStatusChangedPayload, DRIVE_REMOVED, DRIVE_STATUS_CHANGED};
+use crate::sync::drive_status::{DriveStatus, DriveStatusEntry, derive_folder_name, status_from_is_paused};
+use crate::sync::events::{DRIVE_REMOVED, DRIVE_STATUS_CHANGED, DriveStatusChangedPayload};
 
 /// Emit a `DRIVE_STATUS_CHANGED` event for a single drive.
 ///
 /// Use this from any lifecycle transition that changes a drive's
-/// status (init success, pause, resume) so the frontend can update
-/// its per-drive status map without re-fetching the full list.
+/// status (init success, pause, resume, init failure) so the frontend
+/// can update its per-drive status map without re-fetching the full
+/// list.
 ///
 /// Callers must pass the drive's on-disk `path` so the FE can populate
 /// the entry without a fallback DB read. `folder_name` is derived from
 /// the path here so the helper has exactly one source of truth for
 /// basename derivation (`derive_folder_name`).
 ///
-/// This is fire-and-forget — emit failures are swallowed because they
-/// only happen when the app is shutting down, in which case the FE
-/// will rebuild from `get_all_drive_statuses` on next mount anyway.
+/// Also writes the status into `AppState::drive_status_cache` so a
+/// subsequent `get_all_drive_statuses` call (e.g. when the user
+/// navigates to the Settings page after an init failure has already
+/// emitted) returns the last-known status instead of clobbering the
+/// FE atom's Error state with the DB-derived `Active`.
+///
+/// Emit failures are swallowed because they only happen when the app
+/// is shutting down, in which case the FE will rebuild from
+/// `get_all_drive_statuses` on next mount anyway — which now reads
+/// the cache.
 pub fn emit_drive_status(app: &AppHandle<Wry>, label: &str, path: &str, status: DriveStatus) {
+    use tauri::Manager;
+
+    // Write the last-emitted status to the per-drive cache BEFORE
+    // emitting the event. The cache is what `get_all_drive_statuses`
+    // will read on the next FE bootstrap, so writing here ensures the
+    // cache is up-to-date for the lifetime of this status — even if
+    // the FE isn't listening at the moment the event fires.
+    let app_state = app.state::<crate::app_state::AppState>();
+    if let Ok(mut cache) = app_state.drive_status_cache.lock() {
+        cache.insert(label.to_string(), status.clone());
+    }
+
     let payload = DriveStatusChangedPayload {
         label: label.to_string(),
         folder_name: derive_folder_name(path, label),
@@ -130,11 +148,19 @@ pub fn emit_drive_status(app: &AppHandle<Wry>, label: &str, path: &str, status: 
 
 /// Emit a `DRIVE_REMOVED` event for a single drive. Called by
 /// `remove_drive` after the `sync_paths` row is deleted. The FE
-/// listener drops the entry from its per-drive status map.
+/// listener drops the entry from its per-drive status map, and the
+/// per-drive cache entry is pruned here so a label-reuse scenario
+/// (user removes a drive then creates a new one with the same label)
+/// doesn't resurface a stale Error state.
 pub fn emit_drive_removed(app: &AppHandle<Wry>, label: &str) {
-    let payload = crate::sync::events::LabelPayload {
-        label: label.to_string(),
-    };
+    use tauri::Manager;
+
+    let app_state = app.state::<crate::app_state::AppState>();
+    if let Ok(mut cache) = app_state.drive_status_cache.lock() {
+        cache.remove(label);
+    }
+
+    let payload = crate::sync::events::LabelPayload { label: label.to_string() };
     let _ = app.emit(DRIVE_REMOVED, payload);
 }
 
@@ -142,9 +168,18 @@ pub fn emit_drive_removed(app: &AppHandle<Wry>, label: &str) {
 /// directly so integration tests can exercise the per-drive query
 /// without constructing a `tauri::State` wrapper. The IPC command
 /// below is a one-liner that delegates here.
-pub async fn get_all_drive_statuses_inner(
-    state: &crate::app_state::AppState,
-) -> Result<Vec<DriveStatusEntry>, AppError> {
+///
+/// Status resolution precedence:
+/// 1. **`drive_status_cache`** — the last status emitted for this
+///    label via `emit_drive_status`, including `Error` states from
+///    `auto_init_sync_inner`'s per-drive init failure path. This is
+///    what prevents the FE from silently clobbering an Error row
+///    with `Active` when the user navigates to Settings after the
+///    init failure has already fired.
+/// 2. **`status_from_is_paused`** — the DB-derived fallback for
+///    labels that haven't emitted a status yet this session (fresh
+///    cold start before the first init loop).
+pub async fn get_all_drive_statuses_inner(state: &crate::app_state::AppState) -> Result<Vec<DriveStatusEntry>, AppError> {
     let pool = state.pool()?;
 
     // No account → empty list. The FE shouldn't be calling this when
@@ -157,6 +192,12 @@ pub async fn get_all_drive_statuses_inner(
         .await
         .unwrap_or_default();
 
+    // Snapshot the cache once so the loop below doesn't hold the lock
+    // across the sync-path iteration. A missing label falls through to
+    // the DB-derived status; a hit wins over it.
+    let cache_snapshot: std::collections::HashMap<String, DriveStatus> =
+        state.drive_status_cache.lock().map(|guard| guard.clone()).unwrap_or_default();
+
     Ok(paths
         .into_iter()
         // Skip the internal "migration" pseudo-drive — it's not user-
@@ -168,11 +209,15 @@ pub async fn get_all_drive_statuses_inner(
             // event always produce the same basename for the same
             // path.
             let folder_name = derive_folder_name(&p.path, &p.label);
+            let status = cache_snapshot
+                .get(&p.label)
+                .cloned()
+                .unwrap_or_else(|| status_from_is_paused(p.is_paused));
             DriveStatusEntry {
                 label: p.label,
                 folder_name,
                 path: p.path,
-                status: status_from_is_paused(p.is_paused),
+                status,
             }
         })
         .collect())
@@ -188,9 +233,7 @@ pub async fn get_all_drive_statuses_inner(
 /// Returns an empty list when no account is logged in (the FE renders
 /// nothing in that case anyway).
 #[tauri::command]
-pub async fn get_all_drive_statuses(
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<Vec<DriveStatusEntry>, AppError> {
+pub async fn get_all_drive_statuses(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Vec<DriveStatusEntry>, AppError> {
     get_all_drive_statuses_inner(&state).await
 }
 

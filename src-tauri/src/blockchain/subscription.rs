@@ -56,9 +56,7 @@ pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), Strin
                     consecutive_failures += 1;
                     // Exponential backoff: 5s, 10s, 20s, 40s, capped at 60s
                     let delay_secs = 5u64
-                        .saturating_mul(
-                            2u64.saturating_pow(consecutive_failures.saturating_sub(1).min(4)),
-                        )
+                        .saturating_mul(2u64.saturating_pow(consecutive_failures.saturating_sub(1).min(4)))
                         .min(60);
                     let is_rate_limited = e.contains("429");
                     let delay_secs = if is_rate_limited { delay_secs.max(30) } else { delay_secs };
@@ -136,4 +134,3 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
 
     Ok(())
 }
-

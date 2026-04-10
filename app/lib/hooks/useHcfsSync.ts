@@ -8,8 +8,10 @@ import {
   type HcfsConfigResult,
 } from "../utils/hcfsConfigUtils";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { migrationLockAtom } from "../global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
+import { isNotReady } from "../utils/dispatchTauriError";
 
 export interface UseHcfsSyncResult {
   tryInitializeSync: (accountId: string, label: string, mnemonic?: string) => Promise<boolean>;
@@ -171,25 +173,133 @@ interface AutoInitResult {
  * This function is a thin wrapper that calls Rust and updates the
  * `isSyncConfigured` atom — per-drive sync status is mirrored from
  * Rust by `useDriveStatuses`.
+ *
+ * ## Retry behavior
+ *
+ * On slow systems the FE can invoke `auto_init_sync` before Rust has
+ * finished writing `AuthInfo.mnemonic` from `rehydrate_full_session`.
+ * Rust then returns `NotReady(MASTER_MNEMONIC_UNRECOVERABLE)` and every
+ * drive fails. This wrapper handles the race with a 3-attempt ladder:
+ *
+ *   1. Fire immediately (covers the happy path where auth is already
+ *      populated).
+ *   2. If attempt 1 returned the mnemonic-unavailable error, race a
+ *      750 ms backoff against the `hippius_auth_ready` event — whichever
+ *      fires first triggers attempt 2. Covers the fast case where
+ *      `rehydrate_full_session` is milliseconds away from finishing.
+ *   3. If attempt 2 also failed, race up to 9.25 s of remaining budget
+ *      (10 s total from the subscription) against the event again. Any
+ *      additional event fired during earlier attempts is still captured
+ *      because the listener is subscribed BEFORE attempt 1.
+ *
+ * ### Why the listener subscribes before attempt 1
+ *
+ * Previous versions installed `listen()` only after attempts 1 and 2
+ * had returned. On slow-system cold starts where
+ * `rehydrate_full_session` finishes during attempt 1 or the backoff,
+ * Rust's `hippius_auth_ready` emit landed before the listener was
+ * installed and the signal was silently lost — the FE then waited the
+ * full 10 s for an event that had already fired, and eventually gave
+ * up. Subscribing first guarantees we never miss the signal regardless
+ * of which attempt is in flight when it arrives.
+ *
+ * Any error other than `MasterMnemonicUnrecoverable` (network,
+ * validation, credits) is terminal and must not retry — those need
+ * user action.
  */
 export async function tryAutoInitSync(
   accountId: string,
   mnemonic?: string
 ): Promise<boolean> {
+  const attempt = async (): Promise<"retry" | boolean> => {
+    try {
+      const result = await invoke<AutoInitResult>("auto_init_sync", {
+        accountId,
+        mnemonic: mnemonic ?? null,
+      });
+
+      // Per-drive Active status is emitted by Rust from `auto_init_sync`
+      // for each successful drive init — useDriveStatuses picks them up
+      // via the hcfs_drive_status_changed event, which feeds
+      // hasConfiguredDrivesAtom (the source of truth for "configured?").
+
+      return result.anyInitialized;
+    } catch (err) {
+      // `MasterMnemonicUnrecoverable` is the specific signal that auth
+      // state hasn't been populated yet. Any other error (insufficient
+      // credits, validation, network) is terminal and must not retry.
+      if (isNotReady(err, "mnemonic")) {
+        console.warn(
+          "[AutoSync] mnemonic not yet recoverable — will retry when auth is ready"
+        );
+        return "retry";
+      }
+      console.error("[AutoSync] auto_init_sync failed:", err);
+      return false;
+    }
+  };
+
+  // ── Subscribe to `hippius_auth_ready` BEFORE attempt 1 ───────────
+  //
+  // `authReadyPromise` resolves the first time the event fires and
+  // stays resolved thereafter, so any signal fired during attempt 1
+  // or during the backoff wait is captured. Without this pre-
+  // subscription, signals that land between attempts are silently
+  // lost and the FE waits the full 10 s for an already-fired event.
+  let unlisten: (() => void) | null = null;
+  let resolveAuthReady: (() => void) | null = null;
+  const authReadyPromise = new Promise<void>((resolve) => {
+    resolveAuthReady = resolve;
+  });
+
   try {
-    const result = await invoke<AutoInitResult>("auto_init_sync", {
-      accountId,
-      mnemonic: mnemonic ?? null,
+    unlisten = await listen("hippius_auth_ready", () => {
+      if (resolveAuthReady) {
+        resolveAuthReady();
+        resolveAuthReady = null; // fire-once latch
+      }
     });
+  } catch (e) {
+    console.error("[AutoSync] failed to subscribe to hippius_auth_ready", e);
+    // Continue without the listener — the ladder degrades to pure
+    // backoff waits, which still covers the common fast case.
+  }
 
-    // Per-drive Active status is emitted by Rust from `auto_init_sync`
-    // for each successful drive init — useDriveStatuses picks them up
-    // via the hcfs_drive_status_changed event, which feeds
-    // hasConfiguredDrivesAtom (the source of truth for "configured?").
+  // `waitFor` races the pre-subscribed auth-ready promise against a
+  // sleep timer. If the event has already fired by the time this is
+  // called, `authReadyPromise` is already resolved and `waitFor`
+  // returns immediately — no lost signals.
+  const waitFor = (ms: number): Promise<void> =>
+    Promise.race([
+      authReadyPromise,
+      new Promise<void>((r) => setTimeout(r, ms)),
+    ]);
 
-    return result.anyInitialized;
-  } catch (err) {
-    console.error("[AutoSync] auto_init_sync failed:", err);
-    return false;
+  try {
+    // Attempt 1: fire immediately. If auth is already ready, this
+    // succeeds and we never hit the retry logic at all.
+    const first = await attempt();
+    if (first !== "retry") return first;
+
+    // Attempt 2: race the 750 ms backoff against `hippius_auth_ready`.
+    // Whichever fires first triggers the next attempt.
+    await waitFor(750);
+    const second = await attempt();
+    if (second !== "retry") return second;
+
+    // Attempt 3: wait up to 9.25 s more for auth ready (10 s total
+    // budget from listener subscription). Whichever fires first
+    // triggers the final attempt.
+    await waitFor(9_250);
+    const third = await attempt();
+    if (third === "retry") {
+      console.warn(
+        "[AutoSync] mnemonic still not recoverable after 3 attempts; giving up"
+      );
+      return false;
+    }
+    return third;
+  } finally {
+    if (unlisten) unlisten();
   }
 }

@@ -56,6 +56,19 @@ impl TauriSyncBridge {
         self.app.get().cloned()
     }
 
+    /// Emit the `hippius_auth_ready` signal. Called from login and
+    /// session-restore once `AuthInfo` has been fully written. The FE
+    /// uses this as a retry trigger for `auto_init_sync` on slow
+    /// systems where the first invocation lost the race against
+    /// `rehydrate_full_session`.
+    ///
+    /// No-op if the `AppHandle` has not been wired in yet — at that
+    /// point there's no FE to receive the event anyway.
+    pub fn emit_auth_ready(&self) {
+        if let Some(app) = self.app() {
+            let _ = app.emit(events::AUTH_READY, ());
+        }
+    }
 }
 
 /// Inspect the progress tracker after a sync cycle completes to update

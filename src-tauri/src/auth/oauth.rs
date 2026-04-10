@@ -358,6 +358,14 @@ pub async fn complete_oauth_flow(
         // OAuth has no eth_address or sr25519_pair — those derive from a
         // BIP-39 mnemonic which is generated later by ensure_sync_mnemonic.
         state.set_active_account(&substrate_address, crate::auth::state::AuthCapabilities::OAuthOnly)?;
+
+        // Signal the FE that auth is ready so `tryAutoInitSync` can
+        // retry its auto-init ladder. Without this, OAuth users with
+        // existing sync drives hit the full 10s listener timeout on
+        // every login before giving up — the mnemonic-race fix in
+        // `useHcfsSync.ts` listens on `hippius_auth_ready`, which the
+        // mnemonic-login and session-restore paths already emit.
+        state.sync_bridge.emit_auth_ready();
     }
 
     info!(

@@ -147,7 +147,11 @@ pub async fn restore_session(
                                 // Mnemonic is in AuthInfo — run encryption migration.
                                 // Extract the mnemonic BEFORE awaiting (can't hold mutex across await).
                                 if let Ok(pool) = state.pool() {
-                                    let mnemonic_str = state.auth.lock().ok().and_then(|g| g.mnemonic.as_deref().map(|s| zeroize::Zeroizing::new(s.to_owned())));
+                                    let mnemonic_str = state
+                                        .auth
+                                        .lock()
+                                        .ok()
+                                        .and_then(|g| g.mnemonic.as_deref().map(|s| zeroize::Zeroizing::new(s.to_owned())));
                                     if let Some(m) = mnemonic_str
                                         && let Err(e) = crate::crypto::store::migrate_if_needed(pool, &m, addr).await
                                     {
@@ -161,6 +165,11 @@ pub async fn restore_session(
                         }
                     }
                     info!("Restoring OAuth session for {:?}", substrate_address);
+                    // Signal that AuthInfo is populated so the FE can
+                    // retry `auto_init_sync` if its first attempt raced
+                    // ahead of `rehydrate_or_restored`. See the auth-
+                    // readiness race fix in `sync/lifecycle.rs`.
+                    state.sync_bridge.emit_auth_ready();
                     return Ok(SessionRestoreResult {
                         authenticated: true,
                         substrate_address,
@@ -257,7 +266,11 @@ pub async fn restore_session(
                 // Mnemonic is in AuthInfo — run encryption migration.
                 // Extract the mnemonic BEFORE awaiting (can't hold mutex across await).
                 if let Ok(pool) = state.pool() {
-                    let mnemonic_str = state.auth.lock().ok().and_then(|g| g.mnemonic.as_deref().map(|s| zeroize::Zeroizing::new(s.to_owned())));
+                    let mnemonic_str = state
+                        .auth
+                        .lock()
+                        .ok()
+                        .and_then(|g| g.mnemonic.as_deref().map(|s| zeroize::Zeroizing::new(s.to_owned())));
                     if let Some(m) = mnemonic_str
                         && let Err(e) = crate::crypto::store::migrate_if_needed(pool, &m, addr).await
                     {
@@ -271,6 +284,10 @@ pub async fn restore_session(
         }
     }
     info!("Restoring DB session for {:?}", row.substrate_address);
+    // Signal auth-ready for the DB-fallback restore path as well. The
+    // FE's `auto_init_sync` retry listens on this single event for both
+    // restore branches.
+    state.sync_bridge.emit_auth_ready();
     Ok(SessionRestoreResult {
         authenticated: true,
         substrate_address: row.substrate_address,

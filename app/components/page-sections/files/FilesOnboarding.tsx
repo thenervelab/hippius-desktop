@@ -56,8 +56,11 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
       prev.map((f) => {
         const entry = driveStatuses.get(f.id);
         if (!entry) return f;
+        // Widen to `active` vs non-active so the new `error` variant
+        // renders as non-syncing. See MultiFolderSyncManager for the
+        // matching change and the retry-on-hippius_auth_ready flow.
         const newStatus =
-          entry.status.kind === "paused" ? "paused" : "syncing";
+          entry.status.kind === "active" ? "syncing" : "paused";
         return f.status === newStatus ? f : { ...f, status: newStatus };
       })
     );

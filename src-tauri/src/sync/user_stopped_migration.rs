@@ -41,23 +41,19 @@ const LEGACY_KEY: &str = "sync_user_stopped";
 /// painted to paused (0 in the no-op case).
 pub async fn migrate_user_stopped_to_per_drive(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
     // Step 1: read the legacy flag. Fast path: missing = nothing to do.
-    let legacy: Option<(String,)> = sqlx::query_as(
-        "SELECT preference_value FROM user_preferences WHERE preference_key = ?",
-    )
-    .bind(LEGACY_KEY)
-    .fetch_optional(pool)
-    .await?;
+    let legacy: Option<(String,)> = sqlx::query_as("SELECT preference_value FROM user_preferences WHERE preference_key = ?")
+        .bind(LEGACY_KEY)
+        .fetch_optional(pool)
+        .await?;
 
     let was_stopped = legacy.is_some_and(|(v,)| v == "true");
 
     // If the row exists with value "false" we still want to clean it up
     // (it's dead weight) but we don't paint anything paused.
-    let row_exists = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM user_preferences WHERE preference_key = ?",
-    )
-    .bind(LEGACY_KEY)
-    .fetch_one(pool)
-    .await?
+    let row_exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_preferences WHERE preference_key = ?")
+        .bind(LEGACY_KEY)
+        .fetch_one(pool)
+        .await?
         > 0;
 
     if !row_exists {
@@ -116,9 +112,7 @@ mod tests {
     /// Spin up an in-memory pool with the minimum schema this module
     /// touches: `user_preferences` and `sync_paths`.
     async fn make_pool() -> SqlitePool {
-        let pool = SqlitePool::connect("sqlite::memory:")
-            .await
-            .expect("open in-memory db");
+        let pool = SqlitePool::connect("sqlite::memory:").await.expect("open in-memory db");
 
         sqlx::query(
             "CREATE TABLE user_preferences (
@@ -150,37 +144,31 @@ mod tests {
     }
 
     async fn insert_pref(pool: &SqlitePool, value: &str) {
-        sqlx::query(
-            "INSERT INTO user_preferences (preference_key, preference_value, updated_at) VALUES (?, ?, 0)",
-        )
-        .bind(LEGACY_KEY)
-        .bind(value)
-        .execute(pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO user_preferences (preference_key, preference_value, updated_at) VALUES (?, ?, 0)")
+            .bind(LEGACY_KEY)
+            .bind(value)
+            .execute(pool)
+            .await
+            .unwrap();
     }
 
     async fn insert_path(pool: &SqlitePool, owner: &str, label: &str, paused: bool) {
-        sqlx::query(
-            "INSERT INTO sync_paths (owner, path, type, label, is_paused) VALUES (?, ?, 'private', ?, ?)",
-        )
-        .bind(owner)
-        .bind(format!("/tmp/{label}"))
-        .bind(label)
-        .bind(if paused { 1 } else { 0 })
-        .execute(pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO sync_paths (owner, path, type, label, is_paused) VALUES (?, ?, 'private', ?, ?)")
+            .bind(owner)
+            .bind(format!("/tmp/{label}"))
+            .bind(label)
+            .bind(i32::from(paused))
+            .execute(pool)
+            .await
+            .unwrap();
     }
 
     async fn pref_exists(pool: &SqlitePool) -> bool {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM user_preferences WHERE preference_key = ?",
-        )
-        .bind(LEGACY_KEY)
-        .fetch_one(pool)
-        .await
-        .unwrap()
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_preferences WHERE preference_key = ?")
+            .bind(LEGACY_KEY)
+            .fetch_one(pool)
+            .await
+            .unwrap()
             > 0
     }
 

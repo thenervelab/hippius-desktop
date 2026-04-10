@@ -98,4 +98,3 @@ pub async fn validate_send_balance(
         available_balance_planck: available.to_string(),
     })
 }
-

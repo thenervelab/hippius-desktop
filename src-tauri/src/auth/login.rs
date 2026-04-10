@@ -131,6 +131,13 @@ pub async fn login_with_mnemonic(
         "Mnemonic login successful"
     );
 
+    // Signal that AuthInfo is fully populated so the FE can trigger
+    // `auto_init_sync`. On slow systems the FE otherwise fires auto-init
+    // before `rehydrate_full_session` has finished writing the mnemonic,
+    // and every drive fails with `MasterMnemonicUnrecoverable`. Fire-and-
+    // forget; the bridge no-ops if the AppHandle isn't wired in yet.
+    state.sync_bridge.emit_auth_ready();
+
     Ok(LoginResult {
         substrate_address,
         eth_address,
@@ -163,7 +170,6 @@ pub fn generate_mnemonic_internal() -> Result<zeroize::Zeroizing<String>, AppErr
     let mnemonic = Mnemonic::generate_in(Language::English, 12).map_err(|e| AppError::Crypto(format!("Failed to generate mnemonic: {e}")))?;
     Ok(zeroize::Zeroizing::new(mnemonic.to_string()))
 }
-
 
 #[cfg(test)]
 mod tests {

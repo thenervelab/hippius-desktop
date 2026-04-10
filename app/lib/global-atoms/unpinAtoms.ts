@@ -6,10 +6,15 @@ export const triggerSyncPathRefreshAtom = atom<number>(0);
 /**
  * Per-drive sync status. Mirrors the Rust backend's `DriveStatus` enum
  * (see `src-tauri/src/sync/drive_status.rs`). Wire format is the tagged
- * shape `{"kind": "active"}` so a future `Error` variant can be added
- * without breaking compatibility.
+ * shape `{"kind": "active"}`. The `error` variant is emitted by
+ * `auto_init_sync_inner` when a per-drive init fails (e.g. mnemonic not
+ * yet recoverable on slow-system cold starts); consumers render it as a
+ * "needs attention" state with a retry affordance.
  */
-export type DriveStatus = { kind: "active" } | { kind: "paused" };
+export type DriveStatus =
+  | { kind: "active" }
+  | { kind: "paused" }
+  | { kind: "error"; message: string };
 
 /**
  * One row in the response from `get_all_drive_statuses`. Mirrors the

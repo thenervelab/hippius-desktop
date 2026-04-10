@@ -62,10 +62,7 @@ async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &s
 /// from disk without keychain rehydration — see the cold-start
 /// "Mnemonic required" issue).
 fn session_mnemonic(state: &AppState) -> Result<String> {
-    let auth = state
-        .auth
-        .lock()
-        .map_err(|e| AppError::Other(format!("auth lock poisoned: {e}")))?;
+    let auth = state.auth.lock().map_err(|e| AppError::Other(format!("auth lock poisoned: {e}")))?;
     auth.mnemonic
         .as_ref()
         .map(|z| z.as_str().to_string())

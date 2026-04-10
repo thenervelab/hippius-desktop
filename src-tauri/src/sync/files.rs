@@ -119,15 +119,8 @@ pub async fn add_file(state: tauri::State<'_, crate::app_state::AppState>, sync_
     // operation here so we never copy the file into the sync folder
     // (and thus never trigger an upload that would silently fail
     // server-side for billing reasons).
-    let account_id = state
-        .current_account_id()
-        .map_err(crate::error::AppError::Other)?;
-    crate::billing::eligibility::require_eligible(
-        &state,
-        &account_id,
-        crate::billing::eligibility::InsufficientCreditsAction::FileUpload,
-    )
-    .await?;
+    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FileUpload).await?;
 
     add_file_internal(sync_path, file_path).await
 }
@@ -143,15 +136,8 @@ pub async fn add_folder(
 ) -> Result<String> {
     // Enforce credit eligibility at the IPC boundary — same rationale
     // as `add_file`.
-    let account_id = state
-        .current_account_id()
-        .map_err(crate::error::AppError::Other)?;
-    crate::billing::eligibility::require_eligible(
-        &state,
-        &account_id,
-        crate::billing::eligibility::InsufficientCreditsAction::FolderUpload,
-    )
-    .await?;
+    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FolderUpload).await?;
 
     let source = Path::new(&folder_path);
     let name = source
@@ -401,9 +387,7 @@ pub async fn add_files(
     // boundary. The per-file `add_file_internal` calls inside the loop
     // below do NOT re-check — there's no point hammering the billing
     // API once per file when the batch is treated as a single unit.
-    let account_id = state
-        .current_account_id()
-        .map_err(crate::error::AppError::Other)?;
+    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
     let action = if for_folder {
         crate::billing::eligibility::InsufficientCreditsAction::FolderUpload
     } else {
@@ -1034,11 +1018,7 @@ pub async fn get_user_files(
             };
             // last_charged_at_ms is a billing timestamp -- only use
             // server-side values, never fall back to local mtime.
-            let last_charged_at_ms = if updated_at_ms != 0 {
-                updated_at_ms
-            } else {
-                uploaded_at_ms
-            };
+            let last_charged_at_ms = if updated_at_ms != 0 { updated_at_ms } else { uploaded_at_ms };
 
             // Detect encrypted file names (long hex strings or file_<hex> patterns)
             let display_name = if hcfs_client::engine::classify::is_encrypted_name_stub(&entry.name).is_some()

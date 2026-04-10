@@ -237,11 +237,7 @@ pub async fn check_action_eligibility(
 ///     // ... existing body ...
 /// }
 /// ```
-pub async fn require_eligible(
-    state: &crate::app_state::AppState,
-    account_id: &str,
-    action: InsufficientCreditsAction,
-) -> Result<()> {
+pub async fn require_eligible(state: &crate::app_state::AppState, account_id: &str, action: InsufficientCreditsAction) -> Result<()> {
     let result = check_action_eligibility_inner(state, account_id, action).await?;
     if result.eligible {
         Ok(())
@@ -315,13 +311,19 @@ mod tests {
     #[test]
     fn eligibility_threshold_logic_matches_legacy_typescript() {
         // > 0 actions
-        assert!(matches_eligibility(0.0, 0.0).is_none(), "0 credits with 0 threshold is INELIGIBLE (legacy `credits <= 0` blocks)");
+        assert!(
+            matches_eligibility(0.0, 0.0).is_none(),
+            "0 credits with 0 threshold is INELIGIBLE (legacy `credits <= 0` blocks)"
+        );
         assert!(matches_eligibility(0.5, 0.0).is_some(), "0.5 credits with 0 threshold is eligible");
         assert!(matches_eligibility(1.0, 0.0).is_some());
 
         // >= 10 actions
         assert!(matches_eligibility(0.0, 10.0).is_none());
-        assert!(matches_eligibility(9.99, 10.0).is_none(), "9.99 credits with 10 threshold is INELIGIBLE (legacy `< 10` blocks)");
+        assert!(
+            matches_eligibility(9.99, 10.0).is_none(),
+            "9.99 credits with 10 threshold is INELIGIBLE (legacy `< 10` blocks)"
+        );
         assert!(matches_eligibility(10.0, 10.0).is_some(), "exactly 10 credits passes legacy `< 10` check");
         assert!(matches_eligibility(11.0, 10.0).is_some());
     }

@@ -30,7 +30,6 @@ pub fn to_plancks(amount: String) -> Result<String, crate::error::AppError> {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -69,5 +68,4 @@ mod tests {
         assert!(to_plancks("abc".into()).is_err());
         assert!(to_plancks(String::new()).is_err());
     }
-
 }

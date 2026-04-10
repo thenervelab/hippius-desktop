@@ -30,9 +30,7 @@ use tauri_project_lib::sync::status::get_all_drive_statuses_inner;
 /// Build an in-memory pool with the minimum schema this test touches:
 /// just `sync_paths` plus the unique constraint that production uses.
 async fn make_pool() -> SqlitePool {
-    let pool = SqlitePool::connect("sqlite::memory:")
-        .await
-        .expect("open in-memory db");
+    let pool = SqlitePool::connect("sqlite::memory:").await.expect("open in-memory db");
 
     sqlx::query(
         "CREATE TABLE sync_paths (
@@ -65,16 +63,14 @@ fn account_key(account_id: &str) -> String {
 }
 
 async fn insert_path(pool: &SqlitePool, account_id: &str, label: &str, paused: bool) {
-    sqlx::query(
-        "INSERT INTO sync_paths (owner, path, type, label, is_paused) VALUES (?, ?, 'private', ?, ?)",
-    )
-    .bind(account_key(account_id))
-    .bind(format!("/tmp/{label}"))
-    .bind(label)
-    .bind(if paused { 1 } else { 0 })
-    .execute(pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO sync_paths (owner, path, type, label, is_paused) VALUES (?, ?, 'private', ?, ?)")
+        .bind(account_key(account_id))
+        .bind(format!("/tmp/{label}"))
+        .bind(label)
+        .bind(i32::from(paused))
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 /// Build an `AppState` with the given pool and an active account.
@@ -219,4 +215,76 @@ async fn owner_scoping_excludes_other_accounts() {
     assert!(labels.contains(&"alice_photos"));
     assert!(!labels.contains(&"bob_default"));
     assert!(!labels.contains(&"bob_work"));
+}
+
+#[tokio::test]
+async fn cached_status_wins_over_db_derived_status() {
+    // Regression guard: the per-drive cache in `AppState.drive_status_cache`
+    // must take precedence over the `is_paused`-derived fallback. Without
+    // this, an `Error { message }` state emitted by `auto_init_sync_inner`
+    // would be silently clobbered to `Active` the next time the FE
+    // bootstraps `get_all_drive_statuses` (e.g. on Settings page mount),
+    // which is exactly the bug the cache was added to prevent.
+    let pool = make_pool().await;
+    let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+    // Both rows have `is_paused=false`, so the DB-derived fallback
+    // would return Active for both. The cache overrides one.
+    insert_path(&pool, account, "working_drive", false).await;
+    insert_path(&pool, account, "failed_drive", false).await;
+
+    let state = make_state_with_account(pool, account);
+
+    // Simulate `emit_drive_status` having previously written an Error
+    // for "failed_drive" (e.g. from a failed auto_init_sync run).
+    {
+        let mut cache = state.drive_status_cache.lock().expect("cache lock");
+        cache.insert(
+            "failed_drive".to_string(),
+            DriveStatus::Error {
+                message: "Failed to initialize: test message".to_string(),
+            },
+        );
+    }
+
+    let mut result = get_all_drive_statuses_inner(&state).await.unwrap();
+    result.sort_by(|a, b| a.label.cmp(&b.label));
+
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].label, "failed_drive");
+    assert!(
+        matches!(result[0].status, DriveStatus::Error { ref message } if message.contains("Failed to initialize")),
+        "expected cached Error state to win over is_paused=false; got {:?}",
+        result[0].status
+    );
+
+    // The non-cached drive still gets the DB-derived Active status.
+    assert_eq!(result[1].label, "working_drive");
+    assert_eq!(result[1].status, DriveStatus::Active);
+}
+
+#[tokio::test]
+async fn cached_status_falls_through_when_label_missing() {
+    // Negative case: a cache that has an entry for one label must not
+    // affect other labels' DB-derived status. Protects against an
+    // accidental map-wide override in `get_all_drive_statuses_inner`.
+    let pool = make_pool().await;
+    let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+    insert_path(&pool, account, "drive_with_cache", false).await;
+    insert_path(&pool, account, "drive_without_cache", true).await;
+
+    let state = make_state_with_account(pool, account);
+    {
+        let mut cache = state.drive_status_cache.lock().expect("cache lock");
+        cache.insert("drive_with_cache".to_string(), DriveStatus::Paused);
+    }
+
+    let mut result = get_all_drive_statuses_inner(&state).await.unwrap();
+    result.sort_by(|a, b| a.label.cmp(&b.label));
+
+    // Cached entry: Paused (cache wins over is_paused=false).
+    assert_eq!(result[0].label, "drive_with_cache");
+    assert_eq!(result[0].status, DriveStatus::Paused);
+    // Non-cached entry: DB-derived Paused (is_paused=true).
+    assert_eq!(result[1].label, "drive_without_cache");
+    assert_eq!(result[1].status, DriveStatus::Paused);
 }

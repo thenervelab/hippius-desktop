@@ -199,10 +199,15 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   // tray submenu, FilesOnboarding). Reading from the atom keeps
   // every per-drive UI in sync without round-trips.
   const driveStatuses = useAtomValue(driveStatusesAtom);
+  // `pausedLabels` is "labels not currently active" — includes both
+  // `paused` (user intent) and the new `error` variant (emitted on
+  // per-drive init failure). Click handlers below treat both as
+  // "needs resume", which re-triggers `initialize_sync_inner` in Rust
+  // and is the correct retry action for an errored drive.
   const pausedLabels = useMemo(
     () =>
       Array.from(driveStatuses.entries())
-        .filter(([, entry]) => entry.status.kind === "paused")
+        .filter(([, entry]) => entry.status.kind !== "active")
         .map(([label]) => label),
     [driveStatuses]
   );

@@ -487,7 +487,10 @@ pub async fn complete_migration_transition(
         crate::sync::paths::set_sync_path_internal(pool, &account_id, &path_str, false, Some(&label)).await?;
         info!("Created sync path at '{}' for migration label '{}'", path_str, label);
     } else if custom_sync_path.as_ref().is_some_and(|p| !p.is_empty()) {
-        warn!("custom_sync_path provided but sync path already exists for '{}'; ignoring custom path", label);
+        warn!(
+            "custom_sync_path provided but sync path already exists for '{}'; ignoring custom path",
+            label
+        );
     }
 
     // 3. Initialize the drive for the migration label.

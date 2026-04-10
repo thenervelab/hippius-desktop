@@ -407,7 +407,7 @@ export function useTrayInit(isAuthenticated: boolean) {
  *
  * Click handlers read the current status from `appStore` at click
  * time rather than capturing it from the outer scope, so setText-
- * only updates can't leave a stale `isPaused` value behind.
+ * only updates can't leave a stale `needsResume` value behind.
  *
  * Concurrency: serialized via `isRebuildingDriveSubmenu`. If a
  * second update arrives mid-rebuild, the latest one is recorded in
@@ -574,15 +574,18 @@ async function reconcileDriveSubmenu(
 }
 
 function renderDriveSubmenuText(entry: DriveEntry): string {
-  return entry.status.kind === "paused"
-    ? `${entry.folderName} — Resume`
-    : `${entry.folderName} — Pause`;
+  // Only `active` drives get the "Pause" action — `paused` and the new
+  // `error` variant (emitted on per-drive init failure) both surface
+  // "Resume", which triggers the re-init retry path in Rust.
+  return entry.status.kind === "active"
+    ? `${entry.folderName} — Pause`
+    : `${entry.folderName} — Resume`;
 }
 
 /**
  * Build a single drive row MenuItem. Click handler reads the current
  * status from `appStore.get(driveStatusesAtom)` at click time so
- * setText-only updates above don't leave a stale `isPaused` capture.
+ * setText-only updates above don't leave a stale `needsResume` capture.
  */
 async function createDriveRowItem(
   label: string,
@@ -595,7 +598,7 @@ async function createDriveRowItem(
     action: async () => {
       // Read the current entry from the atom at click time. setText
       // updates above keep the menu text in sync but don't replace
-      // the click handler, so capturing `isPaused` from the outer
+      // the click handler, so capturing `needsResume` from the outer
       // scope would let the user click "Pause" on a row whose
       // current text says "Resume" if Rust raced ahead.
       const currentMap = appStore.get(driveStatusesAtom);
@@ -606,9 +609,12 @@ async function createDriveRowItem(
         return;
       }
       const folderName = current.folderName;
-      const isPaused = current.status.kind === "paused";
+      // Both `paused` and `error` take the resume branch — resume_drive
+      // re-invokes initialize_sync_inner, which is the correct retry
+      // action for an errored drive.
+      const needsResume = current.status.kind !== "active";
       try {
-        if (isPaused) {
+        if (needsResume) {
           // Mnemonic is intentionally not passed: the tray has no
           // access to wallet auth context (would create a circular
           // import). The Rust resume path falls back to the
@@ -623,10 +629,10 @@ async function createDriveRowItem(
         }
       } catch (err) {
         console.error(
-          `[Tray] Failed to ${isPaused ? "resume" : "pause"} drive '${label}':`,
+          `[Tray] Failed to ${needsResume ? "resume" : "pause"} drive '${label}':`,
           err
         );
-        if (isPaused) {
+        if (needsResume) {
           toast.error(
             `Failed to resume "${folderName}". Open the Settings page and try from there.`
           );

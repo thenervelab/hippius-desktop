@@ -12,11 +12,13 @@ use crate::auth::oauth::OAuthState;
 use crate::auth::state::AuthInfo;
 use crate::blockchain::state::{BlockSubscriptionState, BlockchainState};
 use crate::nebula::state::NebulaState;
+use crate::sync::drive_status::DriveStatus;
 use crate::sync::migration::MigrationState;
 use crate::sync::tauri_bridge::TauriSyncBridge;
 use hcfs_client::engine::runner::SyncRunner;
 
 use sqlx::sqlite::SqlitePool;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// The single top-level state container for the entire Tauri backend.
@@ -46,6 +48,20 @@ pub struct AppState {
     pub drive_removed_notify: tokio::sync::Notify,
     /// Per-file consecutive failure counters and session-skip state.
     pub file_failures: crate::sync::failure_tracking::FileFailureState,
+    /// Last emitted `DriveStatus` per drive label. The single source of
+    /// truth for `get_all_drive_statuses` — without this, an errored
+    /// drive (`is_paused=false` in the DB but failed to init) would be
+    /// reported as `Active` on FE bootstrap because the DB-derived
+    /// fallback can only say Active/Paused. Writes flow through
+    /// `sync::status::emit_drive_status`; reads happen in
+    /// `get_all_drive_statuses_inner` and fall back to the DB-derived
+    /// status for labels with no cached value yet.
+    ///
+    /// Cleared on `stop_sync` (logout/reset) and pruned on
+    /// `emit_drive_removed` (per-drive removal). Never persisted to
+    /// disk — an Error state is transient and should not survive app
+    /// restart.
+    pub drive_status_cache: Mutex<HashMap<String, DriveStatus>>,
 }
 
 impl Default for AppState {
@@ -85,6 +101,7 @@ impl AppState {
             api_client: reqwest::Client::builder().build().expect("Failed to build API HTTP client"),
             drive_removed_notify: tokio::sync::Notify::new(),
             file_failures: crate::sync::failure_tracking::FileFailureState::new(),
+            drive_status_cache: Mutex::new(HashMap::new()),
         }
     }
 

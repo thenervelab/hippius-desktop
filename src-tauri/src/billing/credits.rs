@@ -68,11 +68,14 @@ pub struct SyncEligibility {
 /// shape and the same legacy reason codes (`balance_zero` / `no_credits`).
 #[tauri::command]
 pub async fn check_sync_eligibility(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<SyncEligibility, AppError> {
-    use crate::billing::eligibility::{check_action_eligibility_inner, InsufficientCreditsAction};
+    use crate::billing::eligibility::{InsufficientCreditsAction, check_action_eligibility_inner};
 
     let result = check_action_eligibility_inner(&state, &account_id, InsufficientCreditsAction::FolderSync).await?;
     if result.eligible {
-        return Ok(SyncEligibility { eligible: true, reason: None });
+        return Ok(SyncEligibility {
+            eligible: true,
+            reason: None,
+        });
     }
     // Map the new `reason` codes back to the legacy ones the old IPC
     // contract used. The new shape is richer (current_balance,

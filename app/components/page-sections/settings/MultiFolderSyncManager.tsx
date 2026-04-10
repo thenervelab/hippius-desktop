@@ -54,8 +54,12 @@ export default function MultiFolderSyncManager() {
       prev.map((f) => {
         const entry = driveStatuses.get(f.id);
         if (!entry) return f;
+        // Widen to `active` vs non-active so the new `error` variant
+        // (emitted by auto_init_sync on per-drive init failure) renders
+        // as non-syncing. The FE retry ladder in `tryAutoInitSync`
+        // flips errored drives back to Active on success.
         const newStatus =
-          entry.status.kind === "paused" ? "paused" : "syncing";
+          entry.status.kind === "active" ? "syncing" : "paused";
         return f.status === newStatus ? f : { ...f, status: newStatus };
       })
     );

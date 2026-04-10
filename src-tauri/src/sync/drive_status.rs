@@ -23,22 +23,23 @@
 //! only persisted state is `sync_paths.is_paused`, derived to `Paused`.
 //! Everything else is computed live.
 //!
-//! ## Future: Error variant
+//! ## Error variant
 //!
-//! `DriveStatus` deliberately has only `Active` and `Paused` for now.
-//! A future `Error(String)` variant can be added when we want the
-//! settings page to surface per-drive init failures (currently logged
-//! and silently swallowed). Adding it requires per-drive error state
-//! in `AppState` plus error-clear logic on every successful transition;
-//! out of scope for the initial per-drive migration.
+//! `DriveStatus::Error { message }` is emitted by `auto_init_sync_inner`
+//! when a per-drive `initialize_sync_inner` call fails — previously these
+//! were silently swallowed and the drive just vanished from the per-drive
+//! status map, leaving the user with no affordance to retry. The FE
+//! renders this as a "needs attention" row and triggers a retry on the
+//! `hippius_auth_ready` event, which covers the slow-system race where
+//! `AuthInfo.mnemonic` hasn't been populated yet when auto-init first
+//! runs.
 
 use serde::{Deserialize, Serialize};
 
 /// Per-drive status. Wire format is camelCase to match TypeScript.
 ///
-/// `serde(tag = "kind")` produces `{"kind": "active"}` / `{"kind": "paused"}`
-/// — the tagged shape leaves room for a future `Error { message: String }`
-/// variant without breaking the wire format.
+/// `serde(tag = "kind")` produces `{"kind": "active"}`, `{"kind": "paused"}`,
+/// or `{"kind": "error", "message": "..."}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum DriveStatus {
@@ -46,6 +47,9 @@ pub enum DriveStatus {
     Active,
     /// Drive's `is_paused` flag is true; not in the drives map.
     Paused,
+    /// Init failed — carries the user-facing reason so the FE can render
+    /// a retry affordance without a second IPC round-trip.
+    Error { message: String },
 }
 
 /// One row in the response from `get_all_drive_statuses`.
@@ -89,14 +93,11 @@ pub fn derive_folder_name(path: &str, label: &str) -> String {
 /// is `Paused`, everything else is `Active`. The "drive is in the
 /// in-memory map" check is implied by `is_paused=false` because every
 /// non-paused path is loaded by `auto_init_sync` at startup; if a load
-/// failure prevents that, the path is still considered Active here and
-/// the failure surfaces elsewhere (logs, future Error variant).
+/// failure prevents that, `auto_init_sync_inner` emits a subsequent
+/// `DriveStatus::Error` event for that label which overrides this
+/// bootstrap default in the FE map.
 pub fn status_from_is_paused(is_paused: bool) -> DriveStatus {
-    if is_paused {
-        DriveStatus::Paused
-    } else {
-        DriveStatus::Active
-    }
+    if is_paused { DriveStatus::Paused } else { DriveStatus::Active }
 }
 
 #[cfg(test)]
@@ -112,10 +113,7 @@ mod tests {
     #[test]
     fn derive_folder_name_uses_basename() {
         assert_eq!(derive_folder_name("/Users/me/Hippius", "default"), "Hippius");
-        assert_eq!(
-            derive_folder_name("/Users/me/Documents/Photos", "photos"),
-            "Photos"
-        );
+        assert_eq!(derive_folder_name("/Users/me/Documents/Photos", "photos"), "Photos");
     }
 
     #[test]
@@ -127,17 +125,25 @@ mod tests {
     #[test]
     fn drive_status_serializes_as_tagged_kind() {
         // The wire format is `{"kind": "active"}` (not just `"active"`)
-        // so a future `Error { message }` variant can be added without
-        // breaking compatibility.
+        // so the `Error { message }` variant sits alongside the unit
+        // variants without breaking compatibility.
         let active = serde_json::to_string(&DriveStatus::Active).unwrap();
         let paused = serde_json::to_string(&DriveStatus::Paused).unwrap();
+        let error = serde_json::to_string(&DriveStatus::Error { message: "boom".to_string() }).unwrap();
         assert_eq!(active, r#"{"kind":"active"}"#);
         assert_eq!(paused, r#"{"kind":"paused"}"#);
+        assert_eq!(error, r#"{"kind":"error","message":"boom"}"#);
     }
 
     #[test]
     fn drive_status_round_trips() {
-        for s in [DriveStatus::Active, DriveStatus::Paused] {
+        for s in [
+            DriveStatus::Active,
+            DriveStatus::Paused,
+            DriveStatus::Error {
+                message: "oh no".to_string(),
+            },
+        ] {
             let json = serde_json::to_string(&s).unwrap();
             let parsed: DriveStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(parsed, s);

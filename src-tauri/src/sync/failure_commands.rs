@@ -11,11 +11,7 @@ use crate::error::Result;
 /// skips it on the next cycle) and records it as a session-skip so
 /// the pattern can be removed on teardown/restart.
 #[tauri::command]
-pub async fn sp_skip_file(
-    label: String,
-    path: String,
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<()> {
+pub async fn sp_skip_file(label: String, path: String, state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
     state.file_failures.skip_file(&label, &path);
 
     let drive_arc = {
@@ -37,11 +33,7 @@ pub async fn sp_skip_file(
 /// `sp_skip_file`, this is NOT recorded as a session-skip, so
 /// the pattern persists across restarts.
 #[tauri::command]
-pub async fn sp_exclude_file(
-    label: String,
-    path: String,
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<()> {
+pub async fn sp_exclude_file(label: String, path: String, state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
     state.file_failures.clear_failure(&label, &path);
 
     let drive_arc = {
@@ -63,11 +55,7 @@ pub async fn sp_exclude_file(
 /// session-skip and exclude patterns. The file will be
 /// picked up on the next sync cycle.
 #[tauri::command]
-pub async fn sp_retry_file(
-    label: String,
-    path: String,
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<()> {
+pub async fn sp_retry_file(label: String, path: String, state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
     state.file_failures.clear_failure(&label, &path);
     state.file_failures.unskip_file(&label, &path);
 
