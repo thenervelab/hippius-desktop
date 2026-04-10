@@ -299,36 +299,217 @@ async fn system_notifications_included_in_user_list() {
     assert_eq!(count_notifications(&pool, alice).await, 2);
 }
 
+// ── Welcome notification helper + cleanup ──────────────────────────────
+//
+// The welcome notification was previously created from two FE code
+// paths (mnemonic login + OAuth callback) which both sent the bare
+// subtype `"Welcome"`. The Rust-side dedup guard in `add_notification`
+// used `starts_with("Welcome-")` (dash-suffix only) and also wasn't
+// user-scoped, so on every login the FE successfully inserted a new
+// row. Existing users accumulated dozens of welcomes in their local
+// DB.
+//
+// The fix moved welcome creation into Rust via
+// `ensure_welcome_notification(pool, user_address)`, which is:
+// 1. user-scoped (per-user dedup)
+// 2. matches bare `"Welcome"` AND `"Welcome-*"` to coexist with
+//    legacy rows and future version bumps
+// 3. idempotent by construction — repeat calls are no-ops
+//
+// A one-time startup cleanup (`cleanup_duplicate_welcome_notifications`)
+// collapses the accumulated duplicates to the oldest per user so the
+// timestamp used by `process_credit_events` for event filtering stays
+// valid.
+//
+// These tests mirror those two helpers against the same in-memory
+// schema. We copy the SQL instead of calling the production helpers
+// directly because the helpers take a `&SqlitePool` and the test
+// setup builds one; calling them via the test crate boundary would
+// require the `lib` feature.
+
+use tauri_project_lib::notifications::crud::{cleanup_duplicate_welcome_notifications, ensure_welcome_notification};
+
 #[tokio::test]
-async fn welcome_notification_is_deduplicated() {
+async fn ensure_welcome_notification_inserts_when_absent() {
     let pool = setup_db().await;
-    let subtype = "Welcome-alice";
+    let alice = "alice-addr";
 
-    insert_notification(&pool, "alice", Some("Hippius"), Some(subtype), "Welcome!").await;
+    ensure_welcome_notification(&pool, alice).await.unwrap();
 
-    // Duplicate check — mirrors add_notification dedup logic
-    let (existing,) = sqlx::query_as::<_, (i64,)>(
+    let (count,) = sqlx::query_as::<_, (i64,)>(
         "SELECT COUNT(*) FROM notifications \
-         WHERE notification_type = 'Hippius' AND notification_subtype = ?",
+         WHERE user_address = ? AND notification_type = 'Hippius' \
+         AND notification_subtype = 'Welcome-v1'",
     )
-    .bind(subtype)
+    .bind(alice)
     .fetch_one(&pool)
     .await
     .unwrap();
+    assert_eq!(count, 1);
+}
 
-    assert!(existing > 0, "Welcome notification should already exist");
+#[tokio::test]
+async fn ensure_welcome_notification_is_idempotent() {
+    let pool = setup_db().await;
+    let alice = "alice-addr";
 
-    // A second insert should be skipped by the app logic (count > 0)
-    // Verify the count stays at 1 if we respect the guard
-    let (total,) = sqlx::query_as::<_, (i64,)>(
+    // Call the helper three times in a row — only the first should
+    // insert. This pins the "repeat login is a no-op" contract.
+    ensure_welcome_notification(&pool, alice).await.unwrap();
+    ensure_welcome_notification(&pool, alice).await.unwrap();
+    ensure_welcome_notification(&pool, alice).await.unwrap();
+
+    let (count,) = sqlx::query_as::<_, (i64,)>(
         "SELECT COUNT(*) FROM notifications \
-         WHERE notification_type = 'Hippius' AND notification_subtype = ?",
+         WHERE user_address = ? AND notification_type = 'Hippius'",
     )
-    .bind(subtype)
+    .bind(alice)
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(total, 1);
+    assert_eq!(count, 1, "idempotent helper must not create duplicates");
+}
+
+#[tokio::test]
+async fn ensure_welcome_notification_is_user_scoped() {
+    // Regression guard for the pre-fix dedup which was global, not
+    // per-user: a welcome for alice must NOT suppress the welcome for
+    // bob when bob logs in for the first time on a multi-account
+    // install.
+    let pool = setup_db().await;
+    let alice = "alice-addr";
+    let bob = "bob-addr";
+
+    ensure_welcome_notification(&pool, alice).await.unwrap();
+    ensure_welcome_notification(&pool, bob).await.unwrap();
+
+    let (alice_count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications WHERE user_address = ? AND notification_type = 'Hippius'")
+        .bind(alice)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (bob_count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications WHERE user_address = ? AND notification_type = 'Hippius'")
+        .bind(bob)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(alice_count, 1);
+    assert_eq!(bob_count, 1);
+}
+
+#[tokio::test]
+async fn ensure_welcome_notification_respects_legacy_bare_subtype() {
+    // Upgrade path: an existing user has a legacy `"Welcome"` subtype
+    // row from the broken FE code path. `ensure_welcome_notification`
+    // must see it and NOT insert a second welcome (which would be a
+    // visible UX regression for every upgrading user).
+    let pool = setup_db().await;
+    let alice = "alice-addr";
+    insert_notification(&pool, alice, Some("Hippius"), Some("Welcome"), "Legacy welcome").await;
+
+    ensure_welcome_notification(&pool, alice).await.unwrap();
+
+    let (count,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE user_address = ? AND notification_type = 'Hippius'",
+    )
+    .bind(alice)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1, "legacy welcome row must be recognised as already-present");
+}
+
+#[tokio::test]
+async fn cleanup_collapses_duplicate_welcomes_keeping_oldest() {
+    // Pre-fix users may have accumulated many welcome rows. The
+    // startup migration must keep the OLDEST per user (so the
+    // `creation_time` timestamp used by `process_credit_events` for
+    // credit-event filtering stays valid) and hard-delete the rest.
+    let pool = setup_db().await;
+    let alice = "alice-addr";
+    let bob = "bob-addr";
+
+    // Insert 5 welcomes for alice with mixed subtypes (mirrors real
+    // data: broken FE sent bare "Welcome" sometimes) and 3 for bob.
+    for subtype in ["Welcome", "Welcome", "Welcome-v1", "Welcome", "Welcome-v1"] {
+        insert_notification(&pool, alice, Some("Hippius"), Some(subtype), "Welcome").await;
+    }
+    for subtype in ["Welcome", "Welcome-v1", "Welcome"] {
+        insert_notification(&pool, bob, Some("Hippius"), Some(subtype), "Welcome").await;
+    }
+    // Non-welcome notifications must not be touched.
+    insert_notification(&pool, alice, Some("Credits"), Some("Topup"), "Topup").await;
+    insert_notification(&pool, alice, None, None, "user-notif").await;
+
+    cleanup_duplicate_welcome_notifications(&pool).await.unwrap();
+
+    // Exactly one welcome per user after cleanup.
+    let (alice_welcomes,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE user_address = ? AND notification_type = 'Hippius' \
+         AND (notification_subtype = 'Welcome' OR notification_subtype LIKE 'Welcome-%')",
+    )
+    .bind(alice)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let (bob_welcomes,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE user_address = ? AND notification_type = 'Hippius' \
+         AND (notification_subtype = 'Welcome' OR notification_subtype LIKE 'Welcome-%')",
+    )
+    .bind(bob)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(alice_welcomes, 1);
+    assert_eq!(bob_welcomes, 1);
+
+    // The surviving row must be the oldest (min id) per user.
+    let (alice_min_id,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT id FROM notifications \
+         WHERE user_address = ? AND notification_type = 'Hippius' \
+         AND (notification_subtype = 'Welcome' OR notification_subtype LIKE 'Welcome-%')",
+    )
+    .bind(alice)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(alice_min_id, 1, "oldest welcome (id=1) must survive for alice");
+
+    // Non-welcome notifications are untouched.
+    let (alice_other,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE user_address = ? AND (notification_type != 'Hippius' OR notification_type IS NULL)",
+    )
+    .bind(alice)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(alice_other, 2, "credits + user notif must survive cleanup");
+}
+
+#[tokio::test]
+async fn cleanup_is_noop_when_no_duplicates() {
+    // The startup cleanup runs on every launch — must be a no-op
+    // after the first successful run (and on fresh installs).
+    let pool = setup_db().await;
+    let alice = "alice-addr";
+    ensure_welcome_notification(&pool, alice).await.unwrap();
+
+    let (before,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    cleanup_duplicate_welcome_notifications(&pool).await.unwrap();
+    let (after,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(before, after, "cleanup must not delete anything when there are no duplicates");
 }
 
 #[tokio::test]

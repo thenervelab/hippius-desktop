@@ -13,9 +13,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Loader2, AlertCircle } from "lucide-react";
 import type { OAuthSession } from "@/app/lib/types/oAuth";
-import {
-    addNotification,
-} from "@/app/lib/helpers/notificationsDb";
 
 export default function OAuthCallbackPage() {
     const router = useRouter();
@@ -120,19 +117,12 @@ export default function OAuthCallbackPage() {
                 localStorage.setItem("hippius_oauth_session", JSON.stringify(session));
                 localStorage.setItem("hippius_oauth_session_expiry", session.expiresAt);
 
-                // Update auth context with OAuth session
+                // Update auth context with OAuth session. The welcome
+                // notification is now created by Rust inside
+                // `complete_oauth_flow` via
+                // `ensure_welcome_notification`, so there is no FE-side
+                // addNotification call here anymore.
                 await setOAuthSession(session);
-
-                // Add welcome notification for this user (built-in duplicate check)
-                await addNotification({
-                    userAddress: session.substrateAddress!,
-                    notificationType: "Hippius",
-                    notificationSubtype: "Welcome",
-                    notificationTitleText: "Hello from Hippius 👋  Here's what's new!",
-                    notificationDescription: `🎉 Welcome to Hippius! You're now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. We keep credit pricing simple and fair, so you always know what you're spending. You can check your remaining credits at any time in the billing tab, and top up when you need more. When you're ready, tap Check Out to launch your first storage session.`,
-                    notificationLinkText: "Check Out",
-                    notificationLink: "/files",
-                });
 
                 // Get redirect path from URL params, sessionStorage, or default
                 const urlRedirect = searchParams.get("redirect");

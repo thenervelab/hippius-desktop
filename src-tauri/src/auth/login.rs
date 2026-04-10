@@ -108,6 +108,13 @@ pub async fn login_with_mnemonic(
 
     save_api_token(pool, &substrate_address, &token).await?;
 
+    // Ensure the one-time welcome notification exists for this user.
+    // Idempotent: user-scoped dedup makes repeat calls a no-op. Non-
+    // fatal — a failed insert must not block login.
+    if let Err(e) = crate::notifications::crud::ensure_welcome_notification(pool, &substrate_address).await {
+        warn!(error = %e, "Failed to ensure welcome notification — will retry on next login");
+    }
+
     // Persist the mnemonic in the OS keychain so returning users on
     // this device don't have to re-enter their seed phrase to sign
     // extrinsics. Failures are non-fatal — login still succeeds, the

@@ -28,7 +28,7 @@ impl OAuthState {
 
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Transient PKCE state for an in-flight OAuth authorization.
 ///
@@ -358,6 +358,14 @@ pub async fn complete_oauth_flow(
         // OAuth has no eth_address or sr25519_pair — those derive from a
         // BIP-39 mnemonic which is generated later by ensure_sync_mnemonic.
         state.set_active_account(&substrate_address, crate::auth::state::AuthCapabilities::OAuthOnly)?;
+
+        // Ensure the one-time welcome notification exists for this
+        // user. OAuth doesn't surface an `is_new` flag, so we rely on
+        // the user-scoped dedup inside `ensure_welcome_notification`
+        // to make repeat OAuth logins a no-op.
+        if let Err(e) = crate::notifications::crud::ensure_welcome_notification(pool, &substrate_address).await {
+            warn!(error = %e, "Failed to ensure welcome notification — will retry on next login");
+        }
 
         // Signal the FE that auth is ready so `tryAutoInitSync` can
         // retry its auto-init ladder. Without this, OAuth users with

@@ -33,11 +33,125 @@ pub struct Notification {
     pub release_notes: Option<String>,
 }
 
+// ── Welcome notification constants ──────────────────────────────────────
+
+/// Subtype for the one-time welcome notification. The `-v1` suffix keeps
+/// the existing `LIKE 'Welcome-%'` matcher in
+/// [`crate::notifications::credits::process_credit_events`] working, and
+/// lets us bump the version if we ever want to re-show a new welcome
+/// message to existing users (e.g. `Welcome-v2` after a major
+/// onboarding redesign).
+const WELCOME_SUBTYPE: &str = "Welcome-v1";
+
+/// Title line shown at the top of the welcome notification card.
+const WELCOME_TITLE: &str = "Hello from Hippius! Here's what's new!";
+
+/// Body text for the welcome notification. Previously lived in the FE
+/// `AccessKeyLoginForm.tsx` / `callback/page.tsx` callers that have now
+/// been deleted in favour of Rust-owned welcome creation.
+const WELCOME_DESCRIPTION: &str = "Welcome to Hippius! You're now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. You can check your remaining credits at any time in the billing tab, and top up when you need more. When you're ready, tap Check Out to launch your first storage session.";
+
+/// Link label on the welcome notification's call-to-action button.
+const WELCOME_LINK_TEXT: &str = "Check Out";
+
+/// Route the welcome call-to-action button navigates to.
+const WELCOME_LINK: &str = "/files";
+
+/// Idempotently ensure the given user has exactly one welcome
+/// notification.
+///
+/// Called from both [`crate::auth::login::login_with_mnemonic`] and
+/// [`crate::auth::oauth::complete_oauth_flow`] on every successful
+/// auth — the user-scoped dedup query makes repeat calls a no-op, so
+/// there's no need for an `is_new` flag (which OAuth doesn't expose
+/// anyway). The dedup is deliberately broad: matches bare `Welcome`
+/// (legacy from the broken FE callers that wrote many duplicates
+/// before this fix) OR anything starting with `Welcome-`, so an
+/// existing-install user who already has the legacy bare-subtype
+/// row isn't shown a second welcome after the upgrade.
+///
+/// Returns `Ok(())` on both "inserted" and "already exists" paths.
+/// DB errors propagate as `AppError::Db`; call sites treat this as
+/// non-fatal (log and continue) because a failed welcome
+/// notification must not block login.
+pub async fn ensure_welcome_notification(pool: &sqlx::SqlitePool, user_address: &str) -> Result<(), AppError> {
+    let existing = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE user_address = ? \
+           AND notification_type = 'Hippius' \
+           AND (notification_subtype = 'Welcome' OR notification_subtype LIKE 'Welcome-%')",
+    )
+    .bind(user_address)
+    .fetch_one(pool)
+    .await?;
+
+    if existing.0 > 0 {
+        return Ok(());
+    }
+
+    sqlx::query(
+        r"
+        INSERT INTO notifications (
+            user_address, notification_type, notification_subtype,
+            title_text, description, link_text, link,
+            is_unread, creation_time, is_deleted, release_notes
+        )
+        VALUES (?, 'Hippius', ?, ?, ?, ?, ?, 1, CAST(strftime('%s','now') * 1000 AS INTEGER), 0, NULL)
+        ",
+    )
+    .bind(user_address)
+    .bind(WELCOME_SUBTYPE)
+    .bind(WELCOME_TITLE)
+    .bind(WELCOME_DESCRIPTION)
+    .bind(WELCOME_LINK_TEXT)
+    .bind(WELCOME_LINK)
+    .execute(pool)
+    .await?;
+
+    info!(user_address = %user_address, "Created welcome notification");
+    Ok(())
+}
+
+/// One-time cleanup that collapses multiple welcome notifications per
+/// user down to the oldest one. Runs from `main.rs` startup alongside
+/// the other idempotent migrations.
+///
+/// This exists because the previous FE-driven welcome code was broken:
+/// the dedup guard's `starts_with("Welcome-")` check didn't match the
+/// bare `"Welcome"` subtype the FE actually sent, so every login
+/// inserted a new row. Existing users could have dozens of welcome
+/// notifications in their local DB; this helper hard-deletes the
+/// duplicates while preserving the earliest one (so the timestamp
+/// used by `process_credit_events` for event filtering stays valid).
+pub async fn cleanup_duplicate_welcome_notifications(pool: &sqlx::SqlitePool) -> Result<(), AppError> {
+    let deleted = sqlx::query(
+        "DELETE FROM notifications \
+         WHERE id NOT IN ( \
+             SELECT MIN(id) FROM notifications \
+             WHERE notification_type = 'Hippius' \
+               AND (notification_subtype = 'Welcome' OR notification_subtype LIKE 'Welcome-%') \
+             GROUP BY user_address \
+         ) \
+         AND notification_type = 'Hippius' \
+         AND (notification_subtype = 'Welcome' OR notification_subtype LIKE 'Welcome-%')",
+    )
+    .execute(pool)
+    .await?;
+
+    let affected = deleted.rows_affected();
+    if affected > 0 {
+        info!(deleted = affected, "Cleaned up duplicate welcome notifications");
+    }
+    Ok(())
+}
+
 // ── Notification Commands ───────────────────────────────────────────────
 
-/// Insert a new notification. If notification_type is "Hippius" and subtype
-/// matches "Welcome-*", skip if one already exists (prevents welcome duplicates).
-/// Returns the new row id.
+/// Insert a new notification. Welcome notifications must be created
+/// via [`ensure_welcome_notification`] — this command's dedup guard
+/// suppresses any stray caller that tries to insert one via the IPC
+/// path directly (defense-in-depth; the FE no longer does this).
+/// Returns the new row id, or `0` if the insert was skipped.
 #[tauri::command]
 #[expect(clippy::too_many_arguments)] // Tauri IPC commands take individual params from frontend
 pub async fn add_notification(
@@ -54,15 +168,23 @@ pub async fn add_notification(
 ) -> Result<i64, AppError> {
     let pool = state.pool()?;
 
+    // User-scoped dedup for welcome notifications. The previous guard
+    // only matched `starts_with("Welcome-")` and didn't filter by
+    // user_address — both broken. See `ensure_welcome_notification`
+    // for the canonical path.
     if notification_type.as_deref() == Some("Hippius")
         && let Some(ref subtype) = notification_subtype
-        && subtype.starts_with("Welcome-")
+        && (subtype == "Welcome" || subtype.starts_with("Welcome-"))
     {
-        let existing =
-            sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications WHERE notification_type = 'Hippius' AND notification_subtype = ?")
-                .bind(subtype)
-                .fetch_one(pool)
-                .await?;
+        let existing = sqlx::query_as::<_, (i64,)>(
+            "SELECT COUNT(*) FROM notifications \
+             WHERE user_address = ? \
+               AND notification_type = 'Hippius' \
+               AND (notification_subtype = 'Welcome' OR notification_subtype LIKE 'Welcome-%')",
+        )
+        .bind(&user_address)
+        .fetch_one(pool)
+        .await?;
 
         if existing.0 > 0 {
             return Ok(0);

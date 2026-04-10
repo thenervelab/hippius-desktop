@@ -19,9 +19,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
 import { BackButton } from "@/components/ui";
 import ButtonCard from "../ui/button/CardButton";
-import {
-  addNotification,
-} from "@/app/lib/helpers/notificationsDb";
 
 interface AccessKeyLoginFormProps {
   onBack: () => void;
@@ -52,21 +49,11 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
     setLoggingIn(true);
 
     try {
-      // login() returns the substrate address directly — no localStorage parsing needed
-      const userAddress = await login(mnemonic.trim());
-
-      // Add welcome notification
-      if (userAddress) {
-        await addNotification({
-          userAddress,
-          notificationType: "Hippius",
-          notificationSubtype: "Welcome",
-          notificationTitleText: "Hello from Hippius! Here's what's new!",
-          notificationDescription: "Welcome to Hippius! You're now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. You can check your remaining credits at any time in the billing tab, and top up when you need more. When you're ready, tap Check Out to launch your first storage session.",
-          notificationLinkText: "Check Out",
-          notificationLink: "/files",
-        });
-      }
+      // login() returns the substrate address directly — no localStorage parsing needed.
+      // The welcome notification is now created by Rust in
+      // login_with_mnemonic::ensure_welcome_notification, user-scoped
+      // dedup makes it a no-op on repeat logins.
+      await login(mnemonic.trim());
 
       const redirectPath = searchParams.get("redirect") || "/";
       router.replace(redirectPath);

@@ -481,6 +481,17 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // See `sync::user_stopped_migration` for details.
             crate::sync::user_stopped_migration::run_at_startup(&pool).await;
 
+            // Collapse duplicate welcome notifications from the pre-fix
+            // era (the FE sent bare `"Welcome"` which bypassed the
+            // `starts_with("Welcome-")` dedup guard, so every login
+            // inserted a new row). Keeps the oldest per user so the
+            // timestamp used by `process_credit_events` for event
+            // filtering stays valid. Idempotent — a one-time sweep
+            // that finds nothing to delete on subsequent launches.
+            if let Err(e) = crate::notifications::crud::cleanup_duplicate_welcome_notifications(&pool).await {
+                warn!("Welcome notification cleanup failed (non-fatal): {}", e);
+            }
+
             // Check if autoconnect is enabled
             let autoconnect_enabled: bool = sqlx::query("SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1")
                 .fetch_optional(&pool)
