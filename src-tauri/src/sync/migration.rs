@@ -298,9 +298,13 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
 
     if has_local_in_progress && let Ok(job_status) = poll_migration_status_internal(&state, &account_id).await {
         if job_status.status == "in_progress" {
+            let logical_total = job_status.logical_file_count
+                .filter(|&c| c > 0)
+                .map_or(job_status.total as u64, |c| c as u64);
             info!(
                 completed = job_status.completed,
                 total = job_status.total,
+                logical_total,
                 "Server migration still in progress — resuming tracking"
             );
             // Set the atomic flag so auto_init_sync (which reads this) won't
@@ -316,8 +320,8 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
                 needs_completion: false,
                 completion_status: None,
                 is_in_progress: true,
-                progress_completed: job_status.completed as u64,
-                progress_total: job_status.total as u64,
+                progress_completed: logical_total.min(job_status.completed as u64),
+                progress_total: logical_total,
                 progress_failed: job_status.failed as u64,
             });
         }

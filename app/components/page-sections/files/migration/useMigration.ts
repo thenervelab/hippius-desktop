@@ -109,12 +109,18 @@ export function useMigration(): UseMigrationReturn {
         }
         if (result.status === "poll_error") return;
 
-        setSuccessCount(result.completed);
+        // Use logical file count when available for user-facing numbers.
+        // The S3 object count (result.total) is used internally for
+        // processing progress, but users should see real file counts.
+        const displayTotal = result.logical_file_count ?? result.total;
+        const displayCompleted = Math.min(result.completed, displayTotal);
+
+        setSuccessCount(displayCompleted);
 
         appStore.set(migrationProgressAtom, {
           active: true,
-          completed: result.completed,
-          total: result.total,
+          completed: displayCompleted,
+          total: displayTotal,
         });
 
         if (result.is_terminal) {
