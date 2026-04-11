@@ -8,7 +8,6 @@ import {
   useMigration,
   MigrationPromptDialog,
   MigrationConfirmSkipDialog,
-  MigrationProgressDialog,
   MigrationCompleteDialog,
 } from "@/components/page-sections/files/migration";
 import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
@@ -23,8 +22,8 @@ import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDi
  */
 const MigrationChecker: React.FC = () => {
   const migrationCheck = useAtomValue(migrationCheckAtom);
-  const { polkadotAddress, getMnemonic } = useWalletAuth();
-  const migration = useMigration(getMnemonic);
+  const { polkadotAddress } = useWalletAuth();
+  const migration = useMigration();
 
   useEffect(() => {
     if (
@@ -43,12 +42,12 @@ const MigrationChecker: React.FC = () => {
       {migration.currentStep === "prompt" && (
         <MigrationPromptDialog
           open
-          onMigrate={() =>
+          onMigrate={(syncPath) =>
             polkadotAddress &&
-            migration.startMigration(polkadotAddress)
+            migration.startMigration(polkadotAddress, syncPath)
           }
           onSkip={() => migration.setCurrentStep("skip-confirm")}
-          fileCount={migration.files.length}
+          fileCount={migration.fileCount}
           totalSize={migration.totalSize}
         />
       )}
@@ -57,7 +56,7 @@ const MigrationChecker: React.FC = () => {
           open
           onClose={() => migration.setCurrentStep("prompt")}
           onConfirm={migration.confirmSkip}
-          fileCount={migration.files.length}
+          fileCount={migration.fileCount}
         />
       )}
       {migration.currentStep === "setup" && (
@@ -68,31 +67,16 @@ const MigrationChecker: React.FC = () => {
           loading={migration.isSettingUp}
         />
       )}
-      {migration.currentStep === "progress" && (
-        <MigrationProgressDialog
-          open
-          onCancel={migration.cancelMigration}
-          files={migration.files}
-          currentFileIndex={migration.currentFileIndex}
-          overallProgress={migration.overallProgress}
-          currentFileName={
-            migration.files[migration.currentFileIndex]?.name || ""
-          }
-          isCancelling={migration.isCancelling}
-          phase={migration.phase}
-          uploadedCount={migration.uploadedCount}
-          currentUploadFile={migration.currentUploadFile}
-          totalSize={migration.totalSize}
-        />
-      )}
       {migration.currentStep === "complete" && (
         <MigrationCompleteDialog
           open
           onClose={migration.closeMigration}
           successCount={migration.successCount}
-          failedCount={migration.failedCount}
-          totalCount={migration.files.length}
-          failedFiles={migration.failedFiles}
+          totalCount={migration.fileCount}
+          migrationSucceeded={migration.migrationSucceeded}
+          transitionError={migration.transitionError}
+          onDismiss={migration.dismissAfterError}
+          isTransitioning={migration.isTransitioning}
         />
       )}
     </>

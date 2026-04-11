@@ -23,8 +23,9 @@ import PrivacyBadge from "@/components/ui/PrivacyBadge";
 
 import { cn } from "@/lib/utils";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
-import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { toast } from "sonner";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
 // Custom event name for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -40,10 +41,14 @@ type AddButtonProps = {
   defaultFolderLabel?: string | null;
 };
 
-// Add ref interface for parent components to trigger the dialog
+// Add ref interface for parent components to trigger the dialog.
+// `openWithFiles` and `openWithPaths` are async because they perform a
+// live credit-eligibility check via Rust before opening the dialog.
+// Callers that don't care about the result can fire-and-forget; the
+// hook handles surfacing the insufficient-credits dialog itself.
 export interface AddButtonRef {
-  openWithFiles: (files: FileList) => void;
-  openWithPaths: (paths: string[]) => void;
+  openWithFiles: (files: FileList) => Promise<void>;
+  openWithPaths: (paths: string[]) => Promise<void>;
   isDialogOpen: () => boolean;
 }
 
@@ -59,24 +64,27 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       uploadToIpfsAndSubmitToBlockcahinRequestStateAtom
     );
     const isLoading = uploadingState !== "idle";
-    const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
+    const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
+    const { checkEligibility } = useCreditCheck();
 
     // Expose methods to parent components
     useImperativeHandle(
       ref,
       () => ({
-        openWithFiles: (files: FileList) => {
-          if (syncEngineStatus === "stopped") {
-            toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading files.");
+        openWithFiles: async (files: FileList) => {
+          if (!(await checkEligibility("file-upload"))) return;
+          if (!hasConfiguredDrives) {
+            toast.warning("Set up a sync folder in Settings \u2192 Sync & Storage before uploading.");
             return;
           }
           setDroppedPaths(null);
           setDroppedFiles(files);
           setIsOpen(true);
         },
-        openWithPaths: (paths: string[]) => {
-          if (syncEngineStatus === "stopped") {
-            toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading files.");
+        openWithPaths: async (paths: string[]) => {
+          if (!(await checkEligibility("file-upload"))) return;
+          if (!hasConfiguredDrives) {
+            toast.warning("Set up a sync folder in Settings \u2192 Sync & Storage before uploading.");
             return;
           }
           setDroppedFiles(null);
@@ -85,7 +93,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         },
         isDialogOpen: () => isOpen
       }),
-      [isOpen, syncEngineStatus]
+      [isOpen, hasConfiguredDrives, checkEligibility]
     );
 
     // Memoize title to prevent recalculation
@@ -151,10 +159,11 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       <>
         <CardButton
           className={cn("h-10 w-fit p-1", externalDisabled && "opacity-50 cursor-not-allowed", className)}
-          onClick={() => {
+          onClick={async () => {
             if (IS_SYNC_PAUSED) return;
-            if (syncEngineStatus === "stopped") {
-              toast.warning("Syncing is stopped. Resume syncing from Settings → Sync & Storage before uploading files.");
+            if (!(await checkEligibility("file-upload"))) return;
+            if (!hasConfiguredDrives) {
+              toast.warning("Set up a sync folder in Settings → Sync & Storage before uploading.");
               return;
             }
             setDroppedFiles(null);

@@ -12,11 +12,6 @@ import useFilesCount from "@/app/lib/hooks/api/useFilesCount";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { toast } from "sonner";
-import {
-  calculateStorageCost,
-  DEFAULT_TIMING_OPTION,
-} from "@/lib/utils/storageCostUtils";
-import pricingJson from "@/app/utils/data/pricing-cfg.json";
 
 export default function DetailList() {
   const [isRefreshingCredits, setIsRefreshingCredits] = useState(false);
@@ -69,71 +64,25 @@ export default function DetailList() {
 
   const getCreditsValue = () => {
     if (isCreditsLoading) return "Loading...";
+    if (creditsError) return "Error";
     if (credits !== undefined) return formatCreditBalance(credits);
-    if (creditsError) return "0";
     return "--";
   };
 
-  // Convert credits BigInt to number for calculations
-  const getCreditsAsNumber = (credits: bigint | null): number => {
-    if (credits === null) return 0;
+  // Storage subtitle from Rust (replaces duplicated binary search)
+  const [storageSubtitle, setStorageSubtitle] = useState("≈0 GB/mo Storage");
+  useEffect(() => {
+    if (credits === undefined || credits === BigInt(0)) return;
+    const numCredits = Number(credits / BigInt(10 ** 18)) + Number(credits % BigInt(10 ** 18)) / 1e18;
+    if (numCredits <= 0) return;
+    invoke<Array<{ storageDisplay: string }>>("calculate_storage_capacity", { creditsPerMonth: [numCredits] })
+      .then((results) => {
+        if (results[0]) setStorageSubtitle(results[0].storageDisplay);
+      })
+      .catch(() => {});
+  }, [credits]);
 
-    const divisor = BigInt(10) ** BigInt(18);
-    const integerPart = Number(credits / divisor);
-    const fractionalPart = Number(credits % divisor);
-
-    return integerPart + fractionalPart / Math.pow(10, 18);
-  };
-
-  // Calculate storage capacity based on credits (1 credit = $1)
-  const calculateStorageFromCredits = (creditsAmount: number): number => {
-    // Binary search to find max GB that can be stored with given credits
-    let low = 0;
-    let high = 1000000000; // Start with reasonable upper bound
-    let maxGB = 0;
-
-    while (low <= high) {
-      const mid = Math.floor((low + high) / 2);
-      const monthlyCost = calculateStorageCost({
-        storageTypeData: pricingJson.storage.ipfs,
-        perBlockTime: pricingJson.per_block_time_s,
-        timeframe: DEFAULT_TIMING_OPTION,
-        numOfGb: mid,
-      });
-
-      if (monthlyCost <= creditsAmount) {
-        maxGB = mid;
-        low = mid + 1;
-      } else {
-        high = mid - 1;
-      }
-    }
-
-    return maxGB;
-  };
-
-  // Format storage display (GB for small amounts, TB for larger) - matching PlansPage style
-  const formatStorageDisplay = (storageGB: number, credits: number): string => {
-    const gb = Math.floor(storageGB);
-    const tb = storageGB / 1000;
-    const tbStr = tb >= 10 ? Math.floor(tb).toLocaleString() : tb.toFixed(2);
-
-    if (credits <= 3) {
-      return `≈${gb.toLocaleString()} GB/mo Storage`;
-    }
-    return `≈${tbStr} TB/mo Storage`;
-  };
-
-  const getCreditsSubtitle = (): ReactNode => {
-    if (credits !== undefined) {
-      const numCredits = getCreditsAsNumber(credits);
-      if (numCredits > 0) {
-        const storageGB = calculateStorageFromCredits(numCredits);
-        return formatStorageDisplay(storageGB, numCredits);
-      }
-    }
-    return "≈0 GB/mo Storage";
-  };
+  const getCreditsSubtitle = (): ReactNode => storageSubtitle;
 
   const getTotalFiles = () => {
     if (isFileCountLoading) return "Loading...";
@@ -168,7 +117,7 @@ export default function DetailList() {
       value: getCreditsValue(),
       subtitle: getCreditsSubtitle(),
       showRefresh: true,
-      showAddCreditsButton: (!isCreditsLoading && (credits === undefined || getCreditsAsNumber(credits) === 0)) ? true : false,
+      showAddCreditsButton: !isCreditsLoading && (credits === undefined || credits === BigInt(0)),
       onRefresh: handleRefreshCredits,
       isLoading: isRefreshingCredits,
       info: "Credits available for storage usage. Each credit equals $1 and can be used to pay for arion storage costs.",

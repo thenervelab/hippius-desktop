@@ -11,10 +11,13 @@ import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { basename } from "@tauri-apps/api/path";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
+import { isNotReady } from "@/lib/utils/dispatchTauriError";
 
 // ── Shared types ───────────────────────────────────────────────────────────────
 
@@ -75,11 +78,14 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
   const resetFn = !isFolder ? props.reset : undefined;
   const { upload } = useFilesUpload({
     onError(err) {
-      if (
-        err instanceof Error &&
-        err.message.includes("Insufficient Credits")
-      ) {
-        setInsufficient(true);
+      // The Rust `require_eligible(...)?` gate inside `add_files` raises
+      // `NotReady(InsufficientCredits)` when the user can't afford the
+      // upload. `invoke()` failures arrive here as plain objects, not
+      // `Error` instances, so match on the structured `{ kind, message }`
+      // shape via `isNotReady` instead of brittle substring checks.
+      if (isNotReady(err, "insufficient credits")) {
+        setInsufficient(isFolder ? "folder-upload" : "file-upload");
+        resetFn?.();
       }
       setIsUploading(false);
     },
@@ -92,6 +98,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
   // Folder-mode hooks
   const { polkadotAddress } = useWalletAuth();
   const syncBasePath = isFolder ? props.syncBasePath : undefined;
+  const { checkEligibility } = useCreditCheck();
 
   // ── Shared: populate file list from initial values ─────────────────────────
 
@@ -191,11 +198,15 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
   ): Promise<string[]> => {
     const processedPaths: string[] = [];
 
+    const { tempDir } = await import("@tauri-apps/api/path");
+    const baseTmpDir = await tempDir();
+    const tmpDir = `${baseTmpDir}hippius_upload_${Date.now()}/`;
+
     for (const fileInfo of fileList) {
       if (fileInfo.file) {
         try {
           const arrayBuffer = await fileInfo.file.arrayBuffer();
-          const tempPath = `/tmp/${fileInfo.name}`;
+          const tempPath = `${tmpDir}${fileInfo.name}`;
           const { writeFile: tauriWriteFile } = await import(
             "@tauri-apps/plugin-fs"
           );
@@ -272,78 +283,76 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       return;
     }
 
+    // Live Rust eligibility check (replaces legacy stale-cache gate).
+    // The Rust `add_files` IPC also enforces this internally via
+    // `require_eligible(...)?` so the gate is impossible to bypass.
+    if (!(await checkEligibility("folder-upload"))) {
+      props.onCancel();
+      return;
+    }
+
     props.onCancel(); // Close dialog
     setIsUploading(true);
     setUploadProgress(0);
 
     const fileCount = files.length;
-
-    // Show success toast immediately before backend work
-    toast.success(
-      fileCount === 1
-        ? "File added. Your sync will start soon."
-        : `${fileCount} files added. Your sync will start soon.`,
-      { duration: 4000, closeButton: true }
+    const loadingToastId = toast.loading(
+      fileCount === 1 ? "Adding file..." : `Adding ${fileCount} files...`
     );
 
+    // Listen for per-file progress events from Rust
+    const unlisten = await listen<{ completed: number; total: number }>("add_files_progress", (event) => {
+      setUploadProgress(Math.round((event.payload.completed / event.payload.total) * 100));
+    });
+
     try {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-
-        let filePath = file.path;
-
-        if (file.file) {
-          try {
-            const arrayBuffer = await file.file.arrayBuffer();
-            const tempPath = `/tmp/${file.name}`;
-            const { writeFile: tauriWriteFile } = await import(
-              "@tauri-apps/plugin-fs"
-            );
-            await tauriWriteFile(tempPath, new Uint8Array(arrayBuffer));
-            filePath = tempPath;
-          } catch (error) {
-            console.error(`Error processing file ${file.name}:`, error);
-            toast.error(`Failed to process file: ${file.name}`);
-            continue;
-          }
-        }
-
-        const baseSyncPath =
-          syncBasePath || ((await getPrivateSyncPath(polkadotAddress ?? undefined))?.path ?? "");
-        let targetPath = baseSyncPath;
-        if (props.subfolder) {
-          const { join } = await import("@tauri-apps/api/path");
-          targetPath = await join(baseSyncPath, props.subfolder);
-        }
-
-        await invoke<string>("add_file", {
-          syncPath: targetPath,
-          filePath,
-        });
-
-        setUploadProgress(Math.round(((i + 1) / files.length) * 100));
-
-        if (files.length > 1) await new Promise((r) => setTimeout(r, 300));
+      // Reuse the shared helper for browser File → temp disk conversion
+      const processedPaths = await writeBrowserFilesToDisk(files);
+      if (processedPaths.length === 0) {
+        toast.error("No valid files to process", { id: loadingToastId });
+        setIsUploading(false);
+        unlisten();
+        return;
       }
 
-      await invoke("trigger_sync_now").catch((err: unknown) => console.warn("[UploadFilesFlow] trigger_sync_now failed:", err));
+      const baseSyncPath =
+        syncBasePath || ((await getPrivateSyncPath(polkadotAddress ?? undefined))?.path ?? "");
 
-      // Refresh file list AFTER backend has added the files so list_sync_folder sees them
+      // Single batch call — Rust handles subfolder join, file copy, and sync trigger.
+      // `forFolder: true` because this code path is reached only from the
+      // folder-upload flow (`uploadFilesFolder` above bails for non-folder
+      // mode), so the IPC enforces `FolderUpload` credit eligibility.
+      const result = await invoke<{ added: string[]; failed: Array<{ name: string; error: string }> }>("add_files", {
+        syncPath: baseSyncPath,
+        filePaths: processedPaths,
+        subfolder: props.subfolder ?? null,
+        forFolder: true,
+      });
+
+      toast.dismiss(loadingToastId);
+      if (result.failed.length > 0) {
+        const failedNames = result.failed.map((f) => f.name).join(", ");
+        toast.warning(`${result.added.length} added, ${result.failed.length} failed: ${failedNames}`, { duration: 6000, closeButton: true });
+      } else {
+        toast.success(
+          fileCount === 1
+            ? "File added. Your sync will start soon."
+            : `${fileCount} files added. Your sync will start soon.`,
+          { duration: 4000, closeButton: true }
+        );
+      }
+
       queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
       props.onSuccess();
     } catch (error) {
-      console.error(
-        "Failed to add files to folder:",
-        error,
-        "  ",
-        props.folderName
-      );
+      toast.dismiss(loadingToastId);
       toast.error(
         `Failed to add ${fileCount === 1 ? "file" : "files"}: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
     } finally {
+      unlisten();
       setIsUploading(false);
       setUploadProgress(0);
     }

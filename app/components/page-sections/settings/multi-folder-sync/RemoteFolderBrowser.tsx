@@ -180,7 +180,7 @@ export function RemoteFolderBrowser({
 
   const handleSyncSelected = useCallback(async () => {
     if (isLocal) {
-      // Already synced — apply exclusion patterns directly
+      // Already synced — single Rust call handles pattern changes + sync trigger
       setIsApplying(true);
       try {
         const excludedPaths = files
@@ -190,23 +190,11 @@ export function RemoteFolderBrowser({
           .filter((f) => selected.has(f.path))
           .map((f) => f.path);
 
-        // Remove patterns for files that are now selected (included)
-        for (const path of includedPaths) {
-          await invoke("remove_exclude_pattern", {
-            label: folder.folderName,
-            pattern: path,
-          }).catch(() => {});
-        }
-        // Add patterns for files that are unchecked (excluded)
-        for (const path of excludedPaths) {
-          await invoke("add_exclude_pattern", {
-            label: folder.folderName,
-            pattern: path,
-          }).catch(() => {});
-        }
-
-        // Trigger a sync cycle so newly included files get downloaded (fire-and-forget)
-        invoke("trigger_sync_now").catch(() => {});
+        await invoke("apply_sync_selection", {
+          label: folder.folderName,
+          include: includedPaths,
+          exclude: excludedPaths,
+        });
 
         toast.success("Sync selection updated");
         onClose();

@@ -1,5 +1,21 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { invoke } from "@tauri-apps/api/core";
+
+/** Row shape returned by the Rust `list_notifications` command (camelCase). */
+export interface NotificationRow {
+  id: number;
+  userAddress: string;
+  notificationType: string | null;
+  notificationSubtype: string | null;
+  titleText: string | null;
+  description: string | null;
+  linkText: string | null;
+  link: string | null;
+  isUnread: boolean;
+  creationTime: number | null;
+  isDeleted: boolean;
+  deletedAt: number | null;
+  releaseNotes: string | null;
+}
 
 /* ── Notification Preferences ── */
 
@@ -81,7 +97,7 @@ export async function addNotification({
 
 export async function listNotifications(userAddress: string, limit = 50) {
   try {
-    return await invoke<any[]>("list_notifications", { userAddress, limit });
+    return await invoke<NotificationRow[]>("list_notifications", { userAddress, limit });
   } catch (error) {
     console.error("Failed to list notifications:", error);
     return [];

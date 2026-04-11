@@ -1,6 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { useInvokeQuery } from "./api/useInvokeQuery";
 
 export interface SubscriptionPlan {
   id: string;
@@ -40,90 +38,33 @@ export interface ActiveSubscription {
   message?: string;
 }
 
-export interface SubscriptionPlansResponse {
+interface SubscriptionData {
+  activeSubscription: ActiveSubscription | null;
   plans: SubscriptionPlan[];
   recommendation: string;
+  isOnHighestPlan: boolean;
 }
 
 export default function useSubscriptionData() {
-  const { polkadotAddress } = useWalletAuth();
-  const [activeSubscription, setActiveSubscription] =
-    useState<ActiveSubscription | null>(null);
-  const [subscriptionPlans, setSubscriptionPlans] = useState<
-    SubscriptionPlan[]
-  >([]);
-  const [recommendation, setRecommendation] = useState<string>("");
-  const [isLoadingActive, setIsLoadingActive] = useState(true);
-  const [isLoadingPlans, setIsLoadingPlans] = useState(true);
-  const [activeError, setActiveError] = useState<string | null>(null);
-  const [plansError, setPlansError] = useState<string | null>(null);
-
-  const fetchActiveSubscription = useCallback(async () => {
-    if (!polkadotAddress) {
-      setActiveError("Not authenticated");
-      setIsLoadingActive(false);
-      return;
-    }
-
-    try {
-      setIsLoadingActive(true);
-      setActiveError(null);
-
-      const data = await invoke<ActiveSubscription>(
-        "get_active_subscription",
-        { accountId: polkadotAddress }
-      );
-      setActiveSubscription(data);
-    } catch (error) {
-      console.error("Error fetching active subscription:", error);
-      setActiveError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setIsLoadingActive(false);
-    }
-  }, [polkadotAddress]);
-
-  const fetchSubscriptionPlans = useCallback(async () => {
-    if (!polkadotAddress) {
-      setPlansError("Not authenticated");
-      setIsLoadingPlans(false);
-      return;
-    }
-
-    try {
-      setIsLoadingPlans(true);
-      setPlansError(null);
-
-      const data = await invoke<SubscriptionPlansResponse>(
-        "get_subscription_plans",
-        { accountId: polkadotAddress }
-      );
-      setSubscriptionPlans(data.plans || []);
-      setRecommendation(data.recommendation || "");
-    } catch (error) {
-      console.error("Error fetching subscription plans:", error);
-      setPlansError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setIsLoadingPlans(false);
-    }
-  }, [polkadotAddress]);
-
-  useEffect(() => {
-    if (polkadotAddress) {
-      fetchActiveSubscription();
-      fetchSubscriptionPlans();
-    }
-  }, [polkadotAddress, fetchActiveSubscription, fetchSubscriptionPlans]);
+  const query = useInvokeQuery<SubscriptionData>({
+    command: "get_subscription_data",
+    queryKey: (addr) => ["subscription-data", addr],
+    options: {
+      staleTime: 30000,
+    },
+  });
 
   return {
-    activeSubscription,
-    subscriptionPlans,
-    recommendation,
-    isLoadingActive,
-    isLoadingPlans,
-    isLoading: isLoadingActive || isLoadingPlans,
-    activeError,
-    plansError,
-    refetchActiveSubscription: fetchActiveSubscription,
-    refetchSubscriptionPlans: fetchSubscriptionPlans,
+    activeSubscription: query.data?.activeSubscription ?? null,
+    subscriptionPlans: query.data?.plans ?? [],
+    recommendation: query.data?.recommendation ?? "",
+    isOnHighestPlan: query.data?.isOnHighestPlan ?? false,
+    isLoadingActive: query.isLoading,
+    isLoadingPlans: query.isLoading,
+    isLoading: query.isLoading,
+    activeError: query.error?.message ?? null,
+    plansError: query.error?.message ?? null,
+    refetchActiveSubscription: query.refetch,
+    refetchSubscriptionPlans: query.refetch,
   };
 }

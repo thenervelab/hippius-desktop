@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { useUserFiles } from "@/app/lib/hooks/use-user-files";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useSetAtom, useAtomValue } from "jotai";
@@ -36,7 +35,6 @@ export type UploadOptions = {
 export function useFilesUpload(handlers: UploadFilesHandlers) {
   const { onSuccess, onError } = handlers;
   const setProgress = useSetAtom(uploadProgressAtom);
-  const { data: credits } = useUserCredits();
   const { refetch: refetchUserFiles } = useUserFiles();
   const { polkadotAddress } = useWalletAuth();
   const queryClient = useAtomValue(queryClientAtom);
@@ -84,61 +82,49 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     setProgress(0);
 
     try {
-      // Credits may still be loading on first app render; surface a clearer message.
-      if (credits === undefined) {
-        throw new Error("Credits are still loading. Please try again in a moment.");
-      }
-      if (credits <= BigInt(0)) {
-        throw new Error("Insufficient Credits. Please add credits.");
-      }
-
-      const cids: string[] = [];
+      // NOTE: there used to be TS-side credit checks here that read from a
+      // `staleTime: Infinity` `useUserCredits` cache and threw on
+      // `credits <= 0n`. Both are gone — `useCreditCheck` (live Rust call)
+      // now gates at the click handler, AND the Rust `add_files` IPC
+      // enforces eligibility internally via `require_eligible(...)?` so
+      // any bypass surfaces a structured `NotReady(InsufficientCredits)`
+      // error in the catch block below.
 
       const syncPath = syncPathOverride ?? (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
       if (!syncPath) {
         throw new Error("Sync path not configured. Please set a sync folder first.");
       }
 
-      // Dismiss the loading toast — we'll show a success toast immediately
+      // Single Rust call: adds all files + triggers sync.
+      // `forFolder: false` because this hook is used for loose
+      // multi-file uploads (drag/drop, file picker) — never for the
+      // folder-upload flow which goes through `UploadFilesFlow`. The
+      // IPC enforces `FileUpload` credit eligibility accordingly.
+      const result = await invoke<{ added: string[]; failed: Array<{ name: string; error: string }> }>("add_files", {
+        syncPath,
+        filePaths,
+        forFolder: false,
+      });
+
+      // Show result AFTER the work completes
       toast.dismiss(localToastId);
+      if (result.failed.length > 0) {
+        const failedNames = result.failed.map((f) => f.name).join(", ");
+        toast.warning(`${result.added.length} files added, ${result.failed.length} failed: ${failedNames}`, { duration: 6000, closeButton: true });
+      } else {
+        const addedText =
+          filePaths.length === 1
+            ? `${firstFileName} added. Your sync will start soon.`
+            : `${filePaths.length} files added. Your sync will start soon.`;
+        toast.success(addedText, { duration: 4000, closeButton: true });
+      }
 
-      // Show "added" confirmation right away
-      const addedText =
-        filePaths.length === 1
-          ? `${firstFileName} added. Your sync will start soon.`
-          : `${filePaths.length} files added. Your sync will start soon.`;
-      toast.success(addedText, { duration: 4000, closeButton: true });
-
-      // Refetch immediately so the file list shows the new files
       refetchUserFiles();
       queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
-
-      // Add each file to sync folder (hcfs-client will handle upload/encryption)
-      for (let i = 0; i < filePaths.length; i++) {
-        const filePath = filePaths[i];
-
-        const name = await invoke<string>("add_file", {
-          syncPath,
-          filePath,
-        });
-        cids.push(name);
-
-        // update progress
-        const percent = Math.round(((i + 1) / filePaths.length) * 100);
-        setProgress(percent);
-      }
 
       // finish up
       setRequestState("idle");
       setProgress(0);
-
-      // Fire-and-forget: trigger sync without awaiting (it may block if a
-      // sync cycle is already running). The file watcher will also pick up
-      // the new files on its own heartbeat cycle.
-      invoke("trigger_sync_now").catch((err) => {
-        console.error("[Upload] trigger_sync_now failed:", err);
-      });
-
       onSuccess?.();
     } catch (err) {
       setRequestState("idle");
@@ -151,6 +137,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
           : msgs?.errorMultiple?.(filePaths.length) ??
           `Failed to add ${filePaths.length} files`;
 
+      toast.dismiss(localToastId);
       toast.error(errorText);
     }
   }

@@ -4,8 +4,9 @@ import React, { useState, forwardRef, useImperativeHandle } from "react";
 import { Icons } from "@/components/ui";
 import FolderToFolderUploadDialog from "./FolderToFolderUploadDialog";
 import { useAtomValue } from "jotai";
-import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { toast } from "sonner";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
 interface AddFolderToFolderButtonProps {
     className?: string;
@@ -30,16 +31,18 @@ const AddFolderToFolderButton = forwardRef<unknown, AddFolderToFolderButtonProps
         ref
     ) => {
         const [isDialogOpen, setIsDialogOpen] = useState(false);
-        const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
+        const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
+        const { checkEligibility } = useCreditCheck();
 
         useImperativeHandle(ref, () => ({}));
 
         return (
             <>
                 <button
-                    onClick={() => {
-                        if (syncEngineStatus === "stopped") {
-                            toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before adding folders.");
+                    onClick={async () => {
+                        if (!(await checkEligibility("folder-upload"))) return;
+                        if (!hasConfiguredDrives) {
+                            toast.warning("Set up a sync folder in Settings \u2192 Sync & Storage before uploading.");
                             return;
                         }
                         setIsDialogOpen(true);

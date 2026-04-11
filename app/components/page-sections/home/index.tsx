@@ -13,13 +13,11 @@ import { Account } from "@/lib/types";
 import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import Ipfs from "@/app/components/page-sections/files/FilesContainer";
-import { Icons, IS_SYNC_PAUSED, SyncPausedAlert } from "@/components/ui";
+import { IS_SYNC_PAUSED, SyncPausedAlert } from "@/components/ui";
 
 const Home: React.FC = () => {
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   const setIsViewingRecentFiles = useSetAtom(isViewingRecentFilesAtom);
-
-  const [isCheckingSyncPath, setIsCheckingSyncPath] = useState(true);
 
   // Fetch marketplace credits with a higher limit to get good chart data
   const { data: marketplaceCredits, isLoading: isLoadingCredits } =
@@ -41,30 +39,13 @@ const Home: React.FC = () => {
   }, [marketplaceCredits]);
 
   useEffect(() => {
-    const checkSyncPath = async () => {
-      try {
-        setIsCheckingSyncPath(true);
-      } catch (error) {
-        console.error("Failed to check sync path:", error);
-      } finally {
-        setIsCheckingSyncPath(false);
-      }
-    };
+    setActiveSubMenuItem("");
+    setIsViewingRecentFiles(true);
 
-    checkSyncPath();
-  }, []);
-
-  useEffect(() => {
-    if (!isCheckingSyncPath) {
-      setActiveSubMenuItem("");
-      setIsViewingRecentFiles(true);
-    }
-
-    // Clean up when component unmounts
     return () => {
       setIsViewingRecentFiles(false);
     };
-  }, [isCheckingSyncPath, setActiveSubMenuItem, setIsViewingRecentFiles]);
+  }, [setActiveSubMenuItem, setIsViewingRecentFiles]);
 
   return (
     <>
@@ -94,15 +75,9 @@ const Home: React.FC = () => {
               isLoading={isLoadingFiles}
             />
           </div>
-          {isCheckingSyncPath ? (
-            <div className="flex items-center justify-center w-full h-full">
-              <Icons.Loader className="size-8 animate-spin text-primary-60" />
-            </div>
-          ) : (
-            <div id="recent-files">
-              <Ipfs isRecentFiles />
-            </div>
-          )}
+          <div id="recent-files">
+            <Ipfs isRecentFiles />
+          </div>
         </div>
       </DashboardTitleWrapper>
 

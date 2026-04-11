@@ -9,10 +9,13 @@ import { toast } from "sonner";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { invoke } from "@tauri-apps/api/core";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
 
 const Unstake = () => {
     const router = useRouter();
     const { stakingInfo, operations } = useStaking();
+    const { logout } = useWalletAuth();
     const [isLoading, setIsLoading] = useState(false);
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [pendingAmount, setPendingAmount] = useState("");
@@ -23,9 +26,18 @@ const Unstake = () => {
             return;
         }
 
-        const stakedBalance = Number(stakingInfo.bonded || '0') / 1e18; // Convert from planck with 18 decimals
-        if (parseFloat(amount) > stakedBalance) {
-            toast.error("Amount exceeds staked balance");
+        // Lossless BigInt validation — no float intermediary
+        try {
+            const [intPart, fracPart = ""] = amount.split(".");
+            const padded = fracPart.padEnd(18, "0").slice(0, 18);
+            const amountPlanck = BigInt((intPart || "0") + padded);
+            const bondedPlanck = BigInt(stakingInfo.bonded || "0");
+            if (amountPlanck > bondedPlanck) {
+                toast.error("Amount exceeds staked balance");
+                return;
+            }
+        } catch {
+            toast.error("Invalid amount");
             return;
         }
 
@@ -57,7 +69,9 @@ const Unstake = () => {
         } catch (error) {
             console.error("Unstaking failed:", error);
             toast.dismiss(loadingToast);
-            toast.error(`Unstaking failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+            if (!dispatchSigningError(error, () => logout("/"))) {
+                toast.error(`Unstaking failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+            }
         } finally {
             setIsLoading(false);
             setPendingAmount("");

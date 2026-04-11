@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { InView } from "react-intersection-observer";
 import SectionHeader from "./SectionHeader";
 import SyncFolderSelector from "@/app/components/page-sections/files/SyncFolderSelector";
@@ -12,10 +12,16 @@ import { CardButton, Icons, RevealTextLine } from "@/components/ui";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import StopSyncDialog, { type SyncType } from "./StopSyncDialog";
-import { useAtomValue, useSetAtom } from "jotai";
-import { triggerSyncPathRefreshAtom, syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
-import { SyncStoppedAlert } from "@/components/ui/SyncStoppedAlert";
+import { useSetAtom } from "jotai";
+import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
+// NOTE: this component used to render a "Stop Syncing" / "Start Syncing"
+// button pair plus the global "Syncing is currently stopped" banner.
+// All three were single-drive remnants — the Stop button was hardcoded
+// to `label: "default"` and the banner conflated multi-drive state into
+// a single global enum. They were deleted in the per-drive status
+// migration. Per-drive lifecycle (pause / resume / remove) lives in
+// `MultiFolderSyncManager`'s 3-dot menu now. This page is now solely
+// responsible for choosing the local folder LOCATION.
 import { SyncConnectivityAlert } from "@/components/ui/SyncConnectivityAlert";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
@@ -30,36 +36,20 @@ const UpdateSyncFolder: React.FC = () => {
     useState("");
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const [showSelector, setShowSelector] = useState(false);
-  const [stopSyncTarget, setStopSyncTarget] = useState<SyncType | null>(null);
   const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
-  const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
-  const setSyncEngineStatus = useSetAtom(syncEngineStatusAtom);
-
-  const isSyncActive = syncEngineStatus === "active";
-  const isStopping = syncEngineStatus === "stopping";
-  const [isStarting, setIsStarting] = useState(false);
-
-  // Ref to read the latest syncEngineStatus without re-triggering effects
-  const statusRef = useRef(syncEngineStatus);
-  useEffect(() => {
-    statusRef.current = syncEngineStatus;
-  }, [syncEngineStatus]);
 
   const {
     setupAndInitialize,
-    tryInitializeSync,
     checkConfig,
     isInitializing,
     mnemonicToBackup,
     clearMnemonicBackup,
-    needsSetup,
-    error,
   } = useHcfsSync();
 
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
   const [showMnemonicBackup, setShowMnemonicBackup] = useState(false);
 
-  // Load folder path and check sync status on mount only
+  // Load folder path on mount.
   useEffect(() => {
     (async () => {
       try {
@@ -72,54 +62,7 @@ const UpdateSyncFolder: React.FC = () => {
         console.error("Failed to load sync folder:", err);
       }
     })();
-
-    // Only check drive status if we're not in the middle of stopping
-    if (statusRef.current !== "stopping" && statusRef.current !== "stopped") {
-      (async () => {
-        try {
-          const active = await invoke<boolean>("is_drive_active");
-          // Re-check after await; status might have changed
-          if (statusRef.current === "stopping" || statusRef.current === "stopped") return;
-          setSyncEngineStatus(active ? "active" : "stopped");
-        } catch {
-          // If we can't check, leave status as-is
-        }
-      })();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [polkadotAddress]);
-
-  // While stopping, poll until the drive is actually dropped
-  useEffect(() => {
-    if (syncEngineStatus !== "stopping") return;
-
-    let cancelled = false;
-    const poll = async () => {
-      const start = Date.now();
-      while (!cancelled) {
-        await new Promise((r) => setTimeout(r, 1000));
-        if (Date.now() - start > 30_000) {
-          toast.error("Timed out waiting for sync to stop");
-          setSyncEngineStatus("stopped");
-          break;
-        }
-        try {
-          const active = await invoke<boolean>("is_drive_active");
-          if (!active && !cancelled) {
-            toast.success("Syncing stopped");
-            setSyncEngineStatus("stopped");
-            triggerSyncPathRefresh((prev) => prev + 1);
-            break;
-          }
-        } catch {
-          // Ignore transient failures
-        }
-      }
-    };
-    poll();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [syncEngineStatus]);
 
   const handlePrivateFolderSelected = async (path: string) => {
     if (!polkadotAddress) return;
@@ -143,17 +86,18 @@ const UpdateSyncFolder: React.FC = () => {
         // Config exists — show success immediately, sync in background
         toast.success("Sync folder set — syncing started!");
         setShowSelector(false);
-        // Clear stopped flag — selecting a new folder means user wants sync running
-        localStorage.removeItem("hippius_sync_stopped");
-        setSyncEngineStatus("active");
+        // Per-drive Active status is emitted by Rust automatically when
+        // change_sync_folder re-initializes the drive — useDriveStatuses
+        // picks it up via the DRIVE_STATUS_CHANGED event.
 
-        // Fire off stop + re-init in background (don't block UI)
+        // Single Rust call: removes old drive, sets path, initializes new drive
         const mnemonic = (await getMnemonic()) ?? undefined;
-        invoke("stop_sync").catch((err: unknown) => console.warn("[UpdateSyncFolder] stop_sync failed:", err)).then(() =>
-          tryInitializeSync(polkadotAddress!, "default", mnemonic ?? undefined).catch((err) =>
-            console.error("[UpdateSyncFolder] Background sync init failed:", err)
-          )
-        );
+        invoke("change_sync_folder", {
+          accountId: polkadotAddress,
+          newPath: path,
+          label: "default",
+          mnemonic: mnemonic ?? null,
+        }).catch((err) => console.error("[UpdateSyncFolder] change_sync_folder failed:", err));
       }
     } catch (err) {
       console.error("Failed to update sync path:", err);
@@ -180,7 +124,7 @@ const UpdateSyncFolder: React.FC = () => {
 
       if (initResult) {
         toast.success("Sync folder set — syncing started!");
-        setSyncEngineStatus("active");
+        // Per-drive Active status is emitted by Rust automatically.
         if (initResult.mnemonic) {
           setShowMnemonicBackup(true);
         }
@@ -198,64 +142,6 @@ const UpdateSyncFolder: React.FC = () => {
 
   const handleBackClick = () => {
     setShowSelector(false);
-  };
-
-  const handleStopSyncConfirm = async () => {
-    if (!stopSyncTarget) return;
-    if (!polkadotAddress) {
-      toast.error("Wallet authentication is required");
-      return;
-    }
-
-    setSyncEngineStatus("stopping");
-    setStopSyncTarget(null); // close dialog immediately
-    try {
-      await invoke("stop_drive", { label: "default" });
-      // Persist the stopped state so auto-init is skipped on next app launch
-      localStorage.setItem("hippius_sync_stopped", "true");
-      // The "stopping" → "stopped" transition is handled by the polling useEffect.
-      // We just need to fire off the Rust command; the effect will detect when
-      // is_drive_active() returns false and set status to "stopped" + show toast.
-    } catch {
-      toast.error("Failed to stop syncing for this folder");
-      setSyncEngineStatus("active");
-    }
-  };
-
-  const handleStartSync = async () => {
-    if (!polkadotAddress) {
-      toast.error("Wallet authentication is required");
-      return;
-    }
-
-    setIsStarting(true);
-    try {
-      // Clear the stopped flag — user explicitly wants sync running
-      localStorage.removeItem("hippius_sync_stopped");
-      const mnemonic = (await getMnemonic()) ?? undefined;
-      const success = await tryInitializeSync(polkadotAddress, "default", mnemonic ?? undefined);
-      if (success) {
-        toast.success("Syncing started!");
-        setSyncEngineStatus("active");
-        triggerSyncPathRefresh((prev) => prev + 1);
-      } else {
-        // If needsSetup is true, the user needs to complete setup first
-        if (needsSetup) {
-          toast.error("Please complete sync setup first by selecting a folder.");
-        } else if (error) {
-          // Show the actual error message
-          toast.error(`Failed to start syncing: ${error}`);
-        } else {
-          toast.error("Failed to start syncing. Please check your setup.");
-        }
-      }
-    } catch (err) {
-      console.error("Failed to start sync:", err);
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      toast.error(`Failed to start syncing: ${errorMsg}`);
-    } finally {
-      setIsStarting(false);
-    }
   };
 
   return (
@@ -296,10 +182,11 @@ const UpdateSyncFolder: React.FC = () => {
                         <SyncPausedAlert variant="banner" />
                       </div>
                     )}
-                    {/* Sync connectivity and stopped alerts */}
+                    {/* Sync connectivity alert. The "Syncing is currently
+                        stopped" banner that used to live here was deleted in
+                        the per-drive status migration. */}
                     <div className="mt-4 space-y-2">
                       <SyncConnectivityAlert variant="banner" />
-                      <SyncStoppedAlert variant="banner" hasSyncPaths={!!selectedPrivateFolderPath} />
                     </div>
                     <div className={cn("flex justify-between p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full", IS_SYNC_PAUSED && "opacity-60")}>
                       {selectedPrivateFolderName ? (
@@ -325,35 +212,11 @@ const UpdateSyncFolder: React.FC = () => {
                         </div>
                       )}
                       <div className="flex self-start gap-3">
-                        {selectedPrivateFolderPath && (
-                          isStopping ? (
-                            <CardButton
-                              className="h-10"
-                              variant="secondary"
-                              disabled
-                              loading
-                            >
-                              <span className="text-base leading-4 font-medium">
-                                Stopping...
-                              </span>
-                            </CardButton>
-                          ) : isSyncActive ? (
-                            <button
-                              onClick={() => setStopSyncTarget("private")}
-                              className="h-10 border border-grey-80 p-1.5 sm:px-3 sm:py-1.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
-                            >
-                              Stop Syncing
-                            </button>
-                          ) : (
-                            <button
-                              onClick={handleStartSync}
-                              className="h-10 border border-grey-80 p-1.5 sm:px-3 sm:py-1.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
-                              disabled={isStarting || IS_SYNC_PAUSED}
-                            >
-                              {isStarting ? "Starting..." : "Start Syncing"}
-                            </button>
-                          )
-                        )}
+                        {/* The Start / Stop / Stopping button trio that used
+                            to live here was a single-drive remnant hardcoded
+                            to label="default". Per-drive lifecycle (pause /
+                            resume / remove) is now handled by the 3-dot menu
+                            in MultiFolderSyncManager. */}
                         <CardButton
                           className="max-w-[10rem] h-10"
                           variant="primary"
@@ -405,14 +268,6 @@ const UpdateSyncFolder: React.FC = () => {
               </div>
             </div>
 
-            <StopSyncDialog
-              open={stopSyncTarget !== null}
-              onClose={() => setStopSyncTarget(null)}
-              onConfirm={handleStopSyncConfirm}
-              folderName={selectedPrivateFolderName}
-              folderPath={selectedPrivateFolderPath}
-              loading={isStopping}
-            />
           </div>
         )}
       </InView>

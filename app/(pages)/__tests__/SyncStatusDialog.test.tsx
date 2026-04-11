@@ -210,11 +210,16 @@ describe("SyncStatusDialog", () => {
       makeFileProgress("d.txt", { status: "completed", progressPercent: 100, bytesTransferred: 1000, totalBytes: 1000 }),
     ];
     const sessionTime = Date.now();
-    // Session stays active due to deferred completion; overallPercent = 100
+    // Session stays active due to deferred completion; overallPercent = 100.
+    // Rust's fixup_stalled_completion detects all files done and overrides
+    // effectiveCompleted=true, so the widget shows "Complete" even though
+    // isActive is still true.
     const snapshot1 = makeSnapshot(completedFiles, {
       startedAt: sessionTime,
       isActive: true,
       overallPercent: 100,
+      effectiveCompleted: true,
+      effectiveInProgress: false,
     });
 
     const store = createStore();
@@ -233,8 +238,8 @@ describe("SyncStatusDialog", () => {
       </Provider>,
     );
 
-    // Should show "Syncing..." for 100% (status text shows "Syncing..." when at 100%)
-    expect(screen.getByText("Syncing...")).toBeInTheDocument();
+    // Rust fixes the stalled state, so the widget shows "Complete"
+    expect(screen.getByText("Complete")).toBeInTheDocument();
 
     // Now add a 5th file (deferred completion merged it in)
     const mergedFiles = [
@@ -254,5 +259,31 @@ describe("SyncStatusDialog", () => {
     // NOT stay locked at 100%.
     const percentText = screen.getByText("Syncing 80%");
     expect(percentText).toBeInTheDocument();
+  });
+
+  it("shows Complete when Rust fixes stalled active session at 100%", () => {
+    // Reproduces the bug scenario: hcfs-client leaves is_active=true due to
+    // its file watcher detecting self-generated writes (changes_pending stuck).
+    // The Rust fixup_stalled_completion() overrides effectiveCompleted=true
+    // even though isActive is still true.
+    const files = [
+      makeFileProgress("a.txt", { status: "completed", progressPercent: 100, bytesTransferred: 1000, totalBytes: 1000 }),
+      makeFileProgress("b.txt", { status: "completed", progressPercent: 100, bytesTransferred: 1000, totalBytes: 1000 }),
+      makeFileProgress("c.txt", { status: "completed", progressPercent: 100, bytesTransferred: 1000, totalBytes: 1000 }),
+    ];
+    const snapshot = makeSnapshot(files, {
+      isActive: true,
+      overallPercent: 100,
+      effectiveCompleted: true,
+      effectiveInProgress: false,
+      widgetState: "completed",
+      statusVariant: "success",
+    });
+
+    renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    expect(screen.getByText("Complete")).toBeInTheDocument();
   });
 });

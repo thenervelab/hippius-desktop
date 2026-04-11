@@ -3,7 +3,7 @@
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Graphsheet } from "@/components/ui";
 import * as Icons from "@/components/ui/icons";
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, memo } from "react";
 import { useAtomValue } from "jotai";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import {
@@ -15,7 +15,7 @@ import InfoTooltip from "@/components/ui/info-tooltip";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
 import { syncEngineHealthAtom, CONNECTIVITY_STATUS_LABELS } from "../lib/store/syncAtoms";
-import { type SyncSnapshot } from "../lib/types/syncSnapshot";
+import { type SyncSnapshot, type FileProgress } from "../lib/types/syncSnapshot";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
 
 // Use rem so the widget scales with the fluid root font-size
@@ -52,6 +52,168 @@ interface RateSample {
 /** Number of samples to keep for moving average */
 const RATE_WINDOW = 10;
 
+// ── Memoized file item ─────────────────────────────────────────────
+// Extracted so React can skip re-rendering files whose visible fields
+// haven't changed. Without this, every 250ms snapshot update re-runs
+// getFilePartsFromFileName / getFileTypeFromExtension / getFileIcon
+// for every file in the list.
+
+interface SyncFileItemProps {
+  file: FileProgress;
+  isSingleFile: boolean;
+  effectiveInProgress: boolean;
+  speedBytesPerSec: number | null;
+  etaSeconds: number | null;
+}
+
+const SyncFileItem = memo<SyncFileItemProps>(function SyncFileItem({
+  file,
+  isSingleFile,
+  effectiveInProgress,
+  speedBytesPerSec,
+  etaSeconds,
+}) {
+  const isFileCompleted = file.status === "completed";
+  const isFileDeleted = isFileCompleted && (file.action === "local_delete" || file.action === "remote_delete");
+  const isEncryptingOrDecrypting = file.status === "encrypting" || file.status === "decrypting";
+  const isFileInProgress = file.status === "inProgress" || isEncryptingOrDecrypting;
+  const isFailed = file.status === "error";
+  const { fileFormat } = getFilePartsFromFileName(file.fileName);
+  const fileType = getFileTypeFromExtension(fileFormat || null);
+  const { icon: Icon, color } = getFileIcon(fileType ? fileType : undefined, false);
+
+  return (
+    <div
+      className="mb-4 last:mb-0"
+      data-file-item
+      data-testid="file-item"
+    >
+      <div className="flex gap-2">
+        <AbstractIconWrapper className="size-8 flex-shrink-0 flex items-center justify-center self-center">
+          <Icon className={cn("size-5 relative", color)} />
+        </AbstractIconWrapper>
+
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-3">
+            <MiddleTruncatedName
+              name={file.fileName}
+              className="text-sm font-medium text-grey-10"
+            />
+
+            <div className="flex items-center flex-shrink-0 ml-2">
+              {isFileDeleted ? (
+                <>
+                  <Icons.TickCircle className="w-5 h-5 text-success-50" />
+                  <span className="text-sm ml-1 text-success-50">Deleted</span>
+                </>
+              ) : isFileCompleted ? (
+                <>
+                  <Icons.TickCircle className="w-5 h-5 text-success-50" />
+                  <span className="text-sm ml-1 text-success-50">Synced</span>
+                </>
+              ) : isFailed ? (
+                <>
+                  <Icons.InfoCircle className="w-5 h-5 text-error-50" />
+                  <span className="text-sm ml-1 text-error-50">Failed</span>
+                </>
+              ) : isFileInProgress ? (
+                isEncryptingOrDecrypting ? (
+                  <span className="text-xs text-primary-50">
+                    <span>{file.status === "encrypting" ? "Encrypting" : "Decrypting"}</span>
+                    <span className="inline-flex w-[0.875rem]">
+                      <span className="animate-[dotPulse_1.4s_ease-in-out_infinite]">.</span>
+                      <span className="animate-[dotPulse_1.4s_0.2s_ease-in-out_infinite]">.</span>
+                      <span className="animate-[dotPulse_1.4s_0.4s_ease-in-out_infinite]">.</span>
+                    </span>
+                  </span>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <div className="w-[3.75rem] h-1.5 bg-grey-80 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-primary-50 rounded-full transition-[width] duration-700 ease-out"
+                        style={{ width: `${file.progressPercent}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-primary-50 min-w-[2rem] text-right">
+                      {file.progressPercent}%
+                    </span>
+                  </div>
+                )
+              ) : file.status === "pending" ? (
+                <>
+                  <Icons.InfoCircle className="w-5 h-5 text-warning-50" />
+                  <span className="text-sm ml-1 text-warning-50">Pending</span>
+                </>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <div className="w-[3.75rem] h-1.5 bg-grey-80 rounded-full overflow-hidden">
+                    <div className="h-full bg-grey-60 rounded-full" style={{ width: "0%" }} />
+                  </div>
+                  <span className="text-xs text-grey-50 min-w-[2rem] text-right">0%</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {file.totalBytes > 0 && (
+            isFileInProgress && !isEncryptingOrDecrypting ? (
+              <div className="flex items-center justify-between -mt-0.5">
+                <span className="text-[0.625rem] text-grey-50">
+                  {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
+                </span>
+                {isSingleFile && effectiveInProgress && speedBytesPerSec !== null && speedBytesPerSec > 0 && (
+                  <span className="text-[0.625rem] text-grey-50">
+                    {formatBytes(Math.round(speedBytesPerSec))}/s
+                    {etaSeconds !== null && etaSeconds > 0
+                      ? ` · ~${formatEta(etaSeconds)}`
+                      : ""}
+                  </span>
+                )}
+              </div>
+            ) : isEncryptingOrDecrypting ? (
+              <div className="flex items-center justify-between -mt-0.5">
+                <span className="text-[0.625rem] text-grey-50">
+                  {formatBytes(file.totalBytes)}
+                </span>
+                {isSingleFile && effectiveInProgress && etaSeconds !== null && etaSeconds > 0 && (
+                  <span className="text-[0.625rem] text-grey-50">
+                    ~{formatEta(etaSeconds)} remaining
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="-mt-0.5">
+                <span className="text-[0.625rem] text-grey-50">
+                  {formatBytes(file.totalBytes)}
+                </span>
+              </div>
+            )
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}, (prev, next) => {
+  const pf = prev.file;
+  const nf = next.file;
+  return (
+    pf.status === nf.status &&
+    pf.progressPercent === nf.progressPercent &&
+    pf.bytesTransferred === nf.bytesTransferred &&
+    pf.bytesEncrypted === nf.bytesEncrypted &&
+    pf.action === nf.action &&
+    pf.fileName === nf.fileName &&
+    pf.totalBytes === nf.totalBytes &&
+    pf.error === nf.error &&
+    prev.isSingleFile === next.isSingleFile &&
+    prev.effectiveInProgress === next.effectiveInProgress &&
+    prev.speedBytesPerSec === next.speedBytesPerSec &&
+    prev.etaSeconds === next.etaSeconds
+  );
+});
+
+// ── Main dialog ────────────────────────────────────────────────────
+
 interface SyncStatusDialogProps {
   snapshot: SyncSnapshot;
   open: boolean;
@@ -63,29 +225,20 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   open,
   onClose,
 }) => {
-  const fileListRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const engineHealth = useAtomValue(syncEngineHealthAtom);
 
   const isUnhealthy = engineHealth.status !== "connected";
 
-  // Derive all display state from the snapshot
+  // Display state pre-computed by Rust snapshot
   const isInProgress = snapshot.isActive;
   const isRetrying = !snapshot.isActive && snapshot.retryInSecs > 0;
   const isCompleted = !snapshot.isActive && !isRetrying && (snapshot.completedFiles > 0 || snapshot.failedFiles > 0);
   const hasFailed = (snapshot.failedFiles > 0 && isCompleted) || isRetrying;
   const totalFiles = snapshot.totalFiles;
   const isSingleFile = totalFiles === 1;
-
-  // Detect files still being processed even though the session may be
-  // marked as complete (e.g. encryption finishes after sync loop returns).
-  const hasActiveFiles = snapshot.files.some(
-    (f) => f.status !== "completed" && f.status !== "error"
-  );
-  // For display purposes, treat the widget as "in progress" when files
-  // are still actively processing, even if the session is marked complete.
-  const effectiveInProgress = isInProgress || hasActiveFiles;
-  const effectiveCompleted = isCompleted && !hasActiveFiles;
+  const effectiveInProgress = snapshot.effectiveInProgress;
+  const effectiveCompleted = snapshot.effectiveCompleted;
 
   // ── Smoothed progress ──────────────────────────────────────────
   // Interpolate between snapshot.overallPercent values so the bar
@@ -136,19 +289,9 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
   const [speedBytesPerSec, setSpeedBytesPerSec] = useState<number | null>(null);
 
-  // Compute combined progress across all phases (encrypt + transfer)
-  // so rate calculation works during encryption, not just upload.
-  const combinedProgressBytes = snapshot.files.reduce(
-    (sum, f) => sum + f.bytesEncrypted + f.bytesTransferred, 0
-  );
-  // Expected total work: uploads/downloads go through 2 phases
-  // (encrypt+upload or download+decrypt), deletes are single-phase.
-  const combinedBytesExpected = snapshot.files.reduce(
-    (sum, f) => {
-      const isTransfer = f.action === "upload" || f.action === "download";
-      return sum + f.totalBytes * (isTransfer ? 2 : 1);
-    }, 0
-  );
+  // Combined progress pre-computed by Rust
+  const combinedProgressBytes = snapshot.combinedProgressBytes;
+  const combinedBytesExpected = snapshot.combinedBytesExpected;
 
   useEffect(() => {
     if (!effectiveInProgress || combinedBytesExpected === 0 || combinedProgressBytes === 0) {
@@ -218,35 +361,25 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     return () => clearInterval(timer);
   }, [snapshot.retryInSecs]);
 
-  useEffect(() => {
-    const fileList = fileListRef.current;
-    if (!fileList || !isExpanded) return;
-
-    const handleScroll = () => {
-      const { clientHeight } = fileList;
-      const topFade = 20;
-      const bottomFade = 20;
-      fileList
-        .querySelectorAll<HTMLElement>("[data-file-item]")
-        .forEach((el) => {
-          const { top, height } = el.getBoundingClientRect();
-          const offsetTop = top - fileList.getBoundingClientRect().top;
-          const offsetBottom = offsetTop + height;
-          if (offsetTop < topFade) {
-            el.style.opacity = `${Math.max(0.3, offsetTop / topFade)}`;
-          } else if (offsetBottom > clientHeight - bottomFade) {
-            el.style.opacity = `${Math.max(
-              0.3,
-              (clientHeight - offsetTop) / bottomFade
-            )}`;
-          } else {
-            el.style.opacity = "1";
-          }
-        });
-    };
-    fileList.addEventListener("scroll", handleScroll);
-    return () => fileList.removeEventListener("scroll", handleScroll);
-  }, [isExpanded]);
+  // NOTE: a previous scroll-fade implementation lived here. It iterated
+  // `[data-file-item]` rows on every scroll event and set inline
+  // `el.style.opacity` based on each row's position. It had three bugs:
+  //
+  //   1. The bottom-edge formula `(clientHeight - offsetTop) / bottomFade`
+  //      could produce values WAY larger than 1 (e.g. opacity: 2.8) for
+  //      rows nowhere near the bottom edge.
+  //   2. The handler only ran on `scroll` events, but the inline opacity
+  //      it set was persistent. When React re-rendered the file list,
+  //      the stale inline opacities stuck to whichever DOM nodes React
+  //      reused — assigning random opacities to rows that were no longer
+  //      near the fade band.
+  //   3. The opacity transition combined with text-content updates caused
+  //      the GPU compositor to re-rasterize each row's text on every
+  //      frame, producing a visible "doubled text" artifact on macOS
+  //      WebKit during mid-animation.
+  //
+  // Replaced with a CSS mask gradient on the scroll container (see the
+  // file-list `<div>` below). Pure CSS, no JS, no inline styles.
 
   const toggleExpanded = useCallback(() => {
     setIsExpanded((v) => {
@@ -268,11 +401,6 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   // Nothing to show — no files, not active, not retrying, not completed
   if (snapshot.totalFiles === 0 && !isInProgress && !isRetrying && !isCompleted) return null;
 
-  // Derive counts for the status banner
-  const syncedFiles = snapshot.completedFiles;
-  const deletedFiles = snapshot.files.filter(
-    (f) => (f.action === "local_delete" || f.action === "remote_delete") && f.status === "completed"
-  ).length;
 
   return (
     <div
@@ -284,7 +412,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           ? W_COLLAPSED_DISCONNECTED
           : isRetrying
             ? W_COLLAPSED_RETRY
-            : effectiveCompleted || hasFailed
+            : effectiveCompleted || isCompleted || hasFailed
               ? W_COLLAPSED_DONE
               : W_COLLAPSED_ACTIVE
       }}
@@ -350,12 +478,12 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     "fill-none stroke-[4]",
                     isUnhealthy || hasFailed
                       ? "stroke-[#ef4444]"
-                      : effectiveCompleted
+                      : effectiveCompleted || isCompleted
                         ? "stroke-[#4ade80]"
                         : "stroke-[#4171e0]"
                   )}
                   strokeLinecap="round"
-                  strokeDasharray={isUnhealthy || hasFailed ? "138 138" : effectiveCompleted ? "138 138" : percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
+                  strokeDasharray={isUnhealthy || hasFailed ? "138 138" : (effectiveCompleted || isCompleted) ? "138 138" : percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
                 />
               </svg>
 
@@ -367,7 +495,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   </AbstractIconWrapper>
                 ) : (
                   <AbstractIconWrapper className="size-10 flex items-center justify-center rounded-[50%]">
-                    {effectiveCompleted ? (
+                    {effectiveCompleted || isCompleted ? (
                       <Icons.TickCircle className="size-6 relative text-success-50" />
                     ) : (
                       <Icons.Refresh className="size-6 relative animate-spin text-primary-50" />
@@ -424,7 +552,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     ? retryCountdown > 0 ? `Retry ${retryCountdown}s` : "Retrying..."
                     : hasFailed
                       ? "Failed"
-                      : effectiveCompleted
+                      : effectiveCompleted || isCompleted
                         ? "Complete"
                         : percentage !== null && percentage < 100
                           ? `Syncing ${percentage}%`
@@ -479,7 +607,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           <div className="flex flex-col w-full mt-4 ml-4 gap-2">
             <div className="flex items-center gap-2 flex-wrap">
               {(() => {
-                // Retry state — show countdown
+                // Retry state — show countdown (only part that needs live React state)
                 if (isRetrying) {
                   return (
                     <div className={cn("w-fit px-2 py-0.5 border rounded", "bg-error-100/40 border-error-80")}>
@@ -492,111 +620,49 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   );
                 }
 
-                // Total completed = synced (uploaded) + deleted
-                const completedFiles = syncedFiles + deletedFiles;
-                // Calculate actual total including failed files
-                const actualTotal = snapshot.failedFiles > 0
-                  ? Math.max(totalFiles, completedFiles + snapshot.failedFiles)
-                  : totalFiles;
-
-                // Determine what type of sync is happening based on snapshot action counts
-                const hasUploads = snapshot.expectedUploads > 0;
-                const hasDownloads = snapshot.expectedDownloads > 0;
-                const hasLocalDeletes = snapshot.expectedLocalDeletes > 0;
-                const hasRemoteDeletes = snapshot.expectedRemoteDeletes > 0;
-                const nonDeleteSynced = syncedFiles - deletedFiles;
-
-                // If there are failed files, show appropriate failure message
-                if (snapshot.failedFiles > 0 && !isInProgress) {
-                  let failMsg: string;
-                  if (hasDownloads && !hasUploads) {
-                    failMsg = `${snapshot.failedFiles} of ${actualTotal} files failed to download`;
-                  } else if (hasUploads && !hasDownloads) {
-                    failMsg = `${snapshot.failedFiles} of ${actualTotal} files failed to upload`;
+                // Status text and variant pre-computed by Rust
+                const variantClasses: Record<string, string> = {
+                  error: "bg-error-100/40 border-error-80 text-error-40",
+                  success: "bg-success-100/40 border-success-80 text-success-40",
+                  progress: "bg-primary-100/40 border-primary-80 text-primary-40",
+                };
+                // Format badge text from structured data
+                const { syncedCount, deletedCount, actualTotal, failedFiles, syncDirection, effectiveCompleted, effectiveInProgress } = snapshot;
+                const completedTotal = syncedCount + deletedCount;
+                let badgeText: string;
+                if (snapshot.statusVariant === "error") {
+                  const verb = syncDirection === "download" ? "download" : syncDirection === "upload" ? "upload" : "sync";
+                  badgeText = `${failedFiles} of ${actualTotal} files failed to ${verb}`;
+                } else if (effectiveCompleted) {
+                  if (syncedCount > 0 && deletedCount > 0) {
+                    badgeText = syncDirection === "download"
+                      ? `${completedTotal} ${completedTotal === 1 ? "file" : "files"} downloaded`
+                      : `${completedTotal} ${completedTotal === 1 ? "file" : "files"} synced`;
+                  } else if (syncedCount > 0) {
+                    badgeText = syncDirection === "download"
+                      ? `${syncedCount} ${syncedCount === 1 ? "file" : "files"} downloaded`
+                      : `${syncedCount} ${syncedCount === 1 ? "file" : "files"} synced`;
+                  } else if (deletedCount > 0) {
+                    badgeText = `${deletedCount} ${deletedCount === 1 ? "file" : "files"} deleted`;
                   } else {
-                    failMsg = `${snapshot.failedFiles} of ${actualTotal} files failed to sync`;
+                    badgeText = "Sync complete";
                   }
-                  return (
-                    <div className="w-fit px-2 py-0.5 border rounded bg-error-100/40 border-error-80">
-                      <div className="text-sm text-error-40">{failMsg}</div>
-                    </div>
-                  );
-                }
-                
-                // When completed successfully
-                if (effectiveCompleted) {
-                  const badges: React.ReactNode[] = [];
-
-                  // Combined badge: when both synced and deleted, show total as "synced";
-                  // when only deletions, show "deleted"
-                  if (nonDeleteSynced > 0 && deletedFiles > 0) {
-                    // Mixed: combine into a single "synced" badge
-                    const total = nonDeleteSynced + deletedFiles;
-                    let syncText: string;
-                    if (hasDownloads && !hasUploads) {
-                      syncText = `${total} ${total === 1 ? "file" : "files"} downloaded`;
-                    } else {
-                      syncText = `${total} ${total === 1 ? "file" : "files"} synced`;
-                    }
-                    badges.push(
-                      <div key="synced" className="w-fit px-2 py-0.5 border rounded bg-success-100/40 border-success-80">
-                        <div className="text-sm text-success-40">{syncText}</div>
-                      </div>
-                    );
-                  } else if (nonDeleteSynced > 0) {
-                    // Only uploads/downloads, no deletes
-                    let syncText: string;
-                    if (hasDownloads && !hasUploads) {
-                      syncText = `${nonDeleteSynced} ${nonDeleteSynced === 1 ? "file" : "files"} downloaded`;
-                    } else {
-                      syncText = `${nonDeleteSynced} ${nonDeleteSynced === 1 ? "file" : "files"} synced`;
-                    }
-                    badges.push(
-                      <div key="synced" className="w-fit px-2 py-0.5 border rounded bg-success-100/40 border-success-80">
-                        <div className="text-sm text-success-40">{syncText}</div>
-                      </div>
-                    );
-                  } else if (deletedFiles > 0) {
-                    // Only deletions
-                    badges.push(
-                      <div key="deleted" className="w-fit px-2 py-0.5 border rounded bg-success-100/40 border-success-80">
-                        <div className="text-sm text-success-40">{`${deletedFiles} ${deletedFiles === 1 ? "file" : "files"} deleted`}</div>
-                      </div>
-                    );
-                  }
-
-                  // Fallback if no synced or deleted
-                  if (badges.length === 0) {
-                    badges.push(
-                      <div key="complete" className="w-fit px-2 py-0.5 border rounded bg-success-100/40 border-success-80">
-                        <div className="text-sm text-success-40">Sync complete</div>
-                      </div>
-                    );
-                  }
-
-                  return <>{badges}</>;
-                }
-                
-                // During sync
-                let inProgressText: string;
-                if (effectiveInProgress || actualTotal > 0) {
-                  if (hasDownloads && !hasUploads) {
-                    inProgressText = `${completedFiles} of ${actualTotal} files downloaded`;
-                  } else if ((hasLocalDeletes || hasRemoteDeletes) && !hasUploads && !hasDownloads) {
-                    const deleteCount = snapshot.expectedLocalDeletes + snapshot.expectedRemoteDeletes;
-                    inProgressText = `Deleting ${deleteCount} ${deleteCount === 1 ? 'file' : 'files'}`;
+                } else if (effectiveInProgress || actualTotal > 0) {
+                  if (syncDirection === "download") {
+                    badgeText = `${completedTotal} of ${actualTotal} files downloaded`;
+                  } else if (syncDirection === "delete") {
+                    badgeText = `Deleting ${actualTotal} ${actualTotal === 1 ? "file" : "files"}`;
                   } else {
-                    inProgressText = `${completedFiles} of ${actualTotal} files synced`;
+                    badgeText = `${completedTotal} of ${actualTotal} files synced`;
                   }
-                } else if (completedFiles > 0) {
-                  inProgressText = `${completedFiles} files synced`;
                 } else {
-                  inProgressText = "Preparing sync...";
+                  badgeText = "Preparing sync...";
                 }
 
+                const classes = variantClasses[snapshot.statusVariant] || variantClasses.progress;
                 return (
-                  <div className="w-fit px-2 py-0.5 border rounded bg-primary-100/40 border-primary-80">
-                    <div className="text-sm text-primary-40">{inProgressText}</div>
+                  <div className={cn("w-fit px-2 py-0.5 border rounded", classes)}>
+                    <div className="text-sm">{badgeText}</div>
                   </div>
                 );
               })()}
@@ -651,137 +717,30 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             </div>
           )}
 
-          {/* File list — flex-1 + min-h-0 lets it fill remaining space and scroll */}
-          <div 
-            ref={fileListRef} 
+          {/* File list — flex-1 + min-h-0 lets it fill remaining space and
+              scroll. The mask-image gradient fades content at the top and
+              bottom edges purely in CSS — replaces the buggy JS scroll
+              handler that previously set inline opacity per row and caused
+              the doubled-text rendering artifact. */}
+          <div
             className="overflow-y-auto p-4 flex-1 min-h-0"
+            style={{
+              maskImage:
+                "linear-gradient(to bottom, transparent 0, black 1.25rem, black calc(100% - 1.25rem), transparent 100%)",
+              WebkitMaskImage:
+                "linear-gradient(to bottom, transparent 0, black 1.25rem, black calc(100% - 1.25rem), transparent 100%)",
+            }}
           >
-            {snapshot.files.map((file, index) => {
-              const isFileCompleted = file.status === "completed";
-              const isFileDeleted = isFileCompleted && (file.action === "local_delete" || file.action === "remote_delete");
-              const isEncryptingOrDecrypting = file.status === "encrypting" || file.status === "decrypting";
-              const isFileInProgress = file.status === "inProgress" || isEncryptingOrDecrypting;
-              const isFailed = file.status === "error";
-              const { fileFormat } = getFilePartsFromFileName(file.fileName);
-              const fileType = getFileTypeFromExtension(fileFormat || null);
-              const { icon: Icon, color } = getFileIcon(fileType ? fileType : undefined, false);
-              return (
-                <div
-                  key={`${file.path}-${index}`}
-                  className="mb-4 last:mb-0 transition-opacity duration-200"
-                  data-file-item
-                  data-testid="file-item"
-                >
-                  <div className="flex gap-2">
-                    {/* Icon — spans both rows, vertically centered */}
-                    <AbstractIconWrapper className="size-8 flex-shrink-0 flex items-center justify-center self-center">
-                      <Icon className={cn("size-5 relative", color)} />
-                    </AbstractIconWrapper>
-
-                    {/* Right side: Row 1 + Row 2 stacked */}
-                    <div className="flex-1 min-w-0">
-                      {/* Row 1: name + status/progress */}
-                      <div className="flex items-center justify-between gap-3">
-                        <MiddleTruncatedName
-                          name={file.fileName}
-                          className="text-sm font-medium text-grey-10"
-                        />
-
-                        <div className="flex items-center flex-shrink-0 ml-2">
-                          {isFileDeleted ? (
-                            <>
-                              <Icons.TickCircle className="w-5 h-5 text-success-50" />
-                              <span className="text-sm ml-1 text-success-50">Deleted</span>
-                            </>
-                          ) : isFileCompleted ? (
-                            <>
-                              <Icons.TickCircle className="w-5 h-5 text-success-50" />
-                              <span className="text-sm ml-1 text-success-50">Synced</span>
-                            </>
-                          ) : isFailed ? (
-                            <>
-                              <Icons.InfoCircle className="w-5 h-5 text-error-50" />
-                              <span className="text-sm ml-1 text-error-50">Failed</span>
-                            </>
-                          ) : isFileInProgress ? (
-                            isEncryptingOrDecrypting ? (
-                              <span className="text-xs text-primary-50">
-                                <span>{file.status === "encrypting" ? "Encrypting" : "Decrypting"}</span>
-                                <span className="inline-flex w-[0.875rem]">
-                                  <span className="animate-[dotPulse_1.4s_ease-in-out_infinite]">.</span>
-                                  <span className="animate-[dotPulse_1.4s_0.2s_ease-in-out_infinite]">.</span>
-                                  <span className="animate-[dotPulse_1.4s_0.4s_ease-in-out_infinite]">.</span>
-                                </span>
-                              </span>
-                            ) : (
-                              <div className="flex items-center gap-2">
-                                <div className="w-[3.75rem] h-1.5 bg-grey-80 rounded-full overflow-hidden">
-                                  <div
-                                    className="h-full bg-primary-50 rounded-full transition-[width] duration-700 ease-out"
-                                    style={{ width: `${file.progressPercent}%` }}
-                                  />
-                                </div>
-                                <span className="text-xs text-primary-50 min-w-[2rem] text-right">
-                                  {file.progressPercent}%
-                                </span>
-                              </div>
-                            )
-                          ) : file.status === "pending" ? (
-                            <>
-                              <Icons.InfoCircle className="w-5 h-5 text-warning-50" />
-                              <span className="text-sm ml-1 text-warning-50">Pending</span>
-                            </>
-                          ) : (
-                            <div className="flex items-center gap-2">
-                              <div className="w-[3.75rem] h-1.5 bg-grey-80 rounded-full overflow-hidden">
-                                <div className="h-full bg-grey-60 rounded-full" style={{ width: "0%" }} />
-                              </div>
-                              <span className="text-xs text-grey-50 min-w-[2rem] text-right">0%</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Row 2: transfer details or file size */}
-                      {file.totalBytes > 0 && (
-                        isFileInProgress && !isEncryptingOrDecrypting ? (
-                          <div className="flex items-center justify-between -mt-0.5">
-                            <span className="text-[0.625rem] text-grey-50">
-                              {formatBytes(file.bytesTransferred)} / {formatBytes(file.totalBytes)}
-                            </span>
-                            {isSingleFile && effectiveInProgress && speedBytesPerSec !== null && speedBytesPerSec > 0 && (
-                              <span className="text-[0.625rem] text-grey-50">
-                                {formatBytes(Math.round(speedBytesPerSec))}/s
-                                {etaSeconds !== null && etaSeconds > 0
-                                  ? ` · ~${formatEta(etaSeconds)}`
-                                  : ""}
-                              </span>
-                            )}
-                          </div>
-                        ) : isEncryptingOrDecrypting ? (
-                          <div className="flex items-center justify-between -mt-0.5">
-                            <span className="text-[0.625rem] text-grey-50">
-                              {formatBytes(file.totalBytes)}
-                            </span>
-                            {isSingleFile && effectiveInProgress && etaSeconds !== null && etaSeconds > 0 && (
-                              <span className="text-[0.625rem] text-grey-50">
-                                ~{formatEta(etaSeconds)} remaining
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="-mt-0.5">
-                            <span className="text-[0.625rem] text-grey-50">
-                              {formatBytes(file.totalBytes)}
-                            </span>
-                          </div>
-                        )
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+            {snapshot.files.map((file) => (
+              <SyncFileItem
+                key={file.path}
+                file={file}
+                isSingleFile={isSingleFile}
+                effectiveInProgress={effectiveInProgress}
+                speedBytesPerSec={speedBytesPerSec}
+                etaSeconds={etaSeconds}
+              />
+            ))}
           </div>
         </div>
       </div>

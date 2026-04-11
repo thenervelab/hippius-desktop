@@ -48,8 +48,9 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { FormattedTimestamp } from "@/app/components/ui"; // Add this import
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
-import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { revealFile } from "@/lib/utils/revealFile";
+
 import { toast } from "sonner";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
@@ -150,26 +151,52 @@ const FilesTable: FC<FilesTableProps> = memo(
     onHeaderContextMenu,
   }) => {
     const { polkadotAddress } = useWalletAuth();
-    // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads
+    // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads.
+    // Also suppress the "pending" upload arrow for files that just finished downloading
+    // (they appear locally before the synced-set updates, so the backend marks them "pending").
+    //
+    // Matching uses snapshot `path` (full relative path) first, then falls back to
+    // `fileName` (basename). The "Your Files" page lists all files as basenames
+    // (actualFileName = "photo.jpg"), while subfolder views use relative paths
+    // (actualFileName = "subfolder/photo.jpg"). The snapshot always has the full path.
     const snapshot = useSyncSnapshot();
     const enrichedAllFiles = useMemo(() => {
       if (!snapshot.isActive && snapshot.files.length === 0) return allFiles;
-      // Build a lookup from fileName → action for active/pending files
+
+      // Index by full path (preferred, no collisions) and basename (fallback)
+      const actionByPath = new Map<string, "upload" | "download">();
       const actionByName = new Map<string, "upload" | "download">();
+      const completedDownloadPaths = new Set<string>();
+      const completedDownloadNames = new Set<string>();
+
       for (const f of snapshot.files) {
         if (f.status !== "completed" && (f.action === "upload" || f.action === "download")) {
+          actionByPath.set(f.path, f.action);
           actionByName.set(f.fileName, f.action);
+        } else if (f.status === "completed" && f.action === "download") {
+          completedDownloadPaths.add(f.path);
+          completedDownloadNames.add(f.fileName);
         }
       }
-      if (actionByName.size === 0) return allFiles;
+      if (actionByPath.size === 0 && completedDownloadPaths.size === 0) return allFiles;
 
       return allFiles.map((file) => {
-        const actualName = file.actualFileName || file.name;
-        const action = actionByName.get(actualName);
-        if (!action) return file;
-        const liveSyncStatus: FormattedUserFile["syncStatus"] =
-          action === "download" ? "downloading" : "uploading";
-        return { ...file, syncStatus: liveSyncStatus };
+        const key = file.actualFileName || file.name;
+        const action = actionByPath.get(key) ?? actionByName.get(key);
+        if (action) {
+          const liveSyncStatus: FormattedUserFile["syncStatus"] =
+            action === "download" ? "downloading" : "uploading";
+          return { ...file, syncStatus: liveSyncStatus };
+        }
+        // File just finished downloading but backend still reports "pending"
+        // because the synced-set hasn't refreshed yet — mark as synced.
+        if (
+          file.syncStatus === "pending" &&
+          (completedDownloadPaths.has(key) || completedDownloadNames.has(key))
+        ) {
+          return { ...file, syncStatus: "synced" as const };
+        }
+        return file;
       });
     }, [allFiles, snapshot.isActive, snapshot.files]);
 
@@ -344,30 +371,12 @@ const FilesTable: FC<FilesTableProps> = memo(
             itemTitle: "Reveal in Finder",
             onItemClick: async () => {
               try {
-                let filePath = file.source;
-
-                // If source path is set, try it first
-                if (filePath) {
-                  try {
-                    await revealItemInDir(filePath);
-                    return;
-                  } catch {
-                    console.warn("[RevealInFinder] source path failed, trying resolve_file_path. source:", filePath);
-                  }
-                }
-
-                // Fallback: resolve canonical path from DB
-                if (file.label && polkadotAddress) {
-                  const fileName = file.actualFileName || file.name;
-                  filePath = await invoke<string>("resolve_file_path", {
-                    accountId: polkadotAddress,
-                    label: file.label,
-                    fileName,
-                  });
-                  await revealItemInDir(filePath);
-                } else {
-                  toast.error("File is not available locally. It may only exist on another device.");
-                }
+                await revealFile({
+                  sourcePath: file.source,
+                  label: file.label,
+                  accountId: polkadotAddress ?? undefined,
+                  fileName: file.actualFileName || file.name,
+                });
               } catch (error) {
                 console.error("Failed to reveal file in Finder:", error);
                 toast.error("File is not available locally. It may only exist on another device.");

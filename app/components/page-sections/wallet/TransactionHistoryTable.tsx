@@ -22,7 +22,6 @@ import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { Dollar } from "@/components/ui/icons";
 import { TransactionObject } from "@/app/lib/hooks/api/useBalanceTransactions";
 import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 export const formatDate = (
   date: Date,
@@ -65,7 +64,6 @@ const TransactionHistoryTable: React.FC<TransactionHistoryTableProps> = ({
   transactions,
   isPending,
 }) => {
-  const { polkadotAddress } = useWalletAuth();
   const [currentPage, setCurrentPage] = useState(1);
 
   const totalPages = useMemo(
@@ -129,16 +127,7 @@ const TransactionHistoryTable: React.FC<TransactionHistoryTableProps> = ({
         },
       }),
 
-      columnHelper.accessor(
-        (row) => {
-          if (row.from === polkadotAddress) {
-            return "Sent";
-          } else if (row.to === polkadotAddress) {
-            return "Received";
-          }
-          return "-";
-        },
-        {
+      columnHelper.accessor("direction", {
           id: "transactionType",
           header: "TRANSACTION TYPE",
           cell: (info) => (
@@ -155,7 +144,7 @@ const TransactionHistoryTable: React.FC<TransactionHistoryTableProps> = ({
         enableSorting: true,
       }),
     ],
-    [polkadotAddress] // Add polkadotAddress as dependency
+    []
   );
 
   const columns = baseColumns;

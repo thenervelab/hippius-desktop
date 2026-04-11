@@ -101,10 +101,10 @@ async fn insert_notification(
 ) -> i64 {
     let now = chrono::Utc::now().timestamp_millis();
     let result = sqlx::query(
-        r#"INSERT INTO notifications (
+        r"INSERT INTO notifications (
             user_address, notification_type, notification_subtype,
             title_text, is_unread, creation_time, is_deleted
-        ) VALUES (?, ?, ?, ?, 1, ?, 0)"#,
+        ) VALUES (?, ?, ?, ?, 1, ?, 0)",
     )
     .bind(user_address)
     .bind(notification_type)
@@ -299,50 +299,224 @@ async fn system_notifications_included_in_user_list() {
     assert_eq!(count_notifications(&pool, alice).await, 2);
 }
 
+// ── Welcome notification helper + cleanup ──────────────────────────────
+//
+// The welcome notification was previously created from two FE code
+// paths (mnemonic login + OAuth callback) which both sent the bare
+// subtype `"Welcome"`. The Rust-side dedup guard in `add_notification`
+// used `starts_with("Welcome-")` (dash-suffix only) and also wasn't
+// user-scoped, so on every login the FE successfully inserted a new
+// row. Existing users accumulated dozens of welcomes in their local
+// DB.
+//
+// The fix moved welcome creation into Rust via
+// `ensure_welcome_notification(pool, user_address)`, which is:
+// 1. user-scoped (per-user dedup)
+// 2. matches bare `"Welcome"` AND `"Welcome-*"` to coexist with
+//    legacy rows and future version bumps
+// 3. idempotent by construction — repeat calls are no-ops
+//
+// A one-time startup cleanup (`cleanup_duplicate_welcome_notifications`)
+// collapses the accumulated duplicates to the oldest per user so the
+// timestamp used by `process_credit_events` for event filtering stays
+// valid.
+//
+// These tests mirror those two helpers against the same in-memory
+// schema. We copy the SQL instead of calling the production helpers
+// directly because the helpers take a `&SqlitePool` and the test
+// setup builds one; calling them via the test crate boundary would
+// require the `lib` feature.
+
+use tauri_project_lib::notifications::crud::{cleanup_duplicate_welcome_notifications, ensure_welcome_notification};
+
 #[tokio::test]
-async fn welcome_notification_is_deduplicated() {
+async fn ensure_welcome_notification_inserts_when_absent() {
     let pool = setup_db().await;
-    let subtype = "Welcome-alice";
+    let alice = "alice-addr";
 
-    insert_notification(&pool, "alice", Some("Hippius"), Some(subtype), "Welcome!").await;
+    ensure_welcome_notification(&pool, alice).await.unwrap();
 
-    // Duplicate check — mirrors add_notification dedup logic
-    let (existing,) = sqlx::query_as::<_, (i64,)>(
+    let (count,) = sqlx::query_as::<_, (i64,)>(
         "SELECT COUNT(*) FROM notifications \
-         WHERE notification_type = 'Hippius' AND notification_subtype = ?",
+         WHERE user_address = ? AND notification_type = 'Hippius' \
+         AND notification_subtype = 'Welcome-v1'",
     )
-    .bind(subtype)
+    .bind(alice)
     .fetch_one(&pool)
     .await
     .unwrap();
+    assert_eq!(count, 1);
+}
 
-    assert!(existing > 0, "Welcome notification should already exist");
+#[tokio::test]
+async fn ensure_welcome_notification_is_idempotent() {
+    let pool = setup_db().await;
+    let alice = "alice-addr";
 
-    // A second insert should be skipped by the app logic (count > 0)
-    // Verify the count stays at 1 if we respect the guard
-    let (total,) = sqlx::query_as::<_, (i64,)>(
+    // Call the helper three times in a row — only the first should
+    // insert. This pins the "repeat login is a no-op" contract.
+    ensure_welcome_notification(&pool, alice).await.unwrap();
+    ensure_welcome_notification(&pool, alice).await.unwrap();
+    ensure_welcome_notification(&pool, alice).await.unwrap();
+
+    let (count,) = sqlx::query_as::<_, (i64,)>(
         "SELECT COUNT(*) FROM notifications \
-         WHERE notification_type = 'Hippius' AND notification_subtype = ?",
+         WHERE user_address = ? AND notification_type = 'Hippius'",
     )
-    .bind(subtype)
+    .bind(alice)
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(total, 1);
+    assert_eq!(count, 1, "idempotent helper must not create duplicates");
+}
+
+#[tokio::test]
+async fn ensure_welcome_notification_is_user_scoped() {
+    // Regression guard for the pre-fix dedup which was global, not
+    // per-user: a welcome for alice must NOT suppress the welcome for
+    // bob when bob logs in for the first time on a multi-account
+    // install.
+    let pool = setup_db().await;
+    let alice = "alice-addr";
+    let bob = "bob-addr";
+
+    ensure_welcome_notification(&pool, alice).await.unwrap();
+    ensure_welcome_notification(&pool, bob).await.unwrap();
+
+    let (alice_count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications WHERE user_address = ? AND notification_type = 'Hippius'")
+        .bind(alice)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (bob_count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications WHERE user_address = ? AND notification_type = 'Hippius'")
+        .bind(bob)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(alice_count, 1);
+    assert_eq!(bob_count, 1);
+}
+
+#[tokio::test]
+async fn ensure_welcome_notification_respects_legacy_bare_subtype() {
+    // Upgrade path: an existing user has a legacy `"Welcome"` subtype
+    // row from the broken FE code path. `ensure_welcome_notification`
+    // must see it and NOT insert a second welcome (which would be a
+    // visible UX regression for every upgrading user).
+    let pool = setup_db().await;
+    let alice = "alice-addr";
+    insert_notification(&pool, alice, Some("Hippius"), Some("Welcome"), "Legacy welcome").await;
+
+    ensure_welcome_notification(&pool, alice).await.unwrap();
+
+    let (count,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE user_address = ? AND notification_type = 'Hippius'",
+    )
+    .bind(alice)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1, "legacy welcome row must be recognised as already-present");
+}
+
+#[tokio::test]
+async fn cleanup_collapses_duplicate_welcomes_keeping_oldest() {
+    // Pre-fix users may have accumulated many welcome rows. The
+    // startup migration must keep the OLDEST per user (so the
+    // `creation_time` timestamp used by `process_credit_events` for
+    // credit-event filtering stays valid) and hard-delete the rest.
+    let pool = setup_db().await;
+    let alice = "alice-addr";
+    let bob = "bob-addr";
+
+    // Insert 5 welcomes for alice with mixed subtypes (mirrors real
+    // data: broken FE sent bare "Welcome" sometimes) and 3 for bob.
+    for subtype in ["Welcome", "Welcome", "Welcome-v1", "Welcome", "Welcome-v1"] {
+        insert_notification(&pool, alice, Some("Hippius"), Some(subtype), "Welcome").await;
+    }
+    for subtype in ["Welcome", "Welcome-v1", "Welcome"] {
+        insert_notification(&pool, bob, Some("Hippius"), Some(subtype), "Welcome").await;
+    }
+    // Non-welcome notifications must not be touched.
+    insert_notification(&pool, alice, Some("Credits"), Some("Topup"), "Topup").await;
+    insert_notification(&pool, alice, None, None, "user-notif").await;
+
+    cleanup_duplicate_welcome_notifications(&pool).await.unwrap();
+
+    // Exactly one welcome per user after cleanup.
+    let (alice_welcomes,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE user_address = ? AND notification_type = 'Hippius' \
+         AND (notification_subtype = 'Welcome' OR notification_subtype LIKE 'Welcome-%')",
+    )
+    .bind(alice)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let (bob_welcomes,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE user_address = ? AND notification_type = 'Hippius' \
+         AND (notification_subtype = 'Welcome' OR notification_subtype LIKE 'Welcome-%')",
+    )
+    .bind(bob)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(alice_welcomes, 1);
+    assert_eq!(bob_welcomes, 1);
+
+    // The surviving row must be the oldest (min id) per user.
+    let (alice_min_id,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT id FROM notifications \
+         WHERE user_address = ? AND notification_type = 'Hippius' \
+         AND (notification_subtype = 'Welcome' OR notification_subtype LIKE 'Welcome-%')",
+    )
+    .bind(alice)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(alice_min_id, 1, "oldest welcome (id=1) must survive for alice");
+
+    // Non-welcome notifications are untouched.
+    let (alice_other,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE user_address = ? AND (notification_type != 'Hippius' OR notification_type IS NULL)",
+    )
+    .bind(alice)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(alice_other, 2, "credits + user notif must survive cleanup");
+}
+
+#[tokio::test]
+async fn cleanup_is_noop_when_no_duplicates() {
+    // The startup cleanup runs on every launch — must be a no-op
+    // after the first successful run (and on fresh installs).
+    let pool = setup_db().await;
+    let alice = "alice-addr";
+    ensure_welcome_notification(&pool, alice).await.unwrap();
+
+    let (before,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    cleanup_duplicate_welcome_notifications(&pool).await.unwrap();
+    let (after,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(before, after, "cleanup must not delete anything when there are no duplicates");
 }
 
 #[tokio::test]
 async fn version_notification_exists_check() {
     let pool = setup_db().await;
 
-    insert_notification(
-        &pool,
-        "system",
-        Some("Hippius"),
-        Some("v2.1.0"),
-        "New version",
-    )
-    .await;
+    insert_notification(&pool, "system", Some("Hippius"), Some("v2.1.0"), "New version").await;
 
     // hippius_version_notification_exists query
     let (count,) = sqlx::query_as::<_, (i64,)>(
@@ -392,14 +566,7 @@ async fn low_credit_subtype_detection() {
 async fn active_low_credit_excludes_deleted() {
     let pool = setup_db().await;
 
-    let id = insert_notification(
-        &pool,
-        "alice",
-        Some("Credits"),
-        Some("LowCreditWarning-50"),
-        "Low",
-    )
-    .await;
+    let id = insert_notification(&pool, "alice", Some("Credits"), Some("LowCreditWarning-50"), "Low").await;
 
     // Active before deletion
     let (active,) = sqlx::query_as::<_, (i64,)>(
@@ -450,22 +617,8 @@ async fn last_deleted_low_credit_time() {
     assert!(row.is_none());
 
     // Insert and soft-delete two low-credit warnings with known timestamps
-    let id1 = insert_notification(
-        &pool,
-        "alice",
-        Some("Credits"),
-        Some("LowCreditWarning-1"),
-        "Low 1",
-    )
-    .await;
-    let id2 = insert_notification(
-        &pool,
-        "alice",
-        Some("Credits"),
-        Some("LowCreditWarning-2"),
-        "Low 2",
-    )
-    .await;
+    let id1 = insert_notification(&pool, "alice", Some("Credits"), Some("LowCreditWarning-1"), "Low 1").await;
+    let id2 = insert_notification(&pool, "alice", Some("Credits"), Some("LowCreditWarning-2"), "Low 2").await;
 
     let earlier = 1_000_000_i64;
     let later = 2_000_000_i64;
@@ -521,12 +674,11 @@ async fn update_preference_disables_type() {
         .await
         .unwrap();
 
-    let (enabled,) =
-        sqlx::query_as::<_, (i32,)>("SELECT enabled FROM notification_preferences WHERE id = ?")
-            .bind("credits")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (enabled,) = sqlx::query_as::<_, (i32,)>("SELECT enabled FROM notification_preferences WHERE id = ?")
+        .bind("credits")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(enabled, 0);
 }
@@ -541,12 +693,10 @@ async fn get_enabled_types_only() {
         .await
         .unwrap();
 
-    let rows = sqlx::query_as::<_, (String,)>(
-        "SELECT label FROM notification_preferences WHERE enabled = 1",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let rows = sqlx::query_as::<_, (String,)>("SELECT label FROM notification_preferences WHERE enabled = 1")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
 
     let labels: Vec<String> = rows.into_iter().map(|(l,)| l).collect();
     assert_eq!(labels.len(), 1);
@@ -589,11 +739,10 @@ async fn above_half_credit_toggle() {
     let pool = setup_db().await;
 
     // Default is 0
-    let (val,) =
-        sqlx::query_as::<_, (i32,)>("SELECT is_above_half_credit FROM app_state WHERE id = 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (val,) = sqlx::query_as::<_, (i32,)>("SELECT is_above_half_credit FROM app_state WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(val, 0);
 
     // Set to 1
@@ -602,11 +751,10 @@ async fn above_half_credit_toggle() {
         .await
         .unwrap();
 
-    let (val,) =
-        sqlx::query_as::<_, (i32,)>("SELECT is_above_half_credit FROM app_state WHERE id = 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (val,) = sqlx::query_as::<_, (i32,)>("SELECT is_above_half_credit FROM app_state WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(val, 1);
 }
 
@@ -759,10 +907,7 @@ async fn hard_delete_clears_all() {
     insert_notification(&pool, "bob", None, None, "n2").await;
     insert_notification(&pool, "system", None, None, "n3").await;
 
-    sqlx::query("DELETE FROM notifications")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query("DELETE FROM notifications").execute(&pool).await.unwrap();
 
     let (count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications")
         .fetch_one(&pool)
@@ -777,15 +922,13 @@ async fn hard_delete_clears_all() {
 /// Helper: mirrors the updated `get_unread_count` logic that filters by enabled
 /// notification preferences and always includes "Hippius" system notifications.
 async fn preference_filtered_unread_count(pool: &SqlitePool, user_address: &str) -> i64 {
-    let enabled: Vec<String> = sqlx::query_as::<_, (String,)>(
-        "SELECT label FROM notification_preferences WHERE enabled = 1",
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap()
-    .into_iter()
-    .map(|(l,)| l)
-    .collect();
+    let enabled: Vec<String> = sqlx::query_as::<_, (String,)>("SELECT label FROM notification_preferences WHERE enabled = 1")
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(l,)| l)
+        .collect();
 
     if enabled.is_empty() {
         let (count,) = sqlx::query_as::<_, (i64,)>(
@@ -807,8 +950,7 @@ async fn preference_filtered_unread_count(pool: &SqlitePool, user_address: &str)
         "SELECT COUNT(*) FROM notifications \
          WHERE (user_address = ? OR user_address = 'system') \
          AND is_unread = 1 AND is_deleted = 0 \
-         AND (notification_type IN ({}) OR notification_type = 'Hippius')",
-        in_clause
+         AND (notification_type IN ({in_clause}) OR notification_type = 'Hippius')"
     );
     let mut q = sqlx::query_as::<_, (i64,)>(&query).bind(user_address);
     for label in &enabled {

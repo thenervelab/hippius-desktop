@@ -4,6 +4,8 @@ import TabItem from "./TabItem";
 
 export interface TabOption {
   tabName: string;
+  /** Optional display label shown in the tab. Falls back to `tabName`. */
+  displayName?: string;
   icon?: React.ReactNode;
 }
 
@@ -37,7 +39,8 @@ const TabList: React.FC<TabListProps> = ({
       {tabs.map((tab) => (
         <TabItem
           key={tab.tabName}
-          label={tab.tabName}
+          label={tab.displayName ?? tab.tabName}
+          dataLabel={tab.tabName}
           icon={tab.icon}
           isActive={activeTab === tab.tabName}
           onClick={() => onTabChange(tab.tabName)}

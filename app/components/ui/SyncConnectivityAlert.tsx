@@ -8,7 +8,7 @@ import {
   syncEngineHealthAtom,
   type ConnectivityStatusType,
 } from "@/app/lib/store/syncAtoms";
-import { isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
 interface SyncConnectivityAlertProps {
   className?: string;
@@ -85,7 +85,7 @@ export const SyncConnectivityAlert: React.FC<SyncConnectivityAlertProps> = ({
   variant = "banner",
 }) => {
   const health = useAtomValue(syncEngineHealthAtom);
-  const isSyncConfigured = useAtomValue(isSyncConfiguredAtom);
+  const isSyncConfigured = useAtomValue(hasConfiguredDrivesAtom);
 
   if (health.status === "connected" || !isSyncConfigured) return null;
 

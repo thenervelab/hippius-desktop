@@ -6,7 +6,6 @@
  * Session lifecycle (start, merge, complete, mark-failed) is managed entirely
  * by the Rust backend.  This hook only:
  *  - Tracks connectivity health (syncEngineHealthAtom)
- *  - Marks sync as configured (isSyncConfiguredAtom)
  *  - Invalidates queries on sync completion
  *  - Resets atoms on stop / full reset
  */
@@ -15,12 +14,12 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect } from "react";
 import { useSetAtom, useAtomValue } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
+import { errorMessage } from "../utils/errorUtils";
 import {
   syncEngineHealthAtom,
   DEFAULT_SYNC_ENGINE_HEALTH,
   type SyncEngineHealthState,
 } from "../store/syncAtoms";
-import { isSyncConfiguredAtom } from "../global-atoms/unpinAtoms";
 import { queryClientAtom } from "jotai-tanstack-query";
 import { REMOTE_STORAGE_STATS_QUERY_KEY } from "./api/useRemoteStorageStats";
 
@@ -34,17 +33,9 @@ interface SyncOutcome {
   conflicts_skipped: number;
 }
 
-interface TransferProgress {
-  label: string;
-  bytes: number;
-  total: number;
-  path: string | null;
-}
-
 export function useSyncEvents() {
   const queryClient = useAtomValue(queryClientAtom);
   const setSyncEngineHealthAtom = useSetAtom(syncEngineHealthAtom);
-  const setIsSyncConfiguredAtom = useSetAtom(isSyncConfiguredAtom);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,104 +63,97 @@ export function useSyncEvents() {
           setSyncEngineHealthAtom(health);
         }
       })
-      .catch((err) => {
-        console.warn("[SyncEvents] Failed to get initial health state:", err);
+      .catch((err: unknown) => {
+        console.warn("[SyncEvents] Failed to get initial health state:", errorMessage(err));
       });
 
-    (async () => {
-      try {
-        const results = await Promise.all([
-          // Mark sync as configured when sync starts
-          listen("hcfs_sync_started", () => {
-            setIsSyncConfiguredAtom(true);
-          }),
-          // Invalidate queries when sync completes with file changes
-          listen<SyncOutcome>("hcfs_sync_completed", (e) => {
-            const totalCompleted =
-              e.payload.files_uploaded +
-              e.payload.files_downloaded +
-              e.payload.files_deleted_locally +
-              e.payload.files_deleted_remotely;
+    const register = async () => {
+      const handlers: Array<[string, (e: import("@tauri-apps/api/event").Event<unknown>) => void]> = [
+        // Invalidate queries when sync completes with file changes
+        // (no-op for `hcfs_sync_started` — drive-configured state is
+        // derived from `driveStatusesAtom` via `hasConfiguredDrivesAtom`)
+        ["hcfs_sync_completed", (e) => {
+          const p = e.payload as SyncOutcome;
+          const totalCompleted =
+            p.files_uploaded +
+            p.files_downloaded +
+            p.files_deleted_locally +
+            p.files_deleted_remotely;
 
-            // Cancel the debounced per-file refresh — the full sync
-            // completion below supersedes it.
-            if (fileCompletionTimer) {
-              clearTimeout(fileCompletionTimer);
-              fileCompletionTimer = null;
-            }
+          // Cancel the debounced per-file refresh — the full sync
+          // completion below supersedes it.
+          if (fileCompletionTimer) {
+            clearTimeout(fileCompletionTimer);
+            fileCompletionTimer = null;
+          }
 
-            // Always dispatch so file listings refresh metadata (arion
-            // hashes, sync status, timestamps) even when no files were
-            // transferred — the first sync after login typically has
-            // zero transfers but populates server-side metadata.
-            window.dispatchEvent(
-              new CustomEvent("sync_files_completed_changed", {
-                detail: { filesCompleted: totalCompleted },
-              })
-            );
+          // Always dispatch so file listings refresh metadata (arion
+          // hashes, sync status, timestamps) even when no files were
+          // transferred — the first sync after login typically has
+          // zero transfers but populates server-side metadata.
+          window.dispatchEvent(
+            new CustomEvent("sync_files_completed_changed", {
+              detail: { filesCompleted: totalCompleted },
+            })
+          );
 
-            if (totalCompleted > 0) {
-              queryClient.invalidateQueries({
-                queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY],
-              });
-            }
-          }),
-          // Refresh recent files when individual files finish syncing
-          listen<TransferProgress>("hcfs_upload_progress", (e) => {
-            if (e.payload.bytes >= e.payload.total && e.payload.total > 0) {
-              scheduleRecentFilesRefresh();
-            }
-          }),
-          listen<TransferProgress>("hcfs_download_progress", (e) => {
-            if (e.payload.bytes >= e.payload.total && e.payload.total > 0) {
-              scheduleRecentFilesRefresh();
-            }
-          }),
-          // Activity updated (e.g. file renamed on disk) — dispatch
-          // immediately so recent files reflect the new name without
-          // the 2-second debounce used for upload/download completion.
-          listen("hcfs_activity_updated", () => {
-            window.dispatchEvent(
-              new CustomEvent("sync_files_completed_changed", {
-                detail: { filesCompleted: 0 },
-              })
-            );
-          }),
-          // Connectivity health updates
-          listen<SyncEngineHealthState>(
-            "hcfs_connectivity_changed",
-            (e) => {
-              setSyncEngineHealthAtom(e.payload);
-            }
-          ),
-          // User-initiated stop — reset health to connected
-          listen("hcfs_sync_stopped", () => {
-            setSyncEngineHealthAtom(DEFAULT_SYNC_ENGINE_HEALTH);
-          }),
-          // Full reset — show setup UI
-          listen("hcfs_sync_reset", async () => {
-            await invoke("sp_clear_all_data").catch(() => {});
-            setSyncEngineHealthAtom(DEFAULT_SYNC_ENGINE_HEALTH);
-            setIsSyncConfiguredAtom(false);
-          }),
-        ]);
-        if (cancelled) {
-          results.forEach((u) => u());
-        } else {
-          unsubs.push(...results);
+          if (totalCompleted > 0) {
+            queryClient.invalidateQueries({
+              queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY],
+            });
+          }
+        }],
+        // Refresh recent files when individual files finish syncing.
+        // Rust emits this event when bytes == total — no byte-count
+        // interpretation needed in TypeScript.
+        ["hcfs_file_transfer_complete", () => {
+          scheduleRecentFilesRefresh();
+        }],
+        // Activity updated (e.g. file renamed on disk) — dispatch
+        // immediately so recent files reflect the new name without
+        // the 2-second debounce used for upload/download completion.
+        ["hcfs_activity_updated", () => {
+          window.dispatchEvent(
+            new CustomEvent("sync_files_completed_changed", {
+              detail: { filesCompleted: 0 },
+            })
+          );
+        }],
+        // Connectivity health updates
+        ["hcfs_connectivity_changed", (e) => {
+          setSyncEngineHealthAtom(e.payload as SyncEngineHealthState);
+        }],
+        // User-initiated stop — reset health to connected
+        ["hcfs_sync_stopped", () => {
+          setSyncEngineHealthAtom(DEFAULT_SYNC_ENGINE_HEALTH);
+        }],
+        // Full reset — show setup UI. The "is configured?" state is
+        // derived from driveStatusesAtom (via hasConfiguredDrivesAtom),
+        // which empties on its own when Rust emits hcfs_drive_removed
+        // for each drive during the reset.
+        ["hcfs_sync_reset", () => {
+          invoke("sp_clear_all_data").catch(() => {});
+          setSyncEngineHealthAtom(DEFAULT_SYNC_ENGINE_HEALTH);
+        }],
+      ];
+
+      for (const [event, handler] of handlers) {
+        if (cancelled) break;
+        try {
+          const unsub = await listen(event, handler);
+          if (cancelled) { unsub(); } else { unsubs.push(unsub); }
+        } catch (err) {
+          console.warn(`[SyncEvents] Failed to register ${event}:`, errorMessage(err));
         }
-      } catch (err) {
-        console.warn(
-          "[SyncEvents] Failed to register event listeners:",
-          err
-        );
       }
-    })();
+    };
+
+    register();
 
     return () => {
       cancelled = true;
       if (fileCompletionTimer) clearTimeout(fileCompletionTimer);
       unsubs.forEach((u) => u());
     };
-  }, [setSyncEngineHealthAtom, setIsSyncConfiguredAtom, queryClient]);
+  }, [setSyncEngineHealthAtom, queryClient]);
 }

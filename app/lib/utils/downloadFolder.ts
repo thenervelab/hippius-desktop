@@ -1,8 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
+import { join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { getPrivateSyncPath, getAllSyncPaths } from "@/lib/utils/syncPathUtils";
+
+interface FilePathInfo {
+    sync_path: string;
+    relative_name: string;
+}
 
 export interface DownloadIpfsFolderOptions {
     folderName: string;
@@ -39,27 +44,17 @@ export const downloadFolder = async ({
     const toastId = toast.info("Downloading folder...", { duration: Infinity });
 
     try {
-        let syncPath: string;
-        if (file?.label) {
-            const allPaths = await getAllSyncPaths(polkadotAddress);
-            const match = allPaths.find((sp) => sp.label === file.label);
-            syncPath = match?.path ?? (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
-        } else {
-            syncPath = (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
-        }
-        const fileName = file?.source && syncPath
-            ? (() => {
-                const prefix = syncPath.endsWith("/") ? syncPath : syncPath + "/";
-                return file.source!.startsWith(prefix)
-                    ? file.source!.slice(prefix.length)
-                    : (file?.actualFileName || folderName);
-            })()
-            : (file?.actualFileName || folderName);
+        const info = await invoke<FilePathInfo>("resolve_file_info", {
+            accountId: polkadotAddress,
+            label: file?.label ?? null,
+            source: file?.source ?? null,
+            fileName: file?.actualFileName || folderName,
+        });
 
         await invoke("export_file", {
-            syncPath,
-            fileName,
-            outputPath: `${selectedOutputDir}/${folderName}`,
+            syncPath: info.sync_path,
+            fileName: info.relative_name,
+            outputPath: await join(selectedOutputDir, folderName),
         });
 
         toast.dismiss(toastId);

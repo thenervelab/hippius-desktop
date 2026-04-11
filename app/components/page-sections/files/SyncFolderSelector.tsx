@@ -5,10 +5,9 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { desktopDir, documentDir, downloadDir } from "@tauri-apps/api/path";
 import SectionHeader from "@/components/page-sections/settings/SectionHeader";
-import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
-import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
-import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
+import { invoke } from "@tauri-apps/api/core";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 interface SyncFolderSelectorProps {
   onFolderSelected: (path: string) => void;
@@ -25,8 +24,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
   isFromSettingsPage = false,
   handleBackClick,
 }) => {
-  const { data: balanceInfo, isLoading: balanceLoading } = useHippiusBalance();
-  const { data: credits } = useUserCredits();
+  const { polkadotAddress } = useWalletAuth();
   const [suggested, setSuggested] = useState({
     desktop: "",
     documents: "",
@@ -48,7 +46,6 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
 
   useEffect(() => {
     if (!initialPath) {
-      setSelected(null);
       setSelected(null);
       return;
     }
@@ -109,46 +106,33 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
   };
 
   const apply = async () => {
-    console.log(
-      "formatCreditBalance(credits)",
-      formatCreditBalance(credits ?? null)
-    );
-    console.log("balanceInfo", balanceInfo);
     if (!selected) {
       toast.error("Please select a folder to sync");
       return;
     }
 
-    // Check if balance data is available
-    if (balanceLoading) {
-      toast.info(
-        "Please wait while we fetch your balance. This may take a few moments."
-      );
-      return;
-    }
-
-    if (!balanceInfo?.data?.free) {
-      toast.error(
-        "Your balance is zero. Please add funds to your account first."
-      );
-      return;
-    }
-
-    const currentBalance = +formatCreditBalance(balanceInfo.data.free);
-
-    // Check if balance is zero
-    if (currentBalance <= 0) {
-      toast.error(
-        "Your balance is zero. Please add funds to your account first."
-      );
-      return;
-    }
-
-    if (formatCreditBalance(credits ?? null) === "0") {
-      toast.error(
-        "You have no credits available. Please add credits to your account first."
-      );
-      return;
+    // Rust checks balance + credits, returns a reason code if ineligible
+    if (polkadotAddress) {
+      const checkToast = toast.loading("Checking account eligibility…");
+      try {
+        const result = await invoke<{ eligible: boolean; reason: string | null }>(
+          "check_sync_eligibility",
+          { accountId: polkadotAddress },
+        );
+        toast.dismiss(checkToast);
+        if (!result.eligible) {
+          const messages: Record<string, string> = {
+            balance_zero: "Your balance is zero. Please add funds to your account first.",
+            no_credits: "You have no credits available. Please add credits to your account first.",
+          };
+          toast.error(messages[result.reason ?? ""] ?? "Unable to start sync. Please check your account.");
+          return;
+        }
+      } catch {
+        toast.dismiss(checkToast);
+        toast.error("Unable to verify account eligibility. Please try again.");
+        return;
+      }
     }
 
     const isStd = ["desktop", "documents", "downloads"].includes(selected);
@@ -334,11 +318,11 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
           loading={loading}
           onClick={apply}
         >
-          {balanceLoading ? (
+          {loading ? (
             <ThreeDotLoader dotClassName="bg-white" />
           ) : (
             <span className="text-lg leading-6 font-medium">
-              {IS_SYNC_PAUSED ? "Sync Paused" : loading ? "Setting up..." : "Sync Folder"}
+              {IS_SYNC_PAUSED ? "Sync Paused" : "Sync Folder"}
             </span>
           )}
         </CardButton>

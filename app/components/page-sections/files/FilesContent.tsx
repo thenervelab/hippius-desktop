@@ -14,7 +14,6 @@ import { WaitAMoment } from "@/components/ui";
 import FilesTable from "./files-table";
 import CardView from "./card-view";
 import IPFSNoEntriesFound from "./files-table/NoEntriesFound";
-import InsufficientCreditsDialog from "./InsufficientCreditsDialog";
 import UploadStatusWidget from "./UploadStatusWidget";
 import SidebarDialog from "@/app/components/ui/SidebarDialog";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
@@ -169,24 +168,10 @@ const FilesContent: FC<FilesContentProps> = ({
             const paths = event.payload.paths;
             if (!paths || paths.length === 0 || !addButtonRef?.current) return;
 
-            // Filter out directories
+            // Filter out directories (shows toast if any dropped)
             try {
-              const { stat } = await import("@tauri-apps/plugin-fs");
-              const results = await Promise.all(
-                paths.map(async (p) => {
-                  const info = await stat(p);
-                  return { path: p, isDir: info.isDirectory };
-                })
-              );
-              const dirs = results.filter((r) => r.isDir);
-              const filePaths = results.filter((r) => !r.isDir).map((r) => r.path);
-
-              if (dirs.length > 0) {
-                toast.error(
-                  "Folders cannot be uploaded via drag & drop. Please use the \"Add Folder\" button instead.",
-                  { duration: 5000 }
-                );
-              }
+              const { filterDroppedPaths } = await import("@/lib/utils/filterDroppedPaths");
+              const filePaths = await filterDroppedPaths(paths);
               if (filePaths.length > 0) {
                 addButtonRef.current.openWithPaths(filePaths);
               }
@@ -459,7 +444,6 @@ const FilesContent: FC<FilesContentProps> = ({
         />
       )}
 
-      <InsufficientCreditsDialog />
       <UploadStatusWidget />
 
       <SidebarDialog

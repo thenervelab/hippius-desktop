@@ -1,7 +1,8 @@
-pub mod account_key;
-pub mod accounts;
-pub mod auth_tokens;
-pub mod binary;
-pub mod bookmark_db;
-pub mod nebula;
-pub mod sync;
+//! Shared utility modules.
+
+pub mod bookmarks;
+pub mod platform_info;
+pub mod preferences;
+pub mod schema;
+pub mod support;
+pub mod tray_menu;

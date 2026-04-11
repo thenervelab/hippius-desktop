@@ -10,7 +10,6 @@ import VPNStatusIndicator from "./VPNStatusIndicator";
 import { vpnConnectedAtom, vpnLoadingAtom } from "./vpnAtoms";
 import { RevealTextLine } from "@/app/components/ui";
 import { InView } from "react-intersection-observer";
-import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { toast } from "sonner";
 
 interface VpnStatus {
@@ -20,26 +19,8 @@ interface VpnStatus {
 const VPNMenuContent = () => {
   const [isConnected, setIsConnected] = useAtom(vpnConnectedAtom);
   const [isLoading, setIsLoading] = useAtom(vpnLoadingAtom);
-  const { data: credits, isFetching, isLoading: isCreditsLoading } = useUserCredits();
 
   const handleToggle = async (checked: boolean) => {
-    // Check if user has at least 10 credits before enabling VPN
-    if (checked && (isCreditsLoading || isFetching)) {
-      toast.error("Credits Loading", {
-        description: "Please wait while we load your credits balance.",
-      });
-      return;
-    }
-    if (checked && credits !== undefined) {
-      const creditsNumber = Number(credits) / Math.pow(10, 18);
-      if (creditsNumber < 10) {
-        toast.error("Insufficient Credits", {
-          description: "You need at least 10 credits to use the VPN feature.",
-        });
-        return;
-      }
-    }
-
     setIsLoading(true);
     try {
       const status = await invoke<VpnStatus>("toggle_vpn_status");

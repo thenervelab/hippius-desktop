@@ -2,16 +2,16 @@
 
 import { useState, useCallback } from "react";
 import {
-  saveHcfsConfig,
   getHcfsConfig,
   initializeSync,
   type InitSyncResult,
   type HcfsConfigResult,
 } from "../utils/hcfsConfigUtils";
-import { getPrivateSyncPath, getAllSyncPaths, allowAssetScope } from "../utils/syncPathUtils";
 import { invoke } from "@tauri-apps/api/core";
-import { isSyncConfiguredAtom, syncEngineStatusAtom } from "../global-atoms/unpinAtoms";
+import { listen } from "@tauri-apps/api/event";
+import { migrationLockAtom } from "../global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
+import { isNotReady } from "../utils/dispatchTauriError";
 
 export interface UseHcfsSyncResult {
   tryInitializeSync: (accountId: string, label: string, mnemonic?: string) => Promise<boolean>;
@@ -53,6 +53,12 @@ export function useHcfsSync(): UseHcfsSyncResult {
   const tryInitializeSync = useCallback(
     async (accountId: string, label: string, mnemonic?: string): Promise<boolean> => {
       setError(null);
+
+      // Block sync while server-side migration is in progress
+      if (appStore.get(migrationLockAtom)) {
+        console.log("[useHcfsSync] Migration in progress, sync blocked");
+        return false;
+      }
 
       try {
         // Check if HCFS config exists
@@ -102,12 +108,14 @@ export function useHcfsSync(): UseHcfsSyncResult {
       setIsInitializing(true);
 
       try {
-        // Save the HCFS config first
-        await saveHcfsConfig(accountId, serverUrl, password);
-        console.log("[useHcfsSync] HCFS config saved");
-
-        // Then initialize sync
-        const result = await initializeSync(accountId, label, mnemonic);
+        // Single Rust call: saves config + persists mnemonic + initializes sync
+        const result = await invoke<InitSyncResult>("setup_and_init_sync", {
+          accountId,
+          label,
+          serverUrl,
+          password,
+          mnemonic: mnemonic ?? null,
+        });
 
         // If a new mnemonic was generated, show backup dialog
         if (result.mnemonic) {
@@ -151,113 +159,147 @@ export function useHcfsSync(): UseHcfsSyncResult {
   };
 }
 
+interface AutoInitResult {
+  anyInitialized: boolean;
+  isConfigured: boolean;
+  skippedReason: string | null;
+}
+
 /**
  * Standalone function for use outside React components (e.g., in wallet-auth-context).
  *
- * Called on login / session restore. Only starts sync if BOTH conditions are met:
- *   1. A sync path has been configured by the user
- *   2. The HCFS encryption password has been set
+ * All business logic (migration lock, mnemonic persistence, path queries,
+ * HCFS config check, path filtering, sequential init) lives in Rust.
+ * This function is a thin wrapper that calls Rust and updates the
+ * `isSyncConfigured` atom — per-drive sync status is mirrored from
+ * Rust by `useDriveStatuses`.
  *
- * Does NOT auto-create sync paths or prompt for setup.
- * The user triggers setup explicitly by choosing a sync folder in the Files page.
+ * ## Retry behavior
+ *
+ * On slow systems the FE can invoke `auto_init_sync` before Rust has
+ * finished writing `AuthInfo.mnemonic` from `rehydrate_full_session`.
+ * Rust then returns `NotReady(MASTER_MNEMONIC_UNRECOVERABLE)` and every
+ * drive fails. This wrapper handles the race with a 3-attempt ladder:
+ *
+ *   1. Fire immediately (covers the happy path where auth is already
+ *      populated).
+ *   2. If attempt 1 returned the mnemonic-unavailable error, race a
+ *      750 ms backoff against the `hippius_auth_ready` event — whichever
+ *      fires first triggers attempt 2. Covers the fast case where
+ *      `rehydrate_full_session` is milliseconds away from finishing.
+ *   3. If attempt 2 also failed, race up to 9.25 s of remaining budget
+ *      (10 s total from the subscription) against the event again. Any
+ *      additional event fired during earlier attempts is still captured
+ *      because the listener is subscribed BEFORE attempt 1.
+ *
+ * ### Why the listener subscribes before attempt 1
+ *
+ * Previous versions installed `listen()` only after attempts 1 and 2
+ * had returned. On slow-system cold starts where
+ * `rehydrate_full_session` finishes during attempt 1 or the backoff,
+ * Rust's `hippius_auth_ready` emit landed before the listener was
+ * installed and the signal was silently lost — the FE then waited the
+ * full 10 s for an event that had already fired, and eventually gave
+ * up. Subscribing first guarantees we never miss the signal regardless
+ * of which attempt is in flight when it arrives.
+ *
+ * Any error other than `MasterMnemonicUnrecoverable` (network,
+ * validation, credits) is terminal and must not retry — those need
+ * user action.
  */
 export async function tryAutoInitSync(
   accountId: string,
   mnemonic?: string
 ): Promise<boolean> {
-  try {
-    // Eagerly persist the master mnemonic to disk so it survives app restarts.
-    // This is a no-op if the master already exists or the HCFS password hasn't
-    // been set yet. Without this, an app restart loses the in-memory mnemonic
-    // and a subsequent sync setup would generate a random key, making
-    // cross-device decryption impossible.
-    if (mnemonic) {
-      try {
-        await invoke("persist_master_mnemonic", { accountId, mnemonic });
-      } catch {
-        // HCFS config not set up yet — will be saved during initialize_sync
-      }
-    }
-
-    // Get all configured sync paths
-    let syncPaths: { path: string; label: string; isPaused?: boolean }[] = [];
+  const attempt = async (): Promise<"retry" | boolean> => {
     try {
-      syncPaths = await getAllSyncPaths(accountId);
-    } catch {
-      // No sync paths table or DB not ready yet
-    }
+      const result = await invoke<AutoInitResult>("auto_init_sync", {
+        accountId,
+        mnemonic: mnemonic ?? null,
+      });
 
-    // Fallback: check legacy single-path config
-    if (syncPaths.length === 0) {
-      const legacy = await getPrivateSyncPath(accountId);
-      if (legacy?.path) {
-        syncPaths = [{ path: legacy.path, label: legacy.label || "default" }];
+      // Per-drive Active status is emitted by Rust from `auto_init_sync`
+      // for each successful drive init — useDriveStatuses picks them up
+      // via the hcfs_drive_status_changed event, which feeds
+      // hasConfiguredDrivesAtom (the source of truth for "configured?").
+
+      return result.anyInitialized;
+    } catch (err) {
+      // `MasterMnemonicUnrecoverable` is the specific signal that auth
+      // state hasn't been populated yet. Any other error (insufficient
+      // credits, validation, network) is terminal and must not retry.
+      if (isNotReady(err, "mnemonic")) {
+        console.warn(
+          "[AutoSync] mnemonic not yet recoverable — will retry when auth is ready"
+        );
+        return "retry";
       }
-    }
-
-    if (syncPaths.length === 0) {
-      console.log("[AutoSync] No sync paths configured, skipping auto-init");
+      console.error("[AutoSync] auto_init_sync failed:", err);
       return false;
     }
+  };
 
-    // Expand asset protocol scope for all sync paths so file previews work,
-    // even if sync is stopped or config isn't ready yet.
-    for (const sp of syncPaths) {
-      try {
-        await allowAssetScope(sp.path);
-      } catch {
-        // Non-critical — Rust initialize_sync also does this
+  // ── Subscribe to `hippius_auth_ready` BEFORE attempt 1 ───────────
+  //
+  // `authReadyPromise` resolves the first time the event fires and
+  // stays resolved thereafter, so any signal fired during attempt 1
+  // or during the backoff wait is captured. Without this pre-
+  // subscription, signals that land between attempts are silently
+  // lost and the FE waits the full 10 s for an already-fired event.
+  let unlisten: (() => void) | null = null;
+  let resolveAuthReady: (() => void) | null = null;
+  const authReadyPromise = new Promise<void>((resolve) => {
+    resolveAuthReady = resolve;
+  });
+
+  try {
+    unlisten = await listen("hippius_auth_ready", () => {
+      if (resolveAuthReady) {
+        resolveAuthReady();
+        resolveAuthReady = null; // fire-once latch
       }
-    }
+    });
+  } catch (e) {
+    console.error("[AutoSync] failed to subscribe to hippius_auth_ready", e);
+    // Continue without the listener — the ladder degrades to pure
+    // backoff waits, which still covers the common fast case.
+  }
 
-    // Check if HCFS config exists
-    const config = await getHcfsConfig(accountId);
-    if (!config.has_password) {
-      console.log("[AutoSync] No HCFS config, skipping auto-init (user will be prompted when setting sync folder)");
+  // `waitFor` races the pre-subscribed auth-ready promise against a
+  // sleep timer. If the event has already fired by the time this is
+  // called, `authReadyPromise` is already resolved and `waitFor`
+  // returns immediately — no lost signals.
+  const waitFor = (ms: number): Promise<void> =>
+    Promise.race([
+      authReadyPromise,
+      new Promise<void>((r) => setTimeout(r, ms)),
+    ]);
+
+  try {
+    // Attempt 1: fire immediately. If auth is already ready, this
+    // succeeds and we never hit the retry logic at all.
+    const first = await attempt();
+    if (first !== "retry") return first;
+
+    // Attempt 2: race the 750 ms backoff against `hippius_auth_ready`.
+    // Whichever fires first triggers the next attempt.
+    await waitFor(750);
+    const second = await attempt();
+    if (second !== "retry") return second;
+
+    // Attempt 3: wait up to 9.25 s more for auth ready (10 s total
+    // budget from listener subscription). Whichever fires first
+    // triggers the final attempt.
+    await waitFor(9_250);
+    const third = await attempt();
+    if (third === "retry") {
+      console.warn(
+        "[AutoSync] mnemonic still not recoverable after 3 attempts; giving up"
+      );
       return false;
     }
-
-    // HCFS config exists - mark sync as configured so SyncStoppedAlert can show when needed
-    appStore.set(isSyncConfiguredAtom, true);
-
-    // If the user explicitly stopped sync, don't auto-start on login / session restore
-    if (
-      typeof window !== "undefined" &&
-      localStorage.getItem("hippius_sync_stopped") === "true"
-    ) {
-      console.log("[AutoSync] Sync was explicitly stopped by user, skipping auto-init (but sync is configured)");
-      return false;
-    }
-
-    // Initialize sync for each configured path
-    // Skip "migration" (has its own init flow) and paused folders
-    const regularPaths = syncPaths
-      .filter((sp) => sp.label !== "migration")
-      .filter((sp) => !sp.isPaused);
-    const pausedCount = syncPaths.filter((sp) => sp.isPaused).length;
-    if (pausedCount > 0) {
-      console.log(`[AutoSync] Skipping ${pausedCount} paused sync path(s)`);
-    }
-    console.log(`[AutoSync] Auto-initializing ${regularPaths.length} sync path(s)...`);
-    let anyInitialized = false;
-    for (const sp of regularPaths) {
-      try {
-        const result = await initializeSync(accountId, sp.label, mnemonic);
-        console.log(`[AutoSync] Sync initialized for '${sp.label}':`, result.user_id);
-        anyInitialized = true;
-      } catch (err) {
-        console.error(`[AutoSync] Failed to init sync for label '${sp.label}':`, err);
-      }
-    }
-
-    // Mark sync engine as active so the "Syncing is stopped" banner clears
-    if (anyInitialized) {
-      appStore.set(syncEngineStatusAtom, "active");
-    }
-
-    return anyInitialized;
-  } catch (err) {
-    console.error("[AutoSync] Auto-sync init failed:", err);
-    return false;
+    return third;
+  } finally {
+    if (unlisten) unlisten();
   }
 }

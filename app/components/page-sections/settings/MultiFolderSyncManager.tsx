@@ -6,9 +6,8 @@ import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
 import { AddLocalFolderDialog } from "./AddLocalFolderDialog";
-import { getAllSyncPaths, removeSyncPath } from "@/app/lib/utils/syncPathUtils";
+import { removeSyncPath } from "@/app/lib/utils/syncPathUtils";
 import {
-  listRemoteFolders,
   deleteRemoteFolder,
   restoreRemoteFolders,
 } from "@/app/lib/utils/restoreUtils";
@@ -22,12 +21,11 @@ import {
 } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
 import {
-  syncEngineStatusAtom,
-  isSyncConfiguredAtom,
   triggerSyncPathRefreshAtom,
-  SYNC_STOPPED_STORAGE_KEY,
+  driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
+import { useAtomValue } from "jotai";
 import {
   LocalFoldersSection,
   RemoteFoldersSection,
@@ -41,7 +39,31 @@ import {
 export default function MultiFolderSyncManager() {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const queryClient = useQueryClient();
+  const driveStatuses = useAtomValue(driveStatusesAtom);
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
+
+  // Reconcile each SyncFolder.status with the per-drive atom on every
+  // change. The pause/resume buttons in this manager and in sibling
+  // surfaces (the tray submenu, FilesContainer's tab menu,
+  // FilesOnboarding) all flow through the same Rust events, which
+  // land in driveStatusesAtom — this effect makes the local list
+  // reflect them without optimistic mutations that would lie when
+  // the user pauses from another surface.
+  useEffect(() => {
+    setSyncFolders((prev) =>
+      prev.map((f) => {
+        const entry = driveStatuses.get(f.id);
+        if (!entry) return f;
+        // Widen to `active` vs non-active so the new `error` variant
+        // (emitted by auto_init_sync on per-drive init failure) renders
+        // as non-syncing. The FE retry ladder in `tryAutoInitSync`
+        // flips errored drives back to Active on success.
+        const newStatus =
+          entry.status.kind === "active" ? "syncing" : "paused";
+        return f.status === newStatus ? f : { ...f, status: newStatus };
+      })
+    );
+  }, [driveStatuses]);
   const [remoteFolders, setRemoteFolders] = useState<RemoteFolder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -89,18 +111,19 @@ export default function MultiFolderSyncManager() {
   // Exclusion paths from browse → sync flow
   const [pendingExclusions, setPendingExclusions] = useState<string[]>([]);
 
-  /** Check remaining sync folders; if none left, reset onboarding state. */
-  const checkAndResetIfNoFolders = useCallback(async () => {
-    if (!polkadotAddress) return;
-    const remainingPaths = await getAllSyncPaths(polkadotAddress).catch((err: unknown) => {
-      console.warn("getAllSyncPaths failed:", err);
-      return [];
-    });
-    if (remainingPaths.length === 0) {
-      appStore.set(isSyncConfiguredAtom, false);
-    }
+  /**
+   * Trigger a refresh after a folder list change.
+   *
+   * No need to peek `sync_paths` and toggle a "configured" flag — the
+   * `hasConfiguredDrivesAtom` is derived from `driveStatusesAtom`, which
+   * Rust keeps in sync via `hcfs_drive_status_changed` /
+   * `hcfs_drive_removed` events. When the last drive is removed,
+   * `driveStatusesAtom` empties and the derived atom flips to `false`
+   * automatically.
+   */
+  const checkAndResetIfNoFolders = useCallback(() => {
     appStore.set(triggerSyncPathRefreshAtom, (prev) => prev + 1);
-  }, [polkadotAddress]);
+  }, []);
 
   // ── Data loading ──────────────────────────────────────────────────────
 
@@ -113,70 +136,45 @@ export default function MultiFolderSyncManager() {
     try {
       setIsLoading(true);
 
-      const [syncPaths, remoteList] = await Promise.all([
-        getAllSyncPaths(polkadotAddress).catch((err) => {
-          console.error("[MultiFolderSync] Failed to get sync paths:", err);
-          return [];
-        }),
-        listRemoteFolders(polkadotAddress).catch((err) => {
-          console.error("[MultiFolderSync] Failed to list remote folders:", err);
-          return [];
-        }),
-      ]);
+      // Single Rust call: fetches local paths + remote folders, joins data,
+      // determines status, filters, and sorts. No business logic in TypeScript.
+      const result = await invoke<{
+        local: Array<{
+          id: string;
+          folderName: string;
+          localPath: string;
+          status: string;
+          fileCount: number | null;
+          totalBytes: number | null;
+          lastModified: number | null;
+        }>;
+        remote: Array<{
+          folderName: string;
+          deviceName: string;
+          fileCount: number;
+          totalBytes: number;
+          lastModified: number;
+        }>;
+      }>("get_sync_folders_with_stats", { accountId: polkadotAddress });
 
-      // Build a lookup from remote data so we can attach stats to local folders
-      const remoteByLabel = new Map(
-        remoteList.map((r) => [r.label, r])
-      );
+      const localFolders: SyncFolder[] = result.local.map((f) => ({
+        id: f.id,
+        folderName: f.folderName,
+        localPath: f.localPath,
+        isLocal: true,
+        status: f.status as "syncing" | "paused",
+        fileCount: f.fileCount ?? undefined,
+        totalBytes: f.totalBytes ?? undefined,
+        lastModified: f.lastModified ?? undefined,
+      }));
 
-      const localFolders: SyncFolder[] = await Promise.all(
-        syncPaths.map(async (syncPath, index) => {
-          const folderName =
-            syncPath.path.split(/[\\/]/).filter(Boolean).pop() ||
-            syncPath.label;
-          const label = syncPath.label || `sync-folder-${index}`;
-
-          // Use the persisted is_paused flag (survives restarts).
-          // Fall back to runtime is_drive_active check.
-          let status: "syncing" | "paused" = "syncing";
-          if (syncPath.isPaused) {
-            status = "paused";
-          } else {
-            const isActive = await invoke<boolean>("is_drive_active", {
-              label,
-            }).catch(() => true);
-            if (!isActive) status = "paused";
-          }
-
-          const remoteInfo = remoteByLabel.get(label);
-
-          return {
-            id: label,
-            folderName,
-            localPath: syncPath.path,
-            isLocal: true,
-            status,
-            fileCount: remoteInfo?.file_count,
-            totalBytes: remoteInfo?.total_bytes,
-            lastModified: remoteInfo
-              ? (remoteInfo.updated_at || remoteInfo.created_at) * 1000
-              : undefined,
-          };
-        })
-      );
-
-      const localLabelSet = new Set(localFolders.map((f) => f.id));
-
-      const remoteFoldersData: RemoteFolder[] = remoteList
-        .filter((r) => !localLabelSet.has(r.label))
-        .map((r) => ({
-          folderName: r.label,
-          deviceName: r.device_name || "Unknown Device",
-          fileCount: r.file_count,
-          totalBytes: r.total_bytes,
-          lastModified: (r.updated_at || r.created_at) * 1000,
-        }))
-        .sort((a, b) => b.lastModified - a.lastModified);
+      const remoteFoldersData: RemoteFolder[] = result.remote.map((f) => ({
+        folderName: f.folderName,
+        deviceName: f.deviceName,
+        fileCount: f.fileCount,
+        totalBytes: f.totalBytes,
+        lastModified: f.lastModified,
+      }));
 
       setSyncFolders(localFolders);
       setRemoteFolders(remoteFoldersData);
@@ -220,7 +218,7 @@ export default function MultiFolderSyncManager() {
       toast.success("Folder removed from sync");
       refreshFoldersAndStats();
 
-      await checkAndResetIfNoFolders();
+      checkAndResetIfNoFolders();
     } catch (error) {
       console.error("Failed to remove folder:", error);
       toast.error("Failed to remove folder");
@@ -238,11 +236,7 @@ export default function MultiFolderSyncManager() {
     try {
       await invoke("pause_drive", { label: folder.id });
       toast.success(`Sync paused for "${folder.folderName}"`);
-      setSyncFolders((prev) =>
-        prev.map((f) =>
-          f.id === folder.id ? { ...f, status: "paused" as const } : f
-        )
-      );
+      // Status flips via the driveStatusesAtom reconciliation effect.
     } catch (error) {
       console.error("Failed to pause sync:", error);
       toast.error("Failed to pause sync");
@@ -258,16 +252,12 @@ export default function MultiFolderSyncManager() {
       const mnemonic = (await getMnemonic()) ?? undefined;
       await invoke("resume_drive", { label: folder.id, mnemonic });
 
-      localStorage.removeItem(SYNC_STOPPED_STORAGE_KEY);
-      appStore.set(syncEngineStatusAtom, "active");
-      appStore.set(isSyncConfiguredAtom, true);
+      // Per-drive Active status is emitted by Rust via the
+      // hcfs_drive_status_changed event — see useDriveStatuses.
+      // hasConfiguredDrivesAtom recomputes from that automatically.
 
       toast.success(`Sync resumed for "${folder.folderName}"`);
-      setSyncFolders((prev) =>
-        prev.map((f) =>
-          f.id === folder.id ? { ...f, status: "syncing" as const } : f
-        )
-      );
+      // Status flips via the driveStatusesAtom reconciliation effect.
     } catch (error) {
       console.error("Failed to resume sync:", error);
       toast.error("Failed to resume sync");
@@ -324,9 +314,9 @@ export default function MultiFolderSyncManager() {
         throw new Error(result.error ?? "Unknown error");
       }
 
-      localStorage.removeItem(SYNC_STOPPED_STORAGE_KEY);
-      appStore.set(syncEngineStatusAtom, "active");
-      appStore.set(isSyncConfiguredAtom, true);
+      // Per-drive Active status is emitted by Rust via the
+      // hcfs_drive_status_changed event — see useDriveStatuses.
+      // hasConfiguredDrivesAtom recomputes from that automatically.
 
       // Apply any pending exclusion patterns from the browse dialog
       if (pendingExclusions.length > 0) {
@@ -393,13 +383,6 @@ export default function MultiFolderSyncManager() {
     if (!polkadotAddress) return;
     try {
       await saveHcfsConfig(polkadotAddress, result.serverUrl, result.password);
-      const mnemonic = await getMnemonic();
-      if (mnemonic) {
-        await invoke("persist_master_mnemonic", {
-          accountId: polkadotAddress,
-          mnemonic,
-        }).catch((err: unknown) => console.warn("[MultiFolderSyncManager] persist_master_mnemonic failed:", err));
-      }
       setShowHcfsSetup(false);
       if (pendingAction === "sync") {
         await doRestore();
@@ -460,13 +443,8 @@ export default function MultiFolderSyncManager() {
     setIsDeletingServer(true);
     try {
       const label = deleteDialog.folderId ?? deleteDialog.folderName;
+      // delete_remote_folder also stops the drive and removes the sync path if local
       const result = await deleteRemoteFolder(polkadotAddress, label);
-
-      if (deleteDialog.folderId) {
-        await removeSyncPath(polkadotAddress, deleteDialog.folderId).catch(
-          () => {}
-        );
-      }
 
       toast.success(
         `Folder deleted from server (${result.files_deleted} file${result.files_deleted !== 1 ? "s" : ""} removed)`

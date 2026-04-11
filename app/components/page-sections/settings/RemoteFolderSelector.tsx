@@ -7,7 +7,6 @@ import { toast } from "sonner";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { X, CloudDownload, Folder, Monitor, Clock, HardDrive } from "lucide-react";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { middleTruncate } from "@/lib/utils/middleTruncate";
@@ -16,8 +15,6 @@ import type { RemoteFolder } from "@/app/lib/types/sync-folder";
 import { restoreRemoteFolders } from "@/app/lib/utils/restoreUtils";
 import { getHcfsConfig, saveHcfsConfig } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
-import { syncEngineStatusAtom, isSyncConfiguredAtom, SYNC_STOPPED_STORAGE_KEY } from "@/app/lib/global-atoms/unpinAtoms";
-import { appStore } from "@/lib/store/jotaiStore";
 
 interface RemoteFolderSelectorProps {
   open: boolean;
@@ -95,10 +92,9 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
         throw new Error(result.error ?? "Unknown error");
       }
 
-      // Clear "sync stopped" state — syncing a remote folder means the user wants sync running
-      localStorage.removeItem(SYNC_STOPPED_STORAGE_KEY);
-      appStore.set(syncEngineStatusAtom, "active");
-      appStore.set(isSyncConfiguredAtom, true);
+      // Per-drive Active status is emitted by Rust via the
+      // hcfs_drive_status_changed event — see useDriveStatuses.
+      // hasConfiguredDrivesAtom recomputes from that automatically.
 
       toast.success(`Started syncing ${selectedFolder.folderName}`);
       setSelectedFolder(null);
@@ -156,13 +152,6 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
 
     try {
       await saveHcfsConfig(polkadotAddress, result.serverUrl, result.password);
-      const mnemonic = await getMnemonic();
-      if (mnemonic) {
-        await invoke("persist_master_mnemonic", {
-          accountId: polkadotAddress,
-          mnemonic,
-        }).catch((err: unknown) => console.warn("[RemoteFolderSelector] persist_master_mnemonic failed:", err));
-      }
       setShowHcfsSetup(false);
       await doRestore();
     } catch (err) {

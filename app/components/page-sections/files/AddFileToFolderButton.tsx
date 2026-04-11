@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import { uploadToIpfsAndSubmitToBlockcahinRequestStateAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
 import { useAtomValue } from "jotai";
 import UploadFilesFlow from "./upload-files-flow";
-import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { toast } from "sonner";
 
 const HIPPIUS_DROP_EVENT = "hippius:folder-file-drop";
@@ -47,14 +47,14 @@ const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFold
             uploadToIpfsAndSubmitToBlockcahinRequestStateAtom
         );
         const isLoading = uploadingState !== "idle";
-        const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
+        const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
 
         useImperativeHandle(
             ref,
             () => ({
                 openWithFiles: (files: FileList) => {
-                    if (syncEngineStatus === "stopped") {
-                        toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before adding files.");
+                    if (!hasConfiguredDrives) {
+                        toast.warning("Set up a sync folder in Settings \u2192 Sync & Storage before uploading.");
                         return;
                     }
                     setDroppedPaths(null);
@@ -62,8 +62,8 @@ const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFold
                     setIsOpen(true);
                 },
                 openWithPaths: (paths: string[]) => {
-                    if (syncEngineStatus === "stopped") {
-                        toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before adding files.");
+                    if (!hasConfiguredDrives) {
+                        toast.warning("Set up a sync folder in Settings \u2192 Sync & Storage before uploading.");
                         return;
                     }
                     setDroppedFiles(null);
@@ -72,7 +72,7 @@ const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFold
                 },
                 isDialogOpen: () => isOpen
             }),
-            [isOpen, syncEngineStatus]
+            [isOpen, hasConfiguredDrives]
         );
 
         const closeDialog = useCallback(() => {
@@ -119,8 +119,8 @@ const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFold
                 <CardButton
                     className={cn("h-10 w-fit p-1", externalDisabled && "opacity-50 cursor-not-allowed", className)}
                     onClick={() => {
-                        if (syncEngineStatus === "stopped") {
-                            toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before adding files.");
+                        if (!hasConfiguredDrives) {
+                            toast.warning("Set up a sync folder in Settings \u2192 Sync & Storage before uploading.");
                             return;
                         }
                         setIsOpen(true);
