@@ -6,6 +6,8 @@ import HeaderText from "@/components/dashboard-title-wrapper/HeaderText";
 import ProfileCard from "@/components/dashboard-title-wrapper/ProfileCard";
 import BlockChainStats from "@/components/dashboard-title-wrapper/BlockChainStats";
 import ConflictsBanner from "@/components/ui/ConflictsBanner";
+import MigrationBanner from "@/components/ui/MigrationBanner";
+import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert";
 
 export default function ResponsiveContent({
   children,
@@ -32,6 +34,14 @@ export default function ResponsiveContent({
             </div>
           </div>
           <ConflictsBanner />
+          <MigrationBanner />
+          {/* `SyncReauthRequiredAlert` auto-renders null unless Rust's
+              `restore_session` flagged `sync_requires_reauth = true`
+              (keychain-miss for a mnemonic user). Mounting it here in
+              the sticky toolbar makes it visible on every authenticated
+              route — the previous FilesContainer-only mount missed
+              users whose last-visited page was /wallet, /billing, etc. */}
+          <SyncReauthRequiredAlert className="mt-2" />
         </div>
 
         {/* Scrollable content area — serves as container query context */}

@@ -39,9 +39,6 @@ export const CopyableCell: React.FC<{
 }) => {
   const { isMobile, isTablet, isLaptop, isDesktop, isLargeDesktop } =
     useBreakpoint();
-  console.log("forSmallScreen", forSmallScreen);
-  console.log("isTable", isTable);
-
   let display;
 
   // For Arion hashes or similar long strings, use the truncation style provided

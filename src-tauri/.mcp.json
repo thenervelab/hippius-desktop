@@ -3,10 +3,10 @@
     "illu": {
       "args": [
         "--repo",
-        "/Users/georgiosdelkos/Documents/GitHub/Bitensor/hippius-desktop/src-tauri",
+        "/Users/camden/Source/hippius-desktop/src-tauri",
         "serve"
       ],
-      "command": "/Users/georgiosdelkos/.cargo/bin/illu-rs",
+      "command": "/Users/camden/.cargo/bin/illu-rs",
       "env": {
         "RUST_LOG": "warn"
       }

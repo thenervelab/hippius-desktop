@@ -8,11 +8,9 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Folder } from "lucide-react";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
-import { setPrivateSyncPath, getAllSyncPaths } from "@/app/lib/utils/syncPathUtils";
-import { getHcfsConfig, saveHcfsConfig, initializeSync } from "@/app/lib/utils/hcfsConfigUtils";
+import { getHcfsConfig, saveHcfsConfig } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
-import { syncEngineStatusAtom, isSyncConfiguredAtom, SYNC_STOPPED_STORAGE_KEY } from "@/app/lib/global-atoms/unpinAtoms";
-import { appStore } from "@/lib/store/jotaiStore";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import DialogContainer from "@/components/ui/DialogContainer";
 
 interface AddLocalFolderDialogProps {
@@ -27,6 +25,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   onSuccess,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
+  const { checkEligibility } = useCreditCheck();
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [folderName, setFolderName] = useState<string>("");
   const [isAdding, setIsAdding] = useState(false);
@@ -67,23 +66,17 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
     try {
       const mnemonic = (await getMnemonic()) ?? undefined;
 
-      // Deduplicate label: if "Documents" exists, try "Documents-2", "Documents-3", etc.
-      const existingPaths = await getAllSyncPaths(polkadotAddress).catch((err: unknown) => { console.warn("getAllSyncPaths failed:", err); return []; });
-      const existingLabels = new Set(existingPaths.map((p) => p.label));
-      let label = folderName;
-      let suffix = 2;
-      while (existingLabels.has(label)) {
-        label = `${folderName}-${suffix}`;
-        suffix++;
-      }
+      // Single Rust call: generates label, sets path, initializes sync
+      await invoke<string>("add_local_sync_folder", {
+        accountId: polkadotAddress,
+        path: selectedPath,
+        folderName,
+        mnemonic: mnemonic ?? null,
+      });
 
-      await setPrivateSyncPath(selectedPath, polkadotAddress, label);
-      await initializeSync(polkadotAddress, label, mnemonic);
-
-      // Clear "sync stopped" state — adding a folder means the user wants sync running
-      localStorage.removeItem(SYNC_STOPPED_STORAGE_KEY);
-      appStore.set(syncEngineStatusAtom, "active");
-      appStore.set(isSyncConfiguredAtom, true);
+      // Per-drive Active status is emitted by Rust via the
+      // hcfs_drive_status_changed event — see useDriveStatuses.
+      // hasConfiguredDrivesAtom recomputes from that automatically.
 
       toast.success("Folder added to sync");
       setSelectedPath("");
@@ -111,6 +104,14 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
       return;
     }
 
+    // Live Rust eligibility check (replaces legacy stale-cache gate).
+    // The Rust `add_local_sync_folder` IPC also enforces this internally
+    // via `require_eligible(...)?` so the gate is impossible to bypass.
+    if (!(await checkEligibility("folder-sync"))) {
+      handleClose();
+      return;
+    }
+
     // Check if HCFS config (encryption password) exists
     try {
       const config = await getHcfsConfig(polkadotAddress);
@@ -135,17 +136,10 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
     if (!polkadotAddress) return;
 
     try {
+      // Save config first — add_local_sync_folder needs it for init
       await saveHcfsConfig(polkadotAddress, result.serverUrl, result.password);
-      // Now that the password exists, persist the master mnemonic so it
-      // survives app restarts. getMnemonic() returns from memory if available.
-      const mnemonic = await getMnemonic();
-      if (mnemonic) {
-        await invoke("persist_master_mnemonic", {
-          accountId: polkadotAddress,
-          mnemonic,
-        }).catch((err: unknown) => console.warn("[AddLocalFolderDialog] persist_master_mnemonic failed:", err));
-      }
       setShowHcfsSetup(false);
+      // doAdd → add_local_sync_folder handles mnemonic persistence during init
       await doAdd();
     } catch (err) {
       console.error("Failed to save HCFS config:", err);

@@ -1,0 +1,285 @@
+//! Active sync operations: staging, conflict resolution, triggering, and
+//! drive active-status queries.
+
+use tracing::{debug, info};
+
+use crate::error::Result;
+use hcfs_client::engine::manager::StagedChanges;
+use hcfs_client::engine::runner::{ReviewModeGuard, trigger_sync};
+use std::collections::HashMap;
+use tauri::{AppHandle, Emitter};
+
+/// Delay after a reviewed sync before re-enabling the file watcher.
+/// Gives trailing filesystem events from the sync cycle time to drain
+/// so they don't immediately re-trigger another sync.
+const WATCHER_REENABLE_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Stage changes and return a preview of what will sync.
+/// Pauses auto-sync while the user reviews.
+///
+/// The `label` parameter identifies which drive to stage changes for.
+/// This must match a label that was registered via `set_sync_path`.
+#[tauri::command]
+pub async fn stage_changes(app: tauri::AppHandle, label: String) -> Result<StagedChanges> {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let sync = &app_state.sync;
+
+    let first_arc = {
+        let guard = sync.drives.lock().await;
+        guard
+            .get(&label)
+            .map(|slot| slot.manager.clone())
+            .ok_or_else(|| crate::error::AppError::Other(format!("No active drive with label '{label}'")))?
+    };
+
+    // RAII guard: sets review_mode for this drive, resets on drop unless commit()ed.
+    let review_guard = ReviewModeGuard::new(sync.clone(), label);
+
+    let m = first_arc.try_lock().map_err(|_| "Sync is in progress, please wait".to_string())?;
+
+    if !m.is_unlocked() {
+        return Err(crate::error::AppError::Other("Drive is not unlocked".into()));
+    }
+
+    let changes = m.stage_with_paths().await?;
+    review_guard.commit();
+    Ok(changes)
+}
+
+/// Sync with user-provided conflict resolutions, then resume auto-sync.
+///
+/// The `label` parameter identifies which drive to resolve conflicts for.
+/// `resolutions` maps hex-encoded FileId to a resolution string
+/// (one of: "keep_local", "accept_remote", "keep_both", "skip").
+#[tauri::command]
+#[expect(
+    clippy::implicit_hasher,
+    reason = "Tauri commands cannot be generic; the hasher must be concrete because #[tauri::command] generates a non-generic handler"
+)]
+pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resolutions: HashMap<String, String>) -> Result<()> {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let sync = &app_state.sync;
+
+    // Validate resolution values before proceeding
+    for (file_id, resolution) in &resolutions {
+        if !matches!(resolution.as_str(), "keep_local" | "accept_remote" | "keep_both" | "skip") {
+            return Err(crate::error::AppError::Other(format!(
+                "Invalid resolution '{resolution}' for file {file_id}"
+            )));
+        }
+    }
+
+    // Mark syncing in shared state
+    sync.update_state(&label, |s| {
+        s.is_syncing = true;
+    });
+
+    let _ = app.emit(
+        crate::sync::events::SYNC_STARTED,
+        crate::sync::events::LabelPayload { label: label.clone() },
+    );
+
+    // Suppress file watcher during sync to prevent feedback loops
+    sync.begin_sync();
+
+    let result = {
+        let drive_arc = {
+            let guard = sync.drives.lock().await;
+            guard.get(&label).map(|slot| slot.manager.clone())
+        };
+        match drive_arc {
+            Some(arc) => {
+                let mut m = arc.lock().await;
+                if m.is_unlocked() {
+                    Some(m.sync_with_resolutions(resolutions).await)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        }
+    };
+
+    // Re-enable file watcher after a short delay to ignore trailing FS events.
+    //
+    // NOTE: The spawned task handle is intentionally dropped. `end_sync()` is a
+    // lock-free atomic decrement on `syncs_in_progress` and is safe to call on
+    // a torn-down runner, so orphaning this task during shutdown is safe — and
+    // in fact required, since `begin_sync()` was already called above and the
+    // counter MUST be balanced even if the process is winding down.
+    //
+    // `SyncRunner` does not currently expose an awaitable cancellation token
+    // (only `request_cancel()` / `is_cancelled()` over an `AtomicBool`), so a
+    // `tokio::select!` against cancellation is not possible today. If hcfs-client
+    // ever exposes a `CancellationToken` accessor, switch this to a select so
+    // the delay can be short-circuited on shutdown.
+    {
+        let sync_for_delay = sync.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(WATCHER_REENABLE_DELAY).await;
+            debug!("Re-enabling file watcher after reviewed sync");
+            sync_for_delay.end_sync();
+        });
+    }
+
+    // Resume auto-sync for this drive
+    sync.clear_drive_review(&label);
+
+    // Update per-drive UI state. `is_syncing` flips to false immediately
+    // because the sync cycle IS done from the user's perspective.
+    // `syncs_in_progress` (the global watcher-suppression counter) stays
+    // elevated for another WATCHER_REENABLE_DELAY via the spawned task
+    // above — that's intentional: the two track different things.
+    //   is_syncing        = "is this drive's sync cycle running?" (UI)
+    //   syncs_in_progress = "should the file watcher suppress events?" (internal)
+    sync.update_state(&label, |s| {
+        s.is_syncing = false;
+        s.last_sync_time = Some(chrono::Utc::now().timestamp());
+    });
+
+    match result {
+        Some(Ok(outcome)) => {
+            info!(
+                "Reviewed sync completed: uploaded={}, downloaded={}, deleted_local={}, deleted_remote={}, conflicts_resolved={}, conflicts_skipped={}",
+                outcome.files_uploaded,
+                outcome.files_downloaded,
+                outcome.files_deleted_locally,
+                outcome.files_deleted_remotely,
+                outcome.conflicts_resolved,
+                outcome.conflicts_skipped,
+            );
+            let _ = app.emit(
+                crate::sync::events::SYNC_COMPLETED,
+                crate::sync::events::SyncCompletedPayload::from_outcome(&label, &outcome),
+            );
+            Ok(())
+        }
+        Some(Err(e)) => {
+            let _ = app.emit(
+                crate::sync::events::SYNC_ERROR,
+                crate::sync::events::SyncErrorPayload {
+                    label: label.clone(),
+                    error: e.clone(),
+                    retry_in_secs: 0,
+                    consecutive_failures: 0,
+                },
+            );
+            Err(crate::error::AppError::from(e))
+        }
+        None => {
+            let msg = "Drive not initialized or not unlocked";
+            let _ = app.emit(
+                crate::sync::events::SYNC_ERROR,
+                crate::sync::events::SyncErrorPayload {
+                    label: label.clone(),
+                    error: msg.to_string(),
+                    retry_in_secs: 0,
+                    consecutive_failures: 0,
+                },
+            );
+            Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::DriveNotUnlocked))
+        }
+    }
+}
+
+/// Cancel the review dialog and resume auto-sync without syncing.
+#[tauri::command]
+pub async fn cancel_review(app: tauri::AppHandle) -> Result<()> {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let sync = &app_state.sync;
+
+    sync.clear_all_reviews();
+    info!("Review cancelled, auto-sync resumed");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn trigger_sync_now(app: AppHandle) -> Result<()> {
+    use tauri::Manager;
+    let sync = app.state::<crate::app_state::AppState>().sync.clone();
+    trigger_sync(&sync).await;
+    Ok(())
+}
+
+/// Pure helper: pick the on-disk path for `label` out of a list of sync-path rows.
+///
+/// Extracted so the lookup is unit-testable without touching the Tauri state,
+/// the SQLite pool, or the opener plugin.
+pub(crate) fn resolve_drive_path(paths: Vec<crate::sync::paths::SyncPathResult>, label: &str) -> Result<String> {
+    paths
+        .into_iter()
+        .find(|p| p.label == label)
+        .map(|p| p.path)
+        .ok_or_else(|| crate::error::AppError::Other(format!("No sync path with label '{label}'")))
+}
+
+/// Reveal the on-disk folder for a configured drive in the OS file
+/// manager (Finder on macOS, Explorer on Windows, the default file
+/// manager on Linux).
+///
+/// Looks up the `sync_paths` row by `(owner, label)` for the currently
+/// logged-in account, then hands the resolved path to
+/// `tauri_plugin_opener::reveal_item_in_dir`. Path resolution lives in
+/// Rust so the frontend never reads the `sync_paths` table just to
+/// figure out which folder backs a label.
+///
+/// Errors:
+/// - `NotReady` (no logged-in account)
+/// - `Other("No sync path with label '...'")` when the label is unknown
+/// - `Other("Failed to reveal ...")` when the opener plugin call fails
+#[tauri::command]
+pub async fn reveal_drive_in_finder(state: tauri::State<'_, crate::app_state::AppState>, label: String) -> Result<()> {
+    let pool = state.pool()?;
+    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+
+    let paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id).await?;
+    let path = resolve_drive_path(paths, &label)?;
+
+    tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|e| crate::error::AppError::Other(format!("Failed to reveal '{path}': {e}")))?;
+
+    info!("Revealed drive '{}' at '{}' in file manager", label, path);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync::paths::SyncPathResult;
+
+    fn row(label: &str, path: &str) -> SyncPathResult {
+        SyncPathResult {
+            path: path.to_string(),
+            is_public: false,
+            label: label.to_string(),
+            is_paused: false,
+        }
+    }
+
+    #[test]
+    fn resolve_drive_path_matches_by_label() {
+        let rows = vec![
+            row("default", "/Users/me/Hippius"),
+            row("photos", "/Users/me/Pictures"),
+            row("docs", "/Users/me/Documents"),
+        ];
+        assert_eq!(resolve_drive_path(rows, "photos").unwrap(), "/Users/me/Pictures");
+    }
+
+    #[test]
+    fn resolve_drive_path_errors_on_unknown_label() {
+        let rows = vec![row("default", "/Users/me/Hippius")];
+        let err = resolve_drive_path(rows, "missing").unwrap_err();
+        // The error message must mention the missing label so the FE
+        // toast and the logs are unambiguous.
+        assert!(err.to_string().contains("missing"));
+    }
+
+    #[test]
+    fn resolve_drive_path_errors_on_empty_list() {
+        let err = resolve_drive_path(Vec::new(), "anything").unwrap_err();
+        assert!(err.to_string().contains("anything"));
+    }
+}

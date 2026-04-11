@@ -38,12 +38,12 @@ import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { List } from "lucide-react";
-import {
-  getPrivateSyncPath,
-  getAllSyncPaths,
-} from "@/lib/utils/syncPathUtils";
+import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { useAtomValue } from "jotai";
-import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import {
+  driveStatusesAtom,
+  triggerSyncPathRefreshAtom,
+} from "@/app/lib/global-atoms/unpinAtoms";
 import FolderBreadcrumb from "./FolderBreadcrumb";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 
@@ -93,6 +93,10 @@ export default function FolderView({
   const [syncFolderLabel, setSyncFolderLabel] = useState<string>("");
   const [isLoadingSyncPath, setIsLoadingSyncPath] = useState(true);
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
+  // Read configured drives from the per-drive status atom — used by
+  // `resolveSyncPath` to map a folderSource path back to its sync-root
+  // label without an extra Rust round-trip.
+  const driveStatuses = useAtomValue(driveStatusesAtom);
   const folderSource = getParam("folderSource");
 
   const filteredData = useMemo(() => {
@@ -140,8 +144,6 @@ export default function FolderView({
           subfolder,
           label: syncFolderLabel || null,
         });
-
-        console.log("Fetched folder contents:", entries);
 
         const formattedFiles = entries.map((entry): FormattedUserFile => {
           const modifiedMs = (entry.modified ?? 0) * 1000;
@@ -195,21 +197,22 @@ export default function FolderView({
     loadFolderContents();
   }, [loadFolderContents]);
 
-  // Resolve the correct sync path + label by matching folderSource against all sync paths.
-  // Falls back to getPrivateSyncPath when folderSource is unavailable.
+  // Resolve the correct sync path + label by matching folderSource
+  // against the configured drives in `driveStatusesAtom`. The atom is
+  // already populated by `useDriveStatuses`, so this is a synchronous
+  // map walk — no IPC, no DB read. Falls back to `getPrivateSyncPath`
+  // when folderSource is unavailable or doesn't match any drive.
   const resolveSyncPath = useCallback(async (): Promise<{ path: string; label: string }> => {
     if (folderSource) {
-      try {
-        const allPaths = await getAllSyncPaths(polkadotAddress ?? undefined);
-        const match = allPaths.find((sp) => folderSource.startsWith(sp.path));
-        if (match) return { path: match.path, label: match.label };
-      } catch {
-        // Fall through to default
+      for (const [label, entry] of driveStatuses) {
+        if (entry.path && folderSource.startsWith(entry.path)) {
+          return { path: entry.path, label };
+        }
       }
     }
     const result = await getPrivateSyncPath(polkadotAddress ?? undefined);
     return { path: result?.path ?? "", label: result?.label ?? "" };
-  }, [folderSource, polkadotAddress]);
+  }, [folderSource, polkadotAddress, driveStatuses]);
 
   // Load sync path (all files use private/encrypted HCFS path)
   useEffect(() => {

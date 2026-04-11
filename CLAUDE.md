@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## MUST-DO Rule for AI Agents (Claude and all others)
+
+**Business logic MUST live in the Rust backend (`src-tauri/`). Frontend-only concerns MUST stay in the TypeScript frontend (`app/`).**
+
+- All business logic — data processing, state transitions, persistence, network/IPC, blockchain, crypto, sync, validation, and domain rules — goes in `src-tauri/` (Rust).
+- The `app/` TypeScript frontend is for UI, presentation, routing, and user interaction only. It calls into Rust via Tauri `invoke()` and listens to backend events.
+- Do NOT implement business logic in TypeScript. If a feature needs logic, add a Rust command in `src-tauri/` and call it from the frontend.
+
 ## Overview
 
 Hippius Desktop is a Tauri 2.0 application combining a Next.js 15 frontend with a Rust backend. It provides encrypted file sync, blockchain wallet management, VM provisioning, VPN (Nebula), and billing — all integrated with the Hippius/Bittensor network.
@@ -54,30 +62,31 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 
 ### Backend Structure (src-tauri/src/)
 
-- **`main.rs`** — Entry point. Registers all IPC commands, initializes plugins, sets up single-instance and deep-link handling. `lib.rs` is vestigial — ignore it.
-- **`commands/`** — IPC command handlers organized by domain: `syncing.rs` (file sync), `auth.rs` (mnemonic login), `session.rs` (credential storage), `billing.rs`, `blockchain.rs` (queries, staking, unit conversion), `chart_formatting.rs` (chart data, marketplace credits, storage cost), `migration.rs` (S3→HCFS migration: check, start, cancel, dismiss, `complete_migration_transition` for atomic dismiss+stop+reinit), `vm.rs`, `file_commands.rs`, `oauth.rs`, `local_db.rs` (notifications, contacts, preferences), etc.
-- **`hcfs_drive.rs`** — Core sync engine. Wraps `hcfs_client::Drive` in `HcfsDriveManager`, manages multi-drive registry (`HCFS_DRIVES` HashMap keyed by label), runs background sync loop with file watching. Includes **remote folder auto-recovery**: before each sync cycle, `check_and_recover_remote_folder()` verifies the folder exists on the server; if missing (e.g., another device deleted it), it re-registers the folder, wipes `sync_state.json`, and lets the next sync re-upload local files. A fallback in the error handler also triggers recovery if `sync_with_resolutions` returns a folder-not-found error. **Post-upload folder registration**: after any sync cycle that uploads files, `ensure_folder_registered()` is called to guarantee the folder exists in the server's `folder_registry` — this is critical because the server's upload endpoint does NOT check registration, so files can land on the server while the folder remains invisible to `list_remote_folders` on other devices. **Post-sync finalization guard**: the finalization block (mark_pending_files_as_failed/complete_pending_files + complete_session) is guarded by `should_finalize_session(session_is_active)` — only runs when the current session is active. No-op heartbeat cycles leave the previous completed session inactive; running finalization against it would compare stale expected counts with a zero outcome, emit spurious snapshots, and cause UI flicker. **Deferred completion for mid-sync additions**: when the file watcher sets `changes_pending` during an active sync cycle, the finalization block skips `complete_session` (via `should_defer_completion`). The session stays active so the follow-up cycle's `on_sync_plan_ready` calls `merge_into_session`, appending new files to the existing session. Users see continuous progress ("6/10 synced → 10/10 synced") instead of a jarring reset ("6/6 → 0/4"). `register_files` has a `contains_key` guard preventing overwrites of already-completed files.
-- **`sync_shared.rs`** — Shared sync state: cancellation token, per-drive status, connectivity health, activity ring buffer
-- **`sync_logic.rs`** — Pure logic functions for sync engine decisions (no I/O, fully testable): backoff computation, health-change detection, sync-skip decisions, encrypted-name detection, remote-folder-removal error detection, folder recovery decision (`folder_needs_recovery`), post-upload registration decision (`should_register_after_upload`), post-sync finalization guard (`should_finalize_session`), deferred completion decision (`should_defer_completion`)
-- **`sync_progress.rs`** — In-memory sync progress tracking (sessions, file progress, tray menu data)
-- **`substrate_client.rs`** — Substrate/Polkadot RPC client for blockchain operations
-- **`api_client.rs`** — HTTP client for Hippius API (billing, VMs, support)
-- **`auth_state.rs`** — In-memory auth state (encrypted mnemonic, passcode)
-- **`builder_blocks/setup.rs`** — App setup: SQLite database init with schema migration, deep-link registration, tray icon setup
-- **`constants/substrate.rs`** — WSS endpoint and chain constants
-- **`utils/nebula/`** — Nebula VPN management (download, install, start, certificate handling). **Permission escalation** (macOS osascript / Linux pkexec) for the Nebula binary is requested ONLY when the user enables the VPN via `toggle_vpn_status`, never during app startup or splash screen. The `ensure_vpn_permissions` IPC command is available for frontend pre-checking. The only exception is `remove_existing_binaries` during updates, which may prompt if old binaries are root-owned.
+- **`main.rs`** — Entry point. Registers all IPC commands, initializes plugins, sets up single-instance and deep-link handling. `lib.rs` re-exports all modules for integration tests.
+- **`error.rs`** — `AppError` enum with `thiserror` for structured error handling. Custom `Serialize` produces `{ "kind": "...", "message": "..." }` for frontend error matching. `NotReadyKind` enum gives machine-readable variants for auth/sync readiness errors.
+- **`app_state.rs`** — Centralized `AppState` struct with sub-states: `AuthInfo`, `BlockchainState`, `BlockSubscriptionState`, `OAuthState`, `NebulaState`, `MigrationState`, and `SyncRunner` (Arc). Also holds shared `reqwest::Client` for API calls and `tokio::sync::Notify` for drive-removal wakeups.
+- **`auth/`** — Authentication and account management: `login.rs` (mnemonic login), `logout.rs`, `session_restore.rs` (boot-time session rehydration), `service.rs` (token refresh, key derivation), `accounts.rs` (sub-account CRUD, import/export with encryption), `oauth.rs` (OAuth flow), `ssh_keys.rs`, `billing_auth.rs` (billing API auth), `tokens.rs` (token helpers), `keychain.rs` (OS keychain), `contacts.rs`, `state.rs` (AuthInfo struct), `account_key.rs` (account key hashing), `auth_session_repo.rs` (SQLite session CRUD with inline tests).
+- **`sync/`** — Core sync engine (16 submodules): `lifecycle.rs` (init, auto-init, teardown, progress handler setup), `control.rs` (start/stop/pause drive commands), `files.rs` (file listing, recent files, user files with parallel folder listing), `folders.rs` (folder CRUD), `paths.rs` (sync path DB operations), `config.rs` (HCFS config loading), `progress.rs` (in-memory session/file progress tracking), `status.rs` (sync status queries), `events.rs` (event name constants and payload structs), `logic.rs` (pure I/O-free helpers: snapshot throttling), `migration.rs` (S3→HCFS migration: check, start, poll, complete_migration_transition), `mnemonic.rs` (mnemonic resolution for sync), `remote.rs` (remote folder operations), `selective.rs` (selective sync), `device.rs` (device name), `tauri_bridge.rs` (OnceLock-based event dispatch to Tauri).
+- **`blockchain/`** — Substrate/Polkadot integration: `client.rs` (RPC client with double-check lock pattern), `queries.rs` (balance, staking info with snapshot-consistent reads), `staking.rs` (stake/unstake commands), `transfers.rs` (balance transfers), `subscription.rs` (block subscription), `convert.rs` (unit conversion), `helpers.rs` (signer extraction), `state.rs`, `types.rs`, `runtime.rs`.
+- **`billing/`** — Billing and credits: `charts.rs` (chart data formatting), `credits.rs` (credit balance queries), `queries.rs` (billing API queries), `subscriptions.rs` (plan management).
+- **`api/`** — HTTP clients: `client.rs` (generic Hippius API client), `indexer.rs` (indexer API).
+- **`crypto/`** — Encryption at rest: `store.rs` (HKDF-SHA256 key derivation, ChaCha20-Poly1305 AEAD encrypt/decrypt, `migrate_if_needed` for transparent plaintext→encrypted migration of sub-account seed phrases).
+- **`nebula/`** — Nebula VPN management (download, install, start, certificate handling). **Permission escalation** (macOS osascript / Linux pkexec) for the Nebula binary is requested ONLY when the user enables the VPN via `toggle_vpn_status`, never during app startup or splash screen.
+- **`notifications/`** — Notification management commands.
+- **`infra/`** — VM provisioning and support ticket commands.
+- **`utils/`** — Schema management (`schema.rs` with `ensure_table_schema()`), bookmarks, preferences, platform info, tray menu, support helpers.
 
 ### Key Patterns
 
-**Global state in Rust** is centralized in `AppState` (`app_state.rs`), registered via `app.manage(AppState::new())` at startup. Sub-states: `AuthInfo`, `BlockchainState`, `BlockSubscriptionState`, `OAuthState`, `NebulaState`, `MigrationState`, and `SyncEngine` (Arc). Command handlers access it via `tauri::State<'_, AppState>`, background tasks via `app.state::<AppState>()`. The DB pool uses `OnceLock` within AppState. No module-level `static` variables remain.
+**Global state in Rust** is centralized in `AppState` (`app_state.rs`), registered via `app.manage(AppState::new())` at startup. Sub-states: `AuthInfo`, `BlockchainState`, `BlockSubscriptionState`, `OAuthState`, `NebulaState`, `MigrationState`, and `SyncRunner` (Arc). Also holds a shared `reqwest::Client` for connection pooling and a `tokio::sync::Notify` for drive-removal wakeups. Command handlers access it via `tauri::State<'_, AppState>`, background tasks via `app.state::<AppState>()`. The DB pool uses `OnceLock` within AppState. No module-level `static` variables remain.
 
 **Multi-drive sync**: Drives are keyed by label string. The sync loop iterates all drives sequentially (round-robin). `SyncActivityItem` includes a `label` field; all Tauri events include `"label"` in JSON payload. DB constraint: `UNIQUE(owner, label)` in sync_paths table.
 
-**hcfs-client dependency**: The sync engine delegates to `hcfs-client` (from the `hippius-arion` repo, pinned to a git rev in Cargo.toml). Drive API: `new()`, `init()`, `unlock()`, `sync_async(SyncMode)`, `stage()`, `set_config()`, `set_progress_handlers()`. All file encryption is handled by hcfs-client via BIP-39 mnemonic.
+**hcfs-client dependency**: The sync engine delegates to `hcfs-client` (from the `hcfs` repo, pinned to a git rev in Cargo.toml). Drive API: `new()`, `init()`, `unlock()`, `sync_async(SyncMode)`, `stage()`, `set_config()`, `set_progress_handlers()`. All file encryption is handled by hcfs-client via BIP-39 mnemonic.
 
-**Rename detection**: The file watcher captures OS rename events (From/To pairs from the `notify` crate) and stores them as `RenameHint` structs in `SyncEngine.rename_hints`. Before each sync cycle, `trigger_sync_for_drive` drains the hints, converts them to relative paths, and expands directory-level hints into per-file hints. The pure pairing/expansion logic lives in `sync_logic.rs` (fully tested). When hcfs-client gains rename support (thenervelab/hcfs#52), the hints will be passed through to avoid redundant delete+re-upload cycles for renamed files. Until then, hints are logged and consumed without effect. When a rename hint is captured, `push_rename_hint` also updates existing activity items (committed and pending) and the `synced_paths_cache` to reflect the new filename immediately, then emits `hcfs_activity_updated` so the frontend refreshes the recent-files list without waiting for a full sync cycle. The label-to-root mapping (`SyncEngine.label_roots`) enables converting absolute watcher paths to relative activity filenames.
+**Rename detection**: The file watcher captures OS rename events (From/To pairs from the `notify` crate) and stores them as `RenameHint` structs in `SyncRunner.rename_hints`. Before each sync cycle, the hints are drained, converted to relative paths, and expanded into per-file hints. The pairing/expansion logic lives in `hcfs-client` (fully tested there). When hcfs-client gains rename support (thenervelab/hcfs#52), the hints will be passed through to avoid redundant delete+re-upload cycles for renamed files.
 
-**SQLite**: Database pool lives in `AppState` as a `OnceLock<SqlitePool>`. Schema is maintained via `ensure_table_schema()` in `builder_blocks/setup.rs` (not migration files). Access pattern: `state.pool()?` (from command handlers) or `app.state::<AppState>().pool()?` (from background tasks).
+**SQLite**: Database pool lives in `AppState` as a `OnceLock<SqlitePool>`. Schema is maintained via `ensure_table_schema()` in `utils/schema.rs` (not migration files). Access pattern: `state.pool()?` (from command handlers) or `app.state::<AppState>().pool()?` (from background tasks).
 
 **Logging**: All Rust code uses `tracing` macros (`info!`, `debug!`, `warn!`, `error!`) — never `println!`/`eprintln!`. The subscriber is initialized in `main.rs` with module-path targets. Set `RUST_LOG=debug` for verbose output.
 
@@ -85,129 +94,76 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 
 **User preferences**: Generic key-value store in SQLite (`user_preferences` table) accessed via `get_user_preference` / `save_user_preference` Rust commands. Frontend wrapper in `app/lib/utils/userPreferencesDb.ts` provides typed helpers including `getLastBrowseDirectory()` / `saveLastBrowseDirectory()` which remember the last directory the user browsed to in file/folder pickers (fallback chain: last browse dir → home dir → OS default). Used by `FileDropzone`, `FolderUploadDialog`, and `FolderToFolderUploadDialog`.
 
-**Asset protocol scope**: The static scope in `tauri.conf.json` is `$HOME/.hippius/**` (for HCFS drive metadata). User-chosen sync folders live at arbitrary paths, so the scope is expanded at runtime via `app.asset_protocol_scope().allow_directory(path, true)`. This happens in three places: `set_sync_path` (when user configures a new path), `initialize_sync_inner` (on every sync start/restart), and the frontend `tryAutoInitSync` (belt-and-suspenders at login). The `allow_asset_scope` IPC command is also exposed for direct frontend use. The helper `allow_asset_directory()` lives in `file_commands.rs`.
+**Asset protocol scope**: The static scope in `tauri.conf.json` is `$HOME/.hippius/**` (for HCFS drive metadata). User-chosen sync folders live at arbitrary paths, so the scope is expanded at runtime via `app.asset_protocol_scope().allow_directory(path, true)`. This happens in three places: `set_sync_path` (when user configures a new path), `initialize_sync_inner` (on every sync start/restart), and the frontend `tryAutoInitSync` (belt-and-suspenders at login). The `allow_asset_scope` IPC command is also exposed for direct frontend use. The helper `allow_asset_directory()` lives in `sync/files.rs`.
 
-**Sync widget anti-flicker**: The sync status widget (`SyncStatusDialog` + `SyncStatusHandler`) uses multiple layered guards to prevent visual flicker: (1) **Backend finalization guard** — `should_finalize_session(session_is_active)` in `hcfs_drive.rs` prevents spurious snapshot emissions during no-op heartbeat cycles. (2) **isPreparing suppression** — `SyncStatusHandler` only sets `isPreparing=true` (from `hcfs_sync_started` events) when the widget is NOT already visible (tracked via `shouldShowRef`), preventing redundant React re-renders during heartbeats when the widget is already showing (e.g. latched completed state). (3) **Targeted CSS transitions** — `SyncStatusDialog` uses `transition-[width]`, `transition-[border-radius]`, `transition-[padding]`, and `transition-[opacity]` instead of `transition-all`, so only intentional property changes animate (hover/background changes don't trigger 300ms visual artifacts). (4) **Single width source** — The outer wrapper div owns the width via inline style; the header fills its parent naturally (no duplicate inline width). `overflow-hidden` on the outer div prevents content overflow clipping at viewport edge. (5) **Two-state collapsed widths** — `W_COLLAPSED_DONE` and `W_COLLAPSED_ACTIVE` (no mid-progress width jump at percentage=10%).
+**Sync widget anti-flicker**: The sync status widget (`SyncStatusDialog` + `SyncStatusHandler`) uses multiple layered guards to prevent visual flicker: (1) **Unconditional finalization emit** — `finalize_session_for_label` in hcfs-client always calls `runner.emit_snapshot(true)` at exit (mirrors `handle_sync_error`), so any session-state cleanup mutations reach the FE immediately and stale per-chunk snapshots are flushed. (2) **isPreparing suppression** — `SyncStatusHandler` only sets `isPreparing=true` (from `hcfs_sync_started` events) when the widget is NOT already visible (tracked via `shouldShowRef`). (3) **Targeted CSS transitions** — `SyncStatusDialog` uses `transition-[width]`, `transition-[border-radius]`, `transition-[padding]`, and `transition-[opacity]` instead of `transition-all`. (4) **Single width source** — The outer wrapper div owns the width via inline style. (5) **Two-state collapsed widths** — `W_COLLAPSED_DONE` and `W_COLLAPSED_ACTIVE`. (6) **Stalled completion fixup** — `fixup_stalled_completion()` in `sync/progress.rs` detects when hcfs-client leaves a session active despite all files being done (caused by the file watcher detecting self-generated writes via `changes_pending`). It overrides `effective_completed`, `effective_in_progress`, `widget_state`, and `status_variant` so the widget shows "Complete" instead of being stuck on "Syncing...". (7) **Stable file row keys** — `SyncStatusDialog` keys file rows by `file.path` only (not `${file.path}-${index}`) so that React moves DOM nodes when `snapshot.files` reorders by priority instead of unmount/remount, which avoids ghost text from `transition-opacity` restarts.
+
+**Per-drive sync status** is owned by Rust as the single source of truth — there is NO global "sync engine status" enum, no global "user stopped" flag, no global "Syncing is currently stopped" banner. Every locally synced folder is one drive, and each drive has its own status (`Active | Paused`) computed from `sync_paths.is_paused`. The full design is in `src-tauri/src/sync/drive_status.rs`. Key pieces:
+
+- **`DriveStatus` enum** (`Active | Paused`) and **`DriveStatusEntry` struct** (`{ label, folder_name, status }`). Wire format is the tagged shape `{"kind": "active"}` so a future `Error { message }` variant can be added without breaking the frontend. `folder_name` is the basename of the sync path (e.g. `/Users/me/Documents/Hippius` → `"Hippius"`) — the user-facing name shown in tray submenus and per-drive UI rows.
+- **`get_all_drive_statuses` IPC** returns one entry per `sync_paths` row for the current account, filtered to skip the internal `migration` pseudo-drive. Called by the frontend on mount to bootstrap the per-drive map.
+- **Two events**: `hcfs_drive_status_changed` (payload `{label, status}`) fires when a single drive transitions Active ↔ Paused. `hcfs_drive_removed` (payload `{label}`) fires when `remove_drive` deletes a drive's row, telling the FE to drop the entry from its map.
+- **`pause_drive`** sets `is_paused=true` in the DB, removes the drive from the in-memory map, emits `hcfs_drive_status_changed` with status=Paused. **`resume_drive`** clears `is_paused`, calls `initialize_sync_inner` (which emits Active on success). **`remove_drive`** (renamed from `stop_drive`) deletes the `sync_paths` row, tears down the in-memory state, leaves files on disk untouched, and emits `hcfs_drive_removed`. There is no longer a global "Stop Sync" button.
+- **`stop_sync`** is internal cleanup only (logout, login, reset). It does NOT touch any persisted state — `is_paused` rows survive logout/login because they represent user intent.
+- **`auto_init_sync`** filters out paused paths and emits per-drive Paused for each before the init loop. For each successful init, the per-drive Active status is emitted by `initialize_sync_inner`. There is no global aggregation; every status emit is per-drive.
+- **Frontend mirror**: `driveStatusesAtom: Map<label, DriveEntry>` in `app/lib/global-atoms/unpinAtoms.ts`, populated by `useDriveStatuses` (mounted in `SyncEventLogger`). Derived `hasConfiguredDrivesAtom` answers "does the user have any drives configured" — used by upload buttons to gate the "set up sync first" toast. **Frontend code must never mutate `driveStatusesAtom` directly** — call the corresponding Rust IPC (`pause_drive`, `resume_drive`, `remove_drive`) and let the event listener propagate the change.
+- **Three pause/resume surfaces** all share the same atom: (1) the 3-dot menu in `MultiFolderSyncManager` (settings → Sync & Storage), (2) the per-folder tab menu in `FilesContainer`, (3) the **Sync Folders** tray submenu in `useTraySync`. All call the same Rust IPCs and read pause state from the same atom — no local state mirrors.
+- **Legacy migration**: existing users with the old global `user_preferences.sync_user_stopped = true` flag get every `sync_paths` row painted `is_paused = true` on first launch via `sync/user_stopped_migration.rs`. Idempotent, runs at every startup, safely deletable once enough releases have shipped.
+
+**Tray sync state cleanup**: The tray menu in `useTraySync.ts` uses module-level latching variables (`latchedComplete`, `latchedSnapshot`, `lastSyncSummarySignature`) to keep completed sync info visible after backend resets. These are explicitly cleared in the `useTrayInit` logout cleanup effect to prevent stale data from a previous account appearing after account switch.
+
+**Migration folder picker**: The `MigrationPromptDialog` includes a folder picker pre-populated with the default migration path (`~/Documents/Hippius-Migration-YYYY-MM-DD`). The chosen path is stored in `migrationCheckAtom.syncPath` and passed to `complete_migration_transition` as `custom_sync_path`. If not provided, falls back to the auto-generated default.
+
+**Per-file sync completion**: hcfs-client's `on_file_synced` callback fires per-file after the upload (or download + AEAD-verifying decrypt) succeeds. The desktop `build_file_synced_callback` calls `crate::sync::progress::mark_file_synced` to transition that single file's progress status to `Completed` immediately, instead of waiting for the entire sync cycle to finish in `complete_pending_files`. This fixes the bug where a small decrypted file would stay pinned at "Decrypting" while a large file was still downloading alongside it.
+
+**Credit-eligibility checks**: The decision of whether the user can afford a gated action (file upload, folder upload, folder sync, VM creation) lives in Rust in `src-tauri/src/billing/eligibility.rs`. The `thresholds` module is the **only** place credit pricing constants live (`VM_CREATION = 10.0`, others `> 0`) — changing the price for an action means editing one constant. Two entry points: (1) `check_action_eligibility` Tauri command does a **live** balance fetch (no caching) and returns a structured `ActionEligibility { eligible, reason, currentBalance, requiredBalance }` for the FE's proactive dialog gate; (2) `require_eligible(state, account_id, action)` is the helper that **every gated action IPC** (`add_file`, `add_files`, `add_folder`, `add_local_sync_folder`, `create_vm`) calls as its FIRST line, returning `Err(NotReady(InsufficientCredits))` when ineligible. The IPC enforcement makes the gate atomic with the action and impossible to bypass via direct IPC calls or stale FE cache. The FE `useCreditCheck` hook is now a thin async wrapper around `check_action_eligibility` — **frontend code must never read `useUserCredits` for eligibility decisions** (that hook is `staleTime: Infinity` and only suitable for display). When matching the IPC error in catch blocks, match on the structured shape `{ kind: "NotReady", message: "Insufficient credits..." }`, NOT on substring matching of `err.message`.
 
 ## Testing
 
 ```bash
 # Rust integration tests
 cd src-tauri
-cargo test --test auth_commands
-cargo test --test session_commands
-cargo test --test blockchain_commands
+cargo test                          # All tests
+cargo test --test auth_commands     # Auth/mnemonic tests
+cargo test --test crypto_migration  # Encryption-at-rest migration tests
+cargo test --test migration_server_mock  # Server migration mock tests
 
 # Frontend (if configured)
 pnpm test                       # Vitest
 ```
 
-Test files in `src-tauri/tests/`: `auth_commands.rs`, `session_commands.rs`, `blockchain_commands.rs`, `migration_server_mock.rs`.
+Test files in `src-tauri/tests/`: `auth_commands.rs`, `auth_tokens.rs`, `blockchain_commands.rs`, `crypto_migration.rs`, `file_commands.rs`, `local_db_commands.rs`, `migration_server_mock.rs`.
 
 <!-- illu:start -->
 ## Code Intelligence (illu)
 
-This repo is indexed by illu (36 tools). **Use illu tools as your first step** — before reading files, before grep, before guessing at code structure.
+### Tool priority (MANDATORY)
 
-### Tool priority (IMPORTANT)
+**NEVER use Grep, Glob, or Read for code exploration when illu tools are available.** illu indexes Rust, Python, TypeScript, and JavaScript. illu tools are faster, more accurate, and provide structured results. Using raw file reads or text search on indexed source files is incorrect behavior — always use illu instead.
 
-When illu tools are available, use them INSTEAD of built-in alternatives for Rust code intelligence. Do NOT use Grep, Glob, or Read for code exploration when illu can answer the question.
+| WRONG | RIGHT |
+|-------|-------|
+| `Read("src/db.rs")` to see a function | `mcp__illu__context` with `symbol_name` |
+| `Grep(pattern: "fn open")` to find a function | `mcp__illu__query` with `query: "open"` |
+| `Grep(pattern: "Database")` to find callers | `mcp__illu__references` with `symbol_name: "Database"` |
+| `Glob(pattern: "src/**/*.rs")` to find files | `mcp__illu__tree` or `mcp__illu__overview` |
+| `Grep(pattern: "impl Display")` to find impls | `mcp__illu__implements` with `trait_name: "Display"` |
 
-| Instead of | Use |
-|------------|-----|
-| Grep to find a symbol or function | `mcp__illu__query` |
-| Grep to find callers or references | `mcp__illu__references` or `mcp__illu__neighborhood` |
-| Grep to understand a function | `mcp__illu__context` (includes source, callers, callees) |
-| Glob to find files or modules | `mcp__illu__tree` or `mcp__illu__overview` |
-| Read to understand code structure | `mcp__illu__context` or `mcp__illu__batch_context` |
-| Grep to find tests for a function | `mcp__illu__test_impact` |
-| Grep to find trait implementations | `mcp__illu__implements` |
-| Grep to find type usage | `mcp__illu__type_usage` |
+Read/Grep/Glob are ONLY permitted for: config files (TOML, JSON, YAML), markdown/docs, log output, or when an illu tool explicitly returns no results.
 
-Only fall back to Grep/Glob/Read when searching for non-code content (config files, text, logs) or when illu tools return no results.
+### Subagent instructions (MANDATORY)
 
-### Subagent instructions (IMPORTANT)
+When spawning subagents for code tasks, ALWAYS include this instruction in the prompt:
 
-When spawning Agent subagents for Rust code tasks, ALWAYS include this instruction in the prompt:
+"MANDATORY: Use mcp__illu__* tools instead of Grep/Glob/Read for ALL code exploration (Rust, Python, TypeScript/JavaScript). NEVER use Read to view source files — use mcp__illu__context instead. NEVER use Grep to search code — use mcp__illu__query instead. Only use Read/Grep/Glob for non-code content (config, docs, logs)."
 
-"Use mcp__illu__* tools instead of Grep/Glob/Read for Rust code exploration. Use mcp__illu__query to find symbols, mcp__illu__context for definitions and callers, mcp__illu__neighborhood for call graphs. Only fall back to Grep/Glob/Read for non-code content."
+Prefer `illu-explore`, `illu-review`, `illu-refactor` agents when available.
 
-Prefer dedicated illu agents when available: `illu-explore` (codebase questions), `illu-review` (change analysis), `illu-refactor` (refactoring support).
+### Workflow
 
-### When to use illu
-
-- **Starting any task**: `illu query` the relevant symbols to understand what exists
-- **Before modifying a function/struct/trait**: `illu impact` to see what depends on it
-- **Debugging or tracing issues**: `illu context` to get the full definition and references
-- **Understanding call flow**: `illu neighborhood` or `illu callpath` to explore the call graph
-- **Before refactoring a module**: `illu boundary` to see what's public API vs internal
-- **Using an external crate**: `illu docs` to check how it's used in this project
-- **Before reading files**: query first — illu tells you exactly where things are
-- **Finding which tests to run**: `illu test_impact` after changing a symbol
-- **Dead code detection**: `illu unused` or `illu orphaned` to find unreferenced symbols
-- **Index health**: `illu freshness` to check if the index is current
-- **Cross-repo analysis**: `illu cross_query` to find symbols in other repos, `illu cross_impact` to check cross-repo effects
-- **Repo overview**: `illu repos` to see all registered repos
-
-### Commands
-
-| User types | MCP tool | Params |
-|------------|----------|--------|
-| `illu query <term>` | `mcp__illu__query` | `query: "<term>"` |
-| `illu query <term> --scope <s>` | `mcp__illu__query` | `query: "<term>", scope: "<s>"` |
-| `illu query * --kind struct` | `mcp__illu__query` | `query: "*", kind: "struct"` |
-| `illu query * --sig "-> Result"` | `mcp__illu__query` | `query: "*", signature: "-> Result"` |
-| `illu context <symbol>` | `mcp__illu__context` | `symbol_name: "<symbol>"` |
-| `illu context Type::method` | `mcp__illu__context` | `symbol_name: "Type::method"` |
-| `illu context <sym> --sections source,callers` | `mcp__illu__context` | `symbol_name: "<sym>", sections: ["source", "callers"]` |
-| `illu context <sym> --exclude-tests` | `mcp__illu__context` | `symbol_name: "<sym>", exclude_tests: true` |
-| `illu batch_context <sym1> <sym2>` | `mcp__illu__batch_context` | `symbols: ["<sym1>", "<sym2>"]` |
-| `illu impact <symbol>` | `mcp__illu__impact` | `symbol_name: "<symbol>"` |
-| `illu impact <symbol> --depth 1` | `mcp__illu__impact` | `symbol_name: "<symbol>", depth: 1` |
-| `illu diff_impact` | `mcp__illu__diff_impact` | *(unstaged changes)* |
-| `illu diff_impact main` | `mcp__illu__diff_impact` | `git_ref: "main"` |
-| `illu test_impact <symbol>` | `mcp__illu__test_impact` | `symbol_name: "<symbol>"` |
-| `illu callpath <from> <to>` | `mcp__illu__callpath` | `from: "<from>", to: "<to>"` |
-| `illu neighborhood <symbol>` | `mcp__illu__neighborhood` | `symbol_name: "<symbol>"` |
-| `illu neighborhood <sym> --format tree` | `mcp__illu__neighborhood` | `symbol_name: "<sym>", format: "tree"` |
-| `illu references <symbol>` | `mcp__illu__references` | `symbol_name: "<symbol>"` |
-| `illu boundary src/server/` | `mcp__illu__boundary` | `path: "src/server/"` |
-| `illu unused` | `mcp__illu__unused` | |
-| `illu unused --path src/server/` | `mcp__illu__unused` | `path: "src/server/"` |
-| `illu orphaned` | `mcp__illu__orphaned` | |
-| `illu overview src/` | `mcp__illu__overview` | `path: "src/"` |
-| `illu stats` | `mcp__illu__stats` | |
-| `illu hotspots` | `mcp__illu__hotspots` | |
-| `illu implements --trait Display` | `mcp__illu__implements` | `trait_name: "Display"` |
-| `illu docs <dep>` | `mcp__illu__docs` | `dependency: "<dep>"` |
-| `illu docs <dep> --topic <t>` | `mcp__illu__docs` | `dependency: "<dep>", topic: "<t>"` |
-| `illu freshness` | `mcp__illu__freshness` | |
-| `illu crate_graph` | `mcp__illu__crate_graph` | |
-| `illu blame <symbol>` | `mcp__illu__blame` | `symbol_name: "<symbol>"` |
-| `illu history <symbol>` | `mcp__illu__history` | `symbol_name: "<symbol>"` |
-| `illu repos` | `mcp__illu__repos` | |
-| `illu cross_query <term>` | `mcp__illu__cross_query` | `query: "<term>"` |
-| `illu cross_impact <symbol>` | `mcp__illu__cross_impact` | `symbol_name: "<symbol>"` |
-| `illu cross_deps` | `mcp__illu__cross_deps` | |
-| `illu cross_callpath <from> <to>` | `mcp__illu__cross_callpath` | `from: "<from>", to: "<to>"` |
-
-### Workflow rules
-
-1. **Locate before you read**: `illu query` or `illu context` to find the right file:line, then Read only what you need
-2. **Impact before you change**: always run `illu impact` before modifying any public symbol
-3. **Chain tools**: `illu query` to find candidates → `illu context` for the one you need → `illu impact` before changing it
-4. **Save tokens**: use `sections: ["source", "callers"]` on context/batch_context to fetch only what you need
-5. **Production focus**: use `exclude_tests: true` on context/neighborhood/callpath to filter out test functions
-
-### Cross-repo workflow
-
-**NEVER navigate to or read files from other repositories directly.** Use cross-repo tools instead — they query other repos' indexes without leaving this repo.
-
-1. `illu repos` — confirm the other repo is indexed and available
-2. `illu cross_query <term>` — search symbols across all indexed repos
-3. `illu cross_impact <symbol>` — find which code in other repos references a symbol
-4. `illu cross_deps` — show inter-repo dependency relationships
-5. `illu cross_callpath <from> <to>` — find call chains spanning repo boundaries
-
-Cross-repo tools open other repos' indexes read-only. They work as long as the other repo has been indexed by illu (check with `illu repos`). If a repo is not indexed, ask the user to run illu on it first.
+1. **Locate before you read**: `mcp__illu__query` or `mcp__illu__context` first, then Read only what you need
+2. **Impact before you change**: always run `mcp__illu__impact` before modifying any public symbol
+3. **Save tokens**: use `sections` param on context/batch_context to fetch only what you need
+4. **Production focus**: use `exclude_tests: true` to filter out test functions
+5. **Cross-repo**: use `mcp__illu__cross_query`/`mcp__illu__cross_impact`/`mcp__illu__cross_deps`/`mcp__illu__cross_callpath` — NEVER navigate to or read files from other repositories directly
 <!-- illu:end -->

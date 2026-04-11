@@ -72,41 +72,12 @@ const CustomizeRPC: React.FC = () => {
   }, []);
 
   const testEndpoint = async () => {
-    if (!rpcEndpoint) {
-      setError("Please enter an RPC endpoint");
-      return false;
-    }
-
-    // Validate URL format
-    if (!rpcEndpoint.startsWith("ws://") && !rpcEndpoint.startsWith("wss://")) {
-      setError(formatErrorMessage("Invalid WSS endpoint format"));
-      return false;
-    }
-
     setError(null);
     setTesting(true);
 
     try {
-      // Test the endpoint by opening a WebSocket connection
-      await new Promise<void>((resolve, reject) => {
-        const ws = new WebSocket(rpcEndpoint);
-        const timeout = setTimeout(() => {
-          ws.close();
-          reject(new Error("timed out"));
-        }, 10000);
-
-        ws.onopen = () => {
-          clearTimeout(timeout);
-          ws.close();
-          resolve();
-        };
-        ws.onerror = () => {
-          clearTimeout(timeout);
-          ws.close();
-          reject(new Error("connection refused"));
-        };
-      });
-
+      // Rust validates format (ws:// / wss://) and tests the connection
+      await invoke("test_rpc_endpoint_command", { endpoint: rpcEndpoint });
       setTesting(false);
       return true;
     } catch (err) {

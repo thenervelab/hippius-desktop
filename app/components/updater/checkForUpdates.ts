@@ -12,6 +12,8 @@ import { toast } from "sonner";
 import {
   openUpdateDialog,
   getUpdateConfirmation,
+  updateStore,
+  updateConfirmedAtom,
 } from "@/app/components/updater/updateStore";
 
 // Utility function to format bytes to MB
@@ -84,14 +86,22 @@ export async function checkForUpdates(notifyOnce = false) {
       return; // Exit early, let the app continue loading
     }
 
-    // Wait for user response (polling) - only for manual update checks
-    let userResponse = null;
-    while (userResponse === null) {
-      userResponse = getUpdateConfirmation();
-      if (userResponse === null) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
+    // Wait for user response via store subscription — no polling
+    const userResponse = await new Promise<boolean | null>((resolve) => {
+      const unsub = updateStore.sub(updateConfirmedAtom, () => {
+        const value = updateStore.get(updateConfirmedAtom);
+        if (value !== null) {
+          unsub();
+          resolve(value);
+        }
+      });
+      // Check immediately in case it was already set
+      const current = getUpdateConfirmation();
+      if (current !== null) {
+        unsub();
+        resolve(current);
       }
-    }
+    });
 
     // If user canceled or dialog was closed
     if (userResponse !== true) {

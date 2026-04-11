@@ -15,7 +15,6 @@ import FilesOnboarding from "./FilesOnboarding";
 import {
   getPrivateSyncPath,
   removeSyncPath,
-  getAllSyncPaths,
 } from "@/lib/utils/syncPathUtils";
 import { deleteRemoteFolder } from "@/app/lib/utils/restoreUtils";
 import SyncFolderTabs from "./SyncFolderTabs";
@@ -44,13 +43,11 @@ import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import {
   triggerSyncPathRefreshAtom,
-  syncEngineStatusAtom,
-  isSyncConfiguredAtom,
-  SYNC_STOPPED_STORAGE_KEY,
+  hasConfiguredDrivesAtom,
+  driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
-import { SyncStoppedAlert } from "@/components/ui/SyncStoppedAlert";
 import { SyncConnectivityAlert } from "@/components/ui/SyncConnectivityAlert";
 import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
 import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
@@ -63,7 +60,6 @@ import {
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { appStore } from "@/lib/store/jotaiStore";
 
 const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
@@ -97,7 +93,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const isFetching = isRecentFiles
     ? isRecentFilesFetching
     : isRegularFilesFetching;
-  const addButtonRef = useRef<{ openWithFiles(files: FileList): void; openWithPaths(paths: string[]): void; isDialogOpen(): boolean }>(null);
+  const addButtonRef = useRef<{ openWithFiles(files: FileList): Promise<void>; openWithPaths(paths: string[]): Promise<void>; isDialogOpen(): boolean }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
 
   // Folder upload dialog state (lifted from FilesHeader so context menus can trigger it)
@@ -142,61 +138,11 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
   const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
-  const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
-  const setSyncEngineStatus = useSetAtom(syncEngineStatusAtom);
-  const isSyncConfigured = useAtomValue(isSyncConfiguredAtom);
+  const isSyncConfigured = useAtomValue(hasConfiguredDrivesAtom);
 
-  // Ref to track current status without creating effect dependencies
-  const syncStatusRef = useRef(syncEngineStatus);
-  useEffect(() => {
-    syncStatusRef.current = syncEngineStatus;
-  }, [syncEngineStatus]);
-
-  // Check if sync engine is active on mount and when sync path refreshes.
-  // Does NOT depend on syncEngineStatus to avoid re-running on every status change.
-  useEffect(() => {
-    // Skip check if user is in the process of stopping or has stopped sync
-    if (syncStatusRef.current === "stopping" || syncStatusRef.current === "stopped") return;
-
-    (async () => {
-      try {
-        const active = await invoke<boolean>("is_drive_active");
-        // Re-check after async gap — user may have clicked stop while await was pending
-        if (syncStatusRef.current === "stopping" || syncStatusRef.current === "stopped") return;
-        setSyncEngineStatus(active ? "active" : "stopped");
-      } catch {
-        // If we can't check, leave status as-is
-      }
-    })();
-  }, [setSyncEngineStatus, syncPathRefreshTrigger]);
-
-  // While stopping, keep checking until the drive is actually dropped
-  useEffect(() => {
-    if (syncEngineStatus !== "stopping") return;
-
-    let cancelled = false;
-
-    const poll = async () => {
-      while (!cancelled) {
-        await new Promise((r) => setTimeout(r, 1000));
-        try {
-          const active = await invoke<boolean>("is_drive_active");
-          if (!active && !cancelled) {
-            setSyncEngineStatus("stopped");
-            break;
-          }
-        } catch {
-          // Ignore transient failures and keep polling
-        }
-      }
-    };
-
-    poll();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [syncEngineStatus, setSyncEngineStatus]);
+  // Per-drive sync status is owned by Rust and pushed via the
+  // `useDriveStatuses` hook mounted in `SyncEventLogger`. The previous
+  // global engine-status atom and its mount-time race are gone.
 
   // HCFS sync integration
   const {
@@ -245,19 +191,33 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     return [];
   }, [regularFilesData]);
 
-  // Track paused labels for tab context menu
-  const [pausedLabels, setPausedLabels] = useState<string[]>([]);
-  useEffect(() => {
-    if (!polkadotAddress || syncFolderLabels.length === 0) return;
-    (async () => {
-      try {
-        const allPaths = await getAllSyncPaths(polkadotAddress);
-        setPausedLabels(allPaths.filter(p => p.isPaused).map(p => p.label));
-      } catch {
-        // ignore
-      }
-    })();
-  }, [polkadotAddress, syncFolderLabels]);
+  // Paused labels and label → display name are derived from
+  // driveStatusesAtom (the per-drive source of truth, mirrored from
+  // Rust by useDriveStatuses). The previous local state + manual
+  // get_all_sync_paths fetch was a stale mirror that lied whenever
+  // the user paused / resumed from another surface (settings,
+  // tray submenu, FilesOnboarding). Reading from the atom keeps
+  // every per-drive UI in sync without round-trips.
+  const driveStatuses = useAtomValue(driveStatusesAtom);
+  // `pausedLabels` is "labels not currently active" — includes both
+  // `paused` (user intent) and the new `error` variant (emitted on
+  // per-drive init failure). Click handlers below treat both as
+  // "needs resume", which re-triggers `initialize_sync_inner` in Rust
+  // and is the correct retry action for an errored drive.
+  const pausedLabels = useMemo(
+    () =>
+      Array.from(driveStatuses.entries())
+        .filter(([, entry]) => entry.status.kind !== "active")
+        .map(([label]) => label),
+    [driveStatuses]
+  );
+  const labelDisplayNames = useMemo(() => {
+    const names: Record<string, string> = {};
+    for (const [label, entry] of driveStatuses.entries()) {
+      names[label] = entry.folderName;
+    }
+    return names;
+  }, [driveStatuses]);
 
   // Get the appropriate data based on view mode
   const allData = useMemo(() => {
@@ -630,21 +590,20 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     setSettingsDialogOpen(true);
   }, [setActiveSettingsTab, setSettingsDialogOpen]);
 
-  // Tab context menu handlers (operate on folder label strings)
+  // Tab context menu handlers (operate on folder label strings).
+  //
+  // Path resolution + reveal-in-file-manager happens entirely in Rust
+  // (`reveal_drive_in_finder`), so the FE never reads the `sync_paths`
+  // table or imports the opener plugin just to figure out which on-disk
+  // folder backs a label.
   const handleTabOpenInFinder = useCallback(async (label: string) => {
-    if (!polkadotAddress) return;
     try {
-      const allPaths = await getAllSyncPaths(polkadotAddress);
-      const match = allPaths.find((p) => p.label === label);
-      if (match) {
-        const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-        await revealItemInDir(match.path);
-      }
+      await invoke("reveal_drive_in_finder", { label });
     } catch (err) {
       console.error("Failed to open folder:", err);
       toast.error("Failed to open folder");
     }
-  }, [polkadotAddress]);
+  }, []);
 
   // Tab context menu: open dialogs instead of executing directly
   const handleTabRemoveFromSync = useCallback((label: string) => {
@@ -668,11 +627,12 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
         try {
           const mnemonic = (await getMnemonic()) ?? undefined;
           await invoke("resume_drive", { label, mnemonic });
-          localStorage.removeItem(SYNC_STOPPED_STORAGE_KEY);
-          appStore.set(syncEngineStatusAtom, "active");
-          appStore.set(isSyncConfiguredAtom, true);
+          // Per-drive Active status is emitted by Rust via the
+          // hcfs_drive_status_changed event and lands in
+          // driveStatusesAtom — pausedLabels is a memo over that
+          // atom, so the tab badge updates without any local state.
+          // hasConfiguredDrivesAtom recomputes from the same source.
           toast.success(`Sync resumed for "${label}"`);
-          setPausedLabels(prev => prev.filter(l => l !== label));
         } catch (err) {
           console.error("Failed to resume sync:", err);
           toast.error("Failed to resume sync");
@@ -691,7 +651,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     try {
       await invoke("pause_drive", { label });
       toast.success(`Sync paused for "${label}"`);
-      setPausedLabels(prev => [...prev, label]);
+      // Atom updates via the hcfs_drive_status_changed event from
+      // Rust — pausedLabels is a memo over driveStatusesAtom.
     } catch (err) {
       console.error("Failed to pause sync:", err);
       toast.error("Failed to pause sync");
@@ -724,9 +685,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     if (!label || !polkadotAddress) return;
     setIsDeletingServer(true);
     try {
+      // delete_remote_folder also stops the drive and removes the sync path if local
       const result = await deleteRemoteFolder(polkadotAddress, label);
-      // Also remove from local sync paths
-      await removeSyncPath(polkadotAddress, label).catch(() => {});
       toast.success(
         `Folder deleted from server (${result.files_deleted} file${result.files_deleted !== 1 ? "s" : ""} removed)`
       );
@@ -928,13 +888,11 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             </div>
           )}
 
-          {/* Sync connectivity and stopped alerts */}
+          {/* Sync connectivity alert. `SyncReauthRequiredAlert` is
+              mounted globally in `ResponsiveContent` so it's visible
+              on every authenticated route (not just /files). */}
           <div className="mb-4 space-y-2">
             <SyncConnectivityAlert variant={isRecentFiles ? "compact" : "banner"} />
-            <SyncStoppedAlert
-              variant={isRecentFiles ? "compact" : "banner"}
-              hasSyncPaths={isRecentFiles ? hasAnySyncPath : (isSyncPathConfigured ?? false)}
-            />
           </div>
 
           <FilesHeader
@@ -974,6 +932,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           {!isRecentFiles && (
             <SyncFolderTabs
               labels={syncFolderLabels}
+              displayNames={labelDisplayNames}
               selectedTab={selectedFolderTab}
               onTabChange={setSelectedFolderTab}
               onBrowseContents={handleTabBrowseContents}

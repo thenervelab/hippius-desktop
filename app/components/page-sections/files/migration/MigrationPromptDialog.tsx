@@ -1,7 +1,9 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import React from "react";
+import React, { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import DialogContainer from "@/components/ui/DialogContainer";
 import { CardButton, Graphsheet, Icons } from "@/components/ui";
 import { formatBytes } from "@/lib/utils/formatBytes";
@@ -9,7 +11,7 @@ import { FolderSync } from "lucide-react";
 
 export interface MigrationPromptDialogProps {
     open: boolean;
-    onMigrate: () => void;
+    onMigrate: (syncPath: string) => void;
     onSkip: () => void;
     fileCount: number;
     totalSize: number;
@@ -22,6 +24,26 @@ const MigrationPromptDialog: React.FC<MigrationPromptDialogProps> = ({
     fileCount,
     totalSize,
 }) => {
+    const [syncPath, setSyncPath] = useState<string>("");
+
+    useEffect(() => {
+        if (!open) return;
+        invoke<string>("get_default_migration_path")
+            .then(setSyncPath)
+            .catch(() => setSyncPath(""));
+    }, [open]);
+
+    const handleBrowse = async () => {
+        const selected = await openDialog({
+            directory: true,
+            title: "Choose migration folder",
+            defaultPath: syncPath || undefined,
+        });
+        if (selected) {
+            setSyncPath(selected);
+        }
+    };
+
     return (
         <Dialog.Root open={open}>
             <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[30rem] h-fit" preventClose>
@@ -84,12 +106,34 @@ const MigrationPromptDialog: React.FC<MigrationPromptDialogProps> = ({
                         </div>
                     </div>
 
+                    {/* Destination Folder Picker */}
+                    <div className="flex flex-col gap-1.5 mt-4">
+                        <label className="text-sm font-medium text-grey-30">
+                            Destination Folder
+                        </label>
+                        <div className="flex items-center gap-2">
+                            <div className="flex-1 min-w-0 px-3 py-2 bg-grey-90 rounded-lg border border-grey-80">
+                                <p className="text-sm text-grey-30 truncate" title={syncPath}>
+                                    {syncPath || "Loading..."}
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={handleBrowse}
+                                className="shrink-0 px-3 py-2 text-sm font-medium text-grey-30 bg-grey-90 rounded-lg border border-grey-80 hover:bg-grey-80 transition-colors"
+                            >
+                                Browse
+                            </button>
+                        </div>
+                    </div>
+
                     {/* Action Buttons */}
                     <div className="flex flex-col gap-3">
                         <CardButton
                             variant="dialog"
                             className="w-full h-12 text-base font-medium"
-                            onClick={onMigrate}
+                            onClick={() => onMigrate(syncPath)}
+                            disabled={!syncPath}
                         >
                             <div className="flex items-center gap-2">
                                 <Icons.DocumentDownload className="size-5" />

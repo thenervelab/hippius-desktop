@@ -5,8 +5,8 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension, getFileTypeDisplayLabel } from "@/lib/utils/getTileTypeFromExtension";
-import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { revealFile } from "@/lib/utils/revealFile";
 import { toast } from "sonner";
 import { getFileIcon } from "@/app/lib/utils/fileTypeUtils";
 import { cn } from "@/app/lib/utils";
@@ -109,38 +109,13 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
               className="mt-1 p-0 h-auto text-primary-50 text-sm flex items-center gap-1 hover:underline cursor-pointer w-fit"
               onClick={async () => {
                 try {
-                  let filePath = file.source;
-
-                  // If source path is set, try it first
-                  if (filePath) {
-                    const relativeName = file.actualFileName || file.name;
-                    const syncFolderPath = filePath.endsWith(relativeName)
-                      ? filePath.slice(0, filePath.length - relativeName.length - 1)
-                      : filePath;
-                    try {
-                      await revealItemInDir(syncFolderPath);
-                      return;
-                    } catch {
-                      console.warn("[RevealInFinder] source path failed, trying resolve_file_path. syncFolderPath:", syncFolderPath);
-                    }
-                  }
-
-                  // Fallback: resolve canonical path from DB
-                  if (file.label && polkadotAddress) {
-                    const fileName = file.actualFileName || file.name;
-                    filePath = await invoke<string>("resolve_file_path", {
-                      accountId: polkadotAddress,
-                      label: file.label,
-                      fileName,
-                    });
-                    const relativeName = file.actualFileName || file.name;
-                    const syncFolderPath = filePath.endsWith(relativeName)
-                      ? filePath.slice(0, filePath.length - relativeName.length - 1)
-                      : filePath;
-                    await revealItemInDir(syncFolderPath);
-                  } else {
-                    toast.error("File is not available locally. It may only exist on another device.");
-                  }
+                  await revealFile({
+                    sourcePath: file.source,
+                    label: file.label,
+                    accountId: polkadotAddress ?? undefined,
+                    fileName: file.actualFileName || file.name,
+                    revealFolder: true,
+                  });
                 } catch (error) {
                   console.error("Failed to reveal in Finder:", error);
                   toast.error("File is not available locally. It may only exist on another device.");

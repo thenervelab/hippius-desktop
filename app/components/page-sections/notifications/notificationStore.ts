@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { atom } from "jotai";
 import {
   listNotifications,
@@ -7,29 +6,30 @@ import {
   markAllRead,
   getEnabledNotificationTypes,
 } from "@/app/lib/helpers/notificationsDb";
+import type { NotificationRow } from "@/app/lib/helpers/notificationsDb";
 import { UiNotification } from "@/components/page-sections/notifications/types";
 import { Icons } from "@/components/ui";
 import { iconMap } from "@/lib/helpers/notificationIcons";
 import { invoke } from "@tauri-apps/api/core";
 
-// Add debug helpers to window for testing
-if (typeof window !== 'undefined') {
-  (window as any).__clearNotifications = async () => {
+// Debug helpers — only exposed in development builds
+if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+  (window as unknown as Record<string, unknown>).__clearNotifications = async () => {
     const { clearAllNotifications } = await import('@/app/lib/helpers/notificationsDb');
     await clearAllNotifications();
     console.log('All notifications cleared from database!');
   };
 
-  (window as any).__debugNotifications = async (userAddress?: string) => {
+  (window as unknown as Record<string, unknown>).__debugNotifications = async (userAddress?: string) => {
     try {
-      const notifications = await invoke<any[]>("list_notifications", {
+      const notifications = await invoke<NotificationRow[]>("list_notifications", {
         userAddress: userAddress || "system",
         limit: 1000,
       });
       console.log("=== NOTIFICATIONS DEBUG ===");
       console.log(`Filter: ${userAddress || "ALL USERS"}`);
       console.log(`Total notifications: ${notifications.length}`);
-      notifications.forEach((n: any, idx: number) => {
+      notifications.forEach((n: NotificationRow, idx: number) => {
         console.log(`[${idx}]`, n);
       });
       console.log("======================");
@@ -72,21 +72,21 @@ export const refreshNotificationsAtom = atom(null, async (get, set) => {
   // Fetch all notifications for this user (Rust returns objects, not raw rows)
   const rows = await listNotifications(userAddress, 100);
 
-  const mapped = rows.map((r: any) => {
+  const mapped = rows.map((r: NotificationRow) => {
     const timestamp = Number(r.creationTime);
     const releaseNotes = typeof r.releaseNotes === "string" ? r.releaseNotes : "";
 
     return {
       id: Number(r.id),
-      icon: iconMap[r.notificationType] ?? Icons.Document,
-      type: r.notificationType,
+      icon: (r.notificationType ? iconMap[r.notificationType] : undefined) ?? Icons.Document,
+      type: r.notificationType ?? "",
       subType: r.notificationSubtype || "",
-      title: r.titleText,
-      description: r.description,
-      buttonText: r.linkText,
-      buttonLink: r.link,
+      title: r.titleText ?? "",
+      description: r.description ?? "",
+      buttonText: r.linkText ?? "",
+      buttonLink: r.link ?? "",
       releaseNotes,
-      unread: r.isUnread === true || r.isUnread === 1,
+      unread: r.isUnread === true,
       // Keep original timestamp for TimeAgo component
       timestamp: timestamp,
       // Fallback time display in case TimeAgo fails
@@ -100,7 +100,7 @@ export const refreshNotificationsAtom = atom(null, async (get, set) => {
   // notifications which are always visible.
   const filteredNotifications = mapped.filter(
     (notification) =>
-      enabledTypes.includes(notification.type) ||
+      (notification.type != null && enabledTypes.includes(notification.type)) ||
       notification.type === "Hippius"
   );
 

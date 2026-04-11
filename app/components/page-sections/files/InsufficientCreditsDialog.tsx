@@ -1,31 +1,58 @@
+"use client";
 import React from "react";
 import { useAtom } from "jotai";
-import { insufficientCreditsDialogOpenAtom } from "./atoms/query-atoms";
+import { insufficientCreditsDialogOpenAtom, InsufficientCreditsReason } from "./atoms/query-atoms";
 import { Icons, CardButton, AbstractIconWrapper } from "@/components/ui";
 import { openLinkByKey } from "@/app/lib/utils/links";
 
-const InsufficientCreditsDialog: React.FC = () => {
-  const [isOpen, setIsOpen] = useAtom(insufficientCreditsDialogOpenAtom);
+const copy: Record<InsufficientCreditsReason, { title: string; description: string }> = {
+  "file-upload": {
+    title: "Insufficient Credits for File Upload",
+    description:
+      "You do not have enough credits to upload a file to Hippius. File upload is paused until your credits are enough.",
+  },
+  "folder-upload": {
+    title: "Insufficient Credits for Folder Upload",
+    description:
+      "You do not have enough credits to upload a folder to Hippius. Folder upload is paused until your credits are enough.",
+  },
+  "folder-sync": {
+    title: "Insufficient Credits for Folder Sync",
+    description:
+      "You do not have enough credits to sync this folder. Please add credits before adding a new sync folder.",
+  },
+  "vm-creation": {
+    title: "Insufficient Credits for VM Creation",
+    description:
+      "You need at least 10 credits to create a virtual machine. Please add credits before proceeding.",
+  },
+};
 
-  if (!isOpen) return null;
+const InsufficientCreditsDialog: React.FC = () => {
+  const [reason, setReason] = useAtom(insufficientCreditsDialogOpenAtom);
+
+  if (!reason) return null;
+
+  const { title, description } = copy[reason];
+
   const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget) {
-      setIsOpen(false);
+      setReason(false);
     }
   };
 
   const handleOpenConsoleBillingPage = () => {
-    setIsOpen(false);
+    setReason(false);
     openLinkByKey("BILLING");
   };
   const handleOpenConsoleCreditsPage = () => {
-    setIsOpen(false);
+    setReason(false);
     openLinkByKey("CREDITS");
   };
 
   return (
     <div
-      className="fixed inset-0 flex items-center justify-center z-50 bg-white/70"
+      className="fixed inset-0 flex items-center justify-center z-[60] bg-white/70"
       onClick={handleOverlayClick}
     >
       <div className="bg-white rounded-lg shadow-dialog max-w-[26.75rem] max-h-[85vh] overflow-y-auto w-full p-6 animate-in fade-in border border-grey-80 relative">
@@ -35,12 +62,11 @@ const InsufficientCreditsDialog: React.FC = () => {
           </AbstractIconWrapper>
 
           <h2 className="text-2xl font-medium text-grey-10 text-center">
-            Insufficient Credits for File Upload
+            {title}
           </h2>
 
           <p className="mt-3 text-base text-center text-grey-50 mb-6">
-            You do not have enough credits to upload a file to Hippius. File
-            upload is paused until your credits are enough.
+            {description}
           </p>
 
           <div className="flex flex-col w-full gap-y-2">

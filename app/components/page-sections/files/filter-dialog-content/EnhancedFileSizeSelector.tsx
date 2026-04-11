@@ -10,12 +10,13 @@ import { FileSizeSelector } from "./FileSizeSelector";
 
 // Predefined file size options in bytes
 // Using different approach: min/max ranges instead of single values
+// Predefined file size options using SI units (1000-based), consistent with formatBytes
 const fileSizeOptions = [
-    { value: 1, label: "Small", description: "< 1 MB" }, // 0 to 1MB
-    { value: 1024 * 1024, label: "Medium", description: "1 MB - 100 MB" }, // 1MB to 100MB
-    { value: 100 * 1024 * 1024, label: "Large", description: "100 MB - 1 GB" }, // 100MB to 1GB
-    { value: 1024 * 1024 * 1024, label: "Very Large", description: "> 1 GB" }, // > 1GB
-    { value: -1, label: "Custom", description: "Filter Custom Size" }, // Special value for custom
+    { value: 1, label: "Small", description: "< 1 MB" },
+    { value: 1_000_000, label: "Medium", description: "1 MB - 100 MB" },
+    { value: 100_000_000, label: "Large", description: "100 MB - 1 GB" },
+    { value: 1_000_000_000, label: "Very Large", description: "> 1 GB" },
+    { value: -1, label: "Custom", description: "Filter Custom Size" },
 ];
 
 interface EnhancedFileSizeSelectorProps {

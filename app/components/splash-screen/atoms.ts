@@ -3,6 +3,8 @@ import { PHASE_CONTENT } from "./SplashContent";
 
 export const phaseAtom = atom<string | null>(null);
 
+export { splashCompleteAtom } from "@/lib/global-atoms/splashAtoms";
+
 // Track if we're in the update check phase (before main phases)
 export const isUpdateCheckPhaseAtom = atom<boolean>(true);
 

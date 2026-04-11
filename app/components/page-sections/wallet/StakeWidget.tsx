@@ -5,11 +5,14 @@ import { useRouter } from "next/navigation";
 import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
 import { toast } from "sonner";
 
 const StakeWidget: FC = () => {
     const router = useRouter();
     const { stakingInfo, operations } = useStaking();
+    const { logout } = useWalletAuth();
     const [isWithdrawing, setIsWithdrawing] = useState(false);
 
     const handleStakeNow = () => {
@@ -39,9 +42,11 @@ const StakeWidget: FC = () => {
             toast.dismiss(loadingToast);
             toast.success("Successfully withdrew unbonded tokens!");
         } catch (error) {
-            toast.dismiss(loadingToast);
-            toast.error(error instanceof Error ? error.message : "Failed to withdraw tokens");
             console.error("Withdraw error:", error);
+            toast.dismiss(loadingToast);
+            if (!dispatchSigningError(error, () => logout("/"))) {
+                toast.error(error instanceof Error ? error.message : "Failed to withdraw tokens");
+            }
         } finally {
             setIsWithdrawing(false);
         }

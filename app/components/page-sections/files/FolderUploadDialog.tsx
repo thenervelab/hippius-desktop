@@ -20,8 +20,9 @@ import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteSto
 import { GET_USER_IPFS_FILES_QUERY_KEY } from "@/app/lib/hooks/use-user-files";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
-import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { getLastBrowseDirectory, saveLastBrowseDirectory } from "@/lib/utils/userPreferencesDb";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
 type Props = {
     open: boolean;
@@ -40,7 +41,8 @@ export default function FolderUploadDialog({
 }: Props) {
     const { polkadotAddress } = useWalletAuth();
     const queryClient = useAtomValue(queryClientAtom);
-    const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
+    const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
+    const { checkEligibility } = useCreditCheck();
 
     const [folderPath, setFolderPath] = useState<string>("");
     const [folderError, setFolderError] = useState<string | null>(null);
@@ -79,8 +81,13 @@ export default function FolderUploadDialog({
             return;
         }
 
-        if (syncEngineStatus === "stopped") {
-            toast.warning("Syncing is stopped. Resume syncing from Settings \u2192 Sync & Storage before uploading folders.");
+        if (!(await checkEligibility("folder-upload"))) {
+            handleClose();
+            return;
+        }
+
+        if (!hasConfiguredDrives) {
+            toast.warning("Set up a sync folder in Settings \u2192 Sync & Storage before uploading.");
             return;
         }
 
@@ -94,13 +101,12 @@ export default function FolderUploadDialog({
             // Get sync path — use selected path or fall back to default
             const syncPath = selectedSyncPath ?? (await getPrivateSyncPath(polkadotAddress || ""))?.path ?? "";
 
+            // Single call — copies folder and triggers sync internally
             const name = await invoke<string>("add_folder", {
                 syncPath,
                 folderPath,
+                subfolder: null,
             });
-
-            // Trigger sync to push changes
-            await invoke("trigger_sync_now").catch((err: unknown) => console.warn("[FolderUploadDialog] trigger_sync_now failed:", err));
 
             // Refresh file list AFTER backend has added the folder so list_sync_folder sees it
             queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });

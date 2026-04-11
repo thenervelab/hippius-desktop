@@ -2,10 +2,10 @@
 
 import { useEffect } from "react";
 import { useSetAtom } from "jotai";
-import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { pendingConflictsAtom } from "@/lib/store/syncAtoms";
 import type { StagedChanges } from "@/lib/types/syncTypes";
+import { registerTauriListeners } from "@/lib/utils/tauriListeners";
 
 /**
  * Invisible component that listens for conflict-related Tauri events
@@ -20,27 +20,26 @@ export default function ConflictEventListener() {
   const setPendingConflicts = useSetAtom(pendingConflictsAtom);
 
   useEffect(() => {
-    const listeners = [
-      listen<{ label: string; staged: StagedChanges }>("hcfs_conflicts_pending", (event) => {
-        setPendingConflicts(event.payload.staged);
-      }),
-      listen("hcfs_sync_completed", () => {
+    const { cleanup } = registerTauriListeners([
+      ["hcfs_conflicts_pending", (event) => {
+        const payload = event.payload as { label: string; staged: StagedChanges };
+        setPendingConflicts(payload.staged);
+      }],
+      ["hcfs_sync_completed", () => {
         setPendingConflicts(null);
-      }),
-      listen("hcfs_sync_error", () => {
+      }],
+      ["hcfs_sync_error", () => {
         setPendingConflicts(null);
-      }),
-      listen<{ label: string }>("hcfs_review_mode_timeout", () => {
+      }],
+      ["hcfs_review_mode_timeout", () => {
         setPendingConflicts(null);
         toast.warning("Review mode timed out — conflicts were skipped", {
           duration: 6000,
         });
-      }),
-    ];
+      }],
+    ]);
 
-    return () => {
-      listeners.forEach((p) => p.then((unlisten) => unlisten()));
-    };
+    return cleanup;
   }, [setPendingConflicts]);
 
   return null;

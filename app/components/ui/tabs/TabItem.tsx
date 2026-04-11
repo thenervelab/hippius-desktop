@@ -7,6 +7,8 @@ import * as Tooltip from "@radix-ui/react-tooltip";
 
 export interface TabItemProps {
   label: string;
+  /** Value for `data-tab-label`. Falls back to `label`. */
+  dataLabel?: string;
   icon?: React.ReactNode;
   isActive: boolean;
   onClick: () => void;
@@ -19,6 +21,7 @@ export interface TabItemProps {
 
 const TabItem: React.FC<TabItemProps> = ({
   label,
+  dataLabel,
   icon,
   isActive,
   onClick,
@@ -35,7 +38,7 @@ const TabItem: React.FC<TabItemProps> = ({
 
   const content = (
     <div
-      data-tab-label={label}
+      data-tab-label={dataLabel ?? label}
       className={cn(
         "flex items-center gap-2 relative transition-all duration-300 cursor-pointer",
         iconOnly ? "w-[2.5rem] justify-center" : width,

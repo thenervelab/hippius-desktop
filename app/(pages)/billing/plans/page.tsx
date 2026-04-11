@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2, MoreVertical } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -24,11 +24,6 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
 import DashboardTitleWrapper from "@/app/components/dashboard-title-wrapper";
 import { GoBackButton } from "@/app/components/ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import {
-  calculateStorageCost,
-  DEFAULT_TIMING_OPTION,
-} from "@/app/lib/utils/storageCostUtils";
-import pricingJson from "@/app/utils/data/pricing-cfg.json";
 import SectionHeader from "@/app/components/page-sections/settings/SectionHeader";
 
 export default function PlansPage() {
@@ -44,66 +39,27 @@ export default function PlansPage() {
   const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const hasActiveSubscription = activeSubscription?.has_subscription || false;
-  // Calculate storage capacity based on credits (1 credit = $1)
-  const calculateStorageFromCredits = (creditsPerMonth: number): number => {
-    // Binary search to find max GB that can be stored with given credits
-    let low = 0;
-    let high = 1000000; // Start with reasonable upper bound
-    let maxGB = 0;
 
-    while (low <= high) {
-      const mid = Math.floor((low + high) / 2);
-      const monthlyCost = calculateStorageCost({
-        storageTypeData: pricingJson.storage.ipfs,
-        perBlockTime: pricingJson.per_block_time_s,
-        timeframe: DEFAULT_TIMING_OPTION,
-        numOfGb: mid,
-      });
-
-      if (monthlyCost <= creditsPerMonth) {
-        maxGB = mid;
-        low = mid + 1;
-      } else {
-        high = mid - 1;
-      }
-    }
-
-    return maxGB;
-  };
-
-  // Get storage capacity for each plan
-  const getStorageCapacity = useMemo(() => {
-    return plans.reduce((acc, plan) => {
-      const storageGB = calculateStorageFromCredits(plan.credits_per_billing);
-      acc[plan.id] = storageGB;
-      return acc;
-    }, {} as Record<string, number>);
+  // Storage capacity info pre-computed by Rust (replaces duplicated binary search)
+  interface StorageCapacityInfo {
+    storageGb: number;
+    storageDisplay: string;
+    usageDescription: string;
+  }
+  const [storageInfo, setStorageInfo] = useState<Record<string, StorageCapacityInfo>>({});
+  useEffect(() => {
+    if (plans.length === 0) return;
+    const credits = plans.map((p) => p.credits_per_billing);
+    invoke<StorageCapacityInfo[]>("calculate_storage_capacity", { creditsPerMonth: credits })
+      .then((results) => {
+        const map: Record<string, StorageCapacityInfo> = {};
+        plans.forEach((plan, i) => {
+          map[plan.id] = results[i];
+        });
+        setStorageInfo(map);
+      })
+      .catch(() => {});
   }, [plans]);
-
-  // Get ideal usage description for each plan
-  const getIdealUsageDescription = (credits: number): string => {
-    if (credits <= 3) return "Ideal for Personal Backups";
-    if (credits <= 15) return "Ideal for Small Businesses";
-    if (credits <= 50) return "Ideal for Growing Businesses";
-    if (credits <= 100) return "Ideal for Scaling Businesses";
-    if (credits <= 150) return "Ideal for Medium Businesses";
-    if (credits <= 450) return "Ideal for Large Businesses";
-    return "Enterprise Level Solution";
-  };
-
-  // Format storage display (GB for small amounts, TB for larger)
-  const formatStorageDisplay = (storageGB: number, credits: number): string => {
-    if (credits <= 3) {
-      // Show both GB and TB for the 3 credits plan only, round GB to nearest thousand
-      const roundedGB = Math.round(storageGB / 1000) * 1000;
-      const storageTB = Math.round(storageGB / 1000);
-      return `≈${roundedGB} GB / ${storageTB} TB Storage on Hippius`;
-    } else {
-      // Show only TB for other plans, remove decimal places
-      const storageTB = Math.round(storageGB / 1000);
-      return `≈${storageTB} TB Storage on Hippius`;
-    }
-  };
   const handleSubscribe = async (planId: string) => {
     if (!planId) {
       toast.error("Please select a valid plan");
@@ -315,10 +271,7 @@ export default function PlansPage() {
                   <div className="text-base font-medium text-grey-60 mt-2">
                     <div>{plan.description}</div>
                     <div className="text-sm text-primary-50 mt-1">
-                      {formatStorageDisplay(
-                        getStorageCapacity[plan.id] || 0,
-                        plan.credits_per_billing
-                      )}
+                      {storageInfo[plan.id]?.storageDisplay || "Calculating..."}
                     </div>
                   </div>
 
@@ -353,7 +306,7 @@ export default function PlansPage() {
                     <div className="flex items-center">
                       <CircularTickGrid className="size-9 shrink-0" />
                       <span className="text-grey-10 text-base font-medium ml-2">
-                        {getIdealUsageDescription(plan.credits_per_billing)}
+                        {storageInfo[plan.id]?.usageDescription || ""}
                       </span>
                     </div>
                   </div>

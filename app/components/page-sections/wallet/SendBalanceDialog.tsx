@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import * as Dialog from "@radix-ui/react-dialog";
 import React, { useState } from "react";
 import { Label } from "@/components/ui/label";
@@ -11,15 +10,12 @@ import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import SendBalanceConfirmationDialog from "./SendBalanceConfirmationDialog";
 import { useAddressValidation } from "@/lib/hooks/useAddressValidation";
-
-// Use string to preserve precision for very small values
-export const TRANSACTION_FEE = "0.000000000270233151"; // hALPHA
+import { formatBalance } from "@/lib/utils/formatters/formatBalance";
 
 export interface SendBalanceDialogProps {
   open: boolean;
   onClose: () => void;
-  availableBalance: number | undefined;
-  mnemonic?: string;
+  availableBalancePlanck: string;
   refetchBalance?: () => void;
   polkadotAddress: string;
 }
@@ -27,7 +23,7 @@ export interface SendBalanceDialogProps {
 const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
   open,
   onClose,
-  availableBalance,
+  availableBalancePlanck,
   refetchBalance,
   polkadotAddress
 }) => {
@@ -46,56 +42,48 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
   const [loading, setLoading] = useState(false);
   const [amountError, setAmountError] = useState<string | undefined>();
   const [showConfirmation, setShowConfirmation] = useState(false);
-  const balanceAfterFee =
-    availableBalance !== undefined
-      ? Math.max(0, availableBalance - parseFloat(TRANSACTION_FEE))
-      : 0;
 
   const handleSetMax = () => {
-    // Set the amount to the maximum transferable value (balance minus fee)
-    setAmount(balanceAfterFee.toString()); // Use 6 decimal places for clarity
-    // Clear any amount error when max is set
+    // Compute max transferable: balance - fee, using lossless BigInt math
+    // Fee constant lives in Rust; we use the known value here only for MAX display
+    const available = BigInt(availableBalancePlanck || "0");
+    const fee = BigInt("270233151"); // matches Rust ESTIMATED_TRANSFER_FEE_PLANCK
+    const maxPlanck = available > fee ? available - fee : BigInt(0);
+    // Convert planck to decimal string for the input field
+    const whole = maxPlanck / BigInt(10 ** 18);
+    const frac = maxPlanck % BigInt(10 ** 18);
+    const maxDisplay = frac === BigInt(0)
+      ? whole.toString()
+      : `${whole}.${frac.toString().padStart(18, "0").replace(/0+$/, "")}`;
+    setAmount(maxDisplay);
     setAmountError(undefined);
   };
 
-  const validateForm = async () => {
+  const validateForm = async (): Promise<string | null> => {
     const addressValid = await validateAddress();
+    if (!addressValid) return null;
 
-    // Amount validation
-    let amountValid = true;
-    let newAmountError: string | undefined;
-
-    if (!amount.trim()) {
-      newAmountError = "Amount is required";
-      amountValid = false;
-    } else {
-      const numAmount = parseFloat(amount);
-      if (isNaN(numAmount)) {
-        newAmountError = "Amount must be a valid number";
-        amountValid = false;
-      } else if (numAmount <= 0) {
-        newAmountError = "Amount must be greater than zero";
-        amountValid = false;
-      } else if (availableBalance !== undefined) {
-        // First check if amount alone exceeds balance
-        if (numAmount > availableBalance) {
-          newAmountError = "Amount exceeds your available balance";
-          amountValid = false;
-        }
-        // Then check if amount plus fee exceeds balance
-        else if (numAmount + parseFloat(TRANSACTION_FEE) > availableBalance) {
-          newAmountError = `Amount (incl. transaction fee) exceeds your balance`;
-          amountValid = false;
-        }
-      }
+    try {
+      // Single Rust call — fetches balance from chain, validates amount + fee
+      const result = await invoke<{ planckAmount: string; estimatedFee: string; availableBalancePlanck: string }>(
+        "validate_send_balance",
+        { recipientAddress: address, amount },
+      );
+      setAmountError(undefined);
+      return result.planckAmount;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setAmountError(msg);
+      return null;
     }
-
-    setAmountError(newAmountError);
-    return addressValid && amountValid;
   };
 
+  const [validatedPlanck, setValidatedPlanck] = useState<string | null>(null);
+
   const handleOpenConfirmation = async () => {
-    if (!(await validateForm())) return;
+    const planck = await validateForm();
+    if (!planck) return;
+    setValidatedPlanck(planck);
     setShowConfirmation(true);
   };
 
@@ -104,43 +92,27 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
   };
 
   const handleTransfer = async () => {
+    if (!validatedPlanck) return;
     setLoading(true);
     try {
-      // Convert amount (string) to plancks (u128) with 18 decimals
-      let planckAmount: string;
-      if (!amount || isNaN(Number(amount))) {
-        toast.error("Invalid amount");
-        setLoading(false);
-        return;
-      }
-
-      // Support both integer and decimal input
-      const [whole, fraction = ""] = amount.split(".");
-      const fractionPadded = (fraction + "0".repeat(18)).slice(0, 18);
-      planckAmount = whole + fractionPadded;
-      // Remove leading zeros
-      planckAmount = planckAmount.replace(/^0+/, "");
-      if (!planckAmount) planckAmount = "0";
-
       await invoke<{ txHash: string; success: boolean }>("transfer_balance", {
         recipientAddress: address,
-        amount: planckAmount
+        amount: validatedPlanck,
       });
 
       toast.success("Transfer successful!", { duration: 3000 });
-
       refetchBalance?.();
-
       onClose();
       setAddress("");
       setAmount("");
+      setValidatedPlanck(null);
       clearAddressError();
       setAmountError(undefined);
       setShowConfirmation(false);
-    } catch (e: any) {
+    } catch (e: unknown) {
       toast.error("Transfer failed", {
-        description: e.toString(),
-        duration: 5000
+        description: e instanceof Error ? e.message : String(e),
+        duration: 5000,
       });
     } finally {
       setLoading(false);
@@ -258,7 +230,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
                 Available
               </span>
               <span className="text-sm font-medium text-success-50">
-                {availableBalance ?? 0} hALPHA
+                {formatBalance(availableBalancePlanck || "0")} hALPHA
               </span>
             </div>
 

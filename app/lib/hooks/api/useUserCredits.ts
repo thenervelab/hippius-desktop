@@ -1,25 +1,17 @@
 import { useInvokeQuery } from "./useInvokeQuery";
 
-interface UserCreditsResponse {
-  balance?: string;
-}
-
 /**
- * Fetch user credits from API
- * Returns bigint   -> balance value (scaled to 18 decimals)
- * Returns undefined -> no token or error
+ * Fetch user credits as planck BigInt (18 decimals).
+ * Rust converts the decimal string to planck without float intermediary,
+ * avoiding precision loss on large balances.
  */
 export function useUserCredits() {
-  return useInvokeQuery<UserCreditsResponse, bigint | undefined>({
-    command: "get_user_credits_balance",
+  return useInvokeQuery<string, bigint | undefined>({
+    command: "get_credits_planck",
     queryKey: (addr) => ["user-credits", addr],
     options: {
       staleTime: Infinity,
-      select: (data) => {
-        const balanceStr = data.balance || "0";
-        const balance = parseFloat(balanceStr) * Math.pow(10, 18);
-        return BigInt(Math.floor(balance));
-      },
+      select: (planck) => BigInt(planck || "0"),
     },
   });
 }

@@ -22,13 +22,14 @@ export interface TicketAttachment {
   id: number;
   filename: string;
   file: string;
-  uploaded_at: string;
+  uploadedAt: string;
 }
 
 /**
- * Hook to upload an attachment to a ticket message using react-query mutation.
- * Note: This uses fetch() directly because Tauri invoke() cannot handle
- * multipart/form-data with browser File objects.
+ * Hook to upload an attachment to a ticket message.
+ *
+ * Writes the browser File to a temp path, then delegates to Rust for the
+ * multipart upload — no hardcoded URL or auth token in the frontend.
  */
 export default function useUploadTicketAttachment(
   options?: Omit<
@@ -45,41 +46,24 @@ export default function useUploadTicketAttachment(
         throw new Error("No wallet address available");
       }
 
-      // Get auth token from Rust DB
-      const token = await invoke<string>("get_auth_token", {
-        accountId: polkadotAddress,
-      });
-
       const { ticket_id, message_id, file, filename } = payload;
 
-      // API endpoint: /api/support/tickets/{ticket_id}/messages/{message_id}/attachments/
-      const url = `https://api.hippius.com/api/support/tickets/${ticket_id}/messages/${message_id}/attachments/`;
+      // Write browser File to temp disk (Rust can't receive File objects over IPC)
+      const { tempDir } = await import("@tauri-apps/api/path");
+      const baseTmpDir = await tempDir();
+      const tmpPath = `${baseTmpDir}hippius_attachment_${Date.now()}_${file.name}`;
+      const { writeFile: tauriWriteFile } = await import("@tauri-apps/plugin-fs");
+      const arrayBuffer = await file.arrayBuffer();
+      await tauriWriteFile(tmpPath, new Uint8Array(arrayBuffer));
 
-      // Create FormData for multipart/form-data upload
-      const formData = new FormData();
-      formData.append("file", file);
-
-      if (filename) {
-        formData.append("filename", filename);
-      }
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Token ${token}`,
-        },
-        body: formData,
+      // Rust handles auth + multipart upload — no hardcoded URL needed
+      return invoke<TicketAttachment>("upload_ticket_attachment", {
+        accountId: polkadotAddress,
+        ticketId: ticket_id,
+        messageId: message_id,
+        filePath: tmpPath,
+        filename: filename ?? file.name,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(
-          errorData.message ||
-            `HTTP ${response.status}: Failed to upload attachment`
-        );
-      }
-
-      return response.json() as Promise<TicketAttachment>;
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({

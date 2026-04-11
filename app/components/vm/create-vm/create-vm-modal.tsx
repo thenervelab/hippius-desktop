@@ -19,7 +19,7 @@ import useVMImages from "@/app/lib/hooks/api/useVMImages";
 import useCreateVM, {
   type CreateVMRequest,
 } from "@/app/lib/hooks/api/useCreateVM";
-import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import useVMApplications from "@/app/lib/hooks/api/useVMApplications";
 
 type FieldName = "instanceName" | "operatingSystem" | "image" | "sshKey";
@@ -95,12 +95,21 @@ const CreateVMModal: React.FC<Props> = ({
   // Use create VM mutation
   const { mutateAsync: createVM, isPending: isCreatingVM } = useCreateVM();
 
-  // Fetch user credits
-  const {
-    data: credits,
-    isFetching: isCreditsFetching,
-    isLoading: isCreditsLoading,
-  } = useUserCredits();
+  // Tracks the in-flight `check_action_eligibility` IPC so the submit
+  // button shows a disabled/loading state during the round-trip. Without
+  // this the button would appear instantly clickable while the live
+  // balance check is running, which regressed the legacy
+  // `isCreditsLoading || isCreditsFetching` UX.
+  const [isChecking, setIsChecking] = useState(false);
+
+  // Live credit eligibility check (replaces the legacy hardcoded
+  // `creditsNumber < 10` JSX comparison and the stale-cache
+  // `useUserCredits` read). The threshold lives in Rust at
+  // `crate::billing::eligibility::thresholds::VM_CREATION` and the
+  // `create_vm` IPC also enforces it via `require_eligible(...)?`,
+  // so this gate is purely UX (so we don't navigate the user to the
+  // VM creation flow only to fail at the spawn step).
+  const { checkEligibility } = useCreditCheck();
 
   // Extract unique operating systems from VM images
   const operatingSystems = React.useMemo(() => {
@@ -277,27 +286,18 @@ const CreateVMModal: React.FC<Props> = ({
 
   const handleSubmit = async () => {
     try {
-      // Check if credits are loading
-      if (isCreditsLoading || isCreditsFetching) {
-        toast.error("Credits Loading", {
-          description: "Please wait while we load your credits balance.",
-          duration: Infinity,
-          closeButton: true,
-        });
-        return;
+      // Live Rust eligibility check. Threshold (≥ 10 credits) lives in
+      // `crate::billing::eligibility::thresholds::VM_CREATION` — the
+      // only place that number is allowed to live now.
+      setIsChecking(true);
+      let eligible = false;
+      try {
+        eligible = await checkEligibility("vm-creation");
+      } finally {
+        setIsChecking(false);
       }
-
-      // Check if user has at least 10 credits
-      if (credits !== undefined) {
-        const creditsNumber = Number(credits) / Math.pow(10, 18);
-        if (creditsNumber < 10) {
-          toast.error("Insufficient Credits", {
-            description: "You need at least 10 credits to create a VM.",
-            duration: Infinity,
-            closeButton: true,
-          });
-          return;
-        }
+      if (!eligible) {
+        return;
       }
 
       // Find the selected image ID from the slug
@@ -607,16 +607,13 @@ const CreateVMModal: React.FC<Props> = ({
                       <Button
                         className={`flex gap-x-2 items-center  h-[3.75rem] w-full`}
                         onClick={handleSubmit}
-                        disabled={
-                          isLoading ||
-                          isCreatingVM ||
-                          isCreditsLoading ||
-                          isCreditsFetching
-                        }
+                        disabled={isLoading || isCreatingVM || isChecking}
                       >
                         {" "}
                         <div className="font-medium text-base leading-[1.375rem] tracking-tight">
-                          {isCreatingVM
+                          {isChecking
+                            ? "Checking credits..."
+                            : isCreatingVM
                             ? "Creating..."
                             : "Create Virtual Machine"}
                         </div>
@@ -625,7 +622,7 @@ const CreateVMModal: React.FC<Props> = ({
                       <Button2
                         className="bg-grey-100  border border-grey-80 text-grey-10 w-full my-4 text-lg font-medium h-[3.5rem] hover:bg-grey-80 transition"
                         onClick={handleBack}
-                        disabled={isLoading || isCreatingVM}
+                        disabled={isLoading || isCreatingVM || isChecking}
                       >
                         Go Back
                       </Button2>
