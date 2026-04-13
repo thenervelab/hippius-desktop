@@ -31,7 +31,7 @@ use tracing::info;
 use zeroize::Zeroizing;
 
 use crate::auth::tokens::get_api_token;
-use crate::error::{AppError, Result};
+use crate::error::{AppError, NotReadyKind, Result};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -312,7 +312,7 @@ pub async fn enable_console_access(
     // resilient to a missing endpoint in staging. Revisit if the
     // server starts relying on it.
 
-    post_json::<_, serde_json::Value>(&ctx, "/v1/mnemonic-blob", &blob).await?;
+    post_json_discard(&ctx, "/v1/mnemonic-blob", &blob).await?;
     info!("Console access enabled for account {}", short_ss58(&ctx.ss58));
     Ok(())
 }
@@ -345,7 +345,7 @@ pub async fn rotate_console_passphrase(
     // `rotate_passphrase` calls `open_mnemonic` under the hood; a wrong
     // old-passphrase surfaces as `MnemonicBlobError::AeadTag`.
     let next = rotate_passphrase(&current, &old_passphrase, &new_passphrase, &ctx.ss58).map_err(crypto_to_err)?;
-    post_json::<_, serde_json::Value>(&ctx, "/v1/mnemonic-blob", &next).await?;
+    post_json_discard(&ctx, "/v1/mnemonic-blob", &next).await?;
     info!("Console access passphrase rotated for account {}", short_ss58(&ctx.ss58));
     Ok(())
 }
@@ -373,6 +373,18 @@ pub async fn disable_console_access(
 // `hcfs-client::drive` machinery, just plain JSON over an
 // authenticated HTTP call. Reuses `state.api_client` for connection
 // pooling and `state.auth` + `get_api_token` for the bearer token.
+//
+// ## Why not `ApiClient`?
+//
+// The project already ships `crate::api::client::ApiClient` against
+// `api.hippius.com`, but that client uses the legacy
+// `Authorization: Token <token>` scheme. `hcfs-server` (per PR #120)
+// expects the modern `Authorization: Bearer <token>` scheme — the
+// same token value, different header word. Rather than widen
+// `ApiClient` with a variant that would risk bleeding the wrong
+// scheme into unrelated call sites, we keep these handlers standalone
+// with direct `reqwest` calls. Consolidate when `api.hippius.com`
+// migrates to Bearer as well.
 // ---------------------------------------------------------------------------
 
 /// Ambient context every HTTP helper needs. Resolved once per command.
@@ -397,9 +409,18 @@ impl HcfsServerCtx {
             // Belt-and-braces guard: `current_account_id` and
             // `substrate_address` track the same thing and should never
             // diverge, but if they do we want the loud error not a
-            // silently-wrong blob upload.
+            // silently-wrong blob upload. Log the full values for
+            // diagnosis; only a short prefix reaches the user so we
+            // don't splatter both SS58s across a toast.
+            tracing::error!(
+                account_id = %account_id,
+                active_ss58 = %ss58,
+                "Console access: account_id vs active SS58 mismatch — aborting"
+            );
             return Err(AppError::Other(format!(
-                "account_id ({account_id}) does not match active SS58 ({ss58})"
+                "Session identity check failed ({} vs {}). Please log out and back in.",
+                short_ss58(&account_id),
+                short_ss58(&ss58),
             )));
         }
 
@@ -409,7 +430,7 @@ impl HcfsServerCtx {
             .map_err(AppError::Other)?
             .ok_or_else(|| AppError::Other("No authentication token — please log in again.".into()))?;
 
-        let base_url = resolve_hcfs_base_url(pool, &account_id).await;
+        let base_url = resolve_hcfs_base_url(pool, &account_id).await?;
         Ok(Self {
             client: state.api_client.clone(),
             base_url,
@@ -420,16 +441,27 @@ impl HcfsServerCtx {
     }
 }
 
-async fn resolve_hcfs_base_url(pool: &sqlx::SqlitePool, account_id: &str) -> String {
-    // Re-use the same server URL the sync engine stores per account.
-    // Falls back to the public default when the row is missing (fresh
-    // install, sync not yet configured).
-    crate::sync::config::get_hcfs_config_internal(pool, account_id)
+/// Resolve the hcfs-server URL the desktop is already syncing to.
+///
+/// Reuses the sync engine's `hcfs_config.server_url` so blob traffic
+/// and drive traffic land on the same deployment (public Hippius,
+/// self-hosted, staging). Refuses to fall back to the hardcoded
+/// public URL — a user who has never configured sync on this account
+/// would otherwise upload their sealed blob to `arion.hippius.com`
+/// even on a self-hosted deployment, which is a footgun: blob lands
+/// on the wrong server, subsequent `disable_console_access` on the
+/// right server 404s, and `console_access_status` reports "disabled"
+/// while ciphertext sits orphaned on the public host. Surface
+/// `NotReady(ConfigMissing)` so the settings UI can prompt the user
+/// to set up sync first.
+async fn resolve_hcfs_base_url(pool: &sqlx::SqlitePool, account_id: &str) -> Result<String> {
+    let config = crate::sync::config::get_hcfs_config_internal(pool, account_id)
         .await
-        .ok()
-        .map(|c| c.server_url)
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://arion.hippius.com".to_string())
+        .map_err(|e| AppError::Other(format!("Could not read sync config: {e}")))?;
+    if config.server_url.is_empty() {
+        return Err(AppError::NotReady(NotReadyKind::ConfigMissing));
+    }
+    Ok(config.server_url)
 }
 
 enum HttpOutcome<T> {
@@ -457,7 +489,12 @@ async fn get_json<T: serde::de::DeserializeOwned>(ctx: &HcfsServerCtx, path: &st
     }
 }
 
-async fn post_json<B: Serialize, R: serde::de::DeserializeOwned>(ctx: &HcfsServerCtx, path: &str, body: &B) -> Result<R> {
+/// POST JSON and discard the response body. Used for upserts where
+/// the server returns a trivial `{"status": "ok"}` we don't care
+/// about; keeping a typed response parameter here would make every
+/// caller choose a throwaway deserialize target, and silently break
+/// if the server ever moves to 204 No Content.
+async fn post_json_discard<B: Serialize>(ctx: &HcfsServerCtx, path: &str, body: &B) -> Result<()> {
     let url = format!("{}{path}", ctx.base_url);
     let resp = ctx
         .client
@@ -470,7 +507,7 @@ async fn post_json<B: Serialize, R: serde::de::DeserializeOwned>(ctx: &HcfsServe
         .await
         .map_err(|e| AppError::Other(format!("HTTP error: {e}")))?;
     if resp.status().is_success() {
-        resp.json::<R>().await.map_err(|e| AppError::Other(format!("JSON parse error: {e}")))
+        Ok(())
     } else {
         Err(http_err(resp.status(), resp, path).await)
     }
@@ -525,9 +562,20 @@ fn short_ss58(ss58: &str) -> String {
 fn crypto_to_err(e: hcfs_client::mnemonic_blob::MnemonicBlobError) -> AppError {
     use hcfs_client::mnemonic_blob::MnemonicBlobError as E;
     match &e {
-        E::AeadTag => AppError::Validation(
-            "Could not decrypt — wrong passphrase, or the server returned a blob that does not match this account.".into(),
-        ),
+        E::AeadTag => {
+            // AeadTag fires on either a wrong passphrase or an SS58
+            // mismatch. The SS58-mismatch branch is unreachable from
+            // this codebase — we always seal and open with the active
+            // session's SS58, and the server serves the row keyed by
+            // that same SS58 (resolved from the bearer token). The
+            // only way to hit a mismatch is a compromised/buggy
+            // server, which is a much worse problem than the error
+            // text. Surface "wrong passphrase" to users and log the
+            // raw error so an SS58-mismatch incident is still
+            // diagnosable from tracing output.
+            tracing::warn!(error = %e, "AEAD tag mismatch decrypting Console blob");
+            AppError::Validation("Wrong passphrase.".into())
+        }
         _ => AppError::Crypto(e.to_string()),
     }
 }
@@ -661,6 +709,97 @@ mod tests {
         // Halfway to the threshold should be halfway on the bar.
         let half = bits_to_percent(MIN_ENTROPY_BITS / 2.0);
         assert!((49..=51).contains(&half), "expected ~50%, got {half}");
+    }
+
+    // ── short_ss58 ──────────────────────────────────────────────────
+
+    #[test]
+    fn short_ss58_truncates_long_address() {
+        let full = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        let short = short_ss58(full);
+        // Format is "first8…" — 8 chars + one ellipsis. No tail, no
+        // full address leak in user-facing strings.
+        assert_eq!(short, "5GrwvaEF…");
+        assert!(
+            !short.contains("Cut"),
+            "short_ss58 must not echo the tail; callers rely on it for log hygiene"
+        );
+    }
+
+    #[test]
+    fn short_ss58_tolerates_short_input() {
+        // Degenerate case — a too-short SS58 shouldn't panic.
+        assert_eq!(short_ss58(""), "…");
+        assert_eq!(short_ss58("abc"), "abc…");
+    }
+
+    // ── resolve_hcfs_base_url ───────────────────────────────────────
+    //
+    // The branch under test (B1 from the review): a missing or empty
+    // `hcfs_config.server_url` must surface as `NotReady(ConfigMissing)`,
+    // not silently fall back to the public default. Without this the
+    // settings UI could upload a sealed blob to the wrong deployment
+    // on a self-hosted / staging setup.
+
+    async fn make_empty_pool_with_hcfs_config() -> sqlx::SqlitePool {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.expect("open in-memory db");
+        sqlx::query(
+            "CREATE TABLE hcfs_config (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL UNIQUE,
+                server_url TEXT NOT NULL DEFAULT '',
+                drive_password TEXT NOT NULL DEFAULT '',
+                encryption_version INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn resolve_base_url_rejects_empty_server_url() {
+        // No row at all — `get_hcfs_config_internal` returns an empty
+        // `HcfsConfigResult`, which must surface as NotReady.
+        let pool = make_empty_pool_with_hcfs_config().await;
+        let err = resolve_hcfs_base_url(&pool, "5GrwvaEF…").await.expect_err("empty config must fail");
+        assert!(
+            matches!(err, AppError::NotReady(NotReadyKind::ConfigMissing)),
+            "expected NotReady(ConfigMissing), got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_base_url_rejects_blank_string_row() {
+        // Row exists but `server_url` is empty — same story: don't
+        // silently fall back to the public host.
+        let pool = make_empty_pool_with_hcfs_config().await;
+        let owner = crate::auth::account_key::account_key("5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY");
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, '', '', 0)")
+            .bind(&owner)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let err = resolve_hcfs_base_url(&pool, "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY")
+            .await
+            .expect_err("blank server_url must fail");
+        assert!(matches!(err, AppError::NotReady(NotReadyKind::ConfigMissing)));
+    }
+
+    #[tokio::test]
+    async fn resolve_base_url_uses_configured_server() {
+        let pool = make_empty_pool_with_hcfs_config().await;
+        let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        let owner = crate::auth::account_key::account_key(account);
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, ?, '', 0)")
+            .bind(&owner)
+            .bind("https://staging.example.com")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let url = resolve_hcfs_base_url(&pool, account).await.expect("ok");
+        assert_eq!(url, "https://staging.example.com");
     }
 
     #[test]
