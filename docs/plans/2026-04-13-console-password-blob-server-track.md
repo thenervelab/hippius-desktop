@@ -61,9 +61,10 @@ existing `hcfs-client` crypto with passphrase-based sealing.
 pub struct SealedBlob {
  pub ciphertext: Vec<u8>,
  pub salt: [u8; 16],
- pub nonce: [u8; 12],
+ pub nonce: [u8; 24], // XChaCha20 — 192-bit nonce
  pub aad: Vec<u8>, // SS58 address bytes — bound into AEAD
  pub kdf: KdfParams,
+ pub aead: AeadParams,
 }
 
 pub struct KdfParams {
@@ -71,6 +72,10 @@ pub struct KdfParams {
  pub memory_kib: u32, // 131_072 (128 MiB)
  pub time_cost: u32, // 3
  pub parallelism: u32, // 1
+}
+
+pub struct AeadParams {
+ pub algorithm: &'static str, // "xchacha20-poly1305"
 }
 
 /// `ss58` is bound into the AEAD as AAD so a server-side blob swap
@@ -95,7 +100,8 @@ pub fn rotate_passphrase(
 ```
 
 - KDF: `argon2` crate with the params above. Salt is fresh per seal.
-- AEAD: `chacha20poly1305` with a fresh random nonce. AAD = SS58 bytes.
+- AEAD: `chacha20poly1305::XChaCha20Poly1305` (20 rounds, 24-byte random nonce). AAD = SS58 bytes.
+- Algorithm identifiers are embedded in the blob (`kdf.algorithm`, `aead.algorithm`) so the browser never guesses — it reads them and selects the matching code path, and refuses to open a blob whose algorithms it doesn't recognize.
 - All intermediate buffers wrapped in `Zeroizing`.
 - Test vectors fixed in `tests/mnemonic_blob_vectors.rs` so the WASM
  build can assert byte-identical outputs. Vectors include a
@@ -165,13 +171,14 @@ server resolves the SS58 from whichever auth header the caller used
 CREATE TABLE mnemonic_blobs (
  user_id TEXT PRIMARY KEY NOT NULL, -- SS58 address
  ciphertext BLOB NOT NULL,
- salt BLOB NOT NULL,
- nonce BLOB NOT NULL,
+ salt BLOB NOT NULL, -- 16 bytes, Argon2id salt
+ nonce BLOB NOT NULL, -- 24 bytes, XChaCha20 nonce
  aad BLOB NOT NULL, -- SS58 bytes, echoed back on GET
- kdf_algorithm TEXT NOT NULL,
+ kdf_algorithm TEXT NOT NULL, -- "argon2id"
  kdf_memory_kib INTEGER NOT NULL,
  kdf_time_cost INTEGER NOT NULL,
  kdf_parallelism INTEGER NOT NULL,
+ aead_algorithm TEXT NOT NULL, -- "xchacha20-poly1305"
  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
@@ -203,7 +210,7 @@ presented and reject the request if the SS58 can't be determined.
 
 | Method | Path | Auth | Body / Headers | Notes |
 |---|---|---|---|---|
-| `POST` | `/v1/mnemonic-blob` | sr25519 signature (desktop) — SS58 derived from the signing key | `{ ciphertext, salt, nonce, aad, kdf: { algorithm, memory_kib, time_cost, parallelism } }` (base64 in JSON). Server stores `user_id = ss58_from_signature`. | Upserts. Rate limit: 10 / hour / user. |
+| `POST` | `/v1/mnemonic-blob` | sr25519 signature (desktop) — SS58 derived from the signing key | `{ ciphertext, salt, nonce, aad, kdf: { algorithm, memory_kib, time_cost, parallelism }, aead: { algorithm } }` (base64 in JSON). Server stores `user_id = ss58_from_signature`. | Upserts. Rate limit: 10 / hour / user. |
 | `GET` | `/v1/mnemonic-blob` | OAuth bearer (browser) **or** sr25519 signature (desktop). Browser path: server resolves `oauth_sub → ss58` via `users` table. Desktop path: SS58 from signature. | Header `X-Passkey-Assertion: <b64>` required if `passkeys` has any rows for the resolved SS58. First fetch (no passkey enrolled yet) accepts the auth header alone. Rate limit: 5 / hour / user. | Returns the same shape as POST body. |
 | `DELETE` | `/v1/mnemonic-blob` | sr25519 signature only (no browser path) | — | Removes the row. Used on rotation completion (after new POST) and on account deletion. |
 

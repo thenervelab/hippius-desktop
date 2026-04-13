@@ -17,7 +17,7 @@ at Console use time.**
 | # | Decision | Why |
 |---|---|---|
 | 1 | Server holds a long-lived **encrypted mnemonic blob** per user. | Desktop-independence is the whole point of this feature. |
-| 2 | Blob is encrypted under a key derived from a user-chosen **passphrase** via **Argon2id** (m≥128 MiB, t≥3). | KDF is the only wall against offline brute force from a DB exfil. |
+| 2 | Blob is encrypted under a key derived from a user-chosen **passphrase** via **Argon2id** (m≥128 MiB, t≥3). AEAD is **XChaCha20-Poly1305** (20 rounds, 192-bit random nonce). | KDF is the only wall against offline brute force from a DB exfil. XChaCha20's 24-byte nonce eliminates any birthday-collision concern under random generation, even across rotations. |
 | 3 | Passphrase never leaves the browser. Server sees only `{ciphertext, salt, nonce, kdf_params}`. | Preserves end-to-end encryption against a compromised backend. |
 | 4 | Browser runs the same crypto as Rust via a WASM build of `hcfs-client`'s crypto module. | Single source of truth. |
 | 5 | After first unlock, the mnemonic is **re-wrapped with a WebAuthn-PRF passkey** and stored in IndexedDB. **No other caching path exists.** Browsers without PRF (Chrome <116, Safari <18, Firefox, older Edge) see a "browser not supported" page and can't use Console. | Passphrase is typed once per device, not per session. No password ever persisted. Dropping the autofill fallback removes the weakest link — plaintext password in Keychain or Password Manager — entirely. |

@@ -54,6 +54,11 @@ await init(); // loads .wasm with SRI verification
 // is bound into the AEAD as AAD on seal; mismatch fails the AEAD tag
 // check and surfaces as `Error("AeadTag")` — distinct from a wrong
 // passphrase ("InvalidPassphrase").
+//
+// AEAD is XChaCha20-Poly1305 — the blob's `nonce` field is 24 bytes.
+// `aead.algorithm` must be `"xchacha20-poly1305"`; the WASM `open`
+// function refuses unknown identifiers so a future algorithm swap
+// requires an explicit version bump on both sides.
 const mnemonic: string = open_mnemonic_blob(blob, passphrase, expectedSs58);
 
 // Defense in depth: re-derive SS58 from the decrypted mnemonic and
@@ -85,7 +90,7 @@ reports.
 | `POST` | `/v1/passkey/registration-challenge` | Get challenge for `navigator.credentials.create`. |
 | `POST` | `/v1/passkey/register` | Submit attestation. Server stores under the resolved SS58. |
 | `POST` | `/v1/passkey/assertion-challenge` | Get challenge for `navigator.credentials.get`. |
-| `GET` | `/v1/mnemonic-blob` | Returns `{ ciphertext, salt, nonce, aad, kdf }`. `aad` is the SS58 bytes the desktop bound at seal time. Header `X-Passkey-Assertion: <b64>` required after first enrollment. |
+| `GET` | `/v1/mnemonic-blob` | Returns `{ ciphertext, salt, nonce (24 B), aad, kdf, aead }`. AEAD is **XChaCha20-Poly1305** (`aead.algorithm === "xchacha20-poly1305"`, 24-byte nonce). `aad` is the SS58 bytes the desktop bound at seal time. Header `X-Passkey-Assertion: <b64>` required after first enrollment. |
 | `GET` | `/v1/me` | Returns `{ ss58_address: string }` — the SS58 the server has on file for the OAuth user. Used by Console to obtain `expectedSs58` before calling `open_mnemonic_blob`. |
 | `DELETE` | `/v1/passkey/{id}` | Revoke. |
 
