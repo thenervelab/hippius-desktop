@@ -14,6 +14,7 @@ import { ApiTokenCard, ApiTokenUsageCard } from "./OAuthTokenSection";
 import EmailNotificationSection from "./EmailNotificationSection";
 import VPNSettings from "./VPNSettings";
 import RecoveryPhraseSettings from "./RecoveryPhraseSettings";
+import ConsoleAccessSettings from "./ConsoleAccessSettings";
 import DeviceNameSetting from "./DeviceNameSetting";
 
 const SETTINGS_COLLAPSE_WIDTH = 900;
@@ -68,6 +69,10 @@ const SettingsDialogContent: React.FC = () => {
     },
     {
       tabName: "Recovery Phrase",
+      icon: <Icons.KeySquare className="size-4" />,
+    },
+    {
+      tabName: "Console Access",
       icon: <Icons.KeySquare className="size-4" />,
     },
     {
@@ -139,6 +144,12 @@ const SettingsDialogContent: React.FC = () => {
             {activeTab === "Recovery Phrase" && (
               <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                 <RecoveryPhraseSettings />
+              </div>
+            )}
+
+            {activeTab === "Console Access" && (
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                <ConsoleAccessSettings />
               </div>
             )}
 
