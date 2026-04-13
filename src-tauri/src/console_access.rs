@@ -9,16 +9,6 @@
 //! See `docs/plans/2026-04-13-console-password-blob-*.md` for the full
 //! design (threat model, server API, browser flow).
 //!
-//! ## Scaffold status
-//!
-//! The Tauri command shells, types, and passphrase entropy scoring
-//! live here. Seal / upload / rotate are stubbed with
-//! `AppError::NotReady(...)` pending the `hcfs-client::mnemonic_blob`
-//! module that the hcfs team is landing in parallel. Once the
-//! `hcfs-client` git rev is bumped in `Cargo.toml`, the command
-//! bodies wire the real calls in — see the `TODO(console-access):`
-//! markers below.
-//!
 //! ## Rule: all logic in Rust
 //!
 //! Every domain decision happens here and surfaces to the frontend
@@ -28,15 +18,20 @@
 //! - Passphrase strength scoring → Rust (`validate_console_passphrase`).
 //! - "Did the user tick the recovery-phrase backup checkbox?" → sent
 //!   to Rust as a boolean, Rust enforces it (`enable_console_access`
-//!   returns `Err(ConfirmationRequired)` if false).
+//!   returns `AppError::Validation(...)` if false).
 //! - "Is Console access currently enabled?" → Rust
 //!   (`console_access_status`).
 //! - SS58 resolution, seal, upload, rotate → Rust.
 
-use serde::Serialize;
+use hcfs_client::mnemonic_blob::{SealedBlob, rotate_passphrase, seal_mnemonic};
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::StatusCode;
+use serde::{Deserialize, Serialize};
+use tracing::info;
 use zeroize::Zeroizing;
 
-use crate::error::{AppError, NotReadyKind, Result};
+use crate::auth::tokens::get_api_token;
+use crate::error::{AppError, Result};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -263,22 +258,29 @@ pub fn validate_console_passphrase(passphrase: String) -> PassphraseStrength {
 }
 
 /// Fetch the current Console-access state for the active account.
+///
+/// `GET /v1/mnemonic-blob` on the configured `hcfs-server`. 200 means
+/// enabled; 404 means disabled; any other status is an error. The
+/// body is parsed only to extract `updated_at` for display — the
+/// ciphertext is discarded here because this path is the "settings
+/// page status" check, not an unlock.
 #[tauri::command]
 pub async fn console_access_status(
-    _state: tauri::State<'_, crate::app_state::AppState>,
+    state: tauri::State<'_, crate::app_state::AppState>,
 ) -> Result<ConsoleAccessStatus> {
-    // TODO(console-access): after the hcfs-client rev lands and the
-    // server endpoints ship, this should:
-    //   1. Resolve the active SS58 from state.auth.
-    //   2. GET /v1/mnemonic-blob with sr25519 sig; 404 → disabled.
-    //   3. Read updated_at + optional GET /v1/passkey/list for count.
-    // Until then: report "disabled" so the settings page renders the
-    // onboarding section and nothing points at phantom state.
-    Ok(ConsoleAccessStatus {
-        enabled: false,
-        last_updated_at: None,
-        passkey_count: 0,
-    })
+    let ctx = HcfsServerCtx::resolve(&state).await?;
+    match get_json::<BlobRecord>(&ctx, "/v1/mnemonic-blob").await? {
+        HttpOutcome::Ok(rec) => Ok(ConsoleAccessStatus {
+            enabled: true,
+            last_updated_at: rec.updated_at,
+            passkey_count: 0, // TODO: wire /v1/passkey/list when the server exposes it.
+        }),
+        HttpOutcome::NotFound => Ok(ConsoleAccessStatus {
+            enabled: false,
+            last_updated_at: None,
+            passkey_count: 0,
+        }),
+    }
 }
 
 /// Enable Console access for the active account.
@@ -289,7 +291,7 @@ pub async fn console_access_status(
 /// passphrase is zeroized on drop regardless of which branch returns.
 #[tauri::command]
 pub async fn enable_console_access(
-    _state: tauri::State<'_, crate::app_state::AppState>,
+    state: tauri::State<'_, crate::app_state::AppState>,
     passphrase: String,
     confirmed_backup: bool,
 ) -> Result<()> {
@@ -298,23 +300,29 @@ pub async fn enable_console_access(
         return Err(err);
     }
 
-    // TODO(console-access): after the hcfs-client rev lands:
-    //   1. let mnemonic = crate::sync::mnemonic::get_mnemonic_for_account(&state, &account_id).await?;
-    //   2. let ss58 = state.auth.lock()?.substrate_address.clone().ok_or(...)?;
-    //   3. let blob = hcfs_client::mnemonic_blob::seal_mnemonic(&mnemonic, &passphrase, &ss58)?;
-    //   4. For OAuth users: POST /v1/users/bind { oauth_sub, ss58 } (idempotent).
-    //   5. POST /v1/mnemonic-blob { blob } (sr25519-signed).
-    //
-    // Passphrase and any derived material are already wrapped in
-    // `Zeroizing` so they scrub on return.
-    Err(AppError::NotReady(NotReadyKind::ConfigMissing))
+    let ctx = HcfsServerCtx::resolve(&state).await?;
+    let account_id = ctx.account_id.clone();
+    let mnemonic = crate::sync::mnemonic::get_mnemonic_for_account(state.inner(), &account_id).await?;
+    let blob = seal_mnemonic(&mnemonic, &passphrase, &ctx.ss58).map_err(crypto_to_err)?;
+
+    // Note: `/v1/users/bind` exists on the server for operational
+    // observability, but the authorization model resolves SS58 from
+    // the bearer token on every request — the binding row is not
+    // required on the request path. We skip it here to keep the flow
+    // resilient to a missing endpoint in staging. Revisit if the
+    // server starts relying on it.
+
+    post_json::<_, serde_json::Value>(&ctx, "/v1/mnemonic-blob", &blob).await?;
+    info!("Console access enabled for account {}", short_ss58(&ctx.ss58));
+    Ok(())
 }
 
-/// Rotate the Console passphrase. Requires the current passphrase to
-/// unlock the existing blob, plus a new passphrase to reseal under.
+/// Rotate the Console passphrase. Fetches the current blob, decrypts
+/// with the old passphrase, re-seals under the new one, and POSTs back.
+/// The server upsert replaces the row atomically — no DELETE needed.
 #[tauri::command]
 pub async fn rotate_console_passphrase(
-    _state: tauri::State<'_, crate::app_state::AppState>,
+    state: tauri::State<'_, crate::app_state::AppState>,
     old_passphrase: String,
     new_passphrase: String,
     confirmed_backup: bool,
@@ -325,24 +333,203 @@ pub async fn rotate_console_passphrase(
         return Err(err);
     }
 
-    // TODO(console-access): after the hcfs-client rev lands:
-    //   1. GET /v1/mnemonic-blob → current sealed blob.
-    //   2. let new = hcfs_client::mnemonic_blob::rotate_passphrase(&blob, &old, &new, &ss58)?;
-    //   3. POST /v1/mnemonic-blob { new } (upsert).
-    //      Server replaces the row atomically — no DELETE needed.
-    Err(AppError::NotReady(NotReadyKind::ConfigMissing))
+    let ctx = HcfsServerCtx::resolve(&state).await?;
+    let current: SealedBlob = match get_json::<SealedBlob>(&ctx, "/v1/mnemonic-blob").await? {
+        HttpOutcome::Ok(b) => b,
+        HttpOutcome::NotFound => {
+            return Err(AppError::Other(
+                "Console access isn't enabled on this account — nothing to rotate.".into(),
+            ));
+        }
+    };
+    // `rotate_passphrase` calls `open_mnemonic` under the hood; a wrong
+    // old-passphrase surfaces as `MnemonicBlobError::AeadTag`.
+    let next = rotate_passphrase(&current, &old_passphrase, &new_passphrase, &ctx.ss58).map_err(crypto_to_err)?;
+    post_json::<_, serde_json::Value>(&ctx, "/v1/mnemonic-blob", &next).await?;
+    info!("Console access passphrase rotated for account {}", short_ss58(&ctx.ss58));
+    Ok(())
 }
 
-/// Disable Console access — delete the blob from the server. Does
-/// not affect local sync or desktop access.
+/// Disable Console access — deletes the blob from the server. Does
+/// not touch local sync or the desktop's own access.
 #[tauri::command]
 pub async fn disable_console_access(
-    _state: tauri::State<'_, crate::app_state::AppState>,
+    state: tauri::State<'_, crate::app_state::AppState>,
 ) -> Result<()> {
-    // TODO(console-access): DELETE /v1/mnemonic-blob (sr25519-signed).
-    // Also revoke all passkeys registered against the account so the
-    // user starts clean if they re-enable later.
-    Err(AppError::NotReady(NotReadyKind::ConfigMissing))
+    let ctx = HcfsServerCtx::resolve(&state).await?;
+    delete(&ctx, "/v1/mnemonic-blob").await?;
+    info!("Console access disabled for account {}", short_ss58(&ctx.ss58));
+    // TODO(console-access): also DELETE /v1/passkey/{id} for each
+    // registered passkey once that endpoint is in use, so re-enabling
+    // later starts from a clean credential set. Not critical today —
+    // the server ignores passkey requirements when no blob exists.
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// HTTP helpers — bearer-authenticated JSON against `hcfs-server`.
+//
+// Small deliberate footprint: these paths don't need the
+// `hcfs-client::drive` machinery, just plain JSON over an
+// authenticated HTTP call. Reuses `state.api_client` for connection
+// pooling and `state.auth` + `get_api_token` for the bearer token.
+// ---------------------------------------------------------------------------
+
+/// Ambient context every HTTP helper needs. Resolved once per command.
+struct HcfsServerCtx {
+    client: reqwest::Client,
+    base_url: String,
+    bearer: String,
+    account_id: String,
+    ss58: String,
+}
+
+impl HcfsServerCtx {
+    async fn resolve(state: &tauri::State<'_, crate::app_state::AppState>) -> Result<Self> {
+        let account_id = state.current_account_id().map_err(AppError::Other)?;
+        let ss58 = state
+            .auth
+            .lock()?
+            .substrate_address
+            .clone()
+            .ok_or_else(|| AppError::Other("No active SS58 address — please log in first.".into()))?;
+        if ss58 != account_id {
+            // Belt-and-braces guard: `current_account_id` and
+            // `substrate_address` track the same thing and should never
+            // diverge, but if they do we want the loud error not a
+            // silently-wrong blob upload.
+            return Err(AppError::Other(format!(
+                "account_id ({account_id}) does not match active SS58 ({ss58})"
+            )));
+        }
+
+        let pool = state.pool()?;
+        let bearer = get_api_token(pool, &account_id)
+            .await
+            .map_err(AppError::Other)?
+            .ok_or_else(|| AppError::Other("No authentication token — please log in again.".into()))?;
+
+        let base_url = resolve_hcfs_base_url(pool, &account_id).await;
+        Ok(Self {
+            client: state.api_client.clone(),
+            base_url,
+            bearer,
+            account_id,
+            ss58,
+        })
+    }
+}
+
+async fn resolve_hcfs_base_url(pool: &sqlx::SqlitePool, account_id: &str) -> String {
+    // Re-use the same server URL the sync engine stores per account.
+    // Falls back to the public default when the row is missing (fresh
+    // install, sync not yet configured).
+    crate::sync::config::get_hcfs_config_internal(pool, account_id)
+        .await
+        .ok()
+        .map(|c| c.server_url)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "https://arion.hippius.com".to_string())
+}
+
+enum HttpOutcome<T> {
+    Ok(T),
+    NotFound,
+}
+
+async fn get_json<T: serde::de::DeserializeOwned>(ctx: &HcfsServerCtx, path: &str) -> Result<HttpOutcome<T>> {
+    let url = format!("{}{path}", ctx.base_url);
+    let resp = ctx
+        .client
+        .get(&url)
+        .header(AUTHORIZATION, format!("Bearer {}", ctx.bearer))
+        .header(ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|e| AppError::Other(format!("HTTP error: {e}")))?;
+    match resp.status() {
+        StatusCode::OK => {
+            let v = resp.json::<T>().await.map_err(|e| AppError::Other(format!("JSON parse error: {e}")))?;
+            Ok(HttpOutcome::Ok(v))
+        }
+        StatusCode::NOT_FOUND => Ok(HttpOutcome::NotFound),
+        status => Err(http_err(status, resp, path).await),
+    }
+}
+
+async fn post_json<B: Serialize, R: serde::de::DeserializeOwned>(ctx: &HcfsServerCtx, path: &str, body: &B) -> Result<R> {
+    let url = format!("{}{path}", ctx.base_url);
+    let resp = ctx
+        .client
+        .post(&url)
+        .header(AUTHORIZATION, format!("Bearer {}", ctx.bearer))
+        .header(CONTENT_TYPE, "application/json")
+        .header(ACCEPT, "application/json")
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| AppError::Other(format!("HTTP error: {e}")))?;
+    if resp.status().is_success() {
+        resp.json::<R>().await.map_err(|e| AppError::Other(format!("JSON parse error: {e}")))
+    } else {
+        Err(http_err(resp.status(), resp, path).await)
+    }
+}
+
+async fn delete(ctx: &HcfsServerCtx, path: &str) -> Result<()> {
+    let url = format!("{}{path}", ctx.base_url);
+    let resp = ctx
+        .client
+        .delete(&url)
+        .header(AUTHORIZATION, format!("Bearer {}", ctx.bearer))
+        .header(ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|e| AppError::Other(format!("HTTP error: {e}")))?;
+    if resp.status().is_success() || resp.status() == StatusCode::NOT_FOUND {
+        // 404 on delete = already gone = success from the user's POV.
+        Ok(())
+    } else {
+        Err(http_err(resp.status(), resp, path).await)
+    }
+}
+
+async fn http_err(status: StatusCode, resp: reqwest::Response, path: &str) -> AppError {
+    let body = resp.text().await.unwrap_or_default();
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        return AppError::Validation(
+            "You've hit the rate limit for Console access changes. Please wait a few minutes and try again.".into(),
+        );
+    }
+    AppError::Api {
+        status: status.as_u16(),
+        body: format!("{path}: {body}"),
+    }
+}
+
+/// Mnemonic-blob `updated_at` lives on the GET response but isn't part
+/// of the `SealedBlob` the hcfs-client exports. A tiny local type
+/// keeps the parse permissive — unknown fields are ignored.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlobRecord {
+    #[serde(default)]
+    updated_at: Option<String>,
+}
+
+fn short_ss58(ss58: &str) -> String {
+    let head: String = ss58.chars().take(8).collect();
+    format!("{head}…")
+}
+
+fn crypto_to_err(e: hcfs_client::mnemonic_blob::MnemonicBlobError) -> AppError {
+    use hcfs_client::mnemonic_blob::MnemonicBlobError as E;
+    match &e {
+        E::AeadTag => AppError::Validation(
+            "Could not decrypt — wrong passphrase, or the server returned a blob that does not match this account.".into(),
+        ),
+        _ => AppError::Crypto(e.to_string()),
+    }
 }
 
 // ---------------------------------------------------------------------------
