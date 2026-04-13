@@ -33,7 +33,26 @@ locally and start work in parallel:
 
 1. **`@hippius/crypto-wasm` npm package** — TypeScript signatures
  below. Pin an exact version with SRI.
-2. **REST API** — five endpoints, OAuth-gated, on `api.hippius.com`.
+2. **REST API** — five endpoints, bearer-authenticated via Console's
+ existing OAuth flow, on the `hcfs-server` host. All endpoints sit
+ behind the `HCFS_FEATURE_CONSOLE_BLOB=1` feature flag server-side
+ during rollout.
+
+### On the WASM crate's independence from `hcfs-client`
+
+`hcfs-client-wasm` reimplements the crypto primitives (BIP-39 seed,
+folder-mnemonic derivation, file-key derivation, XChaCha20-Poly1305
+decrypt, Argon2id) rather than being a thin `wasm-bindgen` wrapper
+over `hcfs-client`. That avoids pulling `tokio`, `reqwest`, and file-
+watcher deps into a browser bundle that doesn't need them.
+
+The tradeoff: there is no compile-time guarantee that the Rust native
+and WASM paths produce byte-identical outputs. The server track has a
+follow-up task to add a cross-crate integration test that seals a
+blob with native `hcfs-client::mnemonic_blob::seal_mnemonic` and
+opens it with `hcfs-client-wasm::open_mnemonic_blob`, asserting a
+round trip on a frozen set of vectors. Treat that test as the
+source-of-truth contract between the two implementations.
 
 ### WASM API surface
 
@@ -52,14 +71,14 @@ await init(); // loads .wasm with SRI verification
 
 // Decrypt the server blob with the user's passphrase. `expectedSs58`
 // is bound into the AEAD as AAD on seal; mismatch fails the AEAD tag
-// check and surfaces as `Error("AeadTag")` — distinct from a wrong
-// passphrase ("InvalidPassphrase").
+// check. `open_mnemonic_blob` takes a JSON-stringified blob so the
+// caller can hand it straight through from `fetch().then(r => r.text())`
+// without reshaping.
 //
-// AEAD is XChaCha20-Poly1305 — the blob's `nonce` field is 24 bytes.
-// `aead.algorithm` must be `"xchacha20-poly1305"`; the WASM `open`
-// function refuses unknown identifiers so a future algorithm swap
-// requires an explicit version bump on both sides.
-const mnemonic: string = open_mnemonic_blob(blob, passphrase, expectedSs58);
+// AEAD is XChaCha20-Poly1305 — the blob's `nonce` is 24 bytes. The
+// KDF algorithm string in the blob is checked by `open_mnemonic_blob`;
+// unknown KDFs are rejected before any decryption attempt.
+const mnemonic: string = open_mnemonic_blob(blobJson, passphrase, expectedSs58);
 
 // Defense in depth: re-derive SS58 from the decrypted mnemonic and
 // confirm it matches the OAuth session's SS58 before caching.
@@ -77,20 +96,21 @@ const plaintext = decrypt_file_chunk(key, nonce, aad, ciphertext);
 
 ### REST API contract
 
-All Console-side requests use `Authorization: Bearer <oauth-token>`.
-The server resolves the caller's SS58 from the OAuth `sub` via its
-`users` table (populated by the desktop on signup). Console never
-needs to know the SS58 *before* unlock — the server handles the
-mapping. *After* unlock, Console derives SS58 locally from the
-decrypted mnemonic and asserts it matches what the session backend
-reports.
+All Console-side requests use `Authorization: Bearer <api_token>`.
+Console obtains this token through its existing OAuth flow; the
+bearer token is already bound to the caller's SS58 on the server
+side (same auth path the desktop uses). Console never needs to
+derive or send the SS58 before unlock — the server resolves it
+from the token. *After* unlock, Console derives SS58 locally from
+the decrypted mnemonic and asserts it matches what the session
+backend reports via `GET /v1/me`.
 
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/v1/passkey/registration-challenge` | Get challenge for `navigator.credentials.create`. |
 | `POST` | `/v1/passkey/register` | Submit attestation. Server stores under the resolved SS58. |
 | `POST` | `/v1/passkey/assertion-challenge` | Get challenge for `navigator.credentials.get`. |
-| `GET` | `/v1/mnemonic-blob` | Returns `{ ciphertext, salt, nonce (24 B), aad, kdf, aead }`. AEAD is **XChaCha20-Poly1305** (`aead.algorithm === "xchacha20-poly1305"`, 24-byte nonce). `aad` is the SS58 bytes the desktop bound at seal time. Header `X-Passkey-Assertion: <b64>` required after first enrollment. |
+| `GET` | `/v1/mnemonic-blob` | Returns `{ ciphertext, salt, nonce, aad, kdf }` (all bytes as base64 strings, 24-byte nonce). AEAD is XChaCha20-Poly1305 — fixed server-side, no `aead` field in the body. `aad` is the base64 of the SS58 bytes the desktop bound at seal time. Header `X-Passkey-Assertion: <b64>` required after first enrollment. |
 | `GET` | `/v1/me` | Returns `{ ss58_address: string }` — the SS58 the server has on file for the OAuth user. Used by Console to obtain `expectedSs58` before calling `open_mnemonic_blob`. |
 | `DELETE` | `/v1/passkey/{id}` | Revoke. |
 

@@ -24,33 +24,34 @@ the API contracts in §4 and §5.
 
 ## 0. User identification (foundational — read first)
 
-The whole flow keys on the user's **SS58 address**, not OAuth `sub` or
-email. This affects the table schemas, the API signatures, and the
-seal/open functions below — so it sits ahead of every other section
-in this plan.
+The whole flow keys on the user's **SS58 address**. This affects the
+table schemas, the API signatures, and the seal/open functions below
+— so it sits ahead of every other section in this plan.
 
 - `mnemonic_blobs.user_id` and `passkeys.user_id` are SS58 strings.
 - The seal binds the SS58 into the AEAD as AAD so a server-side blob
  swap is cryptographically detectable on unlock.
-- Pre-unlock browser callers authenticate via OAuth bearer; the server
- maps OAuth `sub` → SS58 via a `users` table.
+- Every caller (desktop and Console) authenticates with
+ `Authorization: Bearer <api_token>`. The server's existing
+ `authenticate_caller` → `verify_token` pipeline resolves the SS58.
+ No new signing scheme, no sr25519-signed bodies.
 
-If `hcfs-server` doesn't already maintain an `oauth_sub → ss58`
-mapping, add it as part of this track:
+A `users(oauth_sub, ss58_address)` table is kept for operational
+observability (admin tooling, future cross-system lookups). The
+desktop's `enable_console_access` flow posts to `POST /v1/users/bind`
+immediately after generating an OAuth user's mnemonic. Idempotent on
+the unique constraint. Because auth is bearer-token only, the binding
+is not required on the request path — the server already knows the
+caller's SS58 from the token.
 
 ```sql
 CREATE TABLE IF NOT EXISTS users (
  oauth_sub TEXT PRIMARY KEY NOT NULL,
  ss58_address TEXT NOT NULL UNIQUE,
- created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX users_ss58_idx ON users(ss58_address);
 ```
-
-A new endpoint `POST /v1/users/bind` (sr25519-signed by the desktop)
-upserts the row right after the desktop generates an OAuth user's
-mnemonic. Idempotent on the unique constraint. Without this row, the
-pre-unlock browser GET cannot resolve which blob to serve.
 
 ## 1. `hcfs-client::mnemonic_blob` — the producer crypto
 
@@ -58,25 +59,29 @@ New module at `hcfs/hcfs-client/src/mnemonic_blob.rs`. Wraps the
 existing `hcfs-client` crypto with passphrase-based sealing.
 
 ```rust
+/// Byte fields are base64-encoded on the JSON wire. The `SealedBlob`
+/// `Serialize` impl handles the encoding — callers pass raw bytes to
+/// `seal_mnemonic` and receive a ready-to-POST struct.
 pub struct SealedBlob {
- pub ciphertext: Vec<u8>,
- pub salt: [u8; 16],
- pub nonce: [u8; 24], // XChaCha20 — 192-bit nonce
- pub aad: Vec<u8>, // SS58 address bytes — bound into AEAD
+ pub ciphertext: String, // base64 of 16-byte Poly1305 tag + ct
+ pub salt: String, // base64 of 16 random bytes
+ pub nonce: String, // base64 of 24 random bytes (XChaCha20)
+ pub aad: String, // base64 of SS58 bytes — bound into AEAD
  pub kdf: KdfParams,
- pub aead: AeadParams,
 }
 
 pub struct KdfParams {
- pub algorithm: &'static str, // "argon2id"
+ pub algorithm: String, // "argon2id"
  pub memory_kib: u32, // 131_072 (128 MiB)
  pub time_cost: u32, // 3
  pub parallelism: u32, // 1
 }
+```
 
-pub struct AeadParams {
- pub algorithm: &'static str, // "xchacha20-poly1305"
-}
+AEAD is fixed at XChaCha20-Poly1305 server-side; there is no `aead`
+field in the wire body. If we ever need an algorithm transition, we
+bump the blob wire version in a new top-level field rather than
+branching on an embedded identifier.
 
 /// `ss58` is bound into the AEAD as AAD so a server-side blob swap
 /// fails the AEAD tag check on the next `open_mnemonic`.
@@ -101,7 +106,7 @@ pub fn rotate_passphrase(
 
 - KDF: `argon2` crate with the params above. Salt is fresh per seal.
 - AEAD: `chacha20poly1305::XChaCha20Poly1305` (20 rounds, 24-byte random nonce). AAD = SS58 bytes.
-- Algorithm identifiers are embedded in the blob (`kdf.algorithm`, `aead.algorithm`) so the browser never guesses — it reads them and selects the matching code path, and refuses to open a blob whose algorithms it doesn't recognize.
+- `kdf.algorithm` string is embedded in the blob so the opener can reject unknown KDFs. AEAD is fixed at XChaCha20-Poly1305 — no identifier travels with the blob; a future algorithm change bumps a top-level version field rather than inline dispatch.
 - All intermediate buffers wrapped in `Zeroizing`.
 - Test vectors fixed in `tests/mnemonic_blob_vectors.rs` so the WASM
  build can assert byte-identical outputs. Vectors include a
@@ -170,18 +175,21 @@ server resolves the SS58 from whichever auth header the caller used
 ```sql
 CREATE TABLE mnemonic_blobs (
  user_id TEXT PRIMARY KEY NOT NULL, -- SS58 address
- ciphertext BLOB NOT NULL,
- salt BLOB NOT NULL, -- 16 bytes, Argon2id salt
- nonce BLOB NOT NULL, -- 24 bytes, XChaCha20 nonce
- aad BLOB NOT NULL, -- SS58 bytes, echoed back on GET
+ ciphertext BYTEA NOT NULL,
+ salt BYTEA NOT NULL, -- 16 bytes, Argon2id salt
+ nonce BYTEA NOT NULL, -- 24 bytes, XChaCha20 nonce
+ aad BYTEA NOT NULL, -- SS58 bytes, echoed back on GET
  kdf_algorithm TEXT NOT NULL, -- "argon2id"
  kdf_memory_kib INTEGER NOT NULL,
  kdf_time_cost INTEGER NOT NULL,
  kdf_parallelism INTEGER NOT NULL,
- aead_algorithm TEXT NOT NULL, -- "xchacha20-poly1305"
- updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
+
+(Postgres flavor — `hcfs-server` runs Postgres. SQLite-flavored
+`BLOB` / `TIMESTAMP DEFAULT CURRENT_TIMESTAMP` is the equivalent if
+this plan is ever ported.)
 
 ### 3b. New table `passkeys`
 
@@ -201,25 +209,25 @@ CREATE TABLE passkeys (
 CREATE INDEX passkeys_user_id_idx ON passkeys(user_id);
 ```
 
-### 3c. New handler module `handlers/mnemonic_blob.rs`
+### 3c. New handler module `handlers/console_blob.rs`
 
-Three endpoints. Auth method varies by caller because pre-unlock
-browser sessions can't sign sr25519 requests yet (no mnemonic in
-hand). All endpoints resolve the SS58 from whichever auth header was
-presented and reject the request if the SS58 can't be determined.
+Three endpoints. All authenticate via `Authorization: Bearer
+<api_token>` — the same header every other `hcfs-server` endpoint
+uses. `resolve_caller` delegates to the existing
+`auth::authenticate_caller` and returns the caller's SS58 address;
+admin tokens (which return `None`) are rejected with 403 because
+admins cannot act on behalf of a specific user's blob.
 
-| Method | Path | Auth | Body / Headers | Notes |
-|---|---|---|---|---|
-| `POST` | `/v1/mnemonic-blob` | sr25519 signature (desktop) — SS58 derived from the signing key | `{ ciphertext, salt, nonce, aad, kdf: { algorithm, memory_kib, time_cost, parallelism }, aead: { algorithm } }` (base64 in JSON). Server stores `user_id = ss58_from_signature`. | Upserts. Rate limit: 10 / hour / user. |
-| `GET` | `/v1/mnemonic-blob` | OAuth bearer (browser) **or** sr25519 signature (desktop). Browser path: server resolves `oauth_sub → ss58` via `users` table. Desktop path: SS58 from signature. | Header `X-Passkey-Assertion: <b64>` required if `passkeys` has any rows for the resolved SS58. First fetch (no passkey enrolled yet) accepts the auth header alone. Rate limit: 5 / hour / user. | Returns the same shape as POST body. |
-| `DELETE` | `/v1/mnemonic-blob` | sr25519 signature only (no browser path) | — | Removes the row. Used on rotation completion (after new POST) and on account deletion. |
+| Method | Path | Body / Headers | Notes |
+|---|---|---|---|
+| `POST` | `/v1/mnemonic-blob` | `{ ciphertext, salt, nonce, aad, kdf: { algorithm, memory_kib, time_cost, parallelism } }` (base64 strings in JSON). Server stores `user_id = caller_ss58`. | Upserts. Rate limit: 10 / hour / user. |
+| `GET` | `/v1/mnemonic-blob` | Header `X-Passkey-Assertion: <b64>` required if `passkeys` has any rows for the caller's SS58. First fetch (no passkey enrolled yet) accepts bearer alone. Rate limit: 5 / hour / user. | Returns the same shape as POST body. |
+| `DELETE` | `/v1/mnemonic-blob` | — | Removes the row. Used on rotation completion (after new POST) and on account deletion. |
 
-A new auth helper `resolve_caller_ss58(headers, pool) -> Result<String>`
-encapsulates the bifurcation:
-
-1. If `Authorization: Substrate-Sig <sig>` is present → verify, return `ss58_from_pubkey`.
-2. Else if `Authorization: Bearer <oauth>` is present → verify with the OAuth provider, look up `users.ss58_address` for the `oauth_sub`. 401 if not found.
-3. Else → 401.
+Validation constants (enforced on POST):
+- `MAX_CIPHERTEXT_BYTES = 1024` — mnemonic ciphertext is ~220 bytes; the cap rejects accidental abuse without boxing real data in.
+- `EXPECTED_SALT_BYTES = 16`, `EXPECTED_NONCE_BYTES = 24` — exact-size checks; reject mismatches with 400.
+- `MAX_AAD_BYTES = 256` — SS58 addresses are ~48 bytes.
 
 ### 3d. New passkey endpoints
 
@@ -239,18 +247,17 @@ Use the `webauthn-rs` crate for verification.
 
 ```
 POST /v1/users/bind
-Auth: sr25519-signed by the desktop
+Auth: Authorization: Bearer <api_token>
 Body: { oauth_sub: string, ss58_address: string }
 Behavior: upsert into `users(oauth_sub, ss58_address)`. Idempotent on
-the unique index. Server verifies the signing key derives the same
-SS58 as the body — body is what the desktop sends, signature is the
-proof.
+the unique index. The server rejects with 403 if the caller's SS58
+(resolved from the bearer token) does not match `body.ss58_address`
+— the caller can only bind their own SS58.
 ```
 
 Called by the desktop right after it generates an OAuth user's
-mnemonic. Without this row the pre-unlock Console GET cannot find
-which blob to serve. For mnemonic-only users (no OAuth) this endpoint
-is a no-op.
+mnemonic. For mnemonic-only users (no OAuth) this endpoint is a
+no-op and the desktop skips it.
 
 ### 3e. Cascade and rate limits
 
@@ -309,8 +316,8 @@ pub async fn console_access_status(
 2. Resolve the active SS58 from `state.auth.lock()?.substrate_address`.
 3. Validate passphrase entropy (≥ 50 bits via a `zxcvbn`-style estimator). Reject top-10k common passwords.
 4. `hcfs_client::mnemonic_blob::seal_mnemonic(mnemonic, passphrase, ss58)` — SS58 is bound into the AEAD as AAD.
-5. If this is an OAuth user, also `POST /v1/users/bind { oauth_sub, ss58 }` to ensure the pre-unlock browser GET can resolve the blob owner. Idempotent — no-op on subsequent calls.
-6. `POST /v1/mnemonic-blob { ciphertext, salt, nonce, aad, kdf }` via `state.api_client`. Request is sr25519-signed.
+5. If this is an OAuth user, also `POST /v1/users/bind { oauth_sub, ss58 }` for operational observability. Idempotent — no-op on subsequent calls.
+6. `POST /v1/mnemonic-blob { ciphertext, salt, nonce, aad, kdf }` via `state.api_client`. Bearer-authenticated — same token the sync engine already uses.
 7. Zeroize passphrase + intermediate buffers on drop.
 
 ### 5b. New settings page

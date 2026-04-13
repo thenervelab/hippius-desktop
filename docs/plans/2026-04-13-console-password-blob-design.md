@@ -17,7 +17,7 @@ at Console use time.**
 | # | Decision | Why |
 |---|---|---|
 | 1 | Server holds a long-lived **encrypted mnemonic blob** per user. | Desktop-independence is the whole point of this feature. |
-| 2 | Blob is encrypted under a key derived from a user-chosen **passphrase** via **Argon2id** (m≥128 MiB, t≥3). AEAD is **XChaCha20-Poly1305** (20 rounds, 192-bit random nonce). | KDF is the only wall against offline brute force from a DB exfil. XChaCha20's 24-byte nonce eliminates any birthday-collision concern under random generation, even across rotations. |
+| 2 | Blob is encrypted under a key derived from a user-chosen **passphrase** via **Argon2id** (m≥128 MiB, t≥3). AEAD is **XChaCha20-Poly1305** (20 rounds, 192-bit random nonce). Algorithm identifiers are embedded in the `kdf` struct on the wire — AEAD is fixed at the server so no `aead` field travels in the body. | KDF is the only wall against offline brute force from a DB exfil. XChaCha20's 24-byte nonce eliminates any birthday-collision concern under random generation, even across rotations. |
 | 3 | Passphrase never leaves the browser. Server sees only `{ciphertext, salt, nonce, kdf_params}`. | Preserves end-to-end encryption against a compromised backend. |
 | 4 | Browser runs the same crypto as Rust via a WASM build of `hcfs-client`'s crypto module. | Single source of truth. |
 | 5 | After first unlock, the mnemonic is **re-wrapped with a WebAuthn-PRF passkey** and stored in IndexedDB. **No other caching path exists.** Browsers without PRF (Chrome <116, Safari <18, Firefox, older Edge) see a "browser not supported" page and can't use Console. | Passphrase is typed once per device, not per session. No password ever persisted. Dropping the autofill fallback removes the weakest link — plaintext password in Keychain or Password Manager — entirely. |
@@ -123,41 +123,52 @@ desktop SQLite table.
 - `passkeys.user_id` = the user's SS58.
 - All blob/passkey lookups go through SS58 — never email, never OAuth `sub`, never numeric id.
 
-### Authentication per caller
+### Authentication
 
-The blob endpoints accept different auth headers depending on which client is calling, because the three clients hold different secrets:
+Every Console-blob endpoint authenticates via a single mechanism:
+**`Authorization: Bearer <api_token>`**, same as every other
+`hcfs-server` endpoint today. The server's `authenticate_caller`
+verifies the token and returns the SS58 address the token was minted
+for.
 
-| Caller | Has | Auth header | Server resolves SS58 via |
-|---|---|---|---|
-| Desktop (mnemonic user) | mnemonic + sr25519 key | sr25519-signed request (existing pattern) | Signature → public key → SS58 |
-| Desktop (OAuth user) | OAuth token + mnemonic + sr25519 key | Either signed request or `Authorization: Bearer <oauth>` | Signature, OR OAuth-sub → SS58 mapping |
-| Console **before** unlock | OAuth token only — no mnemonic, no sr25519 yet | `Authorization: Bearer <oauth>` | OAuth-sub → SS58 mapping |
-| Console **after** unlock | OAuth + mnemonic + sr25519 | Either | Either |
+| Caller | Auth header | Server resolves SS58 via |
+|---|---|---|
+| Desktop (mnemonic or OAuth user) | `Authorization: Bearer <api_token>` (existing `get_api_token` store) | `verify_token` → SS58 |
+| Console browser | `Authorization: Bearer <api_token>` (Console's OAuth flow mints one) | `verify_token` → SS58 |
 
-The pre-unlock browser case is the new constraint. The browser cannot
-sign Substrate extrinsics before it has the mnemonic — that's the
-whole point of the blob fetch. So `GET /v1/mnemonic-blob` from
-Console is OAuth-authenticated, and the server uses an `oauth_sub →
-ss58_address` mapping to find the right blob.
+No sr25519 signatures, no bespoke signing headers. The desktop
+already has a bearer token in its session store and `state.api_client`
+already attaches it to outgoing HTTP requests.
+
+Admin tokens (existing server concept) are accepted at the transport
+layer but rejected by the blob endpoints: an admin cannot upload or
+fetch a blob on behalf of a user. The `resolve_caller` helper returns
+`403 Forbidden` when `authenticate_caller` produces `None` (the
+admin-token sentinel).
 
 ### `oauth_sub → ss58` mapping
 
-If `hcfs-server` doesn't already have this mapping, add a `users`
-table populated when the desktop first creates an OAuth user's
-mnemonic:
+The server keeps an `oauth_sub → ss58_address` table so that server-
+side admin tooling and future cross-system lookups can resolve one
+from the other. The desktop's `enable_console_access` flow POSTs this
+binding to `/v1/users/bind` (bearer-authenticated) right after
+generating an OAuth user's mnemonic. One write, idempotent on the
+unique index.
 
 ```sql
 CREATE TABLE IF NOT EXISTS users (
  oauth_sub TEXT PRIMARY KEY NOT NULL,
  ss58_address TEXT NOT NULL UNIQUE,
- created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX users_ss58_idx ON users(ss58_address);
 ```
 
-The desktop's existing OAuth-signup flow needs to POST `(oauth_sub,
-ss58)` to a new `/v1/users/bind` endpoint right after it generates
-the mnemonic. One write, idempotent on the unique index.
+The bearer-auth model means this mapping is not strictly required on
+the request path — the server already knows the caller's SS58 from
+the token. The binding exists for operational observability and for
+future flows (e.g. "which SS58 owns this OAuth account?") that
+shouldn't round-trip through the token service.
 
 ### Bind the SS58 inside the blob (defense in depth)
 
