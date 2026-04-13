@@ -1,11 +1,13 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import { toast } from "sonner";
 import { InView } from "react-intersection-observer";
 
 import SectionHeader from "./SectionHeader";
 import { CardButton, Icons, Input, RevealTextLine } from "@/components/ui";
+import DialogContainer from "@/components/ui/DialogContainer";
 import * as Typography from "@/components/ui/typography";
 import { cn } from "@/lib/utils";
 import {
@@ -172,11 +174,10 @@ const EnabledSection: React.FC<{
   const [rotating, setRotating] = useState(false);
   const [disabling, setDisabling] = useState(false);
   const [showRotate, setShowRotate] = useState(false);
+  const [showDisableDialog, setShowDisableDialog] = useState(false);
 
-  const handleDisable = useCallback(async () => {
-    if (!window.confirm("Disable Console access? Your browser sessions will need to re-enable before they can decrypt files.")) {
-      return;
-    }
+  const handleDisableConfirmed = useCallback(async () => {
+    setShowDisableDialog(false);
     setDisabling(true);
     try {
       await disableConsoleAccess();
@@ -205,7 +206,12 @@ const EnabledSection: React.FC<{
         <CardButton onClick={() => setShowRotate(true)} disabled={rotating || disabling}>
           Rotate passphrase
         </CardButton>
-        <CardButton variant="secondary" onClick={handleDisable} loading={disabling} disabled={rotating}>
+        <CardButton
+          variant="secondary"
+          onClick={() => setShowDisableDialog(true)}
+          loading={disabling}
+          disabled={rotating}
+        >
           Disable
         </CardButton>
       </div>
@@ -217,9 +223,42 @@ const EnabledSection: React.FC<{
           onSubmitting={setRotating}
         />
       )}
+
+      <DisableConfirmDialog
+        open={showDisableDialog}
+        onClose={() => setShowDisableDialog(false)}
+        onConfirm={handleDisableConfirmed}
+      />
     </div>
   );
 };
+
+const DisableConfirmDialog: React.FC<{
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}> = ({ open, onClose, onConfirm }) => (
+  <Dialog.Root open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <DialogContainer>
+      <div className="flex flex-col gap-4 p-6 max-w-md">
+        <Dialog.Title asChild>
+          <Typography.H4 className="text-grey-10">Disable Console access?</Typography.H4>
+        </Dialog.Title>
+        <Dialog.Description asChild>
+          <Typography.P size="sm" className="text-grey-50">
+            Browser sessions that are currently signed in will keep their cached
+            mnemonic until they close. To decrypt files from a new browser afterwards,
+            you will need to re-enable Console access from here.
+          </Typography.P>
+        </Dialog.Description>
+        <div className="flex gap-2 justify-end mt-2">
+          <CardButton variant="secondary" onClick={onClose}>Cancel</CardButton>
+          <CardButton onClick={onConfirm}>Disable</CardButton>
+        </div>
+      </div>
+    </DialogContainer>
+  </Dialog.Root>
+);
 
 const RotateForm: React.FC<{
   onDone: () => void;
@@ -316,26 +355,31 @@ const PassphraseField: React.FC<{
   </label>
 );
 
+// Per-verdict CSS classes only — no labels, no thresholds. The text
+// label comes from `strength.label` (Rust-owned); the progress value
+// comes from `strength.progressPercent` (Rust-owned). This component
+// is pure presentation — the only thing it decides is which Tailwind
+// colour to use for each verdict.
+const VERDICT_STYLES: Record<PassphraseVerdict, { bar: string; text: string }> = {
+  too_short: { bar: "bg-grey-70",    text: "text-grey-40" },
+  weak:      { bar: "bg-error-60",   text: "text-error-60" },
+  ok:        { bar: "bg-warning-50", text: "text-warning-50" },
+  strong:    { bar: "bg-success-50", text: "text-success-60" },
+};
+
 const StrengthMeter: React.FC<{ strength: PassphraseStrength | null }> = ({ strength }) => {
-  const palette: Record<PassphraseVerdict, { bar: string; label: string; text: string }> = useMemo(
-    () => ({
-      too_short: { bar: "bg-grey-70", label: "Too short", text: "text-grey-40" },
-      weak:      { bar: "bg-error-60", label: "Weak", text: "text-error-60" },
-      ok:        { bar: "bg-warning-50", label: "OK", text: "text-warning-50" },
-      strong:    { bar: "bg-success-50", label: "Strong", text: "text-success-60" },
-    }),
-    [],
-  );
   if (!strength) return null;
-  const pct = Math.max(5, Math.min(100, (strength.bits / 80) * 100));
-  const style = palette[strength.verdict];
+  const style = VERDICT_STYLES[strength.verdict];
   return (
     <div className="flex flex-col gap-1">
       <div className="h-1.5 w-full bg-grey-90 rounded-full overflow-hidden">
-        <div className={cn("h-full rounded-full transition-[width]", style.bar)} style={{ width: `${pct}%` }} />
+        <div
+          className={cn("h-full rounded-full transition-[width]", style.bar)}
+          style={{ width: `${strength.progressPercent}%` }}
+        />
       </div>
       <div className="flex justify-between text-xs">
-        <span className={style.text}>{style.label}</span>
+        <span className={style.text}>{strength.label}</span>
         <span className="text-grey-50">{strength.bits.toFixed(0)} bits</span>
       </div>
       {strength.hints.length > 0 && (

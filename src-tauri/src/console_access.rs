@@ -34,6 +34,7 @@
 //! - SS58 resolution, seal, upload, rotate → Rust.
 
 use serde::Serialize;
+use zeroize::Zeroizing;
 
 use crate::error::{AppError, NotReadyKind, Result};
 
@@ -60,9 +61,10 @@ pub struct ConsoleAccessStatus {
 
 /// Strength verdict bucket used by the UI progress meter. The
 /// thresholds (weak < 40 bits, ok < 50, strong ≥ 50) are set here so
-/// the UI never has to know the rule.
+/// the UI never has to know the rule. `snake_case` JSON so the TS
+/// discriminant matches — `TooShort` → `"too_short"`.
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum PassphraseVerdict {
     TooShort,
     Weak,
@@ -70,16 +72,25 @@ pub enum PassphraseVerdict {
     Strong,
 }
 
-/// Result of [`validate_console_passphrase`]. The UI renders `verdict`
-/// as a meter and `hints` as guidance under the input. The boolean
-/// `acceptable_for_submit` is the authoritative gate — the UI may
-/// disable the submit button on it, and the commands that mutate
-/// state will re-check it so a tampered frontend can't bypass.
+/// Result of [`validate_console_passphrase`]. The UI renders the
+/// `label`, `progress_percent`, and `hints` verbatim and gates the
+/// submit button on `acceptable_for_submit`. Every string and every
+/// threshold originates here — the frontend has zero decisions to
+/// make about passphrase policy.
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PassphraseStrength {
     pub bits: f64,
     pub verdict: PassphraseVerdict,
+    /// User-facing label for this verdict — "Too short", "Weak", "OK",
+    /// "Strong". Owned here so the marketing copy can change in one
+    /// place without touching the frontend.
+    pub label: String,
+    /// 0–100 progress-bar fill. Clamped so the bar is always visible
+    /// even at 0 bits, and never exceeds 100% when the user picks
+    /// something wildly over-strong. Owned here so that moving the
+    /// entropy floor moves the bar's "full" point in lockstep.
+    pub progress_percent: u8,
     pub hints: Vec<String>,
     pub acceptable_for_submit: bool,
 }
@@ -101,11 +112,38 @@ const MIN_ENTROPY_BITS: f64 = 50.0;
 /// score noisily and users need a clear "add words" hint anyway.
 const MIN_PASSPHRASE_LEN: usize = 10;
 
+/// Label shown next to the strength meter. Owned in Rust so copy
+/// changes don't require a frontend edit.
+fn verdict_label(verdict: PassphraseVerdict) -> &'static str {
+    match verdict {
+        PassphraseVerdict::TooShort => "Too short",
+        PassphraseVerdict::Weak => "Weak",
+        PassphraseVerdict::Ok => "OK",
+        PassphraseVerdict::Strong => "Strong",
+    }
+}
+
+/// Map a bits-of-entropy value to a 0–100 meter fill.
+///
+/// The bar is "full" at `MIN_ENTROPY_BITS` (the acceptable-for-submit
+/// threshold), not at some arbitrary 80-bit visual maximum. That way
+/// the full point moves with the policy if we ever raise the floor,
+/// and users don't see a meter that looks half-empty when they've
+/// already cleared the acceptance bar.
+fn bits_to_percent(bits: f64) -> u8 {
+    // Clamp below at 5% so the bar is visible even for the empty case.
+    let raw = (bits / MIN_ENTROPY_BITS) * 100.0;
+    raw.clamp(5.0, 100.0).round() as u8
+}
+
 fn score_passphrase(passphrase: &str) -> PassphraseStrength {
     if passphrase.chars().count() < MIN_PASSPHRASE_LEN {
+        let verdict = PassphraseVerdict::TooShort;
         return PassphraseStrength {
             bits: 0.0,
-            verdict: PassphraseVerdict::TooShort,
+            verdict,
+            label: verdict_label(verdict).to_string(),
+            progress_percent: bits_to_percent(0.0),
             hints: vec![format!(
                 "Use at least {MIN_PASSPHRASE_LEN} characters. A passphrase of 4+ unrelated words is easier to remember and stronger than a short complicated password."
             )],
@@ -149,8 +187,63 @@ fn score_passphrase(passphrase: &str) -> PassphraseStrength {
     PassphraseStrength {
         bits,
         verdict,
+        label: verdict_label(verdict).to_string(),
+        progress_percent: bits_to_percent(bits),
         hints,
         acceptable_for_submit: bits >= MIN_ENTROPY_BITS,
+    }
+}
+
+/// Outcome of checking an operation's pre-conditions (passphrase
+/// strength + backup-confirmed checkbox). Pure function — no state,
+/// no network — so it can be unit-tested directly without spinning
+/// up a Tauri `AppState`. The mutating commands below thread their
+/// inputs through this gate before doing anything else, so the gate
+/// is the single point of enforcement on the Rust side.
+#[derive(Debug, PartialEq, Eq)]
+enum PolicyGate {
+    Ok,
+    PassphraseTooWeak { bits_seen: u32 },
+    BackupNotConfirmed,
+    PassphraseSameAsOld,
+}
+
+fn check_enable_policy(passphrase: &str, confirmed_backup: bool) -> PolicyGate {
+    let strength = score_passphrase(passphrase);
+    if !strength.acceptable_for_submit {
+        return PolicyGate::PassphraseTooWeak {
+            bits_seen: strength.bits.round() as u32,
+        };
+    }
+    if !confirmed_backup {
+        return PolicyGate::BackupNotConfirmed;
+    }
+    PolicyGate::Ok
+}
+
+fn check_rotation_policy(old: &str, new: &str, confirmed_backup: bool) -> PolicyGate {
+    let gate = check_enable_policy(new, confirmed_backup);
+    if gate != PolicyGate::Ok {
+        return gate;
+    }
+    if old == new {
+        return PolicyGate::PassphraseSameAsOld;
+    }
+    PolicyGate::Ok
+}
+
+fn policy_to_err(gate: PolicyGate) -> Option<AppError> {
+    match gate {
+        PolicyGate::Ok => None,
+        PolicyGate::PassphraseTooWeak { bits_seen } => Some(AppError::Validation(format!(
+            "Passphrase is too weak: {bits_seen} bits (need ≥ {MIN_ENTROPY_BITS:.0}). Please pick a stronger passphrase.",
+        ))),
+        PolicyGate::BackupNotConfirmed => Some(AppError::Validation(
+            "You must confirm that you have saved your recovery phrase offline before enabling Console access.".into(),
+        )),
+        PolicyGate::PassphraseSameAsOld => Some(AppError::Validation(
+            "New passphrase must differ from the current one.".into(),
+        )),
     }
 }
 
@@ -158,10 +251,14 @@ fn score_passphrase(passphrase: &str) -> PassphraseStrength {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-/// Score a passphrase. Called live as the user types (debounced on the
-/// frontend). Pure function — no state reads, no network.
+/// Score a passphrase. Called live as the user types (debounced on
+/// the frontend). Pure function — no state reads, no network. The
+/// `String` argument is wrapped in `Zeroizing` so the heap copy is
+/// scrubbed before the stack frame returns; the frontend keeps a
+/// `Uint8Array` it can clear when appropriate.
 #[tauri::command]
 pub fn validate_console_passphrase(passphrase: String) -> PassphraseStrength {
+    let passphrase = Zeroizing::new(passphrase);
     score_passphrase(&passphrase)
 }
 
@@ -188,24 +285,17 @@ pub async fn console_access_status(
 ///
 /// `confirmed_backup` must be `true` — the UI only sets it after the
 /// user has ticked the "I saved my recovery phrase offline" checkbox.
-/// Rust re-checks here so a tampered frontend can't bypass.
+/// Rust re-checks here so a tampered frontend can't bypass. The
+/// passphrase is zeroized on drop regardless of which branch returns.
 #[tauri::command]
 pub async fn enable_console_access(
     _state: tauri::State<'_, crate::app_state::AppState>,
     passphrase: String,
     confirmed_backup: bool,
 ) -> Result<()> {
-    let strength = score_passphrase(&passphrase);
-    if !strength.acceptable_for_submit {
-        return Err(AppError::Validation(format!(
-            "Passphrase is too weak: {:.0} bits (need ≥ {MIN_ENTROPY_BITS:.0}). Please pick a stronger passphrase.",
-            strength.bits
-        )));
-    }
-    if !confirmed_backup {
-        return Err(AppError::Validation(
-            "You must confirm that you have saved your recovery phrase offline before enabling Console access.".into(),
-        ));
+    let passphrase = Zeroizing::new(passphrase);
+    if let Some(err) = policy_to_err(check_enable_policy(&passphrase, confirmed_backup)) {
+        return Err(err);
     }
 
     // TODO(console-access): after the hcfs-client rev lands:
@@ -214,7 +304,9 @@ pub async fn enable_console_access(
     //   3. let blob = hcfs_client::mnemonic_blob::seal_mnemonic(&mnemonic, &passphrase, &ss58)?;
     //   4. For OAuth users: POST /v1/users/bind { oauth_sub, ss58 } (idempotent).
     //   5. POST /v1/mnemonic-blob { blob } (sr25519-signed).
-    //   6. Zeroize passphrase and derived buffers on drop.
+    //
+    // Passphrase and any derived material are already wrapped in
+    // `Zeroizing` so they scrub on return.
     Err(AppError::NotReady(NotReadyKind::ConfigMissing))
 }
 
@@ -227,22 +319,10 @@ pub async fn rotate_console_passphrase(
     new_passphrase: String,
     confirmed_backup: bool,
 ) -> Result<()> {
-    let strength = score_passphrase(&new_passphrase);
-    if !strength.acceptable_for_submit {
-        return Err(AppError::Validation(format!(
-            "New passphrase is too weak: {:.0} bits (need ≥ {MIN_ENTROPY_BITS:.0}).",
-            strength.bits
-        )));
-    }
-    if !confirmed_backup {
-        return Err(AppError::Validation(
-            "You must confirm that you have saved your recovery phrase offline before rotating.".into(),
-        ));
-    }
-    if old_passphrase == new_passphrase {
-        return Err(AppError::Validation(
-            "New passphrase must differ from the current one.".into(),
-        ));
+    let old_passphrase = Zeroizing::new(old_passphrase);
+    let new_passphrase = Zeroizing::new(new_passphrase);
+    if let Some(err) = policy_to_err(check_rotation_policy(&old_passphrase, &new_passphrase, confirmed_backup)) {
+        return Err(err);
     }
 
     // TODO(console-access): after the hcfs-client rev lands:
@@ -308,27 +388,110 @@ mod tests {
         assert_eq!(a.verdict, b.verdict);
     }
 
-    #[tokio::test]
-    async fn enable_rejects_weak_passphrase_before_hcfs_stub() {
-        // We can't build a full AppState here without a pool; the policy
-        // check runs before touching state, so passing a dangling State
-        // is fine — the weak-passphrase error fires first.
-        //
-        // This test pins the invariant: any future refactor that reads
-        // state before running validate_passphrase() will fail this.
-        //
-        // (Using an unsafe cast is avoided — we just verify the scorer
-        // is the gate by exercising it directly.)
-        let weak = score_passphrase("short");
-        assert!(!weak.acceptable_for_submit);
+    // ── Policy gate — the actual gates the mutating commands run ──
+
+    #[test]
+    fn enable_policy_weak_passphrase_fails_with_bits() {
+        match check_enable_policy("short", true) {
+            PolicyGate::PassphraseTooWeak { bits_seen } => assert_eq!(bits_seen, 0),
+            other => panic!("expected PassphraseTooWeak, got {other:?}"),
+        }
     }
 
     #[test]
-    fn rotation_rejects_same_passphrase() {
-        // Pure policy check — doesn't touch state either.
-        let same = "violet octopus hammer spruce";
-        // Score it to confirm it would pass the weakness gate — the
-        // same-passphrase check comes after.
-        assert!(score_passphrase(same).acceptable_for_submit);
+    fn enable_policy_backup_unconfirmed_fails_after_strength_passes() {
+        // Use a strong passphrase so we know the failure is the
+        // checkbox, not the entropy floor. If this assert swaps we'll
+        // know the gate order changed.
+        assert_eq!(
+            check_enable_policy("violet octopus hammer spruce", false),
+            PolicyGate::BackupNotConfirmed,
+        );
+    }
+
+    #[test]
+    fn enable_policy_happy_path() {
+        assert_eq!(
+            check_enable_policy("violet octopus hammer spruce", true),
+            PolicyGate::Ok,
+        );
+    }
+
+    #[test]
+    fn rotation_policy_same_passphrase_fails() {
+        let strong = "violet octopus hammer spruce";
+        assert_eq!(
+            check_rotation_policy(strong, strong, true),
+            PolicyGate::PassphraseSameAsOld,
+        );
+    }
+
+    #[test]
+    fn rotation_policy_inherits_enable_gates() {
+        // New passphrase too weak — same-passphrase check should not
+        // fire first. This locks the gate ordering.
+        assert!(matches!(
+            check_rotation_policy("anything", "short", true),
+            PolicyGate::PassphraseTooWeak { .. },
+        ));
+        // Weakness check happens BEFORE backup check — lock that too.
+        assert!(matches!(
+            check_rotation_policy("anything", "short", false),
+            PolicyGate::PassphraseTooWeak { .. },
+        ));
+    }
+
+    #[test]
+    fn rotation_policy_happy_path() {
+        assert_eq!(
+            check_rotation_policy("old pass phrase alpha", "violet octopus hammer spruce", true),
+            PolicyGate::Ok,
+        );
+    }
+
+    #[test]
+    fn policy_to_err_messages_mention_the_right_rule() {
+        // We don't pin exact wording (copy can change) but we do pin
+        // that each variant produces a user-facing Validation error
+        // so the frontend always gets something renderable.
+        for gate in [
+            PolicyGate::PassphraseTooWeak { bits_seen: 12 },
+            PolicyGate::BackupNotConfirmed,
+            PolicyGate::PassphraseSameAsOld,
+        ] {
+            assert!(matches!(policy_to_err(gate), Some(AppError::Validation(_))));
+        }
+        assert!(policy_to_err(PolicyGate::Ok).is_none());
+    }
+
+    // ── Progress-bar math ──
+
+    #[test]
+    fn progress_percent_is_clamped() {
+        assert_eq!(bits_to_percent(0.0), 5);
+        assert_eq!(bits_to_percent(MIN_ENTROPY_BITS), 100);
+        assert_eq!(bits_to_percent(MIN_ENTROPY_BITS * 2.0), 100);
+        // Halfway to the threshold should be halfway on the bar.
+        let half = bits_to_percent(MIN_ENTROPY_BITS / 2.0);
+        assert!((49..=51).contains(&half), "expected ~50%, got {half}");
+    }
+
+    #[test]
+    fn verdict_labels_cover_all_variants() {
+        // Guards against adding a new variant and forgetting the
+        // label match arm — the exhaustive match in `verdict_label`
+        // would stop compiling, and here we assert the strings are
+        // non-empty and distinct.
+        use std::collections::HashSet;
+        let labels: HashSet<&str> = [
+            verdict_label(PassphraseVerdict::TooShort),
+            verdict_label(PassphraseVerdict::Weak),
+            verdict_label(PassphraseVerdict::Ok),
+            verdict_label(PassphraseVerdict::Strong),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(labels.len(), 4, "each verdict needs a unique label");
+        assert!(labels.iter().all(|l| !l.is_empty()));
     }
 }

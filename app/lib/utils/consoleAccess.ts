@@ -20,6 +20,10 @@ export type PassphraseVerdict = "too_short" | "weak" | "ok" | "strong";
 export interface PassphraseStrength {
     bits: number;
     verdict: PassphraseVerdict;
+    /** User-facing label owned by Rust — "Too short", "Weak", "OK", "Strong". */
+    label: string;
+    /** 0–100 fill for the progress meter, clamped in Rust. */
+    progressPercent: number;
     hints: string[];
     /**
      * Authoritative submit gate. The UI disables the submit button on
