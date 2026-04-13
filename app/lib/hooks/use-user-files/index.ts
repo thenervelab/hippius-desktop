@@ -86,12 +86,24 @@ export function useUserFiles() {
       // retries on timeout, and the FE surfaces `error` via the files
       // container when all retries are exhausted — instead of the
       // indefinite spinner the bug report surfaced.
-      const result = await Promise.race([
-        invoke<UserFilesResult>("get_user_files", { accountId: polkadotAddress }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("get_user_files timed out")), 15_000),
-        ),
-      ]);
+      //
+      // The timer is cleared in `finally` so the happy path doesn't
+      // keep a 15s timer alive (and its closure) per fetch — TanStack
+      // Query refetches keep arriving on events, so the leak would
+      // accumulate noticeably.
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error("get_user_files timed out")), 15_000);
+      });
+      let result: UserFilesResult;
+      try {
+        result = await Promise.race([
+          invoke<UserFilesResult>("get_user_files", { accountId: polkadotAddress }),
+          timeout,
+        ]);
+      } finally {
+        if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      }
 
       return {
         files: result.files,

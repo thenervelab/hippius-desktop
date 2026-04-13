@@ -257,7 +257,7 @@ pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppS
     // Regenerating then corrupted the drive password on the next
     // decrypt. Instead, surface `MasterMnemonicUnrecoverable` so the
     // frontend's reauth banner / seed-phrase re-entry flow takes over.
-    if has_existing_mnemonic_state(&state, &account_id).await? {
+    if has_existing_mnemonic_state(state.pool()?, &account_id).await? {
         warn!(
             "Mnemonic recovery failed for account {} but encrypted state exists — refusing to generate a new mnemonic (reauth required)",
             &account_id[..8.min(account_id.len())]
@@ -289,14 +289,17 @@ pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppS
 /// Checked artifacts:
 /// - `master_enc_mnemonic.json` under `~/.hippius/drives/<account_key>/`.
 /// - A `hcfs_config` row with `encryption_version > 0`.
-pub(crate) async fn has_existing_mnemonic_state(state: &crate::app_state::AppState, account_id: &str) -> Result<bool> {
+///
+/// Takes `&SqlitePool` (not `&AppState`) so unit tests can exercise the
+/// DB branch with an in-memory pool without standing up the full
+/// application state.
+pub(crate) async fn has_existing_mnemonic_state(pool: &sqlx::SqlitePool, account_id: &str) -> Result<bool> {
     if let Ok(path) = master_mnemonic_path(account_id)
         && path.exists()
     {
         return Ok(true);
     }
 
-    let pool = state.pool()?;
     let owner = account_key(account_id);
     let row: Option<(i32,)> = sqlx::query_as("SELECT COALESCE(encryption_version, 0) FROM hcfs_config WHERE owner = ? LIMIT 1")
         .bind(&owner)
@@ -428,5 +431,99 @@ mod tests {
             dir.display()
         );
         assert!(components.contains(&"drives".to_string()), "should be under drives: {}", dir.display());
+    }
+
+    // ── has_existing_mnemonic_state ─────────────────────────────────
+    //
+    // The DB branch — `hcfs_config.encryption_version > 0` — is what
+    // guards the release-mode scenario that motivated these tests (an
+    // OAuth user with a previously-set-up drive whose OS keychain
+    // entry was evicted). The file-exists branch is exercised by the
+    // integration tests in `src-tauri/tests/` that spin up a real
+    // account directory; here we focus on the DB shape.
+
+    use sqlx::sqlite::SqlitePool;
+
+    async fn make_hcfs_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.expect("open in-memory db");
+        sqlx::query(
+            "CREATE TABLE hcfs_config (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL UNIQUE,
+                server_url TEXT NOT NULL DEFAULT '',
+                drive_password TEXT NOT NULL DEFAULT '',
+                encryption_version INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    // A randomized-looking SS58 we never combine with HOME so the file
+    // branch can't accidentally fire during the DB-branch tests on a
+    // developer machine that happens to have `master_enc_mnemonic.json`
+    // lying around.
+    const UNUSED_ACCOUNT: &str = "5TestAccountIdForHasExistingMnemonicState0000";
+
+    #[tokio::test]
+    async fn no_row_and_no_file_returns_false() {
+        let pool = make_hcfs_pool().await;
+        let result = has_existing_mnemonic_state(&pool, UNUSED_ACCOUNT).await.unwrap();
+        assert!(!result, "fresh account with no artifacts should not block regeneration");
+    }
+
+    #[tokio::test]
+    async fn plaintext_row_returns_false() {
+        // encryption_version = 0 means the row predates at-rest
+        // encryption — the old `get_mnemonic_for_account` stages could
+        // still read it with `None`, so regeneration isn't needed.
+        let pool = make_hcfs_pool().await;
+        let owner = account_key(UNUSED_ACCOUNT);
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, ?, ?, 0)")
+            .bind(&owner)
+            .bind("https://example")
+            .bind("plaintext-password")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let result = has_existing_mnemonic_state(&pool, UNUSED_ACCOUNT).await.unwrap();
+        assert!(!result, "plaintext config row must not trigger the guard");
+    }
+
+    #[tokio::test]
+    async fn encrypted_row_returns_true() {
+        // The load-bearing case: encrypted drive_password exists, so
+        // regenerating a mnemonic would permanently lock the user out.
+        let pool = make_hcfs_pool().await;
+        let owner = account_key(UNUSED_ACCOUNT);
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, ?, ?, 1)")
+            .bind(&owner)
+            .bind("https://example")
+            .bind("base64-ciphertext-blob")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let result = has_existing_mnemonic_state(&pool, UNUSED_ACCOUNT).await.unwrap();
+        assert!(result, "encrypted row must block regeneration");
+    }
+
+    #[tokio::test]
+    async fn different_owner_does_not_match() {
+        // The lookup is scoped by `owner = account_key(account_id)`;
+        // another user's encrypted row must not leak into this
+        // account's regeneration decision.
+        let pool = make_hcfs_pool().await;
+        let other_owner = account_key("5OtherAccountWithEncryptedState0000000000000");
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, ?, ?, 1)")
+            .bind(&other_owner)
+            .bind("https://example")
+            .bind("encrypted")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let result = has_existing_mnemonic_state(&pool, UNUSED_ACCOUNT).await.unwrap();
+        assert!(!result, "another user's encrypted row must not trigger the guard");
     }
 }

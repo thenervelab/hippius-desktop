@@ -22,6 +22,7 @@ import { appStore } from "./store/jotaiStore";
 import { migrationCheckAtom, DEFAULT_MIGRATION_CHECK_STATE } from "./global-atoms/migrationAtoms";
 import { splashCompleteAtom } from "./global-atoms/splashAtoms";
 import { syncRequiresReauthAtom } from "./global-atoms/unpinAtoms";
+import { isMasterMnemonicUnrecoverable } from "./utils/dispatchTauriError";
 import { useAtomValue } from "jotai";
 
 /** Result from Rust login_with_mnemonic command */
@@ -332,7 +333,7 @@ export function WalletAuthProvider({
             // to `initSync` which would surface as the opaque
             // `Crypto: decryption failed` error on the next drive
             // resume.
-            if ((err as { kind?: string; subkind?: string } | null)?.subkind === "MASTER_MNEMONIC_UNRECOVERABLE") {
+            if (isMasterMnemonicUnrecoverable(err)) {
               appStore.set(syncRequiresReauthAtom, true);
             }
           }
@@ -500,7 +501,7 @@ export function WalletAuthProvider({
         // state already exists, flag reauth so the UI prompts recovery
         // instead of letting `initSync` fail opaquely with `Crypto:
         // decryption failed`.
-        if ((err as { kind?: string; subkind?: string } | null)?.subkind === "MASTER_MNEMONIC_UNRECOVERABLE") {
+        if (isMasterMnemonicUnrecoverable(err)) {
           appStore.set(syncRequiresReauthAtom, true);
         }
       }

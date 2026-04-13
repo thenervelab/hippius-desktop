@@ -43,7 +43,11 @@ async fn arm_asset_scope_for_account(app: &tauri::AppHandle, state: &tauri::Stat
             return;
         }
     };
-    for sp in paths.iter().filter(|sp| !sp.path.is_empty()) {
+    // Skip the internal `migration` pseudo-drive — its path is a
+    // scratch directory used during S3 → HCFS migration and shouldn't
+    // be served via the `asset://` protocol. Matches the filter used
+    // in `get_all_drive_statuses_inner` and `auto_init_sync_inner`.
+    for sp in paths.iter().filter(|sp| !sp.path.is_empty() && sp.label != "migration") {
         crate::sync::files::allow_asset_directory(app, &sp.path);
     }
 }
