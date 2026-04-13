@@ -67,6 +67,11 @@ export default function OAuthCallbackPage() {
 
                 const token = paramsToUse.get("token") || undefined;
                 const code = paramsToUse.get("code") || undefined;
+                // `state` is the CSRF token we minted in start_oauth_flow
+                // and threaded through the callback URL. Forward it to
+                // Rust unchanged — complete_oauth_flow rejects the
+                // callback outright if it doesn't match a pending flow.
+                const state = paramsToUse.get("state") || undefined;
                 const error = paramsToUse.get("error") || undefined;
                 const errorDescription = paramsToUse.get("error_description") || undefined;
 
@@ -93,6 +98,7 @@ export default function OAuthCallbackPage() {
                     params: {
                         token: token || null,
                         code: code || null,
+                        state: state || null,
                         error: error || null,
                         errorDescription: errorDescription || null,
                         userId: userId ? parseInt(userId, 10) : null,

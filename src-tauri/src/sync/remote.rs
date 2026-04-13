@@ -77,7 +77,7 @@ async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Resul
     let config = HcfsClientConfig {
         base_url: server_url,
         bearer_token,
-        accept_invalid_certs: true,
+        accept_invalid_certs: crate::sync::config::ACCEPT_INVALID_CERTS,
         billing_bypass_token: None,
         ss58_address: account_id.to_string(),
         folder_hash: folder_hash(label),

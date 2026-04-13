@@ -204,35 +204,51 @@ pub async fn get_drive_mnemonic(state: tauri::State<'_, crate::app_state::AppSta
 /// Ensure a BIP-39 mnemonic is available for HCFS sync.
 ///
 /// Tries the drive's encrypted mnemonic first, falls back to generating
-/// a new one. Replaces the TypeScript `ensureSyncMnemonic.ts` that did
-/// the same fallback with a module-level dedup promise.
+/// a new one. The resolved (or generated) mnemonic is cached in
+/// `AuthInfo.mnemonic` so every downstream Rust caller that needs it can
+/// pull it from memory via `get_mnemonic_for_account` without the mnemonic
+/// ever having to cross the IPC boundary.
+///
+/// # Security
+///
+/// This command returns `Result<()>` rather than the raw phrase. The
+/// frontend used to consume the return value and hand it back to
+/// `initialize_sync` / `auto_init_sync`, which round-tripped the seed
+/// phrase through JavaScript memory unnecessarily. Rust already has
+/// everything it needs once this function returns, so the return value
+/// is intentionally empty. The explicit reveal flow lives in
+/// `get_drive_mnemonic` — the recovery-phrase settings page is the only
+/// legitimate consumer of the raw string.
 #[tauri::command]
-pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String> {
-    // Try drive mnemonic first. Unwrap at the IPC return boundary so Tauri
-    // can serialize a plain `String`; the `Zeroizing` wrapper is dropped
-    // immediately after the clone, wiping the in-process copy.
+pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<()> {
+    // Try drive mnemonic first.
     if let Ok(m) = get_mnemonic_for_account(&state, &account_id).await
         && !m.is_empty()
     {
-        return Ok((*m).clone());
+        // Already cached by stage 1 of `get_mnemonic_for_account` when it
+        // hit `AuthInfo.mnemonic`, or freshly resolved from disk/DB. Make
+        // sure the active AuthInfo slot has it so downstream Rust callers
+        // pick it up without re-traversing the fallback chain.
+        state.auth.lock()?.cache_session_mnemonic(&account_id, (*m).clone());
+        return Ok(());
     }
 
-    // Fall back to generating a new mnemonic (OAuth users on first sync)
+    // Fall back to generating a new mnemonic (OAuth users on first sync).
     info!(
         "No drive mnemonic available, generating new one for account {}",
         &account_id[..8.min(account_id.len())]
     );
     let generated = crate::auth::login::generate_mnemonic_internal()?;
 
-    // Cache for the active session so subsequent get_mnemonic_for_account
-    // calls (e.g. migration) hit Stage 1 immediately, regardless of whether
-    // auto_init_sync has finished writing master_enc_mnemonic.json yet.
-    // The helper is gated on the active substrate_address so a stale cache
-    // from a previous account never leaks across logins.
+    // Cache for the active session so subsequent `get_mnemonic_for_account`
+    // calls (e.g. migration, auto_init_sync) hit Stage 1 immediately,
+    // regardless of whether auto_init_sync has finished writing
+    // `master_enc_mnemonic.json` yet. The helper is gated on the active
+    // substrate_address so a stale cache from a previous account never
+    // leaks across logins.
     state.auth.lock()?.cache_session_mnemonic(&account_id, (*generated).clone());
 
-    // Return plain String for IPC serialization; `generated` is zeroized on drop.
-    Ok((*generated).clone())
+    Ok(())
 }
 
 /// Create a password-protected zip file containing the plaintext mnemonic.

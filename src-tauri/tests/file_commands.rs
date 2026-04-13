@@ -152,6 +152,62 @@ async fn resolve_missing_sync_path() {
     assert!(result.unwrap_err().contains("No sync path configured"));
 }
 
+/// Helper mirroring the sync_paths gate added to `export_file`:
+/// returns Ok(()) when the (owner, path) pair exists in the table.
+async fn assert_export_sync_path_registered(pool: &SqlitePool, account_id: &str, sync_path: &str) -> Result<(), String> {
+    let owner = account_key(account_id);
+    let row: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM sync_paths WHERE owner = ? AND path = ? LIMIT 1")
+        .bind(&owner)
+        .bind(sync_path)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error: {e}"))?;
+    if row.is_none() {
+        return Err("sync_path is not a registered sync folder for this account".to_string());
+    }
+    Ok(())
+}
+
+/// Export gate accepts a sync_path that is registered for the account.
+#[tokio::test]
+async fn export_accepts_registered_sync_path() {
+    let pool = setup_db().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let sync_root = tmp.path().to_str().unwrap();
+    insert_sync_path(&pool, "5ABC", sync_root, "default").await;
+
+    let result = assert_export_sync_path_registered(&pool, "5ABC", sync_root).await;
+    assert!(result.is_ok(), "Registered sync_path should be accepted: {result:?}");
+}
+
+/// Export gate rejects an arbitrary sync_path (the pre-fix bypass).
+#[tokio::test]
+async fn export_rejects_arbitrary_sync_path() {
+    let pool = setup_db().await;
+    // Simulate a compromised caller trying to export /etc/passwd by
+    // pointing sync_path at the root. With the gate, this fails before
+    // `ensure_within` ever gets a chance.
+    let result = assert_export_sync_path_registered(&pool, "5ABC", "/").await;
+    assert!(result.is_err());
+    assert!(
+        result.unwrap_err().contains("not a registered sync folder"),
+        "Arbitrary sync_path should be rejected"
+    );
+}
+
+/// Export gate rejects a registered path that belongs to a different account.
+#[tokio::test]
+async fn export_rejects_sync_path_from_different_account() {
+    let pool = setup_db().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let sync_root = tmp.path().to_str().unwrap();
+    // Register for account A, query from account B
+    insert_sync_path(&pool, "5AAA", sync_root, "default").await;
+
+    let result = assert_export_sync_path_registered(&pool, "5BBB", sync_root).await;
+    assert!(result.is_err(), "Cross-account sync_path should be rejected");
+}
+
 /// Export copies a subfolder file to the output location.
 #[tokio::test]
 async fn export_subfolder_file() {

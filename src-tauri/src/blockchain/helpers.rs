@@ -1,22 +1,27 @@
 //! Internal helpers shared across blockchain submodules.
+//!
+//! Transaction signers are `subxt_signer::sr25519::Keypair` values cloned
+//! out of `AppState.auth`. That type implements subxt's `Signer` trait
+//! directly, so there is no `PairSigner` wrapper and no `sp-core` type
+//! leakage in the signing path.
 
 use crate::auth::state::AuthCapabilities;
 use crate::error::{AppError, NotReadyKind};
-use subxt::tx::PairSigner;
+use subxt_signer::sr25519::Keypair;
 
-/// Build a `PairSigner` from the sr25519 keypair in `AppState.auth`.
+/// Clone the sr25519 keypair from `AppState.auth` for transaction signing.
 ///
 /// Returns `NotReady(SigningKeyUnavailable)` for OAuth users or sessions
 /// restored from disk that haven't been unlocked with a passcode yet.
-/// The frontend can dispatch on `kind === "NotReady"` + the structured
+/// The frontend dispatches on `kind === "NotReady"` + the structured
 /// message to show "this action requires your seed phrase".
-pub(crate) fn get_signer(app_state: &crate::app_state::AppState) -> Result<PairSigner<subxt::PolkadotConfig, sp_core::sr25519::Pair>, AppError> {
+pub(crate) fn get_signer(app_state: &crate::app_state::AppState) -> Result<Keypair, AppError> {
     let auth = app_state.auth.lock().map_err(|e| AppError::Other(format!("Lock error: {e}")))?;
     match auth.capabilities {
-        AuthCapabilities::Full => {
-            let pair = auth.sr25519_pair.clone().ok_or(AppError::NotReady(NotReadyKind::SigningKeyUnavailable))?;
-            Ok(PairSigner::new(pair))
-        }
+        AuthCapabilities::Full => auth
+            .sr25519_pair
+            .clone()
+            .ok_or(AppError::NotReady(NotReadyKind::SigningKeyUnavailable)),
         AuthCapabilities::OAuthOnly | AuthCapabilities::Restored => Err(AppError::NotReady(NotReadyKind::SigningKeyUnavailable)),
         AuthCapabilities::None => Err(AppError::Auth("Not authenticated — please log in first".into())),
     }
@@ -35,9 +40,7 @@ pub(crate) fn get_substrate_address(app_state: &crate::app_state::AppState) -> R
 /// Prefer this over separate [`get_signer`] + [`get_substrate_address`] calls
 /// when both values are needed, to avoid acquiring the auth mutex twice.
 /// Same capability gating as [`get_signer`].
-pub(crate) fn get_signer_and_address(
-    app_state: &crate::app_state::AppState,
-) -> Result<(PairSigner<subxt::PolkadotConfig, sp_core::sr25519::Pair>, String), AppError> {
+pub(crate) fn get_signer_and_address(app_state: &crate::app_state::AppState) -> Result<(Keypair, String), AppError> {
     let auth = app_state.auth.lock().map_err(|e| AppError::Other(format!("Lock error: {e}")))?;
     match auth.capabilities {
         AuthCapabilities::Full => {
@@ -46,7 +49,7 @@ pub(crate) fn get_signer_and_address(
                 .substrate_address
                 .clone()
                 .ok_or(AppError::Auth("Not authenticated — please log in first".into()))?;
-            Ok((PairSigner::new(pair), address))
+            Ok((pair, address))
         }
         AuthCapabilities::OAuthOnly | AuthCapabilities::Restored => Err(AppError::NotReady(NotReadyKind::SigningKeyUnavailable)),
         AuthCapabilities::None => Err(AppError::Auth("Not authenticated — please log in first".into())),

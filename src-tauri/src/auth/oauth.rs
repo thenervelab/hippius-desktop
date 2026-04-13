@@ -1,13 +1,55 @@
-//! OAuth flow commands and PKCE state.
+//! OAuth flow commands and state binding.
 //!
-//! Handles OAuth URL construction, PKCE state, token exchange,
-//! and session persistence. The frontend never stores OAuth state
-//! in localStorage/sessionStorage.
+//! Handles OAuth URL construction, token exchange, and session
+//! persistence. The frontend never stores OAuth state in
+//! localStorage/sessionStorage.
+//!
+//! # CSRF / state binding
+//!
+//! Every call to [`start_oauth_flow`] mints a cryptographically random
+//! `state` token (RFC 6749 §10.12) and stores it in
+//! [`OAuthState::pkce_states`] keyed by the state value. The token is
+//! threaded through the callback URL as a query parameter so the
+//! Hippius API server and (for code-grant flows) the upstream OAuth
+//! provider pass it back untouched on redirect. [`complete_oauth_flow`]
+//! then requires the incoming callback to carry a `state` value that
+//! matches a non-expired entry in the store — anything without a
+//! matching state, including a deep link delivered by an attacker who
+//! can reach the `hippiusapp://` custom scheme, is rejected as
+//! untrusted.
+//!
+//! The server's `/accounts/<provider>/login/` endpoint also sets its
+//! own Django `state` cookie for the upstream Google/GitHub leg; ours
+//! is a defence-in-depth check on the desktop side and does NOT
+//! replace it.
+//!
+//! Full RFC 7636 PKCE (code_challenge/code_verifier) is not used: the
+//! Hippius `/api/auth/exchange/` endpoint does not consume those fields
+//! and the upstream provider handshake is brokered by the Hippius
+//! server, not the desktop. Adding PKCE end-to-end would require
+//! server-side changes. The state binding implemented here closes the
+//! specific desktop-side CSRF hole — that a stale deep link could
+//! impersonate a session — without needing server cooperation.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
-/// In-flight OAuth PKCE states, keyed by the `state` parameter.
+/// Maximum age of a pending OAuth flow. Any `PkceState` older than this
+/// is considered expired and discarded on the next lookup. Five minutes
+/// is long enough to complete a legitimate browser-based login (user
+/// opens browser → signs in → redirected back) while short enough that
+/// a dormant entry can't be weaponized hours after the user abandoned
+/// their login attempt.
+const PKCE_STATE_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// In-flight OAuth flow states, keyed by the random `state` CSRF token.
+///
+/// Keying by state (not by provider) lets multiple overlapping flows
+/// coexist — e.g. the user clicks "Sign in with Google" twice in a
+/// row, or the first attempt is abandoned and a second is started.
+/// Each flow's callback can still be matched to the correct entry
+/// because the random token is unique per `start_oauth_flow` call.
 pub struct OAuthState {
     pub pkce_states: Mutex<HashMap<String, PkceState>>,
 }
@@ -28,16 +70,35 @@ impl OAuthState {
 
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
-/// Transient PKCE state for an in-flight OAuth authorization.
+/// Transient state for an in-flight OAuth authorization.
 ///
-/// Keyed by provider name in `OAuthState.pkce_states` to prevent
-/// cross-provider confusion when multiple flows overlap.
+/// Stored in `OAuthState::pkce_states` under the random CSRF `state`
+/// token that was minted by `start_oauth_flow` and embedded in the
+/// OAuth callback URL. `created_at` drives TTL expiry (see
+/// [`PKCE_STATE_TTL`]) so a deep link that surfaces long after the
+/// user abandoned the login attempt is rejected as untrusted.
 pub struct PkceState {
+    /// Upstream OAuth provider (`"google" | "github" | "apple"`). Used
+    /// as the `code_verifier` placeholder the Hippius server currently
+    /// expects on `/api/auth/exchange/`.
     provider: String,
-    #[expect(dead_code)] // stored for future nonce validation in complete_oauth_flow
-    nonce: String,
+    created_at: Instant,
+}
+
+/// Drop any `PkceState` entries older than [`PKCE_STATE_TTL`] and
+/// return how many remain. Called before reading the map in
+/// `complete_oauth_flow` so the pending-flow check can't be satisfied
+/// by an ancient entry.
+fn purge_expired(states: &mut HashMap<String, PkceState>) -> usize {
+    let before = states.len();
+    states.retain(|_, s| s.created_at.elapsed() < PKCE_STATE_TTL);
+    let purged = before - states.len();
+    if purged > 0 {
+        debug!(purged, "Expired OAuth PKCE state entries");
+    }
+    states.len()
 }
 
 const API_BASE_URL: &str = "https://api.hippius.com";
@@ -61,11 +122,19 @@ pub struct OAuthUrlResult {
 /// Either `token` (direct grant) or `code` (authorization code) will be
 /// present, but never both. Error fields are populated when the provider
 /// rejects the request.
+///
+/// `state` is the CSRF token that was minted in [`start_oauth_flow`]
+/// and embedded in the callback URL. `complete_oauth_flow` requires
+/// this field to match a non-expired entry in
+/// [`OAuthState::pkce_states`] before accepting the rest of the
+/// payload — this closes the cold-deep-link attack where a malicious
+/// `hippiusapp://auth/callback?token=…` could impersonate a session.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuthCallbackParams {
     pub token: Option<String>,
     pub code: Option<String>,
+    pub state: Option<String>,
     pub error: Option<String>,
     pub error_description: Option<String>,
     pub user_id: Option<i64>,
@@ -104,6 +173,15 @@ struct ExchangeUser {
 
 /// Build the OAuth authorization URL for the given provider and return it.
 /// The frontend opens this URL in the external browser.
+///
+/// Mints a random `state` token, stashes a [`PkceState`] keyed by that
+/// token in [`OAuthState::pkce_states`], and embeds the token in the
+/// callback URL as `&state=<state>`. The Hippius API server preserves
+/// the `callback_url` query string byte-for-byte through the
+/// OAuth-provider redirect dance, so the `state` comes back in the
+/// final `hippiusapp://auth/callback?state=…&token=…` deep link and
+/// [`complete_oauth_flow`] can bind the callback to this specific
+/// in-progress flow.
 #[tauri::command]
 pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState>, provider: String) -> Result<OAuthUrlResult, AppError> {
     info!(provider = %provider, "OAuth flow started");
@@ -116,19 +194,33 @@ pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState
         _ => return Err(AppError::Validation(format!("Unsupported OAuth provider: {provider}"))),
     };
 
-    let nonce = uuid::Uuid::new_v4().to_string();
+    // Cryptographically random CSRF token. UUID v4 gives us 122 bits
+    // of entropy from `OsRng` — more than enough for a 5-minute TTL
+    // and a map that is purged on every access.
+    let oauth_state = uuid::Uuid::new_v4().to_string();
     {
         let mut states = state.oauth.pkce_states.lock()?;
+        // Drop any stale entries from a previous abandoned attempt
+        // before inserting. Keeps the map bounded and removes stale
+        // flows that would otherwise satisfy the pending-flow check
+        // in `complete_oauth_flow`.
+        purge_expired(&mut states);
         states.insert(
-            provider.clone(),
+            oauth_state.clone(),
             PkceState {
                 provider: provider.clone(),
-                nonce: nonce.clone(),
+                created_at: Instant::now(),
             },
         );
     }
 
-    let callback = format!("{CALLBACK_URL}?source=desktop");
+    // Include the `state` CSRF token in the deep-link callback so we
+    // can match the returned deep link to this in-progress flow. The
+    // Hippius `/get-token/` endpoint passes `callback_url` through
+    // untouched, so anything we append here survives the OAuth
+    // provider redirect round-trip (verified via a direct HTTP probe
+    // during the C4 audit).
+    let callback = format!("{CALLBACK_URL}?source=desktop&state={}", crate::api::client::urlencoding(&oauth_state));
     let next = format!("/get-token/?callback_url={}", crate::api::client::urlencoding(&callback));
 
     let url = format!("{base}{auth_path}?next={}", crate::api::client::urlencoding(&next));
@@ -185,11 +277,14 @@ pub fn parse_oauth_deep_link(url: String) -> Result<ParsedDeepLink, AppError> {
 
     let params: std::collections::HashMap<String, String> = url_obj.query_pairs().into_owned().collect();
 
-    // Extract standard parameters
+    // Extract standard parameters. `state` is the CSRF token minted by
+    // `start_oauth_flow` — it must be preserved here so the downstream
+    // `complete_oauth_flow` call can match it against a pending flow.
     let mut out = std::collections::HashMap::new();
     for key in &[
         "token",
         "code",
+        "state",
         "username",
         "email",
         "user_id",
@@ -251,11 +346,33 @@ pub async fn complete_oauth_flow(
         return Err(AppError::Auth("Authentication failed".into()));
     }
 
+    // CSRF binding: every incoming callback MUST carry a `state`
+    // parameter that matches a non-expired entry in `pkce_states`. The
+    // matching entry is consumed on first use so a replayed deep link
+    // can't re-authenticate the same session. Without this, any call
+    // with `hippiusapp://auth/callback?token=…&substrate_address=…`
+    // would be accepted as a valid session by the app — and the
+    // `hippiusapp://` custom scheme is OS-wide, so any program or
+    // compromised browser tab could deliver one.
+    let Some(ref received_state) = params.state else {
+        warn!("Rejected OAuth callback: no state parameter (CSRF check)");
+        return Err(AppError::Auth(
+            "Missing state parameter. Start a new login from the sign-in screen.".into(),
+        ));
+    };
+    let matched_provider = {
+        let mut states = state.oauth.pkce_states.lock()?;
+        purge_expired(&mut states);
+        let Some(entry) = states.remove(received_state) else {
+            warn!("Rejected OAuth callback: state did not match any pending flow");
+            return Err(AppError::Auth(
+                "Unknown or expired OAuth state. Start a new login from the sign-in screen.".into(),
+            ));
+        };
+        entry.provider
+    };
+
     let (token, user_id, username, email, substrate_address) = if let Some(ref t) = params.token {
-        {
-            let mut states = state.oauth.pkce_states.lock()?;
-            states.clear();
-        }
         (
             t.clone(),
             params.user_id.unwrap_or(0),
@@ -264,21 +381,11 @@ pub async fn complete_oauth_flow(
             params.substrate_address.clone().unwrap_or_default(),
         )
     } else if let Some(ref code) = params.code {
-        let provider = {
-            let states = state.oauth.pkce_states.lock()?;
-            if states.is_empty() {
-                return Err(AppError::Auth("No pending OAuth flow found".into()));
-            }
-            if states.len() > 1 {
-                return Err(AppError::Auth("Multiple pending OAuth flows — cannot determine provider".into()));
-            }
-            states
-                .values()
-                .next()
-                .map(|s| s.provider.clone())
-                .ok_or(AppError::Auth("No pending OAuth flow found".into()))?
-        };
-
+        // The matched provider from the state lookup becomes the
+        // `code_verifier` placeholder the Hippius server currently
+        // expects on `/api/auth/exchange/`. (It ignores the value in
+        // practice — see the C4 audit probe — but we keep the shape
+        // the server already accepts to avoid surprising the backend.)
         let base = api_base_url();
         let resp = state
             .api_client
@@ -287,7 +394,7 @@ pub async fn complete_oauth_flow(
             .header("Accept", "application/json")
             .json(&serde_json::json!({
                 "code": code,
-                "code_verifier": provider,
+                "code_verifier": matched_provider,
             }))
             .send()
             .await?;
@@ -300,10 +407,10 @@ pub async fn complete_oauth_flow(
 
         let data: ExchangeResponse = resp.json().await?;
 
-        {
-            let mut states = state.oauth.pkce_states.lock()?;
-            states.remove(&provider);
-        }
+        // The pending `PkceState` entry was already consumed by the
+        // state-lookup block above — there is nothing to clean up
+        // here. `matched_provider` owns the last reference to the
+        // provider string and drops at the end of this scope.
 
         (
             data.token,
@@ -391,4 +498,130 @@ pub async fn complete_oauth_flow(
         provider: provider_name,
         expires_at,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_state(age: Duration) -> PkceState {
+        PkceState {
+            provider: "google".to_string(),
+            // `checked_sub` guards against Instant wraparound on exotic
+            // clocks; in practice `age` is always small and this can't
+            // fail, but clippy prefers the explicit form.
+            created_at: Instant::now().checked_sub(age).expect("test age fits in Instant range"),
+        }
+    }
+
+    #[test]
+    fn purge_expired_removes_stale_entries() {
+        let mut states = HashMap::new();
+        states.insert("a".to_string(), make_state(Duration::from_secs(1)));
+        states.insert("b".to_string(), make_state(PKCE_STATE_TTL + Duration::from_secs(1)));
+        states.insert("c".to_string(), make_state(Duration::from_secs(10)));
+
+        let remaining = purge_expired(&mut states);
+        assert_eq!(remaining, 2, "one entry older than TTL should be dropped");
+        assert!(states.contains_key("a"));
+        assert!(!states.contains_key("b"));
+        assert!(states.contains_key("c"));
+    }
+
+    #[test]
+    fn purge_expired_keeps_everything_fresh() {
+        let mut states = HashMap::new();
+        states.insert("x".to_string(), make_state(Duration::from_secs(0)));
+        states.insert("y".to_string(), make_state(Duration::from_secs(30)));
+        let remaining = purge_expired(&mut states);
+        assert_eq!(remaining, 2);
+    }
+
+    #[test]
+    fn purge_expired_reports_zero_on_empty_map() {
+        let mut states: HashMap<String, PkceState> = HashMap::new();
+        assert_eq!(purge_expired(&mut states), 0);
+    }
+
+    #[test]
+    fn purge_expired_clears_all_when_all_stale() {
+        let mut states = HashMap::new();
+        let very_old = PKCE_STATE_TTL * 2;
+        states.insert("a".to_string(), make_state(very_old));
+        states.insert("b".to_string(), make_state(very_old));
+        assert_eq!(purge_expired(&mut states), 0);
+        assert!(states.is_empty());
+    }
+
+    // ─── State-binding semantics ───────────────────────────────────
+    //
+    // These tests pin the invariants that protect the desktop from
+    // a cold-deep-link CSRF. They don't spin up a Tauri runtime —
+    // they exercise `pkce_states` directly the same way
+    // `complete_oauth_flow` does.
+
+    #[test]
+    fn state_lookup_removes_entry_on_first_match() {
+        let mut states = HashMap::new();
+        states.insert("csrf-token-1".to_string(), make_state(Duration::from_secs(1)));
+
+        // First match succeeds and removes the entry (mirrors the
+        // `complete_oauth_flow` path: `states.remove(received_state)`).
+        let entry = states.remove("csrf-token-1");
+        assert!(entry.is_some(), "first lookup should succeed");
+        assert_eq!(entry.unwrap().provider, "google");
+
+        // Second lookup fails: a replayed deep link with the same
+        // state cannot re-authenticate the session.
+        assert!(states.remove("csrf-token-1").is_none(), "replay must fail");
+    }
+
+    #[test]
+    fn state_lookup_fails_for_unknown_state() {
+        let mut states = HashMap::new();
+        states.insert("csrf-token-legit".to_string(), make_state(Duration::from_secs(1)));
+
+        // An attacker delivers `hippiusapp://auth/callback?state=attacker-forged&...`
+        // while a legitimate flow is in progress. The lookup must
+        // miss — any forged state that doesn't collide with a minted
+        // UUID v4 (2^122 entropy) is rejected.
+        assert!(states.remove("attacker-forged").is_none());
+        // And the legit entry is untouched so the real user can
+        // still complete their flow.
+        assert!(states.contains_key("csrf-token-legit"));
+    }
+
+    #[test]
+    fn state_lookup_fails_after_ttl_purge() {
+        let mut states = HashMap::new();
+        states.insert(
+            "csrf-token-old".to_string(),
+            make_state(PKCE_STATE_TTL + Duration::from_secs(1)),
+        );
+
+        // Mirror `complete_oauth_flow`: purge_expired runs BEFORE the
+        // state lookup. A deep link that surfaces after the 5-minute
+        // TTL is therefore rejected even though the state string
+        // matches a once-valid entry.
+        purge_expired(&mut states);
+        assert!(states.remove("csrf-token-old").is_none(), "expired state must be purged before lookup");
+    }
+
+    #[test]
+    fn multiple_concurrent_flows_do_not_interfere() {
+        // Two overlapping flows for the SAME provider are legal —
+        // e.g. user clicks "Sign in with Google" twice. State-keyed
+        // storage keeps both alive and lets each complete
+        // independently.
+        let mut states = HashMap::new();
+        states.insert("flow-1".to_string(), make_state(Duration::from_secs(1)));
+        states.insert("flow-2".to_string(), make_state(Duration::from_secs(1)));
+
+        assert_eq!(states.len(), 2);
+
+        // Completing flow-1 must not affect flow-2.
+        let completed = states.remove("flow-1");
+        assert!(completed.is_some());
+        assert!(states.contains_key("flow-2"));
+    }
 }

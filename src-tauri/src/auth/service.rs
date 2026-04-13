@@ -37,12 +37,20 @@ struct VerifyResponse {
 
 /// Derive both Substrate (sr25519) and Ethereum (secp256k1) keypairs from a
 /// BIP-39 mnemonic. Returns both keypairs and their formatted addresses.
-pub(crate) fn derive_keys(mnemonic: &str) -> Result<(sp_core::sr25519::Pair, String, PrivateKeySigner, String), String> {
-    use sp_core::Pair as _;
-    use sp_core::crypto::Ss58Codec;
+///
+/// Uses `subxt_signer::sr25519::Keypair` for the Substrate side, which
+/// implements `subxt::tx::Signer<PolkadotConfig>` directly — no `PairSigner`
+/// wrapper, no `sp-core` dependency on the signing path.
+pub(crate) fn derive_keys(mnemonic: &str) -> Result<(subxt_signer::sr25519::Keypair, String, PrivateKeySigner, String), String> {
+    use subxt_signer::bip39::Mnemonic as SubxtMnemonic;
+    use subxt_signer::sr25519::Keypair as SrKeypair;
 
-    let (sr25519_pair, _) = sp_core::sr25519::Pair::from_phrase(mnemonic, None).map_err(|e| format!("{e:?}"))?;
-    let substrate_address = sr25519_pair.public().to_ss58check();
+    let parsed = SubxtMnemonic::parse(mnemonic).map_err(|e| format!("Invalid BIP-39 mnemonic: {e}"))?;
+    let sr25519_pair = SrKeypair::from_phrase(&parsed, None).map_err(|e| format!("Failed to derive sr25519 keypair: {e}"))?;
+    // subxt_signer's account_id uses the generic `42` SS58 prefix by
+    // default, matching the previous `sp_core::sr25519::Pair::public().to_ss58check()`
+    // behaviour and what the Hippius API expects.
+    let substrate_address = sr25519_pair.public_key().to_account_id().to_string();
 
     let eth_signer: PrivateKeySigner = MnemonicBuilder::<English>::default()
         .phrase(mnemonic)

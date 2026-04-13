@@ -1169,9 +1169,36 @@ pub async fn get_user_files(
     })
 }
 
-/// Export file or folder from sync folder to arbitrary location
+/// Export file or folder from sync folder to arbitrary location.
+///
+/// Rejects `sync_path` values that are not registered in the `sync_paths`
+/// table for the active account. Without this check, a caller (e.g. a
+/// compromised frontend) could set `sync_path` to `/` and `file_name` to
+/// `etc/passwd` and the inner `ensure_within` guard would trivially allow
+/// it because `/etc/passwd` is contained in `/`.
 #[tauri::command]
-pub async fn export_file(sync_path: String, file_name: String, output_path: String) -> Result<()> {
+pub async fn export_file(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    sync_path: String,
+    file_name: String,
+    output_path: String,
+) -> Result<()> {
+    // Gate 1: sync_path must be a registered sync folder for the active
+    // user. This prevents the broad `ensure_within` guard from being
+    // bypassed via an attacker-controlled parent directory.
+    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    let owner = account_key(&account_id);
+    let registered: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM sync_paths WHERE owner = ? AND path = ? LIMIT 1")
+        .bind(&owner)
+        .bind(&sync_path)
+        .fetch_optional(state.pool()?)
+        .await?;
+    if registered.is_none() {
+        return Err(crate::error::AppError::Other(
+            "sync_path is not a registered sync folder for this account".into(),
+        ));
+    }
+
     let parent = Path::new(&sync_path);
     let source = parent.join(&file_name);
     let source = ensure_within(parent, &source)?;

@@ -6,7 +6,7 @@ use crate::blockchain::helpers::{get_signer, get_substrate_address};
 use crate::blockchain::queries::validate_address;
 use crate::blockchain::runtime::custom_runtime;
 use crate::blockchain::types::{TxResult, ValidatedTransfer};
-use sp_core::crypto::Ss58Codec;
+use std::str::FromStr;
 use tracing::info;
 
 /// Estimated transaction fee in planck.
@@ -26,7 +26,10 @@ pub async fn transfer_balance(
         .parse()
         .map_err(|e| crate::error::AppError::Other(format!("Invalid amount: {e}")))?;
 
-    let recipient = <sp_core::crypto::AccountId32 as Ss58Codec>::from_ss58check(&recipient_address)
+    // Parse the recipient as a `subxt::utils::AccountId32` directly —
+    // this avoids the removed `sp_core::crypto::AccountId32 → MultiAddress`
+    // conversion that only existed under `substrate-compat`.
+    let recipient = subxt::utils::AccountId32::from_str(&recipient_address)
         .map_err(|e| crate::error::AppError::Other(format!("Invalid recipient address: {e:?}")))?;
 
     info!("Submitting transfer_keep_alive transaction...");

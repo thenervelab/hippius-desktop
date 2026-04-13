@@ -208,14 +208,20 @@ interface AutoInitResult {
  * user action.
  */
 export async function tryAutoInitSync(
-  accountId: string,
-  mnemonic?: string
+  accountId: string
 ): Promise<boolean> {
+  // `auto_init_sync` no longer takes a mnemonic argument. Rust reads the
+  // active mnemonic from `AuthInfo` via `get_mnemonic_for_account` (stage
+  // 1 of the fallback chain), which every login path — mnemonic, OAuth
+  // via `ensure_sync_mnemonic`, and keychain-backed session restore —
+  // populates before reaching this call. Passing the phrase from JS
+  // offered no capability beyond keeping it alive in heap memory longer
+  // than necessary.
   const attempt = async (): Promise<"retry" | boolean> => {
     try {
       const result = await invoke<AutoInitResult>("auto_init_sync", {
         accountId,
-        mnemonic: mnemonic ?? null,
+        mnemonic: null,
       });
 
       // Per-drive Active status is emitted by Rust from `auto_init_sync`

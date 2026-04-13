@@ -14,6 +14,7 @@ import { AccessKeyLoginForm } from "./AccessKeyLoginForm";
 import * as Typography from "@/components/ui/typography";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
+import { isTauri } from "@tauri-apps/api/core";
 import { useRouter } from "next/navigation";
 
 export function LoginForm({
@@ -72,7 +73,7 @@ export function LoginForm({
 
     // ✅ Deep link handler - processes OAuth callbacks and redirects to /auth/callback
     useEffect(() => {
-        if (typeof window === "undefined" || !("__TAURI__" in window)) return;
+        if (typeof window === "undefined" || !isTauri()) return;
 
         let unlisten: null | (() => void) = null;
         let initialDeepLinkProcessed = false;

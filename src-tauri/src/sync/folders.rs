@@ -10,7 +10,7 @@ use tracing::{error, info, warn};
 use crate::auth::account_key::account_key;
 use crate::auth::tokens::get_api_token;
 use crate::error::Result;
-use crate::sync::config::get_hcfs_config_internal;
+use crate::sync::config::{ACCEPT_INVALID_CERTS, get_hcfs_config_internal};
 use crate::sync::lifecycle::start_sync_loop;
 use crate::sync::lifecycle::{initialize_sync_inner, remove_drive};
 use crate::sync::mnemonic::{config_dir_for_folder, folder_hash};
@@ -133,7 +133,7 @@ pub(crate) async fn list_remote_folders_internal(pool: &SqlitePool, account_id: 
     let client_config = HcfsClientConfig {
         base_url: server_url,
         bearer_token,
-        accept_invalid_certs: true,
+        accept_invalid_certs: ACCEPT_INVALID_CERTS,
         billing_bypass_token: None,
         ss58_address: account_id.to_string(),
         folder_hash: String::new(),
@@ -178,7 +178,7 @@ pub async fn list_remote_folders(state: tauri::State<'_, crate::app_state::AppSt
     let client_config = HcfsClientConfig {
         base_url: server_url,
         bearer_token,
-        accept_invalid_certs: true,
+        accept_invalid_certs: ACCEPT_INVALID_CERTS,
         billing_bypass_token: None,
         ss58_address: account_id.clone(),
         folder_hash: String::new(),
@@ -333,7 +333,7 @@ pub async fn delete_remote_folder(
     let client_config = HcfsClientConfig {
         base_url: server_url,
         bearer_token,
-        accept_invalid_certs: true,
+        accept_invalid_certs: ACCEPT_INVALID_CERTS,
         billing_bypass_token: None,
         ss58_address: account_id.clone(),
         folder_hash: fhash.clone(),

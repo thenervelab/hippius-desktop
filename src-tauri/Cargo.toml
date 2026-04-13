@@ -62,11 +62,11 @@ sha2 = "0.10"
 aes = "0.8"
 cbc = "0.1"
 md5 = "0.7"
-subxt = { version = "0.38", features = ["substrate-compat"] }
-sp-core = "34.0.0"
+subxt = "0.38"
+subxt-signer = { version = "0.38", features = ["subxt", "sr25519"] }
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
-sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-native-tls"] }
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 hex = "0.4"
 parity-scale-codec = "3.6"
 tauri-plugin-fs = "2"
