@@ -45,12 +45,22 @@ import init, {
  decrypt_file_chunk,
  argon2id_derive,
  open_mnemonic_blob,
+ derive_ss58_from_mnemonic,
 } from "@hippius/crypto-wasm";
 
 await init(); // loads .wasm with SRI verification
 
-// Decrypt the server blob with the user's passphrase
-const mnemonic: string = open_mnemonic_blob(blob, passphrase);
+// Decrypt the server blob with the user's passphrase. `expectedSs58`
+// is bound into the AEAD as AAD on seal; mismatch fails the AEAD tag
+// check and surfaces as `Error("AeadTag")` — distinct from a wrong
+// passphrase ("InvalidPassphrase").
+const mnemonic: string = open_mnemonic_blob(blob, passphrase, expectedSs58);
+
+// Defense in depth: re-derive SS58 from the decrypted mnemonic and
+// confirm it matches the OAuth session's SS58 before caching.
+if (derive_ss58_from_mnemonic(mnemonic) !== expectedSs58) {
+ throw new Error("Mnemonic does not match session identity");
+}
 
 // Per-folder key derivation
 const folderMnemonic = derive_folder_mnemonic(mnemonic, label);
@@ -62,12 +72,21 @@ const plaintext = decrypt_file_chunk(key, nonce, aad, ciphertext);
 
 ### REST API contract
 
+All Console-side requests use `Authorization: Bearer <oauth-token>`.
+The server resolves the caller's SS58 from the OAuth `sub` via its
+`users` table (populated by the desktop on signup). Console never
+needs to know the SS58 *before* unlock — the server handles the
+mapping. *After* unlock, Console derives SS58 locally from the
+decrypted mnemonic and asserts it matches what the session backend
+reports.
+
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/v1/passkey/registration-challenge` | Get challenge for `navigator.credentials.create`. |
-| `POST` | `/v1/passkey/register` | Submit attestation. |
+| `POST` | `/v1/passkey/register` | Submit attestation. Server stores under the resolved SS58. |
 | `POST` | `/v1/passkey/assertion-challenge` | Get challenge for `navigator.credentials.get`. |
-| `GET` | `/v1/mnemonic-blob` | Returns the blob. Header `X-Passkey-Assertion: <b64>` required after first enrollment. |
+| `GET` | `/v1/mnemonic-blob` | Returns `{ ciphertext, salt, nonce, aad, kdf }`. `aad` is the SS58 bytes the desktop bound at seal time. Header `X-Passkey-Assertion: <b64>` required after first enrollment. |
+| `GET` | `/v1/me` | Returns `{ ss58_address: string }` — the SS58 the server has on file for the OAuth user. Used by Console to obtain `expectedSs58` before calling `open_mnemonic_blob`. |
 | `DELETE` | `/v1/passkey/{id}` | Revoke. |
 
 Mock these from a local fixture server while waiting for the real
@@ -118,9 +137,14 @@ Look in IndexedDB (`hippius_console.mnemonic_wrapped`):
 
 Single password input. On submit:
 
-1. `argon2id_derive(passphrase, salt, mem, time, parallelism)` — params and salt come from the blob. WASM-side, so the UI can show a "Deriving key (~1.5s)" spinner.
-2. `open_mnemonic_blob(blob, passphrase)` — same WASM call as the server-side helper, just over JSON-decoded fields.
-3. On invalid passphrase → toast and stay on the page. Rate-limit the submit button (1s cooldown) to slow brute force from the UI side too.
+1. `GET /v1/me` → cache the server's view of `session.ss58_address`. Done once per session.
+2. `GET /v1/mnemonic-blob` → `{ciphertext, salt, nonce, aad, kdf}`.
+3. `argon2id_derive(passphrase, salt, mem, time, parallelism)` — WASM-side, UI shows a "Deriving key (~1.5s)" spinner.
+4. `open_mnemonic_blob(blob, passphrase, session.ss58_address)` — passes the SS58 as expected AAD. Outcomes:
+ - `Ok(mnemonic)` → continue.
+ - `Err("InvalidPassphrase")` → toast, stay on the page, rate-limit the submit button (1s cooldown).
+ - `Err("AeadTag")` → **abort with a hard error**, don't retry. The server returned a blob whose AAD doesn't match the session SS58 — possible blob swap. Surface a "Session integrity check failed, please contact support" message and log the incident.
+5. `derive_ss58_from_mnemonic(mnemonic) === session.ss58_address` — second-layer assertion. Same failure handling as the AAD mismatch.
 
 ### 2c. EnrollingPasskey (mandatory)
 

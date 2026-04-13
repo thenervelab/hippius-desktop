@@ -23,6 +23,8 @@ at Console use time.**
 | 5 | After first unlock, the mnemonic is **re-wrapped with a WebAuthn-PRF passkey** and stored in IndexedDB. **No other caching path exists.** Browsers without PRF (Chrome <116, Safari <18, Firefox, older Edge) see a "browser not supported" page and can't use Console. | Passphrase is typed once per device, not per session. No password ever persisted. Dropping the autofill fallback removes the weakest link — plaintext password in Keychain or Password Manager — entirely. |
 | 6 | Recovery-phrase export is **forced** at desktop setup. | Passphrase has no reset — the mnemonic itself is the only recovery. |
 | 7 | Downloading the blob requires OAuth **plus** a fresh WebAuthn assertion on enrolled devices. | OAuth-token theft alone can no longer fetch the blob. |
+| 8 | **The user's SS58 address is the canonical identifier.** `mnemonic_blobs.user_id` is the SS58. The SS58 is bound into the AEAD as AAD on seal, and the browser asserts `derive_ss58(decrypted_mnemonic) === session_ss58` after unlock. | Prevents server-side blob swaps and guarantees the unlock flow can't silently mint a foreign identity. |
+| 9 | **Blob flow is mandatory for OAuth users (they don't know their phrase) and optional for mnemonic users (who can type their phrase directly).** | Mnemonic users already have the secret and shouldn't be forced into a server-stored blob unless they want the convenience. |
 
 ## Architecture
 
@@ -106,6 +108,79 @@ Already exists (Next.js, TypeScript, Tailwind). New pages/components:
 - **Passkey unlock** on subsequent page loads: WebAuthn `get` with PRF → unwrap IndexedDB blob → mnemonic in memory.
 - **No fallback path.** Browsers without WebAuthn PRF support (Chrome <116, Safari <18, Firefox, older Edge, many Android <14) are detected on first Console load via a feature-detect (`PublicKeyCredential.isConditionalMediationAvailable` + a probe `create` call with `prf` extension). Unsupported browsers get a dedicated page with the exact copy: **"Browser not supported, download/decrypting sync-engine files not supported."** Keeping one code path removes the weakest Keychain-storage option (plaintext password autofill) from the attack surface entirely.
 - **Hardening**: strict CSP (`script-src 'self'`, no `unsafe-inline`, pinned `connect-src`), SRI on every script + the WASM fetch, `pnpm config set ignore-scripts true`, `minimumReleaseAge 1440`, no third-party scripts on any page that handles the mnemonic.
+
+## User identification
+
+The whole flow needs to know "who is this user?" at every hop. The
+canonical answer everywhere on the Hippius backend, including the new
+blob endpoints, is the **SS58 address** — the same identifier
+`account_key()` already hashes for the `owner` column on every
+desktop SQLite table.
+
+### The SS58 is the primary key everywhere
+
+- `mnemonic_blobs.user_id` = the user's SS58.
+- `passkeys.user_id` = the user's SS58.
+- All blob/passkey lookups go through SS58 — never email, never OAuth `sub`, never numeric id.
+
+### Authentication per caller
+
+The blob endpoints accept different auth headers depending on which client is calling, because the three clients hold different secrets:
+
+| Caller | Has | Auth header | Server resolves SS58 via |
+|---|---|---|---|
+| Desktop (mnemonic user) | mnemonic + sr25519 key | sr25519-signed request (existing pattern) | Signature → public key → SS58 |
+| Desktop (OAuth user) | OAuth token + mnemonic + sr25519 key | Either signed request or `Authorization: Bearer <oauth>` | Signature, OR OAuth-sub → SS58 mapping |
+| Console **before** unlock | OAuth token only — no mnemonic, no sr25519 yet | `Authorization: Bearer <oauth>` | OAuth-sub → SS58 mapping |
+| Console **after** unlock | OAuth + mnemonic + sr25519 | Either | Either |
+
+The pre-unlock browser case is the new constraint. The browser cannot
+sign Substrate extrinsics before it has the mnemonic — that's the
+whole point of the blob fetch. So `GET /v1/mnemonic-blob` from
+Console is OAuth-authenticated, and the server uses an `oauth_sub →
+ss58_address` mapping to find the right blob.
+
+### `oauth_sub → ss58` mapping
+
+If `hcfs-server` doesn't already have this mapping, add a `users`
+table populated when the desktop first creates an OAuth user's
+mnemonic:
+
+```sql
+CREATE TABLE IF NOT EXISTS users (
+ oauth_sub TEXT PRIMARY KEY NOT NULL,
+ ss58_address TEXT NOT NULL UNIQUE,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX users_ss58_idx ON users(ss58_address);
+```
+
+The desktop's existing OAuth-signup flow needs to POST `(oauth_sub,
+ss58)` to a new `/v1/users/bind` endpoint right after it generates
+the mnemonic. One write, idempotent on the unique index.
+
+### Bind the SS58 inside the blob (defense in depth)
+
+A malicious or compromised server could swap user A's blob for user
+B's. Crypto-bind the SS58 inside the blob so the swap is detected:
+
+1. **Seal-time:** `seal_mnemonic(mnemonic, passphrase, ss58)` runs ChaCha20-Poly1305 with `aad = ss58_bytes`. The server stores `aad` alongside `ciphertext / salt / nonce` so it can echo it back.
+2. **Open-time (browser):** `open_mnemonic_blob(blob, passphrase, expected_ss58 = session.ss58)` passes `expected_ss58` as AAD. AEAD tag mismatch if the server returned someone else's blob.
+3. **Post-unlock check:** browser derives SS58 from the decrypted mnemonic and asserts `derive_ss58(mnemonic) === session.ss58`. Catches any swap that bypasses the AAD check.
+
+Either step alone catches the attack; both together is two
+independent layers.
+
+### What the user is for mnemonic-only desktop users
+
+Mnemonic-auth desktop users already know their seed phrase. They have
+two paths to use Console:
+
+- **Type the phrase on Console.** Bypasses the blob entirely — Console accepts the phrase, derives SS58 locally, asserts it matches the OAuth/login session, proceeds to passkey enrollment as in the OAuth flow.
+- **Opt into the blob flow** for convenience (don't type 24 words on every new device). Same `enable_console_access` Tauri command, same passphrase prompt.
+
+OAuth users have only one path because they don't know their phrase:
+the blob flow.
 
 ## Keychain storage — the evaluation
 
