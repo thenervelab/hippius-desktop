@@ -917,6 +917,20 @@ pub struct FileFilterCriteria {
     pub folder_tab: Option<String>,
 }
 
+impl FileFilterCriteria {
+    /// `true` when every filter field is empty — short-circuits the
+    /// `filter_file_entries` IPC so callers don't pay the round-trip
+    /// serialization cost for a no-op.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.search_term.as_deref().is_none_or(str::is_empty)
+            && self.file_types.as_ref().is_none_or(std::vec::Vec::is_empty)
+            && self.date_filter.as_deref().is_none_or(str::is_empty)
+            && self.file_sizes.as_ref().is_none_or(std::vec::Vec::is_empty)
+            && self.folder_tab.is_none()
+    }
+}
+
 /// Result of get_user_files including both files and metadata.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -927,7 +941,11 @@ pub struct UserFilesResult {
 }
 
 /// A user file ready for UI rendering. Matches `FormattedUserFile` shape.
-#[derive(Serialize, Clone)]
+///
+/// `Deserialize` is required so the frontend can pass a previously-fetched
+/// list back into [`filter_file_entries`] for re-filtering without a round
+/// trip to disk.
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct UserFileEntry {
     pub name: String,
@@ -1055,108 +1073,8 @@ pub async fn get_user_files(
         }
     }
 
-    // Apply all filters in a single pass
     if let Some(ref f) = filters {
-        // Pre-compute lowercase search term once
-        let search_lower = f.search_term.as_ref().and_then(|s| {
-            let low = s.to_lowercase();
-            if low.is_empty() { None } else { Some(low) }
-        });
-        let now = chrono::Utc::now();
-
-        all_files.retain(|file| {
-            // Folder tab filter
-            if let Some(ref tab) = f.folder_tab
-                && file.label != *tab
-            {
-                return false;
-            }
-
-            // Search filter
-            if let Some(ref search) = search_lower
-                && !file.name.to_lowercase().contains(search)
-                && !file.arion_hash.to_lowercase().contains(search)
-            {
-                return false;
-            }
-
-            // File type filter
-            if let Some(ref types) = f.file_types
-                && !types.is_empty()
-            {
-                let matches = if file.is_folder {
-                    types.iter().any(|t| t == "folder")
-                } else {
-                    let ext = file.name.rsplit('.').next().unwrap_or("").to_lowercase();
-                    let file_type = match ext.as_str() {
-                        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "svg" | "webp" | "ico" | "tiff" => "image",
-                        "mp4" | "mov" | "avi" | "mkv" | "wmv" | "flv" | "webm" | "m4v" | "3gp" => "video",
-                        "mp3" | "wav" | "ogg" | "flac" | "aac" | "wma" | "m4a" => "audio",
-                        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "rtf" | "csv" | "md" => "document",
-                        "zip" | "tar" | "gz" | "rar" | "7z" | "bz2" => "archive",
-                        _ => "other",
-                    };
-                    types.iter().any(|t| t == file_type)
-                };
-                if !matches {
-                    return false;
-                }
-            }
-
-            // Date filter
-            if let Some(ref date) = f.date_filter
-                && !date.is_empty()
-            {
-                if file.created_at == 0 {
-                    return false;
-                }
-                let file_ms = if file.created_at > 946_684_800_000 {
-                    file.created_at
-                } else {
-                    file.created_at * 1000
-                };
-                let Some(file_dt) = chrono::DateTime::from_timestamp_millis(file_ms) else {
-                    return false;
-                };
-                let date_matches = match date.as_str() {
-                    "today" => file_dt.date_naive() == now.date_naive(),
-                    "last7days" => (now - file_dt).num_days() <= 7,
-                    "last30days" => (now - file_dt).num_days() <= 30,
-                    "thisyear" => file_dt.date_naive().year() == now.date_naive().year(),
-                    "lastyear" => file_dt.date_naive().year() == now.date_naive().year() - 1,
-                    _ => {
-                        // Custom date YYYY-MM-DD
-                        if let Ok(target) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-                            file_dt.date_naive() == target
-                        } else {
-                            true
-                        }
-                    }
-                };
-                if !date_matches {
-                    return false;
-                }
-            }
-
-            // File size filter
-            if let Some(ref sizes) = f.file_sizes
-                && !sizes.is_empty()
-            {
-                let size = file.size;
-                let size_matches = sizes.iter().any(|&threshold| match threshold {
-                    1 => size < 1_048_576,                                      // Small: < 1 MB
-                    1_048_576 => (1_048_576..=104_857_600).contains(&size),     // Medium: 1-100 MB
-                    104_857_600 => size > 104_857_600 && size <= 1_073_741_824, // Large: 100MB-1GB
-                    1_073_741_824 => size > 1_073_741_824,                      // Very Large: > 1 GB
-                    _ => size >= threshold,
-                });
-                if !size_matches {
-                    return false;
-                }
-            }
-
-            true
-        });
+        apply_file_filters(&mut all_files, f);
     }
 
     // Sort by timestamp (newest first)
@@ -1167,6 +1085,135 @@ pub async fn get_user_files(
         total_private_size: total_private_size.to_string(),
         sync_folder_labels,
     })
+}
+
+/// Apply the full filter chain to a mutable file list in place.
+///
+/// Shared between [`get_user_files`] (initial fetch with filters) and
+/// [`filter_file_entries`] (UI-side filter re-application without a
+/// refetch). Owning the filter rules in a single function keeps the
+/// folder view and the files page from drifting — previously both
+/// reimplemented the logic in TypeScript.
+fn apply_file_filters(files: &mut Vec<UserFileEntry>, f: &FileFilterCriteria) {
+    let search_lower = f.search_term.as_ref().and_then(|s| {
+        let low = s.to_lowercase();
+        if low.is_empty() { None } else { Some(low) }
+    });
+    let now = chrono::Utc::now();
+
+    files.retain(|file| {
+        if let Some(ref tab) = f.folder_tab
+            && file.label != *tab
+        {
+            return false;
+        }
+
+        if let Some(ref search) = search_lower
+            && !file.name.to_lowercase().contains(search)
+            && !file.arion_hash.to_lowercase().contains(search)
+        {
+            return false;
+        }
+
+        if let Some(ref types) = f.file_types
+            && !types.is_empty()
+        {
+            let matches = if file.is_folder {
+                types.iter().any(|t| t == "folder")
+            } else {
+                let ext = file.name.rsplit('.').next().unwrap_or("").to_lowercase();
+                let file_type = classify_extension(&ext);
+                types.iter().any(|t| t == file_type)
+            };
+            if !matches {
+                return false;
+            }
+        }
+
+        if let Some(ref date) = f.date_filter
+            && !date.is_empty()
+        {
+            if file.created_at == 0 {
+                return false;
+            }
+            let file_ms = if file.created_at > 946_684_800_000 {
+                file.created_at
+            } else {
+                file.created_at * 1000
+            };
+            let Some(file_dt) = chrono::DateTime::from_timestamp_millis(file_ms) else {
+                return false;
+            };
+            let date_matches = match date.as_str() {
+                "today" => file_dt.date_naive() == now.date_naive(),
+                "last7days" => (now - file_dt).num_days() <= 7,
+                "last30days" => (now - file_dt).num_days() <= 30,
+                "thisyear" => file_dt.date_naive().year() == now.date_naive().year(),
+                "lastyear" => file_dt.date_naive().year() == now.date_naive().year() - 1,
+                _ => {
+                    if let Ok(target) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+                        file_dt.date_naive() == target
+                    } else {
+                        true
+                    }
+                }
+            };
+            if !date_matches {
+                return false;
+            }
+        }
+
+        // Size thresholds come from `EnhancedFileSizeSelector` in SI
+        // bytes (1 MB = 1_000_000) to match the user-facing labels the
+        // `formatBytes` helper prints. Any other numeric threshold is
+        // treated as a custom "size >= N" cut.
+        if let Some(ref sizes) = f.file_sizes
+            && !sizes.is_empty()
+        {
+            let size = file.size;
+            let size_matches = sizes.iter().any(|&threshold| match threshold {
+                1 => size < 1_000_000,
+                1_000_000 => (1_000_000..=100_000_000).contains(&size),
+                100_000_000 => size > 100_000_000 && size <= 1_000_000_000,
+                1_000_000_000 => size > 1_000_000_000,
+                _ => size >= threshold,
+            });
+            if !size_matches {
+                return false;
+            }
+        }
+
+        true
+    });
+}
+
+/// Map a file extension to the coarse type group the filter UI uses.
+///
+/// Pulled out of the filter so the same classifier can be reused (e.g.
+/// for icon selection) without duplicating the extension list.
+fn classify_extension(ext: &str) -> &'static str {
+    match ext {
+        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "svg" | "webp" | "ico" | "tiff" => "image",
+        "mp4" | "mov" | "avi" | "mkv" | "wmv" | "flv" | "webm" | "m4v" | "3gp" => "video",
+        "mp3" | "wav" | "ogg" | "flac" | "aac" | "wma" | "m4a" => "audio",
+        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "rtf" | "csv" | "md" => "document",
+        "zip" | "tar" | "gz" | "rar" | "7z" | "bz2" => "archive",
+        _ => "other",
+    }
+}
+
+/// Apply the user files filter to an arbitrary list of entries.
+///
+/// Used by the files page and the folder view to re-filter a list the
+/// frontend already has without re-fetching it from disk. Exposing the
+/// shared filter as its own command keeps every filter rule (date
+/// ranges, size thresholds, search behaviour) on the Rust side — the
+/// TS layer now just passes criteria and renders the result.
+#[tauri::command]
+pub fn filter_file_entries(files: Vec<UserFileEntry>, filters: FileFilterCriteria) -> Vec<UserFileEntry> {
+    let mut files = files;
+    apply_file_filters(&mut files, &filters);
+    files
 }
 
 /// Export file or folder from sync folder to arbitrary location.
@@ -1371,5 +1418,117 @@ mod tests {
     #[test]
     fn handles_nested_subfolder() {
         assert_eq!(derive_relative_name("/sync", Some("/sync/a/b/c/deep.txt"), "x.txt"), "a/b/c/deep.txt",);
+    }
+
+    // --- filter_file_entries / apply_file_filters ---
+
+    fn make_file(name: &str, size: u64, label: &str, created_at: i64, is_folder: bool) -> UserFileEntry {
+        UserFileEntry {
+            name: name.to_string(),
+            actual_file_name: name.to_string(),
+            size,
+            created_at,
+            arion_hash: String::new(),
+            arion_cid: String::new(),
+            source: String::new(),
+            miner_ids: Vec::new(),
+            is_assigned: false,
+            last_charged_at: created_at,
+            is_folder,
+            file_type: String::new(),
+            is_erasure_coded: false,
+            main_req_hash: String::new(),
+            sync_status: String::new(),
+            label: label.to_string(),
+            file_count: None,
+            deleted: false,
+        }
+    }
+
+    #[test]
+    fn filter_search_matches_name_case_insensitive() {
+        let files = vec![make_file("Report.pdf", 1_000, "docs", 0, false), make_file("photo.png", 1_000, "docs", 0, false)];
+        let criteria = FileFilterCriteria {
+            search_term: Some("REPORT".into()),
+            file_types: None,
+            date_filter: None,
+            file_sizes: None,
+            folder_tab: None,
+        };
+        let out = filter_file_entries(files, criteria);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "Report.pdf");
+    }
+
+    #[test]
+    fn filter_folder_tab_isolates_label() {
+        let files = vec![
+            make_file("a.txt", 1, "drive-one", 0, false),
+            make_file("b.txt", 1, "drive-two", 0, false),
+            make_file("c.txt", 1, "drive-one", 0, false),
+        ];
+        let criteria = FileFilterCriteria {
+            search_term: None,
+            file_types: None,
+            date_filter: None,
+            file_sizes: None,
+            folder_tab: Some("drive-one".into()),
+        };
+        let out = filter_file_entries(files, criteria);
+        assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["a.txt", "c.txt"]);
+    }
+
+    #[test]
+    fn filter_size_si_thresholds() {
+        let files = vec![
+            make_file("tiny.txt", 500, "d", 0, false),               // Small
+            make_file("medium.zip", 50_000_000, "d", 0, false),      // Medium
+            make_file("large.bin", 500_000_000, "d", 0, false),      // Large
+            make_file("huge.iso", 5_000_000_000, "d", 0, false),     // Very Large
+        ];
+        // "Medium" + "Very Large" selected — boundaries match the UI's SI labels.
+        let criteria = FileFilterCriteria {
+            search_term: None,
+            file_types: None,
+            date_filter: None,
+            file_sizes: Some(vec![1_000_000, 1_000_000_000]),
+            folder_tab: None,
+        };
+        let out = filter_file_entries(files, criteria);
+        assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["medium.zip", "huge.iso"]);
+    }
+
+    #[test]
+    fn filter_type_classifies_by_extension() {
+        let files = vec![
+            make_file("pic.png", 1, "d", 0, false),
+            make_file("clip.mp4", 1, "d", 0, false),
+            make_file("notes.txt", 1, "d", 0, false),
+            make_file("subfolder", 0, "d", 0, true),
+        ];
+        let criteria = FileFilterCriteria {
+            search_term: None,
+            file_types: Some(vec!["image".into(), "folder".into()]),
+            date_filter: None,
+            file_sizes: None,
+            folder_tab: None,
+        };
+        let out = filter_file_entries(files, criteria);
+        assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["pic.png", "subfolder"]);
+    }
+
+    #[test]
+    fn empty_criteria_is_a_noop() {
+        let files = vec![make_file("a.txt", 1, "d", 0, false), make_file("b.txt", 1, "d", 0, false)];
+        let criteria = FileFilterCriteria {
+            search_term: Some(String::new()),
+            file_types: Some(Vec::new()),
+            date_filter: Some(String::new()),
+            file_sizes: Some(Vec::new()),
+            folder_tab: None,
+        };
+        assert!(criteria.is_empty());
+        let out = filter_file_entries(files, criteria);
+        assert_eq!(out.len(), 2);
     }
 }

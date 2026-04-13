@@ -1,9 +1,17 @@
 import { useInvokeQuery } from "./useInvokeQuery";
 
+/**
+ * Raw shape from Rust `get_account_balance`. Every `*_hip` field is the
+ * pre-formatted HIP display string (`planck_to_hip`). Keep the planck
+ * strings for bigint math; use `*_hip` for rendering.
+ */
 interface AccountBalance {
   free: string;
+  freeHip: string;
   reserved: string;
+  reservedHip: string;
   frozen: string;
+  frozenHip: string;
 }
 
 export interface FrameSystemAccountInfo {
@@ -13,15 +21,20 @@ export interface FrameSystemAccountInfo {
   sufficients: number;
   data: {
     free: bigint;
+    freeHip: string;
     reserved: bigint;
+    reservedHip: string;
     frozen: bigint;
+    frozenHip: string;
     flags: string;
   };
 }
 
 /**
  * Query account balance via Rust `get_account_balance` command.
- * Returns the same FrameSystemAccountInfo shape for backward compatibility.
+ * Returns the FrameSystemAccountInfo shape existing UI code expects,
+ * augmented with the pre-formatted HIP display strings so consumers
+ * don't need to re-implement planck→HIP conversion in JS.
  */
 export function useHippiusBalance() {
   return useInvokeQuery<AccountBalance, FrameSystemAccountInfo | undefined>({
@@ -39,8 +52,11 @@ export function useHippiusBalance() {
             sufficients: 0,
             data: {
               free: BigInt(balance.free),
+              freeHip: balance.freeHip,
               reserved: BigInt(balance.reserved),
+              reservedHip: balance.reservedHip,
               frozen: BigInt(balance.frozen),
+              frozenHip: balance.frozenHip,
               flags: "0",
             },
           };

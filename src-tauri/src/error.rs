@@ -131,12 +131,17 @@ impl std::fmt::Display for NotReadyKind {
 
 /// Serialize `AppError` for Tauri IPC.
 ///
-/// Produces `{ "kind": "Db", "message": "..." }` so the frontend
-/// can match on `kind` programmatically and display `message` to users.
+/// Produces `{ "kind": "Db", "message": "..." }` for most variants. For
+/// `NotReady`, the serialized form also carries a `subkind` field whose
+/// value is the SCREAMING_SNAKE_CASE name of the [`NotReadyKind`]
+/// variant (e.g. `"NOT_ENOUGH_DISK_SPACE"`). The frontend can then
+/// dispatch on `err.subkind` instead of pattern-matching English
+/// substrings of `err.message` — the substring match was fragile and
+/// broke silently whenever the Display text was reworded.
 impl Serialize for AppError {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AppError", 2)?;
+
         let kind = match self {
             Self::Db(_) => "Db",
             Self::Io(_) => "Io",
@@ -154,9 +159,19 @@ impl Serialize for AppError {
             Self::Lock(_) => "Lock",
             Self::Other(_) => "Other",
         };
-        s.serialize_field("kind", kind)?;
-        s.serialize_field("message", &self.to_string())?;
-        s.end()
+
+        if let Self::NotReady(subkind) = self {
+            let mut s = serializer.serialize_struct("AppError", 3)?;
+            s.serialize_field("kind", kind)?;
+            s.serialize_field("subkind", subkind)?;
+            s.serialize_field("message", &self.to_string())?;
+            s.end()
+        } else {
+            let mut s = serializer.serialize_struct("AppError", 2)?;
+            s.serialize_field("kind", kind)?;
+            s.serialize_field("message", &self.to_string())?;
+            s.end()
+        }
     }
 }
 

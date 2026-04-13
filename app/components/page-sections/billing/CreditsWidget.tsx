@@ -8,7 +8,6 @@ import { AbstractIconWrapper, CardButton } from "@/components/ui";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import Warning from "@/components/ui/icons/Warning";
 import TimeAgo from "react-timeago";
-import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { openLinkByKey } from "@/app/lib/utils/links";
 
 
@@ -51,7 +50,7 @@ const CreditsWidget: FC<CreditsWidgetProps> = ({
           <div className="flex flex-col">
             <div className="text-2xl font-medium text-grey-10">
               {credits !== undefined
-                ? `${formatCreditBalance(credits)}`
+                ? credits.hip
                 : error
                   ? "ERROR"
                   : "- - - -"}

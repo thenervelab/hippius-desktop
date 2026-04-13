@@ -20,10 +20,8 @@ import FilesContent from "@/app/components/page-sections/files/FilesContent";
 import { toast } from "sonner";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import { FileTypes } from "@/lib/types/fileTypes";
-import {
-  filterFiles,
-  generateActiveFilters,
-} from "@/lib/utils/fileFilterUtils";
+import { generateActiveFilters } from "@/lib/utils/fileFilterUtils";
+import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import { SearchInput } from "@/components/ui";
 import FilterChips from "@/app/components/page-sections/files/filter-chips";
 import { downloadFolder } from "@/app/lib/utils/downloadFolder";
@@ -99,14 +97,20 @@ export default function FolderView({
   const driveStatuses = useAtomValue(driveStatusesAtom);
   const folderSource = getParam("folderSource");
 
-  const filteredData = useMemo(() => {
-    return filterFiles(files, {
-      searchTerm,
-      fileTypes: selectedFileTypes,
-      dateFilter: selectedDate,
-      fileSize: selectedFileSize,
-    });
-  }, [files, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
+  // Rust `filter_file_entries` owns the filter chain — search, type,
+  // date, size. `selectedFileSize` (single legacy value) is folded into
+  // the `fileSizes` array the Rust side expects so we don't need a
+  // second code path in the IPC for it.
+  const filterSizes = useMemo(
+    () => (selectedFileSize > 0 ? [selectedFileSize] : undefined),
+    [selectedFileSize],
+  );
+  const filteredData = useFilteredFiles(files, {
+    searchTerm,
+    fileTypes: selectedFileTypes,
+    dateFilter: selectedDate,
+    fileSizes: filterSizes,
+  });
 
   // Infinite scroll state for list and card views
   const { visibleData, hasMore, loadMore, resetScroll } =

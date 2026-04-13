@@ -33,14 +33,15 @@ use crate::billing::charts::{
     calculate_storage_capacity, calculate_storage_cost, format_balance_chart, format_credits_chart, format_storage_chart,
     transform_marketplace_credits,
 };
-use crate::billing::credits::{check_sync_eligibility, get_credits_planck};
+use crate::billing::credits::{check_sync_eligibility, get_user_credits};
 use crate::billing::eligibility::check_action_eligibility;
 use crate::billing::queries::{
     get_add_credit_events, get_balance_transfers, get_billing_transactions, get_credits, get_deposit_address, get_files_count, get_files_size,
     get_marketplace_credits, get_system_balance,
 };
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
-use crate::blockchain::convert::to_plancks;
+use crate::blockchain::convert::{planck_to_hip_full, to_plancks};
+use crate::blockchain::transfers::compute_max_transferable;
 use crate::blockchain::queries::{get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address};
 use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, update_wss_endpoint_command};
 use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded};
@@ -64,7 +65,7 @@ use crate::notifications::settings::{get_notification_settings, update_notificat
 use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::files::{
-    add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, get_recent_files, get_user_files, list_sync_folder,
+    add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, filter_file_entries, get_recent_files, get_user_files, list_sync_folder,
     resolve_file_info, resolve_file_path,
 };
 use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
@@ -175,6 +176,7 @@ fn main() {
             list_sync_folder,
             get_recent_files,
             get_user_files,
+            filter_file_entries,
             export_file,
             resolve_file_path,
             resolve_file_info,
@@ -258,6 +260,8 @@ fn main() {
             validate_send_balance,
             get_referral_links,
             to_plancks,
+            planck_to_hip_full,
+            compute_max_transferable,
             // Block subscription
             start_block_subscription,
             // VM management
@@ -276,8 +280,8 @@ fn main() {
             create_ssh_key,
             delete_ssh_key,
             // Billing & credits
+            get_user_credits,
             get_credits,
-            get_credits_planck,
             check_sync_eligibility,
             check_action_eligibility,
             get_billing_transactions,

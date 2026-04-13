@@ -32,17 +32,31 @@ fn credits_to_planck(balance_str: &str) -> String {
     if stripped.is_empty() { "0".to_string() } else { stripped.to_string() }
 }
 
-/// Fetch the credit balance as a planck string (18 decimals, no precision loss).
+/// Credit balance in both representations the frontend needs: raw planck
+/// (for bigint math / eligibility comparisons) and pre-formatted HIP
+/// display string (from `planck_to_hip`, so every credit render in the
+/// app goes through a single formatter).
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CreditBalance {
+    pub planck: String,
+    pub hip: String,
+}
+
+/// Fetch the credit balance.
 ///
-/// The API returns `{ "balance": "1.5" }`. This command converts "1.5" to
-/// "1500000000000000000" using string manipulation, so TypeScript can do
-/// `BigInt(planck)` without any float intermediary.
+/// The API returns `{ "balance": "1.5" }`. This command converts to
+/// planck via `credits_to_planck` (string divmod, no float), then runs
+/// the planck string through `planck_to_hip` so the FE has both shapes
+/// in a single round-trip.
 #[tauri::command]
-pub async fn get_credits_planck(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String, AppError> {
+pub async fn get_user_credits(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<CreditBalance, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let resp: serde_json::Value = client.get("/api/billing/credits/balance/", &account_id).await?;
     let balance_str = resp.get("balance").and_then(|v| v.as_str()).unwrap_or("0");
-    Ok(credits_to_planck(balance_str))
+    let planck = credits_to_planck(balance_str);
+    let hip = crate::blockchain::convert::planck_to_hip(&planck);
+    Ok(CreditBalance { planck, hip })
 }
 
 /// Check whether the user is eligible to start syncing files.

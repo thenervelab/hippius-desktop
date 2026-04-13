@@ -1,6 +1,7 @@
 //! Balance, staking, and on-chain data queries.
 
 use crate::blockchain::client::get_substrate_client;
+use crate::blockchain::convert::planck_to_hip;
 use crate::blockchain::helpers::get_substrate_address;
 use crate::blockchain::runtime::custom_runtime;
 use crate::blockchain::types::{AccountBalance, BlockTimestampResult, ReferralLink, StakingInfo, UnbondingPeriod};
@@ -23,18 +24,18 @@ pub async fn get_account_balance(
         .await
         .map_err(|e| crate::error::AppError::Other(format!("Query failed: {e}")))?;
 
-    match account_info {
-        Some(info) => Ok(AccountBalance {
-            free: info.data.free.to_string(),
-            reserved: info.data.reserved.to_string(),
-            frozen: info.data.frozen.to_string(),
-        }),
-        None => Ok(AccountBalance {
-            free: "0".to_string(),
-            reserved: "0".to_string(),
-            frozen: "0".to_string(),
-        }),
-    }
+    let (free, reserved, frozen) = match account_info {
+        Some(info) => (info.data.free.to_string(), info.data.reserved.to_string(), info.data.frozen.to_string()),
+        None => ("0".to_string(), "0".to_string(), "0".to_string()),
+    };
+    Ok(AccountBalance {
+        free_hip: planck_to_hip(&free),
+        reserved_hip: planck_to_hip(&reserved),
+        frozen_hip: planck_to_hip(&frozen),
+        free,
+        reserved,
+        frozen,
+    })
 }
 
 /// Query staking state for the current authenticated user.
@@ -81,8 +82,10 @@ pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState
                 withdrawable_total += amount;
             } else {
                 unbonding_total += amount;
+                let amount_str = amount.to_string();
                 unbonding_periods.push(UnbondingPeriod {
-                    amount: amount.to_string(),
+                    amount_hip: planck_to_hip(&amount_str),
+                    amount: amount_str,
                     era: unlock_era,
                     remaining_eras: remaining,
                 });
@@ -95,13 +98,23 @@ pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState
     let bonded_u128: u128 = bonded.parse().unwrap_or(0);
     let available = total.saturating_sub(bonded_u128).saturating_sub(unbonding_total);
 
+    let unbonding = unbonding_total.to_string();
+    let withdrawable = withdrawable_total.to_string();
+    let available_balance = available.to_string();
+
     Ok(StakingInfo {
+        bonded_hip: planck_to_hip(&bonded),
+        rewards_hip: planck_to_hip(&rewards),
+        unbonding_hip: planck_to_hip(&unbonding),
+        withdrawable_hip: planck_to_hip(&withdrawable),
+        balance_hip: planck_to_hip(&free_balance),
+        available_balance_hip: planck_to_hip(&available_balance),
         bonded,
         rewards,
-        unbonding: unbonding_total.to_string(),
-        withdrawable: withdrawable_total.to_string(),
+        unbonding,
+        withdrawable,
         balance: free_balance,
-        available_balance: available.to_string(),
+        available_balance,
         unbonding_periods,
     })
 }

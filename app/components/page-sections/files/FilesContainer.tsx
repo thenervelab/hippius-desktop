@@ -24,10 +24,10 @@ import useFilesCount from "@/app/lib/hooks/api/useFilesCount";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { FileTypes } from "@/lib/types/fileTypes";
 import {
-  filterFiles,
   generateActiveFilters,
   ActiveFilter,
 } from "@/lib/utils/fileFilterUtils";
+import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import FilesHeader from "./FilesHeader";
 import FilesContent from "./FilesContent";
 import { useAtomValue, useSetAtom } from "jotai";
@@ -229,41 +229,25 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     return [];
   }, [isRecentFiles, recentFilesData, regularFilesData?.files]);
 
-  // Filter data to show only private files, then by selected folder tab
+  // Prune the list down to the private-files universe the files page
+  // displays. The folder-tab cut is delegated to Rust's filter along with
+  // every other filter — keeping the type cut here keeps recents vs.
+  // private as a TS-owned concern (it's part of *which view* the user
+  // picked, not a filter the chip UI exposes).
   const allFilteredData = useMemo(() => {
-    let data = allData;
+    if (isRecentFiles) return allData;
+    return allData.filter((file) => (file.type?.toLowerCase() || "") === "private");
+  }, [allData, isRecentFiles]);
 
-    if (!isRecentFiles) {
-      data = data.filter((file) => {
-        const fileType = file.type?.toLowerCase() || "";
-        return fileType === "private";
-      });
-    }
-
-    if (selectedFolderTab && !isRecentFiles) {
-      data = data.filter((file) => file.label === selectedFolderTab);
-    }
-
-    return data;
-  }, [allData, isRecentFiles, selectedFolderTab]);
-
-  // Filter data based on search and filter settings
-  const filteredData = useMemo(() => {
-    return filterFiles(allFilteredData, {
-      searchTerm,
-      fileTypes: filterState.fileTypes,
-      dateFilter: filterState.date,
-      fileSize: filterState.fileSize,
-      fileSizes: filterState.fileSizes,
-    });
-  }, [
-    allFilteredData,
+  // Rust owns the filter chain — search, type, date, size, folder tab.
+  // `useFilteredFiles` debounces fast typing so we don't IPC per keystroke.
+  const filteredData = useFilteredFiles(allFilteredData, {
     searchTerm,
-    filterState.fileTypes,
-    filterState.date,
-    filterState.fileSize,
-    filterState.fileSizes,
-  ]);
+    fileTypes: filterState.fileTypes,
+    dateFilter: filterState.date,
+    fileSizes: filterState.fileSizes,
+    folderTab: isRecentFiles ? null : selectedFolderTab,
+  });
 
   // Infinite scroll state for list and card views
   const { visibleData, hasMore, loadMore, resetScroll } =
@@ -343,20 +327,20 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     [filterState.fileTypes, filterState.fileSizes, updateFilters]
   );
 
-  // Format storage size — indexer stats at top level, local stats for folder tabs
+  // Format storage size — indexer stats at top level, local stats for folder tabs.
+  // Sums bytes from the raw per-folder slice so the tab size doesn't shrink
+  // when the user types into the search box (the Rust filter is applied to
+  // `filteredData`, not to the size-aggregation view).
   const formattedStorageSize = useMemo(() => {
     if (isRecentFiles) return "";
 
-    // Folder-scoped view: use local computed size for that folder
     if (selectedFolderTab) {
-      const tabSize = allFilteredData.reduce(
-        (sum, f) => sum + BigInt(f.size ?? 0),
-        BigInt(0)
-      );
+      const tabSize = allFilteredData
+        .filter((f) => f.label === selectedFolderTab)
+        .reduce((sum, f) => sum + BigInt(f.size ?? 0), BigInt(0));
       return formatBytesFromBigInt(tabSize);
     }
 
-    // Top-level "All" view: use indexer stats (same source as Home page)
     if (remoteStorageStats?.totalBytes) {
       return formatBytes(remoteStorageStats.totalBytes, 2);
     }

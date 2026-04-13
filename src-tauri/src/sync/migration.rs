@@ -18,6 +18,37 @@ use std::sync::atomic::Ordering;
 use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Derive the HCFS drive label for a migration destination path.
+///
+/// The rule is: take the path's last non-empty component (the directory
+/// name the user chose for migrated files), sanitize it for filesystem
+/// safety, and fall back to `"default"` when no path is given or the
+/// sanitized name is empty. Previously both `launchServerMigration` and
+/// `closeMigration` in `useMigration.ts` had their own copy of this
+/// snippet — keeping it in Rust closes the "what if the two diverge?"
+/// class of bug and lets the frontend stop threading a redundant
+/// `label` argument through every migration IPC.
+pub(crate) fn derive_migration_label(sync_path: Option<&str>) -> String {
+    let candidate = sync_path
+        .and_then(|p| {
+            std::path::Path::new(p)
+                .components()
+                .filter_map(|c| match c {
+                    std::path::Component::Normal(os) => os.to_str(),
+                    _ => None,
+                })
+                .next_back()
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+
+    crate::sync::folders::sanitize_label(&candidate).unwrap_or_else(|_| "default".to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -488,9 +519,8 @@ pub async fn complete_migration_transition(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     custom_sync_path: Option<String>,
-    label: String,
 ) -> Result<crate::sync::lifecycle::InitSyncResult> {
-    let label = crate::sync::folders::sanitize_label(&label)?;
+    let label = derive_migration_label(custom_sync_path.as_deref());
     let pool = state.pool()?;
 
     // 1. Clear migration-in-progress flag so initialize_sync isn't blocked.
@@ -620,9 +650,9 @@ pub async fn start_server_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     total_size: u64,
-    label: String,
+    sync_path: Option<String>,
 ) -> Result<StartServerMigrationResult> {
-    let label = crate::sync::folders::sanitize_label(&label)?;
+    let label = derive_migration_label(sync_path.as_deref());
     tracing::info!("[Migration] Starting server migration for account {account_id}, label={label}, total_size={total_size}");
     state.migration.in_progress.store(true, Ordering::SeqCst);
     state.migration.poll_failure_count.store(0, Ordering::SeqCst);
@@ -985,6 +1015,40 @@ impl MigrationState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // derive_migration_label
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn derive_label_uses_last_path_component() {
+        assert_eq!(derive_migration_label(Some("/Users/alice/Documents/Hippius-Migration")), "Hippius-Migration");
+    }
+
+    #[test]
+    fn derive_label_trailing_slash_is_stripped() {
+        assert_eq!(derive_migration_label(Some("/Users/alice/Hippius/")), "Hippius");
+    }
+
+    #[test]
+    fn derive_label_sanitizes_unsupported_chars() {
+        assert_eq!(derive_migration_label(Some("/tmp/weird*folder?name")), "weirdfoldername");
+    }
+
+    #[test]
+    fn derive_label_none_defaults() {
+        assert_eq!(derive_migration_label(None), "default");
+    }
+
+    #[test]
+    fn derive_label_empty_string_defaults() {
+        assert_eq!(derive_migration_label(Some("")), "default");
+    }
+
+    #[test]
+    fn derive_label_only_slashes_defaults() {
+        assert_eq!(derive_migration_label(Some("///")), "default");
+    }
 
     // -----------------------------------------------------------------------
     // check_disk_space (Unix only)

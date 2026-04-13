@@ -10,12 +10,14 @@ import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import SendBalanceConfirmationDialog from "./SendBalanceConfirmationDialog";
 import { useAddressValidation } from "@/lib/hooks/useAddressValidation";
-import { formatBalance } from "@/lib/utils/formatters/formatBalance";
 
 export interface SendBalanceDialogProps {
   open: boolean;
   onClose: () => void;
+  /** Raw planck string — source of truth for the max calculation. */
   availableBalancePlanck: string;
+  /** Pre-formatted HIP string from Rust (`planck_to_hip`) for display. */
+  availableBalanceHip: string;
   refetchBalance?: () => void;
   polkadotAddress: string;
 }
@@ -24,6 +26,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
   open,
   onClose,
   availableBalancePlanck,
+  availableBalanceHip,
   refetchBalance,
   polkadotAddress
 }) => {
@@ -43,20 +46,20 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
   const [amountError, setAmountError] = useState<string | undefined>();
   const [showConfirmation, setShowConfirmation] = useState(false);
 
-  const handleSetMax = () => {
-    // Compute max transferable: balance - fee, using lossless BigInt math
-    // Fee constant lives in Rust; we use the known value here only for MAX display
-    const available = BigInt(availableBalancePlanck || "0");
-    const fee = BigInt("270233151"); // matches Rust ESTIMATED_TRANSFER_FEE_PLANCK
-    const maxPlanck = available > fee ? available - fee : BigInt(0);
-    // Convert planck to decimal string for the input field
-    const whole = maxPlanck / BigInt(10 ** 18);
-    const frac = maxPlanck % BigInt(10 ** 18);
-    const maxDisplay = frac === BigInt(0)
-      ? whole.toString()
-      : `${whole}.${frac.toString().padStart(18, "0").replace(/0+$/, "")}`;
-    setAmount(maxDisplay);
-    setAmountError(undefined);
+  const handleSetMax = async () => {
+    // Max = balance - fee, computed in Rust so the fee constant and the
+    // planck→HIP conversion stay colocated with `transfer_balance`.
+    try {
+      const { hip } = await invoke<{ planck: string; hip: string }>(
+        "compute_max_transferable",
+        { balancePlanck: availableBalancePlanck || "0" },
+      );
+      setAmount(hip);
+      setAmountError(undefined);
+    } catch {
+      setAmount("0");
+      setAmountError(undefined);
+    }
   };
 
   const validateForm = async (): Promise<string | null> => {
@@ -230,7 +233,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
                 Available
               </span>
               <span className="text-sm font-medium text-success-50">
-                {formatBalance(availableBalancePlanck || "0")} hALPHA
+                {availableBalanceHip || "0"} hALPHA
               </span>
             </div>
 

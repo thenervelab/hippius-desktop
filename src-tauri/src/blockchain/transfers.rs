@@ -12,6 +12,29 @@ use tracing::info;
 /// Estimated transaction fee in planck.
 const ESTIMATED_TRANSFER_FEE_PLANCK: u128 = 270_233_151;
 
+/// Max-transferable amount for the "Send Max" UX on the balance page.
+///
+/// Pure function — takes a planck balance string, subtracts the fee, and
+/// returns both the remaining planck and the formatted HIP string. Lives
+/// in Rust so the fee constant, the BigInt subtraction, and the planck→HIP
+/// conversion are all owned by the backend (the same places the actual
+/// transfer logic lives).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaxTransferable {
+    pub planck: String,
+    pub hip: String,
+}
+
+#[tauri::command]
+pub fn compute_max_transferable(balance_planck: String) -> MaxTransferable {
+    let balance = balance_planck.parse::<u128>().unwrap_or(0);
+    let max_planck = balance.saturating_sub(ESTIMATED_TRANSFER_FEE_PLANCK);
+    let planck = max_planck.to_string();
+    let hip = crate::blockchain::convert::planck_to_hip_full(planck.clone());
+    MaxTransferable { planck, hip }
+}
+
 /// Transfer balance using the keypair from `AppState.auth`.
 #[tauri::command]
 pub async fn transfer_balance(
@@ -95,9 +118,14 @@ pub async fn validate_send_balance(
         ));
     }
 
+    let estimated_fee = ESTIMATED_TRANSFER_FEE_PLANCK.to_string();
+    let available_balance_planck = available.to_string();
     Ok(ValidatedTransfer {
+        planck_amount_hip: crate::blockchain::convert::planck_to_hip(&planck_str),
+        estimated_fee_hip: crate::blockchain::convert::planck_to_hip(&estimated_fee),
+        available_balance_hip: crate::blockchain::convert::planck_to_hip(&available_balance_planck),
         planck_amount: planck_str,
-        estimated_fee: ESTIMATED_TRANSFER_FEE_PLANCK.to_string(),
-        available_balance_planck: available.to_string(),
+        estimated_fee,
+        available_balance_planck,
     })
 }
