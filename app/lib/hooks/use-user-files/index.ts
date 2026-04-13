@@ -77,9 +77,21 @@ export function useUserFiles() {
 
       // Single Rust call: fetches from all sync paths, resolves timestamps,
       // detects encrypted names, sorts. No loop or mapping in TypeScript.
-      const result = await invoke<UserFilesResult>("get_user_files", {
-        accountId: polkadotAddress,
-      });
+      //
+      // A 15s wall-clock cap guards against the files page spinning
+      // forever when a downstream call inside `get_user_files` stalls
+      // (e.g. `tokio::fs::read_dir` on a path the app has lost
+      // permission for, or a drive registry lock held by a sync loop
+      // that is itself wedged). TanStack Query's `retry: 3` below
+      // retries on timeout, and the FE surfaces `error` via the files
+      // container when all retries are exhausted — instead of the
+      // indefinite spinner the bug report surfaced.
+      const result = await Promise.race([
+        invoke<UserFilesResult>("get_user_files", { accountId: polkadotAddress }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("get_user_files timed out")), 15_000),
+        ),
+      ]);
 
       return {
         files: result.files,

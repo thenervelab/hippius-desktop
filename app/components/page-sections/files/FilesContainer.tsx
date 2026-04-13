@@ -11,6 +11,7 @@ import React, {
 import useUserFiles from "@/app/lib/hooks/use-user-files";
 import useRecentFiles from "@/lib/hooks/use-recent-files";
 import { WaitAMoment } from "@/components/ui";
+import * as Typography from "@/components/ui/typography";
 import FilesOnboarding from "./FilesOnboarding";
 import {
   getPrivateSyncPath,
@@ -834,6 +835,29 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
 
   if (shouldShowLoading) {
     content = <WaitAMoment />;
+  } else if (error && !isRecentFiles) {
+    // `useUserFiles` exposes a terminal error (after TanStack Query's
+    // retry budget is exhausted or the 15 s wall-clock cap in the
+    // query fires). Without an explicit branch here the page stayed
+    // blank with only the reauth banner at the top, which the user
+    // reported as "loads indefinitely without displaying any content".
+    content = (
+      <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+        <Typography.P size="md" className="font-medium text-error-60 mb-2">
+          Couldn&apos;t load your files right now.
+        </Typography.P>
+        <Typography.P size="sm" className="text-grey-50 max-w-md">
+          {error instanceof Error ? error.message : String(error)}
+        </Typography.P>
+        <button
+          type="button"
+          className="mt-6 text-sm font-medium text-primary-50 hover:text-primary-40"
+          onClick={() => refetchUserFiles()}
+        >
+          Try again
+        </button>
+      </div>
+    );
   } else if (isSyncPathConfigured === false && !isRecentFiles) {
     content = (
       <FilesOnboarding

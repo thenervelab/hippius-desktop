@@ -221,7 +221,7 @@ pub async fn get_drive_mnemonic(state: tauri::State<'_, crate::app_state::AppSta
 /// legitimate consumer of the raw string.
 #[tauri::command]
 pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<()> {
-    // Try drive mnemonic first.
+    // Try the five-stage recovery chain first.
     if let Ok(m) = get_mnemonic_for_account(&state, &account_id).await
         && !m.is_empty()
     {
@@ -233,9 +233,41 @@ pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppS
         return Ok(());
     }
 
-    // Fall back to generating a new mnemonic (OAuth users on first sync).
+    // Recovery failed. Before generating a fresh mnemonic, check whether
+    // the user already has encrypted state on disk / in the DB that would
+    // be rendered permanently unreadable by minting a new one. The
+    // canonical markers:
+    //
+    // 1. `master_enc_mnemonic.json` exists — the mnemonic was already
+    //    generated once and encrypted to disk with the user's drive
+    //    password. Generating a new mnemonic would leave this file
+    //    unopenable.
+    // 2. `hcfs_config.drive_password` has `encryption_version > 0` — the
+    //    drive password is encrypted with the existing mnemonic; a new
+    //    mnemonic cannot decrypt it and `load_sync_config` would fail
+    //    with the opaque `Crypto: decryption failed — wrong key or
+    //    corrupted data` the bug report surfaced.
+    //
+    // The previous code regenerated in both states because
+    // `get_mnemonic_for_account` stages 2-4 pass `None` to
+    // `get_drive_password` and always return `Err` for
+    // `encryption_version = 1` rows — a chicken-and-egg that made the
+    // recovery chain look empty whenever the keychain had evicted the
+    // mnemonic (common in release-signed builds with `hardenedRuntime`).
+    // Regenerating then corrupted the drive password on the next
+    // decrypt. Instead, surface `MasterMnemonicUnrecoverable` so the
+    // frontend's reauth banner / seed-phrase re-entry flow takes over.
+    if has_existing_mnemonic_state(&state, &account_id).await? {
+        warn!(
+            "Mnemonic recovery failed for account {} but encrypted state exists — refusing to generate a new mnemonic (reauth required)",
+            &account_id[..8.min(account_id.len())]
+        );
+        return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::MasterMnemonicUnrecoverable));
+    }
+
+    // Truly fresh state (first-time OAuth sync setup) — safe to mint one.
     info!(
-        "No drive mnemonic available, generating new one for account {}",
+        "No drive mnemonic available and no prior state, generating new one for account {}",
         &account_id[..8.min(account_id.len())]
     );
     let generated = crate::auth::login::generate_mnemonic_internal()?;
@@ -249,6 +281,29 @@ pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppS
     state.auth.lock()?.cache_session_mnemonic(&account_id, (*generated).clone());
 
     Ok(())
+}
+
+/// Returns `true` when the account already has encrypted mnemonic/drive
+/// state that would be destroyed by minting a new mnemonic.
+///
+/// Checked artifacts:
+/// - `master_enc_mnemonic.json` under `~/.hippius/drives/<account_key>/`.
+/// - A `hcfs_config` row with `encryption_version > 0`.
+pub(crate) async fn has_existing_mnemonic_state(state: &crate::app_state::AppState, account_id: &str) -> Result<bool> {
+    if let Ok(path) = master_mnemonic_path(account_id)
+        && path.exists()
+    {
+        return Ok(true);
+    }
+
+    let pool = state.pool()?;
+    let owner = account_key(account_id);
+    let row: Option<(i32,)> = sqlx::query_as("SELECT COALESCE(encryption_version, 0) FROM hcfs_config WHERE owner = ? LIMIT 1")
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(row.is_some_and(|(v,)| v > 0))
 }
 
 /// Create a password-protected zip file containing the plaintext mnemonic.

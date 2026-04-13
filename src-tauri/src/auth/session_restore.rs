@@ -12,6 +12,42 @@ use crate::auth::state::AuthCapabilities;
 use crate::error::AppError;
 use tracing::{info, warn};
 
+/// Re-arm the Tauri asset protocol scope for every configured sync path
+/// of `account_id`.
+///
+/// The static scope in `tauri.conf.json` only covers `$HOME/.hippius/**`.
+/// User-chosen sync folders live at arbitrary paths, so the runtime
+/// scope needs to be re-expanded each launch. `auto_init_sync` does
+/// this in step 4 — but when sync init is blocked upstream (e.g. the
+/// keychain has no mnemonic for a restored mnemonic session, or the
+/// credits check fails), that step never runs and the asset protocol
+/// falls back to the narrower static scope. On macOS release builds
+/// with `hardenedRuntime`, the first unscoped `asset://` read then
+/// triggers the system folder-permission dialog every launch. Priming
+/// the scope here, at the first success point in session restore,
+/// makes the expansion deterministic regardless of whether sync init
+/// eventually succeeds.
+///
+/// Best-effort — each path failure is logged and skipped. A missing
+/// sync-paths table or a deleted folder must not abort the session
+/// restore flow.
+async fn arm_asset_scope_for_account(app: &tauri::AppHandle, state: &tauri::State<'_, crate::app_state::AppState>, account_id: &str) {
+    let Ok(pool) = state.pool() else {
+        warn!("arm_asset_scope_for_account: pool unavailable, skipping");
+        return;
+    };
+    let paths = match crate::sync::folders::get_all_sync_paths_internal(pool, account_id).await {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(error = %e, "arm_asset_scope_for_account: failed to list sync paths");
+            return;
+        }
+    };
+    for sp in paths.iter().filter(|sp| !sp.path.is_empty()) {
+        crate::sync::files::allow_asset_directory(app, &sp.path);
+    }
+}
+
 /// Outcome of [`rehydrate_or_restored`]. Tells the caller whether the
 /// helper has already populated `AuthInfo` (via the keychain rehydrate
 /// path) or whether the caller still needs to write
@@ -106,6 +142,7 @@ pub struct SessionRestoreResult {
     reason = "Linear multi-stage auth flow (OAuth JSON validation → DB fallback → result build). Splitting fragments the early-return error paths and has caused past regressions; auth_session_repo's inline unit tests cover the upsert/clear/COALESCE invariants."
 )]
 pub async fn restore_session(
+    app: tauri::AppHandle,
     state: tauri::State<'_, crate::app_state::AppState>,
     oauth_session_json: Option<String>,
     oauth_expiry_ms: Option<i64>,
@@ -185,6 +222,21 @@ pub async fn restore_session(
                         }
                     }
                     info!("Restoring OAuth session for {:?}", substrate_address);
+                    // Re-arm the Tauri asset protocol scope for every
+                    // configured sync path. The static scope in
+                    // `tauri.conf.json` only covers `$HOME/.hippius/**`;
+                    // user-chosen folders need a runtime `allow_directory`
+                    // call each launch. `auto_init_sync` also does this
+                    // in step 4, but if the mnemonic is unrecoverable
+                    // (keychain evicted, reauth required), `auto_init_sync`
+                    // aborts before the scope is expanded — and on
+                    // macOS release builds the first `asset://` read of
+                    // a sync-folder file then re-triggers the system
+                    // folder-permission dialog every launch. Priming
+                    // the scope here makes the bootstrap deterministic.
+                    if let Some(ref addr) = substrate_address {
+                        arm_asset_scope_for_account(&app, &state, addr).await;
+                    }
                     // Signal that AuthInfo is populated so the FE can
                     // retry `auto_init_sync` if its first attempt raced
                     // ahead of `rehydrate_or_restored`. See the auth-
@@ -311,6 +363,11 @@ pub async fn restore_session(
         }
     }
     info!("Restoring DB session for {:?}", row.substrate_address);
+    // Re-arm the asset protocol scope for the restored account — same
+    // rationale as the OAuth branch above.
+    if let Some(ref addr) = row.substrate_address {
+        arm_asset_scope_for_account(&app, &state, addr).await;
+    }
     // Signal auth-ready for the DB-fallback restore path as well. The
     // FE's `auto_init_sync` retry listens on this single event for both
     // restore branches.

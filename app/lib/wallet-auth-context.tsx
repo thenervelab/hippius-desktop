@@ -324,6 +324,17 @@ export function WalletAuthProvider({
             await invoke<void>("ensure_sync_mnemonic", { accountId: result.substrateAddress });
           } catch (err) {
             console.error("[WalletAuth] ensure_sync_mnemonic failed:", err);
+            // Rust refuses to mint a fresh mnemonic when encrypted
+            // state already exists on disk — returning
+            // `NotReady(MasterMnemonicUnrecoverable)`. Flip the
+            // reauth banner so the user can recover via re-entering
+            // their seed phrase, instead of silently falling through
+            // to `initSync` which would surface as the opaque
+            // `Crypto: decryption failed` error on the next drive
+            // resume.
+            if ((err as { kind?: string; subkind?: string } | null)?.subkind === "MASTER_MNEMONIC_UNRECOVERABLE") {
+              appStore.set(syncRequiresReauthAtom, true);
+            }
           }
         }
         initSync(result.substrateAddress);
@@ -484,6 +495,14 @@ export function WalletAuthProvider({
         await invoke<void>("ensure_sync_mnemonic", { accountId: session.substrateAddress });
       } catch (err) {
         console.error("[WalletAuth] ensure_sync_mnemonic failed:", err);
+        // See the companion handler in the boot-time session restore:
+        // when Rust refuses to mint a fresh mnemonic because encrypted
+        // state already exists, flag reauth so the UI prompts recovery
+        // instead of letting `initSync` fail opaquely with `Crypto:
+        // decryption failed`.
+        if ((err as { kind?: string; subkind?: string } | null)?.subkind === "MASTER_MNEMONIC_UNRECOVERABLE") {
+          appStore.set(syncRequiresReauthAtom, true);
+        }
       }
       initSync(session.substrateAddress);
     }
