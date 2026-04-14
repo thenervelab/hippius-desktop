@@ -163,11 +163,23 @@ export default function OAuthCallbackPage() {
                 router.replace(redirectPath);
             } catch (err) {
                 console.error("[OAuthCallback] Failed to process callback:", err);
-                setError(
-                    err instanceof Error
-                        ? err.message
-                        : "Failed to complete authentication. Please try again."
-                );
+                // Tauri invoke rejects with the serialized Rust error
+                // (plain object shaped like {kind, message}), not an
+                // Error instance — so `err instanceof Error` is false
+                // for backend failures. Coerce every shape we might
+                // see into a renderable string so the user sees the
+                // actual failure rather than a generic fallback.
+                let message: string;
+                if (err instanceof Error) {
+                    message = err.message;
+                } else if (typeof err === "object" && err !== null && "message" in err) {
+                    message = String((err as { message: unknown }).message);
+                } else if (typeof err === "string") {
+                    message = err;
+                } else {
+                    message = "Failed to complete authentication. Please try again.";
+                }
+                setError(message);
             }
         };
 
