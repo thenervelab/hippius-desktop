@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { useSetAtom } from "jotai";
+import { useAtom } from "jotai";
 
 import {
   RecoveryCheck,
@@ -19,23 +19,27 @@ import {
  * paths — matching the backend gate default (`Skipped`) for those.
  */
 const RecoveryEventListener: React.FC = () => {
-  const setCheck = useSetAtom(activeRecoveryCheckAtom);
+  const [current, setCheck] = useAtom(activeRecoveryCheckAtom);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void (async () => {
       unlisten = await listen<RecoveryCheck>("oauth_recovery_check_needed", (e) => {
-        // `proceed` still comes through so the dialog auto-skips via
-        // ProceedBranch and confirms the gate state. Backend has already
-        // set the gate correctly; this is belt-and-braces for the case
-        // where the gate was set before any waiter existed.
-        setCheck(e.payload);
+        // OAuthCallbackPage already populates the atom via an explicit
+        // `check_recovery_state` invoke before navigating — that's the
+        // primary path. This listener only fills the gap if the
+        // callback failed to set the atom (e.g. network error). Skip
+        // the write when the atom is already populated to avoid
+        // overwriting a dialog that's mid-flow.
+        if (current === null) {
+          setCheck(e.payload);
+        }
       });
     })();
     return () => {
       unlisten?.();
     };
-  }, [setCheck]);
+  }, [current, setCheck]);
 
   return null;
 };

@@ -208,11 +208,11 @@ const ProceedBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
     void (async () => {
       try {
         await markRecoverySkipped();
-      } catch {
-        // The backend default gate is already `Skipped` so a failure here
-        // is harmless — the sync await already unblocked. Log via toast
-        // only if the user was shown the dialog, which they aren't on
-        // this branch.
+      } catch (err) {
+        // Backend default gate is `Skipped`, so a failure here is
+        // cosmetic — sync is already unblocked. Log for triage; no
+        // toast because the user was never shown this branch.
+        console.warn("[AccountRecovery] mark_recovery_skipped failed:", err);
       }
       onDone();
     })();

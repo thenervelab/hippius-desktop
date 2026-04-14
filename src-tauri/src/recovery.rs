@@ -9,8 +9,7 @@
 //! - The default hcfs-server URL used before sync is configured.
 //! - Helpers that seed the URL into `hcfs_config` so recovery can reach the
 //!   server on a fresh device.
-//! - The Tauri commands invoked by the recovery dialog (added in follow-up
-//!   tasks — currently only the scaffold lives here).
+//! - The Tauri commands invoked by the recovery dialog.
 
 use hcfs_client::mnemonic_blob::{SealedBlob, open_mnemonic, seal_mnemonic};
 use serde::{Deserialize, Serialize};
@@ -274,26 +273,28 @@ pub async fn recover_mnemonic(
     }
 
     state.set_recovery_state(crate::recovery::RecoveryGateState::Resolved);
-    info!("Recovery completed for account {}", short_account(&account_id));
+    info!("Recovery completed for account {}", crate::console_access::short_ss58(&account_id));
     Ok(())
 }
 
 /// Write the recovered mnemonic to `master_enc_mnemonic.json` under the
 /// account directory. Creates parent directories if missing.
+///
+/// The heap-backed copies passed into `spawn_blocking` are wrapped in
+/// `Zeroizing` so the mnemonic and password are scrubbed from the
+/// allocator when the closure drops — the caller's `Zeroizing` wrapper
+/// doesn't extend into the moved clones automatically.
+/// hcfs-client's `save_encrypted_mnemonic` chmods the file to `0o600`,
+/// so no additional permission tightening is needed here.
 async fn install_recovered_mnemonic(account_id: &str, mnemonic: &str, password: &str) -> Result<()> {
     let path = crate::sync::mnemonic::master_mnemonic_path(account_id)?;
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
-    // `save_encrypted_mnemonic` is synchronous I/O + crypto; run it on
-    // the blocking pool so we don't stall the runtime. Its error type
-    // is `Box<dyn Error>` which isn't `Send`, so we stringify inside
-    // the closure before the `JoinHandle` boundary.
-    let path_owned = path.clone();
-    let mnemonic_owned = mnemonic.to_string();
-    let password_owned = password.to_string();
+    let mnemonic_owned = Zeroizing::new(mnemonic.to_string());
+    let password_owned = Zeroizing::new(password.to_string());
     tokio::task::spawn_blocking(move || {
-        hcfs_client::auth::save_encrypted_mnemonic(&path_owned, &mnemonic_owned, &password_owned).map_err(|e| e.to_string())
+        hcfs_client::auth::save_encrypted_mnemonic(&path, &mnemonic_owned, &password_owned).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| AppError::Other(format!("join error: {e}")))?
@@ -325,36 +326,40 @@ pub async fn seal_and_upload_mnemonic(
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
-    // Obtain a mnemonic to seal:
-    //   - Fresh OAuth signup: no mnemonic exists anywhere yet. The sync
-    //     init path that would normally mint one (`ensure_sync_mnemonic`)
-    //     is parked on the recovery gate, so we mint it here and cache
-    //     it in AuthInfo. The same write flows through the recovery
-    //     installer so the on-disk `master_enc_mnemonic.json` is
-    //     encrypted under the recovery password — the user only has to
-    //     remember one secret.
-    //   - Existing-user migration: a mnemonic already exists locally and
-    //     `get_mnemonic_for_account` returns it (stage 1 cache or stage
-    //     2 disk). We seal that without generating anything new.
-    let mnemonic = match crate::sync::mnemonic::get_mnemonic_for_account(state.inner(), &account_id).await {
-        Ok(m) if !m.is_empty() => m,
-        _ => {
-            let generated = crate::auth::login::generate_mnemonic_internal()?;
-            {
-                let mut auth = state.auth.lock()?;
-                auth.cache_session_mnemonic(&account_id, (*generated).clone());
-            }
-            install_recovered_mnemonic(&account_id, &generated, &password).await?;
-            generated
-        }
+    // Obtain a mnemonic. For existing users it already lives in AuthInfo
+    // or on disk; for fresh-signup users we mint one here but DO NOT
+    // persist it to disk until the server upload succeeds — see the
+    // commit-point discussion below.
+    let (mnemonic, is_fresh_signup) = match crate::sync::mnemonic::get_mnemonic_for_account(state.inner(), &account_id).await {
+        Ok(m) if !m.is_empty() => (m, false),
+        _ => (crate::auth::login::generate_mnemonic_internal()?, true),
     };
 
     let ctx = HcfsServerCtx::resolve(&state).await?;
     let blob = seal_mnemonic(&mnemonic, &password, &ctx.ss58).map_err(crypto_to_err)?;
+
+    // Server upload is the commit point: if it fails on the fresh-signup
+    // path, leaving a local `master_enc_mnemonic.json` behind would make
+    // the next `check_recovery_state` return `Proceed` (local present),
+    // silently skipping the upload retry and leaving the user
+    // unrecoverable. By POSTing first and installing locally only after
+    // a 2xx, a failed upload leaves no local state, so the user hits
+    // the Signup branch again on retry.
+    //
+    // For existing-user migration (`is_fresh_signup=false`) there's
+    // already a local mnemonic from a prior session — the POST is the
+    // only side effect, and if it fails the existing-user prompt will
+    // re-fire on the next launch.
     post_json_discard(&ctx, "/v1/mnemonic-blob", &blob).await?;
 
+    if is_fresh_signup {
+        install_recovered_mnemonic(&account_id, &mnemonic, &password).await?;
+        let mut auth = state.auth.lock()?;
+        auth.cache_session_mnemonic(&account_id, (*mnemonic).clone());
+    }
+
     state.set_recovery_state(crate::recovery::RecoveryGateState::Resolved);
-    info!("Recovery blob sealed and uploaded for account {}", short_account(&account_id));
+    info!("Recovery blob sealed and uploaded for account {}", crate::console_access::short_ss58(&account_id));
     Ok(())
 }
 
@@ -372,14 +377,6 @@ pub async fn mark_recovery_skipped(state: tauri::State<'_, crate::app_state::App
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn short_account(id: &str) -> String {
-    let head: String = id.chars().take(8).collect();
-    format!("{head}…")
-}
 
 #[cfg(test)]
 mod tests {
@@ -491,6 +488,36 @@ mod tests {
             .await
             .expect("await should return immediately when already resolved");
         assert_eq!(awaited, RecoveryGateState::Resolved);
+    }
+
+    /// Proves the whole point of the recovery gate: when set to
+    /// `Pending`, any code path that calls `await_recovery_resolved`
+    /// (notably `ensure_sync_mnemonic`) parks until the gate transitions.
+    /// Without this gate, a fresh-device OAuth login races
+    /// `auto_init_sync` against the recovery dialog and mints a
+    /// throwaway mnemonic that then corrupts the drive password.
+    #[tokio::test]
+    async fn await_recovery_resolved_blocks_while_pending() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let state = Arc::new(crate::app_state::AppState::new());
+        state.set_recovery_state(RecoveryGateState::Pending);
+
+        let waiter_state = state.clone();
+        let handle = tokio::spawn(async move { waiter_state.await_recovery_resolved().await });
+
+        // Give the waiter time to park, then assert it's still pending.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!handle.is_finished(), "waiter must block while gate is Pending");
+
+        // Flip to Resolved — waiter must wake.
+        state.set_recovery_state(RecoveryGateState::Resolved);
+        let resolved = tokio::time::timeout(Duration::from_millis(200), handle)
+            .await
+            .expect("waiter must wake within 200ms of gate resolution")
+            .expect("task panicked");
+        assert_eq!(resolved, RecoveryGateState::Resolved);
     }
 
     #[tokio::test]

@@ -286,7 +286,9 @@ async fn http_err(status: StatusCode, resp: reqwest::Response, path: &str) -> Ap
     }
 }
 
-fn short_ss58(ss58: &str) -> String {
+/// Truncate an SS58 address (or anything resembling one) to its first 8
+/// characters plus an ellipsis, for log hygiene and short UI fragments.
+pub(crate) fn short_ss58(ss58: &str) -> String {
     let head: String = ss58.chars().take(8).collect();
     format!("{head}…")
 }
