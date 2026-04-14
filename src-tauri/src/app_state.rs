@@ -109,7 +109,12 @@ impl AppState {
             drive_removed_notify: tokio::sync::Notify::new(),
             file_failures: crate::sync::failure_tracking::FileFailureState::new(),
             drive_status_cache: Mutex::new(HashMap::new()),
-            recovery_gate: tokio::sync::watch::channel(RecoveryGateState::Pending).0,
+            // Default `Skipped` — non-OAuth login paths (mnemonic login,
+            // session restore for a returning user) never need the dialog,
+            // so `ensure_sync_mnemonic`'s await passes through immediately.
+            // `complete_oauth_flow` flips this to `Pending` at its start so
+            // the dialog gets a chance to run before any sync init races in.
+            recovery_gate: tokio::sync::watch::channel(RecoveryGateState::Skipped).0,
         }
     }
 

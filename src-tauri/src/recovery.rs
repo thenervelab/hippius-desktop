@@ -162,6 +162,14 @@ fn has_local_mnemonic(account_id: &str) -> bool {
 /// overwriting server state.
 #[tauri::command]
 pub async fn check_recovery_state(state: tauri::State<'_, crate::app_state::AppState>) -> Result<RecoveryCheck> {
+    check_recovery_state_inner(&state).await
+}
+
+/// Inner logic for [`check_recovery_state`]. Takes `tauri::State` so it can
+/// reuse `HcfsServerCtx::resolve` (which in turn consults AuthInfo, pool,
+/// and the API client). Callable from other commands (notably the OAuth
+/// callback) without the `#[tauri::command]` boundary in the way.
+pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::app_state::AppState>) -> Result<RecoveryCheck> {
     let account_id = state.current_account_id().map_err(AppError::Other)?;
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
@@ -180,7 +188,7 @@ pub async fn check_recovery_state(state: tauri::State<'_, crate::app_state::AppS
         });
     }
 
-    let ctx = match HcfsServerCtx::resolve(&state).await {
+    let ctx = match HcfsServerCtx::resolve(state).await {
         Ok(c) => c,
         Err(e) => {
             warn!(error = %e, "check_recovery_state: failed to resolve hcfs context");
@@ -445,8 +453,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn app_state_recovery_gate_defaults_pending_and_resolves() {
+    async fn app_state_recovery_gate_defaults_skipped_and_transitions() {
         let state = crate::app_state::AppState::new();
+        // Default is Skipped so non-OAuth login paths don't block.
+        assert_eq!(state.recovery_state(), RecoveryGateState::Skipped);
+
+        state.set_recovery_state(RecoveryGateState::Pending);
         assert_eq!(state.recovery_state(), RecoveryGateState::Pending);
 
         state.set_recovery_state(RecoveryGateState::Resolved);
@@ -463,19 +475,22 @@ mod tests {
     async fn app_state_recovery_gate_wakes_pending_waiters() {
         use std::sync::Arc;
         let state = Arc::new(crate::app_state::AppState::new());
+        // OAuth callback flips Skipped → Pending so sync init can await the
+        // dialog. Simulate that here.
+        state.set_recovery_state(RecoveryGateState::Pending);
 
         let waiter_state = state.clone();
         let handle = tokio::spawn(async move { waiter_state.await_recovery_resolved().await });
 
         // Give the waiter a chance to park on the channel.
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        state.set_recovery_state(RecoveryGateState::Skipped);
+        state.set_recovery_state(RecoveryGateState::Resolved);
 
         let resolved = tokio::time::timeout(std::time::Duration::from_millis(100), handle)
             .await
             .expect("waiter must wake within timeout")
             .expect("task panicked");
-        assert_eq!(resolved, RecoveryGateState::Skipped);
+        assert_eq!(resolved, RecoveryGateState::Resolved);
     }
 
     #[tokio::test]

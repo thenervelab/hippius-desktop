@@ -221,6 +221,23 @@ pub async fn get_drive_mnemonic(state: tauri::State<'_, crate::app_state::AppSta
 /// legitimate consumer of the raw string.
 #[tauri::command]
 pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<()> {
+    // Block on the recovery gate before touching the mnemonic store.
+    //
+    // For OAuth login on a fresh device, `complete_oauth_flow` flips the
+    // gate to `Pending` so this await parks until the recovery dialog has
+    // resolved — either by installing a server-sealed mnemonic via
+    // `recover_mnemonic`, uploading a freshly-generated one via
+    // `seal_and_upload_mnemonic`, or fast-path skipping via
+    // `mark_recovery_skipped`. Without this gate there's a race where
+    // `auto_init_sync` mints a new mnemonic seconds before the user
+    // enters their recovery password, which then corrupts the drive
+    // password and trips `MasterMnemonicUnrecoverable` on the next run.
+    //
+    // For every other login path (mnemonic login, session restore on a
+    // returning device) the gate's default is `Skipped`, so this await
+    // is a no-op.
+    state.await_recovery_resolved().await;
+
     // Try the five-stage recovery chain first.
     if let Ok(m) = get_mnemonic_for_account(&state, &account_id).await
         && !m.is_empty()
