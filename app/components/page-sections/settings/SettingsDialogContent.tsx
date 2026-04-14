@@ -14,7 +14,6 @@ import { ApiTokenCard, ApiTokenUsageCard } from "./OAuthTokenSection";
 import EmailNotificationSection from "./EmailNotificationSection";
 import VPNSettings from "./VPNSettings";
 import RecoveryPhraseSettings from "./RecoveryPhraseSettings";
-import ConsoleAccessSettings from "./ConsoleAccessSettings";
 import DeviceNameSetting from "./DeviceNameSetting";
 
 const SETTINGS_COLLAPSE_WIDTH = 900;
@@ -71,10 +70,11 @@ const SettingsDialogContent: React.FC = () => {
       tabName: "Recovery Phrase",
       icon: <Icons.KeySquare className="size-4" />,
     },
-    {
-      tabName: "Console Access",
-      icon: <Icons.KeySquare className="size-4" />,
-    },
+    // "Console Access" removed: account recovery is now always-on and
+    // configured during OAuth signup. The Settings surface is gone but
+    // the backend IPC commands (`enable_console_access`,
+    // `rotate_console_passphrase`, etc.) remain registered for legacy
+    // in-flight sessions. Full backend cleanup lives in a follow-up PR.
     {
       tabName: "API Token",
       icon: <Icons.Key className="size-4" />,
@@ -144,12 +144,6 @@ const SettingsDialogContent: React.FC = () => {
             {activeTab === "Recovery Phrase" && (
               <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                 <RecoveryPhraseSettings />
-              </div>
-            )}
-
-            {activeTab === "Console Access" && (
-              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
-                <ConsoleAccessSettings />
               </div>
             )}
 

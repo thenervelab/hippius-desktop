@@ -175,53 +175,52 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
     let local = has_local_mnemonic(&account_id);
+    let (has_server_blob, updated_at) = probe_server_blob(state).await;
 
-    // If we already have a local mnemonic, the flow is `Proceed`
-    // regardless of server state. Short-circuit before the network
-    // call so a flaky connection doesn't gate a returning user.
-    if local {
-        return Ok(RecoveryCheck {
-            has_server_blob: false, // not consulted — see docstring
-            has_local_mnemonic: true,
-            updated_at: None,
-            recommended_flow: RecoveryFlow::Proceed,
-        });
-    }
+    // Decision table:
+    //   local=false, blob=false → Signup  (first-time OAuth user)
+    //   local=false, blob=true  → Unlock  (returning user on fresh device)
+    //   local=true,  *          → Proceed (local mnemonic is authoritative)
+    //   probe failed            → Unknown (FE retries; never overwrite)
+    //
+    // Returning `has_server_blob` truthfully even on the Proceed branch
+    // lets the existing-user migration prompt detect
+    // "local + no blob" (needs server-side recovery setup).
+    let recommended_flow = match (local, has_server_blob) {
+        (true, _) => RecoveryFlow::Proceed,
+        (false, Some(true)) => RecoveryFlow::Unlock,
+        (false, Some(false)) => RecoveryFlow::Signup,
+        (false, None) => RecoveryFlow::Unknown,
+    };
 
+    Ok(RecoveryCheck {
+        has_server_blob: has_server_blob.unwrap_or(false),
+        has_local_mnemonic: local,
+        updated_at,
+        recommended_flow,
+    })
+}
+
+/// Probe hcfs-server for blob existence.
+///
+/// Returns `(Some(true), Some(updated_at))` when present,
+/// `(Some(false), None)` on 404, and `(None, None)` on any network or
+/// auth failure so the caller distinguishes "known absent" from
+/// "don't know". Local-only `Proceed` callers skip this probe.
+async fn probe_server_blob(state: &tauri::State<'_, crate::app_state::AppState>) -> (Option<bool>, Option<String>) {
     let ctx = match HcfsServerCtx::resolve(state).await {
         Ok(c) => c,
         Err(e) => {
-            warn!(error = %e, "check_recovery_state: failed to resolve hcfs context");
-            return Ok(RecoveryCheck {
-                has_server_blob: false,
-                has_local_mnemonic: false,
-                updated_at: None,
-                recommended_flow: RecoveryFlow::Unknown,
-            });
+            warn!(error = %e, "recovery probe: failed to resolve hcfs context");
+            return (None, None);
         }
     };
-
     match get_json::<BlobMetadata>(&ctx, "/v1/mnemonic-blob").await {
-        Ok(HttpOutcome::Ok(meta)) => Ok(RecoveryCheck {
-            has_server_blob: true,
-            has_local_mnemonic: false,
-            updated_at: meta.updated_at,
-            recommended_flow: RecoveryFlow::Unlock,
-        }),
-        Ok(HttpOutcome::NotFound) => Ok(RecoveryCheck {
-            has_server_blob: false,
-            has_local_mnemonic: false,
-            updated_at: None,
-            recommended_flow: RecoveryFlow::Signup,
-        }),
+        Ok(HttpOutcome::Ok(meta)) => (Some(true), meta.updated_at),
+        Ok(HttpOutcome::NotFound) => (Some(false), None),
         Err(e) => {
-            warn!(error = %e, "check_recovery_state: server probe failed");
-            Ok(RecoveryCheck {
-                has_server_blob: false,
-                has_local_mnemonic: false,
-                updated_at: None,
-                recommended_flow: RecoveryFlow::Unknown,
-            })
+            warn!(error = %e, "recovery probe: server call failed");
+            (None, None)
         }
     }
 }
@@ -326,7 +325,30 @@ pub async fn seal_and_upload_mnemonic(
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
-    let mnemonic = crate::sync::mnemonic::get_mnemonic_for_account(state.inner(), &account_id).await?;
+    // Obtain a mnemonic to seal:
+    //   - Fresh OAuth signup: no mnemonic exists anywhere yet. The sync
+    //     init path that would normally mint one (`ensure_sync_mnemonic`)
+    //     is parked on the recovery gate, so we mint it here and cache
+    //     it in AuthInfo. The same write flows through the recovery
+    //     installer so the on-disk `master_enc_mnemonic.json` is
+    //     encrypted under the recovery password — the user only has to
+    //     remember one secret.
+    //   - Existing-user migration: a mnemonic already exists locally and
+    //     `get_mnemonic_for_account` returns it (stage 1 cache or stage
+    //     2 disk). We seal that without generating anything new.
+    let mnemonic = match crate::sync::mnemonic::get_mnemonic_for_account(state.inner(), &account_id).await {
+        Ok(m) if !m.is_empty() => m,
+        _ => {
+            let generated = crate::auth::login::generate_mnemonic_internal()?;
+            {
+                let mut auth = state.auth.lock()?;
+                auth.cache_session_mnemonic(&account_id, (*generated).clone());
+            }
+            install_recovered_mnemonic(&account_id, &generated, &password).await?;
+            generated
+        }
+    };
+
     let ctx = HcfsServerCtx::resolve(&state).await?;
     let blob = seal_mnemonic(&mnemonic, &password, &ctx.ss58).map_err(crypto_to_err)?;
     post_json_discard(&ctx, "/v1/mnemonic-blob", &blob).await?;
