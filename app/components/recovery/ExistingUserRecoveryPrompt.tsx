@@ -46,10 +46,9 @@ const ExistingUserRecoveryPrompt: React.FC = () => {
     void (async () => {
       try {
         const check = await checkRecoveryState();
-        // Existing user condition: we have a local mnemonic but no
-        // server-sealed blob. `recommendedFlow === "proceed"` when
-        // local is present; we differentiate via `hasServerBlob`.
-        if (check.hasLocalMnemonic && !check.hasServerBlob && check.recommendedFlow === "proceed") {
+        // Rust owns the nag predicate — see `RecoveryCheck`'s
+        // `should_prompt_legacy_migration` docstring. FE just renders.
+        if (check.shouldPromptLegacyMigration) {
           setOpen(true);
         }
       } catch (err) {

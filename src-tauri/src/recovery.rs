@@ -129,6 +129,14 @@ pub struct RecoveryCheck {
     pub has_local_mnemonic: bool,
     pub updated_at: Option<String>,
     pub recommended_flow: RecoveryFlow,
+    /// `true` iff the user has a local mnemonic but no server blob —
+    /// i.e. the account pre-dates always-on recovery and is currently
+    /// unrecoverable. `ExistingUserRecoveryPrompt` reads this flag
+    /// directly instead of composing its own predicate over
+    /// `has_local_mnemonic` and `has_server_blob`, so policy changes
+    /// (rate-limiting the nag, server-side opt-out, kill switch)
+    /// stay backend-owned.
+    pub should_prompt_legacy_migration: bool,
 }
 
 /// Lightweight metadata-only fetch of the server blob.
@@ -192,11 +200,17 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
         (false, None) => RecoveryFlow::Unknown,
     };
 
+    // Legacy-user predicate: known-absent server blob AND a local
+    // mnemonic. `Some(false)` (server said 404), not `None` (probe
+    // failed) — we only nag users we're certain are unrecoverable.
+    let should_prompt_legacy_migration = local && matches!(has_server_blob, Some(false));
+
     Ok(RecoveryCheck {
         has_server_blob: has_server_blob.unwrap_or(false),
         has_local_mnemonic: local,
         updated_at,
         recommended_flow,
+        should_prompt_legacy_migration,
     })
 }
 

@@ -9,6 +9,12 @@ export interface RecoveryCheck {
   hasLocalMnemonic: boolean;
   updatedAt: string | null;
   recommendedFlow: RecoveryFlow;
+  /**
+   * `true` iff the account pre-dates always-on recovery (local mnemonic
+   * exists but no server blob). Rust-computed so the nag policy stays
+   * backend-owned; the FE just renders on this flag.
+   */
+  shouldPromptLegacyMigration: boolean;
 }
 
 /**
