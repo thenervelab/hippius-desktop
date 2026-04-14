@@ -5,15 +5,14 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { toast } from "sonner";
 
 import DialogContainer from "@/components/ui/DialogContainer";
-import { CardButton, Input } from "@/components/ui";
+import { CardButton } from "@/components/ui";
 import * as Typography from "@/components/ui/typography";
 import {
   PassphraseStrength,
   checkRecoveryState,
   sealAndUploadMnemonic,
-  validateRecoveryPassword,
 } from "@/app/lib/utils/recovery";
-import { cn } from "@/lib/utils";
+import { PasswordField, StrengthMeter, errMessage, useLiveStrength } from "./_shared";
 
 /**
  * One-shot prompt for users who had an account before account recovery
@@ -78,7 +77,7 @@ const ExistingUserRecoveryPrompt: React.FC = () => {
       setPassword("");
       setConfirm("");
     } catch (err) {
-      toast.error(`Could not save recovery password: ${msg(err)}`);
+      toast.error(`Could not save recovery password: ${errMessage(err)}`);
     } finally {
       setSubmitting(false);
     }
@@ -128,78 +127,3 @@ const ExistingUserRecoveryPrompt: React.FC = () => {
 };
 
 export default ExistingUserRecoveryPrompt;
-
-// ---------------------------------------------------------------------------
-// Local UI helpers (copies of the ones in AccountRecoveryDialog to keep
-// each file self-contained — shared helpers live in a follow-up refactor)
-// ---------------------------------------------------------------------------
-
-const PasswordField: React.FC<{
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  errorMessage?: string;
-}> = ({ label, value, onChange, errorMessage }) => (
-  <label className="flex flex-col gap-1">
-    <span className="text-xs text-grey-40">{label}</span>
-    <Input
-      type="password"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      autoComplete="new-password"
-      autoCapitalize="off"
-      spellCheck={false}
-    />
-    {errorMessage && <span className="text-xs text-error-60">{errorMessage}</span>}
-  </label>
-);
-
-const VERDICT_BARS: Record<string, string> = {
-  too_short: "bg-grey-70",
-  weak: "bg-error-60",
-  ok: "bg-warning-50",
-  strong: "bg-success-50",
-};
-
-const StrengthMeter: React.FC<{ strength: PassphraseStrength | null }> = ({ strength }) => {
-  if (!strength) return null;
-  const bar = VERDICT_BARS[strength.verdict] ?? "bg-grey-70";
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="h-1.5 w-full bg-grey-90 rounded-full overflow-hidden">
-        <div className={cn("h-full rounded-full transition-[width]", bar)} style={{ width: `${strength.progressPercent}%` }} />
-      </div>
-      <div className="flex justify-between text-xs text-grey-50">
-        <span>{strength.label}</span>
-        <span>{strength.bits.toFixed(0)} bits</span>
-      </div>
-    </div>
-  );
-};
-
-function useLiveStrength(password: string, setStrength: (s: PassphraseStrength | null) => void) {
-  useEffect(() => {
-    if (password.length === 0) {
-      setStrength(null);
-      return;
-    }
-    let cancelled = false;
-    const t = setTimeout(() => {
-      validateRecoveryPassword(password)
-        .then((s) => { if (!cancelled) setStrength(s); })
-        .catch(() => { if (!cancelled) setStrength(null); });
-    }, 120);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [password, setStrength]);
-}
-
-function msg(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "object" && err !== null && "message" in err) {
-    return String((err as { message: unknown }).message);
-  }
-  return String(err);
-}

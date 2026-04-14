@@ -6,7 +6,7 @@ import { useAtom } from "jotai";
 import { toast } from "sonner";
 
 import DialogContainer from "@/components/ui/DialogContainer";
-import { CardButton, Input } from "@/components/ui";
+import { CardButton } from "@/components/ui";
 import * as Typography from "@/components/ui/typography";
 import {
   RecoveryCheck,
@@ -18,9 +18,8 @@ import {
   markRecoverySkipped,
   recoverMnemonic,
   sealAndUploadMnemonic,
-  validateRecoveryPassword,
 } from "@/app/lib/utils/recovery";
-import { cn } from "@/lib/utils";
+import { PasswordField, StrengthMeter, errMessage, useLiveStrength } from "./_shared";
 
 /**
  * Blocking recovery dialog shown after OAuth login when the backend
@@ -105,7 +104,7 @@ const SignupBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
       toast.success("Recovery password set. Your account is now protected.");
       onDone();
     } catch (err) {
-      toast.error(`Could not set recovery password: ${msg(err)}`);
+      toast.error(`Could not set recovery password: ${errMessage(err)}`);
     } finally {
       setSubmitting(false);
     }
@@ -157,7 +156,7 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
       toast.success("Account unlocked.");
       onDone();
     } catch (err) {
-      setError(msg(err));
+      setError(errMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -248,83 +247,3 @@ const UnknownBranch: React.FC<{ onRetry: () => Promise<void> }> = ({ onRetry }) 
   );
 };
 
-// ---------------------------------------------------------------------------
-// Shared UI
-// ---------------------------------------------------------------------------
-
-const PasswordField: React.FC<{
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  errorMessage?: string;
-  onSubmit?: () => void;
-}> = ({ label, value, onChange, errorMessage, onSubmit }) => (
-  <label className="flex flex-col gap-1">
-    <span className="text-xs text-grey-40">{label}</span>
-    <Input
-      type="password"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" && onSubmit) {
-          e.preventDefault();
-          onSubmit();
-        }
-      }}
-      autoComplete="current-password"
-      autoCapitalize="off"
-      spellCheck={false}
-    />
-    {errorMessage && <span className="text-xs text-error-60">{errorMessage}</span>}
-  </label>
-);
-
-const VERDICT_BARS: Record<string, string> = {
-  too_short: "bg-grey-70",
-  weak: "bg-error-60",
-  ok: "bg-warning-50",
-  strong: "bg-success-50",
-};
-
-const StrengthMeter: React.FC<{ strength: PassphraseStrength | null }> = ({ strength }) => {
-  if (!strength) return null;
-  const bar = VERDICT_BARS[strength.verdict] ?? "bg-grey-70";
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="h-1.5 w-full bg-grey-90 rounded-full overflow-hidden">
-        <div className={cn("h-full rounded-full transition-[width]", bar)} style={{ width: `${strength.progressPercent}%` }} />
-      </div>
-      <div className="flex justify-between text-xs text-grey-50">
-        <span>{strength.label}</span>
-        <span>{strength.bits.toFixed(0)} bits</span>
-      </div>
-    </div>
-  );
-};
-
-function useLiveStrength(password: string, setStrength: (s: PassphraseStrength | null) => void) {
-  useEffect(() => {
-    if (password.length === 0) {
-      setStrength(null);
-      return;
-    }
-    let cancelled = false;
-    const t = setTimeout(() => {
-      validateRecoveryPassword(password)
-        .then((s) => { if (!cancelled) setStrength(s); })
-        .catch(() => { if (!cancelled) setStrength(null); });
-    }, 120);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [password, setStrength]);
-}
-
-function msg(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "object" && err !== null && "message" in err) {
-    return String((err as { message: unknown }).message);
-  }
-  return String(err);
-}
