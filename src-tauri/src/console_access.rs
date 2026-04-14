@@ -164,7 +164,6 @@ pub(crate) struct HcfsServerCtx {
     pub(crate) client: reqwest::Client,
     pub(crate) base_url: String,
     pub(crate) bearer: String,
-    pub(crate) account_id: String,
     pub(crate) ss58: String,
 }
 
@@ -205,7 +204,6 @@ impl HcfsServerCtx {
             client: state.api_client.clone(),
             base_url,
             bearer,
-            account_id,
             ss58,
         })
     }
