@@ -34,6 +34,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tauri::Emitter;
 
 /// Maximum age of a pending OAuth flow. Any `PkceState` older than this
 /// is considered expired and discarded on the next lookup. Five minutes
@@ -337,6 +338,7 @@ pub fn parse_oauth_deep_link(url: String) -> Result<ParsedDeepLink, AppError> {
 #[tauri::command]
 #[expect(clippy::too_many_lines, reason = "OAuth protocol flow; splitting loses coherence")]
 pub async fn complete_oauth_flow(
+    app: tauri::AppHandle,
     state: tauri::State<'_, crate::app_state::AppState>,
     params: OAuthCallbackParams,
 ) -> Result<OAuthSessionResult, AppError> {
@@ -472,6 +474,31 @@ pub async fn complete_oauth_flow(
         // to make repeat OAuth logins a no-op.
         if let Err(e) = crate::notifications::crud::ensure_welcome_notification(pool, &substrate_address).await {
             warn!(error = %e, "Failed to ensure welcome notification — will retry on next login");
+        }
+
+        // Probe recovery state before any sync init can race in.
+        //
+        // The recovery gate starts `Skipped` by default (so non-OAuth
+        // login paths never block). We need to flip it to `Pending`
+        // whenever the dialog is required so `ensure_sync_mnemonic`
+        // parks until the user has entered their recovery password or
+        // completed the signup wizard. The decision is based on the
+        // `RecoveryCheck` we get from probing the server for a sealed
+        // blob and checking local mnemonic presence.
+        let recovery_check = crate::recovery::check_recovery_state_inner(&state).await?;
+        let gate_target = match recovery_check.recommended_flow {
+            // Local mnemonic exists — sync can proceed without the dialog.
+            crate::recovery::RecoveryFlow::Proceed => crate::recovery::RecoveryGateState::Skipped,
+            // Dialog required: signup, unlock, or retry after Unknown.
+            _ => crate::recovery::RecoveryGateState::Pending,
+        };
+        state.set_recovery_state(gate_target);
+
+        // Tell the FE which dialog to show, if any. Emit before
+        // `auth_ready` so the recovery dialog is mounted before sync
+        // init fires — though the gate also prevents the race.
+        if let Err(e) = app.emit("oauth_recovery_check_needed", &recovery_check) {
+            warn!(error = %e, "Failed to emit oauth_recovery_check_needed");
         }
 
         // Signal the FE that auth is ready so `tryAutoInitSync` can

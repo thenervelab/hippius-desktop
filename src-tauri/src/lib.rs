@@ -16,5 +16,6 @@ pub mod error;
 pub mod infra;
 pub mod nebula;
 pub mod notifications;
+pub mod recovery;
 pub mod sync;
 pub mod utils;

@@ -8,6 +8,9 @@ import MigrationChecker from "./MigrationChecker";
 import InsufficientCreditsDialog from "@/components/page-sections/files/InsufficientCreditsDialog";
 import FailedFilesListener from "./FailedFilesListener";
 import FailedFilesModal from "@/components/page-sections/files/FailedFilesModal";
+import AccountRecoveryDialog from "@/components/recovery/AccountRecoveryDialog";
+import RecoveryEventListener from "@/components/recovery/RecoveryEventListener";
+import ExistingUserRecoveryPrompt from "@/components/recovery/ExistingUserRecoveryPrompt";
 
 export default function ProtectedLayout({
   children,
@@ -22,6 +25,9 @@ export default function ProtectedLayout({
       <MigrationChecker />
       <InsufficientCreditsDialog />
       <FailedFilesModal />
+      <RecoveryEventListener />
+      <AccountRecoveryDialog />
+      <ExistingUserRecoveryPrompt />
       <div className="flex min-h-screen w-full">
         <SyncFilesHandler />
         <Sidebar />
