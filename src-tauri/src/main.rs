@@ -47,6 +47,7 @@ use crate::blockchain::transfers::compute_max_transferable;
 use crate::console_access::{
     console_access_status, disable_console_access, enable_console_access, rotate_console_passphrase, validate_console_passphrase,
 };
+use crate::recovery::{check_recovery_state, mark_recovery_skipped, recover_mnemonic, seal_and_upload_mnemonic};
 use crate::blockchain::queries::{get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address};
 use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, update_wss_endpoint_command};
 use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded};
@@ -273,6 +274,11 @@ fn main() {
             enable_console_access,
             rotate_console_passphrase,
             disable_console_access,
+            // Account recovery (OAuth-based)
+            check_recovery_state,
+            recover_mnemonic,
+            seal_and_upload_mnemonic,
+            mark_recovery_skipped,
             // Block subscription
             start_block_subscription,
             // VM management

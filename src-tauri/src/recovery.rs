@@ -12,10 +12,15 @@
 //! - The Tauri commands invoked by the recovery dialog (added in follow-up
 //!   tasks — currently only the scaffold lives here).
 
+use hcfs_client::mnemonic_blob::{SealedBlob, open_mnemonic, seal_mnemonic};
+use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
+use tracing::{info, warn};
+use zeroize::Zeroizing;
 
 use crate::auth::account_key::account_key;
-use crate::error::Result;
+use crate::console_access::{HcfsServerCtx, HttpOutcome, crypto_to_err, get_json, post_json_discard};
+use crate::error::{AppError, Result};
 
 /// Outcome of the OAuth recovery dialog, broadcast through a `watch` channel
 /// so `ensure_sync_mnemonic` can await resolution before touching the local
@@ -86,6 +91,264 @@ pub(crate) async fn seed_hcfs_server_url_if_missing(pool: &SqlitePool, account_i
     .await?;
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Recovery state check
+// ---------------------------------------------------------------------------
+
+/// Discriminant the frontend uses to route the recovery dialog.
+///
+/// - `Signup` — no server blob and no local mnemonic. User sees the
+///   "create a recovery password" wizard, which generates the mnemonic
+///   and seals it to the server.
+/// - `Unlock` — server blob exists but no local mnemonic (fresh device
+///   returning user). User sees "enter your recovery password".
+/// - `Proceed` — local mnemonic is already present. Nothing to do;
+///   the dialog auto-skips and marks the gate resolved. Server-blob
+///   state is intentionally ignored on this branch — if a local
+///   mnemonic exists, it's authoritative.
+/// - `Unknown` — the server status check failed (network / auth). FE
+///   shows a retry prompt; we never silently fall through to `Signup`
+///   because that would upload a fresh blob and overwrite whatever
+///   the user had before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryFlow {
+    Signup,
+    Unlock,
+    Proceed,
+    Unknown,
+}
+
+/// Result of [`check_recovery_state`]. Every field here drives a UI
+/// decision; rendering only — no logic on the frontend.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryCheck {
+    pub has_server_blob: bool,
+    pub has_local_mnemonic: bool,
+    pub updated_at: Option<String>,
+    pub recommended_flow: RecoveryFlow,
+}
+
+/// Lightweight metadata-only fetch of the server blob.
+///
+/// Used by [`check_recovery_state`] to decide the flow without ever
+/// materialising the ciphertext into memory.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlobMetadata {
+    #[serde(default)]
+    updated_at: Option<String>,
+}
+
+/// Does the account have a usable master mnemonic on disk?
+///
+/// Cheap proxy: is `master_enc_mnemonic.json` present? A returning user
+/// who's logged into this device before has the file; a fresh install
+/// does not. We deliberately avoid decrypting — that would require the
+/// drive password, which isn't available pre-recovery anyway.
+fn has_local_mnemonic(account_id: &str) -> bool {
+    crate::sync::mnemonic::master_mnemonic_path(account_id).is_ok_and(|p| p.exists())
+}
+
+/// Check whether the active account needs recovery action.
+///
+/// Seeds the default hcfs-server URL if sync isn't configured yet, then
+/// probes the blob endpoint for existence and combines that with local
+/// mnemonic presence to recommend a UI flow. Network failure returns
+/// [`RecoveryFlow::Unknown`] so the FE can retry instead of silently
+/// overwriting server state.
+#[tauri::command]
+pub async fn check_recovery_state(state: tauri::State<'_, crate::app_state::AppState>) -> Result<RecoveryCheck> {
+    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let pool = state.pool()?;
+    seed_hcfs_server_url_if_missing(pool, &account_id).await?;
+
+    let local = has_local_mnemonic(&account_id);
+
+    // If we already have a local mnemonic, the flow is `Proceed`
+    // regardless of server state. Short-circuit before the network
+    // call so a flaky connection doesn't gate a returning user.
+    if local {
+        return Ok(RecoveryCheck {
+            has_server_blob: false, // not consulted — see docstring
+            has_local_mnemonic: true,
+            updated_at: None,
+            recommended_flow: RecoveryFlow::Proceed,
+        });
+    }
+
+    let ctx = match HcfsServerCtx::resolve(&state).await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(error = %e, "check_recovery_state: failed to resolve hcfs context");
+            return Ok(RecoveryCheck {
+                has_server_blob: false,
+                has_local_mnemonic: false,
+                updated_at: None,
+                recommended_flow: RecoveryFlow::Unknown,
+            });
+        }
+    };
+
+    match get_json::<BlobMetadata>(&ctx, "/v1/mnemonic-blob").await {
+        Ok(HttpOutcome::Ok(meta)) => Ok(RecoveryCheck {
+            has_server_blob: true,
+            has_local_mnemonic: false,
+            updated_at: meta.updated_at,
+            recommended_flow: RecoveryFlow::Unlock,
+        }),
+        Ok(HttpOutcome::NotFound) => Ok(RecoveryCheck {
+            has_server_blob: false,
+            has_local_mnemonic: false,
+            updated_at: None,
+            recommended_flow: RecoveryFlow::Signup,
+        }),
+        Err(e) => {
+            warn!(error = %e, "check_recovery_state: server probe failed");
+            Ok(RecoveryCheck {
+                has_server_blob: false,
+                has_local_mnemonic: false,
+                updated_at: None,
+                recommended_flow: RecoveryFlow::Unknown,
+            })
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Recover mnemonic from server blob
+// ---------------------------------------------------------------------------
+
+/// Fetch the sealed blob, decrypt it with the user's recovery password,
+/// install the mnemonic into the local store, and mark the recovery gate
+/// resolved.
+///
+/// Wrong password surfaces as [`AppError::Validation("Wrong passphrase.")`]
+/// — same mapping the existing Console Access flow uses, so the frontend
+/// matches one error shape. SS58 mismatch collapses to the same variant
+/// (hcfs-client's `AeadTag`) and is logged for diagnosis; in practice it
+/// shouldn't happen because the blob is keyed by the bearer-resolved
+/// SS58 on the server side.
+#[tauri::command]
+pub async fn recover_mnemonic(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    password: String,
+) -> Result<()> {
+    let password = Zeroizing::new(password);
+    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let pool = state.pool()?;
+    seed_hcfs_server_url_if_missing(pool, &account_id).await?;
+
+    let ctx = HcfsServerCtx::resolve(&state).await?;
+    let blob: SealedBlob = match get_json::<SealedBlob>(&ctx, "/v1/mnemonic-blob").await? {
+        HttpOutcome::Ok(b) => b,
+        HttpOutcome::NotFound => {
+            return Err(AppError::Other(
+                "No recovery data found for this account on the server.".into(),
+            ));
+        }
+    };
+
+    let mnemonic = open_mnemonic(&blob, &password, &ctx.ss58).map_err(crypto_to_err)?;
+
+    // Persist the recovered mnemonic to the local store so subsequent
+    // sync init picks it up without re-fetching. The file password is
+    // the recovery password itself — the user only has to remember one.
+    install_recovered_mnemonic(&account_id, &mnemonic, &password).await?;
+
+    // Cache in AuthInfo so the current session can proceed without
+    // round-tripping through disk decryption.
+    {
+        let mut auth = state.auth.lock()?;
+        auth.cache_session_mnemonic(&account_id, mnemonic.to_string());
+    }
+
+    state.set_recovery_state(crate::recovery::RecoveryGateState::Resolved);
+    info!("Recovery completed for account {}", short_account(&account_id));
+    Ok(())
+}
+
+/// Write the recovered mnemonic to `master_enc_mnemonic.json` under the
+/// account directory. Creates parent directories if missing.
+async fn install_recovered_mnemonic(account_id: &str, mnemonic: &str, password: &str) -> Result<()> {
+    let path = crate::sync::mnemonic::master_mnemonic_path(account_id)?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    // `save_encrypted_mnemonic` is synchronous I/O + crypto; run it on
+    // the blocking pool so we don't stall the runtime. Its error type
+    // is `Box<dyn Error>` which isn't `Send`, so we stringify inside
+    // the closure before the `JoinHandle` boundary.
+    let path_owned = path.clone();
+    let mnemonic_owned = mnemonic.to_string();
+    let password_owned = password.to_string();
+    tokio::task::spawn_blocking(move || {
+        hcfs_client::auth::save_encrypted_mnemonic(&path_owned, &mnemonic_owned, &password_owned).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("join error: {e}")))?
+    .map_err(AppError::Hcfs)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Seal and upload (fresh signup)
+// ---------------------------------------------------------------------------
+
+/// Seal the active account's master mnemonic under `password` and upload
+/// it to hcfs-server. Used by the signup flow (where the mnemonic was
+/// just generated and the user is setting their recovery password for
+/// the first time) and by the existing-user migration path (where a
+/// local mnemonic exists but no server blob does yet).
+///
+/// Unlike `enable_console_access`, this does *not* gate on a
+/// `confirmed_backup` checkbox — the sealed blob on the server IS the
+/// backup. Requiring the user to also write down the seed phrase to
+/// tick a box is friction without added safety.
+#[tauri::command]
+pub async fn seal_and_upload_mnemonic(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    password: String,
+) -> Result<()> {
+    let password = Zeroizing::new(password);
+    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let pool = state.pool()?;
+    seed_hcfs_server_url_if_missing(pool, &account_id).await?;
+
+    let mnemonic = crate::sync::mnemonic::get_mnemonic_for_account(state.inner(), &account_id).await?;
+    let ctx = HcfsServerCtx::resolve(&state).await?;
+    let blob = seal_mnemonic(&mnemonic, &password, &ctx.ss58).map_err(crypto_to_err)?;
+    post_json_discard(&ctx, "/v1/mnemonic-blob", &blob).await?;
+
+    state.set_recovery_state(crate::recovery::RecoveryGateState::Resolved);
+    info!("Recovery blob sealed and uploaded for account {}", short_account(&account_id));
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Skip (local mnemonic already present)
+// ---------------------------------------------------------------------------
+
+/// Mark the recovery gate as skipped without performing any recovery
+/// action. Called by the frontend on the `Proceed` branch, where a
+/// local mnemonic already exists and the server blob (if any) is
+/// ignored. Unblocks `ensure_sync_mnemonic` so sync init can start.
+#[tauri::command]
+pub async fn mark_recovery_skipped(state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
+    state.set_recovery_state(crate::recovery::RecoveryGateState::Skipped);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn short_account(id: &str) -> String {
+    let head: String = id.chars().take(8).collect();
+    format!("{head}…")
 }
 
 #[cfg(test)]

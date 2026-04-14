@@ -388,16 +388,16 @@ pub async fn disable_console_access(
 // ---------------------------------------------------------------------------
 
 /// Ambient context every HTTP helper needs. Resolved once per command.
-struct HcfsServerCtx {
-    client: reqwest::Client,
-    base_url: String,
-    bearer: String,
-    account_id: String,
-    ss58: String,
+pub(crate) struct HcfsServerCtx {
+    pub(crate) client: reqwest::Client,
+    pub(crate) base_url: String,
+    pub(crate) bearer: String,
+    pub(crate) account_id: String,
+    pub(crate) ss58: String,
 }
 
 impl HcfsServerCtx {
-    async fn resolve(state: &tauri::State<'_, crate::app_state::AppState>) -> Result<Self> {
+    pub(crate) async fn resolve(state: &tauri::State<'_, crate::app_state::AppState>) -> Result<Self> {
         let account_id = state.current_account_id().map_err(AppError::Other)?;
         let ss58 = state
             .auth
@@ -464,12 +464,12 @@ async fn resolve_hcfs_base_url(pool: &sqlx::SqlitePool, account_id: &str) -> Res
     Ok(config.server_url)
 }
 
-enum HttpOutcome<T> {
+pub(crate) enum HttpOutcome<T> {
     Ok(T),
     NotFound,
 }
 
-async fn get_json<T: serde::de::DeserializeOwned>(ctx: &HcfsServerCtx, path: &str) -> Result<HttpOutcome<T>> {
+pub(crate) async fn get_json<T: serde::de::DeserializeOwned>(ctx: &HcfsServerCtx, path: &str) -> Result<HttpOutcome<T>> {
     let url = format!("{}{path}", ctx.base_url);
     let resp = ctx
         .client
@@ -494,7 +494,7 @@ async fn get_json<T: serde::de::DeserializeOwned>(ctx: &HcfsServerCtx, path: &st
 /// about; keeping a typed response parameter here would make every
 /// caller choose a throwaway deserialize target, and silently break
 /// if the server ever moves to 204 No Content.
-async fn post_json_discard<B: Serialize>(ctx: &HcfsServerCtx, path: &str, body: &B) -> Result<()> {
+pub(crate) async fn post_json_discard<B: Serialize>(ctx: &HcfsServerCtx, path: &str, body: &B) -> Result<()> {
     let url = format!("{}{path}", ctx.base_url);
     let resp = ctx
         .client
@@ -559,7 +559,7 @@ fn short_ss58(ss58: &str) -> String {
     format!("{head}…")
 }
 
-fn crypto_to_err(e: hcfs_client::mnemonic_blob::MnemonicBlobError) -> AppError {
+pub(crate) fn crypto_to_err(e: hcfs_client::mnemonic_blob::MnemonicBlobError) -> AppError {
     use hcfs_client::mnemonic_blob::MnemonicBlobError as E;
     match &e {
         E::AeadTag => {
