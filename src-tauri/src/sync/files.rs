@@ -1012,7 +1012,7 @@ pub async fn get_user_files(
         })
         .collect();
 
-    let results = futures::future::join_all(folder_futures).await;
+    let results = futures_util::future::join_all(folder_futures).await;
 
     for (label, entries) in &results {
         total_private_size += entries.iter().map(|e| e.size).sum::<u64>();

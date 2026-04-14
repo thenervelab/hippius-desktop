@@ -23,7 +23,6 @@ tauri = { version = "2", features = [
     'tray-icon',
     'image-ico',
     'image-png',
-    'devtools',
 ] }
 tauri-plugin-opener = "2"
 tauri-plugin-deep-link = "2.0.0"
@@ -37,44 +36,35 @@ tokio = { version = "1.49.0", features = [
     "sync",
     "time",
     "fs",
-    "io-util",
-    "net",
     "process",
-    "signal",
 ] }
-futures = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 tokio-util = "0.7"
 dirs = "6.0.0"
 flate2 = "1.1.2"
-tar = "0.4.44"
+tar = { version = "0.4.44", default-features = false }
 reqwest = { version = "0.13.1", default-features = false, features = [
-    "blocking",
     "multipart",
     "json",
     "stream",
     "rustls",
 ] }
 ed25519-dalek = "2.2"
-zip = "4.2.0"
+zip = { version = "4.2.0", default-features = false, features = ["deflate", "aes-crypto"] }
 dotenvy = "0.15"
-base64 = "0.21"
+base64 = "0.22"
 sha2 = "0.10"
-aes = "0.8"
-cbc = "0.1"
-md5 = "0.7"
 subxt = "0.38"
-subxt-signer = { version = "0.38", features = ["subxt", "sr25519"] }
+subxt-signer = { version = "0.38", default-features = false, features = ["sr25519", "subxt", "std"] }
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 hex = "0.4"
-parity-scale-codec = "3.6"
 tauri-plugin-fs = "2"
 sysinfo = "0.32"
 notify = "6.1"
 tauri-plugin-dialog = "2.6.0"
-tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 rand = "0.8"
 tauri-plugin-process = "2"
 which = "4.4"
@@ -95,7 +85,6 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
 hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "e938f240bfffe222265bea09a5b4fd9f0f70f9a5" }
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "e938f240bfffe222265bea09a5b4fd9f0f70f9a5" }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -114,8 +103,6 @@ tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
 tauri-plugin-updater = { version = "2", default-features = false, features = [
     "rustls-tls",
 ] }
-# Directory Traversal
-walkdir = "2.5"
 # Ergonomic Error Handling
 anyhow = "1.0"
 
@@ -165,6 +152,9 @@ tokio = { version = "1", features = [
     "process",
 ] }
 anyhow = "1"
+aes = "0.8"
+cbc = "0.1"
+md5 = "0.7"
 reqwest = { version = "0.13.1", default-features = false, features = [
     "json",
     "rustls",

@@ -127,7 +127,6 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             info!("Another instance attempted to start with argv: {:?}", argv);
             if let Some(window) = app.get_webview_window("main") {
