@@ -53,15 +53,33 @@ export default function OAuthCallbackPage() {
                     }
                 }
 
-                // Fix malformed URL with multiple question marks (backend issue workaround)
-                // Example: ?source=desktop?code=xxx should be ?source=desktop&code=xxx
+                // Fix malformed URL with multiple `?` characters (backend
+                // workaround). The OAuth provider sometimes returns
+                // `?source=desktop&state=...?code=...` instead of
+                // `&code=...`, which makes `URLSearchParams` parse as if
+                // `state` only contains the first segment and drops `code`,
+                // `username`, etc. — or, depending on the URL shape, drops
+                // `state` entirely.
+                //
+                // We swap the leading `?` for a sentinel that contains no
+                // `?` characters, normalise every remaining `?` to `&`,
+                // then restore the leading `?`. The previous version used
+                // `?FIRST?` as the sentinel — its own `?` characters got
+                // converted to `&` in step 2, so the restore step found
+                // nothing and the URL was returned with no `?` at all,
+                // which is what produced the "Missing state parameter"
+                // error users were hitting.
                 let fixedSearchParams: URLSearchParams | null = null;
                 if (typeof window !== "undefined") {
                     const currentUrl = window.location.href;
                     const questionMarkCount = (currentUrl.match(/\?/g) || []).length;
 
                     if (questionMarkCount > 1) {
-                        const fixedUrl = currentUrl.replace(/\?/, "?FIRST?").replace(/\?/g, "&").replace(/\?FIRST\?/, "?");
+                        const SENTINEL = "__OAUTH_FIRST_Q__";
+                        const fixedUrl = currentUrl
+                            .replace("?", SENTINEL)
+                            .replace(/\?/g, "&")
+                            .replace(SENTINEL, "?");
                         const url = new URL(fixedUrl);
                         fixedSearchParams = url.searchParams;
                     }
