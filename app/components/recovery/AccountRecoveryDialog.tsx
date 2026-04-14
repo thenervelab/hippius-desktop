@@ -13,15 +13,13 @@ import {
   activeRecoveryCheckAtom,
 } from "@/app/lib/global-atoms/recoveryAtoms";
 import {
+  PassphraseStrength,
   checkRecoveryState,
   markRecoverySkipped,
   recoverMnemonic,
   sealAndUploadMnemonic,
+  validateRecoveryPassword,
 } from "@/app/lib/utils/recovery";
-import {
-  PassphraseStrength,
-  validateConsolePassphrase,
-} from "@/app/lib/utils/consoleAccess";
 import { cn } from "@/lib/utils";
 
 /**
@@ -312,7 +310,7 @@ function useLiveStrength(password: string, setStrength: (s: PassphraseStrength |
     }
     let cancelled = false;
     const t = setTimeout(() => {
-      validateConsolePassphrase(password)
+      validateRecoveryPassword(password)
         .then((s) => { if (!cancelled) setStrength(s); })
         .catch(() => { if (!cancelled) setStrength(null); });
     }, 120);

@@ -7,11 +7,12 @@ import { toast } from "sonner";
 import DialogContainer from "@/components/ui/DialogContainer";
 import { CardButton, Input } from "@/components/ui";
 import * as Typography from "@/components/ui/typography";
-import { checkRecoveryState, sealAndUploadMnemonic } from "@/app/lib/utils/recovery";
 import {
   PassphraseStrength,
-  validateConsolePassphrase,
-} from "@/app/lib/utils/consoleAccess";
+  checkRecoveryState,
+  sealAndUploadMnemonic,
+  validateRecoveryPassword,
+} from "@/app/lib/utils/recovery";
 import { cn } from "@/lib/utils";
 
 /**
@@ -184,7 +185,7 @@ function useLiveStrength(password: string, setStrength: (s: PassphraseStrength |
     }
     let cancelled = false;
     const t = setTimeout(() => {
-      validateConsolePassphrase(password)
+      validateRecoveryPassword(password)
         .then((s) => { if (!cancelled) setStrength(s); })
         .catch(() => { if (!cancelled) setStrength(null); });
     }, 120);

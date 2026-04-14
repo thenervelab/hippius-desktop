@@ -3,6 +3,34 @@ import { invoke } from "@tauri-apps/api/core";
 import type { RecoveryCheck } from "@/lib/global-atoms/recoveryAtoms";
 
 /**
+ * Passphrase strength verdict from Rust. The UI renders this into a
+ * meter; all scoring rules live on the Rust side so thresholds and
+ * copy can evolve without a frontend change.
+ */
+export type PassphraseVerdict = "too_short" | "weak" | "ok" | "strong";
+
+/** Output of [`validateRecoveryPassword`]. */
+export interface PassphraseStrength {
+  bits: number;
+  verdict: PassphraseVerdict;
+  /** Rust-owned user-facing label: "Too short", "Weak", "OK", "Strong". */
+  label: string;
+  /** 0–100 meter fill, clamped in Rust. */
+  progressPercent: number;
+  hints: string[];
+  /**
+   * Authoritative submit gate. UI disables submit on this value; Rust
+   * commands re-check so a tampered frontend can't bypass.
+   */
+  acceptableForSubmit: boolean;
+}
+
+/** Live strength check; debounce on the FE side. */
+export async function validateRecoveryPassword(passphrase: string): Promise<PassphraseStrength> {
+  return invoke<PassphraseStrength>("validate_recovery_password", { passphrase });
+}
+
+/**
  * Probe the current recovery state for the active account.
  *
  * Safe to call from any mounted component — the backend short-circuits
