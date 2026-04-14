@@ -115,7 +115,7 @@ const SignupBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
 
   return (
     <div className="flex flex-col gap-4">
-      <Typography.H3 className="text-grey-10">Protect your account</Typography.H3>
+      <Typography.H4 className="text-grey-10">Protect your account</Typography.H4>
       <Typography.P size="sm" className="text-grey-40">
         Choose a recovery password. It encrypts your data and lets you sign in
         from any device. <strong>This password cannot be reset.</strong> If you
@@ -167,7 +167,7 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
 
   return (
     <div className="flex flex-col gap-4">
-      <Typography.H3 className="text-grey-10">Unlock your account</Typography.H3>
+      <Typography.H4 className="text-grey-10">Unlock your account</Typography.H4>
       <Typography.P size="sm" className="text-grey-40">
         Enter your recovery password to decrypt your data on this device.
       </Typography.P>
@@ -239,7 +239,7 @@ const UnknownBranch: React.FC<{ onRetry: () => Promise<void> }> = ({ onRetry }) 
 
   return (
     <div className="flex flex-col gap-4">
-      <Typography.H3 className="text-grey-10">Check your connection</Typography.H3>
+      <Typography.H4 className="text-grey-10">Check your connection</Typography.H4>
       <Typography.P size="sm" className="text-grey-40">
         We couldn&apos;t reach the recovery service. Make sure you&apos;re online and try again.
       </Typography.P>

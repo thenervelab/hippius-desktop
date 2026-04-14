@@ -95,7 +95,7 @@ const ExistingUserRecoveryPrompt: React.FC = () => {
         <Dialog.Overlay className="fixed inset-0 bg-black/50 z-40" />
         <DialogContainer className="z-50 w-[420px] max-w-[90vw]">
           <div className="flex flex-col gap-4">
-            <Typography.H3 className="text-grey-10">Add a recovery password</Typography.H3>
+            <Typography.H4 className="text-grey-10">Add a recovery password</Typography.H4>
             <Typography.P size="sm" className="text-grey-40">
               We&apos;ve added a way to recover your account from any device. Set a recovery
               password now so you don&apos;t lose your files if you reinstall or switch devices.
