@@ -482,23 +482,30 @@ pub async fn complete_oauth_flow(
         // login paths never block). We need to flip it to `Pending`
         // whenever the dialog is required so `ensure_sync_mnemonic`
         // parks until the user has entered their recovery password or
-        // completed the signup wizard. The decision is based on the
-        // `RecoveryCheck` we get from probing the server for a sealed
-        // blob and checking local mnemonic presence.
-        let recovery_check = crate::recovery::check_recovery_state_inner(&state).await?;
-        let gate_target = match recovery_check.recommended_flow {
-            // Local mnemonic exists — sync can proceed without the dialog.
-            crate::recovery::RecoveryFlow::Proceed => crate::recovery::RecoveryGateState::Skipped,
-            // Dialog required: signup, unlock, or retry after Unknown.
-            _ => crate::recovery::RecoveryGateState::Pending,
-        };
-        state.set_recovery_state(gate_target);
-
-        // Tell the FE which dialog to show, if any. Emit before
-        // `auth_ready` so the recovery dialog is mounted before sync
-        // init fires — though the gate also prevents the race.
-        if let Err(e) = app.emit("oauth_recovery_check_needed", &recovery_check) {
-            warn!(error = %e, "Failed to emit oauth_recovery_check_needed");
+        // completed the signup wizard.
+        //
+        // A failure here must NOT break OAuth itself. If the probe
+        // errors (transient SQL, hcfs-server down, config missing),
+        // we log and leave the gate at its `Skipped` default — the
+        // user lands in the app, and `ExistingUserRecoveryPrompt` or
+        // a subsequent `check_recovery_state` invoke from the FE
+        // surfaces the prompt on the next cycle. The earlier code
+        // propagated this via `?` and killed OAuth with a generic
+        // "Authentication failed" toast.
+        match crate::recovery::check_recovery_state_inner(&state).await {
+            Ok(recovery_check) => {
+                let gate_target = match recovery_check.recommended_flow {
+                    crate::recovery::RecoveryFlow::Proceed => crate::recovery::RecoveryGateState::Skipped,
+                    _ => crate::recovery::RecoveryGateState::Pending,
+                };
+                state.set_recovery_state(gate_target);
+                if let Err(e) = app.emit("oauth_recovery_check_needed", &recovery_check) {
+                    warn!(error = %e, "Failed to emit oauth_recovery_check_needed");
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "Recovery probe failed during OAuth callback; gate stays Skipped");
+            }
         }
 
         // Signal the FE that auth is ready so `tryAutoInitSync` can
