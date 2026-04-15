@@ -628,7 +628,15 @@ pub async fn change_recovery_password(
                 account = %crate::console_access::short_ss58(&account_id),
                 "recovery: server rotated but local rewrite failed — writing sidecar for boot-time retry"
             );
-            write_rotation_sidecar(&account_id).await?;
+            // mnemonic is unchanged; AuthInfo cache still holds a valid value,
+            // so we intentionally skip cache_session_mnemonic on this branch.
+            if let Err(sidecar_err) = write_rotation_sidecar(&account_id).await {
+                warn!(
+                    error = %sidecar_err,
+                    account = %crate::console_access::short_ss58(&account_id),
+                    "recovery: sidecar write also failed; boot-time retry will be unavailable. Rotation is still durable on the server; user may need to change password again if the local file stays stale."
+                );
+            }
             // Still Ok — the rotation is durable on the server.
             Ok(())
         }
