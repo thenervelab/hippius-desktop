@@ -445,11 +445,10 @@ async fn validate_master_against_existing_folders(
         );
         if *stored != *expected {
             return Err(AppError::Other(format!(
-                "Cannot seal recovery blob: candidate master mnemonic does not derive folder '{}'. \
+                "Cannot seal recovery blob: candidate master mnemonic does not derive folder '{label}'. \
                  The local master is out of sync with folder state — restoring recovery against this master \
                  would leave uploads in this folder undecryptable. \
-                 Import your original master mnemonic via Settings → Recovery before retrying.",
-                label
+                 Import your original master mnemonic via Settings → Recovery before retrying."
             )));
         }
     }
