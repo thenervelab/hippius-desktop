@@ -14,7 +14,7 @@
 use hcfs_client::mnemonic_blob::{SealedBlob, open_mnemonic, seal_mnemonic};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
 use crate::auth::account_key::account_key;
@@ -181,6 +181,9 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
+    let short = crate::console_access::short_ss58(&account_id);
+    debug!(account = %short, "recovery: checking recovery state (probing server for sealed mnemonic blob)");
+
     let local = has_local_mnemonic(&account_id);
     let (has_server_blob, updated_at) = probe_server_blob(state).await;
 
@@ -205,6 +208,15 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
     // failed) — we only nag users we're certain are unrecoverable.
     let should_prompt_legacy_migration = local && matches!(has_server_blob, Some(false));
 
+    info!(
+        account = %short,
+        has_local_mnemonic = local,
+        has_server_blob = ?has_server_blob,
+        flow = ?recommended_flow,
+        legacy_migration_prompt = should_prompt_legacy_migration,
+        "recovery: state decided (Signup=will upload blob, Unlock=will download blob, Proceed=no network, Unknown=probe failed)"
+    );
+
     Ok(RecoveryCheck {
         has_server_blob: has_server_blob.unwrap_or(false),
         has_local_mnemonic: local,
@@ -228,9 +240,16 @@ async fn probe_server_blob(state: &tauri::State<'_, crate::app_state::AppState>)
             return (None, None);
         }
     };
+    debug!(server = %ctx.base_url, "recovery probe: GET /v1/mnemonic-blob (metadata only, no ciphertext fetch)");
     match get_json::<BlobMetadata>(&ctx, "/v1/mnemonic-blob").await {
-        Ok(HttpOutcome::Ok(meta)) => (Some(true), meta.updated_at),
-        Ok(HttpOutcome::NotFound) => (Some(false), None),
+        Ok(HttpOutcome::Ok(meta)) => {
+            info!(updated_at = ?meta.updated_at, "recovery probe: server has a sealed mnemonic blob for this account");
+            (Some(true), meta.updated_at)
+        }
+        Ok(HttpOutcome::NotFound) => {
+            info!("recovery probe: server has NO sealed mnemonic blob for this account (404)");
+            (Some(false), None)
+        }
         Err(e) => {
             warn!(error = %e, "recovery probe: server call failed");
             (None, None)
@@ -262,6 +281,11 @@ pub async fn recover_mnemonic(
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
+    info!(
+        account = %crate::console_access::short_ss58(&account_id),
+        "recovery: downloading sealed mnemonic blob from server (GET /v1/mnemonic-blob) — decrypting locally with user recovery password"
+    );
+
     let ctx = HcfsServerCtx::resolve(&state).await?;
     let blob: SealedBlob = match get_json::<SealedBlob>(&ctx, "/v1/mnemonic-blob").await? {
         HttpOutcome::Ok(b) => b,
@@ -287,7 +311,10 @@ pub async fn recover_mnemonic(
     }
 
     state.set_recovery_state(crate::recovery::RecoveryGateState::Resolved);
-    info!("Recovery completed for account {}", crate::console_access::short_ss58(&account_id));
+    info!(
+        account = %crate::console_access::short_ss58(&account_id),
+        "recovery: unlock complete — mnemonic decrypted and installed locally (no upload performed)"
+    );
     Ok(())
 }
 
@@ -349,6 +376,13 @@ pub async fn seal_and_upload_mnemonic(
         _ => (crate::auth::login::generate_mnemonic_internal()?, true),
     };
 
+    info!(
+        account = %crate::console_access::short_ss58(&account_id),
+        is_fresh_signup,
+        "recovery: sealing encrypted mnemonic blob and UPLOADING to server (POST /v1/mnemonic-blob) — {}",
+        if is_fresh_signup { "fresh signup" } else { "legacy-user migration" }
+    );
+
     let ctx = HcfsServerCtx::resolve(&state).await?;
     let blob = seal_mnemonic(&mnemonic, &password, &ctx.ss58).map_err(crypto_to_err)?;
 
@@ -373,7 +407,11 @@ pub async fn seal_and_upload_mnemonic(
     }
 
     state.set_recovery_state(crate::recovery::RecoveryGateState::Resolved);
-    info!("Recovery blob sealed and uploaded for account {}", crate::console_access::short_ss58(&account_id));
+    info!(
+        account = %crate::console_access::short_ss58(&account_id),
+        is_fresh_signup,
+        "recovery: encrypted mnemonic blob uploaded to server successfully"
+    );
     Ok(())
 }
 
@@ -387,6 +425,7 @@ pub async fn seal_and_upload_mnemonic(
 /// ignored. Unblocks `ensure_sync_mnemonic` so sync init can start.
 #[tauri::command]
 pub async fn mark_recovery_skipped(state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
+    info!("recovery: gate marked Skipped — local mnemonic is authoritative, no server upload or download");
     state.set_recovery_state(crate::recovery::RecoveryGateState::Skipped);
     Ok(())
 }
