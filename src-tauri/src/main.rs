@@ -45,7 +45,7 @@ use crate::billing::subscriptions::{create_subscription, get_customer_portal_url
 use crate::blockchain::convert::{planck_to_hip_full, to_plancks};
 use crate::blockchain::transfers::compute_max_transferable;
 use crate::console_access::validate_recovery_password;
-use crate::recovery::{check_recovery_state, mark_recovery_skipped, recover_mnemonic, seal_and_upload_mnemonic};
+use crate::recovery::{change_recovery_password, check_recovery_state, mark_recovery_skipped, recover_mnemonic, seal_and_upload_mnemonic};
 use crate::blockchain::queries::{get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address};
 use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, update_wss_endpoint_command};
 use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded};
@@ -272,6 +272,7 @@ fn main() {
             recover_mnemonic,
             seal_and_upload_mnemonic,
             mark_recovery_skipped,
+            change_recovery_password,
             // Block subscription
             start_block_subscription,
             // VM management

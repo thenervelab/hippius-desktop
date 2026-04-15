@@ -502,6 +502,49 @@ pub async fn seal_and_upload_mnemonic(
 }
 
 // ---------------------------------------------------------------------------
+// Change recovery password (rotation)
+// ---------------------------------------------------------------------------
+
+/// Rotate the password protecting the sealed mnemonic blob on hcfs-server.
+///
+/// Flow (filled in across Tasks 2-5; this is the skeleton):
+/// 1. GET sealed blob.
+/// 2. Decrypt with `current` (wrong password → `Validation("Wrong passphrase.")`).
+/// 3. Validate `new` (non-empty, strength, != current).
+/// 4. Derivation guard (reuses [`validate_master_against_existing_folders`]).
+/// 5. Reseal under `new`.
+/// 6. POST upsert (commit point).
+/// 7. Re-encrypt local `master_enc_mnemonic.json`. On failure, write a
+///    sidecar and return `Ok(())` anyway — boot-time retry finishes it.
+///
+/// The mnemonic itself is unchanged, so no sync re-init or session
+/// invalidation is needed.
+#[tauri::command]
+pub async fn change_recovery_password(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    current: String,
+    new: String,
+) -> Result<()> {
+    let current = Zeroizing::new(current);
+    let new = Zeroizing::new(new);
+
+    validate_new_password_inputs(&current, &new)?;
+
+    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let pool = state.pool()?;
+    seed_hcfs_server_url_if_missing(pool, &account_id).await?;
+
+    info!(
+        account = %crate::console_access::short_ss58(&account_id),
+        "recovery: starting password rotation (will GET /v1/mnemonic-blob → decrypt → reseal → POST)"
+    );
+
+    // TODO(Task 2-5): GET, decrypt, strength check, guard, reseal, POST,
+    // local rewrite. Intentionally unimplemented.
+    Err(AppError::Other("change_recovery_password: not yet implemented".into()))
+}
+
+// ---------------------------------------------------------------------------
 // Skip (local mnemonic already present)
 // ---------------------------------------------------------------------------
 
@@ -516,6 +559,27 @@ pub async fn mark_recovery_skipped(state: tauri::State<'_, crate::app_state::App
     Ok(())
 }
 
+
+/// Pure input validation for [`change_recovery_password`]. Separated so
+/// unit tests can exercise rules without a running Tauri app or network.
+///
+/// Rules (v1):
+/// - new password must be non-empty
+/// - new password must differ from current
+///
+/// Strength scoring is NOT here — it lives in
+/// `crate::console_access::score_passphrase` and is called from the IPC
+/// command itself so that the structured `PassphraseStrength` reasons
+/// can be surfaced in the error message.
+fn validate_new_password_inputs(current: &str, new: &str) -> Result<()> {
+    if new.is_empty() {
+        return Err(AppError::Validation("New recovery password cannot be empty.".into()));
+    }
+    if current == new {
+        return Err(AppError::Validation("New password must differ from current.".into()));
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
@@ -693,5 +757,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn change_password_rejects_empty_new() {
+        let err = super::validate_new_password_inputs("current", "").unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert!(msg.contains("cannot be empty")),
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn change_password_rejects_new_equals_current() {
+        let err = super::validate_new_password_inputs("same", "same").unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert!(msg.contains("must differ")),
+            other => panic!("expected Validation, got {other:?}"),
+        }
     }
 }
