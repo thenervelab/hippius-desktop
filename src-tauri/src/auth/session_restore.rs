@@ -10,6 +10,7 @@ use crate::auth::auth_session_repo::{self, TokenStatus};
 use crate::auth::keychain::{self, KeychainResult};
 use crate::auth::state::AuthCapabilities;
 use crate::error::AppError;
+use tauri::Emitter;
 use tracing::{info, warn};
 
 /// Re-arm the Tauri asset protocol scope for every configured sync path
@@ -241,6 +242,39 @@ pub async fn restore_session(
                     if let Some(ref addr) = substrate_address {
                         arm_asset_scope_for_account(&app, &state, addr).await;
                     }
+
+                    // For OAuth-provider sessions, probe the recovery
+                    // state and emit `oauth_recovery_check_needed` if a
+                    // dialog is required. Mirrors `complete_oauth_flow`
+                    // so returning OAuth users also get the signup /
+                    // unlock prompt on session restore — otherwise the
+                    // dialog only ever fires on fresh OAuth, and any
+                    // race in which the frontend listener subscribed
+                    // after the fresh-OAuth emit leaves the account
+                    // permanently unrecoverable with no UI.
+                    if auth_type == "oauth" {
+                        match crate::recovery::check_recovery_state_inner(&state).await {
+                            Ok(recovery_check) => {
+                                let gate_target = match recovery_check.recommended_flow {
+                                    crate::recovery::RecoveryFlow::Proceed => crate::recovery::RecoveryGateState::Skipped,
+                                    _ => crate::recovery::RecoveryGateState::Pending,
+                                };
+                                state.set_recovery_state(gate_target);
+                                info!(
+                                    flow = ?recovery_check.recommended_flow,
+                                    gate = ?gate_target,
+                                    "session_restore: emitting oauth_recovery_check_needed so FE can render dialog"
+                                );
+                                if let Err(e) = app.emit("oauth_recovery_check_needed", &recovery_check) {
+                                    warn!(error = %e, "session_restore: failed to emit oauth_recovery_check_needed");
+                                }
+                            }
+                            Err(e) => {
+                                warn!(error = %e, "session_restore: check_recovery_state_inner failed; skipping emit");
+                            }
+                        }
+                    }
+
                     // Signal that AuthInfo is populated so the FE can
                     // retry `auto_init_sync` if its first attempt raced
                     // ahead of `rehydrate_or_restored`. See the auth-
