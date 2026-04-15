@@ -303,6 +303,8 @@ pub async fn recover_mnemonic(
     // the recovery password itself — the user only has to remember one.
     install_recovered_mnemonic(&account_id, &mnemonic, &password).await?;
 
+    align_drive_password(pool, &account_id, &ctx.base_url, &mnemonic, &password).await?;
+
     // Cache in AuthInfo so the current session can proceed without
     // round-tripping through disk decryption.
     {
@@ -456,6 +458,43 @@ async fn validate_master_against_existing_folders(
     Ok(())
 }
 
+/// Bring `hcfs_config.drive_password` and every folder `enc_mnemonic.json`
+/// into line with `new_password`. Called by every flow that settles a
+/// "the user's canonical password is this now" moment: fresh signup,
+/// fresh-device unlock, and rotation.
+///
+/// Writes the drive password row (encrypted with a mnemonic-derived
+/// HKDF key), then rewrites folder files. The second step is a no-op
+/// when there are no folders yet (fresh signup / fresh-device).
+///
+/// Never logs `new_password` or the master mnemonic. The `master` arg
+/// is used both to derive the encryption key for the DB row AND as the
+/// input to `derive_folder_mnemonic(master, label)`.
+async fn align_drive_password(
+    pool: &SqlitePool,
+    account_id: &str,
+    server_url: &str,
+    master: &str,
+    new_password: &str,
+) -> Result<()> {
+    crate::sync::config::save_hcfs_config_internal(
+        pool,
+        account_id,
+        server_url,
+        new_password,
+        Some(master),
+    )
+    .await?;
+    crate::sync::mnemonic::reencrypt_all_folder_mnemonics(
+        pool,
+        account_id,
+        master,
+        new_password,
+    )
+    .await?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Seal and upload (fresh signup)
 // ---------------------------------------------------------------------------
@@ -530,6 +569,8 @@ pub async fn seal_and_upload_mnemonic(
         let mut auth = state.auth.lock()?;
         auth.cache_session_mnemonic(&account_id, (*mnemonic).clone());
     }
+
+    align_drive_password(pool, &account_id, &ctx.base_url, &mnemonic, &password).await?;
 
     state.set_recovery_state(crate::recovery::RecoveryGateState::Resolved);
     info!(
@@ -613,6 +654,7 @@ pub async fn change_recovery_password(
     //    retry finishes the rotation, and still report success to the user.
     match install_recovered_mnemonic(&account_id, &mnemonic, &new).await {
         Ok(()) => {
+            align_drive_password(pool, &account_id, &ctx.base_url, &mnemonic, &new).await?;
             clear_rotation_sidecar(&account_id).await;
             state.auth.lock()?.cache_session_mnemonic(&account_id, (*mnemonic).clone());
             info!(
@@ -688,6 +730,7 @@ pub async fn resume_recovery_password_rotation(
     let mnemonic = open_mnemonic(&blob, &password, &ctx.ss58).map_err(crypto_to_err)?;
 
     install_recovered_mnemonic(&account_id, &mnemonic, &password).await?;
+    align_drive_password(pool, &account_id, &ctx.base_url, &mnemonic, &password).await?;
     clear_rotation_sidecar(&account_id).await;
     state.auth.lock()?.cache_session_mnemonic(&account_id, mnemonic.to_string());
 
@@ -969,6 +1012,65 @@ mod tests {
             AppError::Validation(msg) => assert_eq!(msg, expected),
             other => panic!("expected Validation, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn align_drive_password_writes_row_and_reencrypts_folders() {
+        use sqlx::sqlite::SqlitePoolOptions;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE hcfs_config (owner TEXT PRIMARY KEY, server_url TEXT NOT NULL DEFAULT '', drive_password TEXT NOT NULL DEFAULT '', encryption_version INTEGER NOT NULL DEFAULT 0, updated_at TIMESTAMP)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let account = "5TestAlignAccount";
+        let owner = crate::auth::account_key::account_key(account);
+
+        // Seed one folder under an OLD password.
+        sqlx::query("INSERT INTO sync_paths (owner, path, label) VALUES (?, ?, ?)")
+            .bind(&owner)
+            .bind("/tmp/alpha")
+            .bind("alpha")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let master = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let alpha_dir = crate::sync::mnemonic::config_dir_for_folder(account, "alpha").unwrap();
+        tokio::fs::create_dir_all(&alpha_dir).await.unwrap();
+        let alpha_enc = alpha_dir.join("enc_mnemonic.json");
+        let alpha_folder_mnemonic = hcfs_client::drive::keys::derive_folder_mnemonic(master, "alpha").unwrap();
+        hcfs_client::auth::save_encrypted_mnemonic(&alpha_enc, &alpha_folder_mnemonic, "old drive password").unwrap();
+
+        // Run under a new password.
+        super::align_drive_password(&pool, account, "https://example.invalid", master, "new canonical password")
+            .await
+            .unwrap();
+
+        // hcfs_config row exists, decrypts back to the new password.
+        let recovered = crate::sync::config::get_drive_password(&pool, account, Some(master))
+            .await
+            .unwrap();
+        assert_eq!(recovered, "new canonical password");
+
+        // Folder file re-encrypted under the new password.
+        let folder_check = hcfs_client::auth::recover_mnemonic(&alpha_enc, "new canonical password").unwrap();
+        assert_eq!(folder_check.to_string(), alpha_folder_mnemonic);
     }
 
     #[tokio::test]
