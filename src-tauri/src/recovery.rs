@@ -529,6 +529,7 @@ pub async fn change_recovery_password(
     let new = Zeroizing::new(new);
 
     validate_new_password_inputs(&current, &new)?;
+    reject_if_weak(&new)?;
 
     let account_id = state.current_account_id().map_err(AppError::Other)?;
     let pool = state.pool()?;
@@ -577,6 +578,17 @@ fn validate_new_password_inputs(current: &str, new: &str) -> Result<()> {
     }
     if current == new {
         return Err(AppError::Validation("New password must differ from current.".into()));
+    }
+    Ok(())
+}
+
+/// Return `Err(Validation)` if `candidate` fails the signup strength bar.
+/// Extracted for unit testability.
+fn reject_if_weak(candidate: &str) -> Result<()> {
+    let score = crate::console_access::score_passphrase(candidate);
+    if !score.acceptable_for_submit {
+        let reason = score.hints.first().cloned().unwrap_or_else(|| "too weak".into());
+        return Err(AppError::Validation(format!("Password is too weak: {reason}")));
     }
     Ok(())
 }
@@ -773,6 +785,26 @@ mod tests {
         let err = super::validate_new_password_inputs("same", "same").unwrap_err();
         match err {
             AppError::Validation(msg) => assert!(msg.contains("must differ")),
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn change_password_rejects_weak_new() {
+        // Strength scorer lives in console_access and returns acceptable=false
+        // for short/low-entropy inputs. We surface the first reason verbatim.
+        use crate::console_access::score_passphrase;
+        let score = score_passphrase("abc");
+        assert!(!score.acceptable_for_submit);
+        // The command layer turns this into a Validation error; we reproduce
+        // the exact message here so a regression is caught at unit-test level.
+        let expected = format!(
+            "Password is too weak: {}",
+            score.hints.first().cloned().unwrap_or_default()
+        );
+        let err = super::reject_if_weak("abc").unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert_eq!(msg, expected),
             other => panic!("expected Validation, got {other:?}"),
         }
     }

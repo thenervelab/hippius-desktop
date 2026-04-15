@@ -86,7 +86,7 @@ fn bits_to_percent(bits: f64) -> u8 {
     raw.clamp(5.0, 100.0).round() as u8
 }
 
-fn score_passphrase(passphrase: &str) -> PassphraseStrength {
+pub(crate) fn score_passphrase(passphrase: &str) -> PassphraseStrength {
     if passphrase.chars().count() < MIN_PASSPHRASE_LEN {
         let verdict = PassphraseVerdict::TooShort;
         return PassphraseStrength {
