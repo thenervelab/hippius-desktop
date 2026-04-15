@@ -470,6 +470,10 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "Tests hold HOME_LOCK across awaits to serialise $HOME overrides. #[tokio::test] runs on a current-thread runtime so awaits don't contend on this lock — see test_helpers.rs."
+)]
 mod tests {
     use super::*;
 
@@ -662,6 +666,7 @@ mod tests {
     async fn reencrypt_overwrites_existing_folder_mnemonics_under_new_password() {
         use sqlx::sqlite::SqlitePoolOptions;
 
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
         // `config_dir_for_folder` and the account_id hashing path look at $HOME.
         unsafe {
@@ -669,12 +674,10 @@ mod tests {
         }
 
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
-        sqlx::query(
-            "CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let account = "5TestReencryptAccount";
         let owner = account_key(account);
@@ -729,41 +732,41 @@ mod tests {
     async fn reencrypt_with_zero_folders_returns_ok() {
         use sqlx::sqlite::SqlitePoolOptions;
 
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
 
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
-        sqlx::query(
-            "CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let master = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
         // No sync_paths rows for this account — the loop body must never
         // execute and the helper must be a no-op Ok.
-        reencrypt_all_folder_mnemonics(&pool, "5EmptyAccount", master, "any-password").await.unwrap();
+        reencrypt_all_folder_mnemonics(&pool, "5EmptyAccount", master, "any-password")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn reencrypt_with_invalid_master_warn_skips_all() {
         use sqlx::sqlite::SqlitePoolOptions;
 
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
 
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
-        sqlx::query(
-            "CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let account = "5InvalidMasterAccount";
         let owner = account_key(account);
@@ -780,7 +783,9 @@ mod tests {
         // Invalid master — every folder's derive step will fail. Under the
         // warn+continue policy the helper must still return Ok and NOT
         // write any file.
-        reencrypt_all_folder_mnemonics(&pool, account, "not a bip39 mnemonic", "any-password").await.unwrap();
+        reencrypt_all_folder_mnemonics(&pool, account, "not a bip39 mnemonic", "any-password")
+            .await
+            .unwrap();
 
         for label in ["alpha", "beta"] {
             let enc = config_dir_for_folder(account, label).unwrap().join("enc_mnemonic.json");

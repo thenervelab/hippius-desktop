@@ -272,10 +272,7 @@ async fn probe_server_blob(state: &tauri::State<'_, crate::app_state::AppState>)
 /// shouldn't happen because the blob is keyed by the bearer-resolved
 /// SS58 on the server side.
 #[tauri::command]
-pub async fn recover_mnemonic(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    password: String,
-) -> Result<()> {
+pub async fn recover_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<()> {
     let password = Zeroizing::new(password);
     let account_id = state.current_account_id().map_err(AppError::Other)?;
     let pool = state.pool()?;
@@ -290,9 +287,7 @@ pub async fn recover_mnemonic(
     let blob: SealedBlob = match get_json::<SealedBlob>(&ctx, "/v1/mnemonic-blob").await? {
         HttpOutcome::Ok(b) => b,
         HttpOutcome::NotFound => {
-            return Err(AppError::Other(
-                "No recovery data found for this account on the server.".into(),
-            ));
+            return Err(AppError::Other("No recovery data found for this account on the server.".into()));
         }
     };
 
@@ -398,17 +393,12 @@ async fn clear_rotation_sidecar(account_id: &str) {
 /// Vacuously succeeds when there are no folders (fresh signup) or when
 /// the drive password isn't yet set (folder mnemonics aren't recoverable
 /// to compare; we have to trust the caller).
-async fn validate_master_against_existing_folders(
-    pool: &SqlitePool,
-    account_id: &str,
-    candidate_master: &str,
-) -> Result<()> {
+async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id: &str, candidate_master: &str) -> Result<()> {
     let owner = account_key(account_id);
-    let folders: Vec<(String, String)> =
-        sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ?")
-            .bind(&owner)
-            .fetch_all(pool)
-            .await?;
+    let folders: Vec<(String, String)> = sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ?")
+        .bind(&owner)
+        .fetch_all(pool)
+        .await?;
     if folders.is_empty() {
         return Ok(());
     }
@@ -470,28 +460,9 @@ async fn validate_master_against_existing_folders(
 /// Never logs `new_password` or the master mnemonic. The `master` arg
 /// is used both to derive the encryption key for the DB row AND as the
 /// input to `derive_folder_mnemonic(master, label)`.
-async fn align_drive_password(
-    pool: &SqlitePool,
-    account_id: &str,
-    server_url: &str,
-    master: &str,
-    new_password: &str,
-) -> Result<()> {
-    crate::sync::config::save_hcfs_config_internal(
-        pool,
-        account_id,
-        server_url,
-        new_password,
-        Some(master),
-    )
-    .await?;
-    crate::sync::mnemonic::reencrypt_all_folder_mnemonics(
-        pool,
-        account_id,
-        master,
-        new_password,
-    )
-    .await?;
+async fn align_drive_password(pool: &SqlitePool, account_id: &str, server_url: &str, master: &str, new_password: &str) -> Result<()> {
+    crate::sync::config::save_hcfs_config_internal(pool, account_id, server_url, new_password, Some(master)).await?;
+    crate::sync::mnemonic::reencrypt_all_folder_mnemonics(pool, account_id, master, new_password).await?;
     Ok(())
 }
 
@@ -510,10 +481,7 @@ async fn align_drive_password(
 /// backup. Requiring the user to also write down the seed phrase to
 /// tick a box is friction without added safety.
 #[tauri::command]
-pub async fn seal_and_upload_mnemonic(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    password: String,
-) -> Result<()> {
+pub async fn seal_and_upload_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<()> {
     let password = Zeroizing::new(password);
     let account_id = state.current_account_id().map_err(AppError::Other)?;
     let pool = state.pool()?;
@@ -600,11 +568,7 @@ pub async fn seal_and_upload_mnemonic(
 /// The mnemonic itself is unchanged, so no sync re-init or session
 /// invalidation is needed.
 #[tauri::command]
-pub async fn change_recovery_password(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    current: String,
-    new: String,
-) -> Result<()> {
+pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::AppState>, current: String, new: String) -> Result<()> {
     let current = Zeroizing::new(current);
     let new = Zeroizing::new(new);
 
@@ -692,10 +656,7 @@ pub async fn change_recovery_password(
 /// the current server blob, then rewrites the local file and clears
 /// the sidecar.
 #[tauri::command]
-pub async fn resume_recovery_password_rotation(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    password: String,
-) -> Result<()> {
+pub async fn resume_recovery_password_rotation(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<()> {
     let password = Zeroizing::new(password);
     let account_id = state.current_account_id().map_err(AppError::Other)?;
     let pool = state.pool()?;
@@ -707,9 +668,7 @@ pub async fn resume_recovery_password_rotation(
         HttpOutcome::NotFound => {
             // Server blob vanished — nothing left to finish. Clean up.
             clear_rotation_sidecar(&account_id).await;
-            return Err(AppError::Other(
-                "No sealed recovery blob on the server; nothing to finish.".into(),
-            ));
+            return Err(AppError::Other("No sealed recovery blob on the server; nothing to finish.".into()));
         }
     };
 
@@ -765,7 +724,6 @@ pub async fn mark_recovery_skipped(state: tauri::State<'_, crate::app_state::App
     Ok(())
 }
 
-
 /// Pure input validation for [`change_recovery_password`]. Separated so
 /// unit tests can exercise rules without a running Tauri app or network.
 ///
@@ -799,6 +757,10 @@ fn reject_if_weak(candidate: &str) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "Tests hold HOME_LOCK across awaits to serialise $HOME overrides. #[tokio::test] runs on a current-thread runtime so awaits don't contend on this lock — see test_helpers.rs."
+)]
 mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
@@ -847,11 +809,13 @@ mod tests {
     async fn leaves_non_empty_url_alone() {
         let pool = setup_pool().await;
         let owner = account_key("5TestAccountId");
-        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, 'https://custom.example', 'secret', 0)")
-            .bind(&owner)
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, 'https://custom.example', 'secret', 0)",
+        )
+        .bind(&owner)
+        .execute(&pool)
+        .await
+        .unwrap();
 
         seed_hcfs_server_url_if_missing(&pool, "5TestAccountId").await.unwrap();
 
@@ -969,10 +933,7 @@ mod tests {
         seed_hcfs_server_url_if_missing(&pool, "5TestAccountId").await.unwrap();
         seed_hcfs_server_url_if_missing(&pool, "5TestAccountId").await.unwrap();
 
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM hcfs_config")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM hcfs_config").fetch_one(&pool).await.unwrap();
         assert_eq!(count, 1);
     }
 
@@ -1003,10 +964,7 @@ mod tests {
         assert!(!score.acceptable_for_submit);
         // The command layer turns this into a Validation error; we reproduce
         // the exact message here so a regression is caught at unit-test level.
-        let expected = format!(
-            "Password is too weak: {}",
-            score.hints.first().cloned().unwrap_or_default()
-        );
+        let expected = format!("Password is too weak: {}", score.hints.first().cloned().unwrap_or_default());
         let err = super::reject_if_weak("abc").unwrap_err();
         match err {
             AppError::Validation(msg) => assert_eq!(msg, expected),
@@ -1018,16 +976,13 @@ mod tests {
     async fn align_drive_password_writes_row_and_reencrypts_folders() {
         use sqlx::sqlite::SqlitePoolOptions;
 
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
 
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
         sqlx::query(
             "CREATE TABLE hcfs_config (owner TEXT PRIMARY KEY, server_url TEXT NOT NULL DEFAULT '', drive_password TEXT NOT NULL DEFAULT '', encryption_version INTEGER NOT NULL DEFAULT 0, updated_at TIMESTAMP)",
         )
@@ -1063,9 +1018,7 @@ mod tests {
             .unwrap();
 
         // hcfs_config row exists, decrypts back to the new password.
-        let recovered = crate::sync::config::get_drive_password(&pool, account, Some(master))
-            .await
-            .unwrap();
+        let recovered = crate::sync::config::get_drive_password(&pool, account, Some(master)).await.unwrap();
         assert_eq!(recovered, "new canonical password");
 
         // Folder file re-encrypted under the new password.
@@ -1076,6 +1029,7 @@ mod tests {
     #[tokio::test]
     async fn rotation_sidecar_roundtrip() {
         // Use a tempdir as the `HOME` so master_mnemonic_path points into it.
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
         unsafe {
             std::env::set_var("HOME", tmp.path());

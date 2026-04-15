@@ -23,6 +23,8 @@ pub mod nebula;
 pub mod notifications;
 pub mod recovery;
 pub mod sync;
+#[cfg(test)]
+mod test_helpers;
 mod utils;
 
 use crate::auth::contacts::{add_contact, delete_contact, get_contacts, update_contact};
@@ -43,17 +45,13 @@ use crate::billing::queries::{
 };
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
 use crate::blockchain::convert::{planck_to_hip_full, to_plancks};
-use crate::blockchain::transfers::compute_max_transferable;
-use crate::console_access::validate_recovery_password;
-use crate::recovery::{
-    change_recovery_password, check_recovery_state, has_pending_rotation, mark_recovery_skipped, recover_mnemonic,
-    resume_recovery_password_rotation, seal_and_upload_mnemonic,
-};
 use crate::blockchain::queries::{get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address};
 use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, update_wss_endpoint_command};
 use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded};
 use crate::blockchain::subscription::start_block_subscription;
+use crate::blockchain::transfers::compute_max_transferable;
 use crate::blockchain::transfers::{transfer_balance, validate_send_balance};
+use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
@@ -69,11 +67,15 @@ use crate::notifications::crud::{
     update_local_notification_preferences,
 };
 use crate::notifications::settings::{get_notification_settings, update_notification_settings};
+use crate::recovery::{
+    change_recovery_password, check_recovery_state, has_pending_rotation, mark_recovery_skipped, recover_mnemonic, resume_recovery_password_rotation,
+    seal_and_upload_mnemonic,
+};
 use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::files::{
-    add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, filter_file_entries, get_recent_files, get_user_files, list_sync_folder,
-    resolve_file_info, resolve_file_path,
+    add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, filter_file_entries, get_recent_files, get_user_files,
+    list_sync_folder, resolve_file_info, resolve_file_path,
 };
 use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
 use crate::sync::lifecycle::{
