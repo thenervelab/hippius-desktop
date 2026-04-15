@@ -108,13 +108,20 @@ const RecoveryPhraseSettings: React.FC = () => {
                 parentClassName="w-full"
                 className="delay-700 w-full"
               >
-                <CardButton
-                  variant="secondary"
-                  onClick={() => setShowChangePassword(true)}
-                  className="mt-2"
-                >
-                  Change recovery password
-                </CardButton>
+                <div className="flex justify-between items-center p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full">
+                  <p className="text-sm text-grey-60">
+                    Change the password that protects your encrypted sync folder and recovery data. This password cannot be reset — choose one you can remember.
+                  </p>
+                  <CardButton
+                    className="max-w-[13.75rem] h-10 ml-4 shrink-0"
+                    variant="primary"
+                    onClick={() => setShowChangePassword(true)}
+                  >
+                    <span className="text-base leading-4 font-medium">
+                      Change Password
+                    </span>
+                  </CardButton>
+                </div>
               </RevealTextLine>
             )}
           </div>

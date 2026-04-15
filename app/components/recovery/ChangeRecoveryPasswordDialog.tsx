@@ -65,7 +65,7 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) =
     setCurrentError(null);
     try {
       await changeRecoveryPassword(current, next);
-      toast.success("Recovery password updated.");
+      toast.success("Password updated.");
       reset();
       onOpenChange(false);
     } catch (err) {
@@ -75,7 +75,7 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) =
         setCurrentError("Incorrect current password.");
         setCurrent("");
       } else {
-        toast.error(`Could not change recovery password: ${msg}`);
+        toast.error(`Could not change password: ${msg}`);
       }
     } finally {
       setSubmitting(false);
@@ -94,14 +94,14 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) =
         <Dialog.Overlay className="fixed inset-0 bg-black/50 z-40" />
         <DialogContainer className="z-50 w-[420px] max-w-[90vw] !left-1/2 !top-1/2 !bottom-auto !right-auto !-translate-x-1/2 !-translate-y-1/2 p-6">
           <div className="flex flex-col gap-4">
-            <Typography.H4 className="text-grey-10">Change recovery password</Typography.H4>
+            <Typography.H4 className="text-grey-10">Change password</Typography.H4>
             <Typography.P size="sm" className="text-grey-40">
-              Enter your current recovery password, then choose a new one.
+              Enter your current password, then choose a new one.
               <strong> Your new password cannot be reset</strong> if you forget it.
             </Typography.P>
 
             <PasswordField
-              label="Current recovery password"
+              label="Current password"
               value={current}
               onChange={(v) => {
                 setCurrent(v);
@@ -111,7 +111,7 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) =
             />
 
             <PasswordField
-              label="New recovery password"
+              label="New password"
               value={next}
               onChange={setNext}
               errorMessage={sameAsCurrent ? "New password must differ from current." : undefined}
