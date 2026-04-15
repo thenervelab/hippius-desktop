@@ -48,8 +48,8 @@ pub struct AuthInfo {
     /// `capabilities == Full`.
     ///
     /// `subxt_signer::sr25519::Keypair` wraps a `schnorrkel::MiniSecretKey`
-    /// + `ExpansionMode::Ed25519`; schnorrkel zeroizes its secret bytes on
-    /// drop, so clearing this field or dropping the containing `AuthInfo`
+    /// with `ExpansionMode::Ed25519`. Schnorrkel zeroizes its secret bytes
+    /// on drop, so clearing this field or dropping the containing `AuthInfo`
     /// scrubs the key from memory without additional wrapping.
     pub sr25519_pair: Option<Keypair>,
     /// Active SS58 address. The single source of truth for the active

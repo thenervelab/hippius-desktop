@@ -1,7 +1,7 @@
 # Change Recovery Password — Design
 
 Date: 2026-04-15
-Status: Approved, ready for implementation plan
+Status: Implemented in feature/change-recovery-password
 Owner: Desktop
 Scope: Desktop-only (`hippius-desktop`). No hcfs-server changes.
 

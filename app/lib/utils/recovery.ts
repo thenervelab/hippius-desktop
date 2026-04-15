@@ -76,3 +76,33 @@ export async function sealAndUploadMnemonic(password: string): Promise<void> {
 export async function markRecoverySkipped(): Promise<void> {
   await invoke("mark_recovery_skipped");
 }
+
+/**
+ * Rotate the recovery password for the active account.
+ *
+ * Delegates to Rust (`change_recovery_password`) which fetches the sealed
+ * blob, decrypts with `currentPassword`, re-seals under `newPassword`,
+ * POSTs the upsert, and rewrites the local master_enc_mnemonic.json.
+ * If the local rewrite fails after a successful upload, a sidecar is
+ * written and the next launch prompts the user to finish — callers
+ * here can still treat a resolved Promise as success.
+ */
+export async function changeRecoveryPassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  await invoke("change_recovery_password", {
+    current: currentPassword,
+    new: newPassword,
+  });
+}
+
+/** Finish a rotation whose local-rewrite step failed on a previous run. */
+export async function resumeRecoveryPasswordRotation(password: string): Promise<void> {
+  await invoke("resume_recovery_password_rotation", { password });
+}
+
+/** `true` when a rotation-pending sidecar is on disk for the active account. */
+export async function hasPendingRotation(): Promise<boolean> {
+  return invoke<boolean>("has_pending_rotation");
+}

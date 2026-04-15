@@ -275,6 +275,19 @@ pub async fn restore_session(
                         }
                     }
 
+                    // Notify FE if a rotation is awaiting its local-rewrite step.
+                    if let Some(ref addr) = substrate_address
+                        && crate::recovery::rotation_sidecar_path(addr).map(|p| p.exists()).unwrap_or(false)
+                    {
+                        info!(
+                            account = %crate::console_access::short_ss58(addr),
+                            "session_restore: rotation sidecar present → emitting recovery_rotation_pending"
+                        );
+                        if let Err(e) = app.emit("recovery_rotation_pending", addr) {
+                            warn!(error = %e, "session_restore: failed to emit recovery_rotation_pending");
+                        }
+                    }
+
                     // Signal that AuthInfo is populated so the FE can
                     // retry `auto_init_sync` if its first attempt raced
                     // ahead of `rehydrate_or_restored`. See the auth-

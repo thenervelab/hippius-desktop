@@ -343,6 +343,46 @@ async fn install_recovered_mnemonic(account_id: &str, mnemonic: &str, password: 
     Ok(())
 }
 
+/// On-disk path of the rotation sidecar for `account_id`.
+pub(crate) fn rotation_sidecar_path(account_id: &str) -> Result<std::path::PathBuf> {
+    let master = crate::sync::mnemonic::master_mnemonic_path(account_id)?;
+    let parent = master
+        .parent()
+        .ok_or_else(|| AppError::Other("master mnemonic path has no parent".into()))?;
+    Ok(parent.join("recovery_pending_local_rewrite.json"))
+}
+
+async fn write_rotation_sidecar(account_id: &str) -> Result<()> {
+    let path = rotation_sidecar_path(account_id)?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let body = serde_json::json!({
+        "ss58": account_id,
+        "created_at_ms": chrono::Utc::now().timestamp_millis(),
+    });
+    tokio::fs::write(&path, body.to_string()).await?;
+    // chmod 0o600 — match master_enc_mnemonic.json.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = tokio::fs::metadata(&path).await?.permissions();
+        perms.set_mode(0o600);
+        tokio::fs::set_permissions(&path, perms).await?;
+    }
+    Ok(())
+}
+
+/// Best-effort removal. Missing sidecar is not an error.
+async fn clear_rotation_sidecar(account_id: &str) {
+    if let Ok(path) = rotation_sidecar_path(account_id)
+        && let Err(e) = tokio::fs::remove_file(&path).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(error = %e, path = ?path, "clear_rotation_sidecar: failed to remove");
+    }
+}
+
 /// Verify a candidate master mnemonic actually derives the folder
 /// mnemonics stored on disk for this account.
 ///
@@ -405,11 +445,10 @@ async fn validate_master_against_existing_folders(
         );
         if *stored != *expected {
             return Err(AppError::Other(format!(
-                "Cannot seal recovery blob: candidate master mnemonic does not derive folder '{}'. \
+                "Cannot seal recovery blob: candidate master mnemonic does not derive folder '{label}'. \
                  The local master is out of sync with folder state — restoring recovery against this master \
                  would leave uploads in this folder undecryptable. \
-                 Import your original master mnemonic via Settings → Recovery before retrying.",
-                label
+                 Import your original master mnemonic via Settings → Recovery before retrying."
             )));
         }
     }
@@ -502,6 +541,173 @@ pub async fn seal_and_upload_mnemonic(
 }
 
 // ---------------------------------------------------------------------------
+// Change recovery password (rotation)
+// ---------------------------------------------------------------------------
+
+/// Rotate the password protecting the sealed mnemonic blob on hcfs-server.
+///
+/// Flow (filled in across Tasks 2-5; this is the skeleton):
+/// 1. GET sealed blob.
+/// 2. Decrypt with `current` (wrong password → `Validation("Wrong passphrase.")`).
+/// 3. Validate `new` (non-empty, strength, != current).
+/// 4. Derivation guard (reuses [`validate_master_against_existing_folders`]).
+/// 5. Reseal under `new`.
+/// 6. POST upsert (commit point).
+/// 7. Re-encrypt local `master_enc_mnemonic.json`. On failure, write a
+///    sidecar and return `Ok(())` anyway — boot-time retry finishes it.
+///
+/// The mnemonic itself is unchanged, so no sync re-init or session
+/// invalidation is needed.
+#[tauri::command]
+pub async fn change_recovery_password(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    current: String,
+    new: String,
+) -> Result<()> {
+    let current = Zeroizing::new(current);
+    let new = Zeroizing::new(new);
+
+    validate_new_password_inputs(&current, &new)?;
+    reject_if_weak(&new)?;
+
+    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let pool = state.pool()?;
+    seed_hcfs_server_url_if_missing(pool, &account_id).await?;
+
+    info!(
+        account = %crate::console_access::short_ss58(&account_id),
+        "recovery: starting password rotation (will GET /v1/mnemonic-blob → decrypt → reseal → POST)"
+    );
+
+    let ctx = HcfsServerCtx::resolve(&state).await?;
+
+    // 1. Fetch the current sealed blob.
+    let blob: SealedBlob = match get_json::<SealedBlob>(&ctx, "/v1/mnemonic-blob").await? {
+        HttpOutcome::Ok(b) => b,
+        HttpOutcome::NotFound => {
+            return Err(AppError::Other(
+                "No sealed recovery blob on the server. Set a recovery password first.".into(),
+            ));
+        }
+    };
+
+    // 2. Decrypt with `current`. Wrong password → Validation("Wrong passphrase.").
+    let mnemonic = open_mnemonic(&blob, &current, &ctx.ss58).map_err(crypto_to_err)?;
+
+    // 3. Derivation guard — refuse to rotate under a master that can't
+    //    reproduce existing folder mnemonics.
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
+
+    // 4. Reseal under `new`.
+    let new_blob = seal_mnemonic(&mnemonic, &new, &ctx.ss58).map_err(crypto_to_err)?;
+
+    // 5. Commit point: POST upsert.
+    post_json_discard(&ctx, "/v1/mnemonic-blob", &new_blob).await?;
+
+    info!(
+        account = %crate::console_access::short_ss58(&account_id),
+        "recovery: sealed blob upserted under new password (server is now authoritative)"
+    );
+
+    // 6. Re-encrypt local file. On failure, write the sidecar so boot-time
+    //    retry finishes the rotation, and still report success to the user.
+    match install_recovered_mnemonic(&account_id, &mnemonic, &new).await {
+        Ok(()) => {
+            clear_rotation_sidecar(&account_id).await;
+            state.auth.lock()?.cache_session_mnemonic(&account_id, (*mnemonic).clone());
+            info!(
+                account = %crate::console_access::short_ss58(&account_id),
+                "recovery: password rotation complete"
+            );
+            Ok(())
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                account = %crate::console_access::short_ss58(&account_id),
+                "recovery: server rotated but local rewrite failed — writing sidecar for boot-time retry"
+            );
+            // mnemonic is unchanged; AuthInfo cache still holds a valid value,
+            // so we intentionally skip cache_session_mnemonic on this branch.
+            if let Err(sidecar_err) = write_rotation_sidecar(&account_id).await {
+                warn!(
+                    error = %sidecar_err,
+                    account = %crate::console_access::short_ss58(&account_id),
+                    "recovery: sidecar write also failed; boot-time retry will be unavailable. Rotation is still durable on the server; user may need to change password again if the local file stays stale."
+                );
+            }
+            // Still Ok — the rotation is durable on the server.
+            Ok(())
+        }
+    }
+}
+
+/// Boot-time finish for [`change_recovery_password`] partial failures.
+///
+/// Called by the frontend when the user re-enters their new password
+/// after a previous rotation left the local file encrypted under the
+/// old password (see sidecar mechanism). Verifies `password` decrypts
+/// the current server blob, then rewrites the local file and clears
+/// the sidecar.
+#[tauri::command]
+pub async fn resume_recovery_password_rotation(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    password: String,
+) -> Result<()> {
+    let password = Zeroizing::new(password);
+    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let pool = state.pool()?;
+    seed_hcfs_server_url_if_missing(pool, &account_id).await?;
+
+    let ctx = HcfsServerCtx::resolve(&state).await?;
+    let blob: SealedBlob = match get_json::<SealedBlob>(&ctx, "/v1/mnemonic-blob").await? {
+        HttpOutcome::Ok(b) => b,
+        HttpOutcome::NotFound => {
+            // Server blob vanished — nothing left to finish. Clean up.
+            clear_rotation_sidecar(&account_id).await;
+            return Err(AppError::Other(
+                "No sealed recovery blob on the server; nothing to finish.".into(),
+            ));
+        }
+    };
+
+    // Verify the password decrypts the (new) server blob.
+    //
+    // Stale-sidecar note: the sidecar has no upper lifetime and we don't
+    // compare against the `updated_at` captured when it was written. If
+    // the user rotated again on a different device between the failing
+    // rotation and this resume, `password` is the NEW-new password (the
+    // only one that opens the current server blob) — so this call
+    // silently finishes with whatever the server currently holds. That's
+    // acceptable because the underlying mnemonic is unchanged across
+    // rotations; the cost is only that the user may see this prompt
+    // asking for "the new password" and must remember which one is
+    // current. If we ever need stricter semantics, store `updated_at`
+    // in the sidecar and require it to match the server's before
+    // accepting the resume.
+    let mnemonic = open_mnemonic(&blob, &password, &ctx.ss58).map_err(crypto_to_err)?;
+
+    install_recovered_mnemonic(&account_id, &mnemonic, &password).await?;
+    clear_rotation_sidecar(&account_id).await;
+    state.auth.lock()?.cache_session_mnemonic(&account_id, mnemonic.to_string());
+
+    info!(
+        account = %crate::console_access::short_ss58(&account_id),
+        "recovery: rotation-resume finished; local file now matches server"
+    );
+    Ok(())
+}
+
+/// Read-only IPC used by the frontend on boot to decide whether to show
+/// the "finish rotation" prompt.
+#[tauri::command]
+pub async fn has_pending_rotation(state: tauri::State<'_, crate::app_state::AppState>) -> Result<bool> {
+    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let path = rotation_sidecar_path(&account_id)?;
+    Ok(path.exists())
+}
+
+// ---------------------------------------------------------------------------
 // Skip (local mnemonic already present)
 // ---------------------------------------------------------------------------
 
@@ -516,6 +722,38 @@ pub async fn mark_recovery_skipped(state: tauri::State<'_, crate::app_state::App
     Ok(())
 }
 
+
+/// Pure input validation for [`change_recovery_password`]. Separated so
+/// unit tests can exercise rules without a running Tauri app or network.
+///
+/// Rules (v1):
+/// - new password must be non-empty
+/// - new password must differ from current
+///
+/// Strength scoring is NOT here — it lives in
+/// `crate::console_access::score_passphrase` and is called from the IPC
+/// command itself so that the structured `PassphraseStrength` reasons
+/// can be surfaced in the error message.
+fn validate_new_password_inputs(current: &str, new: &str) -> Result<()> {
+    if new.is_empty() {
+        return Err(AppError::Validation("New recovery password cannot be empty.".into()));
+    }
+    if current == new {
+        return Err(AppError::Validation("New password must differ from current.".into()));
+    }
+    Ok(())
+}
+
+/// Return `Err(Validation)` if `candidate` fails the signup strength bar.
+/// Extracted for unit testability.
+fn reject_if_weak(candidate: &str) -> Result<()> {
+    let score = crate::console_access::score_passphrase(candidate);
+    if !score.acceptable_for_submit {
+        let reason = score.hints.first().cloned().unwrap_or_else(|| "too weak".into());
+        return Err(AppError::Validation(format!("Password is too weak: {reason}")));
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
@@ -693,5 +931,67 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn change_password_rejects_empty_new() {
+        let err = super::validate_new_password_inputs("current", "").unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert!(msg.contains("cannot be empty")),
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn change_password_rejects_new_equals_current() {
+        let err = super::validate_new_password_inputs("same", "same").unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert!(msg.contains("must differ")),
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn change_password_rejects_weak_new() {
+        // Strength scorer lives in console_access and returns acceptable=false
+        // for short/low-entropy inputs. We surface the first reason verbatim.
+        use crate::console_access::score_passphrase;
+        let score = score_passphrase("abc");
+        assert!(!score.acceptable_for_submit);
+        // The command layer turns this into a Validation error; we reproduce
+        // the exact message here so a regression is caught at unit-test level.
+        let expected = format!(
+            "Password is too weak: {}",
+            score.hints.first().cloned().unwrap_or_default()
+        );
+        let err = super::reject_if_weak("abc").unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert_eq!(msg, expected),
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn rotation_sidecar_roundtrip() {
+        // Use a tempdir as the `HOME` so master_mnemonic_path points into it.
+        let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+
+        let account = "5TestSidecarAccount";
+        // master_mnemonic_path creates the parent on first write via
+        // install_recovered_mnemonic. We mirror that here.
+        let sidecar = super::rotation_sidecar_path(account).unwrap();
+        tokio::fs::create_dir_all(sidecar.parent().unwrap()).await.unwrap();
+
+        super::write_rotation_sidecar(account).await.unwrap();
+        assert!(sidecar.exists(), "sidecar should be written");
+
+        super::clear_rotation_sidecar(account).await;
+        assert!(!sidecar.exists(), "sidecar should be removed");
+
+        // Idempotent clear.
+        super::clear_rotation_sidecar(account).await;
     }
 }
