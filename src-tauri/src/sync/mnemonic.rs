@@ -373,17 +373,19 @@ pub async fn create_encrypted_backup(mnemonic: String, password: String, output_
 /// re-run after a partial failure.
 ///
 /// Skips the internal `migration` pseudo-drive label (see
-/// `sync::drive_status` filters). Folders whose `enc_mnemonic.json` file
-/// does not exist yet are ignored — they'll be created on first sync
-/// under the current drive password.
+/// `sync::drive_status` filters). Folders whose `enc_mnemonic.json` does
+/// not exist yet are created under the new password as part of this call
+/// — rotation brings every folder that has a `sync_paths` row up to date,
+/// whether or not it had been realised on disk before.
 ///
-/// Best-effort per folder on write failure: logs a `warn!` with the
-/// offending label and continues to the next folder. Returns `Ok(())`
-/// when every folder either succeeded or was absent; returns `Err` only
-/// when a bulk-level failure occurred (DB unreachable, master mnemonic
-/// derivation failed for an entire folder, etc.). The caller decides
-/// whether to treat the first `Err` as fatal.
-pub async fn reencrypt_all_folder_mnemonics(
+/// Every per-folder step is best-effort: derivation or save failures are
+/// warn-logged with their `label` and skipped so a single bad folder
+/// doesn't block rotating the rest. Returns `Err` only when the
+/// `sync_paths` read itself fails.
+// Wired into rotation / unlock / signup flows in Phases 2-4 of the
+// unify-drive-password plan. Exercised by the unit tests below.
+#[allow(dead_code)]
+pub(crate) async fn reencrypt_all_folder_mnemonics(
     pool: &sqlx::SqlitePool,
     account_id: &str,
     master_mnemonic: &str,
@@ -392,44 +394,75 @@ pub async fn reencrypt_all_folder_mnemonics(
     use crate::auth::account_key::account_key;
 
     let owner = account_key(account_id);
-    let folders: Vec<(String, String)> = sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ?")
+    let labels: Vec<String> = sqlx::query_scalar("SELECT label FROM sync_paths WHERE owner = ?")
         .bind(&owner)
         .fetch_all(pool)
         .await?;
 
-    for (_path, label) in folders.iter().filter(|(_, l)| l != "migration") {
-        let folder_dir = config_dir_for_folder(account_id, label)?;
+    for label in labels.iter().filter(|l| l.as_str() != "migration") {
+        let folder_dir = match config_dir_for_folder(account_id, label) {
+            Ok(dir) => dir,
+            Err(e) => {
+                tracing::warn!(
+                    label = %label,
+                    error = %e,
+                    "reencrypt_all_folder_mnemonics: failed to compute folder dir; continuing"
+                );
+                continue;
+            }
+        };
         let folder_enc = folder_dir.join("enc_mnemonic.json");
 
         // Re-derive deterministically from the master. Folder files that
-        // don't exist yet on disk get created here under the new password.
-        let folder_mnemonic = zeroize::Zeroizing::new(
-            hcfs_client::drive::keys::derive_folder_mnemonic(master_mnemonic, label)
-                .map_err(|e| crate::error::AppError::Other(format!("derive_folder_mnemonic failed for '{label}': {e}")))?,
-        );
+        // don't exist yet on disk are created here under the new password.
+        let folder_mnemonic_owned = match hcfs_client::drive::keys::derive_folder_mnemonic(master_mnemonic, label) {
+            Ok(s) => zeroize::Zeroizing::new(s),
+            Err(e) => {
+                tracing::warn!(
+                    label = %label,
+                    error = %e,
+                    "reencrypt_all_folder_mnemonics: failed to derive folder mnemonic; continuing"
+                );
+                continue;
+            }
+        };
 
-        if let Some(parent) = folder_enc.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+        if let Some(parent) = folder_enc.parent()
+            && let Err(e) = tokio::fs::create_dir_all(parent).await
+        {
+            tracing::warn!(
+                label = %label,
+                error = %e,
+                "reencrypt_all_folder_mnemonics: failed to create folder dir; continuing"
+            );
+            continue;
         }
 
         // save_encrypted_mnemonic is sync + blocking; wrap in spawn_blocking
         // to match install_recovered_mnemonic.
-        let path_owned = folder_enc.clone();
-        let folder_mnemonic_owned = zeroize::Zeroizing::new((*folder_mnemonic).clone());
         let password_owned = zeroize::Zeroizing::new(new_password.to_string());
         let label_owned = label.clone();
         let result = tokio::task::spawn_blocking(move || {
-            hcfs_client::auth::save_encrypted_mnemonic(&path_owned, &folder_mnemonic_owned, &password_owned).map_err(|e| e.to_string())
+            hcfs_client::auth::save_encrypted_mnemonic(&folder_enc, &folder_mnemonic_owned, &password_owned).map_err(|e| e.to_string())
         })
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("join error: {e}")))?;
+        .await;
 
-        if let Err(e) = result {
-            tracing::warn!(
-                label = %label_owned,
-                error = %e,
-                "reencrypt_all_folder_mnemonics: failed to save folder mnemonic; continuing"
-            );
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    label = %label_owned,
+                    error = %e,
+                    "reencrypt_all_folder_mnemonics: failed to save folder mnemonic; continuing"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    label = %label_owned,
+                    error = %e,
+                    "reencrypt_all_folder_mnemonics: spawn_blocking join error; continuing"
+                );
+            }
         }
     }
 
@@ -690,5 +723,68 @@ mod tests {
         reencrypt_all_folder_mnemonics(&pool, account, master, new_password).await.unwrap();
         let recovered_again = hcfs_client::auth::recover_mnemonic(&alpha_enc, new_password).unwrap();
         assert_eq!(recovered_again.to_string(), alpha_folder_mnemonic);
+    }
+
+    #[tokio::test]
+    async fn reencrypt_with_zero_folders_returns_ok() {
+        use sqlx::sqlite::SqlitePoolOptions;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let master = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        // No sync_paths rows for this account — the loop body must never
+        // execute and the helper must be a no-op Ok.
+        reencrypt_all_folder_mnemonics(&pool, "5EmptyAccount", master, "any-password").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reencrypt_with_invalid_master_warn_skips_all() {
+        use sqlx::sqlite::SqlitePoolOptions;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let account = "5InvalidMasterAccount";
+        let owner = account_key(account);
+        for label in ["alpha", "beta"] {
+            sqlx::query("INSERT INTO sync_paths (owner, path, label) VALUES (?, ?, ?)")
+                .bind(&owner)
+                .bind(format!("/tmp/{label}"))
+                .bind(label)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        // Invalid master — every folder's derive step will fail. Under the
+        // warn+continue policy the helper must still return Ok and NOT
+        // write any file.
+        reencrypt_all_folder_mnemonics(&pool, account, "not a bip39 mnemonic", "any-password").await.unwrap();
+
+        for label in ["alpha", "beta"] {
+            let enc = config_dir_for_folder(account, label).unwrap().join("enc_mnemonic.json");
+            assert!(!enc.exists(), "{label}: no file should be written when derivation fails");
+        }
     }
 }
