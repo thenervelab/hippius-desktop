@@ -906,4 +906,28 @@ mod tests {
             other => panic!("expected Validation, got {other:?}"),
         }
     }
+
+    #[tokio::test]
+    async fn rotation_sidecar_roundtrip() {
+        // Use a tempdir as the `HOME` so master_mnemonic_path points into it.
+        let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+
+        let account = "5TestSidecarAccount";
+        // master_mnemonic_path creates the parent on first write via
+        // install_recovered_mnemonic. We mirror that here.
+        let sidecar = super::rotation_sidecar_path(account).unwrap();
+        tokio::fs::create_dir_all(sidecar.parent().unwrap()).await.unwrap();
+
+        super::write_rotation_sidecar(account).await.unwrap();
+        assert!(sidecar.exists(), "sidecar should be written");
+
+        super::clear_rotation_sidecar(account).await;
+        assert!(!sidecar.exists(), "sidecar should be removed");
+
+        // Idempotent clear.
+        super::clear_rotation_sidecar(account).await;
+    }
 }
