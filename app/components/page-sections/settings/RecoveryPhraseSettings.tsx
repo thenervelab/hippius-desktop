@@ -110,7 +110,7 @@ const RecoveryPhraseSettings: React.FC = () => {
               >
                 <div className="flex justify-between items-center p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full">
                   <p className="text-sm text-grey-60">
-                    Change the password that protects your encrypted sync folder and recovery data. This password cannot be reset — choose one you can remember.
+                    Change the password that protects your encrypted sync folder and recovery data. Choose one you can remember.
                   </p>
                   <CardButton
                     className="max-w-[13.75rem] h-10 ml-4 shrink-0"
