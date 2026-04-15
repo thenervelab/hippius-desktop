@@ -92,7 +92,7 @@ const ExistingUserRecoveryPrompt: React.FC = () => {
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50 z-40" />
-        <DialogContainer className="z-50 w-[420px] max-w-[90vw]">
+        <DialogContainer className="z-50 w-[420px] max-w-[90vw] !left-1/2 !top-1/2 !bottom-auto !right-auto !-translate-x-1/2 !-translate-y-1/2 p-6">
           <div className="flex flex-col gap-4">
             <Typography.H4 className="text-grey-10">Add a recovery password</Typography.H4>
             <Typography.P size="sm" className="text-grey-40">

@@ -343,6 +343,80 @@ async fn install_recovered_mnemonic(account_id: &str, mnemonic: &str, password: 
     Ok(())
 }
 
+/// Verify a candidate master mnemonic actually derives the folder
+/// mnemonics stored on disk for this account.
+///
+/// For every `sync_paths` row we can read a folder `enc_mnemonic.json`
+/// from, compute `derive_folder_mnemonic(candidate, label)` and compare
+/// with the stored value. If any folder fails the check, refuse — the
+/// candidate would seal a master that can't reproduce existing per-folder
+/// encryption keys, leaving uploads encrypted under one master and
+/// recovery under another.
+///
+/// Vacuously succeeds when there are no folders (fresh signup) or when
+/// the drive password isn't yet set (folder mnemonics aren't recoverable
+/// to compare; we have to trust the caller).
+async fn validate_master_against_existing_folders(
+    pool: &SqlitePool,
+    account_id: &str,
+    candidate_master: &str,
+) -> Result<()> {
+    let owner = account_key(account_id);
+    let folders: Vec<(String, String)> =
+        sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ?")
+            .bind(&owner)
+            .fetch_all(pool)
+            .await?;
+    if folders.is_empty() {
+        return Ok(());
+    }
+
+    let drive_password = match crate::sync::config::get_drive_password(pool, account_id, None).await {
+        Ok(pw) if !pw.is_empty() => pw,
+        _ => {
+            // No usable drive password yet — we can't decrypt folder
+            // mnemonics to compare. Allow the seal so the fresh-signup
+            // path keeps working; once a drive password exists, future
+            // calls hit the real check.
+            return Ok(());
+        }
+    };
+
+    for (_path, label) in &folders {
+        let folder_dir = crate::sync::mnemonic::config_dir_for_folder(account_id, label)?;
+        let folder_enc = folder_dir.join("enc_mnemonic.json");
+        if !folder_enc.exists() {
+            continue;
+        }
+        let stored = match hcfs_client::auth::recover_mnemonic(&folder_enc, &drive_password) {
+            Ok(m) => Zeroizing::new(m.to_string()),
+            Err(e) => {
+                warn!(
+                    label = %label,
+                    error = %e,
+                    "recovery validation: failed to read stored folder mnemonic; skipping"
+                );
+                continue;
+            }
+        };
+        let expected = Zeroizing::new(
+            hcfs_client::drive::keys::derive_folder_mnemonic(candidate_master, label)
+                .map_err(|e| AppError::Other(format!("derive_folder_mnemonic failed: {e}")))?,
+        );
+        if *stored != *expected {
+            return Err(AppError::Other(format!(
+                "Cannot seal recovery blob: candidate master mnemonic does not derive folder '{}'. \
+                 The local master is out of sync with folder state — restoring recovery against this master \
+                 would leave uploads in this folder undecryptable. \
+                 Import your original master mnemonic via Settings → Recovery before retrying.",
+                label
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Seal and upload (fresh signup)
 // ---------------------------------------------------------------------------
@@ -382,6 +456,18 @@ pub async fn seal_and_upload_mnemonic(
         "recovery: sealing encrypted mnemonic blob and UPLOADING to server (POST /v1/mnemonic-blob) — {}",
         if is_fresh_signup { "fresh signup" } else { "legacy-user migration" }
     );
+
+    // Refuse to seal a mnemonic that doesn't derive the folder mnemonics
+    // already on disk. Without this guard, a stale/missing
+    // `master_enc_mnemonic.json` lets the resolver fall through to either
+    // a freshly-generated master (`is_fresh_signup`) or the Stage-3
+    // folder-mnemonic fallback in `get_mnemonic_for_account`, both of
+    // which seal a master that can't reproduce the per-folder
+    // encryption keys. Console then downloads the blob, derives keys
+    // from this wrong master, and AEAD-tag-fails on chunk 0. Detect
+    // here, surface a clear error, and abort instead of corrupting the
+    // server-side recovery state.
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
 
     let ctx = HcfsServerCtx::resolve(&state).await?;
     let blob = seal_mnemonic(&mnemonic, &password, &ctx.ss58).map_err(crypto_to_err)?;

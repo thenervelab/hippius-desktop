@@ -438,6 +438,16 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         app_handle.manage(app_state);
         let win = app.get_webview_window("main").expect("main window not found");
 
+        // Open devtools on startup when `HIPPIUS_DEVTOOLS=1` is set in the
+        // environment. Works in both debug and release builds because the
+        // Tauri `devtools` feature is enabled in Cargo.toml. Use this to
+        // inspect OAuth/recovery flows without rebuilding a debug DMG:
+        //     HIPPIUS_DEVTOOLS=1 pnpm tauri:static -- --release
+        if std::env::var("HIPPIUS_DEVTOOLS").as_deref() == Ok("1") {
+            info!("HIPPIUS_DEVTOOLS=1 — opening devtools on main window");
+            win.open_devtools();
+        }
+
         if let Some(m) = win.current_monitor()? {
             let phys = m.size();
             let origin = m.position();

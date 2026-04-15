@@ -42,7 +42,7 @@ const AccountRecoveryDialog: React.FC = () => {
     <Dialog.Root open>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50" />
-        <DialogContainer className="z-50 w-[420px] max-w-[90vw]">
+        <DialogContainer className="z-50 w-[420px] max-w-[90vw] !left-1/2 !top-1/2 !bottom-auto !right-auto !-translate-x-1/2 !-translate-y-1/2 p-6">
           <BranchRouter check={check} onDone={() => setCheck(null)} onRetry={async () => {
             const next = await checkRecoveryState();
             setCheck(next);
