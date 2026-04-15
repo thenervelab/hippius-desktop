@@ -22,7 +22,6 @@ pub mod infra;
 pub mod nebula;
 pub mod notifications;
 pub mod recovery;
-pub mod recovery_migration;
 pub mod sync;
 mod utils;
 
