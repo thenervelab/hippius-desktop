@@ -123,6 +123,7 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) =
               value={confirm}
               onChange={setConfirm}
               errorMessage={mismatch ? "Passwords do not match." : undefined}
+              onSubmit={handleSubmit}
             />
 
             <div className="flex gap-2 justify-end">

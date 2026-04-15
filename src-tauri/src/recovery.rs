@@ -672,6 +672,19 @@ pub async fn resume_recovery_password_rotation(
     };
 
     // Verify the password decrypts the (new) server blob.
+    //
+    // Stale-sidecar note: the sidecar has no upper lifetime and we don't
+    // compare against the `updated_at` captured when it was written. If
+    // the user rotated again on a different device between the failing
+    // rotation and this resume, `password` is the NEW-new password (the
+    // only one that opens the current server blob) — so this call
+    // silently finishes with whatever the server currently holds. That's
+    // acceptable because the underlying mnemonic is unchanged across
+    // rotations; the cost is only that the user may see this prompt
+    // asking for "the new password" and must remember which one is
+    // current. If we ever need stricter semantics, store `updated_at`
+    // in the sidecar and require it to match the server's before
+    // accepting the resume.
     let mnemonic = open_mnemonic(&blob, &password, &ctx.ss58).map_err(crypto_to_err)?;
 
     install_recovered_mnemonic(&account_id, &mnemonic, &password).await?;
