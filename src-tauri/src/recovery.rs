@@ -344,7 +344,7 @@ async fn install_recovered_mnemonic(account_id: &str, mnemonic: &str, password: 
 }
 
 /// On-disk path of the rotation sidecar for `account_id`.
-fn rotation_sidecar_path(account_id: &str) -> Result<std::path::PathBuf> {
+pub(crate) fn rotation_sidecar_path(account_id: &str) -> Result<std::path::PathBuf> {
     let master = crate::sync::mnemonic::master_mnemonic_path(account_id)?;
     let parent = master
         .parent()
@@ -641,6 +641,58 @@ pub async fn change_recovery_password(
             Ok(())
         }
     }
+}
+
+/// Boot-time finish for [`change_recovery_password`] partial failures.
+///
+/// Called by the frontend when the user re-enters their new password
+/// after a previous rotation left the local file encrypted under the
+/// old password (see sidecar mechanism). Verifies `password` decrypts
+/// the current server blob, then rewrites the local file and clears
+/// the sidecar.
+#[tauri::command]
+pub async fn resume_recovery_password_rotation(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    password: String,
+) -> Result<()> {
+    let password = Zeroizing::new(password);
+    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let pool = state.pool()?;
+    seed_hcfs_server_url_if_missing(pool, &account_id).await?;
+
+    let ctx = HcfsServerCtx::resolve(&state).await?;
+    let blob: SealedBlob = match get_json::<SealedBlob>(&ctx, "/v1/mnemonic-blob").await? {
+        HttpOutcome::Ok(b) => b,
+        HttpOutcome::NotFound => {
+            // Server blob vanished — nothing left to finish. Clean up.
+            clear_rotation_sidecar(&account_id).await;
+            return Err(AppError::Other(
+                "No sealed recovery blob on the server; nothing to finish.".into(),
+            ));
+        }
+    };
+
+    // Verify the password decrypts the (new) server blob.
+    let mnemonic = open_mnemonic(&blob, &password, &ctx.ss58).map_err(crypto_to_err)?;
+
+    install_recovered_mnemonic(&account_id, &mnemonic, &password).await?;
+    clear_rotation_sidecar(&account_id).await;
+    state.auth.lock()?.cache_session_mnemonic(&account_id, mnemonic.to_string());
+
+    info!(
+        account = %crate::console_access::short_ss58(&account_id),
+        "recovery: rotation-resume finished; local file now matches server"
+    );
+    Ok(())
+}
+
+/// Read-only IPC used by the frontend on boot to decide whether to show
+/// the "finish rotation" prompt.
+#[tauri::command]
+pub async fn has_pending_rotation(state: tauri::State<'_, crate::app_state::AppState>) -> Result<bool> {
+    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let path = rotation_sidecar_path(&account_id)?;
+    Ok(path.exists())
 }
 
 // ---------------------------------------------------------------------------
