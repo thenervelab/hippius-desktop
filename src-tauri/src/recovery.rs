@@ -343,6 +343,46 @@ async fn install_recovered_mnemonic(account_id: &str, mnemonic: &str, password: 
     Ok(())
 }
 
+/// On-disk path of the rotation sidecar for `account_id`.
+fn rotation_sidecar_path(account_id: &str) -> Result<std::path::PathBuf> {
+    let master = crate::sync::mnemonic::master_mnemonic_path(account_id)?;
+    let parent = master
+        .parent()
+        .ok_or_else(|| AppError::Other("master mnemonic path has no parent".into()))?;
+    Ok(parent.join("recovery_pending_local_rewrite.json"))
+}
+
+async fn write_rotation_sidecar(account_id: &str) -> Result<()> {
+    let path = rotation_sidecar_path(account_id)?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let body = serde_json::json!({
+        "ss58": account_id,
+        "created_at_ms": chrono::Utc::now().timestamp_millis(),
+    });
+    tokio::fs::write(&path, body.to_string()).await?;
+    // chmod 0o600 — match master_enc_mnemonic.json.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = tokio::fs::metadata(&path).await?.permissions();
+        perms.set_mode(0o600);
+        tokio::fs::set_permissions(&path, perms).await?;
+    }
+    Ok(())
+}
+
+/// Best-effort removal. Missing sidecar is not an error.
+async fn clear_rotation_sidecar(account_id: &str) {
+    if let Ok(path) = rotation_sidecar_path(account_id)
+        && let Err(e) = tokio::fs::remove_file(&path).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(error = %e, path = ?path, "clear_rotation_sidecar: failed to remove");
+    }
+}
+
 /// Verify a candidate master mnemonic actually derives the folder
 /// mnemonics stored on disk for this account.
 ///
@@ -540,9 +580,59 @@ pub async fn change_recovery_password(
         "recovery: starting password rotation (will GET /v1/mnemonic-blob → decrypt → reseal → POST)"
     );
 
-    // TODO(Task 2-5): GET, decrypt, strength check, guard, reseal, POST,
-    // local rewrite. Intentionally unimplemented.
-    Err(AppError::Other("change_recovery_password: not yet implemented".into()))
+    let ctx = HcfsServerCtx::resolve(&state).await?;
+
+    // 1. Fetch the current sealed blob.
+    let blob: SealedBlob = match get_json::<SealedBlob>(&ctx, "/v1/mnemonic-blob").await? {
+        HttpOutcome::Ok(b) => b,
+        HttpOutcome::NotFound => {
+            return Err(AppError::Other(
+                "No sealed recovery blob on the server. Set a recovery password first.".into(),
+            ));
+        }
+    };
+
+    // 2. Decrypt with `current`. Wrong password → Validation("Wrong passphrase.").
+    let mnemonic = open_mnemonic(&blob, &current, &ctx.ss58).map_err(crypto_to_err)?;
+
+    // 3. Derivation guard — refuse to rotate under a master that can't
+    //    reproduce existing folder mnemonics.
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
+
+    // 4. Reseal under `new`.
+    let new_blob = seal_mnemonic(&mnemonic, &new, &ctx.ss58).map_err(crypto_to_err)?;
+
+    // 5. Commit point: POST upsert.
+    post_json_discard(&ctx, "/v1/mnemonic-blob", &new_blob).await?;
+
+    info!(
+        account = %crate::console_access::short_ss58(&account_id),
+        "recovery: sealed blob upserted under new password (server is now authoritative)"
+    );
+
+    // 6. Re-encrypt local file. On failure, write the sidecar so boot-time
+    //    retry finishes the rotation, and still report success to the user.
+    match install_recovered_mnemonic(&account_id, &mnemonic, &new).await {
+        Ok(()) => {
+            clear_rotation_sidecar(&account_id).await;
+            state.auth.lock()?.cache_session_mnemonic(&account_id, (*mnemonic).clone());
+            info!(
+                account = %crate::console_access::short_ss58(&account_id),
+                "recovery: password rotation complete"
+            );
+            Ok(())
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                account = %crate::console_access::short_ss58(&account_id),
+                "recovery: server rotated but local rewrite failed — writing sidecar for boot-time retry"
+            );
+            write_rotation_sidecar(&account_id).await?;
+            // Still Ok — the rotation is durable on the server.
+            Ok(())
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
