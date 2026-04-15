@@ -356,22 +356,46 @@ pub async fn complete_oauth_flow(
     // would be accepted as a valid session by the app — and the
     // `hippiusapp://` custom scheme is OS-wide, so any program or
     // compromised browser tab could deliver one.
-    let Some(ref received_state) = params.state else {
-        warn!("Rejected OAuth callback: no state parameter (CSRF check)");
-        return Err(AppError::Auth(
-            "Missing state parameter. Start a new login from the sign-in screen.".into(),
-        ));
-    };
+    // TEMPORARY — console bridge (`hippius-console`) currently drops the
+    // `state` param when building the desktop deep link, so an OAuth
+    // callback arrives without one. Until that's fixed upstream, we
+    // fall back to a single-pending-flow heuristic: if exactly one
+    // non-expired entry is in `pkce_states`, consume it. This keeps
+    // most of the replay protection (an attacker still has to race a
+    // real login in progress) but tolerates the missing param. Remove
+    // this branch once console forwards `state` correctly.
     let matched_provider = {
         let mut states = state.oauth.pkce_states.lock()?;
         purge_expired(&mut states);
-        let Some(entry) = states.remove(received_state) else {
-            warn!("Rejected OAuth callback: state did not match any pending flow");
-            return Err(AppError::Auth(
-                "Unknown or expired OAuth state. Start a new login from the sign-in screen.".into(),
-            ));
-        };
-        entry.provider
+        match params.state.as_deref() {
+            Some(received_state) => {
+                let Some(entry) = states.remove(received_state) else {
+                    warn!("Rejected OAuth callback: state did not match any pending flow");
+                    return Err(AppError::Auth(
+                        "Unknown or expired OAuth state. Start a new login from the sign-in screen.".into(),
+                    ));
+                };
+                entry.provider
+            }
+            None if states.len() == 1 => {
+                warn!(
+                    "OAuth callback missing state parameter; falling back to the single pending PKCE entry. \
+                     This is a temporary workaround — fix console to propagate `state`."
+                );
+                let only_key = states.keys().next().cloned().expect("len==1 checked above");
+                let entry = states.remove(&only_key).expect("key just read from map");
+                entry.provider
+            }
+            None => {
+                warn!(
+                    pending_flows = states.len(),
+                    "Rejected OAuth callback: no state parameter and fallback only works with exactly one pending flow"
+                );
+                return Err(AppError::Auth(
+                    "Missing state parameter. Start a new login from the sign-in screen.".into(),
+                ));
+            }
+        }
     };
 
     let (token, user_id, username, email, substrate_address) = if let Some(ref t) = params.token {
