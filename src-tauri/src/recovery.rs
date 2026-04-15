@@ -618,7 +618,28 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
     //    retry finishes the rotation, and still report success to the user.
     match install_recovered_mnemonic(&account_id, &mnemonic, &new).await {
         Ok(()) => {
-            align_drive_password(pool, &account_id, &ctx.base_url, &mnemonic, &new).await?;
+            // align_drive_password failures are soft — the server rotation
+            // succeeded and the master file is already under `new`, so the
+            // sync layer's `recover_drive` self-heal handles any partial
+            // folder-rewrite state. Keep the sidecar so the next boot can
+            // finish the align step idempotently.
+            if let Err(align_err) = align_drive_password(pool, &account_id, &ctx.base_url, &mnemonic, &new).await {
+                warn!(
+                    error = %align_err,
+                    account = %crate::console_access::short_ss58(&account_id),
+                    "recovery: server rotated and master file rewritten, but drive_password alignment failed — leaving sidecar for boot-time retry"
+                );
+                if let Err(sidecar_err) = write_rotation_sidecar(&account_id).await {
+                    warn!(
+                        error = %sidecar_err,
+                        account = %crate::console_access::short_ss58(&account_id),
+                        "recovery: sidecar write also failed; boot-time retry unavailable. Rotation is still durable on the server; next login or rotation will re-align."
+                    );
+                }
+                // Intentionally skip cache_session_mnemonic on this branch
+                // so the next call that reads it picks up a fresh value.
+                return Ok(());
+            }
             clear_rotation_sidecar(&account_id).await;
             state.auth.lock()?.cache_session_mnemonic(&account_id, (*mnemonic).clone());
             info!(
@@ -689,7 +710,20 @@ pub async fn resume_recovery_password_rotation(state: tauri::State<'_, crate::ap
     let mnemonic = open_mnemonic(&blob, &password, &ctx.ss58).map_err(crypto_to_err)?;
 
     install_recovered_mnemonic(&account_id, &mnemonic, &password).await?;
-    align_drive_password(pool, &account_id, &ctx.base_url, &mnemonic, &password).await?;
+
+    // align_drive_password failure is soft — the master file is now under
+    // `password`, and the sync layer's `recover_drive` self-heal will
+    // re-derive per-folder files on next sync init if the bulk rewrite
+    // here left any partial state. Leave the sidecar in place so the
+    // next boot retries align idempotently.
+    if let Err(align_err) = align_drive_password(pool, &account_id, &ctx.base_url, &mnemonic, &password).await {
+        warn!(
+            error = %align_err,
+            account = %crate::console_access::short_ss58(&account_id),
+            "recovery: resume finished master install, but drive_password alignment failed — leaving sidecar for next retry"
+        );
+        return Ok(());
+    }
     clear_rotation_sidecar(&account_id).await;
     state.auth.lock()?.cache_session_mnemonic(&account_id, mnemonic.to_string());
 

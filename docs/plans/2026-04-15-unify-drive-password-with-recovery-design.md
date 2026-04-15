@@ -69,6 +69,58 @@ password is this now":
 After any of these succeeds, the DB row + every on-disk folder file are
 aligned with the user's current recovery password.
 
+### Concurrency with active sync
+
+`align_drive_password` does not take any sync-runner lock. The four call
+sites can fire while a sync cycle is in flight, so the invariant we
+depend on is:
+
+- **`DriveManager` caches the unlocked key for the lifetime of a sync
+  cycle.** An in-flight cycle that has already called `manager.unlock()`
+  keeps working on its cached plaintext key. It does not re-read
+  `hcfs_config.drive_password` mid-cycle.
+- **The next sync cycle reads `hcfs_config.drive_password` afresh** via
+  `load_sync_config` → `get_drive_password(pool, account_id, Some(mnemonic))`.
+  Any rotation that completed before the next cycle starts is observed
+  cleanly.
+
+The consequence: rotation during an active sync is safe but observably
+*eventual* — the running cycle finishes under the old password, and the
+next one starts under the new password. If the running cycle's folder
+file gets overwritten mid-cycle by `reencrypt_all_folder_mnemonics`, the
+manager doesn't care — it's already unlocked. We intentionally do not
+coordinate, because doing so would require holding a `SyncRunner` lock
+across a network round-trip, which is a worse trade.
+
+### Failure modes
+
+`reencrypt_all_folder_mnemonics` is best-effort per folder: a
+disk-permission error or similar on one folder's `enc_mnemonic.json`
+warn-logs and continues to the next. If this happens during an
+`align_drive_password` call, the account ends up in a split state —
+`hcfs_config.drive_password = new`, folders `0..N-1` at `new`, folders
+`N..end` at `old`.
+
+This is self-healing by virtue of the existing sync-init path. When the
+sync layer next tries to unlock one of the stragglers, `manager.unlock`
+fails, and `recover_drive` (in `sync/lifecycle.rs`) takes over:
+
+1. Deletes the stale `enc_mnemonic.json` and `sync_state.json`.
+2. Re-derives the folder mnemonic from the master via
+   `derive_folder_mnemonic`.
+3. Saves under the current `drive_password` (now aligned).
+4. Re-initialises the drive.
+
+Cost: a **one-time full re-scan** for that folder (the `sync_state.json`
+reset). No re-upload — remote content is intact. The user experiences a
+brief "re-checking folder" during that next sync. We accept this
+penalty as the cost of making the bulk rewrite non-transactional.
+
+Callers that want a harder guarantee can treat an
+`align_drive_password` error as fatal; today's call sites soft-fail
+(rotation leaves the sidecar; signup/unlock return `Ok` after logging)
+because the self-heal above is reliable and the mnemonic is unchanged.
+
 ## 4. What we deliberately did NOT build
 
 An earlier iteration of this design proposed:

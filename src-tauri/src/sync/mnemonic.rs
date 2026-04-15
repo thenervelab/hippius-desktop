@@ -382,9 +382,6 @@ pub async fn create_encrypted_backup(mnemonic: String, password: String, output_
 /// warn-logged with their `label` and skipped so a single bad folder
 /// doesn't block rotating the rest. Returns `Err` only when the
 /// `sync_paths` read itself fails.
-// Wired into rotation / unlock / signup flows in Phases 2-4 of the
-// unify-drive-password plan. Exercised by the unit tests below.
-#[allow(dead_code)]
 pub(crate) async fn reencrypt_all_folder_mnemonics(
     pool: &sqlx::SqlitePool,
     account_id: &str,
