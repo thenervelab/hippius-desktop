@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import SectionHeader from "./SectionHeader";
 import { CardButton, Icons, RevealTextLine } from "@/components/ui";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -8,11 +8,30 @@ import { MnemonicBackupDialog } from "./MnemonicBackupDialog";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { InView } from "react-intersection-observer";
+import ChangeRecoveryPasswordDialog from "@/components/recovery/ChangeRecoveryPasswordDialog";
+import { checkRecoveryState } from "@/app/lib/utils/recovery";
 
 const RecoveryPhraseSettings: React.FC = () => {
   const { getMnemonic, polkadotAddress } = useWalletAuth();
   const [mnemonic, setMnemonic] = useState<string | null>(null);
   const [showDialog, setShowDialog] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [hasServerBlob, setHasServerBlob] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const check = await checkRecoveryState();
+        if (!cancelled) setHasServerBlob(check.hasServerBlob);
+      } catch {
+        // Network hiccup: hide the button rather than show a broken one.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleBackup = async () => {
     // Try to get mnemonic from the HCFS Drive first (works for both mnemonic and OAuth users),
@@ -82,6 +101,22 @@ const RecoveryPhraseSettings: React.FC = () => {
                 </CardButton>
               </div>
             </RevealTextLine>
+            {hasServerBlob && (
+              <RevealTextLine
+                rotate
+                reveal={inView}
+                parentClassName="w-full"
+                className="delay-700 w-full"
+              >
+                <CardButton
+                  variant="secondary"
+                  onClick={() => setShowChangePassword(true)}
+                  className="mt-2"
+                >
+                  Change recovery password
+                </CardButton>
+              </RevealTextLine>
+            )}
           </div>
         )}
       </InView>
@@ -94,6 +129,10 @@ const RecoveryPhraseSettings: React.FC = () => {
           onClose={handleConfirm}
         />
       )}
+      <ChangeRecoveryPasswordDialog
+        open={showChangePassword}
+        onOpenChange={setShowChangePassword}
+      />
     </>
   );
 };
