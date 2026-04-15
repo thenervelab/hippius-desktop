@@ -19,3 +19,6 @@ pub mod notifications;
 pub mod recovery;
 pub mod sync;
 pub mod utils;
+
+#[cfg(test)]
+mod test_helpers;

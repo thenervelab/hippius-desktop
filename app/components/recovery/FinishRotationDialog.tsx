@@ -40,7 +40,7 @@ const FinishRotationDialog: React.FC<Props> = ({ open, onOpenChange }) => {
     setError(null);
     try {
       await resumeRecoveryPasswordRotation(password);
-      toast.success("Recovery password update finished.");
+      toast.success("Password update finished.");
       reset();
       onOpenChange(false);
     } catch (err) {
@@ -56,15 +56,15 @@ const FinishRotationDialog: React.FC<Props> = ({ open, onOpenChange }) => {
         <Dialog.Overlay className="fixed inset-0 bg-black/50 z-40" />
         <DialogContainer className="z-50 w-[420px] max-w-[90vw] !left-1/2 !top-1/2 !bottom-auto !right-auto !-translate-x-1/2 !-translate-y-1/2 p-6">
           <div className="flex flex-col gap-4">
-            <Typography.H4 className="text-grey-10">Finish recovery password change</Typography.H4>
+            <Typography.H4 className="text-grey-10">Finish password change</Typography.H4>
             <Typography.P size="sm" className="text-grey-40">
-              Your new recovery password was saved, but this device didn&apos;t
+              Your new password was saved, but this device didn&apos;t
               finish encrypting local data with it. Re-enter the new password
               to finish now.
             </Typography.P>
 
             <PasswordField
-              label="New recovery password"
+              label="New password"
               value={password}
               onChange={setPassword}
               errorMessage={error ?? undefined}
