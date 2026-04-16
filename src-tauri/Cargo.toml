@@ -90,6 +90,11 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
 hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "c0652ad" }
+# hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
+# MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
+# its public API but does not re-export. Pinned to the same git rev so the
+# wire types stay in lockstep with the client.
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "c0652ad" }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

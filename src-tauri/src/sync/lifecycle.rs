@@ -900,6 +900,11 @@ pub(crate) async fn initialize_sync_inner(
     // whole list. Other drives are unaffected.
     crate::sync::status::emit_drive_status(&app, &label, &cfg.sync_path, crate::sync::drive_status::DriveStatus::Active);
 
+    // One-shot `relative_path` backfill for this drive, guarded by a
+    // set-once timestamp column so re-init storms don't pile up no-op
+    // tasks. All error handling is inside the helper.
+    crate::sync::relative_path_backfill::spawn_if_needed(&app, pool, &account_id, &label).await;
+
     Ok(InitSyncResult {
         user_id,
         // Unwrap Zeroizing at the IPC serialization boundary; the Zeroizing

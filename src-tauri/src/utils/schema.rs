@@ -171,6 +171,27 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         }
     }
 
+    // Migration: add `relative_paths_backfilled_at` column if missing (PR 7 Task 7.3).
+    //
+    // Unix epoch timestamp marking when the one-shot `relative_path` backfill
+    // succeeded for this drive. NULL means "not yet backfilled"; any non-NULL
+    // value is a set-once audit breadcrumb showing exactly when the backfill
+    // completed. Chose `_at` over a boolean `_backfilled` flag so the retry
+    // state machine is tiny (NULL vs set) while still giving us free
+    // forensics if the server later reports a stale entry.
+    {
+        let columns_info = sqlx::query("PRAGMA table_info(sync_paths)").fetch_all(pool).await?;
+        let has_backfilled_at = columns_info
+            .iter()
+            .any(|row| row.get::<String, _>("name") == "relative_paths_backfilled_at");
+        if !has_backfilled_at {
+            info!("Adding relative_paths_backfilled_at column to sync_paths");
+            sqlx::query("ALTER TABLE sync_paths ADD COLUMN relative_paths_backfilled_at INTEGER")
+                .execute(pool)
+                .await?;
+        }
+    }
+
     // Migration: ensure the table has UNIQUE(owner, label).
     // Old schemas may have UNIQUE(owner, type) inline, or a separate unique index
     // on (owner, type) from the main branch migration. Either way, if the DDL
@@ -625,7 +646,7 @@ mod tests {
             .await
             .expect("PRAGMA failed");
         let names: HashSet<String> = cols.iter().map(|r| r.get::<String, _>("name")).collect();
-        for required in ["owner", "path", "type", "label", "timestamp", "is_paused"] {
+        for required in ["owner", "path", "type", "label", "timestamp", "is_paused", "relative_paths_backfilled_at"] {
             assert!(names.contains(required), "sync_paths missing column `{required}`; present: {names:?}");
         }
     }

@@ -23,6 +23,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "hcfs-client",
+ "hcfs-shared",
  "hex",
  "hkdf",
  "hostname",
