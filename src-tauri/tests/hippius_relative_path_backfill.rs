@@ -267,6 +267,48 @@ fn fixture_entries(count: usize) -> Vec<RegisterRelativePathEntry> {
 // Tests
 // =============================================================================
 
+/// Static regression guard: `initialize_sync_inner` MUST reference
+/// `spawn_backfill` somewhere in its body. Every public entry point that
+/// starts or restarts a drive (`setup_and_init_sync`, `add_local_sync_folder`,
+/// `resume_drive`, `initialize_sync`, `auto_init_sync`) funnels through
+/// `initialize_sync_inner`, so this single check covers the whole trigger
+/// surface. A refactor that silently drops the backfill kick-off — or moves
+/// it to a path that isn't on the init funnel — fails this test.
+#[test]
+fn lifecycle_initialize_sync_inner_spawns_backfill() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs")).expect("read lifecycle.rs");
+
+    // Find the function signature and its brace-matched body; simpler than
+    // pulling in a full parser and more precise than a bare substring match
+    // (which would pass if `spawn_backfill` were referenced in an unrelated
+    // helper elsewhere in the file).
+    let sig_idx = src
+        .find("async fn initialize_sync_inner(")
+        .expect("initialize_sync_inner declaration present");
+    let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+    let mut depth = 0usize;
+    let mut body_end = body_start;
+    for (i, ch) in src[body_start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    body_end = body_start + i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let body = &src[body_start..=body_end];
+    assert!(
+        body.contains("spawn_backfill"),
+        "initialize_sync_inner must call spawn_backfill so every init path triggers the one-shot backfill",
+    );
+}
+
+
 /// Invariant: once the backfill flag is set, `run_backfill_for_drive`
 /// short-circuits to `AlreadyDone` without touching the wire. This is
 /// the guard that prevents a hot-reload or repeated `spawn_backfill`

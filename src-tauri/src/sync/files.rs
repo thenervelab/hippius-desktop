@@ -770,11 +770,24 @@ async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
     (size, count)
 }
 
-/// List contents of sync folder
+/// List contents of sync folder.
+///
+/// Thin wrapper around [`list_sync_folder_inner`] that unwraps `state` —
+/// callers inside Rust (notably [`list_sync_folder_grouped`]) should hit the
+/// inner helper directly to avoid going through the Tauri command plumbing.
 #[tauri::command]
-#[expect(clippy::too_many_lines, reason = "1 line over; extracting hurts readability")]
 pub async fn list_sync_folder(
     state: tauri::State<'_, crate::app_state::AppState>,
+    sync_path: String,
+    subfolder: Option<String>,
+    label: Option<String>,
+) -> Result<Vec<FileEntry>> {
+    list_sync_folder_inner(&state, sync_path, subfolder, label).await
+}
+
+#[expect(clippy::too_many_lines, reason = "1 line over; extracting hurts readability")]
+async fn list_sync_folder_inner(
+    state: &crate::app_state::AppState,
     sync_path: String,
     subfolder: Option<String>,
     label: Option<String>,
@@ -904,6 +917,175 @@ pub async fn list_sync_folder(
     }
 
     Ok(entries)
+}
+
+/// Response for [`list_sync_folder_grouped`].
+///
+/// The frontend renders `folders` and `files` as two separate sections at the
+/// current navigation level. `pending_backfill` gates an informational banner
+/// that tells the user the server-side rel-path index is still being populated
+/// — until it clears, nested directories a device hasn't downloaded yet won't
+/// appear server-side-only (they only show once their on-disk copy arrives).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupedListing {
+    pub folders: Vec<FileEntry>,
+    pub files: Vec<FileEntry>,
+    /// `true` iff `sync_paths.relative_paths_backfilled_at` is NULL for this
+    /// drive. Signals to the FE that the grouped view may omit subfolders
+    /// that only exist server-side on another device.
+    pub pending_backfill: bool,
+}
+
+/// Render one level of the sync-folder hierarchy, overlaying on-disk entries
+/// with server-registered rel-paths from `synced_paths_for_label`.
+///
+/// Fixes the "subfolder shows as empty / console is flat" bug: `list_sync_folder`
+/// reads only from disk, so on a device that hasn't downloaded the subfolder
+/// yet the tree appears empty even when the server side has every file. This
+/// command treats the union of (on-disk children + server rel-paths that start
+/// with `subfolder + "/"`) as authoritative and groups by the first path
+/// component. The "console shows flat" symptom falls out because callers now
+/// receive the group structure directly instead of flattening `get_user_files`.
+///
+/// `pending_backfill` is read from `sync_paths.relative_paths_backfilled_at` —
+/// NULL = the one-shot backfill hasn't yet posted rel-paths for legacy rows to
+/// the server, so server-only entries won't yet appear. Once set, the FE can
+/// hide the "still indexing" banner.
+#[tauri::command]
+pub async fn list_sync_folder_grouped(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    sync_path: String,
+    subfolder: Option<String>,
+    label: Option<String>,
+) -> Result<GroupedListing> {
+    list_sync_folder_grouped_inner(&state, account_id, sync_path, subfolder, label).await
+}
+
+/// Pure helper for [`list_sync_folder_grouped`], exposed for integration tests
+/// so they can drive it against a hand-assembled [`AppState`] without going
+/// through the Tauri command layer.
+pub async fn list_sync_folder_grouped_inner(
+    state: &crate::app_state::AppState,
+    account_id: String,
+    sync_path: String,
+    subfolder: Option<String>,
+    label: Option<String>,
+) -> Result<GroupedListing> {
+    // 1. On-disk entries (same rules as `list_sync_folder`). Reusing the
+    // inner helper keeps the exclude/sync-status/file-count logic in one
+    // place; a missing subfolder returns `Vec::new()` from there and we
+    // overlay server entries below.
+    let disk_entries = list_sync_folder_inner(state, sync_path.clone(), subfolder.clone(), label.clone()).await?;
+
+    // 2. Server-side rel-path index for the drive. `None` when no label was
+    // supplied (a root-only listing with no associated drive). When a label
+    // is provided but the drive isn't in the in-memory map,
+    // `synced_paths_for_label` already falls through to the cached snapshot
+    // from `sync.get_cached_synced_paths` — integration tests exercise that
+    // cache-only path by seeding the cache directly.
+    let synced_set = match &label {
+        Some(l) => synced_paths_for_label(&state.sync, l).await,
+        None => None,
+    };
+
+    // 3. Build the overlay. Normalise the subfolder prefix to always end in
+    // `/` so `rel.starts_with(prefix)` doesn't match a sibling whose name
+    // happens to share a prefix (e.g. subfolder="docs" and rel="docs2/x").
+    let prefix = match subfolder.as_deref() {
+        Some("") | None => String::new(),
+        Some(s) => format!("{}/", s.trim_end_matches('/')),
+    };
+    let mut seen_names: std::collections::HashSet<String> = disk_entries.iter().map(|e| e.name.clone()).collect();
+    let mut server_only_files: Vec<FileEntry> = Vec::new();
+    // (file_count, first-info) for each server-only folder at this level.
+    let mut server_only_folders: HashMap<String, u64> = HashMap::new();
+
+    if let Some(map) = &synced_set {
+        for (rel, info) in map {
+            if !rel.starts_with(&prefix) {
+                continue;
+            }
+            let remainder = &rel[prefix.len()..];
+            if remainder.is_empty() {
+                continue;
+            }
+            match remainder.split_once('/') {
+                Some((first_component, _rest)) => {
+                    // Server-known subfolder at this level. Skip if already on
+                    // disk (the on-disk entry's `file_count` is authoritative
+                    // for this device's view of the subfolder).
+                    if !seen_names.contains(first_component) {
+                        *server_only_folders.entry(first_component.to_string()).or_insert(0) += 1;
+                    }
+                }
+                None => {
+                    // Direct child file, server-known. Skip if on disk.
+                    if !seen_names.contains(remainder) {
+                        server_only_files.push(FileEntry {
+                            name: remainder.to_string(),
+                            is_folder: false,
+                            size: 0,
+                            modified: None,
+                            sync_status: "pending".to_string(),
+                            arion_hash: info.path_hash_hex(),
+                            arion_cid: info.arion_cid.to_string(),
+                            file_count: 0,
+                            uploaded_at: info.uploaded_at,
+                            updated_at: info.updated_at,
+                        });
+                        seen_names.insert(remainder.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Assemble final `folders` + `files` from disk_entries plus server-only
+    // additions. Partition disk entries by `is_folder`; append server-only
+    // folders (with aggregated file counts) and server-only files.
+    let mut folders: Vec<FileEntry> = Vec::new();
+    let mut files: Vec<FileEntry> = Vec::new();
+    for entry in disk_entries {
+        if entry.is_folder {
+            folders.push(entry);
+        } else {
+            files.push(entry);
+        }
+    }
+    for (name, file_count) in server_only_folders {
+        folders.push(FileEntry {
+            name,
+            is_folder: true,
+            size: 0,
+            modified: None,
+            sync_status: "pending".to_string(),
+            arion_hash: String::new(),
+            arion_cid: String::new(),
+            file_count,
+            uploaded_at: 0,
+            updated_at: 0,
+        });
+    }
+    files.extend(server_only_files);
+
+    // 5. Backfill flag. NULL on `relative_paths_backfilled_at` ⇒ pending.
+    // Any DB error — missing row, pool not ready — surfaces as
+    // `pending_backfill=false`: we'd rather miss the banner than block the
+    // listing. The backfill task itself is the source of truth and will
+    // flip the flag once it completes.
+    let pending_backfill = if let Some(l) = &label {
+        let owner = account_key(&account_id);
+        match state.pool() {
+            Ok(pool) => !crate::sync::relative_path_backfill::is_backfilled(pool, &owner, l).await.unwrap_or(true),
+            Err(_) => false,
+        }
+    } else {
+        false
+    };
+
+    Ok(GroupedListing { folders, files, pending_backfill })
 }
 
 /// Filter criteria for the files page, matching the frontend `FilterCriteria`.
