@@ -900,10 +900,11 @@ pub(crate) async fn initialize_sync_inner(
     // whole list. Other drives are unaffected.
     crate::sync::status::emit_drive_status(&app, &label, &cfg.sync_path, crate::sync::drive_status::DriveStatus::Active);
 
-    // One-shot `relative_path` backfill for this drive, guarded by a
-    // set-once timestamp column so re-init storms don't pile up no-op
-    // tasks. All error handling is inside the helper.
-    crate::sync::relative_path_backfill::spawn_if_needed(&app, pool, &account_id, &label).await;
+    // One-shot `relative_path` backfill for this drive. The task itself
+    // re-checks the `relative_paths_backfilled_at` flag as its first
+    // step and returns `AlreadyDone` without any work if set — so the
+    // call site stays dumb even under re-init storms.
+    crate::sync::relative_path_backfill::spawn_backfill(app.clone(), account_id.clone(), label.clone());
 
     Ok(InitSyncResult {
         user_id,

@@ -38,9 +38,10 @@ use crate::app_state::AppState;
 use crate::auth::account_key::account_key;
 use crate::auth::tokens::get_api_token;
 use crate::error::{AppError, Result};
-use crate::sync::config::ACCEPT_INVALID_CERTS;
+use crate::sync::config::build_hcfs_config;
 use crate::sync::mnemonic::folder_hash;
-use hcfs_client::client::{HcfsClient, HcfsClientConfig};
+use crate::sync::remote::get_server_url;
+use hcfs_client::client::HcfsClient;
 use hcfs_shared::network::{MAX_REGISTER_RELATIVE_PATHS_BATCH, RegisterRelativePathEntry};
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
@@ -162,6 +163,14 @@ pub(crate) async fn is_backfilled(pool: &SqlitePool, owner: &str, label: &str) -
 /// Returns `None` when the drive isn't in the map yet, isn't unlocked, or
 /// its mutex is held by a sync in progress — all of which are expected
 /// transient states that map to [`BackfillOutcome::NotReady`].
+///
+/// The returned map is a point-in-time snapshot. A concurrent sync may
+/// rename or delete files after we take it; server-side the new
+/// `path_hash` is unknown and the register call skips it, so such files
+/// keep a stale `relative_path` until their next normal sync overwrites
+/// it. That's acceptable because the one-shot backfill is strictly a
+/// bootstrapping pass for pre-existing legacy rows — steady-state writes
+/// are handled by `sync_async`.
 async fn snapshot_path_index(state: &AppState, label: &str) -> Option<std::collections::HashMap<[u8; 32], PathBuf>> {
     let drive_arc = {
         let guard = state.sync.drives.lock().await;
@@ -242,39 +251,23 @@ async fn submit_batches(
     Ok((updated_total, skipped_total))
 }
 
-/// Stand up a fresh `HcfsClient` for the one-shot POST, using the same
-/// config shape that [`crate::sync::remote::build_client`] uses. We do
-/// NOT reuse the drive's own client because it lives behind the per-drive
-/// mutex — grabbing it for the duration of the backfill would serialize
-/// against in-progress syncs for no reason.
+/// Stand up a fresh `HcfsClient` for the one-shot POST, sharing the same
+/// connection parameters the sync engine would use. We do NOT reuse the
+/// drive's own client because it lives behind the per-drive mutex —
+/// grabbing it for the duration of the backfill would serialize against
+/// in-progress syncs for no reason.
+///
+/// Server URL lookup and `HcfsClientConfig` construction are delegated to
+/// the canonical helpers (`sync::remote::get_server_url`,
+/// `sync::config::build_hcfs_config`) so this one-shot path can't silently
+/// drift from the main sync engine's TLS/auth/billing-bypass behaviour.
 async fn build_one_shot_client(pool: &SqlitePool, account_id: &str, label: &str) -> Result<HcfsClient> {
-    let server_url = fetch_server_url(pool, account_id).await?;
+    let server_url = get_server_url(pool, account_id).await?;
     let bearer_token = get_api_token(pool, account_id)
         .await?
         .ok_or_else(|| AppError::Auth("No authentication token found. Please log in again.".into()))?;
-    let config = HcfsClientConfig {
-        base_url: server_url,
-        bearer_token,
-        accept_invalid_certs: ACCEPT_INVALID_CERTS,
-        billing_bypass_token: None,
-        ss58_address: account_id.to_string(),
-        folder_hash: folder_hash(label),
-    };
+    let config = build_hcfs_config(&server_url, &bearer_token, account_id, &folder_hash(label));
     HcfsClient::new(config).map_err(|e| AppError::Hcfs(format!("Failed to create HCFS client for backfill: {e}")))
-}
-
-/// Read `hcfs_config.server_url` for this account; fall back to the
-/// production default to match the rest of the codebase.
-async fn fetch_server_url(pool: &SqlitePool, account_id: &str) -> Result<String> {
-    let owner = account_key(account_id);
-    let result: Option<(String,)> = sqlx::query_as("SELECT server_url FROM hcfs_config WHERE owner = ?")
-        .bind(&owner)
-        .fetch_optional(pool)
-        .await?;
-    Ok(match result {
-        Some((url,)) if !url.is_empty() => url,
-        _ => "https://arion.hippius.com".to_string(),
-    })
 }
 
 /// Set `relative_paths_backfilled_at` to the current Unix epoch. Idempotent
@@ -298,34 +291,18 @@ async fn mark_backfilled(pool: &SqlitePool, owner: &str, label: &str) -> Result<
     Ok(())
 }
 
-/// Check the backfill flag for this drive and spawn the detached worker
-/// if it hasn't run yet. Called from
-/// [`crate::sync::lifecycle::initialize_sync_inner`] at the end of a
-/// successful drive init. Swallowing the flag-check error (and logging
-/// at warn) is deliberate: a transient SQLite glitch shouldn't block the
-/// happy-path drive handoff the user is waiting on.
-pub(crate) async fn spawn_if_needed(app: &tauri::AppHandle, pool: &SqlitePool, account_id: &str, label: &str) {
-    let owner = account_key(account_id);
-    match is_backfilled(pool, &owner, label).await {
-        Ok(false) => {
-            spawn_after_init(app.clone(), account_id.to_owned(), label.to_owned());
-        }
-        Ok(true) => {
-            // Already done — skip the spawn entirely.
-        }
-        Err(e) => {
-            warn!(label = %label, error = ?e, "relative_paths backfill: flag check failed; skipping spawn");
-        }
-    }
-}
-
-/// Spawn the backfill as a detached tokio task. The task takes an owned
-/// `Arc<AppState>` so it outlives the calling context. All failure modes
-/// are logged inside the task — the caller never awaits it.
+/// Spawn the backfill as a detached tokio task.
 ///
-/// Guarded against redundant spawns by an up-front `is_backfilled` check
-/// so a restart-heavy user doesn't accumulate no-op tasks.
-pub(crate) fn spawn_after_init(app: tauri::AppHandle, account_id: String, label: String) {
+/// Called from [`crate::sync::lifecycle::initialize_sync_inner`] at the end
+/// of a successful drive init. We don't pre-check the `is_backfilled` flag
+/// here — `run_backfill_for_drive` does it as its first step, and spawning
+/// a tokio task + running one SELECT against an in-process SQLite pool is
+/// sub-millisecond. Paying that for simpler wiring (no double gate, no
+/// pre-check error-swallow branch) is a trade we take deliberately.
+///
+/// All failure modes are logged inside the task — the caller never awaits
+/// it and never sees errors.
+pub(crate) fn spawn_backfill(app: tauri::AppHandle, account_id: String, label: String) {
     tokio::spawn(async move {
         use tauri::Manager;
         let state = app.state::<AppState>();

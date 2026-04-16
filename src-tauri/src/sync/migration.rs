@@ -9,6 +9,11 @@
 //! path exists, initialize default drive, mark completed).
 
 use crate::error::Result;
+// Single source of truth for "look up this account's HCFS server URL".
+// Migration used to carry its own copy that diverged only in error-wrapping
+// wording; routing through `sync::remote` keeps the default URL + empty-string
+// fallback + schema in exactly one place.
+use crate::sync::remote::get_server_url;
 use ed25519_dalek::Signer;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -176,26 +181,6 @@ pub(crate) async fn upsert_migration_status(
     .await
     .map_err(|e| crate::error::AppError::Other(format!("DB error upserting migration_status: {e}")))?;
     Ok(())
-}
-
-pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String> {
-    let owner = crate::auth::account_key::account_key(account_id);
-    let row = sqlx::query("SELECT server_url FROM hcfs_config WHERE owner = ?")
-        .bind(&owner)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("DB error reading hcfs_config: {e}")))?;
-    match row {
-        Some(r) => {
-            let url: String = r.get("server_url");
-            if url.is_empty() {
-                Ok("https://arion.hippius.com".to_string())
-            } else {
-                Ok(url)
-            }
-        }
-        None => Ok("https://arion.hippius.com".to_string()),
-    }
 }
 
 // ---------------------------------------------------------------------------
