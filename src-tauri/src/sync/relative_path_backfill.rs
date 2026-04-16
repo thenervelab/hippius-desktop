@@ -54,7 +54,7 @@ use tracing::{debug, info, warn};
 /// retryable and map to `RetryLater`, while truly unexpected conditions
 /// (DB corruption, locked-out mutex) surface via the outer `Result::Err`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum BackfillOutcome {
+pub enum BackfillOutcome {
     /// The flag was already set — this drive is done and will never retry.
     AlreadyDone,
     /// The drive wasn't unlocked or registered yet. Harmless — next launch
@@ -77,7 +77,7 @@ pub(crate) enum BackfillOutcome {
 /// surface as `Err(AppError)`. The caller-side spawn in
 /// [`crate::sync::lifecycle::initialize_sync_inner`] relies on this so one
 /// drive's flakiness doesn't take down the whole startup sweep.
-pub(crate) async fn run_backfill_for_drive(state: &AppState, account_id: &str, label: &str) -> Result<BackfillOutcome> {
+pub async fn run_backfill_for_drive(state: &AppState, account_id: &str, label: &str) -> Result<BackfillOutcome> {
     let pool = state.pool()?.clone();
     let owner = account_key(account_id);
 
@@ -149,7 +149,7 @@ pub(crate) async fn run_backfill_for_drive(state: &AppState, account_id: &str, l
 /// Cheap read of the backfill timestamp column. `true` iff the row exists
 /// AND the column is non-NULL. A missing row also returns `false` — the
 /// caller will bail via `NotReady` on the subsequent drive lookup step.
-pub(crate) async fn is_backfilled(pool: &SqlitePool, owner: &str, label: &str) -> Result<bool> {
+pub async fn is_backfilled(pool: &SqlitePool, owner: &str, label: &str) -> Result<bool> {
     let row: Option<(Option<i64>,)> = sqlx::query_as("SELECT relative_paths_backfilled_at FROM sync_paths WHERE owner = ? AND label = ?")
         .bind(owner)
         .bind(label)
