@@ -113,11 +113,14 @@ export function useFilesNotification() {
         ? JSON.stringify(capturedFiles)
         : "";
 
-      // Single Rust call creates the notification
+      // Single Rust call creates the notification. Outcome drives the
+      // title ("Sync Complete") and notification_subtype prefix — the
+      // Rust side never infers it from the description.
       await invoke("create_sync_notification", {
         userAddress,
         description,
         fileDetailsJson,
+        outcome: "success",
       });
       await refreshUnread();
     };
@@ -169,11 +172,16 @@ export function useFilesNotification() {
           listen<SyncError>("hcfs_sync_error", async (e) => {
             if (cancelled || !userAddress) return;
             const label = e.payload.label || "default";
-            // Single Rust call for error notification
+            // Single Rust call for error notification. `outcome: "error"`
+            // makes the backend pick the "Sync Failed" title and the
+            // `FileSyncError-<ts>` subtype. Cancels never reach this
+            // handler — they are silenced at the Rust bridge, so every
+            // event that arrives here is a real, user-actionable failure.
             await invoke("create_sync_notification", {
               userAddress,
               description: `Sync failed for folder "${label}": ${e.payload.error}`,
               fileDetailsJson: "",
+              outcome: "error",
             });
             await refreshUnread();
           }),

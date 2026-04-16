@@ -259,21 +259,55 @@ pub async fn process_credit_events(
     Ok(notifications)
 }
 
-/// Create a sync completion notification with aggregated file details.
+/// Outcome of a sync cycle that is being surfaced as a persisted notification.
 ///
-/// Called by the frontend after its 2-second debounce window closes.
-/// Rust handles notification persistence in one call instead of the
-/// frontend calling `add_notification` after manually aggregating.
-#[tauri::command]
-pub async fn create_sync_notification(
-    state: tauri::State<'_, AppState>,
-    user_address: String,
-    description: String,
-    file_details_json: String,
+/// The frontend maps each `hcfs_sync_*` event to one of these so the Rust layer
+/// can pick the right title, notification_subtype prefix, and description
+/// framing. Adding a new variant is a backend-side change — the frontend only
+/// picks from the variants defined here.
+#[derive(serde::Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncNotificationOutcome {
+    /// The sync cycle completed with one or more transfers. Title: "Sync Complete".
+    Success,
+    /// The sync cycle surfaced a non-cancel error (network, auth, rate limit,
+    /// etc.). Title: "Sync Failed". User-initiated cancels and stall-watchdog
+    /// self-cancels never reach this variant — they are silenced at the bridge
+    /// (see `sync::tauri_bridge::on_event::SyncError`).
+    Error,
+}
+
+impl SyncNotificationOutcome {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Success => "Sync Complete",
+            Self::Error => "Sync Failed",
+        }
+    }
+
+    pub fn subtype_prefix(self) -> &'static str {
+        match self {
+            Self::Success => "FileSyncComplete",
+            Self::Error => "FileSyncError",
+        }
+    }
+}
+
+/// Insert a sync notification row. Returns the new row's `id`.
+///
+/// Pure DB helper — no Tauri state dependency so integration tests can drive it
+/// with an in-memory pool. The `#[tauri::command]` wrapper below just unwraps
+/// the pool from `AppState`.
+pub async fn create_sync_notification_inner(
+    pool: &sqlx::sqlite::SqlitePool,
+    user_address: &str,
+    description: &str,
+    file_details_json: &str,
+    outcome: SyncNotificationOutcome,
 ) -> Result<i64, AppError> {
-    let pool = state.pool()?;
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-    let subtype = format!("FileSyncComplete-{timestamp}");
+    let subtype = format!("{}-{timestamp}", outcome.subtype_prefix());
+    let title = outcome.title();
 
     let id = sqlx::query(
         r"
@@ -282,18 +316,40 @@ pub async fn create_sync_notification(
             title_text, description, link_text, link,
             is_unread, creation_time, is_deleted, release_notes
         )
-        VALUES (?, 'Files', ?, 'Sync Complete', ?, 'View Files', '/files', 1, CAST(strftime('%s','now') * 1000 AS INTEGER), 0, ?)
+        VALUES (?, 'Files', ?, ?, ?, 'View Files', '/files', 1, CAST(strftime('%s','now') * 1000 AS INTEGER), 0, ?)
         ",
     )
-    .bind(&user_address)
+    .bind(user_address)
     .bind(&subtype)
-    .bind(&description)
-    .bind(&file_details_json)
+    .bind(title)
+    .bind(description)
+    .bind(file_details_json)
     .execute(pool)
     .await?
     .last_insert_rowid();
 
     Ok(id)
+}
+
+/// Create a sync notification row.
+///
+/// `outcome` drives the title ("Sync Complete" vs. "Sync Failed") and the
+/// `notification_subtype` prefix — so the notifications page can filter
+/// success from failure without parsing the description string.
+///
+/// Called by the frontend after its aggregation window closes for the success
+/// branch (see `useFilesNotification.ts`), and per-event for the error branch.
+/// Rust owns notification persistence; the FE only formats the description.
+#[tauri::command]
+pub async fn create_sync_notification(
+    state: tauri::State<'_, AppState>,
+    user_address: String,
+    description: String,
+    file_details_json: String,
+    outcome: SyncNotificationOutcome,
+) -> Result<i64, AppError> {
+    let pool = state.pool()?;
+    create_sync_notification_inner(pool, &user_address, &description, &file_details_json, outcome).await
 }
 
 /// Persist multiple credit event notifications in a single call.
