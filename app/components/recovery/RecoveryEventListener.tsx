@@ -8,7 +8,7 @@ import {
   RecoveryCheck,
   activeRecoveryCheckAtom,
 } from "@/app/lib/global-atoms/recoveryAtoms";
-import { hasPendingRotation } from "@/app/lib/utils/recovery";
+import { checkRecoveryState, hasPendingRotation } from "@/app/lib/utils/recovery";
 import FinishRotationDialog from "./FinishRotationDialog";
 
 /**
@@ -16,9 +16,14 @@ import FinishRotationDialog from "./FinishRotationDialog";
  * activates the `AccountRecoveryDialog` with the payload. Mounted once
  * at the top of the pages layout — renders nothing.
  *
- * The backend only emits this event when OAuth completes, so this hook
- * never activates the dialog for mnemonic-login or session-restore
- * paths — matching the backend gate default (`Skipped`) for those.
+ * Backend emits this event from two places: `complete_oauth_flow`
+ * (first-time OAuth) and `session_restore` (returning-device OAuth when
+ * the local mnemonic can't be decrypted without the recovery password).
+ * The session-restore emit can fire BEFORE this listener mounts —
+ * `OnBoardingGuard` gates the layout on `isAuthenticated`, and the
+ * event lands during the auth-establishing window. To cover that race,
+ * we also query `check_recovery_state` once on mount and adopt any
+ * non-`proceed` flow, which idempotently recovers the missed emit.
  *
  * Additionally listens for the `recovery_rotation_pending` event
  * emitted when a prior recovery-password rotation succeeded on the
@@ -49,6 +54,39 @@ const RecoveryEventListener: React.FC = () => {
       unlisten?.();
     };
   }, [current, setCheck]);
+
+  // Self-heal for the session-restore race: if the backend emitted
+  // `oauth_recovery_check_needed` during session_restore — before this
+  // component mounted (gated on `isAuthenticated` by OnBoardingGuard) —
+  // the event was lost. Query the current recovery state once on mount
+  // and adopt any actionable flow. `proceed` is a no-op (local is
+  // authoritative), `unknown` means probe failed (FE retries), so only
+  // `unlock`/`signup` pop the dialog. Skip when the atom is already
+  // populated to avoid racing the live listener above.
+  useEffect(() => {
+    if (current !== null) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const check = await checkRecoveryState();
+        if (cancelled) return;
+        if (check.recommendedFlow === "unlock" || check.recommendedFlow === "signup") {
+          setCheck(check);
+        }
+      } catch (err) {
+        // Pre-auth invocations of the backend command error with
+        // "no active account" — expected during early boot. Silent
+        // skip so the live event listener still handles the wake.
+        console.debug("[RecoveryEventListener] mount-time recovery probe skipped:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Intentionally runs once per mount; subsequent atom changes are
+    // driven by the live listener and the dialog's own onDone/onRetry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
