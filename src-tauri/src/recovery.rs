@@ -160,6 +160,50 @@ fn has_local_mnemonic(account_id: &str) -> bool {
     crate::sync::mnemonic::master_mnemonic_path(account_id).is_ok_and(|p| p.exists())
 }
 
+/// Can the local `master_enc_mnemonic.json` be decrypted without prompting
+/// the user for their recovery password?
+///
+/// Returns true in two cases:
+/// 1. `AuthInfo.mnemonic` already holds the mnemonic for this account —
+///    a seed-phrase login or a prior OAuth unlock this session populated it.
+/// 2. `hcfs_config.drive_password` is plaintext (`encryption_version = 0`).
+///    In that state, `get_drive_password(..., None)` succeeds and Stage 2 of
+///    `sync::mnemonic::get_mnemonic_for_account` opens the master file on its
+///    own.
+///
+/// Returns false for the canonical OAuth-returning-device state: no cached
+/// mnemonic + drive_password encrypted under the mnemonic-derived key. In
+/// that state Stage 2 chicken-and-eggs (needs mnemonic to decrypt
+/// drive_password, needs drive_password to decrypt the master file), so the
+/// recovery flow must route to `Unlock` and let the user supply the password
+/// explicitly rather than silently proceeding into a dead-end.
+async fn can_decrypt_local_mnemonic(state: &tauri::State<'_, crate::app_state::AppState>, account_id: &str, pool: &SqlitePool) -> bool {
+    if let Ok(auth) = state.auth.lock()
+        && auth.substrate_address.as_deref() == Some(account_id)
+        && auth.mnemonic.is_some()
+    {
+        return true;
+    }
+    drive_password_is_plaintext(pool, account_id).await
+}
+
+/// Is `hcfs_config.drive_password` stored in its pre-unification plaintext
+/// form (`encryption_version = 0`)?
+///
+/// Extracted so `can_decrypt_local_mnemonic` stays declarative and the DB
+/// branch gets its own unit test (the AuthInfo-cache branch is a two-line
+/// mutex check not worth fixturing).
+async fn drive_password_is_plaintext(pool: &SqlitePool, account_id: &str) -> bool {
+    let owner = account_key(account_id);
+    matches!(
+        sqlx::query_as::<_, (i32,)>("SELECT COALESCE(encryption_version, 0) FROM hcfs_config WHERE owner = ?")
+            .bind(&owner)
+            .fetch_optional(pool)
+            .await,
+        Ok(Some((0,)))
+    )
+}
+
 /// Check whether the active account needs recovery action.
 ///
 /// Seeds the default hcfs-server URL if sync isn't configured yet, then
@@ -185,22 +229,37 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
     debug!(account = %short, "recovery: checking recovery state (probing server for sealed mnemonic blob)");
 
     let local = has_local_mnemonic(&account_id);
+    let can_decrypt = if local { can_decrypt_local_mnemonic(state, &account_id, pool).await } else { true };
     let (has_server_blob, updated_at) = probe_server_blob(state).await;
 
-    // Decision table:
-    //   local=false, blob=false → Signup  (first-time OAuth user)
-    //   local=false, blob=true  → Unlock  (returning user on fresh device)
-    //   local=true,  *          → Proceed (local mnemonic is authoritative)
-    //   probe failed            → Unknown (FE retries; never overwrite)
+    // Decision table (extended to distinguish "local file exists" from
+    // "local file exists AND we can actually open it"):
+    //   local=false, blob=false     → Signup  (first-time OAuth user)
+    //   local=false, blob=true      → Unlock  (returning user on fresh device)
+    //   local=true,  decryptable    → Proceed (local mnemonic is authoritative)
+    //   local=true,  !decryptable,  → Unlock  (OAuth returning device: drive_password is
+    //               blob=true                  enc_ver=1, no cached mnemonic — prompt
+    //                                          for recovery password rather than
+    //                                          silently dead-ending in
+    //                                          get_mnemonic_for_account)
+    //   local=true,  !decryptable,  → Proceed (stuck; FE surfaces the reauth error.
+    //               blob=false or None        Signup would overwrite the undecryptable
+    //                                         master file with one we can't roundtrip)
+    //   probe failed on local=false → Unknown (FE retries; never overwrite)
     //
     // Returning `has_server_blob` truthfully even on the Proceed branch
     // lets the existing-user migration prompt detect
     // "local + no blob" (needs server-side recovery setup).
-    let recommended_flow = match (local, has_server_blob) {
-        (true, _) => RecoveryFlow::Proceed,
-        (false, Some(true)) => RecoveryFlow::Unlock,
-        (false, Some(false)) => RecoveryFlow::Signup,
-        (false, None) => RecoveryFlow::Unknown,
+    let recommended_flow = match (local, can_decrypt, has_server_blob) {
+        // Unlock fires for two reasons: fresh device with a server blob, OR
+        // returning device whose local file exists but can't be decrypted
+        // (OAuth + drive_password enc_ver=1 + no cached mnemonic). Both
+        // resolve the same way — prompt for recovery password, download (or
+        // re-anchor to) the server blob.
+        (true, false, Some(true)) | (false, _, Some(true)) => RecoveryFlow::Unlock,
+        (true, _, _) => RecoveryFlow::Proceed,
+        (false, _, Some(false)) => RecoveryFlow::Signup,
+        (false, _, None) => RecoveryFlow::Unknown,
     };
 
     // Legacy-user predicate: known-absent server blob AND a local
@@ -211,10 +270,11 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
     info!(
         account = %short,
         has_local_mnemonic = local,
+        can_decrypt_local = can_decrypt,
         has_server_blob = ?has_server_blob,
         flow = ?recommended_flow,
         legacy_migration_prompt = should_prompt_legacy_migration,
-        "recovery: state decided (Signup=will upload blob, Unlock=will download blob, Proceed=no network, Unknown=probe failed)"
+        "recovery: state decided (Signup=will upload blob, Unlock=will download blob, Proceed=local is authoritative, Unknown=probe failed)"
     );
 
     Ok(RecoveryCheck {
@@ -860,6 +920,47 @@ mod tests {
             .unwrap();
         assert_eq!(row.0, "https://custom.example");
         assert_eq!(row.1, "secret");
+    }
+
+    #[tokio::test]
+    async fn drive_password_is_plaintext_false_when_no_row() {
+        // Absent row = can't prove plaintext. Caller short-circuits on
+        // `has_local_mnemonic=false` before reaching this helper anyway, so the
+        // conservative "not plaintext" return keeps the decision tree sound if
+        // someone ever calls it with local=true but no hcfs_config row.
+        let pool = setup_pool().await;
+        assert!(!super::drive_password_is_plaintext(&pool, "5NoRowAccount").await);
+    }
+
+    #[tokio::test]
+    async fn drive_password_is_plaintext_true_when_enc_ver_zero() {
+        let pool = setup_pool().await;
+        let owner = account_key("5PlaintextAccount");
+        sqlx::query(
+            "INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, 'https://x', 'plaintext-pw', 0)",
+        )
+        .bind(&owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(super::drive_password_is_plaintext(&pool, "5PlaintextAccount").await);
+    }
+
+    #[tokio::test]
+    async fn drive_password_is_plaintext_false_when_encrypted() {
+        // The canonical post-#308 state: drive_password is encrypted under a
+        // mnemonic-derived key, so callers without the mnemonic cannot read it.
+        // This is what routes OAuth returning users to Unlock instead of Proceed.
+        let pool = setup_pool().await;
+        let owner = account_key("5EncryptedAccount");
+        sqlx::query(
+            "INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, 'https://x', 'ciphertext', 1)",
+        )
+        .bind(&owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(!super::drive_password_is_plaintext(&pool, "5EncryptedAccount").await);
     }
 
     #[tokio::test]
