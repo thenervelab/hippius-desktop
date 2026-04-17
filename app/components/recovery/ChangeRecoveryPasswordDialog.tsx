@@ -113,7 +113,7 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) =
               <h2 className="text-xl font-semibold text-grey-10">Change Unlock Password</h2>
               <p className="text-sm text-grey-50 max-w-sm">
                 Enter your current password, then choose a new one for
-                previewing and downloading files on Hippius Console.
+                accessing your files on other devices and Hippius Console.
               </p>
             </div>
           </div>

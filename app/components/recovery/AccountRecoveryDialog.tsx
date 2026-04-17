@@ -127,8 +127,8 @@ const SignupBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
         <div className="flex flex-col gap-1">
           <h2 className="text-xl font-semibold text-grey-10">Protect Your Account</h2>
           <p className="text-sm text-grey-50 max-w-sm">
-            Set an unlock password to preview and download your encrypted
-            files on Hippius Console.
+            Set an unlock password to access your encrypted files on
+            other devices and Hippius Console.
           </p>
         </div>
       </div>
@@ -137,8 +137,8 @@ const SignupBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
       <div className="p-3 bg-primary-95 border border-primary-80 rounded-lg flex flex-col gap-2">
         <p className="text-xs text-primary-40">
           Your files are fully encrypted and only you can access them.
-          This password lets you securely preview and download your
-          files on Hippius Console.
+          This password is required to decrypt your files on new
+          devices and to preview or download them on Hippius Console.
         </p>
         <button
           type="button"

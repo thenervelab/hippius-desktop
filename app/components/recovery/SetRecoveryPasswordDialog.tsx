@@ -52,7 +52,7 @@ const SetRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange, onSucc
     setSubmitting(true);
     try {
       await sealAndUploadMnemonic(password);
-      toast.success("Unlock password set. You can now preview and download files on Console.");
+      toast.success("Unlock password set. You can now access your files on other devices and Console.");
       reset();
       onOpenChange(false);
       onSuccess?.();
@@ -91,8 +91,8 @@ const SetRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange, onSucc
             <div className="flex flex-col gap-1">
               <h2 className="text-xl font-semibold text-grey-10">Set Unlock Password</h2>
               <p className="text-sm text-grey-50 max-w-sm">
-                Set a password to preview and download your encrypted files
-                on Hippius Console.
+                Set a password to access your encrypted files on other
+                devices and Hippius Console.
               </p>
             </div>
           </div>
@@ -101,8 +101,8 @@ const SetRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange, onSucc
           <div className="p-3 bg-primary-95 border border-primary-80 rounded-lg flex flex-col gap-2">
             <p className="text-xs text-primary-40">
               Your files are fully encrypted and only you can access them.
-              This password lets you securely preview and download your
-              files on Hippius Console.
+              This password is required to decrypt your files on new
+              devices and to preview or download them on Hippius Console.
             </p>
             <button
               type="button"

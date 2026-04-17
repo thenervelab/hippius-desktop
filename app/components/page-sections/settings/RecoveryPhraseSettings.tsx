@@ -155,7 +155,7 @@ const RecoveryPhraseSettings: React.FC = () => {
               <SectionHeader
                 Icon={Icons.ShieldSecurity}
                 title="Unlock Password"
-                subtitle="Preview and download your encrypted files on Hippius Console."
+                subtitle="Access your encrypted files on other devices and Hippius Console."
               />
             </RevealTextLine>
             {hasServerBlob ? (
@@ -189,7 +189,7 @@ const RecoveryPhraseSettings: React.FC = () => {
               >
                 <div className="flex justify-between items-center p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full">
                   <p className="text-sm text-grey-60">
-                    You haven&apos;t set an unlock password yet. Without it, you won&apos;t be able to preview or download your files on Hippius Console.
+                    You haven&apos;t set an unlock password yet. Without it, you won&apos;t be able to access your files on other devices or Hippius Console.
                   </p>
                   <CardButton
                     className="max-w-[13.75rem] h-10 ml-4 shrink-0"
