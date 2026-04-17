@@ -1115,6 +1115,11 @@ impl FileFilterCriteria {
 
 /// Per-drive-label aggregate for the file tab header.
 ///
+/// Computed in Rust so every tab uses the exact same rule that
+/// `dir_stats_recursive` already uses for folder rows — if we let TypeScript
+/// re-derive these counts, the two places drift and the header stops matching
+/// the rows it sits above.
+///
 /// `file_count` sums real file leaves only: each non-folder row contributes 1,
 /// and each folder row contributes `entry.file_count` (the recursive leaf count
 /// computed by `dir_stats_recursive`). Empty folders contribute 0 — a folder
@@ -1133,7 +1138,7 @@ pub struct UserFilesResult {
     pub files: Vec<UserFileEntry>,
     pub total_private_size: String,
     pub sync_folder_labels: Vec<String>,
-    pub label_stats: std::collections::HashMap<String, LabelStats>,
+    pub label_stats: HashMap<String, LabelStats>,
 }
 
 /// A user file ready for UI rendering. Matches `FormattedUserFile` shape.
@@ -1169,8 +1174,8 @@ pub struct UserFileEntry {
 ///
 /// Pulled out of `get_user_files` so we can unit-test the rule without
 /// standing up a Tauri state / sync-path fixture.
-fn compute_label_stats(entries: &[UserFileEntry]) -> std::collections::HashMap<String, LabelStats> {
-    let mut out: std::collections::HashMap<String, LabelStats> = std::collections::HashMap::new();
+fn compute_label_stats(entries: &[UserFileEntry]) -> HashMap<String, LabelStats> {
+    let mut out: HashMap<String, LabelStats> = HashMap::new();
     for entry in entries {
         if entry.sync_status == "excluded" {
             continue;
@@ -1755,37 +1760,49 @@ mod tests {
     #[test]
     fn label_stats_aggregates_bytes_and_counts_per_label() {
         // Simulate what `get_user_files` pushes into `all_files`:
-        //  - drive "alpha": one 1 KB file + one folder row with 3 nested files, 4 KB aggregate
+        //  - drive "alpha": one 1 KB file + one 200 B file + one folder row
+        //    with 3 nested files, 4 KB aggregate
         //  - drive "beta":  one 500 B file + an empty folder row (file_count = 0)
-        let mut entries: Vec<UserFileEntry> = vec![
+        //  - drive "gamma": one folder row with `file_count: None` — hits the
+        //    `unwrap_or(0)` defense without requiring get_user_files to misbehave
+        //  - one "excluded" entry on drive "alpha" — must be skipped entirely
+        let mut excluded = make_file("ignored.txt", 999_999, "alpha", 0, false);
+        excluded.sync_status = "excluded".to_string();
+
+        let entries: Vec<UserFileEntry> = vec![
             make_file("a.txt", 1_000, "alpha", 0, false),
+            make_file("a2.txt", 200, "alpha", 0, false),
             UserFileEntry {
                 file_count: Some(3),
                 size: 4_000,
                 ..make_file("sub", 4_000, "alpha", 0, true)
             },
+            excluded,
             make_file("b.txt", 500, "beta", 0, false),
             UserFileEntry {
                 file_count: Some(0),
                 size: 0,
                 ..make_file("empty", 0, "beta", 0, true)
             },
+            UserFileEntry {
+                file_count: None,
+                size: 100,
+                ..make_file("loose", 100, "gamma", 0, true)
+            },
         ];
 
         let stats = compute_label_stats(&entries);
 
         let alpha = stats.get("alpha").expect("alpha stats present");
-        assert_eq!(alpha.total_bytes, 5_000, "alpha bytes");
-        assert_eq!(alpha.file_count, 4, "alpha file count (1 file + 3 nested)");
+        assert_eq!(alpha.total_bytes, 5_200, "alpha bytes (1000 + 200 + 4000, excluded skipped)");
+        assert_eq!(alpha.file_count, 5, "alpha file count (2 files + 3 nested, excluded skipped)");
 
         let beta = stats.get("beta").expect("beta stats present");
         assert_eq!(beta.total_bytes, 500, "beta bytes");
-        assert_eq!(
-            beta.file_count, 1,
-            "beta file count (1 file + 0 for empty folder, NOT +1 fallback)"
-        );
+        assert_eq!(beta.file_count, 1, "beta file count (1 file + 0 for empty folder)");
 
-        // Silence unused-mut if we end up not mutating entries.
-        entries.clear();
+        let gamma = stats.get("gamma").expect("gamma stats present");
+        assert_eq!(gamma.total_bytes, 100, "gamma bytes");
+        assert_eq!(gamma.file_count, 0, "gamma file count (folder with file_count: None => 0)");
     }
 }
