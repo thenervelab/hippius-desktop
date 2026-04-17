@@ -96,12 +96,6 @@ export default function FolderView({
   const [syncFolderPath, setSyncFolderPath] = useState<string>("");
   const [syncFolderLabel, setSyncFolderLabel] = useState<string>("");
   const [isLoadingSyncPath, setIsLoadingSyncPath] = useState(true);
-  // `true` when the server-side relative_path index hasn't been backfilled
-  // for this drive yet — signals to the user that subfolders only present
-  // on another device may be temporarily hidden until the one-shot backfill
-  // completes. Driven by `GroupedListing.pendingBackfill` from the Rust
-  // `list_sync_folder_grouped` command.
-  const [pendingBackfill, setPendingBackfill] = useState(false);
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
   // Read configured drives from the per-drive status atom — used by
   // `resolveSyncPath` to map a folderSource path back to its sync-root
@@ -155,19 +149,19 @@ export default function FolderView({
         // Build the subfolder path relative to the sync root
         const subfolder = getFullPath(mainFolderActualName, subFolderPath) || null;
 
-        // Switched from `list_sync_folder` → `list_sync_folder_grouped`
-        // so nested directories a device hasn't downloaded yet still
-        // appear in the listing (the grouped IPC overlays the server-side
-        // rel-path index onto the on-disk tree). Also surfaces
-        // `pendingBackfill` so we can show the "indexing" banner while
-        // the one-shot backfill is still running.
+        // Switched from `list_sync_folder` → `list_sync_folder_grouped` so
+        // nested directories a device hasn't downloaded yet still appear in
+        // the listing — the grouped IPC overlays the server-side rel-path
+        // index onto the on-disk tree. `pendingBackfill` on the response is
+        // intentionally ignored: the backfill runs in the background and
+        // the flipping from "indexing" to "done" is not a state the user
+        // needs to see.
         const listing = await invoke<GroupedListing>("list_sync_folder_grouped", {
           accountId: polkadotAddress || "",
           syncPath,
           subfolder,
           label: syncFolderLabel || null,
         });
-        setPendingBackfill(listing.pendingBackfill);
         // Folders before files matches FE expectations in list/card views
         // (folder rows render at the top when sorted by default).
         const entries: SyncFileEntry[] = [...listing.folders, ...listing.files];
@@ -497,24 +491,6 @@ export default function FolderView({
         {IS_SYNC_PAUSED && (
           <div className="mt-4">
             <SyncPausedAlert variant="inline" />
-          </div>
-        )}
-
-        {/* Relative-path backfill in progress banner. Shown when the drive's
-            server-side rel-path index is still being populated — server-only
-            subfolders (e.g. from another device) may be temporarily absent
-            from the listing until the one-shot backfill completes. See
-            `src-tauri/src/sync/relative_path_backfill.rs`. */}
-        {pendingBackfill && (
-          <div className="mt-4 flex items-start gap-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-            <Icons.Loader className="size-5 text-blue-600 flex-shrink-0 mt-0.5 animate-spin" />
-            <div className="text-sm text-blue-800">
-              <div className="font-medium">Indexing folders…</div>
-              <div className="text-blue-700">
-                Nested subfolders uploaded from other devices may take a moment to
-                appear while we finish indexing this drive.
-              </div>
-            </div>
           </div>
         )}
 
