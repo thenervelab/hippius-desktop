@@ -4,10 +4,11 @@ import React, { useCallback, useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useAtom } from "jotai";
 import { toast } from "sonner";
+import { HelpCircle } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import DialogContainer from "@/components/ui/DialogContainer";
 import { CardButton } from "@/components/ui";
-import * as Typography from "@/components/ui/typography";
 import {
   RecoveryCheck,
   activeRecoveryCheckAtom,
@@ -19,7 +20,7 @@ import {
   recoverMnemonic,
   sealAndUploadMnemonic,
 } from "@/app/lib/utils/recovery";
-import { PasswordField, StrengthMeter, errMessage, useLiveStrength } from "./_shared";
+import { PasswordField, StrengthMeter, errMessage, useLiveStrength, UNLOCK_PASSWORD_DOCS_URL } from "./_shared";
 
 /**
  * Blocking recovery dialog shown after OAuth login when the backend
@@ -40,15 +41,12 @@ const AccountRecoveryDialog: React.FC = () => {
 
   return (
     <Dialog.Root open>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50" />
-        <DialogContainer className="z-50 w-[420px] max-w-[90vw] !left-1/2 !top-1/2 !bottom-auto !right-auto !-translate-x-1/2 !-translate-y-1/2 p-6">
+      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[30rem] h-fit p-6" preventClose>
           <BranchRouter check={check} onDone={() => setCheck(null)} onRetry={async () => {
             const next = await checkRecoveryState();
             setCheck(next);
           }} />
-        </DialogContainer>
-      </Dialog.Portal>
+      </DialogContainer>
     </Dialog.Root>
   );
 };
@@ -101,10 +99,10 @@ const SignupBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
     setSubmitting(true);
     try {
       await sealAndUploadMnemonic(password);
-      toast.success("Recovery password set. Your account is now protected.");
+      toast.success("Unlock password set. Your account is now protected.");
       onDone();
     } catch (err) {
-      toast.error(`Could not set recovery password: ${errMessage(err)}`);
+      toast.error(`Could not set unlock password: ${errMessage(err)}`);
     } finally {
       setSubmitting(false);
     }
@@ -112,17 +110,26 @@ const SignupBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
 
   return (
     <div className="flex flex-col gap-4">
-      <Typography.H4 className="text-grey-10">Protect your account</Typography.H4>
-      <Typography.P size="sm" className="text-grey-40">
-        Choose a recovery password. It encrypts your data and lets you sign in
-        from any device. <strong>This password cannot be reset.</strong> If you
-        forget it, your files cannot be recovered.
-      </Typography.P>
+      <h3 className="text-xl font-medium text-grey-10">Protect your account</h3>
+      <p className="text-sm text-grey-40">
+        Choose an unlock password to secure your account. You will need it
+        to preview and download your encrypted files on Hippius Console.
+      </p>
 
-      <PasswordField label="Recovery password" value={password} onChange={setPassword} />
+      <button
+        type="button"
+        onClick={() => openUrl(UNLOCK_PASSWORD_DOCS_URL)}
+        className="flex items-center gap-1.5 text-xs text-primary-50 hover:text-primary-40 transition-colors"
+      >
+        <HelpCircle className="size-3.5" />
+        Learn how this works
+      </button>
+
+      <PasswordField label="Unlock password" value={password} onChange={setPassword} placeholder="Enter a strong password" />
       <StrengthMeter strength={strength} />
       <PasswordField
         label="Confirm password"
+        placeholder="Confirm your password"
         value={confirm}
         onChange={setConfirm}
         errorMessage={mismatch ? "Passwords do not match." : undefined}
@@ -164,17 +171,27 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
 
   return (
     <div className="flex flex-col gap-4">
-      <Typography.H4 className="text-grey-10">Unlock your account</Typography.H4>
-      <Typography.P size="sm" className="text-grey-40">
-        Enter your recovery password to decrypt your data on this device.
-      </Typography.P>
+      <h3 className="text-xl font-medium text-grey-10">Unlock your account</h3>
+      <p className="text-sm text-grey-40">
+        Enter your unlock password to access your files on this device.
+      </p>
+
+      <button
+        type="button"
+        onClick={() => openUrl(UNLOCK_PASSWORD_DOCS_URL)}
+        className="flex items-center gap-1.5 text-xs text-primary-50 hover:text-primary-40 transition-colors"
+      >
+        <HelpCircle className="size-3.5" />
+        Learn how this works
+      </button>
 
       <PasswordField
-        label="Recovery password"
+        label="Unlock password"
         value={password}
         onChange={setPassword}
         errorMessage={error ?? undefined}
         onSubmit={handleSubmit}
+        placeholder="Enter your unlock password"
       />
 
       <button
@@ -185,10 +202,10 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
         Forgot your password?
       </button>
       {showForgot && (
-        <Typography.P size="xs" className="text-grey-50 bg-grey-95 rounded p-3">
+        <p className="text-xs text-grey-50 bg-grey-95 rounded p-3">
           Your files are encrypted with this password and cannot be recovered without it.
           The password is never sent to our servers, so we cannot reset it for you.
-        </Typography.P>
+        </p>
       )}
 
       <CardButton onClick={handleSubmit} disabled={!canSubmit} loading={submitting} className="self-end">
@@ -236,10 +253,10 @@ const UnknownBranch: React.FC<{ onRetry: () => Promise<void> }> = ({ onRetry }) 
 
   return (
     <div className="flex flex-col gap-4">
-      <Typography.H4 className="text-grey-10">Check your connection</Typography.H4>
-      <Typography.P size="sm" className="text-grey-40">
+      <h3 className="text-xl font-medium text-grey-10">Check your connection</h3>
+      <p className="text-sm text-grey-40">
         We couldn&apos;t reach the recovery service. Make sure you&apos;re online and try again.
-      </Typography.P>
+      </p>
       <CardButton onClick={handleRetry} loading={retrying} className="self-end">
         Retry
       </CardButton>

@@ -1,13 +1,17 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 
-import { Input } from "@/components/ui";
+import { Input, Icons } from "@/components/ui";
 import {
   PassphraseStrength,
   validateRecoveryPassword,
 } from "@/app/lib/utils/recovery";
 import { cn } from "@/lib/utils";
+
+/** Documentation URL explaining unlock-password and encryption flow. */
+export const UNLOCK_PASSWORD_DOCS_URL =
+  "https://docs.hippius.com/use/desktop/file-system#unlock-password";
 
 /**
  * Shared recovery-dialog UI primitives. Used by
@@ -24,26 +28,49 @@ export const PasswordField: React.FC<{
   /** When provided, Enter key triggers submit. */
   onSubmit?: () => void;
   autoComplete?: "current-password" | "new-password";
-}> = ({ label, value, onChange, errorMessage, onSubmit, autoComplete = "new-password" }) => (
-  <label className="flex flex-col gap-1">
-    <span className="text-xs text-grey-40">{label}</span>
-    <Input
-      type="password"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" && onSubmit) {
-          e.preventDefault();
-          onSubmit();
-        }
-      }}
-      autoComplete={autoComplete}
-      autoCapitalize="off"
-      spellCheck={false}
-    />
-    {errorMessage && <span className="text-xs text-error-60">{errorMessage}</span>}
-  </label>
-);
+  placeholder?: string;
+}> = ({ label, value, onChange, errorMessage, onSubmit, autoComplete = "new-password", placeholder }) => {
+  const [visible, setVisible] = useState(false);
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs text-grey-40">{label}</span>
+      <div className="relative">
+        <Input
+          type={visible ? "text" : "password"}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && onSubmit) {
+              e.preventDefault();
+              onSubmit();
+            }
+          }}
+          autoComplete={autoComplete}
+          autoCapitalize="off"
+          spellCheck={false}
+          className="w-full pr-10"
+        />
+        <button
+          type="button"
+          tabIndex={-1}
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-grey-50 hover:text-grey-30 transition-colors"
+          onClick={(e) => {
+            e.preventDefault();
+            setVisible((v) => !v);
+          }}
+        >
+          {visible ? (
+            <Icons.EyeOff className="size-4" />
+          ) : (
+            <Icons.Eye className="size-4" />
+          )}
+        </button>
+      </div>
+      {errorMessage && <span className="text-xs text-error-60">{errorMessage}</span>}
+    </label>
+  );
+};
 
 const VERDICT_BARS: Record<string, string> = {
   too_short: "bg-grey-70",

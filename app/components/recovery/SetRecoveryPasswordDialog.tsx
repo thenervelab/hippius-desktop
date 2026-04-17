@@ -10,79 +10,58 @@ import DialogContainer from "@/components/ui/DialogContainer";
 import { CardButton, Graphsheet, Icons } from "@/components/ui";
 import {
   PassphraseStrength,
-  changeRecoveryPassword,
+  sealAndUploadMnemonic,
 } from "@/app/lib/utils/recovery";
-import {
-  PasswordField,
-  StrengthMeter,
-  errMessage,
-  useLiveStrength,
-  UNLOCK_PASSWORD_DOCS_URL,
-} from "./_shared";
+import { PasswordField, StrengthMeter, errMessage, useLiveStrength, UNLOCK_PASSWORD_DOCS_URL } from "./_shared";
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Called after a successful save so the parent can refresh state. */
+  onSuccess?: () => void;
 }
 
 /**
- * Rotate the recovery password protecting the sealed mnemonic blob on
- * hcfs-server. The mnemonic itself is unchanged, so no sync re-init or
- * session invalidation happens.
- *
- * All domain rules (decryption, strength, derivation guard) live in Rust.
- * This component just renders inputs and surfaces errors.
+ * Dialog to set a recovery password for the first time from Settings.
+ * Used when the user has not yet configured a recovery password
+ * (no server blob exists).
  */
-const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) => {
-  const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
+const SetRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange, onSuccess }) => {
+  const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [strength, setStrength] = useState<PassphraseStrength | null>(null);
-  const [currentError, setCurrentError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  useLiveStrength(next, setStrength);
+
+  useLiveStrength(password, setStrength);
 
   const reset = () => {
-    setCurrent("");
-    setNext("");
+    setPassword("");
     setConfirm("");
     setStrength(null);
-    setCurrentError(null);
   };
 
-  const mismatch = confirm.length > 0 && confirm !== next;
-  const sameAsCurrent = next.length > 0 && next === current;
+  const mismatch = confirm.length > 0 && confirm !== password;
   const canSubmit =
     !submitting &&
-    current.length > 0 &&
-    next.length > 0 &&
     strength?.acceptableForSubmit === true &&
     !mismatch &&
-    !sameAsCurrent &&
-    next === confirm;
+    password === confirm;
 
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
     setSubmitting(true);
-    setCurrentError(null);
     try {
-      await changeRecoveryPassword(current, next);
-      toast.success("Password updated.");
+      await sealAndUploadMnemonic(password);
+      toast.success("Unlock password set. You can now preview and download files on Console.");
       reset();
       onOpenChange(false);
+      onSuccess?.();
     } catch (err) {
-      const msg = errMessage(err);
-      // Rust surfaces wrong current password as Validation("Wrong passphrase.")
-      if (/wrong passphrase/i.test(msg)) {
-        setCurrentError("Incorrect current password.");
-        setCurrent("");
-      } else {
-        toast.error(`Could not change password: ${msg}`);
-      }
+      toast.error(`Could not save unlock password: ${errMessage(err)}`);
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, current, next, onOpenChange]);
+  }, [canSubmit, password, onOpenChange, onSuccess]);
 
   return (
     <Dialog.Root
@@ -93,7 +72,7 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) =
       }}
     >
       <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit">
-        <Dialog.Title className="sr-only">Change Unlock Password</Dialog.Title>
+        <Dialog.Title className="sr-only">Set Unlock Password</Dialog.Title>
 
         <div className="px-4 py-6 flex flex-col gap-5">
           {/* Centered icon header */}
@@ -110,10 +89,10 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) =
               </div>
             </div>
             <div className="flex flex-col gap-1">
-              <h2 className="text-xl font-semibold text-grey-10">Change Unlock Password</h2>
+              <h2 className="text-xl font-semibold text-grey-10">Set Unlock Password</h2>
               <p className="text-sm text-grey-50 max-w-sm">
-                Enter your current password, then choose a new one for
-                previewing and downloading files on Hippius Console.
+                Set a password to preview and download your encrypted files
+                on Hippius Console.
               </p>
             </div>
           </div>
@@ -121,8 +100,9 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) =
           {/* Info box */}
           <div className="p-3 bg-primary-95 border border-primary-80 rounded-lg flex flex-col gap-2">
             <p className="text-xs text-primary-40">
-              Changing your unlock password re-encrypts the sealed backup on
-              the server. Your files on the desktop app are not affected.
+              Your files are fully encrypted and only you can access them.
+              This password lets you securely preview and download your
+              files on Hippius Console.
             </p>
             <button
               type="button"
@@ -134,34 +114,16 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) =
             </button>
           </div>
 
-            <PasswordField
-              label="Current password"
-              value={current}
-              onChange={(v) => {
-                setCurrent(v);
-                setCurrentError(null);
-              }}
-              errorMessage={currentError ?? undefined}
-              placeholder="Enter current password"
-            />
-
-            <PasswordField
-              label="New password"
-              value={next}
-              onChange={setNext}
-              errorMessage={sameAsCurrent ? "New password must differ from current." : undefined}
-              placeholder="Enter a strong password"
-            />
-            <StrengthMeter strength={strength} />
-
-            <PasswordField
-              label="Confirm new password"
-              value={confirm}
-              onChange={setConfirm}
-              errorMessage={mismatch ? "Passwords do not match." : undefined}
-              onSubmit={handleSubmit}
-              placeholder="Confirm your password"
-            />
+          <PasswordField label="Unlock password" value={password} onChange={setPassword} placeholder="Enter a strong password" />
+          <StrengthMeter strength={strength} />
+          <PasswordField
+            label="Confirm password"
+            placeholder="Confirm your password"
+            value={confirm}
+            onChange={setConfirm}
+            errorMessage={mismatch ? "Passwords do not match." : undefined}
+            onSubmit={handleSubmit}
+          />
 
           {/* Actions */}
           <div className="flex gap-3">
@@ -169,13 +131,13 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) =
               Cancel
             </CardButton>
             <CardButton className="w-full" onClick={handleSubmit} disabled={!canSubmit} loading={submitting}>
-              Change password
+              Save password
             </CardButton>
           </div>
         </div>
-        </DialogContainer>
+      </DialogContainer>
     </Dialog.Root>
   );
 };
 
-export default ChangeRecoveryPasswordDialog;
+export default SetRecoveryPasswordDialog;

@@ -34,10 +34,10 @@ export const ONBOARDING_SCREENS = [
   },
   {
     id: 3,
-    titleText: "Secure Your Recovery Phrase",
+    titleText: "Secure Your Mnemonic Seed",
     description:
-      "Your recovery phrase is the only way to restore access to your encrypted files. Back it up safely and never share it with anyone.",
-    screentTitleText: "Recovery Phrase",
+      "Your mnemonic seed is the only way to restore access to your wallet and encrypted files. Back it up safely and never share it with anyone.",
+    screentTitleText: "Mnemonic Seed",
     bulletPoints: [
       "Write it down on paper",
       "Store in a secure location",

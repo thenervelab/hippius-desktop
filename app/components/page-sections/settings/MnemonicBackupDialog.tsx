@@ -224,10 +224,10 @@ export function MnemonicBackupDialog({
 
   // Step icon and title mapping
   const stepConfig: Record<number, { icon: React.ReactNode; title: string }> = {
-    1: { icon: <Shield className="size-5 text-grey-100" />, title: "Secure Your Recovery Phrase" },
-    2: { icon: <Eye className="size-5 text-grey-100" />, title: "Your Recovery Phrase" },
-    3: { icon: <CheckCircle2 className="size-5 text-grey-100" />, title: "Verify Your Recovery Phrase" },
-    4: { icon: <CheckCircle2 className="size-5 text-grey-100" />, title: "Recovery Phrase Secured!" },
+    1: { icon: <Shield className="size-5 text-grey-100" />, title: "Secure Your Mnemonic Seed" },
+    2: { icon: <Eye className="size-5 text-grey-100" />, title: "Your Mnemonic Seed" },
+    3: { icon: <CheckCircle2 className="size-5 text-grey-100" />, title: "Verify Your Mnemonic Seed" },
+    4: { icon: <CheckCircle2 className="size-5 text-grey-100" />, title: "Mnemonic Seed Secured!" },
   };
 
   return (
@@ -294,10 +294,10 @@ export function MnemonicBackupDialog({
             <div className="animate-fade-in-from-b-0.3 flex flex-col gap-4">
               <div className="text-center">
                 <h2 className="text-xl font-semibold text-grey-10">
-                  Secure Your Recovery Phrase
+                  Secure Your Mnemonic Seed
                 </h2>
                 <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
-                  Your recovery phrase is the only way to restore access to your encrypted files.
+                  Your mnemonic seed is the only way to restore access to your wallet and encrypted files.
                 </Dialog.Description>
               </div>
 
@@ -327,17 +327,17 @@ export function MnemonicBackupDialog({
               </div>
 
               <Button onClick={() => setStep(2)} className="w-full">
-                I Understand, Show My Recovery Phrase
+                I Understand, Show My Mnemonic Seed
               </Button>
             </div>
           )}
 
-          {/* Step 2: Display Recovery Phrase */}
+          {/* Step 2: Display Mnemonic Seed */}
           {step === 2 && (
             <div className="animate-fade-in-from-b-0.3 flex flex-col gap-4">
               <div className="text-center">
                 <h2 className="text-xl font-semibold text-grey-10">
-                  Your Recovery Phrase
+                  Your Mnemonic Seed
                 </h2>
                 <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
                   Write down each word in order. You&apos;ll need to verify them in the next step.
@@ -431,7 +431,7 @@ export function MnemonicBackupDialog({
               {showEncryptForm && (
                 <div className="animate-slideDown bg-grey-90 rounded-lg p-4 border border-grey-80 flex flex-col gap-3">
                   <p className="text-xs text-grey-40">
-                    Encrypt your recovery phrase with a password and save it as a file.
+                    Encrypt your mnemonic seed with a password and save it as a file.
                   </p>
                   <div className="flex flex-col gap-2">
                     <input
@@ -484,7 +484,7 @@ export function MnemonicBackupDialog({
             <div className="animate-fade-in-from-b-0.3 flex flex-col gap-4">
               <div className="text-center">
                 <h2 className="text-xl font-semibold text-grey-10">
-                  Verify Your Recovery Phrase
+                  Verify Your Mnemonic Seed
                 </h2>
                 <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
                   Enter the requested words to confirm you&apos;ve saved your phrase correctly.
@@ -558,17 +558,17 @@ export function MnemonicBackupDialog({
 
               <div className="text-center">
                 <h2 className="text-xl font-semibold text-grey-10">
-                  Recovery Phrase Secured!
+                  Mnemonic Seed Secured!
                 </h2>
                 <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
-                  Your recovery phrase has been verified. Your files are protected.
+                  Your mnemonic seed has been verified. Your files are protected.
                 </Dialog.Description>
               </div>
 
               <div className="w-full bg-grey-90 rounded-lg p-4 flex flex-col gap-2.5 border border-grey-80">
                 <div className="flex items-center gap-2.5">
                   <Check className="w-4 h-4 text-success-50 flex-shrink-0" />
-                  <span className="text-sm text-grey-20">Recovery phrase viewed</span>
+                  <span className="text-sm text-grey-20">Mnemonic seed viewed</span>
                 </div>
                 <div className="flex items-center gap-2.5">
                   <Check className="w-4 h-4 text-success-50 flex-shrink-0" />
@@ -591,7 +591,7 @@ export function MnemonicBackupDialog({
               </div>
 
               <p className="text-xs text-grey-40 text-center max-w-xs">
-                Keep your recovery phrase safe. You will need it to restore access to your
+                Keep your mnemonic seed safe. You will need it to restore access to your
                 encrypted files on a new device.
               </p>
 
