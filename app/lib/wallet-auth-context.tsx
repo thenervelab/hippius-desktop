@@ -22,6 +22,7 @@ import { appStore } from "./store/jotaiStore";
 import { migrationCheckAtom, DEFAULT_MIGRATION_CHECK_STATE } from "./global-atoms/migrationAtoms";
 import { splashCompleteAtom } from "./global-atoms/splashAtoms";
 import { syncRequiresReauthAtom } from "./global-atoms/unpinAtoms";
+import { scheduleOAuthSyncInit } from "./auth/scheduleOAuthSyncInit";
 import { isMasterMnemonicUnrecoverable } from "./utils/dispatchTauriError";
 import { useAtomValue } from "jotai";
 
@@ -488,24 +489,13 @@ export function WalletAuthProvider({
     logger.debug("[WalletAuth] OAuth session persisted and state updated");
 
     if (session.substrateAddress && !syncInitialized.current) {
-      try {
-        // ensure_sync_mnemonic caches the mnemonic in `AuthInfo` on the
-        // Rust side. Downstream IPCs (initialize_sync, auto_init_sync,
-        // migration) read it from there via get_mnemonic_for_account —
-        // the raw phrase never has to travel back through JavaScript.
-        await invoke<void>("ensure_sync_mnemonic", { accountId: session.substrateAddress });
-      } catch (err) {
-        console.error("[WalletAuth] ensure_sync_mnemonic failed:", err);
-        // See the companion handler in the boot-time session restore:
-        // when Rust refuses to mint a fresh mnemonic because encrypted
-        // state already exists, flag reauth so the UI prompts recovery
-        // instead of letting `initSync` fail opaquely with `Crypto:
-        // decryption failed`.
-        if (isMasterMnemonicUnrecoverable(err)) {
-          appStore.set(syncRequiresReauthAtom, true);
-        }
-      }
-      initSync(session.substrateAddress);
+      // Fire-and-forget: `ensure_sync_mnemonic` parks on the recovery
+      // gate when `complete_oauth_flow` set it to `Pending` (fresh-
+      // device Unlock). Awaiting inline would block the OAuth callback
+      // page — preventing navigation into `(pages)` where the recovery
+      // dialog mounts, which is the only way the gate ever resolves.
+      // See `scheduleOAuthSyncInit` for the detached sequencing.
+      void scheduleOAuthSyncInit(session.substrateAddress, initSync);
     }
   };
 
