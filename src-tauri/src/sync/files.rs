@@ -1113,6 +1113,19 @@ impl FileFilterCriteria {
     }
 }
 
+/// Per-drive-label aggregate for the file tab header.
+///
+/// `file_count` sums real file leaves only: each non-folder row contributes 1,
+/// and each folder row contributes `entry.file_count` (the recursive leaf count
+/// computed by `dir_stats_recursive`). Empty folders contribute 0 — a folder
+/// with zero files is not itself a "file".
+#[derive(Serialize, Default, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelStats {
+    pub total_bytes: u64,
+    pub file_count: u64,
+}
+
 /// Result of get_user_files including both files and metadata.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1150,19 +1163,6 @@ pub struct UserFileEntry {
     pub label: String,
     pub file_count: Option<u64>,
     pub deleted: bool,
-}
-
-/// Per-drive-label aggregate for the file tab header.
-///
-/// `file_count` sums real file leaves only: each non-folder row contributes 1,
-/// and each folder row contributes `entry.file_count` (the recursive leaf count
-/// computed by `dir_stats_recursive`). Empty folders contribute 0 — a folder
-/// with zero files is not itself a "file".
-#[derive(Serialize, Default, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct LabelStats {
-    pub total_bytes: u64,
-    pub file_count: u64,
 }
 
 /// Compute per-label totals from the flat entry list `get_user_files` builds.
