@@ -68,15 +68,14 @@ const Support: React.FC = () => {
     search: debouncedSearchTerm,
   });
 
-  const { mutate: createTicket, isPending: isCreating } =
-    useCreateSupportTicket({
-      onSuccess: () => {
-        // Don't show success here, will be shown after attachment upload if needed
-      },
-      onError: (error) => {
-        toast.error(error.message || "Failed to create ticket");
-      },
-    });
+  const { mutate: createTicket } = useCreateSupportTicket({
+    onSuccess: () => {
+      // Don't show success here, will be shown after attachment upload if needed
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to create ticket");
+    },
+  });
 
   const { mutateAsync: uploadAttachment } = useUploadTicketAttachment();
 

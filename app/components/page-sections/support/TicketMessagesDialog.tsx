@@ -37,7 +37,9 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
 }) => {
   const [messageText, setMessageText] = useState("");
   const [page] = useState(1);
-  const [attachments, setAttachments] = useState<{ path: string; name: string }[]>([]);
+  const [attachments, setAttachments] = useState<
+    { path: string; name: string }[]
+  >([]);
   const [isUploadingAttachments, setIsUploadingAttachments] = useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const messagesContainerRef = React.useRef<HTMLDivElement>(null);
@@ -55,7 +57,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
     },
     {
       enabled: !!ticket?.id && open,
-    }
+    },
   );
 
   const { mutateAsync: postMessage, isPending: isPosting } =
@@ -138,14 +140,14 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
                 message_id: newMessage.id.toString(),
                 filePath: att.path,
                 filename: att.name,
-              })
-            )
+              }),
+            ),
           );
         } catch (uploadError) {
           toast.error(
             uploadError instanceof Error
               ? uploadError.message
-              : "Failed to upload some attachments"
+              : "Failed to upload some attachments",
           );
         } finally {
           setIsUploadingAttachments(false);
@@ -166,7 +168,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
       setMessageText(currentText);
       setAttachments(currentAttachments);
       toast.error(
-        error instanceof Error ? error.message : "Failed to send message"
+        error instanceof Error ? error.message : "Failed to send message",
       );
     }
   };
@@ -176,10 +178,6 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
       e.preventDefault();
       handleSendMessage();
     }
-  };
-
-  const handlePaste = (_e: React.ClipboardEvent<HTMLInputElement>) => {
-    // Paste-file not supported in Tauri (no file path from clipboard)
   };
 
   const handleRemoveAttachment = (index: number) => {
@@ -216,7 +214,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
             "fixed right-4 max-h-[min(31.25rem,calc(100vh-5rem))] bottom-4 h-full bg-white shadow-xl z-[10001] border border-grey-80 rounded",
             "flex flex-col",
             "max-sm:left-4 max-sm:right-4 max-sm:w-auto",
-            "sm:w-[25rem]"
+            "sm:w-[25rem]",
           )}
         >
           {/* Header */}
@@ -308,7 +306,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
                           <span
                             className={cn(
                               "text-xs font-medium",
-                              getSeverityColor(ticket.priority)
+                              getSeverityColor(ticket.priority),
                             )}
                           >
                             {formatSeverity(ticket.priority)}
@@ -328,10 +326,13 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
                       <div
                         className={cn(
                           "flex",
-                          isStaff ? "justify-start" : "justify-end"
+                          isStaff ? "justify-start" : "justify-end",
                         )}
                       >
-                        <TicketMessageComponent message={message} isStaff={isStaff} />
+                        <TicketMessageComponent
+                          message={message}
+                          isStaff={isStaff}
+                        />
                       </div>
                     )}
                   </div>
@@ -375,7 +376,6 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
                   value={messageText}
                   onChange={(e) => setMessageText(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  onPaste={handlePaste}
                   disabled={
                     isPosting ||
                     isUploadingAttachments ||
