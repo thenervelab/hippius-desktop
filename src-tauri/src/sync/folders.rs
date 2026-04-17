@@ -399,15 +399,22 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
             .unwrap_or(&sp.label)
             .to_string();
 
-        let status = if sp.is_paused {
-            "paused".to_string()
-        } else {
-            let active = match state.sync.drives.try_lock() {
-                Ok(guard) => guard.contains_key(&sp.label),
-                Err(_) => true,
-            };
-            if active { "syncing" } else { "paused" }.to_string()
-        };
+        // Derive status purely from `is_paused` — the same source of truth
+        // `get_all_drive_statuses` uses. The old code also required the
+        // drive to be present in `state.sync.drives` and fell back to
+        // "paused" when it wasn't, but that map is a sync-loop implementation
+        // detail: a drive only lands in it after `initialize_sync_inner`
+        // runs (from `auto_init_sync` on login, or an explicit
+        // `resume_drive`). On any slow-path login — especially OAuth with
+        // the Unlock-dialog recovery round-trip — the settings page loads
+        // before auto_init_sync has populated the map, so every drive
+        // showed "Paused" even though nothing had actually been paused.
+        // Users then had to click "Resume" on drives that were never
+        // paused. is_paused = user intent; presence in the in-memory map
+        // = "sync loop currently running" — conflating them surfaced
+        // "not yet initialised" as "user paused" and is the bug behind
+        // the post-login paused-drive reports.
+        let status = if sp.is_paused { "paused" } else { "syncing" }.to_string();
 
         let remote = remote_by_label.get(&sp.label);
 

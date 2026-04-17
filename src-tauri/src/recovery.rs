@@ -414,12 +414,20 @@ async fn install_recovered_mnemonic(account_id: &str, mnemonic: &str, password: 
     // reference via the `&str` parameter, but the caller's `Zeroizing`
     // scrubs that one too. The keychain write needs an owned `String`
     // anyway; the `keyring` crate copies internally.
-    if let Err(e) = crate::auth::keychain::store_mnemonic(account_id, mnemonic) {
-        warn!(
-            account = %crate::console_access::short_ss58(account_id),
-            error = %e,
-            "recovery: could not cache mnemonic to OS keychain; next launch will re-fetch from server"
-        );
+    match crate::auth::keychain::store_mnemonic(account_id, mnemonic) {
+        Ok(()) => {
+            info!(
+                account = %crate::console_access::short_ss58(account_id),
+                "recovery: cached mnemonic to OS keychain; next launch will skip server round-trip"
+            );
+        }
+        Err(e) => {
+            warn!(
+                account = %crate::console_access::short_ss58(account_id),
+                error = %e,
+                "recovery: could not cache mnemonic to OS keychain; next launch will re-fetch from server"
+            );
+        }
     }
     Ok(())
 }
