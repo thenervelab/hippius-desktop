@@ -296,7 +296,14 @@ async fn remove_drive_inmemory(sync: &SyncRunner, label: &str) -> (usize, Option
 
 /// Pre-populate the synced-paths cache and store the manager in the drive
 /// registry so the first sync cycle sees correct state immediately.
-async fn register_drive(sync: &SyncRunner, manager: DriveManager, label: &str, sync_path: &str, folder_dir: &Path) {
+///
+/// Also fires a one-shot background `reconcile_remote_timestamps` via
+/// hcfs-client so drives whose on-disk `sync_state.json` predates the
+/// authoritative timestamp wire (or whose last sync was cut short before
+/// `save_sync_state` ran) self-heal without waiting for the first sync
+/// cycle. The task takes the drive's existing `Arc<TokioMutex<DriveManager>>`
+/// so a concurrent sync cycle serializes against it naturally — no new lock.
+async fn register_drive(app: &AppHandle, sync: &Arc<SyncRunner>, manager: DriveManager, label: &str, sync_path: &str, folder_dir: &Path) {
     // Consume rekey marker (no remote purge)
     let marker = folder_dir.join(".needs_rekey");
     if marker.exists() {
@@ -318,14 +325,63 @@ async fn register_drive(sync: &SyncRunner, manager: DriveManager, label: &str, s
     }
 
     sync.register_label_root(label.to_string(), PathBuf::from(sync_path));
-    let mut guard = sync.drives.lock().await;
-    guard.insert(
-        label.to_string(),
-        DriveSlot {
-            manager: std::sync::Arc::new(TokioMutex::new(manager)),
-            cancel_token: CancellationToken::new(),
-        },
-    );
+    let manager_arc = std::sync::Arc::new(TokioMutex::new(manager));
+    let reconcile_arc = std::sync::Arc::clone(&manager_arc);
+    {
+        let mut guard = sync.drives.lock().await;
+        guard.insert(
+            label.to_string(),
+            DriveSlot {
+                manager: manager_arc,
+                cancel_token: CancellationToken::new(),
+            },
+        );
+    }
+
+    spawn_reconcile_timestamps(app, sync.clone(), reconcile_arc, label.to_string());
+}
+
+/// Background one-shot task: fetch the server manifest and refresh
+/// `remote_timestamps` on disk when the drive's local state is missing
+/// authoritative values. On success, reloads state from disk, rebuilds
+/// the in-memory synced-paths cache, and emits `hcfs_activity_updated`
+/// so the Files page re-queries and renders the freshly-populated
+/// "DATE UPLOADED" column. Silently fails open — drive init must stay
+/// usable even when the server is unreachable.
+fn spawn_reconcile_timestamps(
+    app: &AppHandle,
+    sync: Arc<SyncRunner>,
+    manager_arc: Arc<TokioMutex<DriveManager>>,
+    label: String,
+) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let manager = manager_arc.lock().await;
+        match manager.reconcile_remote_timestamps().await {
+            Ok(true) => {
+                match manager.load_sync_state().await {
+                    Ok(state) => {
+                        let paths = build_synced_paths_from_state(&state);
+                        sync.update_synced_paths_cache(&label, paths);
+                        drop(manager);
+                        let _ = app.emit(crate::sync::events::ACTIVITY_UPDATED, ());
+                        info!(label = %label, "reconcile_remote_timestamps: cache refreshed");
+                    }
+                    Err(e) => {
+                        warn!(label = %label, error = %e, "reconcile_remote_timestamps: post-fetch state reload failed");
+                    }
+                }
+            }
+            Ok(false) => {
+                debug!(label = %label, "reconcile_remote_timestamps: skipped (fresh)");
+            }
+            Err(e) => {
+                // Fail open — drive stays usable, the next sync cycle's
+                // own `fetch_remote_state` will pick up the slack.
+                warn!(label = %label, error = %e, "reconcile_remote_timestamps: failed");
+            }
+        }
+    });
 }
 
 /// Run migration from legacy config layouts into the per-folder layout.
@@ -884,7 +940,7 @@ pub(crate) async fn initialize_sync_inner(
     check_init_server_health(&app_state.health_client, &cfg.server_url).await;
     setup_progress_handlers(&app, &mut manager, &label, sync);
     sync.clear_cancel();
-    register_drive(sync, manager, &label, &cfg.sync_path, &folder_dir).await;
+    register_drive(&app, sync, manager, &label, &cfg.sync_path, &folder_dir).await;
 
     if start_loop {
         start_sync_loop(app.clone()).await;
@@ -1766,7 +1822,7 @@ fn build_fetch_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) 
 /// waiting for the entire sync cycle to finish. See
 /// [`crate::sync::progress::mark_file_synced`] for the full reasoning.
 fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_client::sync::FileSyncedFn {
-    Arc::new(move |rel_path, path_hash_hex, arion_cid, action| {
+    Arc::new(move |rel_path, path_hash_hex, arion_cid, action, timestamps| {
         debug!("File synced [{label}]: {rel_path} ({action}) cid={arion_cid}");
         if rel_path.is_empty() {
             return;
@@ -1786,9 +1842,9 @@ fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_cl
         }
 
         // hcfs's `FileSyncedFn` callback passes `path_hash_hex` as a hex
-        // string. `SyncedFileInfo::new` now wants the raw 32-byte hash, so
-        // we decode here. A future hcfs PR could pass `&[u8; 32]` directly
-        // to skip this round-trip.
+        // string. `SyncedFileInfo::with_timestamps` wants the raw 32-byte
+        // hash, so we decode here. A future hcfs PR could pass `&[u8; 32]`
+        // directly to skip this round-trip.
         let decoded = match hex::decode(path_hash_hex) {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -1807,7 +1863,18 @@ fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_cl
             );
             return;
         };
-        let info = SyncedFileInfo::new(path_hash_bytes, Arc::from(arion_cid));
+        // When the server response carried authoritative timestamps we
+        // stamp them into the cache immediately so the Files page's
+        // "DATE UPLOADED" column renders right away — no waiting for a
+        // subsequent `fetch_remote_state` to populate them. When the
+        // server was legacy (no timestamps in response), hcfs-client
+        // passes `None` and `SyncedFileInfo::new` preserves the
+        // pre-existing cache timestamps via the zero-guard in
+        // `upsert_synced_path` — never clobber a good value with zeros.
+        let info = match timestamps {
+            Some(ts) => SyncedFileInfo::with_timestamps(path_hash_bytes, Arc::from(arion_cid), ts),
+            None => SyncedFileInfo::new(path_hash_bytes, Arc::from(arion_cid)),
+        };
         sync.upsert_synced_path(&label, rel_path.to_string(), info);
     })
 }
@@ -2059,5 +2126,118 @@ mod tests {
 
         assert_eq!(remaining, 0, "empty map has zero remaining");
         assert!(removed_path.is_none(), "nonexistent label should yield None path");
+    }
+
+    // ── build_file_synced_callback timestamp plumbing ──────────────────
+    //
+    // These tests pin the contract the hcfs-client timestamp fix relies
+    // on: when the server response includes authoritative timestamps,
+    // they reach `synced_paths_cache` immediately (so the Files page
+    // "DATE UPLOADED" column renders non-zero); when the response is
+    // legacy (no timestamps), a previously-reconciled entry survives
+    // via `upsert_synced_path`'s zero-guard.
+
+    fn make_timestamps(c: i64, u: i64) -> hcfs_client::sync::FileTimestamps {
+        hcfs_client::sync::FileTimestamps {
+            created_at: c,
+            updated_at: u,
+        }
+    }
+
+    #[tokio::test]
+    async fn build_file_synced_callback_writes_timestamps_to_cache() {
+        let sync = test_sync_runner();
+        let label: Arc<str> = Arc::from("test-drive");
+        let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+
+        // 32-byte hash keyed by 'a' so the hex decode succeeds.
+        let fid = [0xAAu8; 32];
+        let fid_hex = hex::encode(fid);
+        let ts = make_timestamps(1_700_000_000, 1_700_000_100);
+
+        callback("folder/file.txt", &fid_hex, "cid-1", "uploaded", Some(&ts));
+
+        let cache = sync
+            .get_cached_synced_paths(&label)
+            .expect("cache should have an entry for the label");
+        let info = cache
+            .get("folder/file.txt")
+            .expect("rel path should be present in cache");
+        assert_eq!(info.uploaded_at, 1_700_000_000);
+        assert_eq!(info.updated_at, 1_700_000_100);
+        assert_eq!(&*info.arion_cid, "cid-1");
+    }
+
+    #[tokio::test]
+    async fn build_file_synced_callback_preserves_prior_timestamps_when_none() {
+        let sync = test_sync_runner();
+        let label: Arc<str> = Arc::from("legacy-drive");
+
+        // Seed the cache as if a reconcile had already populated good
+        // timestamps for this rel_path. The legacy-server callback
+        // below must NOT clobber these with zeros.
+        let fid = [0xBBu8; 32];
+        let mut prior: std::collections::HashMap<String, SyncedFileInfo> = std::collections::HashMap::new();
+        prior.insert(
+            "doc.txt".to_string(),
+            SyncedFileInfo {
+                path_hash: fid,
+                arion_cid: Arc::from("cid-old"),
+                uploaded_at: 1_600_000_000,
+                updated_at: 1_600_000_100,
+            },
+        );
+        sync.update_synced_paths_cache(&label, prior);
+
+        let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+        // Same file re-uploaded against a legacy server that omits
+        // timestamps — callback receives `None`.
+        callback("doc.txt", &hex::encode(fid), "cid-new", "uploaded", None);
+
+        let cache = sync.get_cached_synced_paths(&label).expect("cache entry");
+        let info = cache.get("doc.txt").expect("rel path");
+        assert_eq!(info.uploaded_at, 1_600_000_000, "legacy callback must not clobber reconciled timestamps");
+        assert_eq!(info.updated_at, 1_600_000_100);
+        // arion_cid should still update (reflects the latest upload).
+        assert_eq!(&*info.arion_cid, "cid-new");
+    }
+
+    #[tokio::test]
+    async fn build_file_synced_callback_inserts_fresh_entry_without_timestamps() {
+        // Legacy-server path for a file that has no prior cache entry:
+        // the entry is still inserted (so sync_status flips to "synced"),
+        // just with zero timestamps. Reconcile will backfill them.
+        let sync = test_sync_runner();
+        let label: Arc<str> = Arc::from("fresh-legacy-drive");
+        let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+
+        let fid = [0xCCu8; 32];
+        callback("new.txt", &hex::encode(fid), "cid-a", "uploaded", None);
+
+        let info = sync
+            .get_cached_synced_paths(&label)
+            .unwrap()
+            .remove("new.txt")
+            .expect("legacy-server upload should still create a cache entry");
+        assert_eq!(info.uploaded_at, 0);
+        assert_eq!(info.updated_at, 0);
+        assert_eq!(&*info.arion_cid, "cid-a");
+    }
+
+    #[tokio::test]
+    async fn build_file_synced_callback_ignores_empty_rel_path() {
+        // Empty rel_path is the early-exit guard — don't touch the cache.
+        let sync = test_sync_runner();
+        let label: Arc<str> = Arc::from("guard-drive");
+        let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+
+        let fid = [0xDDu8; 32];
+        let ts = make_timestamps(123, 456);
+        callback("", &hex::encode(fid), "cid-x", "uploaded", Some(&ts));
+
+        assert!(
+            sync.get_cached_synced_paths(&label).is_none(),
+            "empty rel_path must not create a cache entry"
+        );
     }
 }
