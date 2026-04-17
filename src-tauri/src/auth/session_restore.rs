@@ -76,30 +76,64 @@ enum RehydrateOutcome {
 ///
 /// For mnemonic users this attempts a keychain load and, if successful,
 /// derives the full keypair via [`crate::auth::login::rehydrate_full_session`].
-/// For OAuth users it skips straight to `OAuthOnly`. For mnemonic users
-/// without a keychain entry, returns `Restored`.
+/// For OAuth users a keychain hit populates `AuthInfo.mnemonic` (so the
+/// recovery check resolves to `Proceed` instead of `Unlock` — i.e. no
+/// server round-trip to re-download the sealed mnemonic blob) while
+/// leaving the capability at `OAuthOnly` (OAuth users don't sign
+/// blockchain extrinsics from a mnemonic-derived keypair). On a
+/// keychain miss either path falls through to the normal Unlock /
+/// Restored flow.
 fn rehydrate_or_restored(state: &crate::app_state::AppState, addr: &str, auth_type: &str) -> RehydrateOutcome {
-    if auth_type != "mnemonic" {
-        return RehydrateOutcome::NeedsActiveAccount(AuthCapabilities::OAuthOnly);
-    }
     match keychain::load_mnemonic(addr) {
-        KeychainResult::Found(mnemonic) => match crate::auth::login::rehydrate_full_session(state, mnemonic) {
-            Ok(_) => {
-                info!("Session fully restored from OS keychain — capability = Full");
-                return RehydrateOutcome::AlreadyWritten;
+        KeychainResult::Found(mnemonic) => {
+            if auth_type == "mnemonic" {
+                match crate::auth::login::rehydrate_full_session(state, mnemonic) {
+                    Ok(_) => {
+                        info!("Session fully restored from OS keychain — capability = Full");
+                        return RehydrateOutcome::AlreadyWritten;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Keychain mnemonic failed to derive keys; falling back to Restored");
+                    }
+                }
+            } else {
+                // OAuth users: write `substrate_address`, capability, and the
+                // mnemonic atomically under a single auth lock. Capability stays
+                // `OAuthOnly` — a cached mnemonic only unblocks sync encryption,
+                // it does not promote the session to signing-capable. The match
+                // mirrors `rehydrate_full_session`'s atomicity guarantee so the
+                // caller can safely rely on `AlreadyWritten` semantics (no
+                // follow-up `set_active_account` call).
+                match state.auth.lock() {
+                    Ok(mut auth) => {
+                        auth.capabilities = AuthCapabilities::OAuthOnly;
+                        auth.substrate_address = Some(addr.to_string());
+                        auth.mnemonic = Some(mnemonic);
+                        info!("OAuth session restored from OS keychain — capability = OAuthOnly, mnemonic cached");
+                        return RehydrateOutcome::AlreadyWritten;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "auth lock poisoned during OAuth keychain rehydrate; falling back to Unlock path");
+                    }
+                }
             }
-            Err(e) => warn!(error = %e, "Keychain mnemonic failed to derive keys; falling back to Restored"),
-        },
+        }
         KeychainResult::NotFound => {
             // Expected for users without a keychain entry yet (first launch
-            // since keychain integration shipped, or post-logout). The user
-            // will see the "re-enter your seed phrase" CTA on signing.
+            // since keychain integration shipped, or post-logout). Mnemonic
+            // users see "re-enter your seed phrase"; OAuth users see the
+            // recovery-password Unlock dialog.
         }
         KeychainResult::Unavailable(reason) => {
-            warn!(reason = %reason, "OS keychain unavailable; falling back to Restored");
+            warn!(reason = %reason, "OS keychain unavailable; falling back to Restored / OAuthOnly");
         }
     }
-    RehydrateOutcome::NeedsActiveAccount(AuthCapabilities::Restored)
+    let fallback = if auth_type == "mnemonic" {
+        AuthCapabilities::Restored
+    } else {
+        AuthCapabilities::OAuthOnly
+    };
+    RehydrateOutcome::NeedsActiveAccount(fallback)
 }
 
 /// Result of session restoration, returned to the frontend for state setup.

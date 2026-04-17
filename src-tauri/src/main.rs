@@ -514,6 +514,13 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // See `sync::user_stopped_migration` for details.
             crate::sync::user_stopped_migration::run_at_startup(&pool).await;
 
+            // One-shot: clear the painted-paused state left behind by
+            // `user_stopped_migration` for users who had the legacy
+            // global "stopped" flag set transiently. Gated by a sentinel
+            // preference so future user-initiated pauses still persist
+            // normally. See `sync::user_stopped_reversal` for details.
+            crate::sync::user_stopped_reversal::run_at_startup(&pool).await;
+
             // One-shot: clear `sync_paths.relative_paths_backfilled_at`
             // for drives that were marked "done" by the pre-NFC backfill
             // (which flipped the flag even when every non-NFC entry was

@@ -397,6 +397,30 @@ async fn install_recovered_mnemonic(account_id: &str, mnemonic: &str, password: 
     .await
     .map_err(|e| AppError::Other(format!("join error: {e}")))?
     .map_err(AppError::Hcfs)?;
+
+    // Cache the plaintext mnemonic in the OS keychain so the next app
+    // launch can rehydrate `AuthInfo.mnemonic` without a server round
+    // trip through `GET /v1/mnemonic-blob` + recovery-password prompt.
+    // Seed-phrase login already writes the keychain in `auth::login`;
+    // this mirror-write covers the OAuth paths (recover_mnemonic,
+    // seal_and_upload_mnemonic, change_recovery_password, and the boot
+    // resumption of a partial rotation) so the same keychain fast-path
+    // in `session_restore::rehydrate_or_restored` applies to every
+    // returning user regardless of how they originally authenticated.
+    //
+    // Best-effort: keychain failures are logged and swallowed. The
+    // plaintext mnemonic is scrubbed at function-return by the
+    // `Zeroizing` wrapper on `mnemonic_owned`; we already hold a second
+    // reference via the `&str` parameter, but the caller's `Zeroizing`
+    // scrubs that one too. The keychain write needs an owned `String`
+    // anyway; the `keyring` crate copies internally.
+    if let Err(e) = crate::auth::keychain::store_mnemonic(account_id, mnemonic) {
+        warn!(
+            account = %crate::console_access::short_ss58(account_id),
+            error = %e,
+            "recovery: could not cache mnemonic to OS keychain; next launch will re-fetch from server"
+        );
+    }
     Ok(())
 }
 
