@@ -514,6 +514,15 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // See `sync::user_stopped_migration` for details.
             crate::sync::user_stopped_migration::run_at_startup(&pool).await;
 
+            // One-shot: clear `sync_paths.relative_paths_backfilled_at`
+            // for drives that were marked "done" by the pre-NFC backfill
+            // (which flipped the flag even when every non-NFC entry was
+            // rejected server-side). After clearing, the next drive init
+            // retries the backfill with NFC-normalised paths. Keyed by a
+            // sentinel preference so it runs exactly once per install.
+            // See `sync::relative_path_backfill_reset` for details.
+            crate::sync::relative_path_backfill_reset::run_at_startup(&pool).await;
+
             // Collapse duplicate welcome notifications from the pre-fix
             // era (the FE sent bare `"Welcome"` which bypassed the
             // `starts_with("Welcome-")` dedup guard, so every login

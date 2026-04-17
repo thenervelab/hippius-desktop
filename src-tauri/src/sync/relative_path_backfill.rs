@@ -124,11 +124,34 @@ pub async fn run_backfill_for_drive(state: &AppState, account_id: &str, label: &
     // 4. Convert + chunk + POST.
     let entries = path_index_to_entries(&path_index, label);
     let total_entries = entries.len() as u64;
-    let Ok((updated, skipped)) = submit_batches(&client, account_id, &folder_hash, entries, label).await else {
+    let Ok((updated, skipped, errors)) = submit_batches(&client, account_id, &folder_hash, entries, label).await else {
         return Ok(BackfillOutcome::RetryLater);
     };
 
-    // 5. Set the flag so we never retry.
+    // 5. If the server rejected any entries, keep the flag NULL so the next
+    //    launch retries. This is what originally bit us in production: the
+    //    original code marked the drive done as long as the HTTP call
+    //    succeeded, even when every non-NFC entry landed in the server's
+    //    per-entry `errors` bucket. When the NFC normalisation fix shipped
+    //    on the client, the retry never happened because the flag was
+    //    already sticky — 402 of 402 non-ASCII filenames stayed NULL
+    //    server-side. Retrying here is safe: `register_relative_paths` is
+    //    idempotent (see hcfs-server `register_relative_path`), so
+    //    re-posting already-registered paths is a no-op and newly-normalised
+    //    entries succeed on the retry.
+    if errors > 0 {
+        warn!(
+            label = %label,
+            total = total_entries,
+            updated,
+            skipped,
+            errors,
+            "backfill: server rejected some entries; not marking drive done, will retry next launch"
+        );
+        return Ok(BackfillOutcome::RetryLater);
+    }
+
+    // 6. All entries accepted — set the flag so we never retry.
     mark_backfilled(&pool, &owner, label).await?;
 
     info!(
@@ -237,18 +260,20 @@ fn path_index_to_entries(path_index: &std::collections::HashMap<[u8; 32], PathBu
 
 /// Post `entries` to the server in chunks of
 /// [`MAX_REGISTER_RELATIVE_PATHS_BATCH`] and return the aggregate
-/// `(updated, skipped)` totals. Per-entry errors are logged at warn level
-/// but do not abort the sweep — they're individual row issues, not batch
-/// failures. Network failures abort and propagate `Err`.
+/// `(updated, skipped, errors)` totals. Per-entry errors are accumulated
+/// rather than aborting — the caller uses the aggregate to decide whether
+/// to mark the drive done (errors == 0) or retry next launch (errors > 0).
+/// Network failures abort the sweep and propagate `Err`.
 async fn submit_batches(
     client: &HcfsClient,
     account_id: &str,
     folder_hash: &str,
     entries: Vec<RegisterRelativePathEntry>,
     label: &str,
-) -> std::result::Result<(u64, u64), hcfs_client::sync::SyncError> {
+) -> std::result::Result<(u64, u64, u64), hcfs_client::sync::SyncError> {
     let mut updated_total = 0u64;
     let mut skipped_total = 0u64;
+    let mut errors_total = 0u64;
 
     for chunk in entries.chunks(MAX_REGISTER_RELATIVE_PATHS_BATCH) {
         let batch: Vec<RegisterRelativePathEntry> = chunk.to_vec();
@@ -266,9 +291,10 @@ async fn submit_batches(
         }
         updated_total += u64::from(result.updated);
         skipped_total += u64::from(result.skipped);
+        errors_total = errors_total.saturating_add(result.errors.len() as u64);
     }
 
-    Ok((updated_total, skipped_total))
+    Ok((updated_total, skipped_total, errors_total))
 }
 
 /// Stand up a fresh `HcfsClient` for the one-shot POST, sharing the same
