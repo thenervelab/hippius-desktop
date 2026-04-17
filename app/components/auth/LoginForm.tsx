@@ -38,7 +38,7 @@ export function LoginForm({
     // TODO: remove this panel before shipping to production. It's an active-
     // debugging aid for OAuth recovery. Tracked with the `DEV_OAUTH_INJECTOR`
     // comment — grep for it when cleaning up.
-    const showDevOAuthInjector = true; // DEV_OAUTH_INJECTOR
+    const showDevOAuthInjector = false; // DEV_OAUTH_INJECTOR
     const [devOAuthUrl, setDevOAuthUrl] = useState("");
     const [devOAuthStatus, setDevOAuthStatus] = useState<string | null>(null);
 
