@@ -86,7 +86,11 @@ const defaults: StatsSourceInput = {
   filteredFiles: [
     { isFolder: false },
     { isFolder: false },
-    { isFolder: true, fileCount: 5 },
+    // Folder with 6 nested files — intentionally ≠ labelStats.Documents.fileCount (7)
+    // so the search/filter branch and the folder-tab branch return distinct
+    // numbers. If a regression reroutes search to labelStats (or vice versa),
+    // the assertion below flips instead of silently agreeing with the other path.
+    { isFolder: true, fileCount: 6 },
   ],
 };
 
@@ -101,6 +105,18 @@ describe("Storage Size Source Selection", () => {
     const result = resolveStorageSize({ ...defaults, selectedFolderTab: "Documents" });
     // 6 KB from labelStats.Documents.totalBytes
     expect(result).toBe("6 KB");
+  });
+
+  it("returns '0 B' when the folder tab is absent from labelStats", () => {
+    // Mirrors the `?? 0` defensive fallback in FilesContainer's
+    // formattedStorageSize — a folder tab that hasn't had its stats
+    // populated yet should render "0 B", not throw or show stale data.
+    const result = resolveStorageSize({
+      ...defaults,
+      selectedFolderTab: "DoesNotExist",
+      labelStats: {},
+    });
+    expect(result).toBe("0 B");
   });
 
   it("returns empty for recent files view", () => {
@@ -130,7 +146,7 @@ describe("Storage Size Source Selection", () => {
   it("handles large indexer values", () => {
     const result = resolveStorageSize({
       ...defaults,
-      remoteStorageTotalBytes: 1500000000000, // 1.5 TB
+      remoteStorageTotalBytes: 1_500_000_000_000, // 1.5 TB
     });
     expect(result).toBe("1.5 TB");
   });
@@ -150,13 +166,14 @@ describe("File Count Source Selection", () => {
 
   it("uses filtered-list count when search is active", () => {
     const result = resolveFileCount({ ...defaults, searchTerm: "report" });
-    // 1 file + 1 file + 5 (folder recursive) = 7
-    expect(result).toBe(7);
+    // 1 file + 1 file + 6 (folder recursive) = 8 — note this is 8, not
+    // labelStats.Documents.fileCount (7). Search must NOT reach into labelStats.
+    expect(result).toBe(8);
   });
 
   it("uses filtered-list count when filters are active", () => {
     const result = resolveFileCount({ ...defaults, activeFiltersLength: 2 });
-    expect(result).toBe(7);
+    expect(result).toBe(8);
   });
 
   it("returns 0 when indexer data is undefined and no folder tab is selected", () => {
