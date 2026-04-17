@@ -8,7 +8,8 @@ import { HelpCircle } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import DialogContainer from "@/components/ui/DialogContainer";
-import { CardButton } from "@/components/ui";
+import { CardButton, Icons } from "@/components/ui";
+import Graphsheet from "@/components/ui/graphsheet";
 import {
   RecoveryCheck,
   activeRecoveryCheckAtom,
@@ -41,7 +42,7 @@ const AccountRecoveryDialog: React.FC = () => {
 
   return (
     <Dialog.Root open>
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[30rem] h-fit p-6" preventClose>
+      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit" preventClose>
           <BranchRouter check={check} onDone={() => setCheck(null)} onRetry={async () => {
             const next = await checkRecoveryState();
             setCheck(next);
@@ -109,21 +110,45 @@ const SignupBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
   }, [canSubmit, password, onDone]);
 
   return (
-    <div className="flex flex-col gap-4">
-      <h3 className="text-xl font-medium text-grey-10">Protect your account</h3>
-      <p className="text-sm text-grey-40">
-        Choose an unlock password to secure your account. You will need it
-        to preview and download your encrypted files on Hippius Console.
-      </p>
+    <div className="px-4 py-6 flex flex-col gap-5">
+      {/* Centered icon header */}
+      <div className="flex flex-col items-center text-center gap-3">
+        <div className="size-14 flex justify-center items-center relative">
+          <Graphsheet
+            majorCell={{ lineColor: [31, 80, 189, 1.0], lineWidth: 2, cellDim: 200 }}
+            minorCell={{ lineColor: [49, 103, 211, 1.0], lineWidth: 1, cellDim: 20 }}
+            className="absolute w-full h-full duration-500 opacity-30 z-0"
+          />
+          <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
+          <div className="h-8 w-8 bg-primary-50 rounded-lg flex items-center justify-center z-20">
+            <Icons.ShieldSecurity className="size-5 text-grey-100" />
+          </div>
+        </div>
+        <div className="flex flex-col gap-1">
+          <h2 className="text-xl font-semibold text-grey-10">Protect Your Account</h2>
+          <p className="text-sm text-grey-50 max-w-sm">
+            Set an unlock password to preview and download your encrypted
+            files on Hippius Console.
+          </p>
+        </div>
+      </div>
 
-      <button
-        type="button"
-        onClick={() => openUrl(UNLOCK_PASSWORD_DOCS_URL)}
-        className="flex items-center gap-1.5 text-xs text-primary-50 hover:text-primary-40 transition-colors"
-      >
-        <HelpCircle className="size-3.5" />
-        Learn how this works
-      </button>
+      {/* Info box */}
+      <div className="p-3 bg-primary-95 border border-primary-80 rounded-lg flex flex-col gap-2">
+        <p className="text-xs text-primary-40">
+          Your files are fully encrypted and only you can access them.
+          This password lets you securely preview and download your
+          files on Hippius Console.
+        </p>
+        <button
+          type="button"
+          onClick={() => openUrl(UNLOCK_PASSWORD_DOCS_URL)}
+          className="flex items-center gap-1.5 text-xs text-primary-50 hover:text-primary-40 transition-colors"
+        >
+          <HelpCircle className="size-3.5" />
+          Learn how this works
+        </button>
+      </div>
 
       <PasswordField label="Unlock password" value={password} onChange={setPassword} placeholder="Enter a strong password" />
       <StrengthMeter strength={strength} />
@@ -135,8 +160,8 @@ const SignupBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
         errorMessage={mismatch ? "Passwords do not match." : undefined}
       />
 
-      <CardButton onClick={handleSubmit} disabled={!canSubmit} loading={submitting} className="self-end">
-        Continue
+      <CardButton className="w-full" onClick={handleSubmit} disabled={!canSubmit} loading={submitting}>
+        Save password
       </CardButton>
     </div>
   );
@@ -170,20 +195,27 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
   }, [canSubmit, password, onDone]);
 
   return (
-    <div className="flex flex-col gap-4">
-      <h3 className="text-xl font-medium text-grey-10">Unlock your account</h3>
-      <p className="text-sm text-grey-40">
-        Enter your unlock password to access your files on this device.
-      </p>
-
-      <button
-        type="button"
-        onClick={() => openUrl(UNLOCK_PASSWORD_DOCS_URL)}
-        className="flex items-center gap-1.5 text-xs text-primary-50 hover:text-primary-40 transition-colors"
-      >
-        <HelpCircle className="size-3.5" />
-        Learn how this works
-      </button>
+    <div className="px-4 py-6 flex flex-col gap-5">
+      {/* Centered icon header */}
+      <div className="flex flex-col items-center text-center gap-3">
+        <div className="size-14 flex justify-center items-center relative">
+          <Graphsheet
+            majorCell={{ lineColor: [31, 80, 189, 1.0], lineWidth: 2, cellDim: 200 }}
+            minorCell={{ lineColor: [49, 103, 211, 1.0], lineWidth: 1, cellDim: 20 }}
+            className="absolute w-full h-full duration-500 opacity-30 z-0"
+          />
+          <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
+          <div className="h-8 w-8 bg-primary-50 rounded-lg flex items-center justify-center z-20">
+            <Icons.ShieldSecurity className="size-5 text-grey-100" />
+          </div>
+        </div>
+        <div className="flex flex-col gap-1">
+          <h2 className="text-xl font-semibold text-grey-10">Unlock Your Account</h2>
+          <p className="text-sm text-grey-50 max-w-sm">
+            Enter your unlock password to access your files on this device.
+          </p>
+        </div>
+      </div>
 
       <PasswordField
         label="Unlock password"
@@ -202,13 +234,15 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
         Forgot your password?
       </button>
       {showForgot && (
-        <p className="text-xs text-grey-50 bg-grey-95 rounded p-3">
-          Your files are encrypted with this password and cannot be recovered without it.
-          The password is never sent to our servers, so we cannot reset it for you.
-        </p>
+        <div className="p-3 bg-primary-95 border border-primary-80 rounded-lg">
+          <p className="text-xs text-primary-40">
+            Your files are encrypted with this password and cannot be recovered without it.
+            The password is never sent to our servers, so we cannot reset it for you.
+          </p>
+        </div>
       )}
 
-      <CardButton onClick={handleSubmit} disabled={!canSubmit} loading={submitting} className="self-end">
+      <CardButton className="w-full" onClick={handleSubmit} disabled={!canSubmit} loading={submitting}>
         Unlock
       </CardButton>
     </div>
@@ -252,12 +286,29 @@ const UnknownBranch: React.FC<{ onRetry: () => Promise<void> }> = ({ onRetry }) 
   }, [onRetry]);
 
   return (
-    <div className="flex flex-col gap-4">
-      <h3 className="text-xl font-medium text-grey-10">Check your connection</h3>
-      <p className="text-sm text-grey-40">
-        We couldn&apos;t reach the recovery service. Make sure you&apos;re online and try again.
-      </p>
-      <CardButton onClick={handleRetry} loading={retrying} className="self-end">
+    <div className="px-4 py-6 flex flex-col gap-5">
+      {/* Centered icon header */}
+      <div className="flex flex-col items-center text-center gap-3">
+        <div className="size-14 flex justify-center items-center relative">
+          <Graphsheet
+            majorCell={{ lineColor: [31, 80, 189, 1.0], lineWidth: 2, cellDim: 200 }}
+            minorCell={{ lineColor: [49, 103, 211, 1.0], lineWidth: 1, cellDim: 20 }}
+            className="absolute w-full h-full duration-500 opacity-30 z-0"
+          />
+          <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
+          <div className="h-8 w-8 bg-primary-50 rounded-lg flex items-center justify-center z-20">
+            <Icons.ShieldSecurity className="size-5 text-grey-100" />
+          </div>
+        </div>
+        <div className="flex flex-col gap-1">
+          <h2 className="text-xl font-semibold text-grey-10">Check Your Connection</h2>
+          <p className="text-sm text-grey-50 max-w-sm">
+            We couldn&apos;t reach the recovery service. Make sure you&apos;re online and try again.
+          </p>
+        </div>
+      </div>
+
+      <CardButton className="w-full" onClick={handleRetry} loading={retrying}>
         Retry
       </CardButton>
     </div>
