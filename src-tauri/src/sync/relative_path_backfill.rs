@@ -193,14 +193,34 @@ async fn snapshot_path_index(state: &AppState, label: &str) -> Option<std::colle
 /// Convert the raw `FileId → PathBuf` map into the wire format hcfs-client
 /// expects. Non-UTF-8 paths are skipped with a warning — they would have
 /// failed anywhere downstream anyway.
+///
+/// Paths are NFC-normalised before being pushed. macOS APFS/HFS+ return
+/// filenames in NFD (decomposed — `é` as `e` + combining-acute), and the
+/// server's `path_validator::validate` hard-rejects any non-NFC path. Without
+/// this normalisation every accented-filename entry in every backfill batch
+/// would land in the server's per-entry `errors` bucket, leaving
+/// `relative_path` NULL and the file hidden from `/browse` forever (the
+/// backfill flag only retries while it's still NULL on the desktop, but the
+/// server-side NULL is what `/browse` filters on — so the two NULLs are
+/// unrelated and the row never recovers). hcfs-client does the same
+/// normalisation in `path_to_posix_relative` for the upload + rename manifest
+/// paths; this is the matching chokepoint for backfill.
 fn path_index_to_entries(path_index: &std::collections::HashMap<[u8; 32], PathBuf>, label: &str) -> Vec<RegisterRelativePathEntry> {
+    use unicode_normalization::UnicodeNormalization;
+
     let mut out = Vec::with_capacity(path_index.len());
     for (path_hash, rel_path) in path_index {
         match rel_path.to_str() {
-            Some(s) if !s.is_empty() => out.push(RegisterRelativePathEntry {
-                path_hash: *path_hash,
-                relative_path: s.to_owned(),
-            }),
+            Some(s) if !s.is_empty() => {
+                // NFC recomposition is segment-local (never crosses `/`), so
+                // normalising the whole joined string is byte-equivalent to
+                // per-segment normalisation and a single allocation cheaper.
+                let normalized: String = s.nfc().collect();
+                out.push(RegisterRelativePathEntry {
+                    path_hash: *path_hash,
+                    relative_path: normalized,
+                });
+            }
             Some(_) => {
                 // Empty relative_path — not something hcfs-client would
                 // have produced, but guard anyway so the server isn't
@@ -427,6 +447,45 @@ mod tests {
         let paths: std::collections::HashSet<&str> = out.iter().map(|e| e.relative_path.as_str()).collect();
         assert!(paths.contains("docs/readme.md"));
         assert!(paths.contains("café/résumé.txt"));
+    }
+
+    /// Regression guard for the 409/436 NULL-rel-path incident: when the
+    /// path_index holds NFD strings (as macOS APFS produces — `é` stored as
+    /// `e` + combining acute `U+0301`, `à` as `a` + combining grave `U+0300`),
+    /// the entries posted to the server MUST be in NFC. Without this, the
+    /// server's `path_validator` rejects every entry with `NotNfc`, the row
+    /// stays NULL, and `/browse` silently hides the file from the user.
+    #[test]
+    fn path_index_to_entries_normalizes_nfd_to_nfc() {
+        use unicode_normalization::is_nfc;
+
+        let mut idx = std::collections::HashMap::new();
+        // NFD forms of the real-world filename that surfaced the bug:
+        // "Capture d'écran … à ….png". `\u{2019}` (RIGHT SINGLE QUOTATION
+        // MARK) is already NFC; `e\u{0301}` decomposes to `\u{00E9}` (é),
+        // `a\u{0300}` decomposes to `\u{00E0}` (à).
+        let nfd = "Capture d\u{2019}e\u{0301}cran a\u{0300} 17.40.png";
+        idx.insert([1u8; 32], PathBuf::from(nfd));
+        // Nested: both parent dir and filename in NFD.
+        let nfd_nested = "cafe\u{0301}/re\u{0301}sume\u{0301}.txt";
+        idx.insert([2u8; 32], PathBuf::from(nfd_nested));
+
+        let out = path_index_to_entries(&idx, "test-label");
+
+        assert_eq!(out.len(), 2);
+        for entry in &out {
+            assert!(
+                is_nfc(&entry.relative_path),
+                "entry relative_path not NFC: {:?}",
+                entry.relative_path
+            );
+        }
+
+        // Tight assertion on the exact NFC output so a regression where the
+        // normalisation silently degrades (e.g. `to_lowercase` bug) surfaces.
+        let paths: std::collections::HashSet<&str> = out.iter().map(|e| e.relative_path.as_str()).collect();
+        assert!(paths.contains("Capture d\u{2019}\u{00E9}cran \u{00E0} 17.40.png"));
+        assert!(paths.contains("caf\u{00E9}/r\u{00E9}sum\u{00E9}.txt"));
     }
 
     /// Regression guard for the chunking math: 501 entries must produce
