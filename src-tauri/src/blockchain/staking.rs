@@ -16,7 +16,9 @@ pub async fn stake_bond(state: tauri::State<'_, crate::app_state::AppState>, amo
         .parse()
         .map_err(|e| crate::error::AppError::Other(format!("Invalid amount: {e}")))?;
 
-    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
+    let account_id = address
+        .parse::<subxt::utils::AccountId32>()
+        .map_err(|_| "Invalid address".to_string())?;
 
     let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
     let already_bonded = client
@@ -99,7 +101,9 @@ pub async fn stake_withdraw_unbonded(state: tauri::State<'_, crate::app_state::A
     let (signer, address) = get_signer_and_address(&state)?;
     let client = get_substrate_client(&state).await?;
 
-    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
+    let account_id = address
+        .parse::<subxt::utils::AccountId32>()
+        .map_err(|_| "Invalid address".to_string())?;
 
     let spans_query = custom_runtime::storage().staking().slashing_spans(&account_id);
     let num_slashing_spans = match client
@@ -140,7 +144,9 @@ pub async fn stake_claim_rewards(state: tauri::State<'_, crate::app_state::AppSt
     let (signer, address) = get_signer_and_address(&state)?;
     let client = get_substrate_client(&state).await?;
 
-    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
+    let account_id = address
+        .parse::<subxt::utils::AccountId32>()
+        .map_err(|_| "Invalid address".to_string())?;
 
     let era_query = custom_runtime::storage().staking().current_era();
     let current_era = client

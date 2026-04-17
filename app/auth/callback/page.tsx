@@ -10,14 +10,18 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { invoke } from "@tauri-apps/api/core";
+import { useSetAtom } from "jotai";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Loader2, AlertCircle } from "lucide-react";
 import type { OAuthSession } from "@/app/lib/types/oAuth";
+import { activeRecoveryCheckAtom } from "@/app/lib/global-atoms/recoveryAtoms";
+import { checkRecoveryState } from "@/app/lib/utils/recovery";
 
 export default function OAuthCallbackPage() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const { setOAuthSession } = useWalletAuth();
+    const setRecoveryCheck = useSetAtom(activeRecoveryCheckAtom);
     const [error, setError] = useState<string | null>(null);
     const hasProcessed = useRef(false);
 
@@ -67,6 +71,11 @@ export default function OAuthCallbackPage() {
 
                 const token = paramsToUse.get("token") || undefined;
                 const code = paramsToUse.get("code") || undefined;
+                // `state` is the CSRF token we minted in start_oauth_flow
+                // and threaded through the callback URL. Forward it to
+                // Rust unchanged — complete_oauth_flow rejects the
+                // callback outright if it doesn't match a pending flow.
+                const state = paramsToUse.get("state") || undefined;
                 const error = paramsToUse.get("error") || undefined;
                 const errorDescription = paramsToUse.get("error_description") || undefined;
 
@@ -93,6 +102,7 @@ export default function OAuthCallbackPage() {
                     params: {
                         token: token || null,
                         code: code || null,
+                        state: state || null,
                         error: error || null,
                         errorDescription: errorDescription || null,
                         userId: userId ? parseInt(userId, 10) : null,
@@ -123,6 +133,23 @@ export default function OAuthCallbackPage() {
                 // `ensure_welcome_notification`, so there is no FE-side
                 // addNotification call here anymore.
                 await setOAuthSession(session);
+
+                // Populate the recovery atom BEFORE navigating so the
+                // AccountRecoveryDialog renders in the same tick the
+                // (pages) layout mounts. The backend also emits
+                // `oauth_recovery_check_needed` during
+                // `complete_oauth_flow` and the layout's
+                // RecoveryEventListener picks that up — this explicit
+                // check is the primary path (no race between emit and
+                // subscribe), the event is belt-and-braces.
+                try {
+                    const recoveryCheck = await checkRecoveryState();
+                    setRecoveryCheck(recoveryCheck);
+                } catch (err) {
+                    console.warn("[OAuthCallback] Recovery check failed:", err);
+                    // Fall through — the event listener and Rust gate
+                    // will still fire the dialog on the next tick.
+                }
 
                 // Get redirect path from URL params, sessionStorage, or default
                 const urlRedirect = searchParams.get("redirect");

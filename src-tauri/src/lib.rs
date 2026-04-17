@@ -10,10 +10,15 @@ pub mod app_state;
 pub mod auth;
 pub mod billing;
 pub mod blockchain;
+pub mod console_access;
 pub mod crypto;
 pub mod error;
 pub mod infra;
 pub mod nebula;
 pub mod notifications;
+pub mod recovery;
 pub mod sync;
 pub mod utils;
+
+#[cfg(test)]
+mod test_helpers;

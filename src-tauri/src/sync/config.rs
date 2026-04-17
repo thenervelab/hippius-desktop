@@ -13,6 +13,15 @@ use crate::error::Result;
 use hcfs_client::client::HcfsClientConfig;
 use sqlx::sqlite::SqlitePool;
 
+/// Whether HCFS clients should accept invalid TLS certificates.
+///
+/// `true` only in debug builds so local development against a self-signed
+/// HCFS server works without manual trust store setup. Release builds verify
+/// certificates the same way every other `reqwest::Client` in the codebase
+/// does, protecting bearer tokens and sync metadata from MITM tampering on
+/// the path to `arion.hippius.com`.
+pub(crate) const ACCEPT_INVALID_CERTS: bool = cfg!(debug_assertions);
+
 /// HCFS server configuration returned by `get_hcfs_config`.
 #[derive(serde::Serialize, Clone)]
 pub struct HcfsConfigResult {
@@ -161,7 +170,7 @@ pub(crate) fn build_hcfs_config(server_url: &str, bearer_token: &str, account_id
     HcfsClientConfig {
         base_url: server_url.to_string(),
         bearer_token: bearer_token.to_string(),
-        accept_invalid_certs: true,
+        accept_invalid_certs: ACCEPT_INVALID_CERTS,
         billing_bypass_token: None,
         ss58_address: account_id.to_string(),
         folder_hash: folder_hash.to_string(),
@@ -243,7 +252,7 @@ mod tests {
         assert_eq!(cfg.bearer_token, "tok123");
         assert_eq!(cfg.ss58_address, "5GrwvaEF");
         assert_eq!(cfg.folder_hash, "abcd1234");
-        assert!(cfg.accept_invalid_certs);
+        assert_eq!(cfg.accept_invalid_certs, ACCEPT_INVALID_CERTS);
         assert!(cfg.billing_bypass_token.is_none());
     }
 

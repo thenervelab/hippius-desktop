@@ -74,6 +74,16 @@ async fn spawn_mock_server() -> (String, MockBilling) {
 /// server doesn't validate it — but it must be present and non-empty
 /// or `ApiClient::get` short-circuits before hitting the network.
 async fn setup_pool_with_token(account_id: &str) -> SqlitePool {
+    // Prevent `auth_session_repo::upsert` from touching the real OS
+    // keychain when running this integration test — without the
+    // disable flag the repo would store `test-token-not-validated` in
+    // the developer's macOS Keychain and leave residue behind.
+    // SAFETY: process-global env mutation, deterministic value, set
+    // before any auth_session_repo call in this test file.
+    unsafe {
+        std::env::set_var("HIPPIUS_DISABLE_TOKEN_KEYCHAIN", "1");
+    }
+
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
 
     sqlx::query(

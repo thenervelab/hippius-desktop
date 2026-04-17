@@ -95,13 +95,15 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
     () => [
       columnHelper.accessor("subject", {
         header: "TICKET SUBJECT",
+        size: 30,
         cell: ({ getValue, row }) => {
           const subject = getValue();
           const ticket = row.original;
           return (
             <button
               onClick={() => onViewMessages?.(ticket)}
-              className="text-grey-20 text-left hover:underline cursor-pointer"
+              className="text-grey-20 text-left hover:underline cursor-pointer block w-full truncate"
+              title={subject}
             >
               {subject}
             </button>
@@ -111,6 +113,7 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
       }),
       columnHelper.accessor("status", {
         header: "STATUS",
+        size: 15,
         cell: (d) => {
           const status = d.getValue();
           return <StatusBadge status={status} />;
@@ -126,6 +129,7 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
       }),
       columnHelper.accessor("category", {
         header: "CATEGORY",
+        size: 20,
         cell: (d) => {
           const category = d.getValue();
           return <CategoryBadge category={category} />;
@@ -135,6 +139,7 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
       columnHelper.display({
         id: "severity",
         header: "SEVERITY",
+        size: 12,
         cell: ({ row }) => {
           const severity = row.original.priority || "medium";
           return (
@@ -147,17 +152,13 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
       }),
       columnHelper.accessor("created_at", {
         header: "CREATED AT",
+        size: 18,
         cell: (d) => formatDate(d.getValue()),
         enableSorting: true,
       }),
       columnHelper.display({
         id: "actions",
         header: "",
-        size: 80,
-        meta: {
-          cellClassName: "w-[5rem] max-w-[5rem]",
-          headerClassName: "w-[5rem] max-w-[5rem]",
-        },
         cell: ({ row }) => {
           const ticket = row.original;
           const menuItems = [];
@@ -184,16 +185,18 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
           if (menuItems.length === 0) return null;
 
           return (
-            <TableActionMenu dropdownTitle="Ticket Options" items={menuItems}>
-              <Button variant="ghost" size="icon" className="text-grey-70">
-                <MoreVertical className="size-4" />
-              </Button>
-            </TableActionMenu>
+            <div className="flex justify-center">
+              <TableActionMenu dropdownTitle="Ticket Options" items={menuItems}>
+                <Button variant="ghost" size="icon" className="text-grey-70">
+                  <MoreVertical className="size-4" />
+                </Button>
+              </TableActionMenu>
+            </div>
           );
         },
       }),
     ],
-    [onViewMessages, onCloseTicket]
+    [onViewMessages, onCloseTicket],
   );
 
   const table = useReactTable({
@@ -223,7 +226,7 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
               {table.getHeaderGroups().map((headerGroup) => (
                 <Tr key={headerGroup.id}>
                   {headerGroup.headers.map((header) => (
-                    <Th key={header.id} header={header} />
+                    <Th key={header.id} header={header} columnWidth={header.id !== "actions" ? header.column.columnDef.size : undefined} />
                   ))}
                 </Tr>
               ))}
@@ -234,12 +237,12 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
                 rows={10}
                 columns={columns.length}
                 columnWidths={[
-                  "18.75rem",
-                  "9.375rem",
-                  "9.375rem",
-                  "7.5rem",
-                  "11.25rem",
-                  "5rem",
+                  "30%",
+                  "15%",
+                  "20%",
+                  "12%",
+                  "18%",
+                  "40px",
                 ]}
               />
             </TBody>
@@ -261,7 +264,7 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
               {table.getHeaderGroups().map((headerGroup) => (
                 <Tr key={headerGroup.id}>
                   {headerGroup.headers.map((header) => (
-                    <Th key={header.id} header={header} />
+                    <Th key={header.id} header={header} columnWidth={header.id !== "actions" ? header.column.columnDef.size : undefined} />
                   ))}
                 </Tr>
               ))}
@@ -278,11 +281,11 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
                     transparent
                     className={cn(
                       shouldHighlight &&
-                        "bg-primary-70/10 hover:bg-primary-70/20 border-l-[0.375rem]  border-l-primary-50"
+                        "bg-primary-70/10 hover:bg-primary-70/20 border-l-[0.375rem]  border-l-primary-50",
                     )}
                   >
                     {row.getVisibleCells().map((cell) => (
-                      <Td key={cell.id} cell={cell} />
+                      <Td key={cell.id} cell={cell} columnWidth={cell.column.id !== "actions" ? cell.column.columnDef.size : undefined} />
                     ))}
                   </Tr>
                 );

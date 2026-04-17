@@ -14,6 +14,7 @@ import { AccessKeyLoginForm } from "./AccessKeyLoginForm";
 import * as Typography from "@/components/ui/typography";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
+import { isTauri } from "@tauri-apps/api/core";
 import { useRouter } from "next/navigation";
 
 export function LoginForm({
@@ -24,6 +25,45 @@ export function LoginForm({
     const [showAccessKeyForm, setShowAccessKeyForm] = useState(false);
     const [version, setVersion] = useState<string>("");
     const router = useRouter();
+
+    // Dev OAuth callback URL injector. In `pnpm tauri:dev` / `pnpm tauri:static`
+    // builds the macOS deep-link routing to `hippiusapp://` usually points at the
+    // installed .app, not the dev binary, so we can't test OAuth end-to-end
+    // without a full DMG rebuild. This panel short-circuits that: paste the
+    // callback URL the browser produced (copy it from the Network tab or the
+    // console's "Deep link URL" log on console.hippius.com/auth/callback),
+    // hit "Inject", and the app routes through exactly the same Rust logic a
+    // real deep link would trigger.
+    //
+    // TODO: remove this panel before shipping to production. It's an active-
+    // debugging aid for OAuth recovery. Tracked with the `DEV_OAUTH_INJECTOR`
+    // comment — grep for it when cleaning up.
+    const showDevOAuthInjector = false; // DEV_OAUTH_INJECTOR
+    const [devOAuthUrl, setDevOAuthUrl] = useState("");
+    const [devOAuthStatus, setDevOAuthStatus] = useState<string | null>(null);
+
+    const handleDevInjectOAuthUrl = async () => {
+        const trimmed = devOAuthUrl.trim();
+        if (!trimmed) return;
+        try {
+            setDevOAuthStatus("Parsing...");
+            const { invoke } = await import("@tauri-apps/api/core");
+            const result = await invoke<{ isCallback: boolean; callbackPath: string | null }>(
+                "parse_oauth_deep_link",
+                { url: trimmed },
+            );
+            if (result.isCallback && result.callbackPath) {
+                setDevOAuthStatus(`Routing to ${result.callbackPath}`);
+                localStorage.setItem("last_processed_deep_link", trimmed);
+                localStorage.setItem("last_processed_deep_link_time", Date.now().toString());
+                router.push(result.callbackPath);
+            } else {
+                setDevOAuthStatus("Not an OAuth callback URL.");
+            }
+        } catch (e: any) {
+            setDevOAuthStatus(`Error: ${e?.message || String(e)}`);
+        }
+    };
 
     // ✅ Deep link debug state (temporary)
     // const [dlRaw, setDlRaw] = useState<string | null>(null);
@@ -72,7 +112,7 @@ export function LoginForm({
 
     // ✅ Deep link handler - processes OAuth callbacks and redirects to /auth/callback
     useEffect(() => {
-        if (typeof window === "undefined" || !("__TAURI__" in window)) return;
+        if (typeof window === "undefined" || !isTauri()) return;
 
         let unlisten: null | (() => void) = null;
         let initialDeepLinkProcessed = false;
@@ -179,6 +219,38 @@ export function LoginForm({
                 <div className="space-y-[min(0.5rem,8px)]">
                     <OAuthButtonsGroup onAccessKeyClick={() => setShowAccessKeyForm(true)} />
                 </div>
+
+                {showDevOAuthInjector && (
+                    <div className="mt-4 rounded-lg border border-dashed border-grey-80 bg-grey-95 p-3 dark:border-[#353535] dark:bg-[#202020]">
+                        <p className="mb-2 text-xs font-semibold text-grey-20 dark:text-white">
+                            Dev: inject OAuth callback URL
+                        </p>
+                        <p className="mb-2 text-[10px] text-grey-40 dark:text-[#a1a1a1]">
+                            Paste the <code>hippiusapp://auth/callback?...</code> (or raw console callback)
+                            URL from the browser to bypass OS deep-link routing.
+                        </p>
+                        <textarea
+                            value={devOAuthUrl}
+                            onChange={(e) => setDevOAuthUrl(e.target.value)}
+                            placeholder="hippiusapp://auth/callback?code=...&state=...&username=...&id=..."
+                            className="mb-2 h-20 w-full rounded border border-grey-80 bg-white p-2 font-mono text-[11px] text-grey-10 dark:border-[#353535] dark:bg-[#161616] dark:text-white"
+                        />
+                        <div className="flex items-center justify-between gap-2">
+                            <button
+                                type="button"
+                                onClick={handleDevInjectOAuthUrl}
+                                className="rounded bg-primary-50 px-3 py-1 text-xs font-medium text-white hover:bg-primary-60"
+                            >
+                                Inject
+                            </button>
+                            {devOAuthStatus && (
+                                <span className="text-[10px] text-grey-40 dark:text-[#a1a1a1]">
+                                    {devOAuthStatus}
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* ✅ Deep link debug panel (remove later) */}

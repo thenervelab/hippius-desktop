@@ -22,6 +22,8 @@ import { appStore } from "./store/jotaiStore";
 import { migrationCheckAtom, DEFAULT_MIGRATION_CHECK_STATE } from "./global-atoms/migrationAtoms";
 import { splashCompleteAtom } from "./global-atoms/splashAtoms";
 import { syncRequiresReauthAtom } from "./global-atoms/unpinAtoms";
+import { scheduleOAuthSyncInit } from "./auth/scheduleOAuthSyncInit";
+import { isMasterMnemonicUnrecoverable } from "./utils/dispatchTauriError";
 import { useAtomValue } from "jotai";
 
 /** Result from Rust login_with_mnemonic command */
@@ -99,35 +101,45 @@ export function WalletAuthProvider({
   >(null);
 
   const syncInitialized = useRef(false);
-  const pendingSyncInit = useRef<{ accountId: string; mnemonic?: string } | null>(null);
+  const pendingSyncInit = useRef<{ accountId: string } | null>(null);
   const splashComplete = useAtomValue(splashCompleteAtom);
   const logoutTimerRef = useRef<NodeJS.Timeout | null>(null);
   // Ref mirrors polkadotAddress so scheduleLogout's timer callback
   // always reads the current value (avoids stale closure).
   const polkadotAddressRef = useRef<string | null>(null);
-  // Keep the login mnemonic in-memory so getMnemonic() can return it
-  // even before a Drive is initialized (e.g. on a new device before
-  // the user creates their first sync folder).
-  const sessionMnemonicRef = useRef<string | null>(null);
 
   useEffect(() => {
     polkadotAddressRef.current = polkadotAddress;
   }, [polkadotAddress]);
 
+  /**
+   * Return the active BIP-39 mnemonic if — and ONLY if — the user is
+   * about to see it (recovery-phrase reveal dialog). For every other
+   * caller this deliberately returns `null` so the seed phrase never
+   * round-trips through JavaScript memory.
+   *
+   * Historical context: this helper used to fall back to an in-memory
+   * `sessionMnemonicRef` so that downstream callers could pass the
+   * phrase to Rust IPCs like `initialize_sync` / `auto_init_sync` /
+   * `resume_drive`. Every one of those commands already resolves the
+   * mnemonic from `AuthInfo` (via `get_mnemonic_for_account`), so the
+   * FE roundtrip was pure pass-through. The fallback has been removed.
+   * Callers that pass the result into a Rust IPC should pass `null`
+   * instead — Rust will read the cached mnemonic from `AuthInfo`.
+   *
+   * The one legitimate consumer is the `RecoveryPhraseSettings` reveal
+   * flow, which displays the phrase to the user after an explicit
+   * click. It calls `get_drive_mnemonic` directly; this helper just
+   * forwards the same call for callers that haven't migrated yet.
+   */
   const getMnemonic = useCallback(async (): Promise<string | null> => {
-    // 1. Try the Rust Drive backend (master mnemonic on disk)
+    if (!polkadotAddress) return null;
     try {
-      if (polkadotAddress) {
-        const result = await invoke<string>("get_drive_mnemonic", { accountId: polkadotAddress });
-        if (result) return result;
-      }
+      const result = await invoke<string>("get_drive_mnemonic", { accountId: polkadotAddress });
+      return result || null;
     } catch {
-      // Drive not initialized or password unavailable — fall through
+      return null;
     }
-    // 2. Fall back to the in-memory login mnemonic. This covers the
-    //    case where the user logged in on a new device but hasn't
-    //    created a sync folder yet (no Drive on disk).
-    return sessionMnemonicRef.current;
   }, [polkadotAddress]);
 
   const logout = useCallback(
@@ -164,7 +176,6 @@ export function WalletAuthProvider({
       setIsAuthenticated(false);
       setSessionTimeRemaining(null);
       syncInitialized.current = false;
-      sessionMnemonicRef.current = null;
       // Clear the reauth banner on logout so a brand-new login
       // session starts with a clean slate.
       appStore.set(syncRequiresReauthAtom, false);
@@ -190,17 +201,19 @@ export function WalletAuthProvider({
   }
 
   /** Start sync for the given account, called after any successful auth.
-   *  Defers until the splash screen is done so sync doesn't race the loading screen. */
-  function initSync(accountId: string, mnemonic?: string) {
+   *  Defers until the splash screen is done so sync doesn't race the loading screen.
+   *
+   *  No longer takes a mnemonic argument — Rust's `auto_init_sync` resolves
+   *  the mnemonic from `AuthInfo` via the 5-stage `get_mnemonic_for_account`
+   *  fallback chain, and `login_with_mnemonic` / `ensure_sync_mnemonic`
+   *  populate `AuthInfo` before this is called. Passing the phrase through
+   *  JavaScript added no capability and kept it alive in heap memory longer
+   *  than necessary. */
+  function initSync(accountId: string) {
     if (syncInitialized.current) return;
-    // Store the mnemonic so getMnemonic() can return it later
-    // (e.g. when migration needs it for OAuth users)
-    if (mnemonic && !sessionMnemonicRef.current) {
-      sessionMnemonicRef.current = mnemonic;
-    }
     if (!splashComplete) {
       // Splash still showing — defer until it finishes
-      pendingSyncInit.current = { accountId, mnemonic };
+      pendingSyncInit.current = { accountId };
       return;
     }
     syncInitialized.current = true;
@@ -208,7 +221,7 @@ export function WalletAuthProvider({
     invoke("stop_sync")
       .catch(() => { })
       .then(() => {
-        tryAutoInitSync(accountId, mnemonic).catch((err) =>
+        tryAutoInitSync(accountId).catch((err) =>
           console.error("[WalletAuth] Failed to start sync:", err)
         );
       });
@@ -218,8 +231,8 @@ export function WalletAuthProvider({
   // Trigger deferred sync init once the splash screen finishes
   useEffect(() => {
     if (splashComplete && pendingSyncInit.current && !syncInitialized.current) {
-      const { accountId, mnemonic } = pendingSyncInit.current;
-      initSync(accountId, mnemonic);
+      const { accountId } = pendingSyncInit.current;
+      initSync(accountId);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [splashComplete]);
@@ -309,15 +322,24 @@ export function WalletAuthProvider({
       if (result.substrateAddress) {
         if (result.needsSyncMnemonic) {
           try {
-            const mnemonic = await invoke<string>("ensure_sync_mnemonic", { accountId: result.substrateAddress });
-            initSync(result.substrateAddress, mnemonic);
+            // Rust caches the mnemonic in AuthInfo; we don't read it back.
+            await invoke<void>("ensure_sync_mnemonic", { accountId: result.substrateAddress });
           } catch (err) {
-            console.error("[WalletAuth] Failed to get sync mnemonic:", err);
-            initSync(result.substrateAddress);
+            console.error("[WalletAuth] ensure_sync_mnemonic failed:", err);
+            // Rust refuses to mint a fresh mnemonic when encrypted
+            // state already exists on disk — returning
+            // `NotReady(MasterMnemonicUnrecoverable)`. Flip the
+            // reauth banner so the user can recover via re-entering
+            // their seed phrase, instead of silently falling through
+            // to `initSync` which would surface as the opaque
+            // `Crypto: decryption failed` error on the next drive
+            // resume.
+            if (isMasterMnemonicUnrecoverable(err)) {
+              appStore.set(syncRequiresReauthAtom, true);
+            }
           }
-        } else {
-          initSync(result.substrateAddress);
         }
+        initSync(result.substrateAddress);
       }
 
       if (result.redirectTo) {
@@ -337,7 +359,6 @@ export function WalletAuthProvider({
     inputMnemonic: string,
     logoutTimeInMinutes?: number
   ): Promise<boolean> => {
-    sessionMnemonicRef.current = inputMnemonic;
     try {
       // Validate mnemonic in Rust
       const valid = await invoke<boolean>("validate_mnemonic", { mnemonic: inputMnemonic });
@@ -346,7 +367,11 @@ export function WalletAuthProvider({
         return false;
       }
 
-      // Full login via Rust: derive keys + challenge-response + persist session
+      // Full login via Rust: derive keys + challenge-response + persist session.
+      // The mnemonic stays inside this try block and is dropped as soon as
+      // the login_with_mnemonic IPC returns — Rust now owns it via
+      // AuthInfo.mnemonic and the OS keychain, so the FE never needs to
+      // hold it again.
       const result = await invoke<LoginResult>("login_with_mnemonic", {
         mnemonic: inputMnemonic,
         logoutTimeMinutes: logoutTimeInMinutes ?? 1440,
@@ -376,7 +401,7 @@ export function WalletAuthProvider({
       setSessionTimeRemaining(timeRemaining === Infinity ? null : timeRemaining);
       scheduleLogout(timeRemaining);
 
-      initSync(result.substrateAddress, inputMnemonic);
+      initSync(result.substrateAddress);
 
       return true;
     } catch (err) {
@@ -390,7 +415,6 @@ export function WalletAuthProvider({
   // Mnemonic login — all crypto happens in Rust
   const login = async (inputMnemonic: string, referralCode?: string | null): Promise<string> => {
     setIsLoading(true);
-    sessionMnemonicRef.current = inputMnemonic;
     try {
       logger.debug("[WalletAuth] Starting mnemonic login via Rust");
 
@@ -419,7 +443,7 @@ export function WalletAuthProvider({
       // flow.
       appStore.set(syncRequiresReauthAtom, false);
 
-      initSync(result.substrateAddress, inputMnemonic);
+      initSync(result.substrateAddress);
 
       return result.substrateAddress;
     } catch (error) {
@@ -465,13 +489,13 @@ export function WalletAuthProvider({
     logger.debug("[WalletAuth] OAuth session persisted and state updated");
 
     if (session.substrateAddress && !syncInitialized.current) {
-      try {
-        const mnemonic = await invoke<string>("ensure_sync_mnemonic", { accountId: session.substrateAddress });
-        initSync(session.substrateAddress, mnemonic);
-      } catch (err) {
-        console.error("[WalletAuth] Failed to get sync mnemonic for OAuth:", err);
-        initSync(session.substrateAddress);
-      }
+      // Fire-and-forget: `ensure_sync_mnemonic` parks on the recovery
+      // gate when `complete_oauth_flow` set it to `Pending` (fresh-
+      // device Unlock). Awaiting inline would block the OAuth callback
+      // page — preventing navigation into `(pages)` where the recovery
+      // dialog mounts, which is the only way the gate ever resolves.
+      // See `scheduleOAuthSyncInit` for the detached sequencing.
+      void scheduleOAuthSyncInit(session.substrateAddress, initSync);
     }
   };
 

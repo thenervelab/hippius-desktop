@@ -56,6 +56,32 @@ pub const DRIVE_REMOVED: &str = "hcfs_drive_removed";
 /// Emitted when files have repeatedly failed to sync (threshold reached).
 pub const FILES_FAILED_REPEATEDLY: &str = "hcfs_files_failed_repeatedly";
 
+/// Exact stringification of [`hcfs_client::sync::SyncError::Cancelled`].
+///
+/// The upstream library stringifies cancel results (both user-initiated — pause,
+/// remove, logout teardown — and internal stall-watchdog self-cancels) through
+/// the same `SyncError::Cancelled` variant before routing them into
+/// `SyncEvent::SyncError`. The desktop bridge treats every error matching this
+/// marker as non-user-actionable and silences it: cancels never produce
+/// persisted notifications.
+///
+/// A regression test (`cancelled_marker_matches_upstream` in this module)
+/// asserts the marker still matches after an `hcfs-client` bump — if the
+/// upstream reword ever diverges, silencing breaks and cancels start creating
+/// "Sync Failed" rows again.
+pub const CANCELLED_MARKER: &str = "Operation cancelled by user";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Catches upstream string drift when bumping the `hcfs-client` git rev.
+    #[test]
+    fn cancelled_marker_matches_upstream() {
+        assert_eq!(hcfs_client::sync::SyncError::Cancelled.to_string(), CANCELLED_MARKER);
+    }
+}
+
 // ── Payload structs for direct Tauri emission ──────────────────────────
 // Used by lifecycle.rs (progress callbacks) and control.rs (manual sync).
 // The library's SyncEvent enum handles most events, but these are needed

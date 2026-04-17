@@ -10,7 +10,6 @@ import { Account } from "@/lib/types";
 import { useRemoteStorageStats } from "@/app/lib/hooks/api/useRemoteStorageStats";
 import useFilesCount from "@/app/lib/hooks/api/useFilesCount";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
-import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { toast } from "sonner";
 
 export default function DetailList() {
@@ -65,16 +64,18 @@ export default function DetailList() {
   const getCreditsValue = () => {
     if (isCreditsLoading) return "Loading...";
     if (creditsError) return "Error";
-    if (credits !== undefined) return formatCreditBalance(credits);
+    if (credits !== undefined) return credits.hip;
     return "--";
   };
 
-  // Storage subtitle from Rust (replaces duplicated binary search)
+  // Storage subtitle from Rust (replaces duplicated binary search).
+  // TODO(#2): once the capacity binary search accepts a planck string,
+  // drop the f64 conversion here and pass `credits.planck.toString()`.
   const [storageSubtitle, setStorageSubtitle] = useState("≈0 GB/mo Storage");
   useEffect(() => {
-    if (credits === undefined || credits === BigInt(0)) return;
-    const numCredits = Number(credits / BigInt(10 ** 18)) + Number(credits % BigInt(10 ** 18)) / 1e18;
-    if (numCredits <= 0) return;
+    if (credits === undefined || credits.planck === BigInt(0)) return;
+    const numCredits = Number(credits.hip);
+    if (!Number.isFinite(numCredits) || numCredits <= 0) return;
     invoke<Array<{ storageDisplay: string }>>("calculate_storage_capacity", { creditsPerMonth: [numCredits] })
       .then((results) => {
         if (results[0]) setStorageSubtitle(results[0].storageDisplay);
@@ -117,7 +118,7 @@ export default function DetailList() {
       value: getCreditsValue(),
       subtitle: getCreditsSubtitle(),
       showRefresh: true,
-      showAddCreditsButton: !isCreditsLoading && (credits === undefined || credits === BigInt(0)),
+      showAddCreditsButton: !isCreditsLoading && (credits === undefined || credits.planck === BigInt(0)),
       onRefresh: handleRefreshCredits,
       isLoading: isRefreshingCredits,
       info: "Credits available for storage usage. Each credit equals $1 and can be used to pay for arion storage costs.",

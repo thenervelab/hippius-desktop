@@ -15,12 +15,16 @@ mod app_state;
 pub mod auth;
 pub mod billing;
 pub mod blockchain;
+pub mod console_access;
 pub mod crypto;
 pub mod error;
 pub mod infra;
 pub mod nebula;
 pub mod notifications;
+pub mod recovery;
 pub mod sync;
+#[cfg(test)]
+mod test_helpers;
 mod utils;
 
 use crate::auth::contacts::{add_contact, delete_contact, get_contacts, update_contact};
@@ -33,19 +37,21 @@ use crate::billing::charts::{
     calculate_storage_capacity, calculate_storage_cost, format_balance_chart, format_credits_chart, format_storage_chart,
     transform_marketplace_credits,
 };
-use crate::billing::credits::{check_sync_eligibility, get_credits_planck};
+use crate::billing::credits::{check_sync_eligibility, get_user_credits};
 use crate::billing::eligibility::check_action_eligibility;
 use crate::billing::queries::{
     get_add_credit_events, get_balance_transfers, get_billing_transactions, get_credits, get_deposit_address, get_files_count, get_files_size,
     get_marketplace_credits, get_system_balance,
 };
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
-use crate::blockchain::convert::to_plancks;
+use crate::blockchain::convert::{planck_to_hip_full, to_plancks};
 use crate::blockchain::queries::{get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address};
 use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, update_wss_endpoint_command};
 use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded};
 use crate::blockchain::subscription::start_block_subscription;
+use crate::blockchain::transfers::compute_max_transferable;
 use crate::blockchain::transfers::{transfer_balance, validate_send_balance};
+use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
@@ -61,11 +67,15 @@ use crate::notifications::crud::{
     update_local_notification_preferences,
 };
 use crate::notifications::settings::{get_notification_settings, update_notification_settings};
+use crate::recovery::{
+    change_recovery_password, check_recovery_state, has_pending_rotation, mark_recovery_skipped, recover_mnemonic, resume_recovery_password_rotation,
+    seal_and_upload_mnemonic,
+};
 use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::files::{
-    add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, get_recent_files, get_user_files, list_sync_folder,
-    resolve_file_info, resolve_file_path,
+    add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, filter_file_entries, get_recent_files, get_user_files,
+    list_sync_folder, list_sync_folder_grouped, resolve_file_info, resolve_file_path,
 };
 use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
 use crate::sync::lifecycle::{
@@ -122,7 +132,6 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             info!("Another instance attempted to start with argv: {:?}", argv);
             if let Some(window) = app.get_webview_window("main") {
@@ -173,8 +182,10 @@ fn main() {
             add_folder,
             delete_files,
             list_sync_folder,
+            list_sync_folder_grouped,
             get_recent_files,
             get_user_files,
+            filter_file_entries,
             export_file,
             resolve_file_path,
             resolve_file_info,
@@ -258,6 +269,18 @@ fn main() {
             validate_send_balance,
             get_referral_links,
             to_plancks,
+            planck_to_hip_full,
+            compute_max_transferable,
+            // Console access
+            // Account recovery (OAuth-based)
+            validate_recovery_password,
+            check_recovery_state,
+            recover_mnemonic,
+            seal_and_upload_mnemonic,
+            mark_recovery_skipped,
+            change_recovery_password,
+            resume_recovery_password_rotation,
+            has_pending_rotation,
             // Block subscription
             start_block_subscription,
             // VM management
@@ -276,8 +299,8 @@ fn main() {
             create_ssh_key,
             delete_ssh_key,
             // Billing & credits
+            get_user_credits,
             get_credits,
-            get_credits_planck,
             check_sync_eligibility,
             check_action_eligibility,
             get_billing_transactions,
@@ -424,6 +447,16 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         app_handle.manage(app_state);
         let win = app.get_webview_window("main").expect("main window not found");
 
+        // Open devtools on startup when `HIPPIUS_DEVTOOLS=1` is set in the
+        // environment. Works in both debug and release builds because the
+        // Tauri `devtools` feature is enabled in Cargo.toml. Use this to
+        // inspect OAuth/recovery flows without rebuilding a debug DMG:
+        //     HIPPIUS_DEVTOOLS=1 pnpm tauri:static -- --release
+        if std::env::var("HIPPIUS_DEVTOOLS").as_deref() == Ok("1") {
+            info!("HIPPIUS_DEVTOOLS=1 — opening devtools on main window");
+            win.open_devtools();
+        }
+
         if let Some(m) = win.current_monitor()? {
             let phys = m.size();
             let origin = m.position();
@@ -480,6 +513,22 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // every launch and short-circuits when already migrated.
             // See `sync::user_stopped_migration` for details.
             crate::sync::user_stopped_migration::run_at_startup(&pool).await;
+
+            // One-shot: clear the painted-paused state left behind by
+            // `user_stopped_migration` for users who had the legacy
+            // global "stopped" flag set transiently. Gated by a sentinel
+            // preference so future user-initiated pauses still persist
+            // normally. See `sync::user_stopped_reversal` for details.
+            crate::sync::user_stopped_reversal::run_at_startup(&pool).await;
+
+            // One-shot: clear `sync_paths.relative_paths_backfilled_at`
+            // for drives that were marked "done" by the pre-NFC backfill
+            // (which flipped the flag even when every non-NFC entry was
+            // rejected server-side). After clearing, the next drive init
+            // retries the backfill with NFC-normalised paths. Keyed by a
+            // sentinel preference so it runs exactly once per install.
+            // See `sync::relative_path_backfill_reset` for details.
+            crate::sync::relative_path_backfill_reset::run_at_startup(&pool).await;
 
             // Collapse duplicate welcome notifications from the pre-fix
             // era (the FE sent bare `"Welcome"` which bypassed the

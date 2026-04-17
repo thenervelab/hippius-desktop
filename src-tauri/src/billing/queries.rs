@@ -302,12 +302,19 @@ pub async fn get_system_balance(
 // ── Balance transfers (parsed amounts, composite IDs) ───────────────────
 
 /// UI-ready balance transfer.
+///
+/// `amount_planck` carries the raw indexer value (planck digits as a
+/// decimal string) so no precision is lost above 2^53 planck (~9 HIP).
+/// The frontend renders `amount_hip`, which is the same value run
+/// through [`crate::blockchain::convert::planck_to_hip`] — the prior
+/// `amount: f64` field silently rounded large transfers.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferObject {
     pub id: String,
     pub block: i64,
-    pub amount: f64,
+    pub amount_planck: String,
+    pub amount_hip: String,
     pub from: String,
     pub to: String,
     pub date: String,
@@ -351,10 +358,18 @@ pub async fn get_balance_transfers(
                 "-"
             }
             .to_string();
+            // The indexer returns scientific-notation strings for large
+            // amounts (e.g. "1.23e+20"). Normalize to plain decimal digits
+            // so the planck→HIP divmod and bigint comparisons downstream
+            // never see an "e" that would fail the digit check.
+            let raw_amount = row.amount.as_deref().unwrap_or("0");
+            let amount_planck = crate::blockchain::convert::normalize_decimal_digits(raw_amount);
+            let amount_hip = crate::blockchain::convert::planck_to_hip(&amount_planck);
             TransferObject {
                 id: format!("{block}-{event_idx}"),
                 block,
-                amount: row.amount.as_deref().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0),
+                amount_planck,
+                amount_hip,
                 from,
                 to,
                 date: row.processed_timestamp.clone().unwrap_or_default(),

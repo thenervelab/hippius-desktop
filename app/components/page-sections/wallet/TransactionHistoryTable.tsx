@@ -21,7 +21,6 @@ import { Loader2 } from "lucide-react";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { Dollar } from "@/components/ui/icons";
 import { TransactionObject } from "@/app/lib/hooks/api/useBalanceTransactions";
-import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
 
 export const formatDate = (
   date: Date,
@@ -85,14 +84,17 @@ const TransactionHistoryTable: React.FC<TransactionHistoryTableProps> = ({
         cell: (d) => d.getValue(),
         enableSorting: true,
       }),
-      columnHelper.accessor("amount", {
+      columnHelper.accessor("amountHip", {
         id: "amount",
         header: () => (
           <span>
             AMOUNT (<span className="!normal-case">hALPHA</span>)
           </span>
         ),
-        cell: (d) => `${formatBalance(d.getValue(), 6)}`,
+        // amountHip is pre-formatted by Rust's `planck_to_hip` — the
+        // old path lost precision above ~9 hALPHA by round-tripping
+        // through f64. Display directly.
+        cell: (d) => d.getValue(),
         enableSorting: true,
       }),
       columnHelper.accessor("from", {

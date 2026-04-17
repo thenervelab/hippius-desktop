@@ -6,11 +6,13 @@ import {
   defaultLayoutIcons,
   DefaultVideoLayout
 } from "@vidstack/react/player/layouts/default";
+import { isTauri as isTauriRuntime } from "@tauri-apps/api/core";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import VideoPlayerError from "./VideoPlayerError";
 
-// Check if running in Tauri
-const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
+// Check if running in Tauri (uses window.isTauri injected by the Tauri runtime,
+// which is available regardless of the `withGlobalTauri` setting)
+const isTauri = isTauriRuntime();
 
 // Platform info loaded from Rust (replaces deprecated navigator.platform)
 let _isLinux = false;

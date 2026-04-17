@@ -15,4 +15,5 @@ pub mod service;
 pub mod session_restore;
 pub mod ssh_keys;
 pub mod state;
+pub mod token_keychain;
 pub mod tokens;

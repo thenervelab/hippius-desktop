@@ -1,10 +1,10 @@
 "use client";
 
 import { FC, useState, useMemo } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Input, CardButton, Icons, AbstractIconWrapper } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useStaking } from "@/app/lib/hooks/useStaking";
-import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
 
 
 interface TokenFormProps {
@@ -47,33 +47,49 @@ const TokenForm: FC<TokenFormProps> = ({
     const [amount, setAmount] = useState("");
     const { stakingInfo } = useStaking();
 
-    // Raw planck string for the relevant balance
+    // Raw planck string for the relevant balance.
     const availablePlanck = useMemo(() => {
         if (isStaking) return stakingInfo.availableBalance || "0";
         if (isUnstaking) return stakingInfo.bonded || "0";
         return stakingInfo.balance || "0";
     }, [stakingInfo.availableBalance, stakingInfo.bonded, stakingInfo.balance, isStaking, isUnstaking]);
 
-    // Display-formatted balance (acceptable precision loss for display only)
-    const availableDisplay = useMemo(
-        () => formatBalance(availablePlanck),
-        [availablePlanck],
-    );
+    // Rust pre-formats every balance as HIP (`planck_to_hip`) — see
+    // `src-tauri/src/blockchain/convert.rs`. We pick the matching
+    // `*_hip` field here instead of re-dividing in JS.
+    const availableDisplay = useMemo(() => {
+        if (isStaking) return stakingInfo.availableBalanceHip;
+        if (isUnstaking) return stakingInfo.bondedHip;
+        return stakingInfo.balanceHip;
+    }, [
+        stakingInfo.availableBalanceHip,
+        stakingInfo.bondedHip,
+        stakingInfo.balanceHip,
+        isStaking,
+        isUnstaking,
+    ]);
 
-    // Format the staked amount for display
     const formattedStakedAmount = useMemo(() => {
         if (showStakedAmount) {
-            return formatBalance(stakingInfo.bonded);
+            return stakingInfo.bondedHip;
         }
         return stakedAmount || "0.00";
-    }, [showStakedAmount, stakingInfo.bonded, stakedAmount]);
+    }, [showStakedAmount, stakingInfo.bondedHip, stakedAmount]);
 
     const handleSubmit = () => {
         onSubmit(amount);
     };
 
-    const handleMaxClick = () => {
-        setAmount(availableDisplay);
+    // Full-precision HIP for the max-fill. The displayed `availableDisplay`
+    // already carries every planck digit (Rust strips trailing zeros only),
+    // so we can use it directly and skip the IPC round-trip.
+    const handleMaxClick = async () => {
+        try {
+            const full = await invoke<string>("planck_to_hip_full", { planck: availablePlanck });
+            setAmount(full);
+        } catch {
+            setAmount(availableDisplay);
+        }
     };
 
     // Lossless validation: convert user input to planck BigInt and compare
@@ -127,8 +143,8 @@ const TokenForm: FC<TokenFormProps> = ({
                             </span>
                             <span className="ml-1">
                                 {isUnstaking
-                                    ? `${formatBalance(stakingInfo.bonded)} hALPHA`
-                                    : formatBalance(availablePlanck, 8)
+                                    ? `${stakingInfo.bondedHip} hALPHA`
+                                    : availableDisplay
                                 }
                             </span>
                         </div>

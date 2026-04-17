@@ -20,10 +20,8 @@ import FilesContent from "@/app/components/page-sections/files/FilesContent";
 import { toast } from "sonner";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import { FileTypes } from "@/lib/types/fileTypes";
-import {
-  filterFiles,
-  generateActiveFilters,
-} from "@/lib/utils/fileFilterUtils";
+import { generateActiveFilters } from "@/lib/utils/fileFilterUtils";
+import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import { SearchInput } from "@/components/ui";
 import FilterChips from "@/app/components/page-sections/files/filter-chips";
 import { downloadFolder } from "@/app/lib/utils/downloadFolder";
@@ -55,6 +53,12 @@ interface SyncFileEntry {
   arion_hash?: string;
   arion_cid?: string;
   sync_status?: string;
+}
+
+interface GroupedListing {
+  folders: SyncFileEntry[];
+  files: SyncFileEntry[];
+  pendingBackfill: boolean;
 }
 
 interface FolderViewProps {
@@ -99,14 +103,20 @@ export default function FolderView({
   const driveStatuses = useAtomValue(driveStatusesAtom);
   const folderSource = getParam("folderSource");
 
-  const filteredData = useMemo(() => {
-    return filterFiles(files, {
-      searchTerm,
-      fileTypes: selectedFileTypes,
-      dateFilter: selectedDate,
-      fileSize: selectedFileSize,
-    });
-  }, [files, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
+  // Rust `filter_file_entries` owns the filter chain — search, type,
+  // date, size. `selectedFileSize` (single legacy value) is folded into
+  // the `fileSizes` array the Rust side expects so we don't need a
+  // second code path in the IPC for it.
+  const filterSizes = useMemo(
+    () => (selectedFileSize > 0 ? [selectedFileSize] : undefined),
+    [selectedFileSize],
+  );
+  const filteredData = useFilteredFiles(files, {
+    searchTerm,
+    fileTypes: selectedFileTypes,
+    dateFilter: selectedDate,
+    fileSizes: filterSizes,
+  });
 
   // Infinite scroll state for list and card views
   const { visibleData, hasMore, loadMore, resetScroll } =
@@ -139,11 +149,22 @@ export default function FolderView({
         // Build the subfolder path relative to the sync root
         const subfolder = getFullPath(mainFolderActualName, subFolderPath) || null;
 
-        const entries = await invoke<SyncFileEntry[]>("list_sync_folder", {
+        // Switched from `list_sync_folder` → `list_sync_folder_grouped` so
+        // nested directories a device hasn't downloaded yet still appear in
+        // the listing — the grouped IPC overlays the server-side rel-path
+        // index onto the on-disk tree. `pendingBackfill` on the response is
+        // intentionally ignored: the backfill runs in the background and
+        // the flipping from "indexing" to "done" is not a state the user
+        // needs to see.
+        const listing = await invoke<GroupedListing>("list_sync_folder_grouped", {
+          accountId: polkadotAddress || "",
           syncPath,
           subfolder,
           label: syncFolderLabel || null,
         });
+        // Folders before files matches FE expectations in list/card views
+        // (folder rows render at the top when sorted by default).
+        const entries: SyncFileEntry[] = [...listing.folders, ...listing.files];
 
         const formattedFiles = entries.map((entry): FormattedUserFile => {
           const modifiedMs = (entry.modified ?? 0) * 1000;

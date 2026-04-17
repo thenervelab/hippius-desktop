@@ -86,14 +86,24 @@ pub async fn create_support_ticket(
         "Creating support ticket"
     );
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "subject": params.subject,
         "priority": params.priority,
         "category": params.category,
-        "resource_type": params.resource_type,
-        "resource_id": params.resource_id,
         "description": params.description,
     });
+    // Only include resource_type/resource_id if they are non-empty;
+    // the API rejects null values for these fields.
+    if let Some(ref rt) = params.resource_type {
+        if !rt.is_empty() {
+            body["resource_type"] = serde_json::json!(rt);
+        }
+    }
+    if let Some(ref ri) = params.resource_id {
+        if !ri.is_empty() {
+            body["resource_id"] = serde_json::json!(ri);
+        }
+    }
     Ok(client.post::<serde_json::Value, _>("/api/support/tickets/", &body, &account_id).await?)
 }
 
@@ -125,7 +135,6 @@ pub async fn post_ticket_message(
 /// Replaces the direct `fetch()` in `useUploadTicketAttachment.ts` that had
 /// the API URL hardcoded and the auth token exposed to the frontend.
 #[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TicketAttachment {
     pub id: serde_json::Value,
     pub filename: String,

@@ -230,6 +230,17 @@ impl SyncEventHandler for TauriSyncBridge {
                 retry_in_secs,
                 consecutive_failures,
             } => {
+                // Cancels (pause, remove, logout teardown, stall watchdog
+                // self-cancel) are never user-actionable and must not produce
+                // persisted "Sync Failed" notifications. The upstream library
+                // routes every cancellation through `SyncError::Cancelled`,
+                // which stringifies to `events::CANCELLED_MARKER` — silence
+                // at the bridge so the `hcfs_sync_error` channel only
+                // carries real failures (network, auth, rate limit, etc.).
+                if error == events::CANCELLED_MARKER {
+                    tracing::debug!(label = %label, "Silenced sync cancel (not emitted as error)");
+                    return;
+                }
                 let _ = app.emit(
                     events::SYNC_ERROR,
                     events::SyncErrorPayload {

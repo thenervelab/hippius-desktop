@@ -10,13 +10,15 @@ import { openExternalLink } from "@/app/lib/utils/tauri";
 interface TicketMessageProps {
   message: TicketMessage;
   isFirstMessage?: boolean;
+  isStaff?: boolean;
 }
 
 const TicketMessage: React.FC<TicketMessageProps> = ({
   message,
   isFirstMessage = false,
+  isStaff: isStaffProp,
 }) => {
-  const isStaff = message.author_is_staff;
+  const isStaff = isStaffProp ?? message.author_is_staff;
   const [loadedImages, setLoadedImages] = useState<Set<number>>(new Set());
 
   const formatDate = (dateString: string) => {
@@ -43,7 +45,7 @@ const TicketMessage: React.FC<TicketMessageProps> = ({
     <div
       className={cn(
         "flex flex-col gap-1.5 w-[16.5rem]",
-        !isFirstMessage && "bg-white border border-grey-80 rounded-lg p-2"
+        !isFirstMessage && "bg-white border border-grey-80 rounded-lg p-2",
       )}
     >
       {/* Message Body */}
@@ -80,7 +82,7 @@ const TicketMessage: React.FC<TicketMessageProps> = ({
                       "w-full h-auto max-h-[12.5rem] object-cover transition-opacity duration-300",
                       loadedImages.has(attachment.id)
                         ? "opacity-100"
-                        : "opacity-0"
+                        : "opacity-0",
                     )}
                   />
                 </div>

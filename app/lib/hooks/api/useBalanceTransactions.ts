@@ -4,7 +4,10 @@ import { useInvokeQuery } from "./useInvokeQuery";
 export interface TransactionObject {
   id: string;
   block: number;
-  amount: number;
+  /** Raw planck amount as a decimal-digit string (full precision). */
+  amountPlanck: string;
+  /** Pre-formatted HIP display string (`planck_to_hip` in Rust). */
+  amountHip: string;
   from: string;
   to: string;
   date: string;

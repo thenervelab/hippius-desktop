@@ -116,14 +116,15 @@ fn test_mnemonic_validation_invalid() {
 
 #[test]
 fn test_key_derivation() {
-    use sp_core::Pair as _;
-    use sp_core::crypto::Ss58Codec;
+    use subxt_signer::bip39::Mnemonic as SubxtMnemonic;
+    use subxt_signer::sr25519::Keypair;
 
     let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
-    // Derive sr25519 keypair
-    let (pair, _) = sp_core::sr25519::Pair::from_phrase(mnemonic, None).unwrap();
-    let substrate_address = pair.public().to_ss58check();
+    // Derive sr25519 keypair via subxt_signer (the production path).
+    let parsed = SubxtMnemonic::parse(mnemonic).unwrap();
+    let pair = Keypair::from_phrase(&parsed, None).unwrap();
+    let substrate_address = pair.public_key().to_account_id().to_string();
 
     // Should produce a valid SS58 address
     assert!(substrate_address.starts_with('5'));
@@ -143,15 +144,20 @@ fn test_key_derivation() {
 
 #[test]
 fn test_key_derivation_deterministic() {
-    use sp_core::Pair as _;
-    use sp_core::crypto::Ss58Codec;
+    use subxt_signer::bip39::Mnemonic as SubxtMnemonic;
+    use subxt_signer::sr25519::Keypair;
 
     let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
-    let (pair1, _) = sp_core::sr25519::Pair::from_phrase(mnemonic, None).unwrap();
-    let (pair2, _) = sp_core::sr25519::Pair::from_phrase(mnemonic, None).unwrap();
+    let parsed1 = SubxtMnemonic::parse(mnemonic).unwrap();
+    let parsed2 = SubxtMnemonic::parse(mnemonic).unwrap();
+    let pair1 = Keypair::from_phrase(&parsed1, None).unwrap();
+    let pair2 = Keypair::from_phrase(&parsed2, None).unwrap();
 
-    assert_eq!(pair1.public().to_ss58check(), pair2.public().to_ss58check());
+    assert_eq!(
+        pair1.public_key().to_account_id().to_string(),
+        pair2.public_key().to_account_id().to_string()
+    );
 }
 
 #[test]

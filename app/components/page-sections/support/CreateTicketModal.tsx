@@ -8,14 +8,14 @@ import TicketSelect from "./TicketSelect";
 import AttachSqaure from "../../ui/icons/AttachSquare";
 import PictureFrame from "../../ui/icons/PictureFrame";
 import { getFilePartsFromFileName } from "@/app/lib/utils/getFilePartsFromFileName";
-import { selectFile } from "@/app/lib/utils/tauri";
+import { selectFilePath } from "@/app/lib/utils/tauri";
 
 export interface CreateTicketData {
   subject: string;
   priority: "low" | "medium" | "high";
   category: string;
   description: string;
-  attachment?: File | null;
+  attachment?: { path: string; name: string } | null;
 }
 
 type Props = {
@@ -48,7 +48,7 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
     const [category, setCategory] = useState("");
     const [severity, setSeverity] = useState("");
     const [description, setDescription] = useState("");
-    const [attachment, setAttachment] = useState<File | null>(null);
+    const [attachment, setAttachment] = useState<{ path: string; name: string } | null>(null);
 
     const resetForm = () => {
       setSubject("");
@@ -79,9 +79,9 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
     };
 
     const handleSelectAttachment = async () => {
-      const files = await selectFile(false, true);
-      if (files && files.length > 0) {
-        setAttachment(files[0]);
+      const result = await selectFilePath(true);
+      if (result) {
+        setAttachment(result);
       }
     };
 

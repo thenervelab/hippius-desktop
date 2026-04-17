@@ -44,8 +44,8 @@ export function useCreditsNotification() {
         const userAddress = oauthSession?.substrateAddress || polkadotAddress;
         if (!userAddress) return;
 
-        // Pass planck string directly — no float conversion needed
-        const creditPlanck = typeof credits === "bigint" ? credits.toString() : String(credits || "0");
+        // Pass planck string directly — no float conversion needed.
+        const creditPlanck = credits.planck.toString();
 
         // Single Rust call handles all state checks and decisions
         const result = await invoke<{

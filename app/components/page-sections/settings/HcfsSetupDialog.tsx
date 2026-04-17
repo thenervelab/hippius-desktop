@@ -6,8 +6,12 @@ import DialogContainer from "@/components/ui/DialogContainer";
 import { CardButton, Graphsheet, Icons } from "@/components/ui";
 import { Input } from "@/components/ui/input/Input2";
 import { HCFS_CONFIG } from "@/app/lib/config";
-import { AlertCircle, Lock, Eye, EyeOff } from "lucide-react";
+import { AlertCircle, Lock, Eye, EyeOff, HelpCircle } from "lucide-react";
 import { Label } from "@/components/ui/label";
+import { openUrl } from "@tauri-apps/plugin-opener";
+
+const ENCRYPTION_DOCS_URL =
+  "https://docs.hippius.com/use/desktop/file-system#encryption";
 
 interface HcfsSetupDialogProps {
   open: boolean;
@@ -91,9 +95,9 @@ export function HcfsSetupDialog({
             <span className="text-center text-2xl text-grey-10 font-medium">
               Setup Sync Encryption
             </span>
-            <Dialog.Description className="text-sm text-grey-50 text-center max-w-sm">
-              Set an encryption password. Your files are encrypted locally
-              before upload.
+            <Dialog.Description className="text-sm text-grey-50 text-left max-w-sm">
+              Your files are encrypted on this device before they are uploaded.
+              Choose a strong, memorable password to keep your data secure.
             </Dialog.Description>
           </div>
 
@@ -105,8 +109,8 @@ export function HcfsSetupDialog({
             </button>
           </div>
           <p className="text-sm text-grey-50 mb-4 md:hidden">
-            Set an encryption password. Your files are encrypted locally
-            before upload.
+            Your files are encrypted on this device before they are uploaded.
+            Choose a strong, memorable password to keep your data secure.
           </p>
 
           {/* Form Fields */}
@@ -140,7 +144,8 @@ export function HcfsSetupDialog({
                 </button>
               </div>
               <p className="text-xs text-grey-50">
-                Used to encrypt your files. Choose a strong, memorable password.
+                Your files are encrypted locally using this password before being
+                uploaded to the network.
               </p>
             </div>
 
@@ -183,10 +188,20 @@ export function HcfsSetupDialog({
             </div>
           )}
 
+          {/* Info callout - learn more */}
+          <button
+            type="button"
+            onClick={() => openUrl(ENCRYPTION_DOCS_URL)}
+            className="flex items-center gap-1.5 text-xs text-primary-50 hover:text-primary-40 transition-colors mt-3"
+          >
+            <HelpCircle className="size-3.5" />
+            Learn how encryption works
+          </button>
+
           {/* Important Notice */}
           <div className="bg-error-100 border border-error-70 rounded-lg p-3 text-xs text-error-50 text-left mt-2">
-            <strong>Important:</strong> Your password cannot be recovered. If
-            you forget it, you will need your recovery phrase to restore access
+            <strong>Important:</strong> This password cannot be recovered. If
+            you forget it, you will need your mnemonic seed to restore access
             to your files.
           </div>
 

@@ -8,6 +8,13 @@ import { toast } from "sonner";
  */
 interface TauriError {
   kind?: string;
+  /**
+   * Structured discriminant for `NotReady` errors — the SCREAMING_SNAKE_CASE
+   * name of the corresponding `NotReadyKind` variant (e.g.
+   * `"MASTER_MNEMONIC_UNRECOVERABLE"`). See `src-tauri/src/error.rs`.
+   * Absent for other `AppError` variants.
+   */
+  subkind?: string;
   message?: string;
 }
 
@@ -55,6 +62,17 @@ export function isNotReady(
     typeof e.message === "string" &&
     e.message.toLowerCase().includes(messageSubstring.toLowerCase())
   );
+}
+
+/**
+ * Structural match against `NotReady(MasterMnemonicUnrecoverable)`.
+ * Surfaced by `ensure_sync_mnemonic` when encrypted state exists but
+ * the mnemonic can't be recovered (OS keychain evicted the entry, or
+ * the mnemonic was never written on this device). Callers should flip
+ * `syncRequiresReauthAtom` and let the reauth banner drive recovery.
+ */
+export function isMasterMnemonicUnrecoverable(error: unknown): boolean {
+  return (error as TauriError | null)?.subkind === "MASTER_MNEMONIC_UNRECOVERABLE";
 }
 
 export function dispatchSigningError(

@@ -4,7 +4,6 @@ import { FC, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import { useStaking } from "@/app/lib/hooks/useStaking";
-import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
 import { toast } from "sonner";
@@ -52,10 +51,10 @@ const StakeWidget: FC = () => {
         }
     };
 
-    const formattedStakedAmount = formatBalance(stakingInfo.bonded);
-    const formattedRewards = formatBalance(stakingInfo.rewards);
-    const formattedUnbonding = formatBalance(stakingInfo.unbonding);
-    const formattedWithdrawable = formatBalance(stakingInfo.withdrawable);
+    const formattedStakedAmount = stakingInfo.bondedHip;
+    const formattedRewards = stakingInfo.rewardsHip;
+    const formattedUnbonding = stakingInfo.unbondingHip;
+    const formattedWithdrawable = stakingInfo.withdrawableHip;
 
     const hasRewards = parseFloat(stakingInfo.rewards) > 0;
     const hasStakedTokens = parseFloat(stakingInfo.bonded) > 0;

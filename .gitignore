@@ -30,3 +30,6 @@ src-tauri/.env
 .illu/
 .claude/agents/illu-*.md
 .gemini/agents/illu-*.md
+
+# Git worktrees (local development)
+.worktrees/

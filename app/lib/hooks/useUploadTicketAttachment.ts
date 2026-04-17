@@ -13,8 +13,8 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
 export interface UploadTicketAttachmentPayload {
   ticket_id: string;
   message_id: string;
-  file: File;
-  filename?: string; // Optional filename override
+  filePath: string;
+  filename: string;
 }
 
 // Response type for a ticket attachment
@@ -22,7 +22,7 @@ export interface TicketAttachment {
   id: number;
   filename: string;
   file: string;
-  uploadedAt: string;
+  uploaded_at: string;
 }
 
 /**
@@ -35,7 +35,7 @@ export default function useUploadTicketAttachment(
   options?: Omit<
     UseMutationOptions<TicketAttachment, Error, UploadTicketAttachmentPayload>,
     "mutationFn"
-  >
+  >,
 ): UseMutationResult<TicketAttachment, Error, UploadTicketAttachmentPayload> {
   const { polkadotAddress } = useWalletAuth();
   const queryClient = useQueryClient();
@@ -46,23 +46,15 @@ export default function useUploadTicketAttachment(
         throw new Error("No wallet address available");
       }
 
-      const { ticket_id, message_id, file, filename } = payload;
+      const { ticket_id, message_id, filePath, filename } = payload;
 
-      // Write browser File to temp disk (Rust can't receive File objects over IPC)
-      const { tempDir } = await import("@tauri-apps/api/path");
-      const baseTmpDir = await tempDir();
-      const tmpPath = `${baseTmpDir}hippius_attachment_${Date.now()}_${file.name}`;
-      const { writeFile: tauriWriteFile } = await import("@tauri-apps/plugin-fs");
-      const arrayBuffer = await file.arrayBuffer();
-      await tauriWriteFile(tmpPath, new Uint8Array(arrayBuffer));
-
-      // Rust handles auth + multipart upload — no hardcoded URL needed
+      // Rust reads the file directly from disk and handles auth + multipart upload
       return invoke<TicketAttachment>("upload_ticket_attachment", {
         accountId: polkadotAddress,
         ticketId: ticket_id,
         messageId: message_id,
-        filePath: tmpPath,
-        filename: filename ?? file.name,
+        filePath,
+        filename,
       });
     },
     onSuccess: (data, variables) => {
