@@ -1120,6 +1120,7 @@ pub struct UserFilesResult {
     pub files: Vec<UserFileEntry>,
     pub total_private_size: String,
     pub sync_folder_labels: Vec<String>,
+    pub label_stats: std::collections::HashMap<String, LabelStats>,
 }
 
 /// A user file ready for UI rendering. Matches `FormattedUserFile` shape.
@@ -1149,6 +1150,40 @@ pub struct UserFileEntry {
     pub label: String,
     pub file_count: Option<u64>,
     pub deleted: bool,
+}
+
+/// Per-drive-label aggregate for the file tab header.
+///
+/// `file_count` sums real file leaves only: each non-folder row contributes 1,
+/// and each folder row contributes `entry.file_count` (the recursive leaf count
+/// computed by `dir_stats_recursive`). Empty folders contribute 0 — a folder
+/// with zero files is not itself a "file".
+#[derive(Serialize, Default, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelStats {
+    pub total_bytes: u64,
+    pub file_count: u64,
+}
+
+/// Compute per-label totals from the flat entry list `get_user_files` builds.
+///
+/// Pulled out of `get_user_files` so we can unit-test the rule without
+/// standing up a Tauri state / sync-path fixture.
+fn compute_label_stats(entries: &[UserFileEntry]) -> std::collections::HashMap<String, LabelStats> {
+    let mut out: std::collections::HashMap<String, LabelStats> = std::collections::HashMap::new();
+    for entry in entries {
+        if entry.sync_status == "excluded" {
+            continue;
+        }
+        let slot = out.entry(entry.label.clone()).or_default();
+        slot.total_bytes = slot.total_bytes.saturating_add(entry.size);
+        slot.file_count = slot.file_count.saturating_add(if entry.is_folder {
+            entry.file_count.unwrap_or(0)
+        } else {
+            1
+        });
+    }
+    out
 }
 
 /// Fetch all user files from all sync paths, apply filters, return UI-ready data.
@@ -1262,10 +1297,13 @@ pub async fn get_user_files(
     // Sort by timestamp (newest first)
     all_files.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
 
+    let label_stats = compute_label_stats(&all_files);
+
     Ok(UserFilesResult {
         files: all_files,
         total_private_size: total_private_size.to_string(),
         sync_folder_labels,
+        label_stats,
     })
 }
 
@@ -1712,5 +1750,42 @@ mod tests {
         assert!(criteria.is_empty());
         let out = filter_file_entries(files, criteria);
         assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn label_stats_aggregates_bytes_and_counts_per_label() {
+        // Simulate what `get_user_files` pushes into `all_files`:
+        //  - drive "alpha": one 1 KB file + one folder row with 3 nested files, 4 KB aggregate
+        //  - drive "beta":  one 500 B file + an empty folder row (file_count = 0)
+        let mut entries: Vec<UserFileEntry> = vec![
+            make_file("a.txt", 1_000, "alpha", 0, false),
+            UserFileEntry {
+                file_count: Some(3),
+                size: 4_000,
+                ..make_file("sub", 4_000, "alpha", 0, true)
+            },
+            make_file("b.txt", 500, "beta", 0, false),
+            UserFileEntry {
+                file_count: Some(0),
+                size: 0,
+                ..make_file("empty", 0, "beta", 0, true)
+            },
+        ];
+
+        let stats = compute_label_stats(&entries);
+
+        let alpha = stats.get("alpha").expect("alpha stats present");
+        assert_eq!(alpha.total_bytes, 5_000, "alpha bytes");
+        assert_eq!(alpha.file_count, 4, "alpha file count (1 file + 3 nested)");
+
+        let beta = stats.get("beta").expect("beta stats present");
+        assert_eq!(beta.total_bytes, 500, "beta bytes");
+        assert_eq!(
+            beta.file_count, 1,
+            "beta file count (1 file + 0 for empty folder, NOT +1 fallback)"
+        );
+
+        // Silence unused-mut if we end up not mutating entries.
+        entries.clear();
     }
 }
