@@ -19,7 +19,6 @@ import {
 } from "@/lib/utils/syncPathUtils";
 import { deleteRemoteFolder } from "@/app/lib/utils/restoreUtils";
 import SyncFolderTabs from "./SyncFolderTabs";
-import { formatBytesFromBigInt } from "@/lib/utils";
 import { useRemoteStorageStats } from "@/app/lib/hooks/api/useRemoteStorageStats";
 import useFilesCount from "@/app/lib/hooks/api/useFilesCount";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
@@ -328,18 +327,18 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     [filterState.fileTypes, filterState.fileSizes, updateFilters]
   );
 
-  // Format storage size — indexer stats at top level, local stats for folder tabs.
-  // Sums bytes from the raw per-folder slice so the tab size doesn't shrink
-  // when the user types into the search box (the Rust filter is applied to
-  // `filteredData`, not to the size-aggregation view).
+  // Header "Total Storage Used":
+  //   - per-folder-tab: raw per-drive bytes from the Rust aggregator.
+  //     Raw (not CID-deduplicated) is intentional — it matches what the
+  //     user sees in the tab's rows. See 2026-04-17-folder-tab-stats-fix.md.
+  //   - "All" tab: keep indexer value so it stays consistent with the
+  //     Home page / Available Credits numbers.
   const formattedStorageSize = useMemo(() => {
     if (isRecentFiles) return "";
 
     if (selectedFolderTab) {
-      const tabSize = allFilteredData
-        .filter((f) => f.label === selectedFolderTab)
-        .reduce((sum, f) => sum + BigInt(f.size ?? 0), BigInt(0));
-      return formatBytesFromBigInt(tabSize);
+      const bytes = regularFilesData?.labelStats?.[selectedFolderTab]?.totalBytes ?? 0;
+      return formatBytes(bytes, 2);
     }
 
     if (remoteStorageStats?.totalBytes) {
@@ -347,7 +346,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     }
 
     return "0 B";
-  }, [isRecentFiles, selectedFolderTab, allFilteredData, remoteStorageStats]);
+  }, [isRecentFiles, selectedFolderTab, regularFilesData?.labelStats, remoteStorageStats]);
 
   // Handle search input change
   const handleSearchChange = useCallback((value: string) => {
@@ -703,35 +702,38 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     }
   }, [error]);
 
-  // Get displayed file count — indexer stats at top level, local count for folder tabs/filters
+  // Header "Number of Files":
+  //   - "All" tab, no search/filters: indexer count (deduplicated).
+  //   - Folder tab, no search/filters: Rust-aggregated per-label count
+  //     (one entry per leaf file; empty folders contribute 0).
+  //   - Search or filter active: count the filtered list (folder rows
+  //     contribute their recursive file_count; empty folders contribute 0).
   const displayedFileCount = useMemo(() => {
-    // If search/filters active or folder tab selected, use local count
-    const useLocalCount = selectedFolderTab
-      || searchTerm
-      || activeFilters.length > 0;
+    if (searchTerm || activeFilters.length > 0) {
+      return filteredData.reduce((count, item) => {
+        if (item.isFolder) {
+          return count + (item.fileCount ?? 0);
+        }
+        return count + 1;
+      }, 0);
+    }
 
-    if (!useLocalCount && remoteFileCount !== undefined) {
+    if (selectedFolderTab) {
+      return regularFilesData?.labelStats?.[selectedFolderTab]?.fileCount ?? 0;
+    }
+
+    if (remoteFileCount !== undefined) {
       return remoteFileCount;
     }
 
-    const source = searchTerm || activeFilters.length > 0
-      ? filteredData
-      : allFilteredData;
-    return source.reduce((count, item) => {
-      if (item.isFolder) {
-        // Use nested file count; treat empty folders as 1 item
-        const nested = item.fileCount ?? 0;
-        return count + (nested > 0 ? nested : 1);
-      }
-      return count + 1;
-    }, 0);
+    return 0;
   }, [
     filteredData,
-    allFilteredData,
     searchTerm,
     activeFilters.length,
     selectedFolderTab,
     remoteFileCount,
+    regularFilesData?.labelStats,
   ]);
 
   // Handle file drop events
