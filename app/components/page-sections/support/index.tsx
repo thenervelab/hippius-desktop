@@ -41,11 +41,12 @@ const Support: React.FC = () => {
   const [isCloseModalOpen, setIsCloseModalOpen] = useState(false);
   const [isMessagesDialogOpen, setIsMessagesDialogOpen] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<SupportTicket | null>(
-    null
+    null,
   );
   const [ticketToClose, setTicketToClose] = useState<SupportTicket | null>(
-    null
+    null,
   );
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Debounce search term with 500ms delay
   useEffect(() => {
@@ -123,6 +124,8 @@ const Support: React.FC = () => {
   const handleSubmitTicket = async (ticketData: CreateTicketData) => {
     const { attachment, ...ticketPayload } = ticketData;
 
+    setIsSubmitting(true);
+
     // If no attachment, just create the ticket normally
     if (!attachment) {
       createTicket(
@@ -133,64 +136,66 @@ const Support: React.FC = () => {
         },
         {
           onSuccess: () => {
-            toast.success("Ticket created successfully!");
+            setIsSubmitting(false);
             setIsModalOpen(false);
             createTicketModalRef.current?.resetForm();
-            setTimeout(() => refetch(), 0);
+            toast.success("Ticket created successfully!");
+            refetch();
           },
-        }
+          onError: () => {
+            setIsSubmitting(false);
+          },
+        },
       );
       return;
     }
 
-    // If there's an attachment, create ticket then upload attachment
-    try {
-      // Step 1: Create the ticket (returns ticket with messages array)
-      createTicket(
-        {
-          ...ticketPayload,
-          resource_type: "",
-          resource_id: "",
-        },
-        {
-          onSuccess: async (ticket) => {
-            // Close modal immediately for better UX
+    // If there's an attachment, create ticket first, keep modal open, then upload attachment
+    createTicket(
+      {
+        ...ticketPayload,
+        resource_type: "",
+        resource_id: "",
+      },
+      {
+        onSuccess: async (ticket) => {
+          try {
+            // Upload the attachment using the first message ID from the response
+            if (ticket.messages && ticket.messages.length > 0) {
+              await uploadAttachment({
+                ticket_id: ticket.id.toString(),
+                message_id: ticket.messages[0].id.toString(),
+                filePath: attachment.path,
+                filename: attachment.name,
+              });
+            } else {
+              throw new Error("No message ID available in ticket response");
+            }
+
+            // Only close modal and show success after attachment upload completes
+            setIsSubmitting(false);
             setIsModalOpen(false);
             createTicketModalRef.current?.resetForm();
             toast.success("Ticket created successfully!");
-
-            try {
-              // Step 2: Upload the attachment using the first message ID from the response
-              if (ticket.messages && ticket.messages.length > 0) {
-                await uploadAttachment({
-                  ticket_id: ticket.id.toString(),
-                  message_id: ticket.messages[0].id.toString(),
-                  file: attachment,
-                });
-
-                // Refetch in background after attachment upload
-                setTimeout(() => refetch(), 0);
-              } else {
-                throw new Error("No message ID available in ticket response");
-              }
-            } catch (error) {
-              toast.error(
-                error instanceof Error
-                  ? error.message
-                  : "Failed to upload attachment"
-              );
-              // Still refetch even if attachment fails
-              setTimeout(() => refetch(), 0);
-            }
-          },
-          onError: (error) => {
-            toast.error(error.message || "Failed to create ticket");
-          },
-        }
-      );
-    } catch {
-      toast.error("An unexpected error occurred");
-    }
+            refetch();
+          } catch (error) {
+            setIsSubmitting(false);
+            setIsModalOpen(false);
+            createTicketModalRef.current?.resetForm();
+            toast.error(
+              error instanceof Error
+                ? error.message
+                : "Failed to upload attachment",
+            );
+            refetch();
+          }
+        },
+        onError: (error) => {
+          setIsSubmitting(false);
+          toast.error(error.message || "Failed to create ticket");
+        },
+      },
+    );
   };
 
   const handleRefresh = () => {
@@ -321,7 +326,7 @@ const Support: React.FC = () => {
             open={isModalOpen}
             onClose={() => setIsModalOpen(false)}
             onSubmit={handleSubmitTicket}
-            isLoading={isCreating}
+            isLoading={isSubmitting}
           />
 
           {/* Close Ticket Confirmation Modal */}
