@@ -297,7 +297,7 @@ export function MnemonicBackupDialog({
                   Secure Your Mnemonic Seed
                 </h2>
                 <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
-                  Your mnemonic seed is the only way to restore access to your wallet and encrypted files.
+                  Your mnemonic seed is the only way to restore access to your account and encrypted files.
                 </Dialog.Description>
               </div>
 

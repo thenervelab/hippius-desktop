@@ -85,7 +85,7 @@ const RecoveryPhraseSettings: React.FC = () => {
               <SectionHeader
                 Icon={Icons.Key}
                 title="Mnemonic Seed"
-                subtitle="Your mnemonic seed is the only way to restore access to your wallet and encrypted files."
+                subtitle="Your mnemonic seed is the only way to restore access to your account and encrypted files."
               />
             </RevealTextLine>
             <RevealTextLine

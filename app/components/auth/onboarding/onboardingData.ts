@@ -36,7 +36,7 @@ export const ONBOARDING_SCREENS = [
     id: 3,
     titleText: "Secure Your Mnemonic Seed",
     description:
-      "Your mnemonic seed is the only way to restore access to your wallet and encrypted files. Back it up safely and never share it with anyone.",
+      "Your mnemonic seed is the only way to restore access to your account and encrypted files. Back it up safely and never share it with anyone.",
     screentTitleText: "Mnemonic Seed",
     bulletPoints: [
       "Write it down on paper",
