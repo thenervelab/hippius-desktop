@@ -36,11 +36,17 @@ export type FormattedUserFile = {
   fileCount?: number;
 };
 
+export interface LabelStats {
+  totalBytes: number;
+  fileCount: number;
+}
+
 export interface UserFilesData {
   files: FormattedUserFile[];
   publicStorageSize: bigint;
   privateStorageSize: bigint;
   syncFolderLabels: string[];
+  labelStats: Record<string, LabelStats>;
 }
 
 export const GET_USER_IPFS_FILES_QUERY_KEY = "userIpfsFiles";
@@ -49,6 +55,7 @@ interface UserFilesResult {
   files: FormattedUserFile[];
   totalPrivateSize: string;
   syncFolderLabels: string[];
+  labelStats: Record<string, LabelStats>;
 }
 
 export function useUserFiles() {
@@ -110,6 +117,7 @@ export function useUserFiles() {
         publicStorageSize: BigInt(0),
         privateStorageSize: BigInt(result.totalPrivateSize || "0"),
         syncFolderLabels: result.syncFolderLabels,
+        labelStats: result.labelStats ?? {},
       };
     },
     enabled: !!polkadotAddress,
