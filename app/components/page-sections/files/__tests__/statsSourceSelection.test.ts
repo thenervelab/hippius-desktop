@@ -2,10 +2,12 @@
  * Stats Source Selection Tests
  *
  * Verify the FilesContainer logic that decides whether to show
- * indexer-based stats (top-level "All" view) or local-computed stats
- * (folder tab / search / filter active).
+ * indexer-based stats (top-level "All" view) or per-tab aggregates
+ * sourced from Rust (`labelStats`) for folder tabs, and a reduce
+ * over the filtered list for search/filter active states.
  *
- * This is the core logic that keeps Home and Files page stats consistent.
+ * This mirror exists to regression-protect the display rules that
+ * keep Home and Files page stats consistent.
  */
 import { describe, it, expect } from "vitest";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
@@ -19,11 +21,10 @@ interface StatsSourceInput {
   activeFiltersLength: number;
   remoteFileCount: number | undefined;
   remoteStorageTotalBytes: number | undefined;
-  localFiles: Array<{
-    size?: number;
-    isFolder?: boolean;
-    fileCount?: number;
-  }>;
+  /** Mirrors `UserFilesData.labelStats` — per-tab aggregates from Rust. */
+  labelStats: Record<string, { totalBytes: number; fileCount: number }>;
+  /** Used only for the search/filter branch (reduce over filtered list). */
+  filteredFiles: Array<{ isFolder?: boolean; fileCount?: number }>;
 }
 
 /**
@@ -33,17 +34,11 @@ interface StatsSourceInput {
 function resolveStorageSize(input: StatsSourceInput): string {
   if (input.isRecentFiles) return "";
 
-  // Folder-scoped: use local sum
   if (input.selectedFolderTab) {
-    const tabSize = input.localFiles.reduce(
-      (sum, f) => sum + BigInt(f.size ?? 0),
-      BigInt(0)
-    );
-    if (tabSize === BigInt(0)) return "0 B";
-    return formatBytes(Number(tabSize), 2);
+    const bytes = input.labelStats[input.selectedFolderTab]?.totalBytes ?? 0;
+    return formatBytes(bytes, 2);
   }
 
-  // Top-level: use indexer
   if (input.remoteStorageTotalBytes) {
     return formatBytes(input.remoteStorageTotalBytes, 2);
   }
@@ -56,22 +51,24 @@ function resolveStorageSize(input: StatsSourceInput): string {
  * Returns the file count that would be displayed.
  */
 function resolveFileCount(input: StatsSourceInput): number {
-  const useLocalCount =
-    input.selectedFolderTab ||
-    input.searchTerm ||
-    input.activeFiltersLength > 0;
+  if (input.searchTerm || input.activeFiltersLength > 0) {
+    return input.filteredFiles.reduce((count, item) => {
+      if (item.isFolder) {
+        return count + (item.fileCount ?? 0);
+      }
+      return count + 1;
+    }, 0);
+  }
 
-  if (!useLocalCount && input.remoteFileCount !== undefined) {
+  if (input.selectedFolderTab) {
+    return input.labelStats[input.selectedFolderTab]?.fileCount ?? 0;
+  }
+
+  if (input.remoteFileCount !== undefined) {
     return input.remoteFileCount;
   }
 
-  return input.localFiles.reduce((count, item) => {
-    if (item.isFolder) {
-      const nested = item.fileCount ?? 0;
-      return count + (nested > 0 ? nested : 1);
-    }
-    return count + 1;
-  }, 0);
+  return 0;
 }
 
 // ─── Tests ──────────────────────────────────────────────────────
@@ -82,11 +79,14 @@ const defaults: StatsSourceInput = {
   searchTerm: "",
   activeFiltersLength: 0,
   remoteFileCount: 42,
-  remoteStorageTotalBytes: 5000000000,
-  localFiles: [
-    { size: 1000, isFolder: false },
-    { size: 2000, isFolder: false },
-    { size: 3000, isFolder: true, fileCount: 5 },
+  remoteStorageTotalBytes: 5_000_000_000,
+  labelStats: {
+    Documents: { totalBytes: 6_000, fileCount: 7 },
+  },
+  filteredFiles: [
+    { isFolder: false },
+    { isFolder: false },
+    { isFolder: true, fileCount: 5 },
   ],
 };
 
@@ -97,12 +97,9 @@ describe("Storage Size Source Selection", () => {
     expect(result).toBe("5 GB");
   });
 
-  it("uses local stats when folder tab is selected", () => {
-    const result = resolveStorageSize({
-      ...defaults,
-      selectedFolderTab: "Documents",
-    });
-    // 1000 + 2000 + 3000 = 6000 bytes = "6 KB"
+  it("uses labelStats bytes when a folder tab is selected", () => {
+    const result = resolveStorageSize({ ...defaults, selectedFolderTab: "Documents" });
+    // 6 KB from labelStats.Documents.totalBytes
     expect(result).toBe("6 KB");
   });
 
@@ -145,40 +142,27 @@ describe("File Count Source Selection", () => {
     expect(result).toBe(42); // from remoteFileCount
   });
 
-  it("uses local count when folder tab is selected", () => {
-    const result = resolveFileCount({
-      ...defaults,
-      selectedFolderTab: "Documents",
-    });
-    // 1 file + 1 file + 5 (folder contents) = 7
+  it("uses labelStats when a folder tab is selected", () => {
+    const result = resolveFileCount({ ...defaults, selectedFolderTab: "Documents" });
+    // Comes directly from labelStats.Documents.fileCount
     expect(result).toBe(7);
   });
 
-  it("uses local count when search is active", () => {
-    const result = resolveFileCount({
-      ...defaults,
-      searchTerm: "report",
-    });
-    // Falls back to local: 1 + 1 + 5 = 7
+  it("uses filtered-list count when search is active", () => {
+    const result = resolveFileCount({ ...defaults, searchTerm: "report" });
+    // 1 file + 1 file + 5 (folder recursive) = 7
     expect(result).toBe(7);
   });
 
-  it("uses local count when filters are active", () => {
-    const result = resolveFileCount({
-      ...defaults,
-      activeFiltersLength: 2,
-    });
-    // Falls back to local: 1 + 1 + 5 = 7
+  it("uses filtered-list count when filters are active", () => {
+    const result = resolveFileCount({ ...defaults, activeFiltersLength: 2 });
     expect(result).toBe(7);
   });
 
-  it("uses local count when indexer data is undefined", () => {
-    const result = resolveFileCount({
-      ...defaults,
-      remoteFileCount: undefined,
-    });
-    // Falls back to local: 1 + 1 + 5 = 7
-    expect(result).toBe(7);
+  it("returns 0 when indexer data is undefined and no folder tab is selected", () => {
+    const result = resolveFileCount({ ...defaults, remoteFileCount: undefined });
+    // No tab, no indexer, no search — header just shows 0.
+    expect(result).toBe(0);
   });
 
   it("uses indexer count of 0 when it returns 0", () => {
@@ -190,24 +174,21 @@ describe("File Count Source Selection", () => {
     expect(result).toBe(0);
   });
 
-  it("counts empty folders as 1 item", () => {
+  it("counts empty folders as 0 files (no +1 fallback)", () => {
     const result = resolveFileCount({
       ...defaults,
       selectedFolderTab: "Stuff",
-      localFiles: [
-        { size: 100, isFolder: true, fileCount: 0 },
-        { size: 200, isFolder: false },
-      ],
+      labelStats: { Stuff: { totalBytes: 100, fileCount: 0 } },
     });
-    // Empty folder = 1, file = 1, total = 2
-    expect(result).toBe(2);
+    // Empty folder contributes 0 — a folder with no files is not a file.
+    expect(result).toBe(0);
   });
 
-  it("handles empty local file list", () => {
+  it("returns 0 when the folder tab is absent from labelStats", () => {
     const result = resolveFileCount({
       ...defaults,
-      selectedFolderTab: "Empty",
-      localFiles: [],
+      selectedFolderTab: "DoesNotExist",
+      labelStats: {},
     });
     expect(result).toBe(0);
   });
