@@ -1124,7 +1124,7 @@ impl FileFilterCriteria {
 /// and each folder row contributes `entry.file_count` (the recursive leaf count
 /// computed by `dir_stats_recursive`). Empty folders contribute 0 — a folder
 /// with zero files is not itself a "file".
-#[derive(Serialize, Default, Clone, Debug)]
+#[derive(Serialize, Default, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct LabelStats {
     pub total_bytes: u64,

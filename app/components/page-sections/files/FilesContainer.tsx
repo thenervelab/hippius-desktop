@@ -706,8 +706,10 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   //   - "All" tab, no search/filters: indexer count (deduplicated).
   //   - Folder tab, no search/filters: Rust-aggregated per-label count
   //     (one entry per leaf file; empty folders contribute 0).
-  //   - Search or filter active: count the filtered list (folder rows
-  //     contribute their recursive file_count; empty folders contribute 0).
+  //   - Search or filter active: count the filtered list. Folder rows
+  //     contribute their recursive file_count; empty folders contribute 0.
+  //     Safe from double-count because list_sync_folder is single-level —
+  //     a folder row's descendants are never in regularFilesData.files.
   const displayedFileCount = useMemo(() => {
     if (searchTerm || activeFilters.length > 0) {
       return filteredData.reduce((count, item) => {
