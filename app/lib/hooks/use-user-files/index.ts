@@ -55,7 +55,11 @@ interface UserFilesResult {
   files: FormattedUserFile[];
   totalPrivateSize: string;
   syncFolderLabels: string[];
-  labelStats: Record<string, LabelStats>;
+  // Optional on the wire so a cached response from before Rust shipped
+  // labelStats (still sitting in TanStack's cache after deploy) doesn't
+  // become a type lie. The React-facing `UserFilesData` type keeps it
+  // required because we fill it in below.
+  labelStats?: Record<string, LabelStats>;
 }
 
 export function useUserFiles() {
@@ -117,6 +121,9 @@ export function useUserFiles() {
         publicStorageSize: BigInt(0),
         privateStorageSize: BigInt(result.totalPrivateSize || "0"),
         syncFolderLabels: result.syncFolderLabels,
+        // `?? {}` covers the one refresh cycle after deploy where a
+        // cached response from before Rust started returning labelStats
+        // could still arrive.
         labelStats: result.labelStats ?? {},
       };
     },
