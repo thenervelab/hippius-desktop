@@ -105,7 +105,16 @@ impl AppState {
             nebula: NebulaState::new(),
             migration: MigrationState::new(),
             health_client,
-            api_client: reqwest::Client::builder().build().expect("Failed to build API HTTP client"),
+            // Explicit timeouts. Without them a hung connection (e.g. a
+            // billing-server blip during `check_action_eligibility`) would
+            // stall the IPC forever — the UI would appear frozen, and when
+            // the TCP layer eventually errored out the FE's fail-closed
+            // catch would mis-report it as "Insufficient Credits".
+            api_client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("Failed to build API HTTP client"),
             drive_removed_notify: tokio::sync::Notify::new(),
             file_failures: crate::sync::failure_tracking::FileFailureState::new(),
             drive_status_cache: Mutex::new(HashMap::new()),
