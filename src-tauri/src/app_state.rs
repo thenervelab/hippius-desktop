@@ -12,6 +12,7 @@ use crate::auth::oauth::OAuthState;
 use crate::auth::state::AuthInfo;
 use crate::blockchain::state::{BlockSubscriptionState, BlockchainState};
 use crate::nebula::state::NebulaState;
+use crate::recovery::RecoveryGateState;
 use crate::sync::drive_status::DriveStatus;
 use crate::sync::migration::MigrationState;
 use crate::sync::tauri_bridge::TauriSyncBridge;
@@ -62,6 +63,12 @@ pub struct AppState {
     /// disk — an Error state is transient and should not survive app
     /// restart.
     pub drive_status_cache: Mutex<HashMap<String, DriveStatus>>,
+    /// Recovery dialog gate. `ensure_sync_mnemonic` awaits a non-`Pending`
+    /// value before touching the local mnemonic store, preventing a race
+    /// where a fresh-device sync init mints a new mnemonic before the
+    /// recovery flow has had a chance to install the unsealed one.
+    /// See `docs/plans/2026-04-14-oauth-account-recovery.md`.
+    recovery_gate: tokio::sync::watch::Sender<RecoveryGateState>,
 }
 
 impl Default for AppState {
@@ -98,10 +105,57 @@ impl AppState {
             nebula: NebulaState::new(),
             migration: MigrationState::new(),
             health_client,
-            api_client: reqwest::Client::builder().build().expect("Failed to build API HTTP client"),
+            // Explicit timeouts. Without them a hung connection (e.g. a
+            // billing-server blip during `check_action_eligibility`) would
+            // stall the IPC forever — the UI would appear frozen, and when
+            // the TCP layer eventually errored out the FE's fail-closed
+            // catch would mis-report it as "Insufficient Credits".
+            api_client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("Failed to build API HTTP client"),
             drive_removed_notify: tokio::sync::Notify::new(),
             file_failures: crate::sync::failure_tracking::FileFailureState::new(),
             drive_status_cache: Mutex::new(HashMap::new()),
+            // Default `Skipped` — non-OAuth login paths (mnemonic login,
+            // session restore for a returning user) never need the dialog,
+            // so `ensure_sync_mnemonic`'s await passes through immediately.
+            // `complete_oauth_flow` flips this to `Pending` at its start so
+            // the dialog gets a chance to run before any sync init races in.
+            recovery_gate: tokio::sync::watch::channel(RecoveryGateState::Skipped).0,
+        }
+    }
+
+    /// Current recovery gate state.
+    pub fn recovery_state(&self) -> RecoveryGateState {
+        *self.recovery_gate.borrow()
+    }
+
+    /// Transition the recovery gate, waking any `await_recovery_resolved` waiters.
+    /// Idempotent: sending the same state twice is a no-op.
+    pub fn set_recovery_state(&self, state: RecoveryGateState) {
+        // `send_replace` unconditionally updates the stored value and notifies
+        // subscribers. `send` would silently drop the value when no receivers
+        // are active — which happens on startup before any waiter subscribes.
+        self.recovery_gate.send_replace(state);
+    }
+
+    /// Await until the recovery gate leaves `Pending`. Returns immediately if
+    /// already resolved. Intended for `ensure_sync_mnemonic` and any other
+    /// code path that must not touch the mnemonic store before recovery
+    /// decides whether to install a server-sealed one.
+    pub async fn await_recovery_resolved(&self) -> RecoveryGateState {
+        let mut rx = self.recovery_gate.subscribe();
+        loop {
+            let current = *rx.borrow();
+            if current.is_resolved() {
+                return current;
+            }
+            if rx.changed().await.is_err() {
+                // Sender dropped — state is whatever was last seen.
+                return *rx.borrow();
+            }
         }
     }
 

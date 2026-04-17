@@ -20,7 +20,7 @@ import { Graphsheet } from "../../ui";
 import { TickSquare } from "../../ui/icons";
 import AttachSqaure from "../../ui/icons/AttachSquare";
 import SendMessage from "../../ui/icons/SendMessage";
-import { selectFile } from "@/app/lib/utils/tauri";
+import { selectFilePath } from "@/app/lib/utils/tauri";
 
 interface TicketMessagesDialogProps {
   open: boolean;
@@ -37,7 +37,9 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
 }) => {
   const [messageText, setMessageText] = useState("");
   const [page] = useState(1);
-  const [attachments, setAttachments] = useState<File[]>([]);
+  const [attachments, setAttachments] = useState<
+    { path: string; name: string }[]
+  >([]);
   const [isUploadingAttachments, setIsUploadingAttachments] = useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const messagesContainerRef = React.useRef<HTMLDivElement>(null);
@@ -55,7 +57,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
     },
     {
       enabled: !!ticket?.id && open,
-    }
+    },
   );
 
   const { mutateAsync: postMessage, isPending: isPosting } =
@@ -132,19 +134,20 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
         try {
           // Upload each attachment separately
           await Promise.all(
-            currentAttachments.map((file) =>
+            currentAttachments.map((att) =>
               uploadAttachment({
                 ticket_id: ticket.id.toString(),
                 message_id: newMessage.id.toString(),
-                file,
-              })
-            )
+                filePath: att.path,
+                filename: att.name,
+              }),
+            ),
           );
         } catch (uploadError) {
           toast.error(
             uploadError instanceof Error
               ? uploadError.message
-              : "Failed to upload some attachments"
+              : "Failed to upload some attachments",
           );
         } finally {
           setIsUploadingAttachments(false);
@@ -165,7 +168,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
       setMessageText(currentText);
       setAttachments(currentAttachments);
       toast.error(
-        error instanceof Error ? error.message : "Failed to send message"
+        error instanceof Error ? error.message : "Failed to send message",
       );
     }
   };
@@ -177,34 +180,14 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
     }
   };
 
-  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
-    const items = e.clipboardData.items;
-    const files: File[] = [];
-
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (item.kind === "file") {
-        const file = item.getAsFile();
-        if (file) {
-          files.push(file);
-        }
-      }
-    }
-
-    if (files.length > 0) {
-      e.preventDefault();
-      setAttachments((prev) => [...prev, ...files]);
-    }
-  };
-
   const handleRemoveAttachment = (index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleAttachClick = async () => {
-    const files = await selectFile(true, false);
-    if (files && files.length > 0) {
-      setAttachments((prev) => [...prev, ...files]);
+    const result = await selectFilePath(false);
+    if (result) {
+      setAttachments((prev) => [...prev, result]);
     }
   };
 
@@ -231,7 +214,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
             "fixed right-4 max-h-[min(31.25rem,calc(100vh-5rem))] bottom-4 h-full bg-white shadow-xl z-[10001] border border-grey-80 rounded",
             "flex flex-col",
             "max-sm:left-4 max-sm:right-4 max-sm:w-auto",
-            "sm:w-[25rem]"
+            "sm:w-[25rem]",
           )}
         >
           {/* Header */}
@@ -306,7 +289,9 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
               </div>
             ) : (
               messages.map((message: TicketMessage, index: number) => {
-                const isStaff = message.author_is_staff;
+                const isStaff =
+                  message.author_is_staff ||
+                  (!message.author_is_staff && !message.author_is_requester);
                 const isFirstMessage = index === 0;
 
                 return (
@@ -321,7 +306,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
                           <span
                             className={cn(
                               "text-xs font-medium",
-                              getSeverityColor(ticket.priority)
+                              getSeverityColor(ticket.priority),
                             )}
                           >
                             {formatSeverity(ticket.priority)}
@@ -330,6 +315,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
                         {/* First Message Content */}
                         <div className="p-2">
                           <TicketMessageComponent
+                            isStaff={isStaff}
                             message={message}
                             isFirstMessage={true}
                           />
@@ -340,10 +326,13 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
                       <div
                         className={cn(
                           "flex",
-                          isStaff ? "justify-start" : "justify-end"
+                          isStaff ? "justify-start" : "justify-end",
                         )}
                       >
-                        <TicketMessageComponent message={message} />
+                        <TicketMessageComponent
+                          message={message}
+                          isStaff={isStaff}
+                        />
                       </div>
                     )}
                   </div>
@@ -357,13 +346,13 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
             {/* Attachments Preview */}
             {attachments.length > 0 && (
               <div className="px-2 py-2 flex flex-wrap gap-2 border-b border-grey-80 bg-grey-95">
-                {attachments.map((file, index) => (
+                {attachments.map((att, index) => (
                   <div
                     key={index}
                     className="flex items-center gap-2 px-2 py-1 bg-white border border-grey-80 rounded text-xs group hover:border-grey-60 transition-colors"
                   >
                     <span className="text-grey-10 truncate max-w-[9.375rem]">
-                      {file.name}
+                      {att.name}
                     </span>
                     <button
                       onClick={() => handleRemoveAttachment(index)}
@@ -387,7 +376,6 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
                   value={messageText}
                   onChange={(e) => setMessageText(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  onPaste={handlePaste}
                   disabled={
                     isPosting ||
                     isUploadingAttachments ||

@@ -388,6 +388,54 @@ pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Derive the SHASUM256.txt URL from a Nebula asset download URL.
+///
+/// Input:  `https://github.com/slackhq/nebula/releases/download/v1.10.3/nebula-darwin.zip`
+/// Output: `https://github.com/slackhq/nebula/releases/download/v1.10.3/SHASUM256.txt`
+fn shasum_url_for_asset(asset_url: &str) -> Option<String> {
+    let last_slash = asset_url.rfind('/')?;
+    let base = &asset_url[..=last_slash];
+    Some(format!("{base}SHASUM256.txt"))
+}
+
+/// Look up the expected SHA-256 digest for `asset_name` inside a
+/// Nebula-style SHASUM256.txt file.
+///
+/// Accepts the standard shasum format: `<hex>  <filename>` (two spaces,
+/// one per line). Any match on the filename wins; the hex is returned
+/// lowercase.
+fn parse_shasum_for_asset(shasum_contents: &str, asset_name: &str) -> Option<String> {
+    for line in shasum_contents.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // Split into (hex, filename). Most shasum tools emit two spaces;
+        // some emit a single tab. Splitting on whitespace handles both.
+        let mut parts = line.split_whitespace();
+        let hex = parts.next()?;
+        let name = parts.next()?;
+        if name == asset_name {
+            return Some(hex.to_ascii_lowercase());
+        }
+    }
+    None
+}
+
+/// Compute the SHA-256 of a byte slice, returned as a lowercase hex string.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
 #[tauri::command]
 pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
     let (needs_update, download_url, latest_version, client) = {
@@ -406,9 +454,6 @@ pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
 
     if needs_update && let (Some(url), Some(version)) = (download_url, latest_version) {
         info!("Downloading Nebula version {}", version);
-        // Check if temp file already exists (maybe from previous run?)
-        // But we should re-download to be safe or check size.
-        // For now, just download.
 
         let nebula_dir = get_nebula_dir().map_err(|e| e.to_string())?;
         fs::create_dir_all(&nebula_dir).await.map_err(|e| e.to_string())?;
@@ -428,12 +473,99 @@ pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
         }
 
         let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+
+        // Integrity check: Nebula releases ship a `SHASUM256.txt` next to
+        // every asset. We download it from the same release and verify the
+        // bytes we just fetched before touching the filesystem. This is
+        // the only defense against a compromised release asset or a TLS
+        // MITM between us and the GitHub CDN — failure here MUST abort
+        // the install, because the binary is later `chown root`/`chmod
+        // u+s`-ed, and a mismatched binary would become setuid-root code
+        // execution on the user's machine.
+        let asset_name = get_asset_name().map_err(|e| e.to_string())?;
+        let shasum_url = shasum_url_for_asset(&url)
+            .ok_or_else(|| "Failed to derive SHASUM256.txt URL from asset URL".to_string())?;
+        debug!("Fetching integrity manifest: {}", shasum_url);
+        let shasum_resp = client
+            .get(&shasum_url)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch SHASUM256.txt: {e}"))?;
+        if !shasum_resp.status().is_success() {
+            return Err(format!(
+                "Integrity check unavailable: SHASUM256.txt returned HTTP {}",
+                shasum_resp.status()
+            ));
+        }
+        let shasum_text = shasum_resp.text().await.map_err(|e| format!("Failed to read SHASUM256.txt body: {e}"))?;
+        let expected = parse_shasum_for_asset(&shasum_text, &asset_name)
+            .ok_or_else(|| format!("Integrity check failed: no entry for '{asset_name}' in SHASUM256.txt"))?;
+        let actual = sha256_hex(&bytes);
+        if actual != expected {
+            // DO NOT write the tampered bytes to disk. Abort hard.
+            error!("Nebula integrity check FAILED: expected {expected}, got {actual}");
+            return Err(format!(
+                "Nebula download integrity check failed — refusing to install. \
+                 Expected SHA-256 {expected} from SHASUM256.txt, got {actual}."
+            ));
+        }
+        info!("Nebula integrity check passed (SHA-256 match)");
+
         fs::write(&temp_path, bytes).await.map_err(|e| e.to_string())?;
 
         info!("Download complete");
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod integrity_tests {
+    use super::*;
+
+    #[test]
+    fn sha256_hex_matches_known_vector() {
+        // sha256("") — FIPS test vector
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn parse_shasum_two_spaces() {
+        let text = "abc123  nebula-darwin.zip\ndef456  nebula-linux-amd64.tar.gz\n";
+        assert_eq!(parse_shasum_for_asset(text, "nebula-darwin.zip"), Some("abc123".to_string()));
+        assert_eq!(parse_shasum_for_asset(text, "nebula-linux-amd64.tar.gz"), Some("def456".to_string()));
+    }
+
+    #[test]
+    fn parse_shasum_handles_tab_separator() {
+        let text = "abcDEF\tnebula-darwin.zip\n";
+        assert_eq!(parse_shasum_for_asset(text, "nebula-darwin.zip"), Some("abcdef".to_string()));
+    }
+
+    #[test]
+    fn parse_shasum_missing_asset_returns_none() {
+        let text = "abc  not-our-file.zip\n";
+        assert_eq!(parse_shasum_for_asset(text, "nebula-darwin.zip"), None);
+    }
+
+    #[test]
+    fn shasum_url_strips_asset_basename() {
+        let url = "https://github.com/slackhq/nebula/releases/download/v1.10.3/nebula-darwin.zip";
+        assert_eq!(
+            shasum_url_for_asset(url).as_deref(),
+            Some("https://github.com/slackhq/nebula/releases/download/v1.10.3/SHASUM256.txt")
+        );
+    }
+
+    #[test]
+    fn shasum_url_handles_trailing_slash_free_input() {
+        // Defensive: a malformed URL without any '/' — None, not panic.
+        assert_eq!(shasum_url_for_asset("no-slashes-here"), None);
+    }
 }
 
 #[tauri::command]

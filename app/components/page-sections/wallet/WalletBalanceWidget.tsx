@@ -6,7 +6,6 @@ import { Refresh, WalletAdd } from "@/components/ui/icons";
 import * as Typography from "@/components/ui/typography";
 import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import Warning from "@/components/ui/icons/Warning";
-import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { toast } from "sonner";
 import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
@@ -46,7 +45,7 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
     // Fee constant matches Rust ESTIMATED_TRANSFER_FEE_PLANCK
     if (freePlanck <= BigInt("270233151")) {
       toast.error(
-        `Your balance (${formatCreditBalance(balanceInfo.data.free)} hALPHA) is too low to cover the transaction fee. Please add funds to your account first.`
+        `Your balance (${balanceInfo.data.freeHip} hALPHA) is too low to cover the transaction fee. Please add funds to your account first.`
       );
       return;
     }
@@ -76,7 +75,7 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
               <div className="flex flex-col">
                 <div className="text-2xl font-medium text-grey-10">
                   {balanceInfo !== undefined
-                    ? `${formatCreditBalance(balanceInfo.data.free)}`
+                    ? balanceInfo.data.freeHip
                     : error
                       ? "ERROR"
                       : "- - - -"}
@@ -139,6 +138,7 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
         open={sendDialogOpen}
         onClose={() => setSendDialogOpen(false)}
         availableBalancePlanck={String(balanceInfo?.data?.free ?? "0")}
+        availableBalanceHip={balanceInfo?.data?.freeHip ?? "0"}
         refetchBalance={() => {
           refetch();
           refetchSystemBalance?.();

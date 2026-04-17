@@ -67,7 +67,6 @@
         "core:event:allow-emit-to",
         "dialog:allow-save",
         "dialog:default",
-        "http:default",
         "core:menu:allow-set-text",
         "core:menu:allow-insert",
         "core:menu:allow-remove",

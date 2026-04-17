@@ -11,6 +11,7 @@ import React, {
 import useUserFiles from "@/app/lib/hooks/use-user-files";
 import useRecentFiles from "@/lib/hooks/use-recent-files";
 import { WaitAMoment } from "@/components/ui";
+import * as Typography from "@/components/ui/typography";
 import FilesOnboarding from "./FilesOnboarding";
 import {
   getPrivateSyncPath,
@@ -18,16 +19,15 @@ import {
 } from "@/lib/utils/syncPathUtils";
 import { deleteRemoteFolder } from "@/app/lib/utils/restoreUtils";
 import SyncFolderTabs from "./SyncFolderTabs";
-import { formatBytesFromBigInt } from "@/lib/utils";
 import { useRemoteStorageStats } from "@/app/lib/hooks/api/useRemoteStorageStats";
 import useFilesCount from "@/app/lib/hooks/api/useFilesCount";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { FileTypes } from "@/lib/types/fileTypes";
 import {
-  filterFiles,
   generateActiveFilters,
   ActiveFilter,
 } from "@/lib/utils/fileFilterUtils";
+import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import FilesHeader from "./FilesHeader";
 import FilesContent from "./FilesContent";
 import { useAtomValue, useSetAtom } from "jotai";
@@ -229,41 +229,25 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     return [];
   }, [isRecentFiles, recentFilesData, regularFilesData?.files]);
 
-  // Filter data to show only private files, then by selected folder tab
+  // Prune the list down to the private-files universe the files page
+  // displays. The folder-tab cut is delegated to Rust's filter along with
+  // every other filter — keeping the type cut here keeps recents vs.
+  // private as a TS-owned concern (it's part of *which view* the user
+  // picked, not a filter the chip UI exposes).
   const allFilteredData = useMemo(() => {
-    let data = allData;
+    if (isRecentFiles) return allData;
+    return allData.filter((file) => (file.type?.toLowerCase() || "") === "private");
+  }, [allData, isRecentFiles]);
 
-    if (!isRecentFiles) {
-      data = data.filter((file) => {
-        const fileType = file.type?.toLowerCase() || "";
-        return fileType === "private";
-      });
-    }
-
-    if (selectedFolderTab && !isRecentFiles) {
-      data = data.filter((file) => file.label === selectedFolderTab);
-    }
-
-    return data;
-  }, [allData, isRecentFiles, selectedFolderTab]);
-
-  // Filter data based on search and filter settings
-  const filteredData = useMemo(() => {
-    return filterFiles(allFilteredData, {
-      searchTerm,
-      fileTypes: filterState.fileTypes,
-      dateFilter: filterState.date,
-      fileSize: filterState.fileSize,
-      fileSizes: filterState.fileSizes,
-    });
-  }, [
-    allFilteredData,
+  // Rust owns the filter chain — search, type, date, size, folder tab.
+  // `useFilteredFiles` debounces fast typing so we don't IPC per keystroke.
+  const filteredData = useFilteredFiles(allFilteredData, {
     searchTerm,
-    filterState.fileTypes,
-    filterState.date,
-    filterState.fileSize,
-    filterState.fileSizes,
-  ]);
+    fileTypes: filterState.fileTypes,
+    dateFilter: filterState.date,
+    fileSizes: filterState.fileSizes,
+    folderTab: isRecentFiles ? null : selectedFolderTab,
+  });
 
   // Infinite scroll state for list and card views
   const { visibleData, hasMore, loadMore, resetScroll } =
@@ -343,26 +327,26 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     [filterState.fileTypes, filterState.fileSizes, updateFilters]
   );
 
-  // Format storage size — indexer stats at top level, local stats for folder tabs
+  // Header "Total Storage Used":
+  //   - per-folder-tab: raw per-drive bytes from the Rust aggregator.
+  //     Raw (not CID-deduplicated) is intentional — it matches what the
+  //     user sees in the tab's rows. See 2026-04-17-folder-tab-stats-fix.md.
+  //   - "All" tab: keep indexer value so it stays consistent with the
+  //     Home page / Available Credits numbers.
   const formattedStorageSize = useMemo(() => {
     if (isRecentFiles) return "";
 
-    // Folder-scoped view: use local computed size for that folder
     if (selectedFolderTab) {
-      const tabSize = allFilteredData.reduce(
-        (sum, f) => sum + BigInt(f.size ?? 0),
-        BigInt(0)
-      );
-      return formatBytesFromBigInt(tabSize);
+      const bytes = regularFilesData?.labelStats?.[selectedFolderTab]?.totalBytes ?? 0;
+      return formatBytes(bytes, 2);
     }
 
-    // Top-level "All" view: use indexer stats (same source as Home page)
     if (remoteStorageStats?.totalBytes) {
       return formatBytes(remoteStorageStats.totalBytes, 2);
     }
 
     return "0 B";
-  }, [isRecentFiles, selectedFolderTab, allFilteredData, remoteStorageStats]);
+  }, [isRecentFiles, selectedFolderTab, regularFilesData?.labelStats, remoteStorageStats]);
 
   // Handle search input change
   const handleSearchChange = useCallback((value: string) => {
@@ -718,35 +702,40 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     }
   }, [error]);
 
-  // Get displayed file count — indexer stats at top level, local count for folder tabs/filters
+  // Header "Number of Files":
+  //   - "All" tab, no search/filters: indexer count (deduplicated).
+  //   - Folder tab, no search/filters: Rust-aggregated per-label count
+  //     (one entry per leaf file; empty folders contribute 0).
+  //   - Search or filter active: count the filtered list. Folder rows
+  //     contribute their recursive file_count; empty folders contribute 0.
+  //     Safe from double-count because list_sync_folder is single-level —
+  //     a folder row's descendants are never in regularFilesData.files.
   const displayedFileCount = useMemo(() => {
-    // If search/filters active or folder tab selected, use local count
-    const useLocalCount = selectedFolderTab
-      || searchTerm
-      || activeFilters.length > 0;
+    if (searchTerm || activeFilters.length > 0) {
+      return filteredData.reduce((count, item) => {
+        if (item.isFolder) {
+          return count + (item.fileCount ?? 0);
+        }
+        return count + 1;
+      }, 0);
+    }
 
-    if (!useLocalCount && remoteFileCount !== undefined) {
+    if (selectedFolderTab) {
+      return regularFilesData?.labelStats?.[selectedFolderTab]?.fileCount ?? 0;
+    }
+
+    if (remoteFileCount !== undefined) {
       return remoteFileCount;
     }
 
-    const source = searchTerm || activeFilters.length > 0
-      ? filteredData
-      : allFilteredData;
-    return source.reduce((count, item) => {
-      if (item.isFolder) {
-        // Use nested file count; treat empty folders as 1 item
-        const nested = item.fileCount ?? 0;
-        return count + (nested > 0 ? nested : 1);
-      }
-      return count + 1;
-    }, 0);
+    return 0;
   }, [
     filteredData,
-    allFilteredData,
     searchTerm,
     activeFilters.length,
     selectedFolderTab,
     remoteFileCount,
+    regularFilesData?.labelStats,
   ]);
 
   // Handle file drop events
@@ -850,6 +839,29 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
 
   if (shouldShowLoading) {
     content = <WaitAMoment />;
+  } else if (error && !isRecentFiles) {
+    // `useUserFiles` exposes a terminal error (after TanStack Query's
+    // retry budget is exhausted or the 15 s wall-clock cap in the
+    // query fires). Without an explicit branch here the page stayed
+    // blank with only the reauth banner at the top, which the user
+    // reported as "loads indefinitely without displaying any content".
+    content = (
+      <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+        <Typography.P size="md" className="font-medium text-error-60 mb-2">
+          Couldn&apos;t load your files right now.
+        </Typography.P>
+        <Typography.P size="sm" className="text-grey-50 max-w-md">
+          {error instanceof Error ? error.message : String(error)}
+        </Typography.P>
+        <button
+          type="button"
+          className="mt-6 text-sm font-medium text-primary-50 hover:text-primary-40"
+          onClick={() => refetchUserFiles()}
+        >
+          Try again
+        </button>
+      </div>
+    );
   } else if (isSyncPathConfigured === false && !isRecentFiles) {
     content = (
       <FilesOnboarding

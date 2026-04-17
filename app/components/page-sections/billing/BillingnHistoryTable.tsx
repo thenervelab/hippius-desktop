@@ -28,7 +28,7 @@ import { cn } from "@/app/lib/utils";
 
 export const formatDate = (
   date: Date,
-  variant: "long" | "short" = "long"
+  variant: "long" | "short" = "long",
 ): string => {
   if (variant === "long") {
     return date
@@ -60,7 +60,13 @@ const columnHelper = createColumnHelper<TransactionObject>();
 const ITEMS_PER_PAGE = 10;
 
 // Visible column order (single source of truth)
-const COLUMN_ORDER = ["id", "amount", "transaction_type", "status", "date"] as const;
+const COLUMN_ORDER = [
+  "id",
+  "amount",
+  "transaction_type",
+  "status",
+  "date",
+] as const;
 
 // Default column widths for billing history table (percentages)
 const DEFAULT_COLUMN_WIDTHS: Record<(typeof COLUMN_ORDER)[number], number> = {
@@ -80,7 +86,10 @@ const MIN_COLUMN_WIDTHS: Record<(typeof COLUMN_ORDER)[number], number> = {
 };
 
 const normalizeColumnWidths = (maybeStored?: Record<string, number>) => {
-  const merged: Record<string, number> = { ...DEFAULT_COLUMN_WIDTHS, ...(maybeStored || {}) };
+  const merged: Record<string, number> = {
+    ...DEFAULT_COLUMN_WIDTHS,
+    ...(maybeStored || {}),
+  };
   const normalized: Record<string, number> = {};
 
   // Keep only expected keys with numeric values; fall back to defaults
@@ -113,8 +122,11 @@ const getStoredColumnWidths = () => {
 const saveColumnWidths = (columnWidths: Record<string, number>) => {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem("billingTable_columnWidths", JSON.stringify(columnWidths));
-  } catch { }
+    localStorage.setItem(
+      "billingTable_columnWidths",
+      JSON.stringify(columnWidths),
+    );
+  } catch {}
 };
 
 const BillingHistoryTable: React.FC = () => {
@@ -125,8 +137,8 @@ const BillingHistoryTable: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
 
   // Column resizing state
-  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(
-    () => getStoredColumnWidths()
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(() =>
+    getStoredColumnWidths(),
   );
   const [isResizing, setIsResizing] = useState(false);
   const [resizeData, setResizeData] = useState<{
@@ -188,15 +200,30 @@ const BillingHistoryTable: React.FC = () => {
         id: "status",
         header: "STATUS",
         cell: (d) => {
-          const status = d.getValue();
+          const raw = d.getValue();
+          if (!raw) return null;
+          const normalized = raw.toLowerCase().replace(/[\s-]+/g, "_");
+          const validStatuses = [
+            "failed",
+            "error",
+            "declined",
+            "cancelled",
+            "canceled",
+            "expired",
+            "success",
+            "successful",
+            "completed",
+            "paid",
+            "confirmed",
+            "pending",
+            "processing",
+            "in_progress",
+            "refunded",
+            "reversed",
+          ] as const;
           const validStatus =
-            status === "failed" ||
-              status === "success" ||
-              status === "completed" ||
-              status === "pending"
-              ? status
-              : null;
-          return <StatusTypeBadge type={validStatus} />;
+            validStatuses.find((s) => s === normalized) ?? null;
+          return <StatusTypeBadge type={validStatus} fallback={raw} />;
         },
       }),
       columnHelper.accessor("transaction_date", {
@@ -208,13 +235,13 @@ const BillingHistoryTable: React.FC = () => {
         enableSorting: true,
       }),
     ],
-    []
+    [],
   );
 
   // Real visible order derived from the columns (never drifts)
   const visibleColumnOrder = useMemo<string[]>(
     () => baseColumns.map((c) => c.id!),
-    [baseColumns]
+    [baseColumns],
   );
 
   // Column resize handlers (use visible order)
@@ -224,7 +251,8 @@ const BillingHistoryTable: React.FC = () => {
       const currentIndex = columnIds.indexOf(columnId);
       if (currentIndex === -1) return;
 
-      const nextColumnId = columnIds[currentIndex + 1] ?? columnIds[currentIndex - 1];
+      const nextColumnId =
+        columnIds[currentIndex + 1] ?? columnIds[currentIndex - 1];
       if (!nextColumnId) return;
 
       setIsResizing(true);
@@ -232,14 +260,15 @@ const BillingHistoryTable: React.FC = () => {
         columnId,
         startX,
         startWidth:
-          columnWidths[columnId] ?? DEFAULT_COLUMN_WIDTHS[columnId as (typeof COLUMN_ORDER)[number]],
+          columnWidths[columnId] ??
+          DEFAULT_COLUMN_WIDTHS[columnId as (typeof COLUMN_ORDER)[number]],
         nextColumnId,
         nextStartWidth:
           columnWidths[nextColumnId] ??
           DEFAULT_COLUMN_WIDTHS[nextColumnId as (typeof COLUMN_ORDER)[number]],
       });
     },
-    [columnWidths, visibleColumnOrder]
+    [columnWidths, visibleColumnOrder],
   );
 
   const handleResizeMove = useCallback(
@@ -248,7 +277,8 @@ const BillingHistoryTable: React.FC = () => {
 
       requestAnimationFrame(() => {
         const diff = clientX - resizeData.startX;
-        const tableWidth = tableRef.current?.getBoundingClientRect().width || 1200;
+        const tableWidth =
+          tableRef.current?.getBoundingClientRect().width || 1200;
         const sensitivity = 2.2;
         const diffPercent = (diff / tableWidth) * 100 * sensitivity;
 
@@ -257,14 +287,25 @@ const BillingHistoryTable: React.FC = () => {
         const proposedNextWidth = resizeData.nextStartWidth - diffPercent;
 
         const currentMin =
-          MIN_COLUMN_WIDTHS[resizeData.columnId as (typeof COLUMN_ORDER)[number]] ?? 5;
+          MIN_COLUMN_WIDTHS[
+            resizeData.columnId as (typeof COLUMN_ORDER)[number]
+          ] ?? 5;
         const nextMin =
-          MIN_COLUMN_WIDTHS[resizeData.nextColumnId as (typeof COLUMN_ORDER)[number]] ?? 5;
+          MIN_COLUMN_WIDTHS[
+            resizeData.nextColumnId as (typeof COLUMN_ORDER)[number]
+          ] ?? 5;
 
-        const newCurrent = Math.max(currentMin, Math.min(80, proposedCurrentWidth));
+        const newCurrent = Math.max(
+          currentMin,
+          Math.min(80, proposedCurrentWidth),
+        );
         const newNext = Math.max(nextMin, Math.min(80, proposedNextWidth));
 
-        if (newCurrent >= currentMin && newNext >= nextMin && resizeData.nextColumnId) {
+        if (
+          newCurrent >= currentMin &&
+          newNext >= nextMin &&
+          resizeData.nextColumnId
+        ) {
           setColumnWidths((prev) => {
             const updated = {
               ...prev,
@@ -272,10 +313,13 @@ const BillingHistoryTable: React.FC = () => {
               [resizeData.nextColumnId!]: newNext,
             };
             // Normalize to keep total at 100%
-            const total = COLUMN_ORDER.reduce((sum, key) => sum + updated[key], 0);
+            const total = COLUMN_ORDER.reduce(
+              (sum, key) => sum + updated[key],
+              0,
+            );
             if (total !== 100) {
               const factor = 100 / total;
-              COLUMN_ORDER.forEach(key => {
+              COLUMN_ORDER.forEach((key) => {
                 updated[key] = Math.round(updated[key] * factor * 100) / 100;
               });
             }
@@ -284,7 +328,7 @@ const BillingHistoryTable: React.FC = () => {
         }
       });
     },
-    [resizeData, isResizing]
+    [resizeData, isResizing],
   );
 
   const handleResizeEnd = useCallback(() => {
@@ -313,7 +357,7 @@ const BillingHistoryTable: React.FC = () => {
 
   const totalPages = useMemo(
     () => Math.ceil((transactions?.length || 0) / ITEMS_PER_PAGE),
-    [transactions?.length]
+    [transactions?.length],
   );
 
   const paginatedData = useMemo(() => {
@@ -333,11 +377,7 @@ const BillingHistoryTable: React.FC = () => {
 
   return (
     <>
-      <TableWrapper
-        className={cn(
-          "mt-5 overflow-x-hidden"
-        )}
-      >
+      <TableWrapper className={cn("mt-5 overflow-x-hidden")}>
         <div ref={tableRef}>
           <Table>
             <THead>

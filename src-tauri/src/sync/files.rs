@@ -770,11 +770,24 @@ async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
     (size, count)
 }
 
-/// List contents of sync folder
+/// List contents of sync folder.
+///
+/// Thin wrapper around [`list_sync_folder_inner`] that unwraps `state` —
+/// callers inside Rust (notably [`list_sync_folder_grouped`]) should hit the
+/// inner helper directly to avoid going through the Tauri command plumbing.
 #[tauri::command]
-#[expect(clippy::too_many_lines, reason = "1 line over; extracting hurts readability")]
 pub async fn list_sync_folder(
     state: tauri::State<'_, crate::app_state::AppState>,
+    sync_path: String,
+    subfolder: Option<String>,
+    label: Option<String>,
+) -> Result<Vec<FileEntry>> {
+    list_sync_folder_inner(&state, sync_path, subfolder, label).await
+}
+
+#[expect(clippy::too_many_lines, reason = "1 line over; extracting hurts readability")]
+async fn list_sync_folder_inner(
+    state: &crate::app_state::AppState,
     sync_path: String,
     subfolder: Option<String>,
     label: Option<String>,
@@ -906,6 +919,175 @@ pub async fn list_sync_folder(
     Ok(entries)
 }
 
+/// Response for [`list_sync_folder_grouped`].
+///
+/// The frontend renders `folders` and `files` as two separate sections at the
+/// current navigation level. `pending_backfill` gates an informational banner
+/// that tells the user the server-side rel-path index is still being populated
+/// — until it clears, nested directories a device hasn't downloaded yet won't
+/// appear server-side-only (they only show once their on-disk copy arrives).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupedListing {
+    pub folders: Vec<FileEntry>,
+    pub files: Vec<FileEntry>,
+    /// `true` iff `sync_paths.relative_paths_backfilled_at` is NULL for this
+    /// drive. Signals to the FE that the grouped view may omit subfolders
+    /// that only exist server-side on another device.
+    pub pending_backfill: bool,
+}
+
+/// Render one level of the sync-folder hierarchy, overlaying on-disk entries
+/// with server-registered rel-paths from `synced_paths_for_label`.
+///
+/// Fixes the "subfolder shows as empty / console is flat" bug: `list_sync_folder`
+/// reads only from disk, so on a device that hasn't downloaded the subfolder
+/// yet the tree appears empty even when the server side has every file. This
+/// command treats the union of (on-disk children + server rel-paths that start
+/// with `subfolder + "/"`) as authoritative and groups by the first path
+/// component. The "console shows flat" symptom falls out because callers now
+/// receive the group structure directly instead of flattening `get_user_files`.
+///
+/// `pending_backfill` is read from `sync_paths.relative_paths_backfilled_at` —
+/// NULL = the one-shot backfill hasn't yet posted rel-paths for legacy rows to
+/// the server, so server-only entries won't yet appear. Once set, the FE can
+/// hide the "still indexing" banner.
+#[tauri::command]
+pub async fn list_sync_folder_grouped(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    sync_path: String,
+    subfolder: Option<String>,
+    label: Option<String>,
+) -> Result<GroupedListing> {
+    list_sync_folder_grouped_inner(&state, account_id, sync_path, subfolder, label).await
+}
+
+/// Pure helper for [`list_sync_folder_grouped`], exposed for integration tests
+/// so they can drive it against a hand-assembled [`AppState`] without going
+/// through the Tauri command layer.
+pub async fn list_sync_folder_grouped_inner(
+    state: &crate::app_state::AppState,
+    account_id: String,
+    sync_path: String,
+    subfolder: Option<String>,
+    label: Option<String>,
+) -> Result<GroupedListing> {
+    // 1. On-disk entries (same rules as `list_sync_folder`). Reusing the
+    // inner helper keeps the exclude/sync-status/file-count logic in one
+    // place; a missing subfolder returns `Vec::new()` from there and we
+    // overlay server entries below.
+    let disk_entries = list_sync_folder_inner(state, sync_path.clone(), subfolder.clone(), label.clone()).await?;
+
+    // 2. Server-side rel-path index for the drive. `None` when no label was
+    // supplied (a root-only listing with no associated drive). When a label
+    // is provided but the drive isn't in the in-memory map,
+    // `synced_paths_for_label` already falls through to the cached snapshot
+    // from `sync.get_cached_synced_paths` — integration tests exercise that
+    // cache-only path by seeding the cache directly.
+    let synced_set = match &label {
+        Some(l) => synced_paths_for_label(&state.sync, l).await,
+        None => None,
+    };
+
+    // 3. Build the overlay. Normalise the subfolder prefix to always end in
+    // `/` so `rel.starts_with(prefix)` doesn't match a sibling whose name
+    // happens to share a prefix (e.g. subfolder="docs" and rel="docs2/x").
+    let prefix = match subfolder.as_deref() {
+        Some("") | None => String::new(),
+        Some(s) => format!("{}/", s.trim_end_matches('/')),
+    };
+    let mut seen_names: std::collections::HashSet<String> = disk_entries.iter().map(|e| e.name.clone()).collect();
+    let mut server_only_files: Vec<FileEntry> = Vec::new();
+    // (file_count, first-info) for each server-only folder at this level.
+    let mut server_only_folders: HashMap<String, u64> = HashMap::new();
+
+    if let Some(map) = &synced_set {
+        for (rel, info) in map {
+            if !rel.starts_with(&prefix) {
+                continue;
+            }
+            let remainder = &rel[prefix.len()..];
+            if remainder.is_empty() {
+                continue;
+            }
+            match remainder.split_once('/') {
+                Some((first_component, _rest)) => {
+                    // Server-known subfolder at this level. Skip if already on
+                    // disk (the on-disk entry's `file_count` is authoritative
+                    // for this device's view of the subfolder).
+                    if !seen_names.contains(first_component) {
+                        *server_only_folders.entry(first_component.to_string()).or_insert(0) += 1;
+                    }
+                }
+                None => {
+                    // Direct child file, server-known. Skip if on disk.
+                    if !seen_names.contains(remainder) {
+                        server_only_files.push(FileEntry {
+                            name: remainder.to_string(),
+                            is_folder: false,
+                            size: 0,
+                            modified: None,
+                            sync_status: "pending".to_string(),
+                            arion_hash: info.path_hash_hex(),
+                            arion_cid: info.arion_cid.to_string(),
+                            file_count: 0,
+                            uploaded_at: info.uploaded_at,
+                            updated_at: info.updated_at,
+                        });
+                        seen_names.insert(remainder.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Assemble final `folders` + `files` from disk_entries plus server-only
+    // additions. Partition disk entries by `is_folder`; append server-only
+    // folders (with aggregated file counts) and server-only files.
+    let mut folders: Vec<FileEntry> = Vec::new();
+    let mut files: Vec<FileEntry> = Vec::new();
+    for entry in disk_entries {
+        if entry.is_folder {
+            folders.push(entry);
+        } else {
+            files.push(entry);
+        }
+    }
+    for (name, file_count) in server_only_folders {
+        folders.push(FileEntry {
+            name,
+            is_folder: true,
+            size: 0,
+            modified: None,
+            sync_status: "pending".to_string(),
+            arion_hash: String::new(),
+            arion_cid: String::new(),
+            file_count,
+            uploaded_at: 0,
+            updated_at: 0,
+        });
+    }
+    files.extend(server_only_files);
+
+    // 5. Backfill flag. NULL on `relative_paths_backfilled_at` ⇒ pending.
+    // Any DB error — missing row, pool not ready — surfaces as
+    // `pending_backfill=false`: we'd rather miss the banner than block the
+    // listing. The backfill task itself is the source of truth and will
+    // flip the flag once it completes.
+    let pending_backfill = if let Some(l) = &label {
+        let owner = account_key(&account_id);
+        match state.pool() {
+            Ok(pool) => !crate::sync::relative_path_backfill::is_backfilled(pool, &owner, l).await.unwrap_or(true),
+            Err(_) => false,
+        }
+    } else {
+        false
+    };
+
+    Ok(GroupedListing { folders, files, pending_backfill })
+}
+
 /// Filter criteria for the files page, matching the frontend `FilterCriteria`.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -917,6 +1099,38 @@ pub struct FileFilterCriteria {
     pub folder_tab: Option<String>,
 }
 
+impl FileFilterCriteria {
+    /// `true` when every filter field is empty — short-circuits the
+    /// `filter_file_entries` IPC so callers don't pay the round-trip
+    /// serialization cost for a no-op.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.search_term.as_deref().is_none_or(str::is_empty)
+            && self.file_types.as_ref().is_none_or(std::vec::Vec::is_empty)
+            && self.date_filter.as_deref().is_none_or(str::is_empty)
+            && self.file_sizes.as_ref().is_none_or(std::vec::Vec::is_empty)
+            && self.folder_tab.is_none()
+    }
+}
+
+/// Per-drive-label aggregate for the file tab header.
+///
+/// Computed in Rust so every tab uses the exact same rule that
+/// `dir_stats_recursive` already uses for folder rows — if we let TypeScript
+/// re-derive these counts, the two places drift and the header stops matching
+/// the rows it sits above.
+///
+/// `file_count` sums real file leaves only: each non-folder row contributes 1,
+/// and each folder row contributes `entry.file_count` (the recursive leaf count
+/// computed by `dir_stats_recursive`). Empty folders contribute 0 — a folder
+/// with zero files is not itself a "file".
+#[derive(Serialize, Default, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelStats {
+    pub total_bytes: u64,
+    pub file_count: u64,
+}
+
 /// Result of get_user_files including both files and metadata.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -924,10 +1138,15 @@ pub struct UserFilesResult {
     pub files: Vec<UserFileEntry>,
     pub total_private_size: String,
     pub sync_folder_labels: Vec<String>,
+    pub label_stats: HashMap<String, LabelStats>,
 }
 
 /// A user file ready for UI rendering. Matches `FormattedUserFile` shape.
-#[derive(Serialize, Clone)]
+///
+/// `Deserialize` is required so the frontend can pass a previously-fetched
+/// list back into [`filter_file_entries`] for re-filtering without a round
+/// trip to disk.
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct UserFileEntry {
     pub name: String,
@@ -951,12 +1170,33 @@ pub struct UserFileEntry {
     pub deleted: bool,
 }
 
+/// Compute per-label totals from the flat entry list `get_user_files` builds.
+///
+/// Pulled out of `get_user_files` so we can unit-test the rule without
+/// standing up a Tauri state / sync-path fixture.
+fn compute_label_stats(entries: &[UserFileEntry]) -> HashMap<String, LabelStats> {
+    let mut out: HashMap<String, LabelStats> = HashMap::new();
+    for entry in entries {
+        if entry.sync_status == "excluded" {
+            continue;
+        }
+        let slot = out.entry(entry.label.clone()).or_default();
+        slot.total_bytes = slot.total_bytes.saturating_add(entry.size);
+        slot.file_count = slot.file_count.saturating_add(if entry.is_folder {
+            entry.file_count.unwrap_or(0)
+        } else {
+            1
+        });
+    }
+    out
+}
+
 /// Fetch all user files from all sync paths, apply filters, return UI-ready data.
 ///
 /// Replaces both the `use-user-files` orchestration (multi-invoke loop with
 /// timestamp logic) AND `fileFilterUtils.ts` (search, type, date, size filtering).
 #[tauri::command]
-#[expect(
+#[allow(
     clippy::too_many_lines,
     reason = "Replaces two full frontend modules (use-user-files + fileFilterUtils) in one Rust function. The filter chain (search / type / date / size) must share the candidate list and statistics accumulators; splitting would require an iterator-builder pattern that obscures the filter order."
 )]
@@ -994,7 +1234,7 @@ pub async fn get_user_files(
         })
         .collect();
 
-    let results = futures::future::join_all(folder_futures).await;
+    let results = futures_util::future::join_all(folder_futures).await;
 
     for (label, entries) in &results {
         total_private_size += entries.iter().map(|e| e.size).sum::<u64>();
@@ -1055,123 +1295,182 @@ pub async fn get_user_files(
         }
     }
 
-    // Apply all filters in a single pass
     if let Some(ref f) = filters {
-        // Pre-compute lowercase search term once
-        let search_lower = f.search_term.as_ref().and_then(|s| {
-            let low = s.to_lowercase();
-            if low.is_empty() { None } else { Some(low) }
-        });
-        let now = chrono::Utc::now();
-
-        all_files.retain(|file| {
-            // Folder tab filter
-            if let Some(ref tab) = f.folder_tab
-                && file.label != *tab
-            {
-                return false;
-            }
-
-            // Search filter
-            if let Some(ref search) = search_lower
-                && !file.name.to_lowercase().contains(search)
-                && !file.arion_hash.to_lowercase().contains(search)
-            {
-                return false;
-            }
-
-            // File type filter
-            if let Some(ref types) = f.file_types
-                && !types.is_empty()
-            {
-                let matches = if file.is_folder {
-                    types.iter().any(|t| t == "folder")
-                } else {
-                    let ext = file.name.rsplit('.').next().unwrap_or("").to_lowercase();
-                    let file_type = match ext.as_str() {
-                        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "svg" | "webp" | "ico" | "tiff" => "image",
-                        "mp4" | "mov" | "avi" | "mkv" | "wmv" | "flv" | "webm" | "m4v" | "3gp" => "video",
-                        "mp3" | "wav" | "ogg" | "flac" | "aac" | "wma" | "m4a" => "audio",
-                        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "rtf" | "csv" | "md" => "document",
-                        "zip" | "tar" | "gz" | "rar" | "7z" | "bz2" => "archive",
-                        _ => "other",
-                    };
-                    types.iter().any(|t| t == file_type)
-                };
-                if !matches {
-                    return false;
-                }
-            }
-
-            // Date filter
-            if let Some(ref date) = f.date_filter
-                && !date.is_empty()
-            {
-                if file.created_at == 0 {
-                    return false;
-                }
-                let file_ms = if file.created_at > 946_684_800_000 {
-                    file.created_at
-                } else {
-                    file.created_at * 1000
-                };
-                let Some(file_dt) = chrono::DateTime::from_timestamp_millis(file_ms) else {
-                    return false;
-                };
-                let date_matches = match date.as_str() {
-                    "today" => file_dt.date_naive() == now.date_naive(),
-                    "last7days" => (now - file_dt).num_days() <= 7,
-                    "last30days" => (now - file_dt).num_days() <= 30,
-                    "thisyear" => file_dt.date_naive().year() == now.date_naive().year(),
-                    "lastyear" => file_dt.date_naive().year() == now.date_naive().year() - 1,
-                    _ => {
-                        // Custom date YYYY-MM-DD
-                        if let Ok(target) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-                            file_dt.date_naive() == target
-                        } else {
-                            true
-                        }
-                    }
-                };
-                if !date_matches {
-                    return false;
-                }
-            }
-
-            // File size filter
-            if let Some(ref sizes) = f.file_sizes
-                && !sizes.is_empty()
-            {
-                let size = file.size;
-                let size_matches = sizes.iter().any(|&threshold| match threshold {
-                    1 => size < 1_048_576,                                      // Small: < 1 MB
-                    1_048_576 => (1_048_576..=104_857_600).contains(&size),     // Medium: 1-100 MB
-                    104_857_600 => size > 104_857_600 && size <= 1_073_741_824, // Large: 100MB-1GB
-                    1_073_741_824 => size > 1_073_741_824,                      // Very Large: > 1 GB
-                    _ => size >= threshold,
-                });
-                if !size_matches {
-                    return false;
-                }
-            }
-
-            true
-        });
+        apply_file_filters(&mut all_files, f);
     }
 
     // Sort by timestamp (newest first)
     all_files.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
 
+    let label_stats = compute_label_stats(&all_files);
+
     Ok(UserFilesResult {
         files: all_files,
         total_private_size: total_private_size.to_string(),
         sync_folder_labels,
+        label_stats,
     })
 }
 
-/// Export file or folder from sync folder to arbitrary location
+/// Apply the full filter chain to a mutable file list in place.
+///
+/// Shared between [`get_user_files`] (initial fetch with filters) and
+/// [`filter_file_entries`] (UI-side filter re-application without a
+/// refetch). Owning the filter rules in a single function keeps the
+/// folder view and the files page from drifting — previously both
+/// reimplemented the logic in TypeScript.
+fn apply_file_filters(files: &mut Vec<UserFileEntry>, f: &FileFilterCriteria) {
+    let search_lower = f.search_term.as_ref().and_then(|s| {
+        let low = s.to_lowercase();
+        if low.is_empty() { None } else { Some(low) }
+    });
+    let now = chrono::Utc::now();
+
+    files.retain(|file| {
+        if let Some(ref tab) = f.folder_tab
+            && file.label != *tab
+        {
+            return false;
+        }
+
+        if let Some(ref search) = search_lower
+            && !file.name.to_lowercase().contains(search)
+            && !file.arion_hash.to_lowercase().contains(search)
+        {
+            return false;
+        }
+
+        if let Some(ref types) = f.file_types
+            && !types.is_empty()
+        {
+            let matches = if file.is_folder {
+                types.iter().any(|t| t == "folder")
+            } else {
+                let ext = file.name.rsplit('.').next().unwrap_or("").to_lowercase();
+                let file_type = classify_extension(&ext);
+                types.iter().any(|t| t == file_type)
+            };
+            if !matches {
+                return false;
+            }
+        }
+
+        if let Some(ref date) = f.date_filter
+            && !date.is_empty()
+        {
+            if file.created_at == 0 {
+                return false;
+            }
+            let file_ms = if file.created_at > 946_684_800_000 {
+                file.created_at
+            } else {
+                file.created_at * 1000
+            };
+            let Some(file_dt) = chrono::DateTime::from_timestamp_millis(file_ms) else {
+                return false;
+            };
+            let date_matches = match date.as_str() {
+                "today" => file_dt.date_naive() == now.date_naive(),
+                "last7days" => (now - file_dt).num_days() <= 7,
+                "last30days" => (now - file_dt).num_days() <= 30,
+                "thisyear" => file_dt.date_naive().year() == now.date_naive().year(),
+                "lastyear" => file_dt.date_naive().year() == now.date_naive().year() - 1,
+                _ => {
+                    if let Ok(target) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+                        file_dt.date_naive() == target
+                    } else {
+                        true
+                    }
+                }
+            };
+            if !date_matches {
+                return false;
+            }
+        }
+
+        // Size thresholds come from `EnhancedFileSizeSelector` in SI
+        // bytes (1 MB = 1_000_000) to match the user-facing labels the
+        // `formatBytes` helper prints. Any other numeric threshold is
+        // treated as a custom "size >= N" cut.
+        if let Some(ref sizes) = f.file_sizes
+            && !sizes.is_empty()
+        {
+            let size = file.size;
+            let size_matches = sizes.iter().any(|&threshold| match threshold {
+                1 => size < 1_000_000,
+                1_000_000 => (1_000_000..=100_000_000).contains(&size),
+                100_000_000 => size > 100_000_000 && size <= 1_000_000_000,
+                1_000_000_000 => size > 1_000_000_000,
+                _ => size >= threshold,
+            });
+            if !size_matches {
+                return false;
+            }
+        }
+
+        true
+    });
+}
+
+/// Map a file extension to the coarse type group the filter UI uses.
+///
+/// Pulled out of the filter so the same classifier can be reused (e.g.
+/// for icon selection) without duplicating the extension list.
+fn classify_extension(ext: &str) -> &'static str {
+    match ext {
+        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "svg" | "webp" | "ico" | "tiff" => "image",
+        "mp4" | "mov" | "avi" | "mkv" | "wmv" | "flv" | "webm" | "m4v" | "3gp" => "video",
+        "mp3" | "wav" | "ogg" | "flac" | "aac" | "wma" | "m4a" => "audio",
+        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "rtf" | "csv" | "md" => "document",
+        "zip" | "tar" | "gz" | "rar" | "7z" | "bz2" => "archive",
+        _ => "other",
+    }
+}
+
+/// Apply the user files filter to an arbitrary list of entries.
+///
+/// Used by the files page and the folder view to re-filter a list the
+/// frontend already has without re-fetching it from disk. Exposing the
+/// shared filter as its own command keeps every filter rule (date
+/// ranges, size thresholds, search behaviour) on the Rust side — the
+/// TS layer now just passes criteria and renders the result.
 #[tauri::command]
-pub async fn export_file(sync_path: String, file_name: String, output_path: String) -> Result<()> {
+pub fn filter_file_entries(files: Vec<UserFileEntry>, filters: FileFilterCriteria) -> Vec<UserFileEntry> {
+    let mut files = files;
+    apply_file_filters(&mut files, &filters);
+    files
+}
+
+/// Export file or folder from sync folder to arbitrary location.
+///
+/// Rejects `sync_path` values that are not registered in the `sync_paths`
+/// table for the active account. Without this check, a caller (e.g. a
+/// compromised frontend) could set `sync_path` to `/` and `file_name` to
+/// `etc/passwd` and the inner `ensure_within` guard would trivially allow
+/// it because `/etc/passwd` is contained in `/`.
+#[tauri::command]
+pub async fn export_file(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    sync_path: String,
+    file_name: String,
+    output_path: String,
+) -> Result<()> {
+    // Gate 1: sync_path must be a registered sync folder for the active
+    // user. This prevents the broad `ensure_within` guard from being
+    // bypassed via an attacker-controlled parent directory.
+    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    let owner = account_key(&account_id);
+    let registered: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM sync_paths WHERE owner = ? AND path = ? LIMIT 1")
+        .bind(&owner)
+        .bind(&sync_path)
+        .fetch_optional(state.pool()?)
+        .await?;
+    if registered.is_none() {
+        return Err(crate::error::AppError::Other(
+            "sync_path is not a registered sync folder for this account".into(),
+        ));
+    }
+
     let parent = Path::new(&sync_path);
     let source = parent.join(&file_name);
     let source = ensure_within(parent, &source)?;
@@ -1344,5 +1643,166 @@ mod tests {
     #[test]
     fn handles_nested_subfolder() {
         assert_eq!(derive_relative_name("/sync", Some("/sync/a/b/c/deep.txt"), "x.txt"), "a/b/c/deep.txt",);
+    }
+
+    // --- filter_file_entries / apply_file_filters ---
+
+    fn make_file(name: &str, size: u64, label: &str, created_at: i64, is_folder: bool) -> UserFileEntry {
+        UserFileEntry {
+            name: name.to_string(),
+            actual_file_name: name.to_string(),
+            size,
+            created_at,
+            arion_hash: String::new(),
+            arion_cid: String::new(),
+            source: String::new(),
+            miner_ids: Vec::new(),
+            is_assigned: false,
+            last_charged_at: created_at,
+            is_folder,
+            file_type: String::new(),
+            is_erasure_coded: false,
+            main_req_hash: String::new(),
+            sync_status: String::new(),
+            label: label.to_string(),
+            file_count: None,
+            deleted: false,
+        }
+    }
+
+    #[test]
+    fn filter_search_matches_name_case_insensitive() {
+        let files = vec![make_file("Report.pdf", 1_000, "docs", 0, false), make_file("photo.png", 1_000, "docs", 0, false)];
+        let criteria = FileFilterCriteria {
+            search_term: Some("REPORT".into()),
+            file_types: None,
+            date_filter: None,
+            file_sizes: None,
+            folder_tab: None,
+        };
+        let out = filter_file_entries(files, criteria);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "Report.pdf");
+    }
+
+    #[test]
+    fn filter_folder_tab_isolates_label() {
+        let files = vec![
+            make_file("a.txt", 1, "drive-one", 0, false),
+            make_file("b.txt", 1, "drive-two", 0, false),
+            make_file("c.txt", 1, "drive-one", 0, false),
+        ];
+        let criteria = FileFilterCriteria {
+            search_term: None,
+            file_types: None,
+            date_filter: None,
+            file_sizes: None,
+            folder_tab: Some("drive-one".into()),
+        };
+        let out = filter_file_entries(files, criteria);
+        assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["a.txt", "c.txt"]);
+    }
+
+    #[test]
+    fn filter_size_si_thresholds() {
+        let files = vec![
+            make_file("tiny.txt", 500, "d", 0, false),               // Small
+            make_file("medium.zip", 50_000_000, "d", 0, false),      // Medium
+            make_file("large.bin", 500_000_000, "d", 0, false),      // Large
+            make_file("huge.iso", 5_000_000_000, "d", 0, false),     // Very Large
+        ];
+        // "Medium" + "Very Large" selected — boundaries match the UI's SI labels.
+        let criteria = FileFilterCriteria {
+            search_term: None,
+            file_types: None,
+            date_filter: None,
+            file_sizes: Some(vec![1_000_000, 1_000_000_000]),
+            folder_tab: None,
+        };
+        let out = filter_file_entries(files, criteria);
+        assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["medium.zip", "huge.iso"]);
+    }
+
+    #[test]
+    fn filter_type_classifies_by_extension() {
+        let files = vec![
+            make_file("pic.png", 1, "d", 0, false),
+            make_file("clip.mp4", 1, "d", 0, false),
+            make_file("notes.txt", 1, "d", 0, false),
+            make_file("subfolder", 0, "d", 0, true),
+        ];
+        let criteria = FileFilterCriteria {
+            search_term: None,
+            file_types: Some(vec!["image".into(), "folder".into()]),
+            date_filter: None,
+            file_sizes: None,
+            folder_tab: None,
+        };
+        let out = filter_file_entries(files, criteria);
+        assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["pic.png", "subfolder"]);
+    }
+
+    #[test]
+    fn empty_criteria_is_a_noop() {
+        let files = vec![make_file("a.txt", 1, "d", 0, false), make_file("b.txt", 1, "d", 0, false)];
+        let criteria = FileFilterCriteria {
+            search_term: Some(String::new()),
+            file_types: Some(Vec::new()),
+            date_filter: Some(String::new()),
+            file_sizes: Some(Vec::new()),
+            folder_tab: None,
+        };
+        assert!(criteria.is_empty());
+        let out = filter_file_entries(files, criteria);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn label_stats_aggregates_bytes_and_counts_per_label() {
+        // Simulate what `get_user_files` pushes into `all_files`:
+        //  - drive "alpha": one 1 KB file + one 200 B file + one folder row
+        //    with 3 nested files, 4 KB aggregate
+        //  - drive "beta":  one 500 B file + an empty folder row (file_count = 0)
+        //  - drive "gamma": one folder row with `file_count: None` — hits the
+        //    `unwrap_or(0)` defense without requiring get_user_files to misbehave
+        //  - one "excluded" entry on drive "alpha" — must be skipped entirely
+        let mut excluded = make_file("ignored.txt", 999_999, "alpha", 0, false);
+        excluded.sync_status = "excluded".to_string();
+
+        let entries: Vec<UserFileEntry> = vec![
+            make_file("a.txt", 1_000, "alpha", 0, false),
+            make_file("a2.txt", 200, "alpha", 0, false),
+            UserFileEntry {
+                file_count: Some(3),
+                size: 4_000,
+                ..make_file("sub", 4_000, "alpha", 0, true)
+            },
+            excluded,
+            make_file("b.txt", 500, "beta", 0, false),
+            UserFileEntry {
+                file_count: Some(0),
+                size: 0,
+                ..make_file("empty", 0, "beta", 0, true)
+            },
+            UserFileEntry {
+                file_count: None,
+                size: 100,
+                ..make_file("loose", 100, "gamma", 0, true)
+            },
+        ];
+
+        let stats = compute_label_stats(&entries);
+
+        let alpha = stats.get("alpha").expect("alpha stats present");
+        assert_eq!(alpha.total_bytes, 5_200, "alpha bytes (1000 + 200 + 4000, excluded skipped)");
+        assert_eq!(alpha.file_count, 5, "alpha file count (2 files + 3 nested, excluded skipped)");
+
+        let beta = stats.get("beta").expect("beta stats present");
+        assert_eq!(beta.total_bytes, 500, "beta bytes");
+        assert_eq!(beta.file_count, 1, "beta file count (1 file + 0 for empty folder)");
+
+        let gamma = stats.get("gamma").expect("gamma stats present");
+        assert_eq!(gamma.total_bytes, 100, "gamma bytes");
+        assert_eq!(gamma.file_count, 0, "gamma file count (folder with file_count: None => 0)");
     }
 }

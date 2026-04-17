@@ -5,24 +5,26 @@
 //! wrappers around subxt, so the primary value is in type-checking and
 //! ensuring the AUTH_STATE integration works.
 
-use sp_core::Pair as _;
-use sp_core::crypto::Ss58Codec;
+use std::str::FromStr;
+use subxt::utils::AccountId32;
+use subxt_signer::bip39::Mnemonic;
+use subxt_signer::sr25519::Keypair;
 
 #[test]
 fn test_account_id_parse_valid_ss58() {
     // The well-known "Alice" address should parse successfully.
-    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    let (pair, _) = sp_core::sr25519::Pair::from_phrase(mnemonic, None).unwrap();
-    let address = pair.public().to_ss58check();
+    let mnemonic = Mnemonic::parse("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
+    let pair = Keypair::from_phrase(&mnemonic, None).unwrap();
+    let address = pair.public_key().to_account_id().to_string();
 
     // Verify it parses as a subxt AccountId32
-    let parsed: Result<subxt::utils::AccountId32, _> = address.parse();
+    let parsed = AccountId32::from_str(&address);
     assert!(parsed.is_ok(), "Valid SS58 address should parse: {address}");
 }
 
 #[test]
 fn test_account_id_parse_invalid() {
-    let parsed: Result<subxt::utils::AccountId32, _> = "not-an-address".parse();
+    let parsed = AccountId32::from_str("not-an-address");
     assert!(parsed.is_err());
 }
 
@@ -50,12 +52,14 @@ fn test_planck_max_safe_value() {
 
 #[test]
 fn test_ss58_roundtrip() {
-    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    let (pair, _) = sp_core::sr25519::Pair::from_phrase(mnemonic, None).unwrap();
-    let address = pair.public().to_ss58check();
+    let mnemonic = Mnemonic::parse("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
+    let pair = Keypair::from_phrase(&mnemonic, None).unwrap();
+    let address = pair.public_key().to_account_id().to_string();
 
-    // Parse back to AccountId32
-    let account_id = sp_core::crypto::AccountId32::from_ss58check(&address).unwrap();
-    let roundtrip = account_id.to_ss58check();
+    // Parse back to AccountId32 and format. subxt_signer's default
+    // format uses the generic `42` prefix — roundtripping the string
+    // verifies the SS58 encoding is stable.
+    let account_id = AccountId32::from_str(&address).unwrap();
+    let roundtrip = account_id.to_string();
     assert_eq!(address, roundtrip);
 }

@@ -4,7 +4,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { useInvokeQuery } from "./useInvokeQuery";
-import { sciToFullString } from "../../utils/formatters/formatBalance";
+import { sciToFullString } from "../../utils/formatters/sciToFullString";
 
 // Define types based on the indexer API response
 export interface FileEvent {

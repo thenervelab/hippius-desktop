@@ -10,7 +10,48 @@ use crate::auth::auth_session_repo::{self, TokenStatus};
 use crate::auth::keychain::{self, KeychainResult};
 use crate::auth::state::AuthCapabilities;
 use crate::error::AppError;
+use tauri::Emitter;
 use tracing::{info, warn};
+
+/// Re-arm the Tauri asset protocol scope for every configured sync path
+/// of `account_id`.
+///
+/// The static scope in `tauri.conf.json` only covers `$HOME/.hippius/**`.
+/// User-chosen sync folders live at arbitrary paths, so the runtime
+/// scope needs to be re-expanded each launch. `auto_init_sync` does
+/// this in step 4 — but when sync init is blocked upstream (e.g. the
+/// keychain has no mnemonic for a restored mnemonic session, or the
+/// credits check fails), that step never runs and the asset protocol
+/// falls back to the narrower static scope. On macOS release builds
+/// with `hardenedRuntime`, the first unscoped `asset://` read then
+/// triggers the system folder-permission dialog every launch. Priming
+/// the scope here, at the first success point in session restore,
+/// makes the expansion deterministic regardless of whether sync init
+/// eventually succeeds.
+///
+/// Best-effort — each path failure is logged and skipped. A missing
+/// sync-paths table or a deleted folder must not abort the session
+/// restore flow.
+async fn arm_asset_scope_for_account(app: &tauri::AppHandle, state: &tauri::State<'_, crate::app_state::AppState>, account_id: &str) {
+    let Ok(pool) = state.pool() else {
+        warn!("arm_asset_scope_for_account: pool unavailable, skipping");
+        return;
+    };
+    let paths = match crate::sync::folders::get_all_sync_paths_internal(pool, account_id).await {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(error = %e, "arm_asset_scope_for_account: failed to list sync paths");
+            return;
+        }
+    };
+    // Skip the internal `migration` pseudo-drive — its path is a
+    // scratch directory used during S3 → HCFS migration and shouldn't
+    // be served via the `asset://` protocol. Matches the filter used
+    // in `get_all_drive_statuses_inner` and `auto_init_sync_inner`.
+    for sp in paths.iter().filter(|sp| !sp.path.is_empty() && sp.label != "migration") {
+        crate::sync::files::allow_asset_directory(app, &sp.path);
+    }
+}
 
 /// Outcome of [`rehydrate_or_restored`]. Tells the caller whether the
 /// helper has already populated `AuthInfo` (via the keychain rehydrate
@@ -35,30 +76,64 @@ enum RehydrateOutcome {
 ///
 /// For mnemonic users this attempts a keychain load and, if successful,
 /// derives the full keypair via [`crate::auth::login::rehydrate_full_session`].
-/// For OAuth users it skips straight to `OAuthOnly`. For mnemonic users
-/// without a keychain entry, returns `Restored`.
+/// For OAuth users a keychain hit populates `AuthInfo.mnemonic` (so the
+/// recovery check resolves to `Proceed` instead of `Unlock` — i.e. no
+/// server round-trip to re-download the sealed mnemonic blob) while
+/// leaving the capability at `OAuthOnly` (OAuth users don't sign
+/// blockchain extrinsics from a mnemonic-derived keypair). On a
+/// keychain miss either path falls through to the normal Unlock /
+/// Restored flow.
 fn rehydrate_or_restored(state: &crate::app_state::AppState, addr: &str, auth_type: &str) -> RehydrateOutcome {
-    if auth_type != "mnemonic" {
-        return RehydrateOutcome::NeedsActiveAccount(AuthCapabilities::OAuthOnly);
-    }
     match keychain::load_mnemonic(addr) {
-        KeychainResult::Found(mnemonic) => match crate::auth::login::rehydrate_full_session(state, mnemonic) {
-            Ok(_) => {
-                info!("Session fully restored from OS keychain — capability = Full");
-                return RehydrateOutcome::AlreadyWritten;
+        KeychainResult::Found(mnemonic) => {
+            if auth_type == "mnemonic" {
+                match crate::auth::login::rehydrate_full_session(state, mnemonic) {
+                    Ok(_) => {
+                        info!("Session fully restored from OS keychain — capability = Full");
+                        return RehydrateOutcome::AlreadyWritten;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Keychain mnemonic failed to derive keys; falling back to Restored");
+                    }
+                }
+            } else {
+                // OAuth users: write `substrate_address`, capability, and the
+                // mnemonic atomically under a single auth lock. Capability stays
+                // `OAuthOnly` — a cached mnemonic only unblocks sync encryption,
+                // it does not promote the session to signing-capable. The match
+                // mirrors `rehydrate_full_session`'s atomicity guarantee so the
+                // caller can safely rely on `AlreadyWritten` semantics (no
+                // follow-up `set_active_account` call).
+                match state.auth.lock() {
+                    Ok(mut auth) => {
+                        auth.capabilities = AuthCapabilities::OAuthOnly;
+                        auth.substrate_address = Some(addr.to_string());
+                        auth.mnemonic = Some(mnemonic);
+                        info!("OAuth session restored from OS keychain — capability = OAuthOnly, mnemonic cached");
+                        return RehydrateOutcome::AlreadyWritten;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "auth lock poisoned during OAuth keychain rehydrate; falling back to Unlock path");
+                    }
+                }
             }
-            Err(e) => warn!(error = %e, "Keychain mnemonic failed to derive keys; falling back to Restored"),
-        },
+        }
         KeychainResult::NotFound => {
             // Expected for users without a keychain entry yet (first launch
-            // since keychain integration shipped, or post-logout). The user
-            // will see the "re-enter your seed phrase" CTA on signing.
+            // since keychain integration shipped, or post-logout). Mnemonic
+            // users see "re-enter your seed phrase"; OAuth users see the
+            // recovery-password Unlock dialog.
         }
         KeychainResult::Unavailable(reason) => {
-            warn!(reason = %reason, "OS keychain unavailable; falling back to Restored");
+            warn!(reason = %reason, "OS keychain unavailable; falling back to Restored / OAuthOnly");
         }
     }
-    RehydrateOutcome::NeedsActiveAccount(AuthCapabilities::Restored)
+    let fallback = if auth_type == "mnemonic" {
+        AuthCapabilities::Restored
+    } else {
+        AuthCapabilities::OAuthOnly
+    };
+    RehydrateOutcome::NeedsActiveAccount(fallback)
 }
 
 /// Result of session restoration, returned to the frontend for state setup.
@@ -106,6 +181,7 @@ pub struct SessionRestoreResult {
     reason = "Linear multi-stage auth flow (OAuth JSON validation → DB fallback → result build). Splitting fragments the early-return error paths and has caused past regressions; auth_session_repo's inline unit tests cover the upsert/clear/COALESCE invariants."
 )]
 pub async fn restore_session(
+    app: tauri::AppHandle,
     state: tauri::State<'_, crate::app_state::AppState>,
     oauth_session_json: Option<String>,
     oauth_expiry_ms: Option<i64>,
@@ -185,6 +261,67 @@ pub async fn restore_session(
                         }
                     }
                     info!("Restoring OAuth session for {:?}", substrate_address);
+                    // Re-arm the Tauri asset protocol scope for every
+                    // configured sync path. The static scope in
+                    // `tauri.conf.json` only covers `$HOME/.hippius/**`;
+                    // user-chosen folders need a runtime `allow_directory`
+                    // call each launch. `auto_init_sync` also does this
+                    // in step 4, but if the mnemonic is unrecoverable
+                    // (keychain evicted, reauth required), `auto_init_sync`
+                    // aborts before the scope is expanded — and on
+                    // macOS release builds the first `asset://` read of
+                    // a sync-folder file then re-triggers the system
+                    // folder-permission dialog every launch. Priming
+                    // the scope here makes the bootstrap deterministic.
+                    if let Some(ref addr) = substrate_address {
+                        arm_asset_scope_for_account(&app, &state, addr).await;
+                    }
+
+                    // For OAuth-provider sessions, probe the recovery
+                    // state and emit `oauth_recovery_check_needed` if a
+                    // dialog is required. Mirrors `complete_oauth_flow`
+                    // so returning OAuth users also get the signup /
+                    // unlock prompt on session restore — otherwise the
+                    // dialog only ever fires on fresh OAuth, and any
+                    // race in which the frontend listener subscribed
+                    // after the fresh-OAuth emit leaves the account
+                    // permanently unrecoverable with no UI.
+                    if auth_type == "oauth" {
+                        match crate::recovery::check_recovery_state_inner(&state).await {
+                            Ok(recovery_check) => {
+                                let gate_target = match recovery_check.recommended_flow {
+                                    crate::recovery::RecoveryFlow::Proceed => crate::recovery::RecoveryGateState::Skipped,
+                                    _ => crate::recovery::RecoveryGateState::Pending,
+                                };
+                                state.set_recovery_state(gate_target);
+                                info!(
+                                    flow = ?recovery_check.recommended_flow,
+                                    gate = ?gate_target,
+                                    "session_restore: emitting oauth_recovery_check_needed so FE can render dialog"
+                                );
+                                if let Err(e) = app.emit("oauth_recovery_check_needed", &recovery_check) {
+                                    warn!(error = %e, "session_restore: failed to emit oauth_recovery_check_needed");
+                                }
+                            }
+                            Err(e) => {
+                                warn!(error = %e, "session_restore: check_recovery_state_inner failed; skipping emit");
+                            }
+                        }
+                    }
+
+                    // Notify FE if a rotation is awaiting its local-rewrite step.
+                    if let Some(ref addr) = substrate_address
+                        && crate::recovery::rotation_sidecar_path(addr).map(|p| p.exists()).unwrap_or(false)
+                    {
+                        info!(
+                            account = %crate::console_access::short_ss58(addr),
+                            "session_restore: rotation sidecar present → emitting recovery_rotation_pending"
+                        );
+                        if let Err(e) = app.emit("recovery_rotation_pending", addr) {
+                            warn!(error = %e, "session_restore: failed to emit recovery_rotation_pending");
+                        }
+                    }
+
                     // Signal that AuthInfo is populated so the FE can
                     // retry `auto_init_sync` if its first attempt raced
                     // ahead of `rehydrate_or_restored`. See the auth-
@@ -311,6 +448,11 @@ pub async fn restore_session(
         }
     }
     info!("Restoring DB session for {:?}", row.substrate_address);
+    // Re-arm the asset protocol scope for the restored account — same
+    // rationale as the OAuth branch above.
+    if let Some(ref addr) = row.substrate_address {
+        arm_asset_scope_for_account(&app, &state, addr).await;
+    }
     // Signal auth-ready for the DB-fallback restore path as well. The
     // FE's `auto_init_sync` retry listens on this single event for both
     // restore branches.

@@ -8,7 +8,6 @@ use crate::app_state::AppState;
 use crate::auth::account_key::account_key;
 use crate::auth::tokens::get_api_token;
 use crate::error::{AppError, Result};
-use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::drive::keys::folder_hash;
 use hcfs_client::drive::remote::RemoteFileInfo;
 use sqlx::sqlite::SqlitePool;
@@ -24,7 +23,13 @@ fn master_mnemonic_path(account_id: &str) -> Result<PathBuf> {
     Ok(home.join(".hippius").join("drives").join(key).join("master_enc_mnemonic.json"))
 }
 
-async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String> {
+/// Read `hcfs_config.server_url` for this account; fall back to the
+/// production default when the row is missing or holds an empty string.
+///
+/// This is the canonical "where does this account's HCFS server live?"
+/// lookup; other modules (migration, one-shot backfill) delegate here so
+/// the default URL and the empty-string fallback only live in one place.
+pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String> {
     let owner = account_key(account_id);
     let result: Option<(String,)> = sqlx::query_as("SELECT server_url FROM hcfs_config WHERE owner = ?")
         .bind(&owner)
@@ -74,14 +79,7 @@ async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Resul
     let bearer_token = get_api_token(pool, account_id)
         .await?
         .ok_or(AppError::Auth("No authentication token found. Please log in again.".into()))?;
-    let config = HcfsClientConfig {
-        base_url: server_url,
-        bearer_token,
-        accept_invalid_certs: true,
-        billing_bypass_token: None,
-        ss58_address: account_id.to_string(),
-        folder_hash: folder_hash(label),
-    };
+    let config = crate::sync::config::build_hcfs_config(&server_url, &bearer_token, account_id, &folder_hash(label));
     hcfs_client::client::HcfsClient::new(config).map_err(|e| AppError::Hcfs(format!("Failed to create HCFS client: {e}")))
 }
 

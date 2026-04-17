@@ -364,6 +364,17 @@ export function useTrayInit(isAuthenticated: boolean) {
       });
       await menu.append(driveSubmenu);
 
+      // Drain any driveStatusesAtom updates that landed while the
+      // menu-builder was awaiting resource resolution / IPCs above.
+      // The rebuild effect at the bottom of useTrayInit bails when
+      // `driveSubmenu` is still null, so updates that arrive during
+      // startup (e.g. the first `hcfs_drive_status_changed` from
+      // `add_local_sync_folder`) can be missed. Reading the atom
+      // directly here catches them, and serialization in
+      // `rebuildDriveSubmenu` handles the race with a concurrent
+      // rebuild from the effect.
+      void rebuildDriveSubmenu(appStore.get(driveStatusesAtom));
+
       // Add separator before quit
       if (!openItemsSeparator) {
         openItemsSeparator = await PredefinedMenuItem.new({

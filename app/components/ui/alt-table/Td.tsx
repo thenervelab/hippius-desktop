@@ -1,8 +1,10 @@
 import { cn } from "@/lib/utils";
 import { Cell, flexRender } from "@tanstack/react-table";
 
-export interface TdProps<TData, TValue>
-  extends React.ThHTMLAttributes<HTMLTableCellElement> {
+export interface TdProps<
+  TData,
+  TValue,
+> extends React.ThHTMLAttributes<HTMLTableCellElement> {
   cell: Cell<TData, TValue>;
   activeSortClassName?: string;
   columnWidth?: number;
@@ -25,7 +27,7 @@ export function Td<TData, TValue>(props: TdProps<TData, TValue>) {
         "",
         cell.column.id === "actions" && "w-10 p-0",
         className,
-        canSort && sortOrder && activeSortClassName
+        canSort && sortOrder && activeSortClassName,
       )}
       style={style}
       {...rest}

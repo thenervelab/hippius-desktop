@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useSetAtom } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import {
   insufficientCreditsDialogOpenAtom,
@@ -77,11 +78,15 @@ export function useCreditCheck() {
         }
         return true;
       } catch (err) {
-        // Fail closed: any IPC error (network, auth, deserialize) is
-        // treated as ineligible. The action IPC will also enforce, so
-        // worst case the user just sees the dialog and can retry.
+        // A failed IPC is NOT the same as "not eligible". Conflating
+        // them previously showed the Insufficient Credits dialog on any
+        // network blip or hung request (users with ample credits were
+        // getting the credits-dialog after the app froze on an untimed
+        // reqwest call). Surface a generic error toast instead and let
+        // the action IPC's own `require_eligible` gate enforce the real
+        // answer if/when the user retries.
         console.warn("[useCreditCheck] check_action_eligibility failed:", err);
-        setReason(action);
+        toast.error("Couldn't verify your credit balance. Check your connection and try again.");
         return false;
       }
     },

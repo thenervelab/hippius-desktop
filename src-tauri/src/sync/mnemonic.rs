@@ -204,35 +204,126 @@ pub async fn get_drive_mnemonic(state: tauri::State<'_, crate::app_state::AppSta
 /// Ensure a BIP-39 mnemonic is available for HCFS sync.
 ///
 /// Tries the drive's encrypted mnemonic first, falls back to generating
-/// a new one. Replaces the TypeScript `ensureSyncMnemonic.ts` that did
-/// the same fallback with a module-level dedup promise.
+/// a new one. The resolved (or generated) mnemonic is cached in
+/// `AuthInfo.mnemonic` so every downstream Rust caller that needs it can
+/// pull it from memory via `get_mnemonic_for_account` without the mnemonic
+/// ever having to cross the IPC boundary.
+///
+/// # Security
+///
+/// This command returns `Result<()>` rather than the raw phrase. The
+/// frontend used to consume the return value and hand it back to
+/// `initialize_sync` / `auto_init_sync`, which round-tripped the seed
+/// phrase through JavaScript memory unnecessarily. Rust already has
+/// everything it needs once this function returns, so the return value
+/// is intentionally empty. The explicit reveal flow lives in
+/// `get_drive_mnemonic` — the recovery-phrase settings page is the only
+/// legitimate consumer of the raw string.
 #[tauri::command]
-pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String> {
-    // Try drive mnemonic first. Unwrap at the IPC return boundary so Tauri
-    // can serialize a plain `String`; the `Zeroizing` wrapper is dropped
-    // immediately after the clone, wiping the in-process copy.
+pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<()> {
+    // Block on the recovery gate before touching the mnemonic store.
+    //
+    // For OAuth login on a fresh device, `complete_oauth_flow` flips the
+    // gate to `Pending` so this await parks until the recovery dialog has
+    // resolved — either by installing a server-sealed mnemonic via
+    // `recover_mnemonic`, uploading a freshly-generated one via
+    // `seal_and_upload_mnemonic`, or fast-path skipping via
+    // `mark_recovery_skipped`. Without this gate there's a race where
+    // `auto_init_sync` mints a new mnemonic seconds before the user
+    // enters their recovery password, which then corrupts the drive
+    // password and trips `MasterMnemonicUnrecoverable` on the next run.
+    //
+    // For every other login path (mnemonic login, session restore on a
+    // returning device) the gate's default is `Skipped`, so this await
+    // is a no-op.
+    state.await_recovery_resolved().await;
+
+    // Try the five-stage recovery chain first.
     if let Ok(m) = get_mnemonic_for_account(&state, &account_id).await
         && !m.is_empty()
     {
-        return Ok((*m).clone());
+        // Already cached by stage 1 of `get_mnemonic_for_account` when it
+        // hit `AuthInfo.mnemonic`, or freshly resolved from disk/DB. Make
+        // sure the active AuthInfo slot has it so downstream Rust callers
+        // pick it up without re-traversing the fallback chain.
+        state.auth.lock()?.cache_session_mnemonic(&account_id, (*m).clone());
+        return Ok(());
     }
 
-    // Fall back to generating a new mnemonic (OAuth users on first sync)
+    // Recovery failed. Before generating a fresh mnemonic, check whether
+    // the user already has encrypted state on disk / in the DB that would
+    // be rendered permanently unreadable by minting a new one. The
+    // canonical markers:
+    //
+    // 1. `master_enc_mnemonic.json` exists — the mnemonic was already
+    //    generated once and encrypted to disk with the user's drive
+    //    password. Generating a new mnemonic would leave this file
+    //    unopenable.
+    // 2. `hcfs_config.drive_password` has `encryption_version > 0` — the
+    //    drive password is encrypted with the existing mnemonic; a new
+    //    mnemonic cannot decrypt it and `load_sync_config` would fail
+    //    with the opaque `Crypto: decryption failed — wrong key or
+    //    corrupted data` the bug report surfaced.
+    //
+    // The previous code regenerated in both states because
+    // `get_mnemonic_for_account` stages 2-4 pass `None` to
+    // `get_drive_password` and always return `Err` for
+    // `encryption_version = 1` rows — a chicken-and-egg that made the
+    // recovery chain look empty whenever the keychain had evicted the
+    // mnemonic (common in release-signed builds with `hardenedRuntime`).
+    // Regenerating then corrupted the drive password on the next
+    // decrypt. Instead, surface `MasterMnemonicUnrecoverable` so the
+    // frontend's reauth banner / seed-phrase re-entry flow takes over.
+    if has_existing_mnemonic_state(state.pool()?, &account_id).await? {
+        warn!(
+            "Mnemonic recovery failed for account {} but encrypted state exists — refusing to generate a new mnemonic (reauth required)",
+            &account_id[..8.min(account_id.len())]
+        );
+        return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::MasterMnemonicUnrecoverable));
+    }
+
+    // Truly fresh state (first-time OAuth sync setup) — safe to mint one.
     info!(
-        "No drive mnemonic available, generating new one for account {}",
+        "No drive mnemonic available and no prior state, generating new one for account {}",
         &account_id[..8.min(account_id.len())]
     );
     let generated = crate::auth::login::generate_mnemonic_internal()?;
 
-    // Cache for the active session so subsequent get_mnemonic_for_account
-    // calls (e.g. migration) hit Stage 1 immediately, regardless of whether
-    // auto_init_sync has finished writing master_enc_mnemonic.json yet.
-    // The helper is gated on the active substrate_address so a stale cache
-    // from a previous account never leaks across logins.
+    // Cache for the active session so subsequent `get_mnemonic_for_account`
+    // calls (e.g. migration, auto_init_sync) hit Stage 1 immediately,
+    // regardless of whether auto_init_sync has finished writing
+    // `master_enc_mnemonic.json` yet. The helper is gated on the active
+    // substrate_address so a stale cache from a previous account never
+    // leaks across logins.
     state.auth.lock()?.cache_session_mnemonic(&account_id, (*generated).clone());
 
-    // Return plain String for IPC serialization; `generated` is zeroized on drop.
-    Ok((*generated).clone())
+    Ok(())
+}
+
+/// Returns `true` when the account already has encrypted mnemonic/drive
+/// state that would be destroyed by minting a new mnemonic.
+///
+/// Checked artifacts:
+/// - `master_enc_mnemonic.json` under `~/.hippius/drives/<account_key>/`.
+/// - A `hcfs_config` row with `encryption_version > 0`.
+///
+/// Takes `&SqlitePool` (not `&AppState`) so unit tests can exercise the
+/// DB branch with an in-memory pool without standing up the full
+/// application state.
+pub(crate) async fn has_existing_mnemonic_state(pool: &sqlx::SqlitePool, account_id: &str) -> Result<bool> {
+    if let Ok(path) = master_mnemonic_path(account_id)
+        && path.exists()
+    {
+        return Ok(true);
+    }
+
+    let owner = account_key(account_id);
+    let row: Option<(i32,)> = sqlx::query_as("SELECT COALESCE(encryption_version, 0) FROM hcfs_config WHERE owner = ? LIMIT 1")
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(row.is_some_and(|(v,)| v > 0))
 }
 
 /// Create a password-protected zip file containing the plaintext mnemonic.
@@ -266,7 +357,120 @@ pub async fn create_encrypted_backup(mnemonic: String, password: String, output_
     Ok(())
 }
 
+/// Re-derive and re-encrypt every sync-folder's `enc_mnemonic.json` under
+/// `new_password` for the active account.
+///
+/// Used by the password-rotation / unlock / signup paths that unify the
+/// user's recovery password with the on-disk drive password. Each folder
+/// mnemonic is **re-derived from the master** via
+/// [`hcfs_client::drive::keys::derive_folder_mnemonic`] rather than decrypted
+/// from the existing file, so this call does not require knowledge of the
+/// previous drive password and is safe to invoke from unlock flows where
+/// the only secret available is the user's recovery password.
+///
+/// Idempotent: `save_encrypted_mnemonic` truncates on write, so re-running
+/// this function with the same inputs produces the same bytes. Safe to
+/// re-run after a partial failure.
+///
+/// Skips the internal `migration` pseudo-drive label (see
+/// `sync::drive_status` filters). Folders whose `enc_mnemonic.json` does
+/// not exist yet are created under the new password as part of this call
+/// — rotation brings every folder that has a `sync_paths` row up to date,
+/// whether or not it had been realised on disk before.
+///
+/// Every per-folder step is best-effort: derivation or save failures are
+/// warn-logged with their `label` and skipped so a single bad folder
+/// doesn't block rotating the rest. Returns `Err` only when the
+/// `sync_paths` read itself fails.
+pub(crate) async fn reencrypt_all_folder_mnemonics(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    master_mnemonic: &str,
+    new_password: &str,
+) -> crate::error::Result<()> {
+    use crate::auth::account_key::account_key;
+
+    let owner = account_key(account_id);
+    let labels: Vec<String> = sqlx::query_scalar("SELECT label FROM sync_paths WHERE owner = ?")
+        .bind(&owner)
+        .fetch_all(pool)
+        .await?;
+
+    for label in labels.iter().filter(|l| l.as_str() != "migration") {
+        let folder_dir = match config_dir_for_folder(account_id, label) {
+            Ok(dir) => dir,
+            Err(e) => {
+                tracing::warn!(
+                    label = %label,
+                    error = %e,
+                    "reencrypt_all_folder_mnemonics: failed to compute folder dir; continuing"
+                );
+                continue;
+            }
+        };
+        let folder_enc = folder_dir.join("enc_mnemonic.json");
+
+        // Re-derive deterministically from the master. Folder files that
+        // don't exist yet on disk are created here under the new password.
+        let folder_mnemonic_owned = match hcfs_client::drive::keys::derive_folder_mnemonic(master_mnemonic, label) {
+            Ok(s) => zeroize::Zeroizing::new(s),
+            Err(e) => {
+                tracing::warn!(
+                    label = %label,
+                    error = %e,
+                    "reencrypt_all_folder_mnemonics: failed to derive folder mnemonic; continuing"
+                );
+                continue;
+            }
+        };
+
+        if let Some(parent) = folder_enc.parent()
+            && let Err(e) = tokio::fs::create_dir_all(parent).await
+        {
+            tracing::warn!(
+                label = %label,
+                error = %e,
+                "reencrypt_all_folder_mnemonics: failed to create folder dir; continuing"
+            );
+            continue;
+        }
+
+        // save_encrypted_mnemonic is sync + blocking; wrap in spawn_blocking
+        // to match install_recovered_mnemonic.
+        let password_owned = zeroize::Zeroizing::new(new_password.to_string());
+        let label_owned = label.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            hcfs_client::auth::save_encrypted_mnemonic(&folder_enc, &folder_mnemonic_owned, &password_owned).map_err(|e| e.to_string())
+        })
+        .await;
+
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    label = %label_owned,
+                    error = %e,
+                    "reencrypt_all_folder_mnemonics: failed to save folder mnemonic; continuing"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    label = %label_owned,
+                    error = %e,
+                    "reencrypt_all_folder_mnemonics: spawn_blocking join error; continuing"
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "Tests hold HOME_LOCK across awaits to serialise $HOME overrides. #[tokio::test] runs on a current-thread runtime so awaits don't contend on this lock — see test_helpers.rs."
+)]
 mod tests {
     use super::*;
 
@@ -357,5 +561,232 @@ mod tests {
             dir.display()
         );
         assert!(components.contains(&"drives".to_string()), "should be under drives: {}", dir.display());
+    }
+
+    // ── has_existing_mnemonic_state ─────────────────────────────────
+    //
+    // The DB branch — `hcfs_config.encryption_version > 0` — is what
+    // guards the release-mode scenario that motivated these tests (an
+    // OAuth user with a previously-set-up drive whose OS keychain
+    // entry was evicted). The file-exists branch is exercised by the
+    // integration tests in `src-tauri/tests/` that spin up a real
+    // account directory; here we focus on the DB shape.
+
+    use sqlx::sqlite::SqlitePool;
+
+    async fn make_hcfs_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.expect("open in-memory db");
+        sqlx::query(
+            "CREATE TABLE hcfs_config (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL UNIQUE,
+                server_url TEXT NOT NULL DEFAULT '',
+                drive_password TEXT NOT NULL DEFAULT '',
+                encryption_version INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    // A randomized-looking SS58 we never combine with HOME so the file
+    // branch can't accidentally fire during the DB-branch tests on a
+    // developer machine that happens to have `master_enc_mnemonic.json`
+    // lying around.
+    const UNUSED_ACCOUNT: &str = "5TestAccountIdForHasExistingMnemonicState0000";
+
+    #[tokio::test]
+    async fn no_row_and_no_file_returns_false() {
+        let pool = make_hcfs_pool().await;
+        let result = has_existing_mnemonic_state(&pool, UNUSED_ACCOUNT).await.unwrap();
+        assert!(!result, "fresh account with no artifacts should not block regeneration");
+    }
+
+    #[tokio::test]
+    async fn plaintext_row_returns_false() {
+        // encryption_version = 0 means the row predates at-rest
+        // encryption — the old `get_mnemonic_for_account` stages could
+        // still read it with `None`, so regeneration isn't needed.
+        let pool = make_hcfs_pool().await;
+        let owner = account_key(UNUSED_ACCOUNT);
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, ?, ?, 0)")
+            .bind(&owner)
+            .bind("https://example")
+            .bind("plaintext-password")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let result = has_existing_mnemonic_state(&pool, UNUSED_ACCOUNT).await.unwrap();
+        assert!(!result, "plaintext config row must not trigger the guard");
+    }
+
+    #[tokio::test]
+    async fn encrypted_row_returns_true() {
+        // The load-bearing case: encrypted drive_password exists, so
+        // regenerating a mnemonic would permanently lock the user out.
+        let pool = make_hcfs_pool().await;
+        let owner = account_key(UNUSED_ACCOUNT);
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, ?, ?, 1)")
+            .bind(&owner)
+            .bind("https://example")
+            .bind("base64-ciphertext-blob")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let result = has_existing_mnemonic_state(&pool, UNUSED_ACCOUNT).await.unwrap();
+        assert!(result, "encrypted row must block regeneration");
+    }
+
+    #[tokio::test]
+    async fn different_owner_does_not_match() {
+        // The lookup is scoped by `owner = account_key(account_id)`;
+        // another user's encrypted row must not leak into this
+        // account's regeneration decision.
+        let pool = make_hcfs_pool().await;
+        let other_owner = account_key("5OtherAccountWithEncryptedState0000000000000");
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, ?, ?, 1)")
+            .bind(&other_owner)
+            .bind("https://example")
+            .bind("encrypted")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let result = has_existing_mnemonic_state(&pool, UNUSED_ACCOUNT).await.unwrap();
+        assert!(!result, "another user's encrypted row must not trigger the guard");
+    }
+
+    // ── reencrypt_all_folder_mnemonics ──────────────────────────────
+
+    #[tokio::test]
+    async fn reencrypt_overwrites_existing_folder_mnemonics_under_new_password() {
+        use sqlx::sqlite::SqlitePoolOptions;
+
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        // `config_dir_for_folder` and the account_id hashing path look at $HOME.
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let account = "5TestReencryptAccount";
+        let owner = account_key(account);
+        for label in ["alpha", "beta", "migration"] {
+            sqlx::query("INSERT INTO sync_paths (owner, path, label) VALUES (?, ?, ?)")
+                .bind(&owner)
+                .bind(format!("/tmp/{label}"))
+                .bind(label)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        // A stable BIP39 test mnemonic — NOT a real secret. Common test vector.
+        let master = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let new_password = "correct horse battery staple test vector only";
+
+        // Seed an existing folder file under an OLD password so we can prove
+        // the function overwrites rather than skips.
+        let alpha_dir = config_dir_for_folder(account, "alpha").unwrap();
+        tokio::fs::create_dir_all(&alpha_dir).await.unwrap();
+        let alpha_enc = alpha_dir.join("enc_mnemonic.json");
+        let alpha_folder_mnemonic = hcfs_client::drive::keys::derive_folder_mnemonic(master, "alpha").unwrap();
+        hcfs_client::auth::save_encrypted_mnemonic(&alpha_enc, &alpha_folder_mnemonic, "old password").unwrap();
+
+        reencrypt_all_folder_mnemonics(&pool, account, master, new_password).await.unwrap();
+
+        // alpha: must decrypt under NEW password and equal the deterministic derivation.
+        let recovered = hcfs_client::auth::recover_mnemonic(&alpha_enc, new_password).unwrap();
+        assert_eq!(recovered.to_string(), alpha_folder_mnemonic);
+
+        // beta: file didn't exist before; the function should have created it
+        // under the new password.
+        let beta_enc = config_dir_for_folder(account, "beta").unwrap().join("enc_mnemonic.json");
+        assert!(beta_enc.exists(), "beta enc_mnemonic.json should be created");
+        let beta_expected = hcfs_client::drive::keys::derive_folder_mnemonic(master, "beta").unwrap();
+        let beta_recovered = hcfs_client::auth::recover_mnemonic(&beta_enc, new_password).unwrap();
+        assert_eq!(beta_recovered.to_string(), beta_expected);
+
+        // migration: must be skipped entirely — no file created.
+        let migration_enc = config_dir_for_folder(account, "migration").unwrap().join("enc_mnemonic.json");
+        assert!(!migration_enc.exists(), "migration pseudo-drive must be skipped");
+
+        // Idempotence: a second call is a no-op on disk (same bytes because
+        // derivation is deterministic) and returns Ok.
+        reencrypt_all_folder_mnemonics(&pool, account, master, new_password).await.unwrap();
+        let recovered_again = hcfs_client::auth::recover_mnemonic(&alpha_enc, new_password).unwrap();
+        assert_eq!(recovered_again.to_string(), alpha_folder_mnemonic);
+    }
+
+    #[tokio::test]
+    async fn reencrypt_with_zero_folders_returns_ok() {
+        use sqlx::sqlite::SqlitePoolOptions;
+
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let master = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        // No sync_paths rows for this account — the loop body must never
+        // execute and the helper must be a no-op Ok.
+        reencrypt_all_folder_mnemonics(&pool, "5EmptyAccount", master, "any-password")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn reencrypt_with_invalid_master_warn_skips_all() {
+        use sqlx::sqlite::SqlitePoolOptions;
+
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let account = "5InvalidMasterAccount";
+        let owner = account_key(account);
+        for label in ["alpha", "beta"] {
+            sqlx::query("INSERT INTO sync_paths (owner, path, label) VALUES (?, ?, ?)")
+                .bind(&owner)
+                .bind(format!("/tmp/{label}"))
+                .bind(label)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        // Invalid master — every folder's derive step will fail. Under the
+        // warn+continue policy the helper must still return Ok and NOT
+        // write any file.
+        reencrypt_all_folder_mnemonics(&pool, account, "not a bip39 mnemonic", "any-password")
+            .await
+            .unwrap();
+
+        for label in ["alpha", "beta"] {
+            let enc = config_dir_for_folder(account, label).unwrap().join("enc_mnemonic.json");
+            assert!(!enc.exists(), "{label}: no file should be written when derivation fails");
+        }
     }
 }

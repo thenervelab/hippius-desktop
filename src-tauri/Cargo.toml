@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.1.92"
+version = "0.1.93"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -23,6 +23,10 @@ tauri = { version = "2", features = [
     'tray-icon',
     'image-ico',
     'image-png',
+    # Enable devtools even in release builds so we can debug OAuth/recovery
+    # without rebuilding a debug DMG. Gated at runtime via the HIPPIUS_DEVTOOLS
+    # env var — see `main.rs` setup hook. Remove once we stop shipping dev
+    # aids in release.
     'devtools',
 ] }
 tauri-plugin-opener = "2"
@@ -37,44 +41,35 @@ tokio = { version = "1.49.0", features = [
     "sync",
     "time",
     "fs",
-    "io-util",
-    "net",
     "process",
-    "signal",
 ] }
-futures = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 tokio-util = "0.7"
 dirs = "6.0.0"
 flate2 = "1.1.2"
-tar = "0.4.44"
+tar = { version = "0.4.44", default-features = false }
 reqwest = { version = "0.13.1", default-features = false, features = [
-    "blocking",
     "multipart",
     "json",
     "stream",
     "rustls",
 ] }
 ed25519-dalek = "2.2"
-zip = "4.2.0"
+zip = { version = "4.2.0", default-features = false, features = ["deflate", "aes-crypto"] }
 dotenvy = "0.15"
-base64 = "0.21"
+base64 = "0.22"
 sha2 = "0.10"
-aes = "0.8"
-cbc = "0.1"
-md5 = "0.7"
-subxt = { version = "0.38", features = ["substrate-compat"] }
-sp-core = "34.0.0"
+subxt = "0.38"
+subxt-signer = { version = "0.38", default-features = false, features = ["sr25519", "subxt", "std"] }
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
-sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-native-tls"] }
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 hex = "0.4"
-parity-scale-codec = "3.6"
 tauri-plugin-fs = "2"
 sysinfo = "0.32"
 notify = "6.1"
 tauri-plugin-dialog = "2.6.0"
-tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 rand = "0.8"
 tauri-plugin-process = "2"
 which = "4.4"
@@ -83,6 +78,7 @@ zeroize = "1"
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
 bip39 = { version = "2.2", features = ["rand"] }
+zxcvbn = { version = "3", default-features = false }
 keyring = { version = "3", default-features = false, features = [
     "apple-native",
     "windows-native",
@@ -93,8 +89,18 @@ alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "27e70f3" }
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "27e70f3" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "85e6002" }
+# hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
+# MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
+# its public API but does not re-export. Pinned to the same git rev so the
+# wire types stay in lockstep with the client.
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "85e6002" }
+# NFC-normalise relative_path strings before posting them to the server's
+# register_relative_paths endpoint. macOS APFS hands filenames back in NFD
+# and the server's path_validator hard-rejects anything non-NFC — see the
+# docstring on `path_index_to_entries` in sync/relative_path_backfill.rs for
+# the full story. Version pinned to match hcfs-server and hcfs-client.
+unicode-normalization = "0.1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -113,8 +119,6 @@ tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
 tauri-plugin-updater = { version = "2", default-features = false, features = [
     "rustls-tls",
 ] }
-# Directory Traversal
-walkdir = "2.5"
 # Ergonomic Error Handling
 anyhow = "1.0"
 
@@ -164,6 +168,9 @@ tokio = { version = "1", features = [
     "process",
 ] }
 anyhow = "1"
+aes = "0.8"
+cbc = "0.1"
+md5 = "0.7"
 reqwest = { version = "0.13.1", default-features = false, features = [
     "json",
     "rustls",

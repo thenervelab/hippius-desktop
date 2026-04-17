@@ -1,6 +1,6 @@
 //! In-memory auth state — keypair and addresses.
 
-use sp_core::sr25519;
+use subxt_signer::sr25519::Keypair;
 use zeroize::Zeroizing;
 
 /// What operations the active session can perform.
@@ -47,13 +47,11 @@ pub struct AuthInfo {
     /// sr25519 keypair for signing Substrate extrinsics. `Some` only when
     /// `capabilities == Full`.
     ///
-    /// `sp_core::sr25519::Pair` is `pub struct Pair(schnorrkel::Keypair)`,
-    /// and `schnorrkel::Keypair` (verified against schnorrkel 0.11.5)
-    /// implements both `Zeroize` and `Drop`. The secret bytes are wiped
-    /// from memory automatically when this field is set to `None` or
-    /// when the containing `AuthInfo` is dropped — no extra newtype is
-    /// required.
-    pub sr25519_pair: Option<sr25519::Pair>,
+    /// `subxt_signer::sr25519::Keypair` wraps a `schnorrkel::MiniSecretKey`
+    /// with `ExpansionMode::Ed25519`. Schnorrkel zeroizes its secret bytes
+    /// on drop, so clearing this field or dropping the containing `AuthInfo`
+    /// scrubs the key from memory without additional wrapping.
+    pub sr25519_pair: Option<Keypair>,
     /// Active SS58 address. The single source of truth for the active
     /// account; `None` only when no user is logged in.
     pub substrate_address: Option<String>,

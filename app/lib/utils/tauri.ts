@@ -109,9 +109,45 @@ const getMimeType = (filename: string): string => {
   }
 };
 
+/**
+ * Select a file and return its absolute path + name (no disk read).
+ * Useful when the file will be sent to a Rust command that reads it itself.
+ */
+export const selectFilePath = async (
+  acceptImagesOnly: boolean = false,
+): Promise<{ path: string; name: string } | null> => {
+  try {
+    const { downloadDir } = await import("@tauri-apps/api/path");
+    let defaultPath: string | undefined;
+    try {
+      defaultPath = await downloadDir();
+    } catch {
+      // Fall back to no directory hint
+    }
+    const selected = await open({
+      multiple: false,
+      defaultPath,
+      filters: acceptImagesOnly
+        ? [
+            {
+              name: "Images",
+              extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg"],
+            },
+          ]
+        : undefined,
+    });
+    if (!selected || Array.isArray(selected)) return null;
+    const name = selected.split(/[/\\]/).pop() || "unknown";
+    return { path: selected, name };
+  } catch (error) {
+    console.error("Failed to select file path:", error);
+    return null;
+  }
+};
+
 export const selectFile = async (
   multiple: boolean = false,
-  acceptImagesOnly: boolean = false
+  acceptImagesOnly: boolean = false,
 ): Promise<File[] | null> => {
   try {
     const { downloadDir } = await import("@tauri-apps/api/path");

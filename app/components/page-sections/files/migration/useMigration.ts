@@ -205,13 +205,14 @@ export function useMigration(): UseMigrationReturn {
 
       appStore.set(migrationLockAtom, true);
 
-      // Derive the folder label from the user-chosen sync path directory name.
-      const migrationState = appStore.get(migrationCheckAtom);
-      const syncPath = migrationState.syncPath;
-      const label = syncPath ? syncPath.split("/").filter(Boolean).pop() ?? "default" : "default";
+      // Rust now derives the HCFS drive label from the user-chosen sync
+      // path — see `derive_migration_label` in `src-tauri/src/sync/migration.rs`.
+      // We just thread the path through; the previous TS-side `split("/")`
+      // was duplicated in `closeMigration` and could drift.
+      const syncPath = appStore.get(migrationCheckAtom).syncPath;
 
       try {
-        await invoke("start_server_migration", { accountId, totalSize, label });
+        await invoke("start_server_migration", { accountId, totalSize, syncPath });
 
         // Dismiss any open dialogs and activate the banner
         setCurrentStep(null);
@@ -225,24 +226,30 @@ export function useMigration(): UseMigrationReturn {
       } catch (err) {
         console.error("[Migration] Start failed:", err);
         appStore.set(migrationLockAtom, false);
-        // Structural dispatch on AppError.kind from Rust.
-        const kind = (err as { kind?: string } | null)?.kind;
-        if (kind === "NotReady") {
-          const message = (err as { message?: string }).message ?? "";
-          if (message.includes("Not enough disk space")) {
-            toast.error("Not enough disk space for migration. Please free up space and try again.");
-          } else if (message.includes("Master mnemonic")) {
-            if (authType === "oauth") {
-              toast.error(
-                "Migration setup incomplete. Please complete sync setup before starting migration, or contact support if the problem persists."
-              );
-            } else {
-              toast.error(
-                "Seed phrase not available. Please log out and log back in with your seed phrase to start migration."
-              );
-            }
-          } else {
-            toast.error("Failed to start migration. Please try again.");
+        // Dispatch on the structured `subkind` from Rust
+        // (`{kind: "NotReady", subkind: "NOT_ENOUGH_DISK_SPACE", ...}`).
+        // Matching substrings of `message` was fragile — any rewording
+        // of the Display text in `NotReadyKind` would silently swap
+        // users to the generic "try again" toast.
+        const typed = err as { kind?: string; subkind?: string } | null;
+        if (typed?.kind === "NotReady") {
+          switch (typed.subkind) {
+            case "NOT_ENOUGH_DISK_SPACE":
+              toast.error("Not enough disk space for migration. Please free up space and try again.");
+              break;
+            case "MASTER_MNEMONIC_UNRECOVERABLE":
+              if (authType === "oauth") {
+                toast.error(
+                  "Migration setup incomplete. Please complete sync setup before starting migration, or contact support if the problem persists."
+                );
+              } else {
+                toast.error(
+                  "Seed phrase not available. Please log out and log back in with your seed phrase to start migration."
+                );
+              }
+              break;
+            default:
+              toast.error("Failed to start migration. Please try again.");
           }
         } else {
           toast.error("Failed to start migration. Please try again.");
@@ -314,13 +321,15 @@ export function useMigration(): UseMigrationReturn {
 
     if (accountId) {
       try {
-        const migrationState = appStore.get(migrationCheckAtom);
-        const syncPath = migrationState.syncPath;
-        const label = syncPath ? syncPath.split("/").filter(Boolean).pop() ?? "default" : "default";
+        // Rust derives the drive label from the path server-side via
+        // `derive_migration_label` — keeping the rule colocated with
+        // the IPC that consumes it means the FE can't accidentally ship
+        // one label to `start_server_migration` and another to
+        // `complete_migration_transition`.
+        const syncPath = appStore.get(migrationCheckAtom).syncPath;
         await invoke("complete_migration_transition", {
           accountId,
           customSyncPath: syncPath,
-          label,
         });
         // Per-drive Active status is emitted by Rust automatically
         // when complete_migration_transition kicks off the sync init —
