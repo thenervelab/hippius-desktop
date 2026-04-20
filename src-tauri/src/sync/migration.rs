@@ -458,12 +458,20 @@ pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppStat
 /// Compute a sensible default directory for the sync folder when the user
 /// hasn't explicitly chosen one (e.g., during migration completion).
 ///
-/// Uses `~/Documents/Hippius-Migration-YYYY-MM-DD` (falling back to
-/// `~/Hippius-Migration-YYYY-MM-DD`). If that path already exists, a
-/// numeric suffix is appended (`-2`, `-3`, ...) to guarantee uniqueness.
+/// Uses `~/Hippius-Migration-YYYY-MM-DD` (falling back to
+/// `~/Documents/Hippius-Migration-YYYY-MM-DD`). If that path already
+/// exists, a numeric suffix is appended (`-2`, `-3`, ...) to guarantee
+/// uniqueness.
+///
+/// Home is preferred over Documents because macOS TCC gates every access
+/// to Documents and only persists the grant against a stable code
+/// identity (Developer ID). Our ad-hoc-signed builds re-prompt on every
+/// access until we sign + notarize, so placing the default outside
+/// Documents removes the permission friction while keeping the folder
+/// visible in Finder.
 pub(crate) fn compute_default_sync_path() -> Result<PathBuf> {
-    let base = dirs::document_dir()
-        .or_else(dirs::home_dir)
+    let base = dirs::home_dir()
+        .or_else(dirs::document_dir)
         .ok_or_else(|| crate::error::AppError::Other("Could not determine a suitable directory for sync folder".into()))?;
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let stem = format!("Hippius-Migration-{today}");
@@ -1175,15 +1183,18 @@ mod tests {
     }
 
     #[test]
-    fn default_sync_path_under_documents_or_home() {
+    fn default_sync_path_prefers_home_over_documents() {
         let path = compute_default_sync_path().expect("should resolve a default path");
         let parent = path.parent().expect("path should have a parent");
-        let doc_dir = dirs::document_dir();
-        let home_dir = dirs::home_dir();
-        assert!(
-            doc_dir.as_ref() == Some(&parent.to_path_buf()) || home_dir.as_ref() == Some(&parent.to_path_buf()),
-            "Expected parent to be Documents or Home, got {parent:?}",
-        );
+        // Home is preferred over Documents so the default doesn't land in
+        // macOS's TCC-gated Documents folder. Documents is only used when
+        // home_dir() returns None (extremely unusual).
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(parent, home.as_path(), "expected parent to be home, got {parent:?}");
+        } else {
+            let doc = dirs::document_dir().expect("at least one of home/documents must resolve");
+            assert_eq!(parent, doc.as_path());
+        }
     }
 
     #[test]
