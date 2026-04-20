@@ -479,6 +479,13 @@ fn main() {
 pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     builder.on_window_event(|window, event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            // Only intercept the main window. If a future refactor adds a
+            // secondary window (e.g. a settings popup), its close button
+            // should behave normally and not hide-to-tray the whole app.
+            if window.label() != "main" {
+                return;
+            }
+
             api.prevent_close();
 
             #[cfg(target_os = "macos")]
