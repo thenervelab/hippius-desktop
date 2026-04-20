@@ -93,6 +93,7 @@ use crate::utils::support::{
     create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message, update_support_ticket, upload_ticket_attachment,
 };
 use crate::utils::tray_menu::get_tray_menu_data;
+use futures_util::FutureExt;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use tauri::{Builder, Emitter, Manager, Wry, path::BaseDirectory};
@@ -389,7 +390,76 @@ fn main() {
     let builder = on_window_event(builder);
 
     info!("Running Tauri application...");
-    builder.run(tauri::generate_context!()).expect("error while running tauri application");
+    let app = builder.build(tauri::generate_context!()).expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        match event {
+            // Single gate for every app-exit path (Cmd+Q, app menu Quit,
+            // tray Quit, `app.exit(n)`). On the first pass we defer the
+            // exit, stop Nebula, and re-request exit; the second pass
+            // sees `nebula_stopped=true` and lets Tauri proceed.
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                let state = app_handle.state::<crate::app_state::AppState>();
+                let already_stopped = state.nebula_stopped.load(std::sync::atomic::Ordering::SeqCst);
+
+                if already_stopped {
+                    // Second pass — allow the exit.
+                    info!("Exit requested; Nebula already stopped, exiting");
+                    return;
+                }
+
+                info!("Exit requested; stopping Nebula before exit");
+                api.prevent_exit();
+
+                // A rapid second Cmd+Q before this task finishes spawns a second cleanup
+                // task. That's fine: `stop_nebula` is idempotent (pkill / taskkill are
+                // no-ops on the second call) and Tauri ignores `exit(0)` after the event
+                // loop has shut down. No extra guard needed.
+                let handle_clone = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let app_state = handle_clone.state::<crate::app_state::AppState>();
+                    // If stop_nebula panics we still want to flip the flag and re-request
+                    // exit — a hung app with a hidden window is worse than an unclean
+                    // Nebula shutdown. AssertUnwindSafe is fine here: NebulaState is self-
+                    // contained behind its own mutexes, so a partial stop can't corrupt
+                    // any shared state we read later.
+                    let result = std::panic::AssertUnwindSafe(crate::nebula::manager::stop_nebula(&app_state.nebula))
+                        .catch_unwind()
+                        .await;
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => warn!("Failed to stop Nebula during shutdown: {e}"),
+                        Err(_) => error!("stop_nebula panicked during shutdown — exiting anyway"),
+                    }
+                    app_state.nebula_stopped.store(true, std::sync::atomic::Ordering::SeqCst);
+                    info!("Nebula stopped; re-requesting exit");
+                    handle_clone.exit(0);
+                });
+            }
+
+            // macOS dock icon click with no visible windows. Mirrors the
+            // tray's "Open Hippius" action.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { has_visible_windows, .. } => {
+                if has_visible_windows {
+                    return;
+                }
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    if let Err(e) = window.unminimize() {
+                        debug!("Failed to unminimize window on reopen: {e}");
+                    }
+                    if let Err(e) = window.show() {
+                        debug!("Failed to show window on reopen: {e}");
+                    }
+                    if let Err(e) = window.set_focus() {
+                        debug!("Failed to focus window on reopen: {e}");
+                    }
+                }
+            }
+
+            _ => {}
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
