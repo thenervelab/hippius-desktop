@@ -396,27 +396,34 @@ fn main() {
 // App setup (was setup.rs)
 // ---------------------------------------------------------------------------
 
-/// Register the window close handler on the Tauri builder.
+/// Window-close dispatcher.
 ///
-/// Prevents the default close, stops Nebula, then exits cleanly.
+/// On macOS, closing the main window (red-X / Cmd+W) hides the window so
+/// the app keeps running in the tray. All genuine quit paths on macOS —
+/// Cmd+Q, the app menu's Quit Hippius, the tray's Quit Hippius — fire
+/// `RunEvent::ExitRequested` instead, where Nebula cleanup happens.
+///
+/// On Windows/Linux, closing the window exits the app (current behavior).
+/// We call `app.exit(0)` rather than letting Tauri's default close fire
+/// so that `RunEvent::ExitRequested` runs and Nebula is stopped there.
 pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     builder.on_window_event(|window, event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            info!("Close requested");
             api.prevent_close();
-            let app_handle = window.app_handle().clone();
 
-            tauri::async_runtime::spawn(async move {
-                debug!("Stopping Nebula VPN...");
-                // Stop Nebula before exiting
-                let nebula_st = &app_handle.state::<crate::app_state::AppState>().nebula;
-                if let Err(e) = crate::nebula::manager::stop_nebula(nebula_st).await {
-                    warn!("Failed to stop Nebula: {}", e);
+            #[cfg(target_os = "macos")]
+            {
+                info!("Window close requested on macOS — hiding to tray");
+                if let Err(e) = window.hide() {
+                    warn!("Failed to hide window: {e}");
                 }
+            }
 
-                info!("Exiting application...");
-                app_handle.exit(0);
-            });
+            #[cfg(not(target_os = "macos"))]
+            {
+                info!("Window close requested — exiting app");
+                window.app_handle().exit(0);
+            }
         }
     })
 }
