@@ -93,6 +93,7 @@ use crate::utils::support::{
     create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message, update_support_ticket, upload_ticket_attachment,
 };
 use crate::utils::tray_menu::get_tray_menu_data;
+use futures_util::FutureExt;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use tauri::{Builder, Emitter, Manager, Wry, path::BaseDirectory};
@@ -389,34 +390,117 @@ fn main() {
     let builder = on_window_event(builder);
 
     info!("Running Tauri application...");
-    builder.run(tauri::generate_context!()).expect("error while running tauri application");
+    let app = builder.build(tauri::generate_context!()).expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        match event {
+            // Single gate for every app-exit path (Cmd+Q, app menu Quit,
+            // tray Quit, `app.exit(n)`). On the first pass we defer the
+            // exit, stop Nebula, and re-request exit; the second pass
+            // sees `nebula_stopped=true` and lets Tauri proceed.
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                let state = app_handle.state::<crate::app_state::AppState>();
+                let already_stopped = state.nebula_stopped.load(std::sync::atomic::Ordering::SeqCst);
+
+                if already_stopped {
+                    // Second pass — allow the exit.
+                    info!("Exit requested; Nebula already stopped, exiting");
+                    return;
+                }
+
+                info!("Exit requested; stopping Nebula before exit");
+                api.prevent_exit();
+
+                // A rapid second Cmd+Q before this task finishes spawns a second cleanup
+                // task. That's fine: `stop_nebula` is idempotent (pkill / taskkill are
+                // no-ops on the second call) and Tauri ignores `exit(0)` after the event
+                // loop has shut down. No extra guard needed.
+                let handle_clone = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let app_state = handle_clone.state::<crate::app_state::AppState>();
+                    // If stop_nebula panics we still want to flip the flag and re-request
+                    // exit — a hung app with a hidden window is worse than an unclean
+                    // Nebula shutdown. AssertUnwindSafe is fine here: NebulaState is self-
+                    // contained behind its own mutexes, so a partial stop can't corrupt
+                    // any shared state we read later.
+                    let result = std::panic::AssertUnwindSafe(crate::nebula::manager::stop_nebula(&app_state.nebula))
+                        .catch_unwind()
+                        .await;
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => warn!("Failed to stop Nebula during shutdown: {e}"),
+                        Err(_) => error!("stop_nebula panicked during shutdown — exiting anyway"),
+                    }
+                    app_state.nebula_stopped.store(true, std::sync::atomic::Ordering::SeqCst);
+                    info!("Nebula stopped; re-requesting exit");
+                    handle_clone.exit(0);
+                });
+            }
+
+            // macOS dock icon click with no visible windows. Mirrors the
+            // tray's "Open Hippius" action.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { has_visible_windows, .. } => {
+                if has_visible_windows {
+                    return;
+                }
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    if let Err(e) = window.unminimize() {
+                        debug!("Failed to unminimize window on reopen: {e}");
+                    }
+                    if let Err(e) = window.show() {
+                        debug!("Failed to show window on reopen: {e}");
+                    }
+                    if let Err(e) = window.set_focus() {
+                        debug!("Failed to focus window on reopen: {e}");
+                    }
+                }
+            }
+
+            _ => {}
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
 // App setup (was setup.rs)
 // ---------------------------------------------------------------------------
 
-/// Register the window close handler on the Tauri builder.
+/// Window-close dispatcher.
 ///
-/// Prevents the default close, stops Nebula, then exits cleanly.
+/// On macOS, closing the main window (red-X / Cmd+W) hides the window so
+/// the app keeps running in the tray. All genuine quit paths on macOS —
+/// Cmd+Q, the app menu's Quit Hippius, the tray's Quit Hippius — fire
+/// `RunEvent::ExitRequested` instead, where Nebula cleanup happens.
+///
+/// On Windows/Linux, closing the window exits the app (current behavior).
+/// We call `app.exit(0)` rather than letting Tauri's default close fire
+/// so that `RunEvent::ExitRequested` runs and Nebula is stopped there.
 pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     builder.on_window_event(|window, event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            info!("Close requested");
+            // Only intercept the main window. If a future refactor adds a
+            // secondary window (e.g. a settings popup), its close button
+            // should behave normally and not hide-to-tray the whole app.
+            if window.label() != "main" {
+                return;
+            }
+
             api.prevent_close();
-            let app_handle = window.app_handle().clone();
 
-            tauri::async_runtime::spawn(async move {
-                debug!("Stopping Nebula VPN...");
-                // Stop Nebula before exiting
-                let nebula_st = &app_handle.state::<crate::app_state::AppState>().nebula;
-                if let Err(e) = crate::nebula::manager::stop_nebula(nebula_st).await {
-                    warn!("Failed to stop Nebula: {}", e);
+            #[cfg(target_os = "macos")]
+            {
+                info!("Window close requested on macOS — hiding to tray");
+                if let Err(e) = window.hide() {
+                    warn!("Failed to hide window: {e}");
                 }
+            }
 
-                info!("Exiting application...");
-                app_handle.exit(0);
-            });
+            #[cfg(not(target_os = "macos"))]
+            {
+                info!("Window close requested — exiting app");
+                window.app_handle().exit(0);
+            }
         }
     })
 }
