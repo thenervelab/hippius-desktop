@@ -1051,6 +1051,54 @@ function startLoginStatusWatcher(setVpnState?: (enabled: boolean) => void) {
 /* ─ Sync Activity watcher (polls localStorage for summary rows) ─ */
 let lastSyncSummarySignature = "";
 
+// Serialize tick() so two rapid `sync_progress_snapshot` events can't both
+// observe `syncProgressItem === null` and each insert a duplicate row. Each
+// tick has several `await` points (menu.items(), MenuItem.new(), menu.insert())
+// against Tauri IPC, so concurrent runs are the common case under a failure
+// storm — the backend emits a snapshot per file-failure + per byte-progress
+// tick. Pending snapshots are coalesced to latest-wins, matching the
+// idempotent "replace prior state" semantics of snapshots. Mirrors the
+// `isUpdatingTrayLabel` pattern used by `updateTraySyncLabel` above.
+let isUpdatingTraySnapshot = false;
+let pendingTraySnapshot: SyncSnapshot | null = null;
+
+/**
+ * Reconcile module-level refs for the sync summary rows against the
+ * current menu contents. If the menu has drifted (duplicate inserts
+ * from a previous concurrent-tick race, or module state lost to HMR
+ * while the menu survived), keep the first matching item and remove
+ * the rest. Runs once per tick; cheap because it reuses a single
+ * `menu.items()` call that the tick needs anyway.
+ */
+async function reconcileSummaryRowRefs(menu: Menu): Promise<void> {
+  const items = await menu.items();
+
+  for (const [id, assignRef] of [
+    [SYNC_PROGRESS_ID, (it: MenuItem | null) => { syncProgressItem = it; }],
+    [SYNC_SIZE_ID, (it: MenuItem | null) => { syncSizeItem = it; }],
+    [SYNC_DELETE_ID, (it: MenuItem | null) => { syncDeleteItem = it; }],
+  ] as const) {
+    const matches = items.filter((i) => i.id === id);
+    if (matches.length === 0) {
+      assignRef(null);
+      continue;
+    }
+    assignRef(matches[0] as MenuItem);
+    if (matches.length > 1) {
+      console.log(
+        `[TraySync] Found ${matches.length} '${id}' items, removing duplicates`,
+      );
+      for (let i = 1; i < matches.length; i++) {
+        try {
+          await menu.remove(matches[i]);
+        } catch {
+          /* already removed */
+        }
+      }
+    }
+  }
+}
+
 function startSyncActivityWatcher() {
   // Clear any old watcher from HMR
   if (typeof window !== "undefined") {
@@ -1062,9 +1110,24 @@ function startSyncActivityWatcher() {
   }
 
   const tick = async (progress: SyncSnapshot) => {
+    // Coalesce a second concurrent tick into the next run. The latest
+    // snapshot wins because snapshot state is "replace prior" — losing
+    // an intermediate frame is fine, but losing the final state (e.g.
+    // "Sync Failed") is not.
+    if (isUpdatingTraySnapshot) {
+      pendingTraySnapshot = progress;
+      return;
+    }
+    isUpdatingTraySnapshot = true;
+
     try {
       const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
       if (!menu) return;
+
+      // Align module refs with the current menu before deciding whether
+      // to insert anything new. Catches orphaned duplicate rows from any
+      // prior race and stops the tick from re-inserting alongside them.
+      await reconcileSummaryRowRefs(menu);
 
       // When logged out, clear sync rows and skip updates.
       // The data stays in the Rust backend so it can be shown after re-login.
@@ -1321,6 +1384,16 @@ function startSyncActivityWatcher() {
       }
     } catch (error) {
       console.error("[TraySync] Error updating sync summary:", errorMessage(error));
+    } finally {
+      isUpdatingTraySnapshot = false;
+      // Drain any snapshot that arrived while we were working. Recursive
+      // call is safe — the flag is false again, so the tail runs on the
+      // next microtask without re-entering this frame.
+      if (pendingTraySnapshot) {
+        const next = pendingTraySnapshot;
+        pendingTraySnapshot = null;
+        void tick(next);
+      }
     }
   };
 
