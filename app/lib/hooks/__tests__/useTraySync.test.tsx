@@ -716,3 +716,132 @@ describe("useTraySync — sync summary row race prevention", () => {
     unmount();
   });
 });
+
+// ── Stalled completion in tray ──────────────────────────────────────
+//
+// hcfs-client's file watcher can detect the sync engine's own writes
+// and set `changes_pending=true`, which pins `session.is_active=true`
+// even after all files are synced. The Rust `fixup_stalled_completion`
+// helper flips `effectiveInProgress`, `effectiveCompleted`,
+// `widgetState`, and `status_variant` — but NOT `isActive`. If the
+// tray reads `progress.isActive` directly, it stays stuck on
+// "⟳ Syncing: 100%" forever. This test drives a stalled snapshot
+// through the listener and asserts the tray transitions to
+// "✓ Sync Complete".
+
+describe("useTraySync — stalled completion shows Sync Complete", () => {
+  type ListenCallback = (e: { payload: SyncSnapshot }) => void;
+
+  function installInvokeMock() {
+    vi.mocked(invoke).mockImplementation(
+      (async (cmd: string) => {
+        switch (cmd) {
+          case "sp_get_snapshot":
+            return { ...EMPTY_SNAPSHOT };
+          case "get_tray_menu_data":
+            return { loggedIn: true, credits: 100, substrateAddress: "addr" };
+          case "get_vpn_status":
+            return { is_enabled: false };
+          default:
+            return null;
+        }
+      }) as unknown as typeof invoke
+    );
+  }
+
+  function installListenMock(): { current: ListenCallback | null } {
+    const capture: { current: ListenCallback | null } = { current: null };
+    vi.mocked(listen).mockImplementation(
+      (async (event: string, cb: ListenCallback) => {
+        if (event === "sync_progress_snapshot") {
+          capture.current = cb;
+        }
+        return () => {
+          /* noop unsub */
+        };
+      }) as unknown as typeof listen
+    );
+    return capture;
+  }
+
+  /**
+   * Build a snapshot matching the production bug: 93/93 files fully
+   * synced, overall 100%, but `isActive=true` because hcfs-client
+   * never called `complete_session`. The Rust fixup has already
+   * flipped the `effective*` fields and `widgetState`.
+   */
+  function makeStalledSnapshot(startedAt: number): SyncSnapshot {
+    return {
+      ...EMPTY_SNAPSHOT,
+      isActive: true, // <-- the stall bug: stays true
+      totalFiles: 93,
+      completedFiles: 93,
+      failedFiles: 0,
+      overallPercent: 100,
+      progressBytes: 1_180_000_000,
+      bytesExpected: 1_180_000_000,
+      startedAt,
+      completedAt: null,
+      widgetState: "completed",       // <-- fixup applied
+      statusVariant: "success",       // <-- fixup applied
+      effectiveInProgress: false,     // <-- fixup applied
+      effectiveCompleted: true,       // <-- fixup applied
+      syncedCount: 93,
+      actualTotal: 93,
+      files: Array.from({ length: 5 }, (_, i) => ({
+        path: `f${i}.mkv`,
+        fileName: `f${i}.mkv`,
+        label: "default",
+        action: "download" as const,
+        status: "completed" as const,
+        progressPercent: 100,
+        bytesEncrypted: 200_000_000,
+        bytesTransferred: 200_000_000,
+        totalBytes: 200_000_000,
+      })),
+    };
+  }
+
+  it("renders '✓ Sync Complete' when isActive=true but effectiveCompleted=true", async () => {
+    installInvokeMock();
+    const listenerCapture = installListenMock();
+
+    const { unmount } = await setupHook();
+
+    await waitFor(() => {
+      expect(listenerCapture.current).not.toBeNull();
+      expect(menuRegistry.length).toBeGreaterThan(0);
+    });
+
+    const rootMenu = menuRegistry[0];
+
+    await act(async () => {
+      listenerCapture.current!({
+        payload: makeStalledSnapshot(Date.now()),
+      });
+      for (let i = 0; i < 32; i++) {
+        await Promise.resolve();
+      }
+    });
+
+    await waitFor(async () => {
+      const items = await rootMenu.items();
+      const syncItem = items.find(
+        (i) =>
+          typeof i === "object" &&
+          i !== null &&
+          "id" in i &&
+          (i as { id?: string }).id === "sync"
+      ) as { text?: string } | undefined;
+      expect(syncItem).toBeDefined();
+      // The critical invariant: tray label reflects completion, not
+      // "Syncing: 100%". Pre-fix this would fail because the tray
+      // read `progress.isActive` directly, which the fixup leaves
+      // as `true`.
+      expect(syncItem!.text).toBe("✓ Sync Complete");
+      expect(syncItem!.text).not.toContain("Syncing");
+    });
+
+    unmount();
+  });
+});

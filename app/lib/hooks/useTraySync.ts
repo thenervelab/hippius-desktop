@@ -1153,7 +1153,16 @@ function startSyncActivityWatcher() {
       const inProgressCount = progress.files.filter(
         (f) => f.status === "inProgress" || f.status === "pending"
       ).length;
-      const isActive = progress.isActive ||
+      // Prefer `effectiveInProgress` over raw `isActive`: the Rust
+      // `fixup_stalled_completion` flips `effectiveInProgress=false`
+      // (but leaves `isActive=true` alone) when hcfs-client's file
+      // watcher detects its own writes and leaves the session stuck
+      // at 100%. Reading `isActive` here would pin the tray at
+      // "⟳ Syncing: 100%" forever in that state. The widget already
+      // uses `effectiveInProgress` / `effectiveCompleted` for the same
+      // reason — see `SyncStatusDialog.test.tsx:215` and the design
+      // note in `CLAUDE.md` ("Stalled completion fixup").
+      const isActive = progress.effectiveInProgress ||
         inProgressCount > 0 ||
         (progress.totalFiles > 0 && progress.completedFiles < progress.totalFiles && progress.failedFiles === 0);
       const hasFailed = progress.failedFiles > 0;
