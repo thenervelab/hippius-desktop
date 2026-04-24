@@ -307,7 +307,24 @@ pub async fn restore_remote_folders(
 }
 
 /// Delete all files for a folder from the remote server and unregister it.
-/// If the folder is also synced locally, stops the drive and removes the sync path.
+///
+/// If the folder is also synced locally, tears the drive down FIRST and only
+/// then wipes the server side. The ordering matters: once `unregister_folder`
+/// lands, the server reports zero files for this folder. If the local drive
+/// is still active and the sync loop fires (either an in-flight cycle or the
+/// next tick), it sees "remote is empty" and mirrors that back onto disk —
+/// deleting every local file the user actually wants to keep. By calling
+/// `remove_drive` first we cancel any in-flight sync, drop the drive from the
+/// in-memory map (so no new sync cycle can pick it up), and delete the
+/// `sync_paths` row so cold restarts don't resurrect it. Files on disk are
+/// left untouched.
+///
+/// If `remove_drive` fails we bail before touching the server — that way the
+/// user's local state is exactly as they found it and they can retry. If the
+/// server call fails after a successful local teardown, the user's files are
+/// still safe on disk; they can re-add the folder pointing at the same path
+/// to resume syncing, and retry the remote deletion when the server is
+/// reachable.
 #[tauri::command]
 pub async fn delete_remote_folder(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -330,6 +347,18 @@ pub async fn delete_remote_folder(
 
     let fhash = folder_hash(&label);
 
+    // Snapshot "was this folder locally synced" before we tear anything down,
+    // so the result we hand back to the FE matches the pre-deletion state the
+    // user was looking at.
+    let was_local = {
+        let guard = state.sync.drives.lock().await;
+        guard.contains_key(&label)
+    };
+
+    if was_local {
+        remove_drive(app, label.clone()).await?;
+    }
+
     let client_config = HcfsClientConfig {
         base_url: server_url,
         bearer_token,
@@ -345,21 +374,6 @@ pub async fn delete_remote_folder(
         .unregister_folder(&account_id, &fhash)
         .await
         .map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
-
-    // If this folder is also synced locally, stop the drive and remove the path
-    let was_local = {
-        let guard = state.sync.drives.lock().await;
-        guard.contains_key(&label)
-    }; // map lock released
-
-    if was_local {
-        if let Err(e) = remove_drive(app, label.clone()).await {
-            warn!("Failed to remove drive '{}' during remote folder deletion: {e}", label);
-        }
-        if let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, &account_id, &label).await {
-            warn!("Failed to remove sync path '{}' during remote folder deletion: {e}", label);
-        }
-    }
 
     info!(
         "Remote folder '{}' deleted: {} files removed, was_local={}",
@@ -495,5 +509,52 @@ mod tests {
     #[test]
     fn sanitize_label_preserves_dots_in_middle() {
         assert_eq!(sanitize_label("file.backup.2024").unwrap(), "file.backup.2024");
+    }
+
+    // ── delete_remote_folder ordering invariant ─────────────────────
+    //
+    // If this test fails, a future refactor has reintroduced the race
+    // that caused users' locally-synced files to be wiped when they
+    // deleted the remote copy from Settings: the server-side
+    // `unregister_folder` lands, the sync loop fires for the still-alive
+    // local drive, sees "remote has zero files", and mirrors that empty
+    // state back onto disk. The fix is to stop the local drive FIRST so
+    // no sync cycle can ever observe the emptied remote.
+    #[test]
+    fn delete_remote_folder_stops_local_drive_before_remote_unregister() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/folders.rs")).expect("read folders.rs");
+
+        let sig_idx = src
+            .find("pub async fn delete_remote_folder(")
+            .expect("delete_remote_folder declaration present");
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+
+        let remove_idx = body.find("remove_drive(").expect(
+            "delete_remote_folder must call remove_drive — it's the only thing that cancels an in-flight sync and takes the drive off the map before the server wipe",
+        );
+        let unregister_idx = body
+            .find(".unregister_folder(")
+            .expect("delete_remote_folder must call unregister_folder on the hcfs client");
+
+        assert!(
+            remove_idx < unregister_idx,
+            "remove_drive MUST be called before .unregister_folder so the local drive is dead before the server reports zero files",
+        );
     }
 }

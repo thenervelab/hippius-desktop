@@ -4,6 +4,9 @@ import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 import React from "react";
 import type { Store } from "jotai";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { EMPTY_SNAPSHOT, type SyncSnapshot } from "@/app/lib/types/syncSnapshot";
 
 // ── Hoisted mock infrastructure ─────────────────────────────────────
 //
@@ -269,8 +272,14 @@ function findSubmenuById(
   return submenuRegistry.find((s) => s.id === id);
 }
 
+// Registry of all MockMenu instances so the race-prevention test can
+// inspect the root menu's items directly (the hook only holds the
+// menu inside a module-local `menuPromise`).
+const menuRegistry: InstanceType<typeof mocks.MockMenu>[] = [];
+
 beforeEach(() => {
   submenuRegistry.length = 0;
+  menuRegistry.length = 0;
   // Patch `Submenu.new` to register every constructed submenu so
   // tests can fish out the drive submenu without reaching into
   // module internals.
@@ -280,6 +289,15 @@ beforeEach(() => {
   ) => {
     const inst = await OrigNew(opts);
     submenuRegistry.push(inst);
+    return inst;
+  };
+  // Same trick for Menu.new.
+  const OrigMenuNew = mocks.MockMenu.new.bind(mocks.MockMenu);
+  mocks.MockMenu.new = async (
+    opts?: { items?: unknown[] }
+  ) => {
+    const inst = await OrigMenuNew(opts);
+    menuRegistry.push(inst);
     return inst;
   };
 });
@@ -466,3 +484,364 @@ describe("useTraySync — Sync Folders submenu lifecycle", () => {
   });
 });
 
+// ── Sync summary row race prevention ────────────────────────────────
+//
+// The tray watcher subscribes to `sync_progress_snapshot` events and
+// inserts three summary rows into the root menu on demand:
+//   - `sync-progress-summary` ("X of Y files synced/failed")
+//   - `sync-size-info`        ("A / B" byte progress)
+//   - `sync-delete-summary`   ("N files deleted")
+//
+// Before the mutex was added, each `tick()` had ~5 awaits against Tauri
+// IPC. A snapshot storm during upload failure (one event per file × per
+// retry × per byte-progress bump) interleaved multiple ticks, each
+// observing the module-level ref as null and each inserting a fresh
+// MenuItem. The module ref overwrote to the LAST one; earlier inserts
+// leaked into the menu as orphan rows — exactly what the user screenshot
+// shows: dozens of "1.11 GB" rows stacked under the "Sync Failed" header.
+//
+// This test drives the listener directly with snapshots whose signatures
+// all differ (so the per-tick signature dedup doesn't short-circuit),
+// then asserts the root menu has at most one row per summary ID.
+
+describe("useTraySync — sync summary row race prevention", () => {
+  type ListenCallback = (e: { payload: SyncSnapshot }) => void;
+
+  /**
+   * Teach the shared `invoke` mock to answer every command the tray
+   * watcher and menu-builder use during this test. Anything unrecognized
+   * returns `null` so regressions surface loudly.
+   */
+  function installInvokeMock() {
+    vi.mocked(invoke).mockImplementation(
+      (async (cmd: string) => {
+        switch (cmd) {
+          case "sp_get_snapshot":
+            return { ...EMPTY_SNAPSHOT };
+          case "get_tray_menu_data":
+            return {
+              loggedIn: true,
+              credits: 100,
+              substrateAddress: "addr",
+            };
+          case "get_vpn_status":
+            return { is_enabled: false };
+          default:
+            return null;
+        }
+      }) as unknown as typeof invoke
+    );
+  }
+
+  /**
+   * Capture the `sync_progress_snapshot` listener so the test can drive
+   * events directly. The hook also listens for other channels (none
+   * today, but tolerate in case that changes) — returning a no-op
+   * unlisten keeps the startup path happy.
+   */
+  function installListenMock(): { current: ListenCallback | null } {
+    const capture: { current: ListenCallback | null } = { current: null };
+    vi.mocked(listen).mockImplementation(
+      (async (event: string, cb: ListenCallback) => {
+        if (event === "sync_progress_snapshot") {
+          capture.current = cb;
+        }
+        return () => {
+          /* noop unsub */
+        };
+      }) as unknown as typeof listen
+    );
+    return capture;
+  }
+
+  /**
+   * Build a snapshot with a failure state that matches the bug report:
+   * 9 of 9 files failed, ~1.11 GB total. `progressBytes` varies so each
+   * event has a distinct signature and the watcher can't short-circuit
+   * via `lastSyncSummarySignature`.
+   */
+  function makeFailingSnapshot(
+    progressBytes: number,
+    startedAt: number
+  ): SyncSnapshot {
+    return {
+      ...EMPTY_SNAPSHOT,
+      isActive: false,
+      totalFiles: 9,
+      completedFiles: 0,
+      failedFiles: 9,
+      bytesExpected: 1_190_000_000,
+      progressBytes,
+      startedAt,
+      completedAt: startedAt + 100,
+      statusVariant: "error",
+      effectiveCompleted: true,
+      actualTotal: 9,
+      files: Array.from({ length: 9 }, (_, i) => ({
+        path: `f${i}.txt`,
+        fileName: `f${i}.txt`,
+        label: "default",
+        action: "upload" as const,
+        status: "error" as const,
+        progressPercent: 0,
+        bytesEncrypted: 0,
+        bytesTransferred: 0,
+        totalBytes: 132_222_222,
+        error: "network",
+      })),
+    };
+  }
+
+  it("inserts at most one of each summary row under a snapshot storm", async () => {
+    installInvokeMock();
+    const listenerCapture = installListenMock();
+
+    const { unmount } = await setupHook();
+
+    // Wait for the menu-builder to finish and the watcher to register
+    // its listener. `menuPromise` is resolved only after the builder
+    // appends the drive submenu, which is an async tail of useTrayInit.
+    await waitFor(() => {
+      expect(listenerCapture.current).not.toBeNull();
+      expect(menuRegistry.length).toBeGreaterThan(0);
+    });
+
+    const rootMenu = menuRegistry[0];
+    const startedAt = Date.now();
+
+    // Fire a storm of snapshots. Each call is `void tick(...)` inside
+    // the real hook — we simulate that synchronously so multiple ticks
+    // are in flight against the same module state at once. Without the
+    // mutex each call sees the refs as null and inserts fresh rows.
+    await act(async () => {
+      for (let i = 0; i < 20; i++) {
+        listenerCapture.current!({
+          payload: makeFailingSnapshot(i, startedAt),
+        });
+      }
+      // Yield the microtask queue enough times for every tick (original
+      // + coalesced tail) to drain. 32 iterations covers the worst-case
+      // ~5 awaits-per-tick × 20 ticks depth with headroom.
+      for (let i = 0; i < 32; i++) {
+        await Promise.resolve();
+      }
+    });
+
+    await waitFor(async () => {
+      const items = await rootMenu.items();
+      const progressItems = items.filter(
+        (i) =>
+          typeof i === "object" &&
+          i !== null &&
+          "id" in i &&
+          (i as { id?: string }).id === "sync-progress-summary"
+      );
+      const sizeItems = items.filter(
+        (i) =>
+          typeof i === "object" &&
+          i !== null &&
+          "id" in i &&
+          (i as { id?: string }).id === "sync-size-info"
+      );
+      // The critical invariant: one row per summary ID, regardless of
+      // how many events fired.
+      expect(progressItems.length).toBeLessThanOrEqual(1);
+      expect(sizeItems.length).toBeLessThanOrEqual(1);
+    });
+
+    unmount();
+  });
+
+  it("reconciles pre-existing duplicate rows by dropping all but one", async () => {
+    installInvokeMock();
+    const listenerCapture = installListenMock();
+
+    const { unmount } = await setupHook();
+
+    await waitFor(() => {
+      expect(listenerCapture.current).not.toBeNull();
+      expect(menuRegistry.length).toBeGreaterThan(0);
+    });
+
+    const rootMenu = menuRegistry[0];
+
+    // Simulate corruption from a pre-fix release: multiple rows with the
+    // same summary ID already in the menu. The reconciler on the next
+    // tick must drop the duplicates without tearing down valid content.
+    for (let i = 0; i < 5; i++) {
+      const stub = new mocks.MockMenuItem({
+        id: "sync-progress-summary",
+        text: `stale ${i}`,
+      });
+      await rootMenu.append(stub);
+    }
+    for (let i = 0; i < 3; i++) {
+      const stub = new mocks.MockMenuItem({
+        id: "sync-size-info",
+        text: `stale ${i}`,
+      });
+      await rootMenu.append(stub);
+    }
+
+    // Fire one snapshot — the dedup sweep runs at the top of every tick.
+    await act(async () => {
+      listenerCapture.current!({
+        payload: makeFailingSnapshot(0, Date.now()),
+      });
+      for (let i = 0; i < 32; i++) {
+        await Promise.resolve();
+      }
+    });
+
+    await waitFor(async () => {
+      const items = await rootMenu.items();
+      const progressItems = items.filter(
+        (i) =>
+          typeof i === "object" &&
+          i !== null &&
+          "id" in i &&
+          (i as { id?: string }).id === "sync-progress-summary"
+      );
+      const sizeItems = items.filter(
+        (i) =>
+          typeof i === "object" &&
+          i !== null &&
+          "id" in i &&
+          (i as { id?: string }).id === "sync-size-info"
+      );
+      expect(progressItems.length).toBe(1);
+      expect(sizeItems.length).toBe(1);
+    });
+
+    unmount();
+  });
+});
+
+// ── Stalled completion in tray ──────────────────────────────────────
+//
+// hcfs-client's file watcher can detect the sync engine's own writes
+// and set `changes_pending=true`, which pins `session.is_active=true`
+// even after all files are synced. The Rust `fixup_stalled_completion`
+// helper flips `effectiveInProgress`, `effectiveCompleted`,
+// `widgetState`, and `status_variant` — but NOT `isActive`. If the
+// tray reads `progress.isActive` directly, it stays stuck on
+// "⟳ Syncing: 100%" forever. This test drives a stalled snapshot
+// through the listener and asserts the tray transitions to
+// "✓ Sync Complete".
+
+describe("useTraySync — stalled completion shows Sync Complete", () => {
+  type ListenCallback = (e: { payload: SyncSnapshot }) => void;
+
+  function installInvokeMock() {
+    vi.mocked(invoke).mockImplementation(
+      (async (cmd: string) => {
+        switch (cmd) {
+          case "sp_get_snapshot":
+            return { ...EMPTY_SNAPSHOT };
+          case "get_tray_menu_data":
+            return { loggedIn: true, credits: 100, substrateAddress: "addr" };
+          case "get_vpn_status":
+            return { is_enabled: false };
+          default:
+            return null;
+        }
+      }) as unknown as typeof invoke
+    );
+  }
+
+  function installListenMock(): { current: ListenCallback | null } {
+    const capture: { current: ListenCallback | null } = { current: null };
+    vi.mocked(listen).mockImplementation(
+      (async (event: string, cb: ListenCallback) => {
+        if (event === "sync_progress_snapshot") {
+          capture.current = cb;
+        }
+        return () => {
+          /* noop unsub */
+        };
+      }) as unknown as typeof listen
+    );
+    return capture;
+  }
+
+  /**
+   * Build a snapshot matching the production bug: 93/93 files fully
+   * synced, overall 100%, but `isActive=true` because hcfs-client
+   * never called `complete_session`. The Rust fixup has already
+   * flipped the `effective*` fields and `widgetState`.
+   */
+  function makeStalledSnapshot(startedAt: number): SyncSnapshot {
+    return {
+      ...EMPTY_SNAPSHOT,
+      isActive: true, // <-- the stall bug: stays true
+      totalFiles: 93,
+      completedFiles: 93,
+      failedFiles: 0,
+      overallPercent: 100,
+      progressBytes: 1_180_000_000,
+      bytesExpected: 1_180_000_000,
+      startedAt,
+      completedAt: null,
+      widgetState: "completed",       // <-- fixup applied
+      statusVariant: "success",       // <-- fixup applied
+      effectiveInProgress: false,     // <-- fixup applied
+      effectiveCompleted: true,       // <-- fixup applied
+      syncedCount: 93,
+      actualTotal: 93,
+      files: Array.from({ length: 5 }, (_, i) => ({
+        path: `f${i}.mkv`,
+        fileName: `f${i}.mkv`,
+        label: "default",
+        action: "download" as const,
+        status: "completed" as const,
+        progressPercent: 100,
+        bytesEncrypted: 200_000_000,
+        bytesTransferred: 200_000_000,
+        totalBytes: 200_000_000,
+      })),
+    };
+  }
+
+  it("renders '✓ Sync Complete' when isActive=true but effectiveCompleted=true", async () => {
+    installInvokeMock();
+    const listenerCapture = installListenMock();
+
+    const { unmount } = await setupHook();
+
+    await waitFor(() => {
+      expect(listenerCapture.current).not.toBeNull();
+      expect(menuRegistry.length).toBeGreaterThan(0);
+    });
+
+    const rootMenu = menuRegistry[0];
+
+    await act(async () => {
+      listenerCapture.current!({
+        payload: makeStalledSnapshot(Date.now()),
+      });
+      for (let i = 0; i < 32; i++) {
+        await Promise.resolve();
+      }
+    });
+
+    await waitFor(async () => {
+      const items = await rootMenu.items();
+      const syncItem = items.find(
+        (i) =>
+          typeof i === "object" &&
+          i !== null &&
+          "id" in i &&
+          (i as { id?: string }).id === "sync"
+      ) as { text?: string } | undefined;
+      expect(syncItem).toBeDefined();
+      // The critical invariant: tray label reflects completion, not
+      // "Syncing: 100%". Pre-fix this would fail because the tray
+      // read `progress.isActive` directly, which the fixup leaves
+      // as `true`.
+      expect(syncItem!.text).toBe("✓ Sync Complete");
+      expect(syncItem!.text).not.toContain("Syncing");
+    });
+
+    unmount();
+  });
+});

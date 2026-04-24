@@ -358,9 +358,19 @@ pub fn get_snapshot(sync: &SyncRunner) -> Result<SyncSnapshot> {
         snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
     }
     snapshot.last_error = sync.last_error.lock().ok().and_then(|g| g.clone());
-    fixup_stalled_completion(&mut snapshot);
-    cap_snapshot_files(&mut snapshot);
+    prepare_snapshot_for_emit(&mut snapshot);
     Ok(snapshot)
+}
+
+/// Apply every mutation a snapshot needs before leaving the Rust side for
+/// the frontend. Called from both the `sp_get_snapshot` bootstrap path
+/// (widget/tray mount) and the `SyncEvent::ProgressSnapshot` bridge
+/// (every live update). Keeping a single funnel guarantees the two paths
+/// can't drift — a stalled-completion snapshot seen at mount must look
+/// identical to one observed mid-session.
+pub(crate) fn prepare_snapshot_for_emit(snapshot: &mut SyncSnapshot) {
+    fixup_stalled_completion(snapshot);
+    cap_snapshot_files(snapshot);
 }
 
 /// Detect and correct a stalled completion state.
@@ -540,6 +550,63 @@ mod tests {
 
         // Already correctly completed, no changes needed
         assert!(snap.effective_completed);
+    }
+
+    /// Regression: the bridge path at
+    /// `src/sync/tauri_bridge.rs::on_event::ProgressSnapshot` emits every
+    /// live snapshot through `prepare_snapshot_for_emit`. If the helper
+    /// stops applying `fixup_stalled_completion`, a stalled session would
+    /// leak through as `widget_state="active"` forever and the tray would
+    /// be pinned at "⟳ Syncing: 100%". This test pins the contract at the
+    /// helper boundary so either path can trust its output equally.
+    #[test]
+    fn prepare_snapshot_for_emit_applies_stalled_completion_fixup() {
+        let mut snap = base_snapshot();
+        snap.is_active = true;
+        snap.total_files = 93;
+        snap.completed_files = 93;
+        snap.failed_files = 0;
+        snap.overall_percent = 100;
+        snap.effective_in_progress = true;
+        snap.effective_completed = false;
+        snap.widget_state = "active".to_string();
+        snap.status_variant = "progress".to_string();
+
+        prepare_snapshot_for_emit(&mut snap);
+
+        assert!(!snap.effective_in_progress, "stall should flip effective_in_progress to false");
+        assert!(snap.effective_completed, "stall should flip effective_completed to true");
+        assert_eq!(snap.widget_state, "completed");
+        assert_eq!(snap.status_variant, "success");
+    }
+
+    /// `prepare_snapshot_for_emit` also caps the `files` vec. Cover the cap
+    /// side of the helper so a future refactor that drops the cap call
+    /// (flooding the webview with a 10k-file payload during migration)
+    /// trips a test rather than hitting users.
+    #[test]
+    fn prepare_snapshot_for_emit_caps_files() {
+        use hcfs_client::engine::progress::state::{FileAction, FileProgress, FileProgressStatus};
+        let mut snap = base_snapshot();
+        snap.files = (0..MAX_EVENT_FILES + 25)
+            .map(|i| FileProgress {
+                path: std::sync::Arc::from(format!("f{i}.txt")),
+                file_name: std::sync::Arc::from(format!("f{i}.txt")),
+                label: std::sync::Arc::from("default"),
+                action: FileAction::Upload,
+                status: FileProgressStatus::Pending,
+                progress_percent: 0,
+                bytes_encrypted: 0,
+                bytes_transferred: 0,
+                total_bytes: 100,
+                resumed_from_bytes: None,
+                error: None,
+            })
+            .collect();
+
+        prepare_snapshot_for_emit(&mut snap);
+
+        assert_eq!(snap.files.len(), MAX_EVENT_FILES);
     }
 
     #[test]
