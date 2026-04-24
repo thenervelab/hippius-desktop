@@ -458,12 +458,14 @@ pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppStat
 /// Compute a sensible default directory for the sync folder when the user
 /// hasn't explicitly chosen one (e.g., during migration completion).
 ///
-/// Uses `~/Documents/Hippius-Migration-YYYY-MM-DD` (falling back to
-/// `~/Hippius-Migration-YYYY-MM-DD`). If that path already exists, a
-/// numeric suffix is appended (`-2`, `-3`, ...) to guarantee uniqueness.
+/// Uses `~/Hippius-Migration-YYYY-MM-DD` directly under the user's home
+/// directory. Avoiding `~/Documents`, `~/Desktop`, and `~/Downloads` keeps
+/// the app out of macOS TCC-protected folders, so watching the default
+/// sync root never triggers a system consent prompt. If the path already
+/// exists, a numeric suffix is appended (`-2`, `-3`, ...) to guarantee
+/// uniqueness.
 pub(crate) fn compute_default_sync_path() -> Result<PathBuf> {
-    let base = dirs::document_dir()
-        .or_else(dirs::home_dir)
+    let base = dirs::home_dir()
         .ok_or_else(|| crate::error::AppError::Other("Could not determine a suitable directory for sync folder".into()))?;
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let stem = format!("Hippius-Migration-{today}");
@@ -495,7 +497,7 @@ pub fn get_default_migration_path() -> Result<String> {
 ///
 /// If no sync path for the given label exists (common for new users going
 /// through migration), one is created automatically at
-/// `~/Documents/Hippius-Migration-YYYY-MM-DD`. The migration status is
+/// `~/Hippius-Migration-YYYY-MM-DD`. The migration status is
 /// marked "completed" only after `initialize_sync` succeeds, so a failed
 /// init can be retried.
 #[tauri::command]
@@ -1175,15 +1177,29 @@ mod tests {
     }
 
     #[test]
-    fn default_sync_path_under_documents_or_home() {
+    fn default_sync_path_stays_out_of_tcc_protected_folders() {
+        // The default lives directly under `~/` to stay out of macOS
+        // TCC-protected folders (Documents, Desktop, Downloads). If this
+        // regresses, first-run users will get a consent popup.
+        //
+        // We check the invariant two ways: the parent is the home dir
+        // (catches someone swapping the base), AND the path is not nested
+        // under any TCC-protected subdirectory (catches someone setting the
+        // base back to `document_dir()` etc., which would still sit *under*
+        // home_dir but fail the starts_with check).
         let path = compute_default_sync_path().expect("should resolve a default path");
         let parent = path.parent().expect("path should have a parent");
-        let doc_dir = dirs::document_dir();
-        let home_dir = dirs::home_dir();
-        assert!(
-            doc_dir.as_ref() == Some(&parent.to_path_buf()) || home_dir.as_ref() == Some(&parent.to_path_buf()),
-            "Expected parent to be Documents or Home, got {parent:?}",
-        );
+        let home_dir = dirs::home_dir().expect("home dir should exist on test runner");
+        assert_eq!(parent, home_dir.as_path(), "Expected parent to be Home, got {parent:?}");
+
+        for protected in [dirs::document_dir(), dirs::desktop_dir(), dirs::download_dir()] {
+            if let Some(p) = protected {
+                assert!(
+                    !path.starts_with(&p),
+                    "default sync path must not live under TCC-protected folder {p:?}, got {path:?}",
+                );
+            }
+        }
     }
 
     #[test]

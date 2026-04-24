@@ -20,7 +20,7 @@ use hcfs_client::engine::runner::SyncRunner;
 
 use sqlx::sqlite::SqlitePool;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, atomic::AtomicBool};
 
 /// The single top-level state container for the entire Tauri backend.
 ///
@@ -69,6 +69,12 @@ pub struct AppState {
     /// recovery flow has had a chance to install the unsealed one.
     /// See `docs/plans/2026-04-14-oauth-account-recovery.md`.
     recovery_gate: tokio::sync::watch::Sender<RecoveryGateState>,
+    /// Set to `true` after `stop_nebula` has run during shutdown. The
+    /// `RunEvent::ExitRequested` handler uses this to distinguish the
+    /// initial exit request (Cmd+Q, tray Quit, etc. — defer and stop
+    /// Nebula first) from the re-entrant one triggered by the post-
+    /// cleanup `app.exit(0)` (allow the exit to proceed).
+    pub nebula_stopped: AtomicBool,
 }
 
 impl Default for AppState {
@@ -124,6 +130,7 @@ impl AppState {
             // `complete_oauth_flow` flips this to `Pending` at its start so
             // the dialog gets a chance to run before any sync init races in.
             recovery_gate: tokio::sync::watch::channel(RecoveryGateState::Skipped).0,
+            nebula_stopped: AtomicBool::new(false),
         }
     }
 

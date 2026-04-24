@@ -10,7 +10,7 @@ use std::pin::Pin;
 use tauri::{AppHandle, Emitter};
 
 use super::events;
-use crate::sync::progress::{cap_file_list, cap_snapshot_files};
+use crate::sync::progress::{cap_file_list, prepare_snapshot_for_emit};
 
 /// Bridge between the hcfs-client sync engine and Tauri's event system.
 ///
@@ -321,7 +321,17 @@ impl SyncEventHandler for TauriSyncBridge {
                 let _ = app.emit(events::AUTH_RELOGIN_REQUIRED, events::AuthRequiredPayload { error });
             }
             SyncEvent::ProgressSnapshot { mut snapshot } => {
-                cap_snapshot_files(&mut snapshot);
+                // `prepare_snapshot_for_emit` applies BOTH the stalled-completion
+                // fixup and the file-cap. Without the fixup, hcfs-client's own
+                // file-watcher-driven `changes_pending=true` leaves `is_active`
+                // stuck at `true` indefinitely after all files are synced, so
+                // `widget_state`, `effective_in_progress`, `effective_completed`,
+                // and `status_variant` all still say "syncing" despite 100%
+                // progress. Only the bootstrap `sp_get_snapshot` path used to
+                // apply the fixup, which meant a session that stalled after the
+                // widget/tray had already mounted would display "Syncing: 100%"
+                // forever. See `progress::fixup_stalled_completion`.
+                prepare_snapshot_for_emit(&mut snapshot);
                 let _ = app.emit(events::PROGRESS_SNAPSHOT, &snapshot);
             }
         }
