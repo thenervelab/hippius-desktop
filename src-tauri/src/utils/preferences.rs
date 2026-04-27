@@ -48,13 +48,28 @@ pub async fn get_user_preference(state: tauri::State<'_, AppState>, key: String)
 /// Save a user preference (upsert). Timestamps with current epoch millis.
 #[tauri::command]
 pub async fn save_user_preference(state: tauri::State<'_, AppState>, key: String, value: String) -> Result<(), AppError> {
-    let pool = state.pool()?;
+    save_user_preference_internal(state.pool()?, &key, &value).await
+}
 
+/// Read a user preference using a `&SqlitePool` directly. Useful from
+/// non-IPC contexts (background tasks) that don't have a Tauri State.
+pub async fn get_user_preference_internal(pool: &sqlx::SqlitePool, key: &str) -> Result<Option<String>, AppError> {
+    let row = sqlx::query_as::<_, (String,)>("SELECT preference_value FROM user_preferences WHERE preference_key = ?")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(row.map(|(v,)| v))
+}
+
+/// Write a user preference using a `&SqlitePool` directly. Useful from
+/// non-IPC contexts (background tasks) that don't have a Tauri State.
+pub async fn save_user_preference_internal(pool: &sqlx::SqlitePool, key: &str, value: &str) -> Result<(), AppError> {
     sqlx::query(
         "INSERT OR REPLACE INTO user_preferences (preference_key, preference_value, updated_at) VALUES (?, ?, CAST(strftime('%s','now') * 1000 AS INTEGER))",
     )
-    .bind(&key)
-    .bind(&value)
+    .bind(key)
+    .bind(value)
     .execute(pool)
     .await?;
 

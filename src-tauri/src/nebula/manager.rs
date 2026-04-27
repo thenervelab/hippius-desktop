@@ -1119,12 +1119,53 @@ pub async fn setup_nebula_background(app: AppHandle) -> Result<(), String> {
 
 // --- Internal helpers for background setup (avoid tauri::State) ---
 
+/// Preference key for the last GitHub release-info check. Stored as an
+/// epoch-ms string so the value parses cleanly with `i64::from_str`.
+const NEBULA_LAST_RELEASE_CHECK_KEY: &str = "nebula_last_release_check_ms";
+/// Skip the unauthenticated GitHub API call if the last successful check
+/// was less than this many milliseconds ago. 24 hours is comfortably
+/// inside GitHub's 60 req/hour anonymous rate limit while still giving
+/// users a same-day path to a new Nebula release.
+const NEBULA_RELEASE_CHECK_TTL_MS: i64 = 24 * 60 * 60 * 1000;
+
 async fn run_check_nebula_requirements(app: &AppHandle) -> Result<(), String> {
     let installed_version = check_nebula_installation().await.map_err(|e| e.to_string())?;
+
+    // Skip the GitHub release probe entirely when (a) we already have a
+    // working install and (b) we successfully checked GitHub within the
+    // TTL window. This drops a per-launch unauthenticated `api.github.com`
+    // call to once-per-day per user.
+    let cert_binary_exists = get_nebula_cert_binary_path().map(|p| p.exists()).unwrap_or(false);
+    if installed_version.is_some() && cert_binary_exists {
+        let app_state = app.state::<crate::app_state::AppState>();
+        if let Ok(pool) = app_state.pool()
+            && let Ok(Some(last_str)) = crate::utils::preferences::get_user_preference_internal(pool, NEBULA_LAST_RELEASE_CHECK_KEY).await
+            && let Ok(last_ms) = last_str.parse::<i64>()
+        {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            if now_ms.saturating_sub(last_ms) < NEBULA_RELEASE_CHECK_TTL_MS {
+                debug!(
+                    age_hours = (now_ms - last_ms) / (60 * 60 * 1000),
+                    "Skipping Nebula release check (cached result is fresh)"
+                );
+                return Ok(());
+            }
+        }
+    }
 
     let client = &app.state::<crate::app_state::AppState>().api_client;
     let latest_release = fetch_latest_release(client).await.map_err(|e| e.to_string())?;
     let latest_version = latest_release.tag_name.clone();
+
+    // Record the successful check timestamp so subsequent launches can
+    // short-circuit until the TTL elapses.
+    let app_state = app.state::<crate::app_state::AppState>();
+    if let Ok(pool) = app_state.pool() {
+        let now_ms = chrono::Utc::now().timestamp_millis().to_string();
+        if let Err(e) = crate::utils::preferences::save_user_preference_internal(pool, NEBULA_LAST_RELEASE_CHECK_KEY, &now_ms).await {
+            warn!(error = %e, "Failed to persist nebula_last_release_check_ms; next launch will re-fetch");
+        }
+    }
 
     let mut needs_install = false;
     if installed_version.is_none() {
