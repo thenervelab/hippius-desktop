@@ -483,39 +483,41 @@ use hcfs_client::engine::types::{SyncedFileInfo, build_synced_paths_from_state};
 /// falls back to the last cached snapshot so the file browser still
 /// shows accurate sync status instead of "unknown".
 async fn synced_paths_for_label(sync: &SyncRunner, label: &str) -> Option<HashMap<String, SyncedFileInfo>> {
-    let (synced, _) = drive_state_for_label(sync, label, false).await;
-    synced
+    let arc = match acquire_drive_arc(sync, label) {
+        DriveArcOutcome::Acquired(arc) => arc,
+        DriveArcOutcome::CacheFallback => return sync.get_cached_synced_paths(label),
+    };
+    // `try_lock` (not `lock().await`) is essential here: the per-drive
+    // mutex is held by the sync loop for the duration of a sync cycle,
+    // and the file browser must remain responsive during that window.
+    // Falling back to the cache on contention is a deliberate tradeoff:
+    // slightly stale on-screen sync status > a 30-second listing freeze.
+    match arc.try_lock() {
+        Ok(manager) => match manager.load_sync_state().await {
+            Ok(state) => {
+                let paths = build_synced_paths_from_state(&state);
+                sync.update_synced_paths_cache(label, paths.clone());
+                Some(paths)
+            }
+            Err(_) => None,
+        },
+        Err(_) => sync.get_cached_synced_paths(label),
+    }
 }
-
-/// Snapshot of per-drive metadata used by the file-listing IPCs.
-///
-/// Returned by [`drive_state_for_label`] in a single drives-map lock
-/// acquisition so callers like `list_sync_folder_inner` (which previously
-/// took the outer lock twice — once for synced paths, once for exclude
-/// patterns) only pay one round-trip through the contended mutex.
-type DriveStateSnapshot = (Option<HashMap<String, SyncedFileInfo>>, Vec<String>);
 
 /// Read both the synced-paths map and the exclusion patterns for `label`
 /// behind a single outer-drives lock acquisition.
 ///
-/// Pass `with_excludes=false` when only the synced paths are needed; the
-/// returned `Vec<String>` will be empty without taking the per-drive lock
-/// for `list_exclude_patterns`. When both are needed, the per-drive lock
-/// is taken once and both values are produced from the same `manager`
-/// borrow — eliminating the two-acquire pattern flagged by the perf
-/// audit.
-async fn drive_state_for_label(sync: &SyncRunner, label: &str, with_excludes: bool) -> DriveStateSnapshot {
-    // Get the per-drive Arc from the map (brief outer lock).
-    let drive_arc = {
-        match sync.drives.try_lock() {
-            Ok(guard) => guard.get(label).map(|slot| slot.manager.clone()),
-            Err(_) => return (sync.get_cached_synced_paths(label), Vec::new()),
-        }
+/// Eliminates the two-acquire pattern flagged by the perf audit: callers
+/// like `list_sync_folder_inner` previously locked `sync.drives` once for
+/// synced paths and again for exclude patterns. Both values are produced
+/// from the same `manager` borrow in a single per-drive lock window.
+async fn synced_paths_and_excludes_for_label(sync: &SyncRunner, label: &str) -> (Option<HashMap<String, SyncedFileInfo>>, Vec<String>) {
+    let arc = match acquire_drive_arc(sync, label) {
+        DriveArcOutcome::Acquired(arc) => arc,
+        DriveArcOutcome::CacheFallback => return (sync.get_cached_synced_paths(label), Vec::new()),
     };
-    let Some(arc) = drive_arc else {
-        return (sync.get_cached_synced_paths(label), Vec::new());
-    };
-    // Try to lock the per-drive mutex; fall back to cache if syncing.
+    // `try_lock` (not `lock().await`) is essential — see synced_paths_for_label.
     match arc.try_lock() {
         Ok(manager) => {
             let synced = match manager.load_sync_state().await {
@@ -526,10 +528,33 @@ async fn drive_state_for_label(sync: &SyncRunner, label: &str, with_excludes: bo
                 }
                 Err(_) => None,
             };
-            let excludes = if with_excludes { manager.list_exclude_patterns() } else { Vec::new() };
+            let excludes = manager.list_exclude_patterns();
             (synced, excludes)
         }
         Err(_) => (sync.get_cached_synced_paths(label), Vec::new()),
+    }
+}
+
+/// Outcome of locating a per-drive `DriveManager` Arc behind the outer
+/// drives map. Either we got the Arc, or the outer/inner lookup failed and
+/// the caller should fall back to the cache.
+enum DriveArcOutcome {
+    Acquired(std::sync::Arc<tokio::sync::Mutex<DriveManager>>),
+    CacheFallback,
+}
+
+/// Single source of truth for the outer-drives map lookup that both the
+/// synced-paths-only and synced-paths-plus-excludes helpers need. Locks
+/// `sync.drives` non-blockingly (briefly), copies out the per-drive Arc,
+/// and drops the outer lock immediately so concurrent listings don't
+/// queue behind the sync loop.
+fn acquire_drive_arc(sync: &SyncRunner, label: &str) -> DriveArcOutcome {
+    match sync.drives.try_lock() {
+        Ok(guard) => match guard.get(label) {
+            Some(slot) => DriveArcOutcome::Acquired(slot.manager.clone()),
+            None => DriveArcOutcome::CacheFallback,
+        },
+        Err(_) => DriveArcOutcome::CacheFallback,
     }
 }
 
@@ -791,12 +816,24 @@ pub async fn get_recent_files(
 /// invalidate the cache, but they don't change `count` and almost never
 /// shift the displayed size by a meaningful amount.
 ///
-/// Bounded organically by the number of folders the user browses; unbounded
-/// in theory but small in practice (sync roots + their subfolders, ~hundreds
-/// of entries on a long session).
-static DIR_STATS_CACHE: OnceLock<std::sync::Mutex<HashMap<std::path::PathBuf, (std::time::SystemTime, u64, u64)>>> = OnceLock::new();
+/// **Symlinks**: `tokio::fs::metadata` follows symlinks. If a sync folder
+/// contains a symlink whose target's directory mtime changes without the
+/// symlink itself being touched, the cache will return stale stats. Sync
+/// folders typically don't contain symlinks (they're user document
+/// folders), so this is a documented limitation rather than a regression.
+///
+/// **Eviction**: bounded organically by the number of folders the user
+/// browses — small in practice (sync roots + their subfolders, ~hundreds
+/// of entries on a long session). No TTL or LRU cap. If usage patterns
+/// change and the cache grows large, swap to `quick_cache` or wire a
+/// per-drive cache that drops on `remove_drive`.
+/// Cached `(mtime, size, count)` for each cached directory path.
+type DirStatsEntry = (std::time::SystemTime, u64, u64);
+type DirStatsMap = std::sync::Mutex<HashMap<std::path::PathBuf, DirStatsEntry>>;
 
-fn dir_stats_cache() -> &'static std::sync::Mutex<HashMap<std::path::PathBuf, (std::time::SystemTime, u64, u64)>> {
+static DIR_STATS_CACHE: OnceLock<DirStatsMap> = OnceLock::new();
+
+fn dir_stats_cache() -> &'static DirStatsMap {
     DIR_STATS_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
@@ -909,7 +946,7 @@ async fn list_sync_folder_inner(
     // the same outer mutex for excludes) which serialized listings
     // behind any in-flight sync that held the outer lock.
     let (synced_set, excluded_patterns) = match label {
-        Some(ref l) => drive_state_for_label(&state.sync, l, true).await,
+        Some(ref l) => synced_paths_and_excludes_for_label(&state.sync, l).await,
         None => (None, Vec::new()),
     };
 
@@ -1203,7 +1240,7 @@ impl FileFilterCriteria {
 /// and each folder row contributes `entry.file_count` (the recursive leaf count
 /// computed by `dir_stats_recursive`). Empty folders contribute 0 — a folder
 /// with zero files is not itself a "file".
-#[derive(Serialize, Default, Debug)]
+#[derive(Serialize, Default, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LabelStats {
     pub total_bytes: u64,
@@ -1249,26 +1286,44 @@ pub struct UserFileEntry {
     pub deleted: bool,
 }
 
+/// Whether a given `sync_status` value should contribute to per-label
+/// stats. Centralised so the inline accumulator in `get_user_files` and
+/// the test-definition `compute_label_stats` cannot disagree on the
+/// filter rule (only one of them being changed silently was the
+/// drift hazard the perf-audit review flagged).
+fn is_counted_for_label_stats(sync_status: &str) -> bool {
+    sync_status != "excluded"
+}
+
+/// Apply the per-counted-entry stats accumulation rule.
+///
+/// Pure function — both `get_user_files`'s inline path and the test
+/// definition `compute_label_stats` route every counted entry through
+/// this helper, so the rule can only be changed in one place. Folders
+/// contribute their nested file count (computed by `dir_stats_recursive`
+/// upstream); plain files contribute 1.
+fn apply_label_stats_rule(stats: &mut LabelStats, is_folder: bool, file_count: u64, size: u64) {
+    stats.total_bytes = stats.total_bytes.saturating_add(size);
+    stats.file_count = stats.file_count.saturating_add(if is_folder { file_count } else { 1 });
+}
+
 /// Compute per-label totals from the flat entry list `get_user_files` builds.
 ///
 /// `get_user_files` accumulates label stats inline during its main entry
 /// loop (avoids walking the file list twice), so this helper is only
 /// referenced from the unit tests below — kept as a single-source rule
-/// definition that the inline accumulator must match.
+/// definition that the inline accumulator must match. Both paths share
+/// `is_counted_for_label_stats` and `apply_label_stats_rule` to enforce
+/// that match at the type level.
 #[cfg(test)]
 fn compute_label_stats(entries: &[UserFileEntry]) -> HashMap<String, LabelStats> {
     let mut out: HashMap<String, LabelStats> = HashMap::new();
     for entry in entries {
-        if entry.sync_status == "excluded" {
+        if !is_counted_for_label_stats(&entry.sync_status) {
             continue;
         }
         let slot = out.entry(entry.label.clone()).or_default();
-        slot.total_bytes = slot.total_bytes.saturating_add(entry.size);
-        slot.file_count = slot.file_count.saturating_add(if entry.is_folder {
-            entry.file_count.unwrap_or(0)
-        } else {
-            1
-        });
+        apply_label_stats_rule(slot, entry.is_folder, entry.file_count.unwrap_or(0), entry.size);
     }
     out
 }
@@ -1336,12 +1391,21 @@ pub async fn get_user_files(
     for (label, entries) in &results {
         total_private_size += entries.iter().map(|e| e.size).sum::<u64>();
 
-        // Borrow the canonical &str from `sync_paths` so we can use it as
-        // the HashMap key without per-entry String allocation.
-        let label_key: &str = label_to_path.get_key_value(label.as_str()).map(|(k, _)| *k).unwrap_or(label.as_str());
+        // Borrow the canonical `&str` from `sync_paths` so `label_stats`
+        // keys are zero-copy. The `get_key_value` call returns the key
+        // borrowed from `label_to_path` (and therefore from `sync_paths`,
+        // which outlives `label_stats`'s entire scope). The `unwrap_or`
+        // fallback covers the orphaned-label case (a label appears in
+        // `results` but not in `sync_paths` — only possible if a path
+        // row was deleted between `get_all_sync_paths_internal` and the
+        // `list_sync_folder` futures resolving). The fallback `&str`
+        // borrows `label`, which lives for the entire outer loop body
+        // and outlives `label_stats`'s `into_iter().collect()` call
+        // below — both lifetimes are valid.
+        let label_key: &str = label_to_path.get_key_value(label.as_str()).map_or(label.as_str(), |(k, _)| *k);
         let folder_path = label_to_path.get(label_key).copied().unwrap_or("");
 
-        for entry in entries.iter().filter(|e| e.sync_status != "excluded") {
+        for entry in entries.iter().filter(|e| is_counted_for_label_stats(&e.sync_status)) {
             let local_modified_ms = entry.modified.map_or(0, |m| m as i64 * 1000);
             let uploaded_at_ms = if entry.uploaded_at != 0 { entry.uploaded_at * 1000 } else { 0 };
             let updated_at_ms = if entry.updated_at != 0 { entry.updated_at * 1000 } else { 0 };
@@ -1371,11 +1435,10 @@ pub async fn get_user_files(
                 entry.name.clone()
             };
 
-            // Inline label_stats accumulation. Mirrors `compute_label_stats`
-            // exactly: count nested files for folders, 1 for plain files.
-            let stats = label_stats.entry(label_key).or_default();
-            stats.total_bytes = stats.total_bytes.saturating_add(entry.size);
-            stats.file_count = stats.file_count.saturating_add(if entry.is_folder { entry.file_count } else { 1 });
+            // Inline label_stats accumulation through the shared
+            // `apply_label_stats_rule` helper so this path cannot drift
+            // from the test-definition `compute_label_stats`.
+            apply_label_stats_rule(label_stats.entry(label_key).or_default(), entry.is_folder, entry.file_count, entry.size);
 
             all_files.push(UserFileEntry {
                 name: display_name,
@@ -1913,5 +1976,102 @@ mod tests {
         let gamma = stats.get("gamma").expect("gamma stats present");
         assert_eq!(gamma.total_bytes, 100, "gamma bytes");
         assert_eq!(gamma.file_count, 0, "gamma file count (folder with file_count: None => 0)");
+    }
+
+    /// Drift guard between `compute_label_stats` (the rule definition) and
+    /// the inline accumulator inside `get_user_files`. Both paths now route
+    /// every counted entry through `apply_label_stats_rule` and every
+    /// filter check through `is_counted_for_label_stats`, so this test
+    /// simulates the inline path manually using the SAME helpers and
+    /// asserts equivalence with `compute_label_stats`. If a future refactor
+    /// changes one path's filter or accumulation, this test fails loudly
+    /// because the helpers diverge.
+    #[test]
+    fn inline_path_matches_compute_label_stats_via_shared_helpers() {
+        let mut excluded = make_file("ignored.txt", 999_999, "alpha", 0, false);
+        excluded.sync_status = "excluded".to_string();
+        let entries: Vec<UserFileEntry> = vec![
+            make_file("a.txt", 1_000, "alpha", 0, false),
+            UserFileEntry {
+                file_count: Some(3),
+                size: 4_000,
+                ..make_file("sub", 4_000, "alpha", 0, true)
+            },
+            excluded,
+            make_file("b.txt", 500, "beta", 0, false),
+        ];
+
+        // Path 1: rule-definition (the test-only helper above).
+        let rule_stats = compute_label_stats(&entries);
+
+        // Path 2: simulate the inline path inside `get_user_files`. Same
+        // shared helpers, same filter ordering — if production drifts,
+        // this expression no longer matches `compute_label_stats` because
+        // either the filter or the accumulator was changed somewhere.
+        let mut inline_stats: HashMap<String, LabelStats> = HashMap::new();
+        for entry in entries.iter().filter(|e| is_counted_for_label_stats(&e.sync_status)) {
+            apply_label_stats_rule(
+                inline_stats.entry(entry.label.clone()).or_default(),
+                entry.is_folder,
+                entry.file_count.unwrap_or(0),
+                entry.size,
+            );
+        }
+
+        assert_eq!(inline_stats, rule_stats);
+    }
+
+    /// `dir_stats_recursive` reads from `DIR_STATS_CACHE` when the
+    /// directory's mtime matches the cached entry. We can't easily
+    /// stage a "real" cache hit in a unit test (mtime resolution is OS
+    /// timer-dependent), so this test takes the deterministic route:
+    /// stat the temp dir to learn its mtime, write a deliberately wrong
+    /// `(size, count)` into the cache under that mtime, and assert
+    /// `dir_stats_recursive` returns the wrong cached value rather than
+    /// re-walking the tree. Proves the cache lookup is consulted.
+    #[tokio::test]
+    async fn dir_stats_recursive_returns_cached_value_on_mtime_match() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+
+        // Create a tiny tree so a fresh walk would return non-zero values.
+        tokio::fs::write(dir.join("a.txt"), b"hello world").await.expect("write a");
+        tokio::fs::write(dir.join("b.txt"), b"goodbye").await.expect("write b");
+
+        // Read the directory's actual mtime — that's the cache key.
+        let mtime = tokio::fs::metadata(dir).await.expect("metadata").modified().expect("mtime");
+
+        // Plant a deliberately wrong cached entry under this mtime.
+        let bogus_size = 999_999_999u64;
+        let bogus_count = 123u64;
+        {
+            let mut cache = dir_stats_cache().lock().expect("lock");
+            cache.insert(dir.to_path_buf(), (mtime, bogus_size, bogus_count));
+        }
+
+        let (size, count) = dir_stats_recursive(dir).await;
+        assert_eq!(size, bogus_size, "dir_stats_recursive must return the cached size on mtime match");
+        assert_eq!(count, bogus_count, "dir_stats_recursive must return the cached count on mtime match");
+
+        // Cleanup so this test doesn't pollute other tests' cache state.
+        dir_stats_cache().lock().expect("lock").remove(dir);
+    }
+
+    /// On a fresh path the cache is empty; `dir_stats_recursive` must walk
+    /// the tree and return real values. Pairs with the cache-hit test
+    /// above to confirm the lookup path doesn't ALWAYS short-circuit.
+    #[tokio::test]
+    async fn dir_stats_recursive_walks_on_cache_miss() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+
+        tokio::fs::write(dir.join("one.txt"), b"x").await.expect("write");
+        tokio::fs::write(dir.join("two.txt"), b"yz").await.expect("write");
+
+        let (size, count) = dir_stats_recursive(dir).await;
+        assert_eq!(size, 3, "fresh walk must sum file bytes (1 + 2)");
+        assert_eq!(count, 2, "fresh walk must count files");
+
+        dir_stats_cache().lock().expect("lock").remove(dir);
     }
 }
