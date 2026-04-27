@@ -1567,6 +1567,10 @@ async fn auto_init_sync_inner(
     });
     let init_results = futures_util::future::join_all(init_futures).await;
 
+    // `join_all` preserves input order, so each `init_results[i]` aligns
+    // with `regular[i]`. The zip below re-pairs every result with its
+    // sync_path so the path-aware `DriveStatus::Error` emit on failure
+    // can read the right `sp.path`.
     let mut any_initialized = false;
     for ((label, result), sp) in init_results.into_iter().zip(regular.iter()) {
         match result {

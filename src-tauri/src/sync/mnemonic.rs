@@ -403,14 +403,27 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
     // is CPU-bound (Argon2-style); concurrency = number of cores via the
     // tokio blocking-thread pool. For users with N drives this reduces the
     // change-recovery-password latency from sum(N) to max(N).
+    //
+    // Secrets are wrapped in `Zeroizing<String>` and shared via `Arc` so we
+    // hold ONE owned copy of the master mnemonic and the new password
+    // across all per-label futures. Cloning the `Arc` per future is cheap
+    // and — critically — preserves zeroization on drop. The pre-Arc
+    // version cloned the secrets into bare `String`s, which sat
+    // unzeroized on the heap for the lifetime of every future.
+    //
+    // Per-label `account_id` is not secret (a public ss58 address), so
+    // bare String clone is fine there.
+    let master_mnemonic = std::sync::Arc::new(zeroize::Zeroizing::new(master_mnemonic.to_string()));
+    let new_password = std::sync::Arc::new(zeroize::Zeroizing::new(new_password.to_string()));
+
     let futures = labels
         .iter()
         .filter(|l| l.as_str() != "migration")
         .map(|label| {
             let label = label.clone();
-            let new_password = new_password.to_string();
             let account_id = account_id.to_string();
-            let master_mnemonic = master_mnemonic.to_string();
+            let master_mnemonic = std::sync::Arc::clone(&master_mnemonic);
+            let new_password = std::sync::Arc::clone(&new_password);
             async move {
                 let folder_dir = match config_dir_for_folder(&account_id, &label) {
                     Ok(dir) => dir,
@@ -428,7 +441,7 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
                 // Re-derive deterministically from the master. Folder files
                 // that don't exist yet on disk are created here under the
                 // new password.
-                let folder_mnemonic_owned = match hcfs_client::drive::keys::derive_folder_mnemonic(&master_mnemonic, &label) {
+                let folder_mnemonic_owned = match hcfs_client::drive::keys::derive_folder_mnemonic(master_mnemonic.as_str(), &label) {
                     Ok(s) => zeroize::Zeroizing::new(s),
                     Err(e) => {
                         tracing::warn!(
@@ -453,7 +466,9 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
 
                 // save_encrypted_mnemonic is sync + blocking; wrap in
                 // spawn_blocking to match install_recovered_mnemonic.
-                let password_owned = zeroize::Zeroizing::new(new_password);
+                // Owned copy of the password for the 'static spawn_blocking
+                // closure, kept in a Zeroizing wrapper so it scrubs on drop.
+                let password_owned: zeroize::Zeroizing<String> = zeroize::Zeroizing::new(new_password.as_str().to_owned());
                 let label_for_task = label.clone();
                 let result = tokio::task::spawn_blocking(move || {
                     hcfs_client::auth::save_encrypted_mnemonic(&folder_enc, &folder_mnemonic_owned, &password_owned).map_err(|e| e.to_string())
