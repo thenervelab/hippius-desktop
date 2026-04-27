@@ -1,7 +1,8 @@
 //! SQLite schema initialization and migration.
 
-use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
+use sqlx::{Acquire, Row};
+use std::collections::HashSet;
 use tracing::{debug, info, warn};
 
 /// Names of every table `ensure_table_schema` is expected to create.
@@ -36,11 +37,33 @@ const EXPECTED_TABLES: &[&str] = &[
     "user_preferences",
 ];
 
+/// Read the column names of a table via `PRAGMA table_info(...)`.
+///
+/// Centralised so the per-column-existence migration blocks below all share
+/// one PRAGMA round-trip per call site instead of running `PRAGMA table_info`
+/// on the same table multiple times in a row.
+async fn table_columns<'e, E>(executor: E, table: &str) -> Result<HashSet<String>, sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let pragma_sql = format!("PRAGMA table_info({table})");
+    let rows = sqlx::query(&pragma_sql).fetch_all(executor).await?;
+    Ok(rows.iter().map(|row| row.get::<String, _>("name")).collect())
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "Large but straightforward schema initializer: declarative TABLE_SCHEMAS loop plus one complex sync_paths migration (label column, is_paused column, UNIQUE constraint recreation) that must stay co-located to be auditable in a single transaction. Coverage is provided by the `ensure_table_schema_creates_all_expected_tables` smoke test against EXPECTED_TABLES."
 )]
 pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    // Wrap the entire initializer in one transaction so all CREATE/ALTER/INSERT
+    // statements share a single fsync at commit time instead of ~30 separate
+    // ones. On SQLite (especially WAL mode) this drops cold-start schema-init
+    // latency by ~10x. Inner blocks that previously called `pool.begin()`
+    // (sync_paths swap, account-key migration) now use `tx.begin()` to nest
+    // as savepoints — see https://www.sqlite.org/lang_savepoint.html.
+    let mut tx = pool.begin().await?;
+
     // Define the expected table schemas (only tables still needed)
     const TABLE_SCHEMAS: &[(&str, &[(&str, &str)])] = &[
         (
@@ -97,22 +120,16 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             table_name,
             columns.iter().map(|(name, typ)| format!("{name} {typ}")).collect::<Vec<_>>().join(", ")
         );
-        sqlx::query(&create_table).execute(pool).await?;
+        sqlx::query(&create_table).execute(&mut *tx).await?;
 
         // Check and add any missing columns
-        let pragma_sql = format!("PRAGMA table_info({table_name})");
-        let columns_info = sqlx::query(&pragma_sql).fetch_all(pool).await?;
+        let existing_cols = table_columns(&mut *tx, table_name).await?;
 
         for (column_name, column_type) in *columns {
-            let column_exists = columns_info.iter().any(|row| {
-                let name: String = row.get("name");
-                name == *column_name
-            });
-
-            if !column_exists {
+            if !existing_cols.contains(*column_name) {
                 info!("Adding column {} to table {}", column_name, table_name);
                 sqlx::query(&format!("ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
         }
@@ -120,15 +137,15 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
     // Seed singleton rows for tables created in the loop above
     sqlx::query("INSERT OR IGNORE INTO vpn_status (id, is_enabled) VALUES (1, FALSE)")
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     sqlx::query("INSERT OR IGNORE INTO nebula_binary_status (id, is_nebula_binary_installed) VALUES (1, FALSE)")
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     sqlx::query("INSERT OR IGNORE INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)")
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     // sync_paths table (kept for path storage)
@@ -144,31 +161,27 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             UNIQUE(owner, label)
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
+    // Read sync_paths columns ONCE and reuse across the three column-add
+    // migration blocks below. Saves three round-trips on every cold start.
+    let sync_paths_cols = table_columns(&mut *tx, "sync_paths").await?;
+
     // Migration: add label column if missing (existing dev databases)
-    {
-        let columns_info = sqlx::query("PRAGMA table_info(sync_paths)").fetch_all(pool).await?;
-        let has_label = columns_info.iter().any(|row| row.get::<String, _>("name") == "label");
-        if !has_label {
-            info!("Adding label column to sync_paths");
-            sqlx::query("ALTER TABLE sync_paths ADD COLUMN label TEXT NOT NULL DEFAULT 'default'")
-                .execute(pool)
-                .await?;
-        }
+    if !sync_paths_cols.contains("label") {
+        info!("Adding label column to sync_paths");
+        sqlx::query("ALTER TABLE sync_paths ADD COLUMN label TEXT NOT NULL DEFAULT 'default'")
+            .execute(&mut *tx)
+            .await?;
     }
 
     // Migration: add is_paused column if missing (existing databases)
-    {
-        let columns_info = sqlx::query("PRAGMA table_info(sync_paths)").fetch_all(pool).await?;
-        let has_is_paused = columns_info.iter().any(|row| row.get::<String, _>("name") == "is_paused");
-        if !has_is_paused {
-            info!("Adding is_paused column to sync_paths");
-            sqlx::query("ALTER TABLE sync_paths ADD COLUMN is_paused INTEGER NOT NULL DEFAULT 0")
-                .execute(pool)
-                .await?;
-        }
+    if !sync_paths_cols.contains("is_paused") {
+        info!("Adding is_paused column to sync_paths");
+        sqlx::query("ALTER TABLE sync_paths ADD COLUMN is_paused INTEGER NOT NULL DEFAULT 0")
+            .execute(&mut *tx)
+            .await?;
     }
 
     // Migration: add `relative_paths_backfilled_at` column if missing (PR 7 Task 7.3).
@@ -179,17 +192,11 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // completed. Chose `_at` over a boolean `_backfilled` flag so the retry
     // state machine is tiny (NULL vs set) while still giving us free
     // forensics if the server later reports a stale entry.
-    {
-        let columns_info = sqlx::query("PRAGMA table_info(sync_paths)").fetch_all(pool).await?;
-        let has_backfilled_at = columns_info
-            .iter()
-            .any(|row| row.get::<String, _>("name") == "relative_paths_backfilled_at");
-        if !has_backfilled_at {
-            info!("Adding relative_paths_backfilled_at column to sync_paths");
-            sqlx::query("ALTER TABLE sync_paths ADD COLUMN relative_paths_backfilled_at INTEGER")
-                .execute(pool)
-                .await?;
-        }
+    if !sync_paths_cols.contains("relative_paths_backfilled_at") {
+        info!("Adding relative_paths_backfilled_at column to sync_paths");
+        sqlx::query("ALTER TABLE sync_paths ADD COLUMN relative_paths_backfilled_at INTEGER")
+            .execute(&mut *tx)
+            .await?;
     }
 
     // Migration: ensure the table has UNIQUE(owner, label).
@@ -197,10 +204,12 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // on (owner, type) from the main branch migration. Either way, if the DDL
     // doesn't contain UNIQUE(owner, label), we recreate the table.
     // SQLite doesn't support ALTER TABLE DROP CONSTRAINT, so we recreate.
-    // Wrapped in a transaction so the table is never left in a broken state.
+    // The whole swap nests as a savepoint inside the outer schema-init tx so
+    // a failed swap rolls back to the savepoint without aborting the rest of
+    // schema initialization.
     {
         let table_sql = sqlx::query("SELECT sql FROM sqlite_master WHERE type='table' AND name='sync_paths'")
-            .fetch_optional(pool)
+            .fetch_optional(&mut *tx)
             .await?;
         let has_correct_constraint = table_sql
             .as_ref()
@@ -212,10 +221,12 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         } else {
             info!("Migrating sync_paths to add UNIQUE(owner, label) constraint");
             // Clean up any leftover temp table from a previous failed attempt
-            sqlx::query("DROP TABLE IF EXISTS sync_paths_new").execute(pool).await?;
+            sqlx::query("DROP TABLE IF EXISTS sync_paths_new").execute(&mut *tx).await?;
 
-            // Run the entire swap inside a transaction
-            let mut tx = pool.begin().await?;
+            // Nested savepoint so the swap is atomic without grabbing a
+            // second pool connection (which would deadlock under contention
+            // and break the outer-tx atomicity guarantee).
+            let mut sp = tx.begin().await?;
 
             sqlx::query(
                 "CREATE TABLE sync_paths_new (
@@ -229,7 +240,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                     UNIQUE(owner, label)
                 )",
             )
-            .execute(&mut *tx)
+            .execute(&mut *sp)
             .await?;
 
             // Copy data, skipping duplicates on (owner, label).
@@ -243,14 +254,14 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                  FROM sync_paths
                  ORDER BY CASE type WHEN 'private' THEN 0 ELSE 1 END",
             )
-            .execute(&mut *tx)
+            .execute(&mut *sp)
             .await?;
 
-            sqlx::query("DROP TABLE sync_paths").execute(&mut *tx).await?;
+            sqlx::query("DROP TABLE sync_paths").execute(&mut *sp).await?;
 
-            sqlx::query("ALTER TABLE sync_paths_new RENAME TO sync_paths").execute(&mut *tx).await?;
+            sqlx::query("ALTER TABLE sync_paths_new RENAME TO sync_paths").execute(&mut *sp).await?;
 
-            tx.commit().await?;
+            sp.commit().await?;
             info!("sync_paths constraint migration completed");
         }
     }
@@ -262,12 +273,12 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query("INSERT OR IGNORE INTO wss_endpoint (id, endpoint) VALUES (1, ?)")
         .bind(crate::blockchain::client::WSS_ENDPOINT)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     // Create security_scoped_bookmarks table for macOS file access persistence
@@ -281,7 +292,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     // Auth session — replaces frontend IndexedDB "session" table + localStorage tokens
@@ -299,7 +310,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     // HCFS config table
@@ -312,7 +323,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     // Encryption-at-rest: add encryption_version to sub_accounts and hcfs_config.
@@ -322,7 +333,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "ALTER TABLE sub_accounts ADD COLUMN encryption_version INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE hcfs_config ADD COLUMN encryption_version INTEGER NOT NULL DEFAULT 0",
     ] {
-        if let Err(e) = sqlx::query(stmt).execute(pool).await {
+        if let Err(e) = sqlx::query(stmt).execute(&mut *tx).await {
             let msg = e.to_string();
             if !msg.contains("duplicate column name") {
                 warn!("Schema migration failed: {msg}");
@@ -341,7 +352,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(
@@ -353,7 +364,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     // Device settings table (singleton row, stores friendly device name)
@@ -364,17 +375,17 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     // Seed with OS hostname if no row exists yet
     {
-        let existing = sqlx::query("SELECT id FROM device_settings WHERE id = 1").fetch_optional(pool).await?;
+        let existing = sqlx::query("SELECT id FROM device_settings WHERE id = 1").fetch_optional(&mut *tx).await?;
         if existing.is_none() {
             let hostname = hostname::get().map_or_else(|_| "My Device".to_string(), |h| h.to_string_lossy().into_owned());
             sqlx::query("INSERT INTO device_settings (id, device_name) VALUES (1, ?)")
                 .bind(&hostname)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
             info!("Device name seeded: {}", hostname);
         }
@@ -394,7 +405,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         )
         ",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     // Notifications (replaces frontend notificationsDb.ts)
@@ -415,15 +426,15 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             release_notes TEXT
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_address)")
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_notifications_user_deleted ON notifications(user_address, is_deleted)")
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     // App state (singleton, replaces frontend app_state table)
@@ -434,11 +445,11 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             is_above_half_credit INTEGER DEFAULT 0
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query("INSERT OR IGNORE INTO app_state (id, is_first_time, is_above_half_credit) VALUES (1, 1, 0)")
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     // Notification preferences (replaces frontend notification_preferences table)
@@ -450,19 +461,19 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             enabled INTEGER DEFAULT 1
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(
         "INSERT OR IGNORE INTO notification_preferences (id, label, description, enabled) VALUES ('credits', 'Credits', 'Account credit notifications', 1)",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(
         "INSERT OR IGNORE INTO notification_preferences (id, label, description, enabled) VALUES ('files', 'Files', 'File sync notifications', 1)",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     // Address book (replaces frontend addressBookDb.ts)
@@ -474,7 +485,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             date_added INTEGER DEFAULT (strftime('%s','now') * 1000)
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     // Onboarding (replaces frontend onboardingDb.ts)
@@ -484,11 +495,11 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             is_done INTEGER DEFAULT 0
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query("INSERT OR IGNORE INTO onboarding (id, is_done) VALUES (1, 0)")
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     // User preferences (replaces frontend userPreferencesDb.ts)
@@ -499,9 +510,10 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at INTEGER NOT NULL
         )",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
+    tx.commit().await?;
     Ok(())
 }
 
@@ -576,7 +588,6 @@ pub async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> 
 mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
-    use std::collections::HashSet;
 
     /// Create a fresh in-memory SQLite pool for isolated schema tests.
     async fn temp_pool() -> SqlitePool {

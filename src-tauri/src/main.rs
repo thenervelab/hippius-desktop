@@ -95,7 +95,7 @@ use crate::utils::support::{
 use crate::utils::tray_menu::get_tray_menu_data;
 use futures_util::FutureExt;
 use sqlx::Row;
-use sqlx::sqlite::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 use tauri::{Builder, Emitter, Manager, Wry, path::BaseDirectory};
 #[cfg(target_os = "linux")]
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -505,6 +505,31 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     })
 }
 
+/// Open the application's SQLite pool with desktop-app-tuned PRAGMAs.
+///
+/// - **WAL** journal mode: readers don't block writers and vice-versa, which
+///   matters because every IPC command goes through this pool.
+/// - **`synchronous=NORMAL`**: at most one in-flight transaction is lost on
+///   power loss, which is acceptable here — all persisted state is
+///   re-derivable from server-of-record (HCFS, blockchain).
+/// - **`busy_timeout=5s`**: rare contention waits at the driver level instead
+///   of surfacing `SQLITE_BUSY` immediately to the IPC caller.
+/// - **`foreign_keys=ON`**: enforce referential integrity (off by default in
+///   SQLite for backwards compatibility).
+/// - **`max_connections=8`**: the IPC fan-in is small; eight is plenty and
+///   keeps fd usage tight.
+async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Error> {
+    let connect_opts = SqliteConnectOptions::new()
+        .filename(db_path)
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .foreign_keys(true);
+
+    SqlitePoolOptions::new().max_connections(8).connect_with(connect_opts).await
+}
+
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");
@@ -571,8 +596,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 std::fs::File::create(&db_path).expect("Failed to create database file");
             }
 
-            let db_url = format!("sqlite:{}", db_path.display());
-            let pool = match SqlitePool::connect(&db_url).await {
+            let pool = match open_db_pool(&db_path).await {
                 Ok(pool) => pool,
                 Err(e) => {
                     error!("FATAL: Failed to open database at {}: {e}", db_path.display());

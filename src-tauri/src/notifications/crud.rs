@@ -377,50 +377,26 @@ pub async fn delete_system_notification_by_version(state: tauri::State<'_, AppSt
 /// Only counts notifications whose `notification_type` matches an enabled
 /// preference label, plus any "Hippius" system notifications which are
 /// always shown regardless of preferences.
+///
+/// Implemented as a single round-trip via a correlated subquery so the
+/// notification badge counter — which is polled on every screen — costs
+/// one pool acquire and one prepared statement instead of two of each.
 #[tauri::command]
 pub async fn get_unread_count(state: tauri::State<'_, AppState>, user_address: String) -> Result<i64, AppError> {
     let pool = state.pool()?;
 
-    // Fetch enabled notification type labels (e.g. ["Credits"])
-    let enabled: Vec<String> = sqlx::query_as::<_, (String,)>("SELECT label FROM notification_preferences WHERE enabled = 1")
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .map(|(l,)| l)
-        .collect();
-
-    if enabled.is_empty() {
-        // Only count system ("Hippius") notifications when no types enabled
-        let row = sqlx::query_as::<_, (i64,)>(
-            "SELECT COUNT(*) FROM notifications \
-             WHERE (user_address = ? OR user_address = 'system') \
-             AND is_unread = 1 AND is_deleted = 0 \
-             AND notification_type = 'Hippius'",
-        )
-        .bind(&user_address)
-        .fetch_one(pool)
-        .await?;
-        return Ok(row.0);
-    }
-
-    // Build placeholders for the IN clause
-    let placeholders: Vec<&str> = enabled.iter().map(|_| "?").collect();
-    let in_clause = placeholders.join(", ");
-    let query = format!(
+    let (count,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM notifications \
          WHERE (user_address = ? OR user_address = 'system') \
          AND is_unread = 1 AND is_deleted = 0 \
-         AND (notification_type IN ({in_clause}) OR notification_type = 'Hippius')"
-    );
+         AND (notification_type = 'Hippius' \
+              OR notification_type IN (SELECT label FROM notification_preferences WHERE enabled = 1))",
+    )
+    .bind(&user_address)
+    .fetch_one(pool)
+    .await?;
 
-    let mut q = sqlx::query_as::<_, (i64,)>(&query).bind(&user_address);
-    for label in &enabled {
-        q = q.bind(label);
-    }
-
-    let row = q.fetch_one(pool).await?;
-
-    Ok(row.0)
+    Ok(count)
 }
 
 /// Check if a credit notification with the given timestamp already exists.

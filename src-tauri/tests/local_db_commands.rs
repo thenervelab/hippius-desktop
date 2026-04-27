@@ -919,44 +919,22 @@ async fn hard_delete_clears_all() {
 
 // ── Unread Count Respects Preferences ───────────────────────────────────
 
-/// Helper: mirrors the updated `get_unread_count` logic that filters by enabled
-/// notification preferences and always includes "Hippius" system notifications.
+/// Helper: mirrors the production `get_unread_count` query (single-statement
+/// correlated subquery against `notification_preferences`). Always includes
+/// "Hippius" system notifications regardless of preference state.
 async fn preference_filtered_unread_count(pool: &SqlitePool, user_address: &str) -> i64 {
-    let enabled: Vec<String> = sqlx::query_as::<_, (String,)>("SELECT label FROM notification_preferences WHERE enabled = 1")
-        .fetch_all(pool)
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|(l,)| l)
-        .collect();
-
-    if enabled.is_empty() {
-        let (count,) = sqlx::query_as::<_, (i64,)>(
-            "SELECT COUNT(*) FROM notifications \
-             WHERE (user_address = ? OR user_address = 'system') \
-             AND is_unread = 1 AND is_deleted = 0 \
-             AND notification_type = 'Hippius'",
-        )
-        .bind(user_address)
-        .fetch_one(pool)
-        .await
-        .unwrap();
-        return count;
-    }
-
-    let placeholders: Vec<&str> = enabled.iter().map(|_| "?").collect();
-    let in_clause = placeholders.join(", ");
-    let query = format!(
+    let (count,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM notifications \
          WHERE (user_address = ? OR user_address = 'system') \
          AND is_unread = 1 AND is_deleted = 0 \
-         AND (notification_type IN ({in_clause}) OR notification_type = 'Hippius')"
-    );
-    let mut q = sqlx::query_as::<_, (i64,)>(&query).bind(user_address);
-    for label in &enabled {
-        q = q.bind(label);
-    }
-    q.fetch_one(pool).await.unwrap().0
+         AND (notification_type = 'Hippius' \
+              OR notification_type IN (SELECT label FROM notification_preferences WHERE enabled = 1))",
+    )
+    .bind(user_address)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    count
 }
 
 #[tokio::test]
