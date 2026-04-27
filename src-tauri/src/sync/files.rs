@@ -10,6 +10,7 @@ use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter, Manager};
 use tracing::{info, warn};
 
@@ -482,25 +483,53 @@ use hcfs_client::engine::types::{SyncedFileInfo, build_synced_paths_from_state};
 /// falls back to the last cached snapshot so the file browser still
 /// shows accurate sync status instead of "unknown".
 async fn synced_paths_for_label(sync: &SyncRunner, label: &str) -> Option<HashMap<String, SyncedFileInfo>> {
+    let (synced, _) = drive_state_for_label(sync, label, false).await;
+    synced
+}
+
+/// Snapshot of per-drive metadata used by the file-listing IPCs.
+///
+/// Returned by [`drive_state_for_label`] in a single drives-map lock
+/// acquisition so callers like `list_sync_folder_inner` (which previously
+/// took the outer lock twice — once for synced paths, once for exclude
+/// patterns) only pay one round-trip through the contended mutex.
+type DriveStateSnapshot = (Option<HashMap<String, SyncedFileInfo>>, Vec<String>);
+
+/// Read both the synced-paths map and the exclusion patterns for `label`
+/// behind a single outer-drives lock acquisition.
+///
+/// Pass `with_excludes=false` when only the synced paths are needed; the
+/// returned `Vec<String>` will be empty without taking the per-drive lock
+/// for `list_exclude_patterns`. When both are needed, the per-drive lock
+/// is taken once and both values are produced from the same `manager`
+/// borrow — eliminating the two-acquire pattern flagged by the perf
+/// audit.
+async fn drive_state_for_label(sync: &SyncRunner, label: &str, with_excludes: bool) -> DriveStateSnapshot {
     // Get the per-drive Arc from the map (brief outer lock).
     let drive_arc = {
         match sync.drives.try_lock() {
             Ok(guard) => guard.get(label).map(|slot| slot.manager.clone()),
-            Err(_) => return sync.get_cached_synced_paths(label),
+            Err(_) => return (sync.get_cached_synced_paths(label), Vec::new()),
         }
     };
     let Some(arc) = drive_arc else {
-        return sync.get_cached_synced_paths(label);
+        return (sync.get_cached_synced_paths(label), Vec::new());
     };
     // Try to lock the per-drive mutex; fall back to cache if syncing.
     match arc.try_lock() {
         Ok(manager) => {
-            let state = manager.load_sync_state().await.ok()?;
-            let paths = build_synced_paths_from_state(&state);
-            sync.update_synced_paths_cache(label, paths.clone());
-            Some(paths)
+            let synced = match manager.load_sync_state().await {
+                Ok(state) => {
+                    let paths = build_synced_paths_from_state(&state);
+                    sync.update_synced_paths_cache(label, paths.clone());
+                    Some(paths)
+                }
+                Err(_) => None,
+            };
+            let excludes = if with_excludes { manager.list_exclude_patterns() } else { Vec::new() };
+            (synced, excludes)
         }
-        Err(_) => sync.get_cached_synced_paths(label),
+        Err(_) => (sync.get_cached_synced_paths(label), Vec::new()),
     }
 }
 
@@ -565,12 +594,16 @@ pub async fn get_synced_file_metadata(state: tauri::State<'_, crate::app_state::
     };
 
     for (label, paths) in label_maps {
-        for (rel_path, info) in &paths {
+        // Move out of the HashMap so we can take ownership of `rel_path`
+        // and only clone once per row (used to be twice — once each for
+        // `file_name` and `relative_path`, both of which always carry
+        // identical content).
+        for (rel_path, info) in paths {
             // Use the full relative path so lookups match activity items
             // that also use relative paths (e.g. "bucket/photo.jpg").
             result.push(SyncedFileMetadata {
                 file_name: rel_path.clone(),
-                relative_path: rel_path.clone(),
+                relative_path: rel_path,
                 label: label.clone(),
                 arion_hash: info.path_hash_hex(),
                 arion_cid: info.arion_cid.to_string(),
@@ -747,9 +780,66 @@ pub async fn get_recent_files(
     Ok(result)
 }
 
+/// Process-wide cache for [`dir_stats_recursive`].
+///
+/// Keyed by absolute path. Each entry records the directory's mtime at the
+/// time of the walk. On lookup, if the current mtime matches the cached
+/// one, the cached `(size, count)` is returned without re-walking. APFS,
+/// ext4, and NTFS all bump a directory's mtime on add/remove/rename of
+/// children, which is the only invalidation case the file browser cares
+/// about — pure file-content changes within an unmodified directory don't
+/// invalidate the cache, but they don't change `count` and almost never
+/// shift the displayed size by a meaningful amount.
+///
+/// Bounded organically by the number of folders the user browses; unbounded
+/// in theory but small in practice (sync roots + their subfolders, ~hundreds
+/// of entries on a long session).
+static DIR_STATS_CACHE: OnceLock<std::sync::Mutex<HashMap<std::path::PathBuf, (std::time::SystemTime, u64, u64)>>> = OnceLock::new();
+
+fn dir_stats_cache() -> &'static std::sync::Mutex<HashMap<std::path::PathBuf, (std::time::SystemTime, u64, u64)>> {
+    DIR_STATS_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
 /// Recursively compute total size and file count within a directory.
 /// Hidden files (starting with '.') are excluded.
+///
+/// Memoised by `(path, mtime)`. On a hit the cached `(size, count)` is
+/// returned without descending the tree. Cache misses fall through to the
+/// recursive walk and write the result back to the cache before returning.
 async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
+    // Cache lookup. Stat the directory once to learn its mtime; on match
+    // skip the walk entirely.
+    let mtime = match tokio::fs::metadata(path).await {
+        Ok(meta) => meta.modified().ok(),
+        Err(_) => None,
+    };
+    if let Some(mtime) = mtime
+        && let Ok(cache) = dir_stats_cache().lock()
+        && let Some((cached_mtime, size, count)) = cache.get(path)
+        && *cached_mtime == mtime
+    {
+        return (*size, *count);
+    }
+
+    // Cache miss — walk the tree.
+    let (size, count) = dir_stats_walk(path).await;
+
+    // Store under the original mtime (if we got one). If mtime is None
+    // we skip caching so the next call retries the walk.
+    if let Some(mtime) = mtime
+        && let Ok(mut cache) = dir_stats_cache().lock()
+    {
+        cache.insert(path.to_path_buf(), (mtime, size, count));
+    }
+    (size, count)
+}
+
+/// The pure recursive walk underpinning [`dir_stats_recursive`]. Split out so
+/// the cache lookup wraps it without recursing through the cache lookup
+/// itself (recursive calls always re-walk subdirectories — the cache would
+/// add lock contention without reducing total work since the parent mtime
+/// already validated the whole subtree).
+async fn dir_stats_walk(path: &Path) -> (u64, u64) {
     let mut size: u64 = 0;
     let mut count: u64 = 0;
     let Ok(mut dir) = tokio::fs::read_dir(path).await else {
@@ -764,7 +854,7 @@ async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
             continue;
         };
         if meta.is_dir() {
-            let (sub_size, sub_count) = Box::pin(dir_stats_recursive(&entry.path())).await;
+            let (sub_size, sub_count) = Box::pin(dir_stats_walk(&entry.path())).await;
             size += sub_size;
             count += sub_count;
         } else {
@@ -813,30 +903,14 @@ async fn list_sync_folder_inner(
         ensure_within(&base, &target)?;
     }
 
-    // Load synced file paths from the drive's persisted sync state
-    let synced_set = match label {
-        Some(ref l) => synced_paths_for_label(&state.sync, l).await,
-        None => None,
-    };
-
-    // Load exclusion patterns so excluded files aren't shown as "pending"
-    let excluded_patterns: Vec<String> = match label {
-        Some(ref l) => {
-            let drive_arc = {
-                let guard = state.sync.drives.lock().await;
-                guard.get(l).map(|slot| slot.manager.clone())
-            };
-            if let Some(arc) = drive_arc {
-                if let Ok(m) = arc.try_lock() {
-                    m.list_exclude_patterns()
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            }
-        }
-        None => Vec::new(),
+    // Load synced paths AND exclusion patterns in a single drives-map
+    // lock + single per-drive lock. Previously these were two separate
+    // acquisitions (synced_paths_for_label, then a `.lock().await` on
+    // the same outer mutex for excludes) which serialized listings
+    // behind any in-flight sync that held the outer lock.
+    let (synced_set, excluded_patterns) = match label {
+        Some(ref l) => drive_state_for_label(&state.sync, l, true).await,
+        None => (None, Vec::new()),
     };
 
     let mut entries = Vec::new();
@@ -1177,8 +1251,11 @@ pub struct UserFileEntry {
 
 /// Compute per-label totals from the flat entry list `get_user_files` builds.
 ///
-/// Pulled out of `get_user_files` so we can unit-test the rule without
-/// standing up a Tauri state / sync-path fixture.
+/// `get_user_files` accumulates label stats inline during its main entry
+/// loop (avoids walking the file list twice), so this helper is only
+/// referenced from the unit tests below — kept as a single-source rule
+/// definition that the inline accumulator must match.
+#[cfg(test)]
 fn compute_label_stats(entries: &[UserFileEntry]) -> HashMap<String, LabelStats> {
     let mut out: HashMap<String, LabelStats> = HashMap::new();
     for entry in entries {
@@ -1219,6 +1296,21 @@ pub async fn get_user_files(
     let mut total_private_size: u64 = 0;
     let sync_folder_labels: Vec<String> = sync_paths.iter().filter(|sp| !sp.path.is_empty()).map(|sp| sp.label.clone()).collect();
 
+    // Pre-build label → folder_path lookup so the per-entry loop below is
+    // O(1) per file instead of O(D) where D is the number of sync paths.
+    // Same idea as the `label_to_path` map in `get_recent_files`.
+    let label_to_path: HashMap<&str, &str> = sync_paths
+        .iter()
+        .filter(|sp| !sp.path.is_empty())
+        .map(|sp| (sp.label.as_str(), sp.path.as_str()))
+        .collect();
+
+    // Accumulator for per-label stats. Filled inline during the entry loop
+    // so the post-loop walk that `compute_label_stats(&all_files)` used to
+    // do is no longer needed. Keyed by `&str` borrowed from `sync_paths`
+    // to avoid cloning each entry.label per iteration.
+    let mut label_stats: HashMap<&str, LabelStats> = HashMap::new();
+
     // List all sync folders concurrently
     let folder_futures: Vec<_> = sync_paths
         .iter()
@@ -1243,6 +1335,11 @@ pub async fn get_user_files(
 
     for (label, entries) in &results {
         total_private_size += entries.iter().map(|e| e.size).sum::<u64>();
+
+        // Borrow the canonical &str from `sync_paths` so we can use it as
+        // the HashMap key without per-entry String allocation.
+        let label_key: &str = label_to_path.get_key_value(label.as_str()).map(|(k, _)| *k).unwrap_or(label.as_str());
+        let folder_path = label_to_path.get(label_key).copied().unwrap_or("");
 
         for entry in entries.iter().filter(|e| e.sync_status != "excluded") {
             let local_modified_ms = entry.modified.map_or(0, |m| m as i64 * 1000);
@@ -1274,8 +1371,11 @@ pub async fn get_user_files(
                 entry.name.clone()
             };
 
-            // Find the sync path for this label to get the folder path
-            let folder_path = sync_paths.iter().find(|sp| sp.label == *label).map_or("", |sp| sp.path.as_str());
+            // Inline label_stats accumulation. Mirrors `compute_label_stats`
+            // exactly: count nested files for folders, 1 for plain files.
+            let stats = label_stats.entry(label_key).or_default();
+            stats.total_bytes = stats.total_bytes.saturating_add(entry.size);
+            stats.file_count = stats.file_count.saturating_add(if entry.is_folder { entry.file_count } else { 1 });
 
             all_files.push(UserFileEntry {
                 name: display_name,
@@ -1307,7 +1407,11 @@ pub async fn get_user_files(
     // Sort by timestamp (newest first)
     all_files.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
 
-    let label_stats = compute_label_stats(&all_files);
+    // Convert the borrowed-key map to owned-key for the result. One
+    // allocation per label instead of one per file (the previous
+    // `compute_label_stats(&all_files)` walk cloned `entry.label` for
+    // every file).
+    let label_stats: HashMap<String, LabelStats> = label_stats.into_iter().map(|(k, v)| (k.to_owned(), v)).collect();
 
     Ok(UserFilesResult {
         files: all_files,
