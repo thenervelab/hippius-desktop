@@ -17,7 +17,7 @@ const FilesPage: FC = () => {
 
     if (folderName) {
         return (
-            <DashboardTitleWrapper mainText={`Your Files - ${folderName}`}>
+            <DashboardTitleWrapper mainText={`My Drive - ${folderName}`}>
                 <FolderView
                     folderCid={folderCid}
                     folderName={folderName}

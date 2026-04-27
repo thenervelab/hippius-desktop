@@ -31,7 +31,7 @@ export const navItems: NavItemData[] = [
     isActive: true,
   },
   {
-    label: "Files",
+    label: "Drive",
     path: "/files",
     icon: <Icons.DocumentText />,
   },
