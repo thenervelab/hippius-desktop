@@ -272,26 +272,45 @@ pub async fn restore_remote_folders(
         account_id
     );
     let pool = state.pool()?;
-    let mut results = Vec::with_capacity(folders.len());
-    let mut any_success = false;
 
-    for folder in &folders {
-        match restore_single_folder(&app, pool, &account_id, &base_path, &folder.label, existing_mnemonic.as_deref()).await {
+    // Fan out per-folder restore concurrently — each `restore_single_folder`
+    // does HCFS server probe + DB writes + drive bootstrap, none of which
+    // share mutable state across folders. For N folders this turns
+    // sum(N) latency into max(N) latency. We pass `start_loop=false` to
+    // each and start the sync loop once at the end so all restored drives
+    // are picked up in a single pass (preserving the prior behavior).
+    let restore_futures = folders.iter().map(|folder| {
+        let app = app.clone();
+        let account_id = account_id.clone();
+        let base_path = base_path.clone();
+        let label = folder.label.clone();
+        let existing_mnemonic = existing_mnemonic.clone();
+        async move {
+            let outcome = restore_single_folder(&app, pool, &account_id, &base_path, &label, existing_mnemonic.as_deref()).await;
+            (label, outcome)
+        }
+    });
+    let outcomes = futures_util::future::join_all(restore_futures).await;
+
+    let mut results = Vec::with_capacity(outcomes.len());
+    let mut any_success = false;
+    for (label, outcome) in outcomes {
+        match outcome {
             Ok(()) => {
                 any_success = true;
                 results.push(RestoreResult {
-                    label: folder.label.clone(),
+                    label,
                     success: true,
                     error: None,
                 });
             }
             Err(e) => {
-                error!("Failed to restore remote folder '{}': {e}", folder.label);
-                if let Err(rollback_err) = crate::sync::paths::remove_sync_path_internal(pool, &account_id, &folder.label).await {
-                    warn!("Failed to rollback sync path for '{}': {rollback_err}", folder.label);
+                error!("Failed to restore remote folder '{}': {e}", label);
+                if let Err(rollback_err) = crate::sync::paths::remove_sync_path_internal(pool, &account_id, &label).await {
+                    warn!("Failed to rollback sync path for '{}': {rollback_err}", label);
                 }
                 results.push(RestoreResult {
-                    label: folder.label.clone(),
+                    label,
                     success: false,
                     error: Some(e.to_string()),
                 });

@@ -1539,26 +1539,37 @@ async fn auto_init_sync_inner(
     // 9. Initialize each path with the pre-resolved mnemonic. Passing
     //    `Some(..)` guarantees every drive takes the `existing_mnemonic`
     //    branch of `initialize_sync_inner` and never touches the auth
-    //    lock fallback — the loop is fully deterministic even if the
+    //    lock fallback — fan-out is fully deterministic even if the
     //    auth state churns underneath it.
+    //
+    //    Initialization is fanned out concurrently with `join_all`. Each
+    //    `initialize_sync_inner` call does multiple DB hits + HCFS probe
+    //    + drive unlock + folder registration — for N drives the
+    //    sequential cost is sum(N), the concurrent cost is max(N). The
+    //    per-drive locks owned by `SyncRunner.drives` already isolate
+    //    the work; the shared resources (DB pool, reqwest client,
+    //    HCFS server) all support concurrent callers.
+    let init_futures = regular.iter().map(|sp| {
+        let app = app.clone();
+        let account_id = account_id.clone();
+        let label = sp.label.clone();
+        let mnemonic = resolved_mnemonic.as_str().to_owned();
+        async move {
+            let result = initialize_sync_inner(app, account_id, label.clone(), Some(mnemonic), true, true).await;
+            (label, result)
+        }
+    });
+    let init_results = futures_util::future::join_all(init_futures).await;
+
     let mut any_initialized = false;
-    for sp in &regular {
-        match initialize_sync_inner(
-            app.clone(),
-            account_id.clone(),
-            sp.label.clone(),
-            Some(resolved_mnemonic.as_str().to_owned()),
-            true,
-            true,
-        )
-        .await
-        {
-            Ok(result) => {
-                info!(label = %sp.label, user_id = %result.user_id, "Sync initialized");
+    for ((label, result), sp) in init_results.into_iter().zip(regular.iter()) {
+        match result {
+            Ok(r) => {
+                info!(label = %label, user_id = %r.user_id, "Sync initialized");
                 any_initialized = true;
             }
             Err(e) => {
-                warn!(label = %sp.label, error = %e, "Failed to init sync");
+                warn!(label = %label, error = %e, "Failed to init sync");
                 // Only emit `Error` for non-recoverable failures.
                 // `NotReady(*)` errors (mnemonic unavailable, signing
                 // key missing, config missing, etc.) have their own
