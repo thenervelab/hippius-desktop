@@ -365,24 +365,25 @@ pub struct NotificationInput {
     pub description: String,
 }
 
-/// Persist multiple notifications in a single call.
+/// Pool-scoped implementation of [`create_credit_notifications`].
 ///
 /// Uses a multi-row `INSERT … VALUES (…), (…), …` instead of N separate
 /// INSERTs to avoid the per-row `Query` allocation + statement-cache lookup
-/// inside the loop. We chunk to stay safely under SQLite's 32 766 default
+/// inside the loop. Chunked to stay safely under SQLite's 32 766 default
 /// `SQLITE_MAX_VARIABLE_NUMBER` — at 4 binds per row, 100 rows = 400 binds,
 /// which leaves a generous margin even on platforms with the older 999 cap.
-#[tauri::command]
-pub async fn create_credit_notifications(
-    state: tauri::State<'_, AppState>,
-    account_id: String,
-    notifications: Vec<NotificationInput>,
+///
+/// Extracted from the `#[tauri::command]` wrapper so the integration tests
+/// can exercise it directly with a `&SqlitePool`.
+pub async fn create_credit_notifications_inner(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    notifications: &[NotificationInput],
 ) -> Result<u32, AppError> {
     if notifications.is_empty() {
         return Ok(0);
     }
 
-    let pool = state.pool()?;
     let mut total = 0u32;
 
     // One transaction across all chunks so the whole call is one fsync.
@@ -412,7 +413,7 @@ pub async fn create_credit_notifications(
 
         let mut q = sqlx::query(&sql);
         for n in chunk {
-            q = q.bind(&account_id).bind(&n.subtype).bind(&n.title).bind(&n.description);
+            q = q.bind(account_id).bind(&n.subtype).bind(&n.title).bind(&n.description);
         }
         q.execute(&mut *tx).await?;
 
@@ -422,4 +423,16 @@ pub async fn create_credit_notifications(
 
     tx.commit().await?;
     Ok(total)
+}
+
+/// Persist multiple notifications in a single call.
+///
+/// Thin IPC wrapper over [`create_credit_notifications_inner`].
+#[tauri::command]
+pub async fn create_credit_notifications(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    notifications: Vec<NotificationInput>,
+) -> Result<u32, AppError> {
+    create_credit_notifications_inner(state.pool()?, &account_id, &notifications).await
 }

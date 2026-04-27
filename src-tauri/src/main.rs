@@ -592,10 +592,8 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
 
             std::fs::create_dir_all(&db_dir).expect("Failed to create .hippius directory");
 
-            if !db_path.exists() {
-                std::fs::File::create(&db_path).expect("Failed to create database file");
-            }
-
+            // The DB file itself is created by `SqliteConnectOptions::create_if_missing(true)`
+            // inside `open_db_pool`, so no explicit `File::create` is needed here.
             let pool = match open_db_pool(&db_path).await {
                 Ok(pool) => pool,
                 Err(e) => {

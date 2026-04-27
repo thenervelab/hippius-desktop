@@ -919,22 +919,15 @@ async fn hard_delete_clears_all() {
 
 // ── Unread Count Respects Preferences ───────────────────────────────────
 
-/// Helper: mirrors the production `get_unread_count` query (single-statement
-/// correlated subquery against `notification_preferences`). Always includes
-/// "Hippius" system notifications regardless of preference state.
+/// Calls the production [`unread_count_inner`] directly so the three
+/// preference tests below exercise the same SQL the IPC handler runs.
+/// Previously this helper hand-rolled the query, which let the helper
+/// drift independently from production — the whole point of extracting
+/// the inner fn was to remove that hazard.
 async fn preference_filtered_unread_count(pool: &SqlitePool, user_address: &str) -> i64 {
-    let (count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM notifications \
-         WHERE (user_address = ? OR user_address = 'system') \
-         AND is_unread = 1 AND is_deleted = 0 \
-         AND (notification_type = 'Hippius' \
-              OR notification_type IN (SELECT label FROM notification_preferences WHERE enabled = 1))",
-    )
-    .bind(user_address)
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    count
+    tauri_project_lib::notifications::crud::unread_count_inner(pool, user_address)
+        .await
+        .unwrap()
 }
 
 #[tokio::test]
@@ -995,4 +988,69 @@ async fn unread_count_zero_when_all_disabled_and_no_system() {
 
     // No Hippius system notifications → count should be 0
     assert_eq!(preference_filtered_unread_count(&pool, alice).await, 0);
+}
+
+// ── create_credit_notifications: chunk boundary regression tests ────────
+
+use tauri_project_lib::notifications::credits::{NotificationInput, create_credit_notifications_inner};
+
+/// Build N synthetic notification inputs for boundary tests.
+fn synthetic_notifications(n: usize) -> Vec<NotificationInput> {
+    (0..n)
+        .map(|i| NotificationInput {
+            subtype: format!("subtype-{i}"),
+            title: format!("title-{i}"),
+            description: format!("description-{i}"),
+        })
+        .collect()
+}
+
+async fn count_credits_for(pool: &SqlitePool, account_id: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM notifications WHERE user_address = ? AND notification_type = 'Credits'")
+        .bind(account_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn create_credit_notifications_empty_input_is_noop() {
+    let pool = setup_db().await;
+    let alice = "alice";
+
+    let inserted = create_credit_notifications_inner(&pool, alice, &[]).await.unwrap();
+    assert_eq!(inserted, 0);
+    assert_eq!(count_credits_for(&pool, alice).await, 0);
+}
+
+/// Boundary: at the chunk size (100) and just over it (101 → two chunks of
+/// 100 + 1) we must still insert exactly the input count and use a single
+/// transaction (so a failure in chunk 2 wouldn't leave chunk 1 committed).
+#[tokio::test]
+async fn create_credit_notifications_handles_chunk_boundaries() {
+    let pool = setup_db().await;
+    let alice = "alice";
+
+    // Exactly one chunk worth.
+    let inserted = create_credit_notifications_inner(&pool, alice, &synthetic_notifications(100))
+        .await
+        .unwrap();
+    assert_eq!(inserted, 100);
+    assert_eq!(count_credits_for(&pool, alice).await, 100);
+
+    // Spans two chunks (100 + 1).
+    let bob = "bob";
+    let inserted = create_credit_notifications_inner(&pool, bob, &synthetic_notifications(101))
+        .await
+        .unwrap();
+    assert_eq!(inserted, 101);
+    assert_eq!(count_credits_for(&pool, bob).await, 101);
+
+    // Multi-chunk: 250 = 2 × 100 + 50.
+    let carol = "carol";
+    let inserted = create_credit_notifications_inner(&pool, carol, &synthetic_notifications(250))
+        .await
+        .unwrap();
+    assert_eq!(inserted, 250);
+    assert_eq!(count_credits_for(&pool, carol).await, 250);
 }

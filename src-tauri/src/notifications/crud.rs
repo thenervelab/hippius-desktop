@@ -372,19 +372,16 @@ pub async fn delete_system_notification_by_version(state: tauri::State<'_, AppSt
     Ok(())
 }
 
-/// Get the count of unread, non-deleted notifications for a user.
+/// Pool-scoped implementation of [`get_unread_count`], extracted so the
+/// integration tests can exercise the production query directly instead
+/// of mirroring it. Single round-trip via a correlated subquery so the
+/// notification badge counter — which is polled on every screen — costs
+/// one pool acquire and one prepared statement.
 ///
-/// Only counts notifications whose `notification_type` matches an enabled
+/// Counts notifications whose `notification_type` matches an enabled
 /// preference label, plus any "Hippius" system notifications which are
 /// always shown regardless of preferences.
-///
-/// Implemented as a single round-trip via a correlated subquery so the
-/// notification badge counter — which is polled on every screen — costs
-/// one pool acquire and one prepared statement instead of two of each.
-#[tauri::command]
-pub async fn get_unread_count(state: tauri::State<'_, AppState>, user_address: String) -> Result<i64, AppError> {
-    let pool = state.pool()?;
-
+pub async fn unread_count_inner(pool: &sqlx::SqlitePool, user_address: &str) -> Result<i64, AppError> {
     let (count,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM notifications \
          WHERE (user_address = ? OR user_address = 'system') \
@@ -392,11 +389,19 @@ pub async fn get_unread_count(state: tauri::State<'_, AppState>, user_address: S
          AND (notification_type = 'Hippius' \
               OR notification_type IN (SELECT label FROM notification_preferences WHERE enabled = 1))",
     )
-    .bind(&user_address)
+    .bind(user_address)
     .fetch_one(pool)
     .await?;
-
     Ok(count)
+}
+
+/// Get the count of unread, non-deleted notifications for a user.
+///
+/// Thin IPC wrapper over [`unread_count_inner`] so the SQL is exercised
+/// directly by the integration tests in `tests/local_db_commands.rs`.
+#[tauri::command]
+pub async fn get_unread_count(state: tauri::State<'_, AppState>, user_address: String) -> Result<i64, AppError> {
+    unread_count_inner(state.pool()?, &user_address).await
 }
 
 /// Check if a credit notification with the given timestamp already exists.

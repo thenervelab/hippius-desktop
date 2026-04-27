@@ -59,9 +59,12 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Wrap the entire initializer in one transaction so all CREATE/ALTER/INSERT
     // statements share a single fsync at commit time instead of ~30 separate
     // ones. On SQLite (especially WAL mode) this drops cold-start schema-init
-    // latency by ~10x. Inner blocks that previously called `pool.begin()`
-    // (sync_paths swap, account-key migration) now use `tx.begin()` to nest
-    // as savepoints — see https://www.sqlite.org/lang_savepoint.html.
+    // latency by ~10x. The pre-existing inner sync_paths swap (line 218 in
+    // history) now calls `tx.begin()` to nest as a savepoint — see
+    // https://www.sqlite.org/lang_savepoint.html. `migrate_account_keys`
+    // (called separately from `main.rs` after `ensure_table_schema` returns)
+    // intentionally keeps its own `pool.begin()`; it runs only when legacy
+    // 8-char owners exist and is decoupled from the schema-init lifecycle.
     let mut tx = pool.begin().await?;
 
     // Define the expected table schemas (only tables still needed)
