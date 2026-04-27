@@ -6,11 +6,24 @@
 
 use hcfs_client::engine::events::{SyncCallbacks, SyncEvent, SyncEventHandler};
 use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter};
 
 use super::events;
-use crate::sync::progress::{cap_file_list, prepare_snapshot_for_emit};
+use crate::sync::progress::{SyncSnapshot, cap_file_list, prepare_snapshot_for_emit};
+
+/// Process-wide cursor holding the last-emitted snapshot fingerprint.
+///
+/// Pre-emit short-circuit: if the new snapshot hashes to the same value as
+/// the last emitted one, skip `app.emit` entirely. The throttle in
+/// `progress::update_file_progress` already gates by time (250 ms); this
+/// gate adds a content check so a state-transition emit (`emit_snapshot(true)`,
+/// not throttled) immediately followed by a chunk-tick emit with identical
+/// headline data only goes over the IPC once. `0` is reserved for "never
+/// emitted, always allow first emit through."
+static LAST_EMITTED_FINGERPRINT: AtomicU64 = AtomicU64::new(0);
 
 /// Bridge between the hcfs-client sync engine and Tauri's event system.
 ///
@@ -81,25 +94,27 @@ fn update_failure_counts(app: &AppHandle, label: &str) {
     let app_state = app.state::<crate::app_state::AppState>();
     let failure_state = &app_state.file_failures;
 
-    // Single lock acquisition: extract failed and succeeded paths together
-    // so progress state can't change between reads.
+    // Single lock acquisition AND single pass over the file map: split
+    // entries into the two outcome buckets in one scan instead of two
+    // back-to-back sweeps. For a drive that just completed thousands of
+    // files this halves the work done under the progress lock.
     let (failed_files, succeeded_paths): (Vec<(String, Option<String>)>, Vec<String>) = {
         let state = app_state.sync.progress.lock_state();
         let Some(session) = &state.current_session else {
             return;
         };
-        let failed: Vec<_> = session
-            .files
-            .values()
-            .filter(|f| f.label.as_ref() == label && matches!(f.status, FileStatus::Error))
-            .map(|f| (f.path.to_string(), f.error.as_deref().map(str::to_owned)))
-            .collect();
-        let succeeded: Vec<_> = session
-            .files
-            .values()
-            .filter(|f| f.label.as_ref() == label && matches!(f.status, FileStatus::Completed))
-            .map(|f| f.path.to_string())
-            .collect();
+        let mut failed: Vec<(String, Option<String>)> = Vec::new();
+        let mut succeeded: Vec<String> = Vec::new();
+        for f in session.files.values() {
+            if f.label.as_ref() != label {
+                continue;
+            }
+            match f.status {
+                FileStatus::Error => failed.push((f.path.to_string(), f.error.as_deref().map(str::to_owned))),
+                FileStatus::Completed => succeeded.push(f.path.to_string()),
+                _ => {}
+            }
+        }
         (failed, succeeded)
     };
 
@@ -332,7 +347,20 @@ impl SyncEventHandler for TauriSyncBridge {
                 // widget/tray had already mounted would display "Syncing: 100%"
                 // forever. See `progress::fixup_stalled_completion`.
                 prepare_snapshot_for_emit(&mut snapshot);
-                let _ = app.emit(events::PROGRESS_SNAPSHOT, &snapshot);
+
+                // Skip the IPC if this snapshot is structurally identical to
+                // the last one we emitted. The throttle in
+                // `progress::update_file_progress` already gates by time;
+                // this fingerprint gate covers the case where two emits land
+                // back-to-back with the same content (e.g. an
+                // `emit_snapshot(true)` after a no-op state mutation, or a
+                // state-transition emit that races with a chunk-tick emit
+                // both seeing the same headline data). Avoiding `app.emit`
+                // skips the JSON serialization + IPC tunnel.
+                let fp = snapshot_fingerprint(&snapshot);
+                if try_claim_snapshot_fingerprint(&LAST_EMITTED_FINGERPRINT, fp) {
+                    let _ = app.emit(events::PROGRESS_SNAPSHOT, &snapshot);
+                }
             }
         }
     }
@@ -390,5 +418,94 @@ impl SyncCallbacks for TauriSyncBridge {
             use tauri::Manager;
             app.state::<crate::app_state::AppState>().current_account_id().map_err(|e| e.clone())
         })
+    }
+}
+
+/// Compute a small content fingerprint for a `SyncSnapshot`.
+///
+/// Hashes the headline scalar fields plus a per-file (path, action, status,
+/// bytes_transferred, bytes_encrypted) tuple so any user-visible change in
+/// per-file progress flips the fingerprint. Pure ordering changes in the
+/// `files` vec do flip the fingerprint by design — the FE renders rows in
+/// the order Rust sent them, so a reorder IS a visible change. `0` is
+/// reserved for the never-emitted sentinel and is remapped to `1` to keep
+/// it distinct from the gate's baseline.
+fn snapshot_fingerprint(s: &SyncSnapshot) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.is_active.hash(&mut h);
+    s.progress_bytes.hash(&mut h);
+    s.bytes_expected.hash(&mut h);
+    s.total_files.hash(&mut h);
+    s.completed_files.hash(&mut h);
+    s.failed_files.hash(&mut h);
+    s.retry_in_secs.hash(&mut h);
+    s.last_error.hash(&mut h);
+    s.expected_uploads.hash(&mut h);
+    s.expected_downloads.hash(&mut h);
+    s.expected_local_deletes.hash(&mut h);
+    s.expected_remote_deletes.hash(&mut h);
+    s.completed_at.hash(&mut h);
+    s.widget_state.hash(&mut h);
+    s.widget_visible.hash(&mut h);
+    s.combined_progress_bytes.hash(&mut h);
+    s.combined_bytes_expected.hash(&mut h);
+    s.deleted_count.hash(&mut h);
+    s.synced_count.hash(&mut h);
+    s.actual_total.hash(&mut h);
+    s.status_variant.hash(&mut h);
+    s.sync_direction.hash(&mut h);
+    s.effective_in_progress.hash(&mut h);
+    s.effective_completed.hash(&mut h);
+    for f in &s.files {
+        f.path.as_ref().hash(&mut h);
+        // FileAction and FileStatus derive Hash via #[derive(Hash)] in hcfs-client.
+        format!("{:?}", f.action).hash(&mut h);
+        format!("{:?}", f.status).hash(&mut h);
+        f.bytes_transferred.hash(&mut h);
+        f.bytes_encrypted.hash(&mut h);
+        f.total_bytes.hash(&mut h);
+        f.error.as_ref().map(AsRef::as_ref).hash(&mut h);
+    }
+    let h = h.finish();
+    if h == 0 { 1 } else { h }
+}
+
+/// Atomically claim the right to emit a snapshot whose fingerprint is `fp`.
+///
+/// Returns `true` if `fp` differs from the previously stored fingerprint
+/// (caller should emit). Returns `false` if `fp` matches what was last
+/// emitted (caller should skip the IPC). Initial state of `0` always
+/// allows the first emit through.
+fn try_claim_snapshot_fingerprint(last: &AtomicU64, fp: u64) -> bool {
+    let prev = last.swap(fp, Ordering::AcqRel);
+    prev != fp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_fingerprint_always_emits() {
+        let last = AtomicU64::new(0);
+        assert!(try_claim_snapshot_fingerprint(&last, 42));
+        assert_eq!(last.load(Ordering::Acquire), 42);
+    }
+
+    #[test]
+    fn duplicate_fingerprint_skips_emit() {
+        let last = AtomicU64::new(0);
+        assert!(try_claim_snapshot_fingerprint(&last, 42));
+        // Same fingerprint again — caller should skip the IPC.
+        assert!(!try_claim_snapshot_fingerprint(&last, 42));
+        assert_eq!(last.load(Ordering::Acquire), 42);
+    }
+
+    #[test]
+    fn changed_fingerprint_emits() {
+        let last = AtomicU64::new(0);
+        assert!(try_claim_snapshot_fingerprint(&last, 42));
+        assert!(try_claim_snapshot_fingerprint(&last, 99));
+        assert_eq!(last.load(Ordering::Acquire), 99);
     }
 }

@@ -5,9 +5,21 @@
 
 use crate::blockchain::client::get_substrate_client;
 use serde::Serialize;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::Emitter;
 use tracing::{info, warn};
+
+/// Minimum milliseconds between throttled `block_number_updated` emits.
+///
+/// Finalized blocks normally arrive every ~6s on Hippius, so this throttle
+/// is a no-op in steady state. It only kicks in during catch-up bursts
+/// (e.g. just after reconnect, when several finalized blocks land in quick
+/// succession) where the FE would otherwise see a flood of identical-shape
+/// events firing TanStack invalidations on every tick.
+///
+/// Connection-state changes bypass the throttle — `is_connected` flips
+/// must reach the FE immediately so the connectivity indicator is honest.
+const BLOCK_EMIT_THROTTLE_MS: u64 = 1000;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -123,14 +135,98 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
         let number = block.number() as u64;
         app_state.block_sub.latest_block.store(number, Ordering::SeqCst);
 
-        let _ = app.emit(
-            "block_number_updated",
-            BlockUpdate {
-                block_number: number,
-                is_connected: true,
-            },
-        );
+        if try_claim_block_emit(&app_state.block_sub.last_emit_ms, monotonic_now_ms(), BLOCK_EMIT_THROTTLE_MS) {
+            let _ = app.emit(
+                "block_number_updated",
+                BlockUpdate {
+                    block_number: number,
+                    is_connected: true,
+                },
+            );
+        }
     }
 
     Ok(())
+}
+
+/// Pure helper: claim the right to emit if at least `min_interval_ms` ms
+/// have elapsed since the last successful emit.
+///
+/// Uses `compare_exchange` so concurrent callers race for the slot — at most
+/// one wins per interval. Returns `true` if this caller should emit. If the
+/// stored timestamp is `0` (never emitted), this caller always wins.
+fn try_claim_block_emit(last_emit_ms: &AtomicU64, now_ms: u64, min_interval_ms: u64) -> bool {
+    loop {
+        let prev = last_emit_ms.load(Ordering::Acquire);
+        if prev != 0 && now_ms.saturating_sub(prev) < min_interval_ms {
+            return false;
+        }
+        if last_emit_ms
+            .compare_exchange(prev, now_ms, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return true;
+        }
+        // Lost the race — re-read and re-evaluate.
+    }
+}
+
+/// Monotonic milliseconds since process start. Same source the sync engine
+/// uses for its snapshot throttle (`sync::progress::monotonic_now_ms`); we
+/// duplicate the helper here so the blockchain crate doesn't depend on
+/// `sync`. Process start is `Instant::elapsed()`'s zero, monotonic across
+/// any wall-clock manipulation.
+fn monotonic_now_ms() -> u64 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    let epoch = EPOCH.get_or_init(Instant::now);
+    u64::try_from(epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_emit_always_succeeds_against_zero_baseline() {
+        let last = AtomicU64::new(0);
+        assert!(try_claim_block_emit(&last, 100, 1000));
+        assert_eq!(last.load(Ordering::Acquire), 100);
+    }
+
+    #[test]
+    fn emit_throttled_within_interval() {
+        let last = AtomicU64::new(100);
+        // 500 ms after baseline, still inside the 1000 ms throttle window.
+        assert!(!try_claim_block_emit(&last, 600, 1000));
+        // Storage unchanged.
+        assert_eq!(last.load(Ordering::Acquire), 100);
+    }
+
+    #[test]
+    fn emit_allowed_after_interval() {
+        let last = AtomicU64::new(100);
+        assert!(try_claim_block_emit(&last, 1100, 1000));
+        assert_eq!(last.load(Ordering::Acquire), 1100);
+    }
+
+    #[test]
+    fn six_rapid_emits_throttle_to_two_within_one_second() {
+        // Real callers see `monotonic_now_ms()` which is process-start
+        // elapsed and always non-zero. Use realistic timestamps starting
+        // at 100 ms so the helper's "prev == 0 means never-emitted"
+        // sentinel doesn't fire on subsequent attempts.
+        let last = AtomicU64::new(0);
+        let attempts = [100, 200, 300, 400, 500, 600];
+        let wins = attempts
+            .iter()
+            .filter(|&&ts| try_claim_block_emit(&last, ts, 1000))
+            .count();
+        // Only the first attempt wins; the next five fall inside the
+        // 1000 ms throttle window after ts=100.
+        assert_eq!(wins, 1, "expected exactly one win in a 500 ms burst against a 1000 ms gate");
+        // After the throttle window closes, the next attempt wins (ts=1101 - 100 = 1001 ms ≥ 1000).
+        assert!(try_claim_block_emit(&last, 1101, 1000));
+    }
 }
