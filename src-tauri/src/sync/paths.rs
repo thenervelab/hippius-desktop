@@ -41,15 +41,25 @@ pub struct SyncPathResult {
 }
 
 /// Reject a new sync path if it overlaps (is a parent or child of) any existing sync path.
-fn validate_no_path_overlap(new_path: &Path, new_label: &str, existing: &[(String, String)]) -> Result<()> {
-    let canonical_new = std::fs::canonicalize(new_path).unwrap_or_else(|_| new_path.to_path_buf());
+///
+/// Async because `canonicalize` is a blocking syscall (`realpath`) that can take
+/// 10–100 ms on a slow/network filesystem; running it on the tokio worker thread
+/// blocks every other IPC handler. Falls back to the raw `Path` if the file
+/// doesn't exist (e.g. during validation of a path the user just typed),
+/// preserving the prefix-matching semantics tested by the unit tests below.
+async fn validate_no_path_overlap(new_path: &Path, new_label: &str, existing: &[(String, String)]) -> Result<()> {
+    let canonical_new = tokio::fs::canonicalize(new_path)
+        .await
+        .unwrap_or_else(|_| new_path.to_path_buf());
 
     for (label, path_str) in existing {
         if label == new_label {
             continue;
         }
         let existing_path = Path::new(path_str);
-        let canonical_existing = std::fs::canonicalize(existing_path).unwrap_or_else(|_| existing_path.to_path_buf());
+        let canonical_existing = tokio::fs::canonicalize(existing_path)
+            .await
+            .unwrap_or_else(|_| existing_path.to_path_buf());
 
         if canonical_new.starts_with(&canonical_existing) {
             return Err(crate::error::AppError::Validation(format!(
@@ -81,7 +91,7 @@ pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, 
 
     let existing: Vec<(String, String)> = rows.iter().map(|r| (r.get("label"), r.get("path"))).collect();
 
-    validate_no_path_overlap(Path::new(path), label, &existing)?;
+    validate_no_path_overlap(Path::new(path), label, &existing).await?;
 
     if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>("SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1")
         .bind(path_type)
@@ -344,61 +354,61 @@ mod tests {
         items.iter().map(|(l, p)| (l.to_string(), p.to_string())).collect()
     }
 
-    #[test]
-    fn sibling_paths_are_allowed() {
+    #[tokio::test]
+    async fn sibling_paths_are_allowed() {
         let existing = pairs(&[("photos", "/home/user/Photos")]);
-        assert!(validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing).is_ok());
+        assert!(validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing).await.is_ok());
     }
 
-    #[test]
-    fn child_of_existing_path_is_rejected() {
+    #[tokio::test]
+    async fn child_of_existing_path_is_rejected() {
         let existing = pairs(&[("docs", "/home/user/Documents")]);
-        let result = validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "work", &existing);
+        let result = validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "work", &existing).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already being synced as part of"));
     }
 
-    #[test]
-    fn parent_of_existing_path_is_rejected() {
+    #[tokio::test]
+    async fn parent_of_existing_path_is_rejected() {
         let existing = pairs(&[("work", "/home/user/Documents/Work")]);
-        let result = validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing);
+        let result = validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already being synced separately"));
     }
 
-    #[test]
-    fn same_label_skips_self() {
+    #[tokio::test]
+    async fn same_label_skips_self() {
         let existing = pairs(&[("docs", "/home/user/Documents")]);
-        assert!(validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "docs", &existing).is_ok());
+        assert!(validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "docs", &existing).await.is_ok());
     }
 
-    #[test]
-    fn exact_same_path_different_label_is_rejected() {
+    #[tokio::test]
+    async fn exact_same_path_different_label_is_rejected() {
         let existing = pairs(&[("docs", "/home/user/Documents")]);
-        let result = validate_no_path_overlap(Path::new("/home/user/Documents"), "docs2", &existing);
+        let result = validate_no_path_overlap(Path::new("/home/user/Documents"), "docs2", &existing).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn multiple_existing_paths_checked() {
+    #[tokio::test]
+    async fn multiple_existing_paths_checked() {
         let existing = pairs(&[
             ("photos", "/home/user/Photos"),
             ("music", "/home/user/Music"),
             ("docs", "/home/user/Documents"),
         ]);
-        let result = validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "work", &existing);
+        let result = validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "work", &existing).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn empty_existing_always_passes() {
-        assert!(validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &[]).is_ok());
+    #[tokio::test]
+    async fn empty_existing_always_passes() {
+        assert!(validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &[]).await.is_ok());
     }
 
-    #[test]
-    fn error_message_includes_conflicting_label() {
+    #[tokio::test]
+    async fn error_message_includes_conflicting_label() {
         let existing = pairs(&[("my-photos", "/home/user/Photos")]);
-        let result = validate_no_path_overlap(Path::new("/home/user/Photos/Vacation"), "vacation", &existing);
+        let result = validate_no_path_overlap(Path::new("/home/user/Photos/Vacation"), "vacation", &existing).await;
         assert!(result.unwrap_err().to_string().contains("my-photos"));
     }
 }

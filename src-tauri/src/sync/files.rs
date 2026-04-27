@@ -78,8 +78,12 @@ fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf> {
 /// performed at the IPC boundary by `add_file` (single-file path) or
 /// `add_files` (batch path), and the inner helper is called from both
 /// without re-checking — see the call sites for the rationale.
-async fn add_file_internal(sync_path: String, file_path: String) -> Result<String> {
-    let source = Path::new(&file_path);
+///
+/// Takes an already-canonicalized parent directory so a batch caller can
+/// canonicalize once outside the loop instead of paying the `realpath`
+/// syscall per file (10–100 ms each on slow filesystems).
+async fn add_file_internal(canonical_parent: &Path, file_path: &str) -> Result<String> {
+    let source = Path::new(file_path);
     let name = source
         .file_name()
         .and_then(|n| n.to_str())
@@ -91,20 +95,12 @@ async fn add_file_internal(sync_path: String, file_path: String) -> Result<Strin
         return Err(crate::error::AppError::Other("Invalid file name".into()));
     }
 
-    let parent = Path::new(&sync_path);
-    let dest = parent.join(&name);
-
-    // Validate destination is within the sync folder BEFORE writing
-    // (canonicalize parent only — dest doesn't exist yet)
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
     let canonical_dest = canonical_parent.join(&name);
-    if !canonical_dest.starts_with(&canonical_parent) {
+    if !canonical_dest.starts_with(canonical_parent) {
         return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
     }
 
-    tokio::fs::copy(source, &dest)
+    tokio::fs::copy(source, &canonical_dest)
         .await
         .map_err(|e| crate::error::AppError::Other(format!("Copy failed: {e}")))?;
 
@@ -122,7 +118,12 @@ pub async fn add_file(state: tauri::State<'_, crate::app_state::AppState>, sync_
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
     crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FileUpload).await?;
 
-    add_file_internal(sync_path, file_path).await
+    // Canonicalize the sync path once and pass it to the internal helper
+    // so the helper can be cheap when called per-file from the batch path.
+    let canonical_parent = tokio::fs::canonicalize(Path::new(&sync_path))
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
+    add_file_internal(&canonical_parent, &file_path).await
 }
 
 /// Add folder to sync folder
@@ -162,12 +163,13 @@ pub async fn add_folder(
         if !t.exists() {
             std::fs::create_dir_all(&t).map_err(|e| crate::error::AppError::Other(format!("Failed to create subfolder: {e}")))?;
         }
-        // Verify resolved path is within sync root
-        let canonical_root = sync_root
-            .canonicalize()
+        // Verify resolved path is within sync root (async canonicalize so
+        // we don't block the tokio worker thread on `realpath`).
+        let canonical_root = tokio::fs::canonicalize(sync_root)
+            .await
             .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
-        let canonical_target = t
-            .canonicalize()
+        let canonical_target = tokio::fs::canonicalize(&t)
+            .await
             .map_err(|e| crate::error::AppError::Other(format!("Invalid subfolder path: {e}")))?;
         if !canonical_target.starts_with(&canonical_root) {
             return Err(crate::error::AppError::Other("Subfolder escapes sync folder".into()));
@@ -177,18 +179,16 @@ pub async fn add_folder(
         sync_root.to_path_buf()
     };
 
-    let dest = target_dir.join(&name);
-
-    // Validate destination is within the sync folder BEFORE writing
-    let canonical_parent = target_dir
-        .canonicalize()
+    // Validate destination is within the sync folder BEFORE writing.
+    let canonical_parent = tokio::fs::canonicalize(&target_dir)
+        .await
         .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
     let canonical_dest = canonical_parent.join(&name);
     if !canonical_dest.starts_with(&canonical_parent) {
         return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
     }
 
-    copy_dir_recursive(source, &dest, 0).await?;
+    copy_dir_recursive(source, &canonical_dest, 0).await?;
 
     // Trigger sync so the uploaded folder gets synced
     {
@@ -201,7 +201,10 @@ pub async fn add_folder(
 }
 
 /// Internal folder copy — no sync trigger (caller handles it).
-async fn add_folder_internal(sync_path: &str, folder_path: &str) -> Result<String> {
+///
+/// Takes an already-canonicalized parent so the batch caller can canonicalize
+/// once outside the loop instead of per-folder.
+async fn add_folder_internal(canonical_parent: &Path, folder_path: &str) -> Result<String> {
     let source = Path::new(folder_path);
     let name = source
         .file_name()
@@ -213,18 +216,12 @@ async fn add_folder_internal(sync_path: &str, folder_path: &str) -> Result<Strin
         return Err(crate::error::AppError::Other("Invalid folder name".into()));
     }
 
-    let parent = Path::new(sync_path);
-    let dest = parent.join(&name);
-
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
     let canonical_dest = canonical_parent.join(&name);
-    if !canonical_dest.starts_with(&canonical_parent) {
+    if !canonical_dest.starts_with(canonical_parent) {
         return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
     }
 
-    copy_dir_recursive(source, &dest, 0).await?;
+    copy_dir_recursive(source, &canonical_dest, 0).await?;
     Ok(name)
 }
 
@@ -397,6 +394,7 @@ pub async fn add_files(
 
     // When a subfolder is specified, resolve the effective target directory.
     // This replaces the path-join logic that was previously in TypeScript.
+    // Async canonicalize so a slow filesystem doesn't block the tokio worker.
     let target_path = if let Some(ref sub) = subfolder {
         // Reject traversal components
         if sub.contains("..") {
@@ -406,12 +404,12 @@ pub async fn add_files(
         if !target.exists() {
             std::fs::create_dir_all(&target).map_err(|e| crate::error::AppError::Other(format!("Failed to create subfolder: {e}")))?;
         }
-        // Verify resolved path stays within sync root
-        let canonical_root = Path::new(&sync_path)
-            .canonicalize()
+        // Verify resolved path stays within sync root.
+        let canonical_root = tokio::fs::canonicalize(Path::new(&sync_path))
+            .await
             .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
-        let canonical_target = target
-            .canonicalize()
+        let canonical_target = tokio::fs::canonicalize(&target)
+            .await
             .map_err(|e| crate::error::AppError::Other(format!("Invalid subfolder path: {e}")))?;
         if !canonical_target.starts_with(&canonical_root) {
             return Err(crate::error::AppError::Other("Subfolder escapes sync folder".into()));
@@ -420,6 +418,13 @@ pub async fn add_files(
     } else {
         sync_path.clone()
     };
+
+    // Canonicalize the target directory ONCE before the loop so each
+    // per-file call doesn't re-pay the `realpath` syscall (which can be
+    // 10–100 ms on slow filesystems and blocks the tokio worker).
+    let canonical_target = tokio::fs::canonicalize(Path::new(&target_path))
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
 
     let mut added = Vec::new();
     let mut failed = Vec::new();
@@ -430,12 +435,12 @@ pub async fn add_files(
         let result = if source.is_dir() {
             // Pass app handle but no subfolder — subfolder already resolved into target_path.
             // Don't trigger sync per-folder — add_files triggers once at the end.
-            add_folder_internal(&target_path, file_path).await
+            add_folder_internal(&canonical_target, file_path).await
         } else {
             // Use the internal helper that skips the per-file eligibility
             // check — the batch eligibility check at the top of `add_files`
             // covers the whole operation.
-            add_file_internal(target_path.clone(), file_path.clone()).await
+            add_file_internal(&canonical_target, file_path).await
         };
         match result {
             Ok(name) => added.push(name),

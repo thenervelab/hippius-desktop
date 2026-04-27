@@ -1372,16 +1372,21 @@ pub async fn start_nebula_internal(
         use std::process::Stdio;
 
         // On macOS, start directly. setsid is not standard.
-        let child = std::process::Command::new(&binary_path)
+        // Use tokio::process::Command and persist the Child in NebulaState so
+        // stop_nebula can kill+wait the process directly instead of polling
+        // `ps` 50× over 5 seconds.
+        let child = tokio::process::Command::new(&binary_path)
             .arg("-config")
             .arg(&config_file)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .kill_on_drop(false)
             .spawn()
             .map_err(|e| format!("Failed to spawn nebula: {e}"))?;
 
-        info!("Started with PID: {}", child.id());
+        info!("Started with PID: {:?}", child.id());
+        *nebula_state.child.lock().await = Some(child);
     }
 
     #[cfg(target_os = "windows")]
@@ -1581,9 +1586,45 @@ pub async fn stop_nebula(nebula_state: &crate::nebula::state::NebulaState) -> Re
     // Stop the background ping task first
     stop_ping_task(nebula_state);
 
+    // Fast path: if we own the Child handle (macOS: nebula spawned directly
+    // by us), kill+wait it directly. This skips the 50× `ps` polling that
+    // the fallback path needs because the kernel signals us when our own
+    // child exits.
+    //
+    // We extract the Child from under the lock in a small scoped block so
+    // the MutexGuard is dropped before the kill+wait awaits — otherwise the
+    // lock would be held for several seconds across the wait and serialize
+    // every concurrent stop call.
+    let owned_child = {
+        let mut guard = nebula_state.child.lock().await;
+        guard.take()
+    };
+    if let Some(mut child) = owned_child {
+        debug!("Stopping nebula via owned Child handle");
+        if let Err(e) = child.kill().await {
+            warn!("Failed to send kill to nebula child: {e}");
+        }
+        match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+            Ok(Ok(status)) => {
+                info!("Nebula child exited (status: {status})");
+                return Ok(());
+            }
+            Ok(Err(e)) => {
+                warn!("Nebula child wait failed: {e}");
+                // Fall through to the pkill path in case the process is somehow
+                // still around or the child handle was stale.
+            }
+            Err(_) => {
+                warn!("Nebula child wait timed out after 5s; falling back to pkill");
+                // Fall through.
+            }
+        }
+    }
+
     #[cfg(unix)]
     {
-        // Use pkill to terminate nebula process with exact name match
+        // Fallback: pkill + poll. Used when we don't own the Child (Linux
+        // setsid path) or when the kill+wait above failed/timed out.
         let output = tokio::process::Command::new("pkill")
             .arg("-x")
             .arg("nebula")
@@ -1823,15 +1864,14 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
         }
     }
 
-    // If not found by name, try to find by IP range (Nebula uses 100.64.0.0/10 by default)
+    // If not found by name, try to find by IP range (Nebula uses 100.64.0.0/10 by default).
+    // All shell-out probes below use `tokio::process::Command` with a short
+    // timeout so a hung `ifconfig`/`netstat`/`ip` doesn't block the tokio
+    // worker thread for the whole IPC handler.
     #[cfg(target_os = "linux")]
     {
-        use std::process::Command;
-
-        // Run ip -o -4 addr show to find interfaces with Nebula IPs
-        if let Ok(output) = Command::new("ip").args(["-o", "-4", "addr", "show"]).output() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            for line in output_str.lines() {
+        if let Some(output) = run_iface_probe("ip", &["-o", "-4", "addr", "show"]).await {
+            for line in output.lines() {
                 if line.contains(target_ip) {
                     // Extract interface name (it's the second field in the output)
                     if let Some(iface) = line.split_whitespace().nth(1) {
@@ -1847,15 +1887,12 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
     // On macOS, try to find the interface with the Nebula IP
     #[cfg(target_os = "macos")]
     {
-        use std::process::Command;
-
         // Method 1: ifconfig
         debug!("Trying ifconfig...");
-        if let Ok(output) = Command::new("ifconfig").arg("-a").output() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
+        if let Some(output) = run_iface_probe("ifconfig", &["-a"]).await {
             let mut current_iface = None;
 
-            for line in output_str.lines() {
+            for line in output.lines() {
                 // Check for interface line (starts with non-whitespace)
                 if !line.starts_with('\t') && !line.starts_with(' ') && line.contains(':') {
                     current_iface = Some(line.split(':').next().unwrap_or("").trim());
@@ -1873,12 +1910,11 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
         // Method 2: netstat -rn (Routing table)
         // This is often more reliable for finding which interface hosts an IP
         debug!("Trying netstat -rn...");
-        if let Ok(output) = Command::new("netstat").args(["-rn", "-f", "inet"]).output() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
+        if let Some(output) = run_iface_probe("netstat", &["-rn", "-f", "inet"]).await {
             // Look for lines containing the IP
             // Example: 100.64.0.1/32      link#15            UCS             utun4
             // Or:      100.64.0.1         100.64.0.1         UH              utun4
-            for line in output_str.lines() {
+            for line in output.lines() {
                 if line.contains(target_ip) {
                     // The interface is usually the last column or one of the last
                     let parts: Vec<&str> = line.split_whitespace().collect();
@@ -1902,6 +1938,27 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
     }
 
     None
+}
+
+/// Run a network-interface probe (`ip` / `ifconfig` / `netstat`) with a 2 s
+/// timeout, returning its stdout as a UTF-8 string on success.
+///
+/// Async + timeout keeps these calls from stalling the tokio worker thread
+/// on a hung syscall, which `get_nebula_stats` was paying every UI tick.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn run_iface_probe(program: &str, args: &[&str]) -> Option<String> {
+    let fut = tokio::process::Command::new(program).args(args).output();
+    match tokio::time::timeout(Duration::from_secs(2), fut).await {
+        Ok(Ok(output)) => Some(String::from_utf8_lossy(&output.stdout).into_owned()),
+        Ok(Err(e)) => {
+            debug!("{program} probe failed: {e}");
+            None
+        }
+        Err(_) => {
+            warn!("{program} probe timed out after 2s");
+            None
+        }
+    }
 }
 
 #[tauri::command]
