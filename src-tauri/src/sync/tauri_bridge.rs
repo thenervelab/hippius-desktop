@@ -423,13 +423,26 @@ impl SyncCallbacks for TauriSyncBridge {
 
 /// Compute a small content fingerprint for a `SyncSnapshot`.
 ///
-/// Hashes the headline scalar fields plus a per-file (path, action, status,
-/// bytes_transferred, bytes_encrypted) tuple so any user-visible change in
-/// per-file progress flips the fingerprint. Pure ordering changes in the
-/// `files` vec do flip the fingerprint by design — the FE renders rows in
-/// the order Rust sent them, so a reorder IS a visible change. `0` is
-/// reserved for the never-emitted sentinel and is remapped to `1` to keep
-/// it distinct from the gate's baseline.
+/// Hashes every scalar field the FE renders plus a per-file
+/// (path, action, status, bytes_transferred, bytes_encrypted, total_bytes,
+/// error) tuple so any user-visible change in per-file progress flips the
+/// fingerprint. Pure ordering changes in the `files` vec also flip it by
+/// design — the FE renders rows in the order Rust sent them, so a reorder
+/// IS a visible change. `0` is reserved for the never-emitted sentinel
+/// and is remapped to `1` to keep it distinct from the gate's baseline.
+///
+/// **Collision contract**: the gate uses `DefaultHasher` (SipHash-1-3,
+/// 64-bit). Two distinct snapshots colliding to the same `u64` is on the
+/// order of 1 in 2^64 per pair — practically impossible — and the failure
+/// mode is "FE keeps showing the previous snapshot until the next emit."
+/// The throttled-but-correct `progress::update_file_progress` path will
+/// re-emit within ~250 ms anyway, so even a freak collision corrects
+/// itself within one frame.
+///
+/// **Single-emitter contract**: pairs with `try_claim_snapshot_fingerprint`'s
+/// `swap` (not `compare_exchange`). Safe because `TauriSyncBridge::on_event`
+/// is dispatched serially per sync runner; concurrent callers would need
+/// CAS to be correct, but we don't have any.
 fn snapshot_fingerprint(s: &SyncSnapshot) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     s.is_active.hash(&mut h);
@@ -444,6 +457,11 @@ fn snapshot_fingerprint(s: &SyncSnapshot) -> u64 {
     s.expected_downloads.hash(&mut h);
     s.expected_local_deletes.hash(&mut h);
     s.expected_remote_deletes.hash(&mut h);
+    // `started_at` distinguishes a new session from the previous one when
+    // their headline counters happen to align. Without this, a session
+    // that ends and immediately restarts with the same expected counts
+    // would have its first snapshot silently dropped.
+    s.started_at.hash(&mut h);
     s.completed_at.hash(&mut h);
     s.widget_state.hash(&mut h);
     s.widget_visible.hash(&mut h);
@@ -458,9 +476,13 @@ fn snapshot_fingerprint(s: &SyncSnapshot) -> u64 {
     s.effective_completed.hash(&mut h);
     for f in &s.files {
         f.path.as_ref().hash(&mut h);
-        // FileAction and FileStatus derive Hash via #[derive(Hash)] in hcfs-client.
-        format!("{:?}", f.action).hash(&mut h);
-        format!("{:?}", f.status).hash(&mut h);
+        // FileAction and FileProgressStatus do NOT derive Hash in
+        // hcfs-client (only Debug + Clone + PartialEq + serde). They are
+        // payload-free, so `mem::discriminant` is sufficient and avoids
+        // the per-file `format!("{:?}", …)` allocation pair the original
+        // implementation paid (10k files × 2 strings × every emit).
+        std::mem::discriminant(&f.action).hash(&mut h);
+        std::mem::discriminant(&f.status).hash(&mut h);
         f.bytes_transferred.hash(&mut h);
         f.bytes_encrypted.hash(&mut h);
         f.total_bytes.hash(&mut h);
@@ -476,6 +498,10 @@ fn snapshot_fingerprint(s: &SyncSnapshot) -> u64 {
 /// (caller should emit). Returns `false` if `fp` matches what was last
 /// emitted (caller should skip the IPC). Initial state of `0` always
 /// allows the first emit through.
+///
+/// Uses `swap`, not `compare_exchange`, because the bridge has a single
+/// dispatch path (`TauriSyncBridge::on_event`) — see the single-emitter
+/// contract on `snapshot_fingerprint`. Concurrent callers would need CAS.
 fn try_claim_snapshot_fingerprint(last: &AtomicU64, fp: u64) -> bool {
     let prev = last.swap(fp, Ordering::AcqRel);
     prev != fp
@@ -507,5 +533,67 @@ mod tests {
         assert!(try_claim_snapshot_fingerprint(&last, 42));
         assert!(try_claim_snapshot_fingerprint(&last, 99));
         assert_eq!(last.load(Ordering::Acquire), 99);
+    }
+
+    /// Build a fixture `SyncSnapshot` with no files. Used as the baseline
+    /// for differential fingerprint tests below.
+    fn fixture_snapshot() -> SyncSnapshot {
+        SyncSnapshot {
+            is_active: true,
+            overall_percent: 50,
+            progress_bytes: 1000,
+            bytes_expected: 2000,
+            total_files: 1,
+            completed_files: 0,
+            failed_files: 0,
+            retry_in_secs: 0,
+            last_error: None,
+            expected_uploads: 1,
+            expected_downloads: 0,
+            expected_local_deletes: 0,
+            expected_remote_deletes: 0,
+            started_at: Some(1_700_000_000_000),
+            completed_at: None,
+            files: Vec::new(),
+            widget_state: "active".to_string(),
+            widget_visible: true,
+            combined_progress_bytes: 1000,
+            combined_bytes_expected: 4000,
+            deleted_count: 0,
+            synced_count: 0,
+            actual_total: 1,
+            status_variant: "progress".to_string(),
+            sync_direction: "upload".to_string(),
+            effective_in_progress: true,
+            effective_completed: false,
+        }
+    }
+
+    /// Regression: the fingerprint MUST change when `progress_bytes`
+    /// changes. Catches the "we forgot to hash field X" class of bug
+    /// the audit's #4 review was specifically about.
+    #[test]
+    fn fingerprint_changes_when_progress_bytes_changes() {
+        let mut a = fixture_snapshot();
+        let mut b = fixture_snapshot();
+        b.progress_bytes = 1500;
+        assert_ne!(snapshot_fingerprint(&a), snapshot_fingerprint(&b));
+        // And while we're here, verify identical snapshots produce
+        // identical fingerprints (the gate's whole reason for existing).
+        a.progress_bytes = 1500;
+        assert_eq!(snapshot_fingerprint(&a), snapshot_fingerprint(&b));
+    }
+
+    /// Regression for the review-flagged `started_at` gap: a session
+    /// that ends and immediately restarts with the same expected counts
+    /// must produce a different fingerprint.
+    #[test]
+    fn fingerprint_changes_when_started_at_changes() {
+        let mut a = fixture_snapshot();
+        let mut b = fixture_snapshot();
+        b.started_at = Some(1_700_000_001_000);
+        assert_ne!(snapshot_fingerprint(&a), snapshot_fingerprint(&b));
+        a.started_at = b.started_at;
+        assert_eq!(snapshot_fingerprint(&a), snapshot_fingerprint(&b));
     }
 }

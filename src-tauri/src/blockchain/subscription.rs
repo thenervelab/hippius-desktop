@@ -17,6 +17,15 @@ use tracing::{info, warn};
 /// succession) where the FE would otherwise see a flood of identical-shape
 /// events firing TanStack invalidations on every tick.
 ///
+/// **Trailing-edge flush guarantee**: the gate is leading-edge with a
+/// trailing flush. The first block in a burst emits immediately; subsequent
+/// blocks update `latest_block` but skip the immediate emit. Each
+/// throttled block schedules (at most one) deferred task that wakes when
+/// the throttle window closes and emits the most-recent `latest_block`.
+/// The FE therefore catches up to the burst's final block within
+/// `BLOCK_EMIT_THROTTLE_MS` rather than waiting for the next steady-state
+/// block 6s later.
+///
 /// Connection-state changes bypass the throttle — `is_connected` flips
 /// must reach the FE immediately so the connectivity indicator is honest.
 const BLOCK_EMIT_THROTTLE_MS: u64 = 1000;
@@ -136,6 +145,7 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
         app_state.block_sub.latest_block.store(number, Ordering::SeqCst);
 
         if try_claim_block_emit(&app_state.block_sub.last_emit_ms, monotonic_now_ms(), BLOCK_EMIT_THROTTLE_MS) {
+            // Window open — emit immediately.
             let _ = app.emit(
                 "block_number_updated",
                 BlockUpdate {
@@ -143,10 +153,68 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
                     is_connected: true,
                 },
             );
+        } else {
+            // Window closed — schedule a single trailing-edge flush so the
+            // most-recent block reaches the FE when the window opens.
+            // Without this, a burst of N blocks landing inside the throttle
+            // window would leave the FE on the FIRST block until the next
+            // steady-state block ~6s later (visible after a reconnect
+            // catch-up of dozens of blocks).
+            schedule_trailing_block_emit(app.clone());
         }
     }
 
     Ok(())
+}
+
+/// Spawn a one-shot deferred task that emits `latest_block` when the
+/// throttle window closes. At most one task runs at a time — `swap` on
+/// `deferred_emit_in_flight` returns the previous value, and we early-out
+/// if another task has already claimed the slot.
+///
+/// The task reads the current `last_emit_ms` and `latest_block` at wake
+/// time, so it always flushes the freshest block — even if more blocks
+/// arrived after this task was scheduled. After the emit it resets
+/// `deferred_emit_in_flight` so a later burst can schedule another flush.
+fn schedule_trailing_block_emit(app: tauri::AppHandle) {
+    use tauri::Manager;
+    let app_state_check = app.state::<crate::app_state::AppState>();
+    if app_state_check.block_sub.deferred_emit_in_flight.swap(true, Ordering::AcqRel) {
+        // Another deferred task is already pending; it will pick up the
+        // latest block when it wakes.
+        return;
+    }
+    drop(app_state_check);
+
+    tokio::spawn(async move {
+        // Sleep until the throttle window has had a chance to close. We
+        // use the full window length rather than computing remaining time
+        // because a burst typically spans <1ms — sleeping a bit longer is
+        // fine and keeps the math simple.
+        tokio::time::sleep(std::time::Duration::from_millis(BLOCK_EMIT_THROTTLE_MS)).await;
+
+        let app_state = app.state::<crate::app_state::AppState>();
+        // If the subscription has shut down while we slept, just clear
+        // the in-flight flag and exit quietly.
+        if !app_state.block_sub.running.load(Ordering::SeqCst) {
+            app_state.block_sub.deferred_emit_in_flight.store(false, Ordering::Release);
+            return;
+        }
+
+        let latest = app_state.block_sub.latest_block.load(Ordering::Acquire);
+        let is_connected = app_state.block_sub.is_connected.load(Ordering::Acquire);
+        // Mark this as the new last-emit-time so the next tick within the
+        // window is throttled cleanly.
+        app_state.block_sub.last_emit_ms.store(monotonic_now_ms(), Ordering::Release);
+        let _ = app.emit(
+            "block_number_updated",
+            BlockUpdate {
+                block_number: latest,
+                is_connected,
+            },
+        );
+        app_state.block_sub.deferred_emit_in_flight.store(false, Ordering::Release);
+    });
 }
 
 /// Pure helper: claim the right to emit if at least `min_interval_ms` ms
