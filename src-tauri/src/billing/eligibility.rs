@@ -147,10 +147,11 @@ pub(crate) async fn check_action_eligibility_inner(
     // 1. Live marketplace credit fetch. NO caching — the whole point of
     //    moving this to Rust is to fix the staleness bug. Done first
     //    so `current_balance` is always populated even when a later
-    //    check fails.
+    //    check fails. Decoded into a typed struct (not `serde_json::Value`)
+    //    so we skip the dynamic-Value allocation per call.
     let client = ApiClient::new(state.api_client.clone(), pool.clone());
-    let resp: serde_json::Value = client.get("/api/billing/credits/balance/", account_id).await?;
-    let credit_str = resp.get("balance").and_then(|v| v.as_str()).unwrap_or("0");
+    let resp: crate::billing::credits::CreditBalanceResponse = client.get("/api/billing/credits/balance/", account_id).await?;
+    let credit_str = resp.balance.as_deref().unwrap_or("0");
     let credits: f64 = credit_str.parse().unwrap_or(0.0);
 
     // 2. Threshold comparison. The user must always have a strictly

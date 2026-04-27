@@ -179,26 +179,44 @@ pub async fn get_referral_links(
         .map_err(|e| crate::error::AppError::Other(format!("ReferralCodes query failed: {e}")))?;
 
     let decimals = 10u128.pow(18);
-    let mut links = Vec::new();
 
+    // Walk the iterator sequentially (subxt requires &mut self for next).
+    // Collect matching codes first, then fan out the per-code reward
+    // fetches concurrently with `try_join_all`. Previously each match's
+    // reward fetch was awaited inline before pulling the next entry, so
+    // a user with K matches paid K serial RPC round-trips on top of the
+    // O(N) iteration. Now the K reward fetches run in parallel against
+    // the same `at_latest()` snapshot.
+    let mut matched_codes: Vec<(Vec<u8>, String)> = Vec::new();
     while let Some(Ok(entry)) = entries.next().await {
         if entry.value == target_account {
-            let code_bytes = &entry.key_bytes[entry.key_bytes.len().saturating_sub(32)..];
+            let code_bytes = entry.key_bytes[entry.key_bytes.len().saturating_sub(32)..].to_vec();
             let code = String::from_utf8_lossy(code_bytes.iter().copied().skip_while(|b| *b == 0).collect::<Vec<u8>>().as_slice()).to_string();
-
-            let reward_query = custom_runtime::storage().credits().referral_code_rewards(code_bytes);
-            let reward_raw = storage
-                .fetch(&reward_query)
-                .await
-                .map_err(|e| crate::error::AppError::Other(format!("Reward query failed: {e}")))?
-                .unwrap_or(0u128);
-
-            links.push(ReferralLink {
-                code,
-                reward: (reward_raw / decimals).to_string(),
-            });
+            matched_codes.push((code_bytes, code));
         }
     }
+
+    let storage_ref = &storage;
+    let reward_futures = matched_codes.iter().map(|(code_bytes, _)| {
+        let reward_query = custom_runtime::storage().credits().referral_code_rewards(code_bytes.as_slice());
+        async move {
+            storage_ref
+                .fetch(&reward_query)
+                .await
+                .map(|opt| opt.unwrap_or(0u128))
+                .map_err(|e| crate::error::AppError::Other(format!("Reward query failed: {e}")))
+        }
+    });
+    let rewards: Vec<u128> = futures_util::future::try_join_all(reward_futures).await?;
+
+    let links = matched_codes
+        .into_iter()
+        .zip(rewards)
+        .map(|((_, code), reward_raw)| ReferralLink {
+            code,
+            reward: (reward_raw / decimals).to_string(),
+        })
+        .collect();
 
     Ok(links)
 }

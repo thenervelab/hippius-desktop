@@ -845,8 +845,11 @@ pub(crate) async fn initialize_sync_inner(
     // `auto_init_sync` checks once before iterating all drives).
     if !skip_credits_check && let Ok(acct) = app_state.current_account_id() {
         let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool_owned.clone());
-        if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
-            let balance: f64 = resp.get("balance").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        if let Ok(resp) = client
+            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &acct)
+            .await
+        {
+            let balance: f64 = resp.balance.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0);
             if balance <= 0.0 {
                 return Err(crate::error::AppError::Validation(
                     "Insufficient credits. Please add credits to your account before syncing.".into(),
@@ -1526,8 +1529,11 @@ async fn auto_init_sync_inner(
     if let Ok(acct) = state.current_account_id() {
         let pool_owned = state.pool()?.clone();
         let client = crate::api::client::ApiClient::new(state.api_client.clone(), pool_owned);
-        if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
-            let balance: f64 = resp.get("balance").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        if let Ok(resp) = client
+            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &acct)
+            .await
+        {
+            let balance: f64 = resp.balance.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0);
             if balance <= 0.0 {
                 return Err(crate::error::AppError::Validation(
                     "Insufficient credits. Please add credits to your account before syncing.".into(),

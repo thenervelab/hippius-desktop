@@ -205,7 +205,13 @@ pub async fn get_credits(
 ) -> Result<Vec<CreditObject>, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
-    let limit_str = limit.unwrap_or(100_000).to_string();
+    // The chart pipeline downstream deduplicates to latest-per-day, so we
+    // only ever need enough rows to cover the longest range the FE asks
+    // for. A year is 365 days, two years 730; 2000 covers any practical
+    // chart range with margin and avoids pulling MBs of JSON the
+    // dedup loop will throw away. Callers can still pass an explicit
+    // larger `limit` if they need raw history.
+    let limit_str = limit.unwrap_or(2000).to_string();
     let params = vec![
         ("account_id", account_id.as_str()),
         ("page", page_str.as_str()),
@@ -263,7 +269,9 @@ pub async fn get_system_balance(
 ) -> Result<Vec<BalanceObject>, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
-    let limit_str = limit.unwrap_or(20_000).to_string();
+    // Same reasoning as `get_credits` above: dedup downstream collapses to
+    // one point per day, so 2000 covers any chart range with margin.
+    let limit_str = limit.unwrap_or(2000).to_string();
     let params = vec![
         ("account_id", account_id.as_str()),
         ("page", page_str.as_str()),

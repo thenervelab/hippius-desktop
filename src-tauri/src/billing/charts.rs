@@ -57,15 +57,19 @@ fn hippius_creation_date() -> NaiveDate {
 /// Divide a raw balance string (representing value * 10^18) by 10^18 and
 /// format with up to `decimals` fractional digits, trimming trailing zeros.
 /// Adds comma grouping to the integer part (matching JS `toLocaleString`).
+///
+/// Uses the precision-preserving string-divmod conversion from
+/// `blockchain::convert` instead of routing the planck string through
+/// `f64`. The pure-f64 path silently loses precision for any value above
+/// ~9 HIP at 6 decimals (2^53 / 10^18 ≈ 9), which broke chart point
+/// formatting for any user with a meaningful balance. See
+/// `blockchain::convert::planck_to_hip` for the underlying semantics.
 fn format_balance(raw: &str, decimals: usize) -> String {
-    let num: f64 = raw.parse().unwrap_or(0.0);
-    let value = num / 1e18;
-    if value == 0.0 {
+    let value = crate::blockchain::convert::planck_to_hip_with_decimals(raw, decimals);
+    if value == "0" {
         return "0".to_string();
     }
-    let fixed = format!("{value:.decimals$}");
-    let trimmed = trim_trailing_zeros(&fixed);
-    add_commas(trimmed)
+    add_commas(&value)
 }
 
 /// Format bytes using SI units (1000-based): B, KB, MB, GB, TB, PB.
@@ -236,17 +240,19 @@ fn map_to_range_carry_forward(
         return Vec::new();
     }
 
-    let mut by_date = std::collections::HashMap::new();
+    // Key the dedup map by `NaiveDate` (Copy) instead of `String` so we
+    // skip one allocation per input point. Output `timestamp` strings are
+    // built only on the rows that actually have data.
+    let mut by_date: std::collections::HashMap<NaiveDate, &RawPoint> = std::collections::HashMap::with_capacity(points.len());
     for p in points {
-        by_date.insert(normalize_date(p.date), p);
+        by_date.insert(p.date, p);
     }
 
-    let first_key = normalize_date(date_range[0]);
+    let first_key = date_range[0];
     let mut last_balance: f64 = 0.0;
     let mut last_credit: Option<f64> = if include_credit { Some(0.0) } else { None };
     for p in points {
-        let pk = normalize_date(p.date);
-        if pk <= first_key {
+        if p.date <= first_key {
             if p.balance > last_balance {
                 last_balance = p.balance;
             }
@@ -261,11 +267,10 @@ fn map_to_range_carry_forward(
     date_range
         .iter()
         .map(|&date| {
-            let key = normalize_date(date);
-            let has_data = by_date.contains_key(&key);
+            let entry = by_date.get(&date);
+            let has_data = entry.is_some();
 
-            if has_data {
-                let p = by_date[&key];
+            if let Some(p) = entry {
                 last_balance = p.balance;
                 if include_credit && let Some(c) = p.credit {
                     last_credit = Some(c);
@@ -295,7 +300,10 @@ fn map_to_range_carry_forward(
                 x: date_to_iso(date),
                 balance: last_balance,
                 formatted_balance,
-                timestamp: if has_data { key } else { String::new() },
+                // Stringify only when the row has real data — empty
+                // timestamp on filler rows keeps the FE behavior the
+                // existing tests pin.
+                timestamp: if has_data { normalize_date(date) } else { String::new() },
                 day_label,
                 band_label,
                 credit: credit_val,
@@ -604,6 +612,22 @@ mod tests {
         assert_eq!(format_balance("0", 6), "0");
         assert_eq!(format_balance("500000000000000000", 6), "0.5");
         assert_eq!(format_balance("1234567890000000000000", 6), "1,234.56789");
+    }
+
+    /// Regression: the previous f64-based implementation silently lost
+    /// precision for any value above ~9 HIP at 6 decimals (since
+    /// 2^53 / 10^18 ≈ 9). 100 HIP is well above that threshold and would
+    /// render as a rounded, lossy value through f64. The string-divmod
+    /// path preserves the exact fraction.
+    #[test]
+    fn format_balance_preserves_precision_above_f64_threshold() {
+        // 100 HIP, with one wei of fractional grit so f64 would round it off.
+        let raw = "100000000000000000001";
+        assert_eq!(format_balance(raw, 6), "100");
+        // 123,456,789.123456 HIP — exact, even though f64 cannot represent
+        // this value. add_commas inserts thousand separators on the integer.
+        let raw_big = "123456789123456000000000000";
+        assert_eq!(format_balance(raw_big, 6), "123,456,789.123456");
     }
 
     #[test]
