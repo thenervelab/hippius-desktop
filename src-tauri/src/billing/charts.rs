@@ -64,6 +64,14 @@ fn hippius_creation_date() -> NaiveDate {
 /// ~9 HIP at 6 decimals (2^53 / 10^18 ≈ 9), which broke chart point
 /// formatting for any user with a meaningful balance. See
 /// `blockchain::convert::planck_to_hip` for the underlying semantics.
+///
+/// **Input contract**: `raw` MUST be a pure decimal-digit string (the
+/// integer planck representation, no decimal point, no scientific
+/// notation, no leading sign). Any non-digit input — including the empty
+/// string, `"1.5"`, `"1e18"`, `"-1"` — is treated as zero. The pre-fix
+/// f64 path silently coerced some of these formats to numeric values;
+/// the new path returns `"0"` consistently. All current callers build
+/// `raw` via `format!("{}", _ as u128)` so they always pass pure digits.
 fn format_balance(raw: &str, decimals: usize) -> String {
     let value = crate::blockchain::convert::planck_to_hip_with_decimals(raw, decimals);
     if value == "0" {
@@ -628,6 +636,20 @@ mod tests {
         // this value. add_commas inserts thousand separators on the integer.
         let raw_big = "123456789123456000000000000";
         assert_eq!(format_balance(raw_big, 6), "123,456,789.123456");
+    }
+
+    /// Pin the input-contract behavior documented on `format_balance`:
+    /// non-digit inputs (decimals, scientific notation, signs, garbage)
+    /// must surface as `"0"` rather than silently rounding via f64 like
+    /// the pre-fix path did. This guards against a future caller
+    /// regressing to passing a non-integer planck string.
+    #[test]
+    fn format_balance_treats_non_digit_input_as_zero() {
+        assert_eq!(format_balance("", 6), "0");
+        assert_eq!(format_balance("abc", 6), "0");
+        assert_eq!(format_balance("1.5", 6), "0", "decimal point not accepted");
+        assert_eq!(format_balance("1e18", 6), "0", "scientific notation not accepted");
+        assert_eq!(format_balance("-1000000000000000000", 6), "0", "negative sign not accepted");
     }
 
     #[test]

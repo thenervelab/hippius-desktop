@@ -10,6 +10,15 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Hard cap on indexer `limit` query-param values for chart endpoints.
+///
+/// The downstream dedup-by-day pipeline collapses any practical range
+/// (longest is "all-time", which is ≤ 2 years × 365 days = 730 daily
+/// points) to a small fixed-size series. 2000 covers that with margin.
+/// Server-side clamp lives here, not in the FE — see CLAUDE.md
+/// "Business logic MUST live in the Rust backend."
+const INDEXER_MAX_LIMIT: i64 = 2000;
+
 // ---------------------------------------------------------------------------
 // Typed response structs for indexer API deserialization
 // ---------------------------------------------------------------------------
@@ -207,11 +216,15 @@ pub async fn get_credits(
     let page_str = page.unwrap_or(1).to_string();
     // The chart pipeline downstream deduplicates to latest-per-day, so we
     // only ever need enough rows to cover the longest range the FE asks
-    // for. A year is 365 days, two years 730; 2000 covers any practical
-    // chart range with margin and avoids pulling MBs of JSON the
-    // dedup loop will throw away. Callers can still pass an explicit
-    // larger `limit` if they need raw history.
-    let limit_str = limit.unwrap_or(2000).to_string();
+    // for. A year is 365 days, two years 730; INDEXER_MAX_LIMIT covers any
+    // practical chart range with margin and avoids pulling MBs of JSON
+    // the dedup loop will throw away.
+    //
+    // Server-side cap: per CLAUDE.md "Business logic MUST live in the
+    // Rust backend." Even when the frontend passes an explicit
+    // `Some(100_000)` (today's `useCredits.ts` default), we clamp here
+    // so the over-fetch can't bypass the cap from the IPC boundary.
+    let limit_str = limit.unwrap_or(INDEXER_MAX_LIMIT).min(INDEXER_MAX_LIMIT).to_string();
     let params = vec![
         ("account_id", account_id.as_str()),
         ("page", page_str.as_str()),
@@ -269,9 +282,10 @@ pub async fn get_system_balance(
 ) -> Result<Vec<BalanceObject>, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
-    // Same reasoning as `get_credits` above: dedup downstream collapses to
-    // one point per day, so 2000 covers any chart range with margin.
-    let limit_str = limit.unwrap_or(2000).to_string();
+    // Same reasoning + same server-side cap as `get_credits` above. The
+    // FE's `useSystemBalance.ts` default of 20_000 is silently clamped
+    // to INDEXER_MAX_LIMIT here.
+    let limit_str = limit.unwrap_or(INDEXER_MAX_LIMIT).min(INDEXER_MAX_LIMIT).to_string();
     let params = vec![
         ("account_id", account_id.as_str()),
         ("page", page_str.as_str()),
