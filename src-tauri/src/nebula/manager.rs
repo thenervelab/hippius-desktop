@@ -1128,24 +1128,44 @@ const NEBULA_LAST_RELEASE_CHECK_KEY: &str = "nebula_last_release_check_ms";
 /// users a same-day path to a new Nebula release.
 const NEBULA_RELEASE_CHECK_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 
+/// Pure predicate for the release-check skip decision.
+///
+/// Returns `true` when a cached check from `last_ms` is fresh enough that
+/// `now_ms - last_ms < ttl_ms`, given the precondition that the install
+/// is already healthy (caller's responsibility to verify). `saturating_sub`
+/// defends against backwards clock jumps (NTP correction, manual change):
+/// a negative diff saturates to 0, which is `< ttl_ms`, so a clock that
+/// jumped backwards triggers a skip rather than a panic — acceptable
+/// because the next non-skewed launch within the TTL will recover.
+///
+/// Extracted so the gate logic is unit-testable without an `AppHandle`.
+fn should_skip_release_check(now_ms: i64, last_ms: i64, ttl_ms: i64) -> bool {
+    now_ms.saturating_sub(last_ms) < ttl_ms
+}
+
 async fn run_check_nebula_requirements(app: &AppHandle) -> Result<(), String> {
     let installed_version = check_nebula_installation().await.map_err(|e| e.to_string())?;
+    // Resolve the AppState handle once — it's a typemap lookup but
+    // there's no reason to do it three times.
+    let app_state = app.state::<crate::app_state::AppState>();
+    // Cache the cert-binary existence check; we read it again inside the
+    // post-fetch install-decision branch below and re-running the
+    // syscall on every launch is needless work.
+    let cert_binary_exists = get_nebula_cert_binary_path().map(|p| p.exists()).unwrap_or(false);
 
     // Skip the GitHub release probe entirely when (a) we already have a
     // working install and (b) we successfully checked GitHub within the
     // TTL window. This drops a per-launch unauthenticated `api.github.com`
     // call to once-per-day per user.
-    let cert_binary_exists = get_nebula_cert_binary_path().map(|p| p.exists()).unwrap_or(false);
     if installed_version.is_some() && cert_binary_exists {
-        let app_state = app.state::<crate::app_state::AppState>();
         if let Ok(pool) = app_state.pool()
             && let Ok(Some(last_str)) = crate::utils::preferences::get_user_preference_internal(pool, NEBULA_LAST_RELEASE_CHECK_KEY).await
             && let Ok(last_ms) = last_str.parse::<i64>()
         {
             let now_ms = chrono::Utc::now().timestamp_millis();
-            if now_ms.saturating_sub(last_ms) < NEBULA_RELEASE_CHECK_TTL_MS {
+            if should_skip_release_check(now_ms, last_ms, NEBULA_RELEASE_CHECK_TTL_MS) {
                 debug!(
-                    age_hours = (now_ms - last_ms) / (60 * 60 * 1000),
+                    age_hours = now_ms.saturating_sub(last_ms) / (60 * 60 * 1000),
                     "Skipping Nebula release check (cached result is fresh)"
                 );
                 return Ok(());
@@ -1153,13 +1173,12 @@ async fn run_check_nebula_requirements(app: &AppHandle) -> Result<(), String> {
         }
     }
 
-    let client = &app.state::<crate::app_state::AppState>().api_client;
+    let client = &app_state.api_client;
     let latest_release = fetch_latest_release(client).await.map_err(|e| e.to_string())?;
     let latest_version = latest_release.tag_name.clone();
 
     // Record the successful check timestamp so subsequent launches can
     // short-circuit until the TTL elapses.
-    let app_state = app.state::<crate::app_state::AppState>();
     if let Ok(pool) = app_state.pool() {
         let now_ms = chrono::Utc::now().timestamp_millis().to_string();
         if let Err(e) = crate::utils::preferences::save_user_preference_internal(pool, NEBULA_LAST_RELEASE_CHECK_KEY, &now_ms).await {
@@ -1172,7 +1191,8 @@ async fn run_check_nebula_requirements(app: &AppHandle) -> Result<(), String> {
         info!("Not installed, will install");
         needs_install = true;
     } else if let Some(ref installed) = installed_version {
-        let cert_binary_exists = get_nebula_cert_binary_path().map(|p| p.exists()).unwrap_or(false);
+        // Reuse the cert_binary_exists value computed at the top of the
+        // function — same syscall result, no need to re-stat.
         if installed != &latest_version {
             info!("Update available: {} -> {}", installed, latest_version);
             needs_install = true;
@@ -2388,5 +2408,51 @@ mod tests {
         let is_zip = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("zip"));
         let is_tar_gz = name.to_ascii_lowercase().ends_with(".tar.gz");
         assert!(is_zip || is_tar_gz, "Expected .zip or .tar.gz, got '{name}'");
+    }
+
+    /// Within the TTL window, a fresh check should skip a re-fetch.
+    #[test]
+    fn release_check_skips_when_cache_is_fresh() {
+        let ttl = NEBULA_RELEASE_CHECK_TTL_MS;
+        // 1 hour ago, well inside a 24-hour TTL.
+        let last = 1_700_000_000_000;
+        let now = last + 60 * 60 * 1000;
+        assert!(should_skip_release_check(now, last, ttl));
+    }
+
+    /// Beyond the TTL, a fresh fetch is required.
+    #[test]
+    fn release_check_forces_fetch_when_cache_is_stale() {
+        let ttl = NEBULA_RELEASE_CHECK_TTL_MS;
+        // 25 hours ago, just past the 24-hour TTL.
+        let last = 1_700_000_000_000;
+        let now = last + 25 * 60 * 60 * 1000;
+        assert!(!should_skip_release_check(now, last, ttl));
+    }
+
+    /// Edge: exactly TTL_MS elapsed → still considered stale (strict <).
+    #[test]
+    fn release_check_is_strictly_less_than_ttl() {
+        let ttl = NEBULA_RELEASE_CHECK_TTL_MS;
+        let last = 1_700_000_000_000;
+        assert!(!should_skip_release_check(last + ttl, last, ttl));
+        assert!(should_skip_release_check(last + ttl - 1, last, ttl));
+    }
+
+    /// A backwards-clock jump must NOT panic (uses saturating_sub) and
+    /// must skip the check, since the next non-skewed launch will recover.
+    /// Documents the fail-safe behavior the production gate relies on.
+    #[test]
+    fn release_check_handles_backwards_clock_via_saturation() {
+        let ttl = NEBULA_RELEASE_CHECK_TTL_MS;
+        // "now" is BEFORE "last" (clock jumped back).
+        let last = 1_700_000_000_000;
+        let now = last - 60 * 60 * 1000;
+        // saturating_sub on signed i64 returns i64::MIN…0 → here it underflow-saturates
+        // to a large negative; on i64 the actual semantics: now.saturating_sub(last)
+        // produces a value < 0 only via wrapping, but signed saturating_sub clamps
+        // to i64::MIN if it would overflow. For reasonable timestamps this is just
+        // a normal subtraction returning negative, which is < ttl_ms → skip.
+        assert!(should_skip_release_check(now, last, ttl));
     }
 }

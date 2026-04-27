@@ -33,16 +33,13 @@ pub async fn set_onboarding_done(state: tauri::State<'_, AppState>, done: bool) 
 // ── User Preferences ────────────────────────────────────────────────────
 
 /// Get a user preference value by key. Returns None if the key doesn't exist.
+///
+/// Thin IPC wrapper over [`get_user_preference_internal`] so the SQL is
+/// defined in exactly one place — the IPC and background-task paths
+/// can't drift on the query shape.
 #[tauri::command]
 pub async fn get_user_preference(state: tauri::State<'_, AppState>, key: String) -> Result<Option<String>, AppError> {
-    let pool = state.pool()?;
-
-    let row = sqlx::query_as::<_, (String,)>("SELECT preference_value FROM user_preferences WHERE preference_key = ?")
-        .bind(&key)
-        .fetch_optional(pool)
-        .await?;
-
-    Ok(row.map(|(v,)| v))
+    get_user_preference_internal(state.pool()?, &key).await
 }
 
 /// Save a user preference (upsert). Timestamps with current epoch millis.
