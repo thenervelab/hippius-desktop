@@ -1426,7 +1426,10 @@ pub async fn start_nebula_internal(
             .spawn()
             .map_err(|e| format!("Failed to spawn nebula: {e}"))?;
 
-        info!("Started with PID: {:?}", child.id());
+        // Log a bare PID number when available. tokio::process::Child::id()
+        // returns Option<u32> (None after wait/kill, never None pre-wait),
+        // so the unwrap_or_else fallback string only fires post-mortem.
+        info!("Started with PID: {}", child.id().map_or_else(|| "<unknown>".to_string(), |p| p.to_string()));
         *nebula_state.child.lock().await = Some(child);
     }
 
@@ -1657,7 +1660,15 @@ pub async fn stop_nebula(nebula_state: &crate::nebula::state::NebulaState) -> Re
             }
             Err(_) => {
                 warn!("Nebula child wait timed out after 5s; falling back to pkill");
-                // Fall through.
+                // The Child is dropped here. We deliberately spawn with
+                // kill_on_drop(false) (line 1425) so this drop is a no-op
+                // — we don't want a stray drop-time SIGTERM racing against
+                // the pkill recovery below. The pkill+ps polling that
+                // follows is the actual cleanup path: if `child.kill()`
+                // already worked but wait() lost the SIGCHLD (rare but
+                // possible under signal masking), pkill will see no
+                // matching process and exit cleanly; if the kill failed,
+                // pkill issues a fresh SIGTERM by name.
             }
         }
     }
@@ -1981,24 +1992,85 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
     None
 }
 
-/// Run a network-interface probe (`ip` / `ifconfig` / `netstat`) with a 2 s
-/// timeout, returning its stdout as a UTF-8 string on success.
+/// Default timeout used by [`run_iface_probe`]. Two seconds is comfortably
+/// longer than any healthy `ip`/`ifconfig`/`netstat` call (low-tens of
+/// milliseconds) but short enough that a hung syscall doesn't stall the
+/// tokio worker for the whole `get_nebula_stats` IPC.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const IFACE_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Run a network-interface probe (`ip` / `ifconfig` / `netstat`) with the
+/// default timeout, returning its stdout as a UTF-8 string on success.
 ///
 /// Async + timeout keeps these calls from stalling the tokio worker thread
 /// on a hung syscall, which `get_nebula_stats` was paying every UI tick.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn run_iface_probe(program: &str, args: &[&str]) -> Option<String> {
+    run_iface_probe_with_timeout(program, args, IFACE_PROBE_TIMEOUT).await
+}
+
+/// Underlying helper used by [`run_iface_probe`]. Exposed only to tests so
+/// they can drive the timeout path with a small duration instead of having
+/// to wait the production 2 s.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn run_iface_probe_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
     let fut = tokio::process::Command::new(program).args(args).output();
-    match tokio::time::timeout(Duration::from_secs(2), fut).await {
+    match tokio::time::timeout(timeout, fut).await {
         Ok(Ok(output)) => Some(String::from_utf8_lossy(&output.stdout).into_owned()),
         Ok(Err(e)) => {
             debug!("{program} probe failed: {e}");
             None
         }
         Err(_) => {
-            warn!("{program} probe timed out after 2s");
+            warn!("{program} probe timed out after {:?}", timeout);
             None
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod iface_probe_tests {
+    use super::*;
+    use std::time::Instant;
+
+    /// Regression: the timeout branch must fire when the subprocess outlasts
+    /// the budget. We run `sleep 5` against a 100 ms budget; the call must
+    /// return `None` within a small multiple of the budget (allowing for
+    /// process spawn latency on slow CI runners).
+    #[tokio::test]
+    async fn iface_probe_returns_none_on_timeout() {
+        let start = Instant::now();
+        let out = run_iface_probe_with_timeout("sleep", &["5"], Duration::from_millis(100)).await;
+        let elapsed = start.elapsed();
+        assert!(out.is_none(), "expected timeout to return None, got Some");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "timeout took {:?} — expected close to 100 ms, fairly under 2 s",
+            elapsed
+        );
+    }
+
+    /// Sanity: the success branch returns the subprocess stdout.
+    #[tokio::test]
+    async fn iface_probe_returns_stdout_on_success() {
+        let out = run_iface_probe_with_timeout("echo", &["hello"], Duration::from_secs(2)).await;
+        assert_eq!(out.as_deref().map(str::trim), Some("hello"));
+    }
+
+    /// Spawn-error branch: nonexistent program should return `None` quickly,
+    /// not panic and not hit the timeout path.
+    #[tokio::test]
+    async fn iface_probe_returns_none_on_spawn_error() {
+        let start = Instant::now();
+        let out = run_iface_probe_with_timeout("__nonexistent_binary__", &[], Duration::from_secs(5)).await;
+        let elapsed = start.elapsed();
+        assert!(out.is_none(), "expected spawn error to return None");
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "spawn error took {:?} — should be near-instant, well under the 5 s budget",
+            elapsed
+        );
     }
 }
 
