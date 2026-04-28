@@ -35,6 +35,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "address_book",
     "onboarding",
     "user_preferences",
+    "share_keystore",
 ];
 
 /// Read the column names of a table via `PRAGMA table_info(...)`.
@@ -511,6 +512,21 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             preference_key TEXT PRIMARY KEY,
             preference_value TEXT NOT NULL,
             updated_at INTEGER NOT NULL
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // Per-share key material for the file-sharing feature. One row per
+    // active share-token this device created. The
+    // `CHECK (length(share_key) = 32)` is defence-in-depth: a wrong-sized
+    // key would otherwise surface as an opaque AEAD failure several
+    // layers up the stack — see crate::shares::keystore.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS share_keystore (
+            share_token TEXT PRIMARY KEY,
+            share_key BLOB NOT NULL CHECK (length(share_key) = 32),
+            created_at INTEGER NOT NULL DEFAULT (unixepoch())
         )",
     )
     .execute(&mut *tx)

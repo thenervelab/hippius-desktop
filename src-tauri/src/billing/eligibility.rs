@@ -55,6 +55,12 @@ pub mod thresholds {
     /// VM provisioning extrinsic charges this much from the account
     /// up-front, so a balance below this guarantees a failed extrinsic.
     pub const VM_CREATION: f64 = 10.0;
+    /// Minimum credits required to mint a public share link. Same
+    /// "any positive balance" rule as file/folder uploads — sharing
+    /// pulls the ciphertext from the same paid storage backend so we
+    /// gate it on the same threshold instead of giving away anonymous
+    /// downloads to a fully-drained account.
+    pub const SHARING: f64 = 0.0;
 }
 
 /// Which action the user is requesting eligibility for. Wire format is
@@ -69,6 +75,7 @@ pub enum InsufficientCreditsAction {
     FolderUpload,
     FolderSync,
     VmCreation,
+    Sharing,
 }
 
 impl InsufficientCreditsAction {
@@ -79,6 +86,7 @@ impl InsufficientCreditsAction {
             Self::FolderUpload => thresholds::FOLDER_UPLOAD,
             Self::FolderSync => thresholds::FOLDER_SYNC,
             Self::VmCreation => thresholds::VM_CREATION,
+            Self::Sharing => thresholds::SHARING,
         }
     }
 
@@ -100,6 +108,7 @@ impl InsufficientCreditsAction {
             Self::FolderUpload => "folder-upload",
             Self::FolderSync => "folder-sync",
             Self::VmCreation => "vm-creation",
+            Self::Sharing => "sharing",
         }
     }
 }
@@ -264,6 +273,7 @@ mod tests {
         assert!(float_eq(InsufficientCreditsAction::FolderUpload.min_credits(), thresholds::FOLDER_UPLOAD));
         assert!(float_eq(InsufficientCreditsAction::FolderSync.min_credits(), thresholds::FOLDER_SYNC));
         assert!(float_eq(InsufficientCreditsAction::VmCreation.min_credits(), thresholds::VM_CREATION));
+        assert!(float_eq(InsufficientCreditsAction::Sharing.min_credits(), thresholds::SHARING));
     }
 
     #[test]
@@ -272,6 +282,7 @@ mod tests {
         assert!(!InsufficientCreditsAction::FolderUpload.requires_chain_balance());
         assert!(!InsufficientCreditsAction::FolderSync.requires_chain_balance());
         assert!(InsufficientCreditsAction::VmCreation.requires_chain_balance());
+        assert!(!InsufficientCreditsAction::Sharing.requires_chain_balance());
     }
 
     #[test]
@@ -283,6 +294,7 @@ mod tests {
             (InsufficientCreditsAction::FolderUpload, "\"folder-upload\""),
             (InsufficientCreditsAction::FolderSync, "\"folder-sync\""),
             (InsufficientCreditsAction::VmCreation, "\"vm-creation\""),
+            (InsufficientCreditsAction::Sharing, "\"sharing\""),
         ] {
             let json = serde_json::to_string(&action).expect("serialize");
             assert_eq!(json, expected);
@@ -298,6 +310,7 @@ mod tests {
             InsufficientCreditsAction::FolderUpload,
             InsufficientCreditsAction::FolderSync,
             InsufficientCreditsAction::VmCreation,
+            InsufficientCreditsAction::Sharing,
         ] {
             let json = serde_json::to_string(&action).unwrap();
             let parsed: InsufficientCreditsAction = serde_json::from_str(&json).unwrap();

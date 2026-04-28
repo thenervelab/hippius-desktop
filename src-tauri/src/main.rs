@@ -22,6 +22,7 @@ pub mod infra;
 pub mod nebula;
 pub mod notifications;
 pub mod recovery;
+pub mod shares;
 pub mod sync;
 #[cfg(test)]
 mod test_helpers;
@@ -245,6 +246,11 @@ fn main() {
             // Remote folder browsing & one-off download
             list_remote_folder_files,
             download_remote_file,
+            // File sharing (link-based public shares)
+            crate::shares::commands::hcfs_create_share,
+            crate::shares::commands::hcfs_list_shares,
+            crate::shares::commands::hcfs_revoke_share,
+            crate::shares::capabilities::hcfs_get_capabilities,
             // Device settings
             get_device_name,
             set_device_name,
