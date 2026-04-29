@@ -3,25 +3,34 @@
 // Lifecycle:
 //
 //   `running`  — `hcfs_create_share` IPC in flight. Spinner + filename.
-//   `done`     — link is ready. Read-only URL, auto-copied to clipboard,
-//                Copy / Open / Revoke buttons.
-//   `error`    — IPC failed. Error message + Retry / Close.
+//   `done`     — link is ready. Read-only URL with an inline copy
+//                button, auto-copied to clipboard, Open / Close /
+//                Revoke actions.
+//   `error`    — IPC failed. Inline error message + Try again / Close.
 //
 // We picked a coarse three-state machine over per-byte progress because
 // hcfs-client's share API does not expose a progress callback in v1
 // (see `docs/plans/2026-04-28-file-sharing-design.md`). Faking smooth
 // percentages would be a UX trap.
+//
+// The visual layout mirrors the wallet dialogs (`SendBalanceDialog`,
+// `ReceiveBalanceDialog`): centered `AbstractIconWrapper` header on
+// desktop, mobile accent bar + close button on small screens, and
+// stacked `CardButton`s for primary/secondary actions. Revoke is
+// rendered as a small de-emphasized red link below the action stack
+// because revoking is rare and shouldn't compete with Copy/Open.
 
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useAtom } from "jotai";
-import { Copy, ExternalLink, Loader2, Trash2, X } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 
 import DialogContainer from "@/components/ui/DialogContainer";
+import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import { shareModalFileAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { createShare, revokeShare, type ShareLink } from "@/app/lib/tauri/shares";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
@@ -31,8 +40,8 @@ type ModalState = { kind: "running" } | { kind: "done"; link: ShareLink } | { ki
 export default function ShareFileModal() {
   const [file, setFile] = useAtom(shareModalFileAtom);
   const [state, setState] = useState<ModalState>({ kind: "running" });
-  // Guard so we only auto-copy once per `done` transition; opening the
-  // dialog twice without closing wouldn't double-copy a stale URL.
+  // Auto-copy fires once per `done` transition. Reopening the dialog
+  // without closing must not double-copy a stale URL.
   const autoCopiedRef = useRef(false);
 
   const filename = file?.actualFileName || file?.name || "";
@@ -45,10 +54,10 @@ export default function ShareFileModal() {
     setState({ kind: "running" });
     autoCopiedRef.current = false;
     try {
-      // `actualFileName` is already the relative path inside the sync
-      // folder (e.g. `subdir/file.txt` for nested files); see
-      // `FormattedUserFile` in `use-user-files`. Falling back to `name`
-      // matches what `revealInFileManager` does in the context menu.
+      // `actualFileName` is the relative path inside the sync folder
+      // (e.g. `subdir/file.txt`); see `FormattedUserFile`. The fallback
+      // to `name` mirrors `revealInFileManager` in the file row's
+      // context menu.
       const relativePath = file.actualFileName || file.name;
       const link = await createShare(folderLabel, relativePath);
       setState({ kind: "done", link });
@@ -62,9 +71,9 @@ export default function ShareFileModal() {
     if (file) startShare();
   }, [file, startShare]);
 
-  // Auto-copy the URL once we've reached `done`. The textarea is still
-  // shown so the user can verify and re-copy — auto-copy alone has been
-  // a UX trap historically (focus loss, etc.).
+  // Auto-copy once we reach `done`. The URL is still rendered in a
+  // selectable textbox so the user can re-copy if focus rules block
+  // the auto-copy (Safari) or if they just want to verify the value.
   useEffect(() => {
     if (state.kind !== "done") return;
     if (autoCopiedRef.current) return;
@@ -73,8 +82,8 @@ export default function ShareFileModal() {
       .writeText(state.link.shareUrl)
       .then(() => toast.success("Link copied to clipboard"))
       .catch((err: unknown) => {
-        // Auto-copy is a best-effort niceness; a clipboard rejection
-        // (Safari focus rules etc.) shouldn't break the modal.
+        // Auto-copy is best-effort; clipboard rejection (Safari focus
+        // rules, etc.) shouldn't break the modal.
         console.warn("[ShareFileModal] auto-copy failed:", err);
       });
   }, [state]);
@@ -113,79 +122,105 @@ export default function ShareFileModal() {
 
   return (
     <Dialog.Root open onOpenChange={(o) => (!o ? close() : undefined)}>
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[32rem] h-fit">
+      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit">
         <Dialog.Title className="sr-only">Share via link</Dialog.Title>
+        {/* Mobile accent line */}
+        <div className="h-4 bg-primary-50 md:hidden" />
 
-        <div className="flex items-center justify-between px-5 py-4 border-b border-grey-80">
-          <h2 className="text-base font-medium text-grey-10">Share via link</h2>
-          <button onClick={close} aria-label="Close" className="text-grey-30 hover:text-grey-10">
-            <X className="size-5" />
-          </button>
-        </div>
+        <div className="px-4">
+          {/* Desktop Header */}
+          <div className="hidden md:flex flex-col items-center justify-center pb-4 pt-4 gap-2">
+            <div className="flex items-center mb-2 p-2">
+              <AbstractIconWrapper className="size-8 sm:size-10">
+                <Icons.Link className="absolute size-4 sm:size-6 text-primary-50" />
+              </AbstractIconWrapper>
+            </div>
+            <span className="text-center text-2xl text-grey-10 font-medium">
+              Share via link
+            </span>
+          </div>
 
-        <div className="px-5 py-4">
+          {/* Mobile Header */}
+          <div className="flex py-4 items-center justify-between text-grey-10 md:hidden">
+            <span className="text-lg font-medium">Share via link</span>
+            <button onClick={close} aria-label="Close">
+              <Icons.CloseCircle className="size-6" />
+            </button>
+          </div>
+
+          {/* Body — one branch per state. */}
           {state.kind === "running" && (
-            <div className="flex items-start gap-3">
-              <Loader2 className="size-5 animate-spin text-grey-30 shrink-0 mt-0.5" />
-              <div>
+            <div className="flex items-start gap-3 mb-2">
+              <Icons.Loader className="size-5 animate-spin text-primary-60 shrink-0 mt-0.5" />
+              <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-grey-10">Encrypting and uploading…</p>
-                <p className="text-xs text-grey-30 truncate" title={filename}>
+                <p className="text-xs text-grey-50 truncate mt-0.5" title={filename}>
                   {filename}
                 </p>
               </div>
             </div>
           )}
 
-          {state.kind === "done" && <DoneBody link={state.link} filename={filename} />}
+          {state.kind === "done" && <DoneBody link={state.link} filename={filename} onCopy={onCopy} />}
 
           {state.kind === "error" && (
-            <div>
-              <p className="text-sm font-medium text-error-50">Couldn&apos;t create share link</p>
-              <p className="text-xs text-grey-30 mt-1 break-words">{state.message}</p>
+            <div className="flex items-start gap-2 text-error-70 mb-2">
+              <AlertCircle className="size-4 mt-0.5 shrink-0" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">Couldn&apos;t create share link</p>
+                <p className="text-xs text-grey-50 mt-1 break-words">{state.message}</p>
+              </div>
             </div>
           )}
-        </div>
 
-        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-grey-80 bg-grey-95">
+          {/* Footer — stacked `CardButton`s, full-width, mirroring the
+              wallet dialogs. Revoke is rendered as a small de-emphasized
+              red link below the stack so it doesn't compete with the
+              Copy/Open primary actions. */}
           {state.kind === "running" && (
-            <button onClick={close} className="px-3 py-1.5 text-xs font-medium text-grey-30 hover:text-grey-10">
-              Cancel
-            </button>
+            <div className="flex flex-col gap-4 my-4">
+              <CardButton className="w-full text-[1.125rem]" variant="secondary" onClick={close}>
+                Cancel
+              </CardButton>
+            </div>
           )}
+
           {state.kind === "error" && (
-            <>
-              <button onClick={close} className="px-3 py-1.5 text-xs font-medium text-grey-30 hover:text-grey-10">
-                Close
-              </button>
-              <button onClick={startShare} className="px-3 py-1.5 text-xs font-medium bg-primary-50 text-white rounded hover:bg-primary-60">
+            <div className="flex flex-col gap-4 my-4">
+              <CardButton
+                className="bg-primary-50 text-[1.125rem] hover:bg-primary-40 transition text-white w-full font-medium"
+                variant="dialog"
+                onClick={startShare}
+              >
                 Try again
-              </button>
-            </>
+              </CardButton>
+              <CardButton className="w-full text-[1.125rem]" variant="secondary" onClick={close}>
+                Close
+              </CardButton>
+            </div>
           )}
+
           {state.kind === "done" && (
-            <>
-              <button
-                onClick={onRevoke}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-error-50 hover:text-error-60"
-              >
-                <Trash2 className="size-3.5" />
-                Revoke
-              </button>
-              <button
+            <div className="flex flex-col gap-4 my-4">
+              <CardButton
+                className="bg-primary-50 text-[1.125rem] hover:bg-primary-40 transition text-white w-full font-medium"
+                variant="dialog"
                 onClick={onOpenInBrowser}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-grey-30 hover:text-grey-10"
               >
-                <ExternalLink className="size-3.5" />
-                Open
-              </button>
+                Open in browser
+              </CardButton>
+              <CardButton className="w-full text-[1.125rem]" variant="secondary" onClick={close}>
+                Close
+              </CardButton>
               <button
-                onClick={onCopy}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-primary-50 text-white rounded hover:bg-primary-60"
+                type="button"
+                onClick={onRevoke}
+                className="self-center flex items-center gap-1.5 text-xs font-medium text-error-70 hover:text-error-60 transition-colors"
               >
-                <Copy className="size-3.5" />
-                Copy link
+                <Icons.Trash className="size-3.5" />
+                Revoke share
               </button>
-            </>
+            </div>
           )}
         </div>
       </DialogContainer>
@@ -193,24 +228,47 @@ export default function ShareFileModal() {
   );
 }
 
-function DoneBody({ link, filename }: { link: ShareLink; filename: string }) {
-  // Render the URL in a read-only textarea so the user can verify and
-  // copy — even if auto-copy succeeded. Plan note: auto-copy alone is
-  // a UX trap.
+// The URL card matches the bordered white address card in
+// `ReceiveBalanceDialog`. We deliberately re-implement the
+// "value + copy button" pattern inline instead of reusing `CopyText`:
+// `CopyText` wraps the value in a `<div>`, which would (a) break the
+// `findByDisplayValue` test seam in `ShareFileModal.test.tsx`, and
+// (b) lose select-all-and-Cmd-C on a long URL. Don't "simplify" this
+// to `CopyText` without porting the test queries first.
+function DoneBody({
+  link,
+  filename,
+  onCopy,
+}: {
+  link: ShareLink;
+  filename: string;
+  onCopy: () => void | Promise<void>;
+}) {
   const expiresAtPretty = formatExpiresAt(link.expiresAt);
   return (
     <div>
       <p className="text-sm text-grey-10 mb-1">
         Anyone with this link can download <span className="font-medium">{filename || "this file"}</span>.
       </p>
-      {expiresAtPretty && <p className="text-xs text-grey-30 mb-3">Expires {expiresAtPretty}.</p>}
-      <textarea
-        readOnly
-        value={link.shareUrl}
-        onFocus={(e) => e.currentTarget.select()}
-        className="w-full text-xs font-mono p-2 bg-grey-95 border border-grey-80 rounded resize-none break-all"
-        rows={3}
-      />
+      {expiresAtPretty && <p className="text-xs text-grey-50 mb-3">Expires {expiresAtPretty}.</p>}
+      <div className="border border-grey-80 rounded-lg bg-white p-3 flex items-start gap-2">
+        <textarea
+          readOnly
+          value={link.shareUrl}
+          onFocus={(e) => e.currentTarget.select()}
+          rows={2}
+          className="flex-1 text-xs font-mono bg-transparent resize-none outline-none break-all text-grey-10"
+        />
+        <button
+          type="button"
+          onClick={onCopy}
+          title="Copy link"
+          aria-label="Copy link"
+          className="px-1.5 py-1 border border-grey-80 rounded bg-grey-90 hover:bg-grey-80 transition-colors shrink-0"
+        >
+          <Icons.Copy className="size-4 text-grey-10" />
+        </button>
+      </div>
     </div>
   );
 }
