@@ -24,10 +24,16 @@ import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { Button } from "@/components/ui/button";
 import {
   Download,
+  Link2,
   MoreVertical,
   Folder,
   FolderOpen,
 } from "lucide-react";
+import { useAtomValue, useSetAtom } from "jotai";
+import {
+  shareFeatureEnabledAtom,
+  shareModalFileAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
 import SelectionActionBar from "../SelectionActionBar";
@@ -151,6 +157,11 @@ const FilesTable: FC<FilesTableProps> = memo(
     onHeaderContextMenu,
   }) => {
     const { polkadotAddress } = useWalletAuth();
+    // Share-feature gating: only show the menu item when the connected
+    // hcfs-server advertises `shares: true`. The atom is populated once
+    // per session by `useServerCapabilities` (mounted in SyncEventLogger).
+    const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
+    const setShareModalFile = useSetAtom(shareModalFileAtom);
     // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads.
     // Also suppress the "pending" upload arrow for files that just finished downloading
     // (they appear locally before the synced-set updates, so the backend marks them "pending").
@@ -403,6 +414,21 @@ const FilesTable: FC<FilesTableProps> = memo(
               },
             ]
             : []),
+          // Share via link — same gating as the right-click context menu
+          // in `app/components/ui/context-menu/index.tsx`. Hidden for
+          // folders, mid-flight files, and old hcfs-servers that don't
+          // advertise `shares: true`.
+          ...(!file.isFolder && file.syncStatus === "synced" && shareEnabled
+            ? [
+              {
+                icon: <Link2 className="size-4" />,
+                itemTitle: "Share via link",
+                onItemClick: () => {
+                  setShareModalFile(file);
+                },
+              },
+            ]
+            : []),
           // Always show delete option, but disabled for unpinned files
           {
             icon: <Icons.Trash className="size-4" />,
@@ -430,6 +456,8 @@ const FilesTable: FC<FilesTableProps> = memo(
         getParam,
         router,
         polkadotAddress,
+        shareEnabled,
+        setShareModalFile,
       ]
     );
 

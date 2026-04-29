@@ -29,6 +29,10 @@ export function useServerCapabilities(): void {
     (async () => {
       try {
         const caps = await getServerCapabilities(polkadotAddress);
+        // One-line trace so a user reporting "I don't see the Share
+        // menu item" can paste the console output and we can tell at
+        // a glance whether the server advertised the feature or not.
+        console.info("[useServerCapabilities] resolved:", caps);
         if (!cancelled) setCapabilities(caps);
       } catch (err) {
         // Treat a failed capability call the same as a 404: feature

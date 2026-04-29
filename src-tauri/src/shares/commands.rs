@@ -27,7 +27,10 @@ use tracing::{info, warn};
 /// Hard-coded for v1 to match the rest of the app's "static prod URL"
 /// pattern — see the OAuth-recovery memory note. Bumping it later is
 /// a single-constant change.
-const CONSOLE_BASE_URL: &str = "https://console.hippius.io";
+///
+/// `hippicode.com` is the production hostname for the recipient page;
+/// the share UI in `hippius-console` is served from this origin.
+const CONSOLE_BASE_URL: &str = "https://console.hippicode.com";
 
 // ─── Wire types ────────────────────────────────────────────────────────────
 

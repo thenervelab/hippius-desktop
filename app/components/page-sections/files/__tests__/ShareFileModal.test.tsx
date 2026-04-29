@@ -61,7 +61,7 @@ describe("ShareFileModal", () => {
   it("shows running state then transitions to done with the share URL", async () => {
     invokeMock.mockResolvedValueOnce({
       shareToken: "tok-abc",
-      shareUrl: "https://console.hippius.io/share/tok-abc#k=KEY",
+      shareUrl: "https://console.hippicode.com/share/tok-abc#k=KEY",
       expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
     });
 
@@ -71,7 +71,7 @@ describe("ShareFileModal", () => {
     expect(screen.getByText(/encrypting and uploading/i)).toBeInTheDocument();
 
     // Then the URL surfaces in the read-only textarea.
-    const textarea = await screen.findByDisplayValue(/console\.hippius\.io\/share\/tok-abc#k=KEY/);
+    const textarea = await screen.findByDisplayValue(/console\.hippicode\.com\/share\/tok-abc#k=KEY/);
     expect(textarea).toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith("hcfs_create_share", { folderLabel: "Drive", relativePath: "doc.pdf" });
   });
@@ -94,7 +94,7 @@ describe("ShareFileModal", () => {
       .mockRejectedValueOnce("network down")
       .mockResolvedValueOnce({
         shareToken: "tok-xyz",
-        shareUrl: "https://console.hippius.io/share/tok-xyz#k=KEY2",
+        shareUrl: "https://console.hippicode.com/share/tok-xyz#k=KEY2",
         expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
       });
 
@@ -107,7 +107,7 @@ describe("ShareFileModal", () => {
     fireEvent.click(screen.getByRole("button", { name: /try again/i }));
 
     // Second call succeeds; URL appears.
-    await screen.findByDisplayValue(/console\.hippius\.io\/share\/tok-xyz#k=KEY2/);
+    await screen.findByDisplayValue(/console\.hippicode\.com\/share\/tok-xyz#k=KEY2/);
     expect(invokeMock).toHaveBeenCalledTimes(2);
   });
 
@@ -115,7 +115,7 @@ describe("ShareFileModal", () => {
     invokeMock
       .mockResolvedValueOnce({
         shareToken: "tok-rev",
-        shareUrl: "https://console.hippius.io/share/tok-rev#k=K",
+        shareUrl: "https://console.hippicode.com/share/tok-rev#k=K",
         expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
       })
       .mockResolvedValueOnce(undefined); // revoke_share returns void
