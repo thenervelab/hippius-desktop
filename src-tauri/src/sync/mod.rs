@@ -18,6 +18,7 @@ pub mod migration;
 pub mod mnemonic;
 pub mod paths;
 pub mod progress;
+pub mod region;
 pub mod relative_path_backfill;
 pub mod relative_path_backfill_reset;
 pub mod remote;

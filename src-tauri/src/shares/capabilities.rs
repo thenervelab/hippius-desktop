@@ -17,12 +17,13 @@
 //! region-probe sentinel), we cannot route this anonymous call through
 //! `HcfsClient` because the share endpoints aren't yet exposed there
 //! and the resolved base URL accessor is `pub(super)` in hcfs-client.
-//! We therefore mirror hcfs-client's regional URL list locally and try
-//! each one in order, returning the first 2xx (or "shares: false" on
-//! 404). The local mirror is checked against drift by
-//! [`tests::regional_fallback_urls_match_hcfs_client`].
+//! We therefore walk the regional fallback list from
+//! [`crate::sync::region`] and return the first 2xx (or "shares: false"
+//! on 404). The list is mirrored from hcfs-client and pinned by a
+//! drift-detection test in that module.
 
 use crate::error::{AppError, Result};
+use crate::sync::region::regional_fallback_urls;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
@@ -82,7 +83,7 @@ pub(crate) async fn fetch_capabilities(state: &crate::app_state::AppState, accou
     // call per session and (b) the FE atom caches the result, so the
     // savings of a parallel probe wouldn't repay the complexity.
     let mut last_err: Option<AppError> = None;
-    for base in REGIONAL_FALLBACK_URLS {
+    for base in regional_fallback_urls() {
         debug!(base, "[capabilities] probing regional URL");
         match fetch_one(&state.api_client, base).await {
             Ok(caps) => return Ok(caps),
@@ -95,37 +96,10 @@ pub(crate) async fn fetch_capabilities(state: &crate::app_state::AppState, accou
     Err(last_err.unwrap_or_else(|| AppError::Hcfs("no regional URLs configured".into())))
 }
 
-/// Mirrors `hcfs_client::client::region::REGIONAL_BASE_URLS`. Kept in
-/// sync manually because hcfs-client gates that constant behind
-/// `pub(crate)`. The drift-detection test below pins this list against
-/// the cross-repo source so a missing entry fails CI on the next bump.
-///
-/// Source of truth: `hcfs/hcfs-client/src/client/region.rs:21`.
-const REGIONAL_FALLBACK_URLS: &[&str] = &["https://eu-central-1-arion.hippius.com", "https://us-east-1-arion.hippius.com"];
-
 /// Tauri command exposing `ServerCapabilities` to the frontend so the
 /// share-related UI surfaces (context-menu item, "My Shares" page) can
 /// hide themselves on old servers.
 #[tauri::command]
 pub async fn hcfs_get_capabilities(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<ServerCapabilities> {
     fetch_capabilities(&state, &account_id).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The local copy of the regional URL list must include every base
-    /// URL hcfs-client would race. If a new region is added upstream
-    /// (or one is removed), this assert fires until the desktop mirror
-    /// is updated. We can't import the upstream constant directly
-    /// because `pub(crate) mod region` hides it — see module docs.
-    #[test]
-    fn regional_fallback_urls_match_hcfs_client_known_set() {
-        // Snapshot of `hcfs_client::client::region::REGIONAL_BASE_URLS`
-        // at rev 1b141d1. Update both sides (and bump the rev comment)
-        // when the upstream list changes.
-        let upstream = ["https://eu-central-1-arion.hippius.com", "https://us-east-1-arion.hippius.com"];
-        assert_eq!(REGIONAL_FALLBACK_URLS, &upstream, "regional URL drift between desktop and hcfs-client");
-    }
 }
