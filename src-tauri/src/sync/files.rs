@@ -167,13 +167,19 @@ pub async fn add_folder(
     crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FolderUpload).await?;
 
     // Pre-walk the source tree so the banner shows an accurate count.
-    // Cheap relative to the full copy (no file-content reads). `.max(1)`
-    // ensures the banner shows for at least one file even when the walk
-    // failed and returned 0 — the generic "Processing your files…"
-    // fallback in the FE is preferable to a banner that never appears
-    // for a real folder upload.
+    // Cheap relative to the full copy (no file-content reads).
+    //
+    // Skip `begin` when the walk found zero files. The walk swallows
+    // per-subdir I/O errors and returns a best-effort lower bound, so
+    // count == 0 means either the folder is genuinely empty or every
+    // subdir was unreadable — in both cases we should not raise a
+    // banner that the sync engine will never clear (an empty plan
+    // can complete without firing `SyncCompleted` in some hcfs-client
+    // configurations).
     let count = count_regular_files(Path::new(&folder_path)).await;
-    state.upload_processing.begin(&app, count.max(1));
+    if count > 0 {
+        state.upload_processing.begin(&app, count);
+    }
 
     let result = add_folder_with_app_inner(&sync_path, &folder_path, subfolder.as_deref()).await;
     match result {
@@ -250,9 +256,14 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
 
 /// Count regular files (non-directory, non-symlink) under `root`,
 /// recursively. Used by `add_folder` and `add_files` to size the
-/// `begin` count for the upload-processing banner. Returns 0 on any
-/// I/O error — the banner falls back to the generic "Processing your
-/// files…" copy which is acceptable.
+/// `begin` count for the upload-processing banner.
+///
+/// Returns a best-effort lower bound: per-subdirectory I/O errors
+/// (e.g. permission-denied) are silently skipped via `continue`, so
+/// the count is the number of regular files we successfully
+/// enumerated, not the total. A wholly-unreadable root produces 0.
+/// Symlinks are not followed and are not counted (consistent with
+/// `tokio::fs::DirEntry::file_type`'s `lstat`-equivalent behavior).
 ///
 /// Iterative depth-first walk via an explicit stack to avoid recursive
 /// async-fn boxing. Does not read file contents — only iterates
@@ -471,15 +482,16 @@ pub async fn add_files(
 
     // Sum the file count for the banner. Each direct file path counts
     // as 1; each directory path gets a recursive walk via
-    // `count_regular_files`. `.max(1)` per-directory ensures even an
-    // unwalkable dir bumps the count by 1 so the banner still appears.
-    // The outer `.max(1)` covers the degenerate case of an entirely
-    // empty batch — the FE falls back to the generic copy. Released
-    // either by the first upload chunk (success path, via
-    // `handle_transfer_progress`) or by the early-return error paths
-    // below (failure paths). Per-file errors inside the loop go into
-    // `failed` and the function returns Ok, so the success path leaves
-    // the window open for sync events to clear naturally (Task 9).
+    // `count_regular_files` (introduced in Task 7). Released either by
+    // the first upload chunk (success), the early-return error paths
+    // below (failure), or the all-failed-batch guard after the loop.
+    //
+    // Per-directory counts use `.max(1)` so that an unwalkable subdir
+    // (permission denied) still bumps the total by 1 — we know there's
+    // a directory there, even if we can't enumerate it. Per-batch
+    // count is NOT clamped: an empty `file_paths` skips `begin` so
+    // that an empty IPC call doesn't raise a banner that nothing
+    // will ever clear.
     let mut total_count: u64 = 0;
     for fp in &file_paths {
         let p = Path::new(fp);
@@ -489,7 +501,9 @@ pub async fn add_files(
             total_count = total_count.saturating_add(1);
         }
     }
-    state.upload_processing.begin(&app, total_count.max(1));
+    if total_count > 0 {
+        state.upload_processing.begin(&app, total_count);
+    }
 
     // When a subfolder is specified, resolve the effective target directory.
     // This replaces the path-join logic that was previously in TypeScript.
@@ -577,6 +591,20 @@ pub async fn add_files(
                 "total": total,
             }),
         );
+    }
+
+    // If the batch was a total failure (every entry errored during
+    // copy), there is no work to upload. Clear the banner here so we
+    // don't depend on `trigger_sync` to produce a terminal event for
+    // an empty plan — hcfs-client may skip the cycle entirely if there
+    // is nothing to do, leaving a `Processing N files…` banner stuck
+    // until the next sync cycle (which could be minutes away).
+    //
+    // The `clear_if_after` is safe even if we never called `begin`
+    // (e.g. `total_count` was 0 above): it short-circuits on
+    // `started_at.is_none()`.
+    if added.is_empty() {
+        state.upload_processing.clear_if_after(&app, std::time::Instant::now());
     }
 
     // Always trigger sync so successfully added files get uploaded

@@ -13,6 +13,31 @@
 //!   `started_at` timestamp so file-watcher activity that fires before
 //!   any user upload cannot accidentally hide a banner.
 //! - `reset()` — unconditional clear. Used by logout / `stop_sync`.
+//!
+//! ## Known limitation: file-watcher race
+//!
+//! `clear_if_after(now)` is called for every upload chunk in
+//! `handle_transfer_progress`. The guard only filters chunks whose
+//! `event_at` predates `started_at`, which means a chunk fired by an
+//! IN-FLIGHT FILE-WATCHER cycle (started before any user upload) will
+//! still satisfy `event_at >= started_at` after a fresh `begin`,
+//! prematurely clearing the banner.
+//!
+//! Concrete scenario:
+//!  1. File-watcher detects a save at T0; sync cycle begins; file A
+//!     starts encrypting/uploading.
+//!  2. User clicks Upload at T1 > T0; `begin` stamps `started_at = T1`.
+//!  3. File A's first upload chunk fires at T2 > T1; `clear_if_after`
+//!     sees `T2 >= T1` and clears the banner — even though that chunk
+//!     was for the watcher's file, not the user's upload.
+//!
+//! The banner flickers off prematurely; the bottom-right widget will
+//! still show progress for the user's upload once their files start
+//! transferring. Properly fixing this would require a session-identity
+//! model (track which sync session each chunk belongs to and require
+//! a match against the session that began after `started_at`). That's
+//! a larger refactor for a low-frequency edge case — accepted as a
+//! v1 limitation.
 
 use std::sync::Mutex;
 use std::time::Instant;
