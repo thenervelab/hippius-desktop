@@ -37,8 +37,6 @@ const REFRESH_INTERVAL_MS = 30_000;
 type SharedIndex = Map<string, Map<string, ShareSummary[]>>;
 
 interface UseSharedFilesResult {
-  /** True when this `(label, relativePath)` pair has at least one active share. */
-  isShared: (label: string | null | undefined, relativePath: string | null | undefined) => boolean;
   /** Active share rows for this `(label, relativePath)` pair. Empty array for unshared files. */
   getSharesFor: (label: string | null | undefined, relativePath: string | null | undefined) => ShareSummary[];
   /** True while the first fetch is in flight. */
@@ -81,11 +79,10 @@ export function useSharedFiles(): UseSharedFilesResult {
 
   const index = data ?? EMPTY_INDEX;
 
-  // Stable identity per `index` so callers that pass either helper into
-  // a memo dependency don't churn unnecessarily. `isShared` is derived
-  // from `getSharesFor` so the two surfaces can never disagree.
-  const { getSharesFor, isShared } = useMemo(() => {
-    const get = (
+  // Stable identity per `index` so callers that pass `getSharesFor`
+  // into a memo dependency don't churn unnecessarily.
+  const getSharesFor = useMemo(() => {
+    return (
       label: string | null | undefined,
       relativePath: string | null | undefined,
     ): ShareSummary[] => {
@@ -94,14 +91,7 @@ export function useSharedFiles(): UseSharedFilesResult {
       if (!folder) return EMPTY_ROWS;
       return folder.get(relativePath) ?? EMPTY_ROWS;
     };
-    return {
-      getSharesFor: get,
-      isShared: (
-        label: string | null | undefined,
-        relativePath: string | null | undefined,
-      ): boolean => get(label, relativePath).length > 0,
-    };
   }, [index]);
 
-  return { isShared, getSharesFor, isLoading: isLoading && shareEnabled };
+  return { getSharesFor, isLoading: isLoading && shareEnabled };
 }
