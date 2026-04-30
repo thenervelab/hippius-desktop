@@ -55,6 +55,12 @@ pub const DRIVE_STATUS_CHANGED: &str = "hcfs_drive_status_changed";
 pub const DRIVE_REMOVED: &str = "hcfs_drive_removed";
 /// Emitted when files have repeatedly failed to sync (threshold reached).
 pub const FILES_FAILED_REPEATEDLY: &str = "hcfs_files_failed_repeatedly";
+/// Emitted when a user-initiated upload (`add_file` / `add_files` /
+/// `add_folder`) is in its disk-copy + encryption window before any
+/// byte of network transfer fires. The frontend renders a top-of-page
+/// banner while `active = true`. State is owned by
+/// `crate::sync::upload_processing::UploadProcessingState`.
+pub const UPLOAD_PROCESSING: &str = "hcfs_upload_processing";
 
 /// Exact stringification of [`hcfs_client::sync::SyncError::Cancelled`].
 ///
