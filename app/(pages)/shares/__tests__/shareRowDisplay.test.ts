@@ -30,9 +30,13 @@ describe("pickShareRowDisplay", () => {
     });
   });
 
-  it("treats hcfs-client's literal '<unknown>' marker as cross-device", () => {
+  it("returns the literal filename when shareUrl is non-null, even if filename is the marker", () => {
+    // The helper keys solely on `shareUrl` — `<unknown>` is hcfs-client's
+    // marker for "key forgotten", but it only surfaces alongside `shareUrl: null`.
+    // If a future wire-format change ever sent `<unknown>` with a real URL,
+    // the helper would render it verbatim. Pin that contract.
     expect(
-      pickShareRowDisplay({ ...baseRow, filename: "<unknown>", shareUrl: null }),
-    ).toEqual({ text: "Shared from another device", isPlaceholder: true });
+      pickShareRowDisplay({ ...baseRow, filename: "<unknown>", shareUrl: "https://share.example/abc#k=def" }),
+    ).toEqual({ text: "<unknown>", isPlaceholder: false });
   });
 });
