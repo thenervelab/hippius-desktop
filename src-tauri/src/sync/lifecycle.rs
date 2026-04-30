@@ -1012,6 +1012,12 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
         cache.clear();
     }
 
+    // 0c. Reset the upload-processing banner state so a logout / account
+    //     switch doesn't leave a stale "Processing N files…" banner up
+    //     for the next user. The reset is unconditional (clears even if
+    //     no upload was active) to make this path idempotent.
+    app_state.upload_processing.reset(&app);
+
     // 1. Cancel every drive's cancellation token FIRST so the sync loop
     //    sees a clean shutdown signal and can persist state before exiting.
     cancel_all_drive_tokens(sync).await;
