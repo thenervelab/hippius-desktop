@@ -28,6 +28,7 @@ import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import { listShares, reshare, revokeShare, type ShareSummary } from "@/app/lib/tauri/shares";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { formatRelative } from "@/app/lib/utils/timeRelative";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/lib/utils";
 import { pickShareRowDisplay } from "./shareRowDisplay";
@@ -316,28 +317,4 @@ function formatBytes(n: number): string {
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
   return `${(n / 1024 ** 3).toFixed(1)} GB`;
-}
-
-/**
- * Render an RFC 3339 timestamp as a coarse "in 4h" / "12m ago" string.
- * Returns the original string if unparseable so a wire-format change
- * upstream doesn't blank the row.
- */
-function formatRelative(rfc3339: string): string {
-  const ms = Date.parse(rfc3339);
-  if (Number.isNaN(ms)) return rfc3339;
-  const diffMs = ms - Date.now();
-  const abs = Math.abs(diffMs);
-  const future = diffMs > 0;
-  if (abs < 60_000) return future ? "in <1m" : "<1m ago";
-  if (abs < 3_600_000) {
-    const m = Math.round(abs / 60_000);
-    return future ? `in ${m}m` : `${m}m ago`;
-  }
-  if (abs < 86_400_000) {
-    const h = Math.round(abs / 3_600_000);
-    return future ? `in ${h}h` : `${h}h ago`;
-  }
-  const d = Math.round(abs / 86_400_000);
-  return future ? `in ${d}d` : `${d}d ago`;
 }
