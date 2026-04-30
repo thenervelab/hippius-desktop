@@ -110,7 +110,12 @@ async fn add_file_internal(canonical_parent: &Path, file_path: &str) -> Result<S
 
 /// Add file to sync folder (Drive auto-syncs)
 #[tauri::command]
-pub async fn add_file(state: tauri::State<'_, crate::app_state::AppState>, sync_path: String, file_path: String) -> Result<String> {
+pub async fn add_file(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    app: tauri::AppHandle,
+    sync_path: String,
+    file_path: String,
+) -> Result<String> {
     // Enforce credit eligibility at the IPC boundary. Even if a stale
     // FE cache let the user click the upload button, this fails the
     // operation here so we never copy the file into the sync folder
@@ -119,12 +124,32 @@ pub async fn add_file(state: tauri::State<'_, crate::app_state::AppState>, sync_
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
     crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FileUpload).await?;
 
+    // Mark the processing window. Released either by the first upload
+    // chunk (success path, in `handle_transfer_progress`) or by the
+    // error guard below (failure path).
+    state.upload_processing.begin(&app, 1);
+
     // Canonicalize the sync path once and pass it to the internal helper
     // so the helper can be cheap when called per-file from the batch path.
-    let canonical_parent = tokio::fs::canonicalize(Path::new(&sync_path))
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
-    add_file_internal(&canonical_parent, &file_path).await
+    //
+    // We can't use `?` after `begin` because we must release the banner
+    // (clear_if_after) BEFORE returning the error — otherwise it would
+    // sit there until the watchdog timeout if the IPC fails before any
+    // upload chunk fires.
+    let canonical_parent = match tokio::fs::canonicalize(Path::new(&sync_path)).await {
+        Ok(p) => p,
+        Err(e) => {
+            state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+            return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
+        }
+    };
+    match add_file_internal(&canonical_parent, &file_path).await {
+        Ok(name) => Ok(name),
+        Err(e) => {
+            state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+            Err(e)
+        }
+    }
 }
 
 /// Add folder to sync folder
