@@ -23,3 +23,19 @@ export function pickShareRowDisplay(row: ShareSummary): ShareRowDisplay {
   }
   return { text: row.filename, isPlaceholder: false };
 }
+
+/**
+ * History-row sibling of `pickShareRowDisplay`. The active-list helper
+ * keys on `shareUrl`, but history rows have no URL — by the time a row
+ * lands in history the share is already revoked or expired, so the URL
+ * is moot. The "is this cross-device?" signal collapses to whether the
+ * filename was ever known on this device: a history row captured by the
+ * diff path on a device that never had the keystore entry stores
+ * `filename: null` (Rust `Option::None`).
+ */
+export function pickHistoryRowDisplay(filename: string | null): ShareRowDisplay {
+  if (filename === null) {
+    return { text: CROSS_DEVICE_PLACEHOLDER, isPlaceholder: true };
+  }
+  return { text: filename, isPlaceholder: false };
+}

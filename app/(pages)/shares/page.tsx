@@ -26,14 +26,22 @@ import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { AbstractIconWrapper, Icons } from "@/components/ui";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import { listShares, reshare, revokeShare, type ShareSummary } from "@/app/lib/tauri/shares";
+import {
+  clearShareHistory,
+  listShareHistory,
+  removeShareHistory,
+  type HistoryEndReason,
+  type ShareHistoryEntry,
+} from "@/app/lib/tauri/shareHistory";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { formatRelative } from "@/app/lib/utils/timeRelative";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/lib/utils";
-import { pickShareRowDisplay } from "./shareRowDisplay";
+import { pickHistoryRowDisplay, pickShareRowDisplay } from "./shareRowDisplay";
 
 const SHARES_QUERY_KEY = "shares-list";
+const HISTORY_QUERY_KEY = "shares-history-list";
 const REFRESH_INTERVAL_MS = 30_000;
 
 export default function MySharesPage() {
@@ -46,10 +54,26 @@ export default function MySharesPage() {
   // same dialog for any row without an extra "which token?" piece of state.
   const [tokenPendingRevoke, setTokenPendingRevoke] = React.useState<string | null>(null);
   const [revokeBusy, setRevokeBusy] = React.useState(false);
+  // `clearAllOpen` drives the "Clear all history" confirmation dialog.
+  // Single boolean (not a token carrier) because the action is global —
+  // there is nothing per-row to remember while the dialog is open.
+  const [clearAllOpen, setClearAllOpen] = React.useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: [SHARES_QUERY_KEY, polkadotAddress],
     queryFn: () => listShares(),
+    enabled: Boolean(polkadotAddress) && shareEnabled,
+    refetchInterval: REFRESH_INTERVAL_MS,
+  });
+
+  // History is a separate query because the lists rotate at different
+  // cadences (active list churns on revoke/reshare, history grows
+  // monotonically until the user clears it). Same refetch interval so
+  // the diff path on the Rust side can keep both surfaces in step
+  // without the FE doing any cross-list bookkeeping.
+  const { data: historyData } = useQuery({
+    queryKey: [HISTORY_QUERY_KEY, polkadotAddress],
+    queryFn: () => listShareHistory(),
     enabled: Boolean(polkadotAddress) && shareEnabled,
     refetchInterval: REFRESH_INTERVAL_MS,
   });
@@ -62,13 +86,30 @@ export default function MySharesPage() {
     try {
       await revokeShare(tokenPendingRevoke);
       toast.success("Share revoked");
-      // Refresh immediately rather than waiting for the 30s tick.
+      // Refresh both lists immediately rather than waiting for the 30s
+      // tick — Rust records a `RevokedHere` history entry on success, so
+      // the new row would otherwise pop in late.
       queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY, polkadotAddress] });
+      queryClient.invalidateQueries({ queryKey: [HISTORY_QUERY_KEY, polkadotAddress] });
     } catch (err) {
       toast.error(`Could not revoke share: ${errorMessage(err)}`);
     } finally {
       setRevokeBusy(false);
       setTokenPendingRevoke(null);
+    }
+  };
+
+  const onRemoveHistory = async (token: string) => {
+    try {
+      await removeShareHistory(token);
+      // No success toast — the row disappearing is its own confirmation.
+      // Removal is a one-way action from this device's perspective:
+      // the share is already dead server-side, and the diff path can't
+      // re-create the row because the share is no longer in the active
+      // list. Invalidate to drop the row immediately.
+      queryClient.invalidateQueries({ queryKey: [HISTORY_QUERY_KEY, polkadotAddress] });
+    } catch (err) {
+      toast.error(`Could not remove from history: ${errorMessage(err)}`);
     }
   };
 
@@ -137,6 +178,29 @@ export default function MySharesPage() {
           </div>
         )}
 
+        {shareEnabled && historyData && historyData.length > 0 && (
+          <>
+            <div className="flex items-center justify-between mt-6 mb-2">
+              <h2 className="text-sm font-semibold text-grey-30">History</h2>
+              <button
+                onClick={() => setClearAllOpen(true)}
+                className="text-xs text-grey-50 hover:text-grey-10"
+              >
+                Clear all history
+              </button>
+            </div>
+            <div className="flex flex-col gap-2">
+              {historyData.map((entry) => (
+                <HistoryRow
+                  key={entry.shareToken}
+                  entry={entry}
+                  onRemove={onRemoveHistory}
+                />
+              ))}
+            </div>
+          </>
+        )}
+
         <ConfirmDialog
           // Treating `tokenPendingRevoke !== null` as the open signal lets the
           // dialog double as a "which token are we asking about?" carrier —
@@ -153,6 +217,24 @@ export default function MySharesPage() {
           cancelText="Cancel"
           onConfirm={confirmRevoke}
           isLoading={revokeBusy}
+        />
+
+        <ConfirmDialog
+          open={clearAllOpen}
+          onOpenChange={setClearAllOpen}
+          variant="warning"
+          title="Clear all share history?"
+          description={`This removes ${historyData?.length ?? 0} entries from this device's history. The shares are already revoked or expired — this only clears the local list.`}
+          confirmText="Clear history"
+          cancelText="Cancel"
+          onConfirm={async () => {
+            try {
+              await clearShareHistory();
+              queryClient.invalidateQueries({ queryKey: [HISTORY_QUERY_KEY, polkadotAddress] });
+            } catch (err) {
+              toast.error(`Could not clear history: ${errorMessage(err)}`);
+            }
+          }}
         />
       </div>
     </DashboardTitleWrapper>
@@ -243,6 +325,103 @@ function ShareRow({ row, onCopy, onRevoke, onReshare }: ShareRowProps) {
       </div>
     </div>
   );
+}
+
+interface HistoryRowProps {
+  entry: ShareHistoryEntry;
+  onRemove: (token: string) => void;
+}
+
+/**
+ * Trimmed sibling of `ShareRow` for entries that have left the active
+ * list. Same icon/title/subtitle structure, but the share is dead
+ * server-side so there are no Copy / Reshare / Revoke affordances —
+ * only "Remove from history" to drop the row from this device's local
+ * record.
+ */
+function HistoryRow({ entry, onRemove }: HistoryRowProps) {
+  const display = pickHistoryRowDisplay(entry.filename);
+  const sizeSegment =
+    entry.plaintextSize !== null ? `${formatBytes(entry.plaintextSize)} · ` : "";
+
+  return (
+    <div className="flex items-center gap-3 p-3 bg-white border border-grey-80 rounded-lg hover:border-grey-70 transition-colors">
+      <AbstractIconWrapper className="size-10 shrink-0">
+        <Icons.Link className="absolute size-5 text-grey-40" />
+      </AbstractIconWrapper>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span
+            className={cn(
+              "text-sm truncate",
+              display.isPlaceholder
+                ? "italic text-grey-50"
+                : "font-medium text-grey-10",
+            )}
+            title={display.text}
+          >
+            {display.text}
+          </span>
+          <HistoryStatusBadge reason={entry.endReason} />
+        </div>
+        <p className="text-xs text-grey-50 mt-0.5">
+          {sizeSegment}created {formatRelative(entry.createdAt)} ·{" "}
+          {historyEndedPhrase(entry.endReason)} {formatRelative(entry.endedAt)}
+        </p>
+      </div>
+
+      <div className="flex items-center gap-2 shrink-0">
+        <RowButton
+          onClick={() => onRemove(entry.shareToken)}
+          title="Remove this entry from this device's history"
+          icon={<Icons.Trash className="size-3.5" />}
+          label="Remove from history"
+          variant="danger"
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Subtitle verb for the "ended" half of a history-row subtitle. The
+ * full string is composed in `HistoryRow` rather than here so the
+ * caller controls placement of the trailing relative time.
+ */
+function historyEndedPhrase(reason: HistoryEndReason): string {
+  switch (reason) {
+    case "expired":
+      return "expired";
+    case "revoked_here":
+      return "revoked";
+    case "revoked_elsewhere":
+      return "revoked elsewhere";
+  }
+}
+
+function HistoryStatusBadge({ reason }: { reason: HistoryEndReason }) {
+  // Three muted variants that match the existing `Expired` badge style
+  // on `ShareRow`. Revoked-elsewhere stays grey and italic to signal
+  // "this device didn't do it" — same convention as the cross-device
+  // filename placeholder above.
+  const baseClasses =
+    "text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded";
+  switch (reason) {
+    case "expired":
+      return <span className={cn(baseClasses, "bg-grey-90 text-grey-30")}>Expired</span>;
+    case "revoked_here":
+      // `error-100` is the lightest red tint in the project palette
+      // (`globals.css` defines 100→10, no 95). Same role the spec calls
+      // for: a soft red tint that pairs with `text-error-50`.
+      return <span className={cn(baseClasses, "bg-error-100 text-error-50")}>Revoked</span>;
+    case "revoked_elsewhere":
+      return (
+        <span className={cn(baseClasses, "bg-grey-90 text-grey-30 italic")}>
+          Revoked elsewhere
+        </span>
+      );
+  }
 }
 
 interface RowButtonProps {
