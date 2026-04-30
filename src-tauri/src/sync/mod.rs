@@ -25,5 +25,6 @@ pub mod remote;
 pub mod selective;
 pub mod status;
 pub mod tauri_bridge;
+pub mod upload_processing;
 pub mod user_stopped_migration;
 pub mod user_stopped_reversal;

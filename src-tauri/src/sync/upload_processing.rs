@@ -1,0 +1,112 @@
+//! Tracks the "processing" window between a user-initiated upload IPC
+//! call and the first byte of upload progress. The frontend renders a
+//! top-of-page banner during this window so the user sees that the
+//! system has acknowledged their click while disk copy + encryption
+//! run.
+//!
+//! Lifecycle:
+//! - `begin(count)` — called from `add_file` / `add_files` / `add_folder`
+//!   after the eligibility check, before the disk copy. Increments the
+//!   pending count and stamps `started_at` if currently `None`.
+//! - `clear_if_after(now)` — called from `handle_transfer_progress`
+//!   when the first upload chunk lands. Idempotent. Guarded by the
+//!   `started_at` timestamp so file-watcher activity that fires before
+//!   any user upload cannot accidentally hide a banner.
+//! - `reset()` — unconditional clear. Used by logout / `stop_sync`.
+
+use std::sync::Mutex;
+use std::time::Instant;
+
+#[derive(Default)]
+struct UploadProcessingInner {
+    pending_files: u64,
+    started_at: Option<Instant>,
+}
+
+pub struct UploadProcessingState {
+    inner: Mutex<UploadProcessingInner>,
+}
+
+impl Default for UploadProcessingState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl UploadProcessingState {
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(UploadProcessingInner::default()),
+        }
+    }
+
+    /// Snapshot for tests and event payload assembly.
+    #[doc(hidden)]
+    pub fn snapshot(&self) -> (bool, u64) {
+        let g = self.inner.lock().expect("upload_processing mutex poisoned");
+        (g.started_at.is_some(), g.pending_files)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn begin_then_clear_after_start_zeros_state() {
+        let s = UploadProcessingState::new();
+        s.begin_for_test(3);
+        let (active_before, count_before) = s.snapshot();
+        assert!(active_before);
+        assert_eq!(count_before, 3);
+
+        s.clear_if_after_for_test(Instant::now() + Duration::from_millis(1));
+        let (active_after, count_after) = s.snapshot();
+        assert!(!active_after);
+        assert_eq!(count_after, 0);
+    }
+
+    #[test]
+    fn clear_with_earlier_instant_is_noop() {
+        let s = UploadProcessingState::new();
+        let earlier = Instant::now();
+        // sleep a tick so the begin's started_at is strictly later
+        std::thread::sleep(Duration::from_millis(2));
+        s.begin_for_test(2);
+
+        s.clear_if_after_for_test(earlier);
+        let (active, count) = s.snapshot();
+        assert!(active, "earlier-instant clear must not fire");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn concurrent_begins_accumulate() {
+        let s = UploadProcessingState::new();
+        s.begin_for_test(4);
+        s.begin_for_test(3);
+        let (active, count) = s.snapshot();
+        assert!(active);
+        assert_eq!(count, 7);
+    }
+
+    #[test]
+    fn clear_when_inactive_is_noop() {
+        let s = UploadProcessingState::new();
+        s.clear_if_after_for_test(Instant::now());
+        let (active, count) = s.snapshot();
+        assert!(!active);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn reset_unconditionally_clears() {
+        let s = UploadProcessingState::new();
+        s.begin_for_test(5);
+        s.reset_for_test();
+        let (active, count) = s.snapshot();
+        assert!(!active);
+        assert_eq!(count, 0);
+    }
+}
