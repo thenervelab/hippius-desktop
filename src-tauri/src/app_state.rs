@@ -20,7 +20,10 @@ use hcfs_client::engine::runner::SyncRunner;
 
 use sqlx::sqlite::SqlitePool;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock, atomic::AtomicBool};
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicBool, AtomicU64},
+};
 
 /// The single top-level state container for the entire Tauri backend.
 ///
@@ -44,6 +47,12 @@ pub struct AppState {
     /// uploads. Drives the top-of-page processing banner. See
     /// `crate::sync::upload_processing`.
     pub upload_processing: std::sync::Arc<crate::sync::upload_processing::UploadProcessingState>,
+    /// Monotonically increasing counter, incremented on every
+    /// `SyncStarted` event. The `UploadProcessingState` clear gate
+    /// reads this to distinguish events from a cycle that began
+    /// AFTER an `add_file`/`add_files`/`add_folder` call from events
+    /// that belong to a cycle that was already running.
+    pub sync_session_epoch: AtomicU64,
     /// HTTP client for HCFS health checks (accepts self-signed certs in debug).
     pub health_client: reqwest::Client,
     /// HTTP client for Hippius API calls (reuses connection pool + TLS cache).
@@ -115,6 +124,7 @@ impl AppState {
             nebula: NebulaState::new(),
             migration: MigrationState::new(),
             upload_processing: std::sync::Arc::new(crate::sync::upload_processing::UploadProcessingState::new()),
+            sync_session_epoch: AtomicU64::new(0),
             health_client,
             // Explicit timeouts. Without them a hung connection (e.g. a
             // billing-server blip during `check_action_eligibility`) would

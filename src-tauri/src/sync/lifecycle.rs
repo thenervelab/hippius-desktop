@@ -1657,13 +1657,17 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
 
         // First non-zero upload chunk for any file ends the
         // "processing" window — the bottom-right widget now has real
-        // per-file progress and the top banner can vanish. Idempotent
-        // and cheap (single mutex tick + early return when state is
-        // already cleared) so calling on every chunk is fine.
+        // per-file progress and the top banner can vanish. Gated on
+        // `sync_session_epoch` so chunks from an in-flight cycle
+        // that started BEFORE the activating `begin` do NOT clear the
+        // banner. Idempotent (single mutex tick + early return when
+        // state is already cleared) so calling on every chunk is
+        // fine.
         if matches!(ctx.direction, TransferDirection::Upload) && bytes > 0 {
             use tauri::Manager;
             let app_state = ctx.app.state::<crate::app_state::AppState>();
-            app_state.upload_processing.clear_if_after(&ctx.app, std::time::Instant::now());
+            let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+            app_state.upload_processing.clear_if_session_advanced(&ctx.app, epoch);
         }
 
         if crate::sync::logic::is_file_completion_tick(bytes, total) {

@@ -170,6 +170,15 @@ impl SyncEventHandler for TauriSyncBridge {
                 mut local_delete_files,
                 mut remote_delete_files,
             } => {
+                // Increment the sync session epoch so the
+                // UploadProcessingState clear gate knows a new cycle
+                // has started. See `crate::sync::upload_processing`
+                // for the full rationale.
+                {
+                    use tauri::Manager;
+                    let app_state = app.state::<crate::app_state::AppState>();
+                    app_state.sync_session_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
                 cap_file_list(&mut upload_files);
                 cap_file_list(&mut download_files);
                 cap_file_list(&mut local_delete_files);
@@ -217,9 +226,15 @@ impl SyncEventHandler for TauriSyncBridge {
                 // already-synced batch, downloads/deletes only), the
                 // first-chunk path in `handle_transfer_progress` never
                 // ran and the banner would otherwise stay raised.
-                // `clear_if_after` is idempotent so the common case
-                // (real upload already cleared it) is a no-op.
-                app_state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+                // `clear_if_session_advanced` is idempotent and gated
+                // on the per-cycle epoch, so the common case (real
+                // upload already cleared it) is a no-op and an
+                // overlapping in-flight cycle's completion cannot
+                // prematurely clear a NEW upload's banner.
+                {
+                    let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+                    app_state.upload_processing.clear_if_session_advanced(&app, epoch);
+                }
 
                 // Update per-file failure counters from the finalized session.
                 update_failure_counts(&app, &label);
@@ -269,11 +284,14 @@ impl SyncEventHandler for TauriSyncBridge {
                 // session aborted mid-encryption the first-chunk path
                 // never ran and the banner would stay raised. Cancels
                 // are intentionally skipped above — those go through
-                // `stop_sync`'s reset path.
+                // `stop_sync`'s reset path. Epoch-gated so an error
+                // emitted by an in-flight cycle that started BEFORE
+                // a fresh `begin` cannot clear that begin's banner.
                 {
                     use tauri::Manager;
                     let app_state = app.state::<crate::app_state::AppState>();
-                    app_state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+                    let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+                    app_state.upload_processing.clear_if_session_advanced(&app, epoch);
                 }
                 let _ = app.emit(
                     events::SYNC_ERROR,

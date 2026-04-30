@@ -125,28 +125,31 @@ pub async fn add_file(
     crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FileUpload).await?;
 
     // Mark the processing window. Released either by the first upload
-    // chunk (success path, in `handle_transfer_progress`) or by the
-    // error guard below (failure path).
-    state.upload_processing.begin(&app, 1);
+    // chunk of the NEXT sync cycle (success path, gated by
+    // `sync_session_epoch` in `handle_transfer_progress`) or by the
+    // error guard below (failure path — IPC failed before any cycle
+    // ran, so unconditional `reset` is correct).
+    let epoch = state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+    state.upload_processing.begin(&app, 1, epoch);
 
     // Canonicalize the sync path once and pass it to the internal helper
     // so the helper can be cheap when called per-file from the batch path.
     //
     // We can't use `?` after `begin` because we must release the banner
-    // (clear_if_after) BEFORE returning the error — otherwise it would
-    // sit there until the watchdog timeout if the IPC fails before any
-    // upload chunk fires.
+    // (`reset`) BEFORE returning the error — otherwise it would sit there
+    // until the watchdog timeout if the IPC fails before any sync cycle
+    // can start.
     let canonical_parent = match tokio::fs::canonicalize(Path::new(&sync_path)).await {
         Ok(p) => p,
         Err(e) => {
-            state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+            state.upload_processing.reset(&app);
             return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
         }
     };
     match add_file_internal(&canonical_parent, &file_path).await {
         Ok(name) => Ok(name),
         Err(e) => {
-            state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+            state.upload_processing.reset(&app);
             Err(e)
         }
     }
@@ -178,7 +181,8 @@ pub async fn add_folder(
     // configurations).
     let count = count_regular_files(Path::new(&folder_path)).await;
     if count > 0 {
-        state.upload_processing.begin(&app, count);
+        let epoch = state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        state.upload_processing.begin(&app, count, epoch);
     }
 
     let result = add_folder_with_app_inner(&sync_path, &folder_path, subfolder.as_deref()).await;
@@ -191,7 +195,9 @@ pub async fn add_folder(
             Ok(name)
         }
         Err(e) => {
-            state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+            // IPC failed before any sync cycle ran — unconditional
+            // reset is correct (no cycle epoch to gate on).
+            state.upload_processing.reset(&app);
             Err(e)
         }
     }
@@ -502,7 +508,8 @@ pub async fn add_files(
         }
     }
     if total_count > 0 {
-        state.upload_processing.begin(&app, total_count);
+        let epoch = state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        state.upload_processing.begin(&app, total_count, epoch);
     }
 
     // When a subfolder is specified, resolve the effective target directory.
@@ -510,38 +517,39 @@ pub async fn add_files(
     // Async canonicalize so a slow filesystem doesn't block the tokio worker.
     //
     // After `begin` above, every fallible early-return path here MUST call
-    // `clear_if_after` first — otherwise the banner sits there until the
-    // watchdog timeout while the IPC has already failed.
+    // `reset` first — otherwise the banner sits there until the watchdog
+    // timeout while the IPC has already failed. Unconditional `reset` is
+    // correct because the IPC failed before any sync cycle could run.
     let target_path = if let Some(ref sub) = subfolder {
         // Reject traversal components
         if sub.contains("..") {
-            state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+            state.upload_processing.reset(&app);
             return Err(crate::error::AppError::Other("Subfolder path contains traversal component".into()));
         }
         let target = Path::new(&sync_path).join(sub);
         if !target.exists()
             && let Err(e) = std::fs::create_dir_all(&target)
         {
-            state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+            state.upload_processing.reset(&app);
             return Err(crate::error::AppError::Other(format!("Failed to create subfolder: {e}")));
         }
         // Verify resolved path stays within sync root.
         let canonical_root = match tokio::fs::canonicalize(Path::new(&sync_path)).await {
             Ok(p) => p,
             Err(e) => {
-                state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+                state.upload_processing.reset(&app);
                 return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
             }
         };
         let canonical_target = match tokio::fs::canonicalize(&target).await {
             Ok(p) => p,
             Err(e) => {
-                state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+                state.upload_processing.reset(&app);
                 return Err(crate::error::AppError::Other(format!("Invalid subfolder path: {e}")));
             }
         };
         if !canonical_target.starts_with(&canonical_root) {
-            state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+            state.upload_processing.reset(&app);
             return Err(crate::error::AppError::Other("Subfolder escapes sync folder".into()));
         }
         target.to_string_lossy().to_string()
@@ -555,7 +563,7 @@ pub async fn add_files(
     let canonical_target = match tokio::fs::canonicalize(Path::new(&target_path)).await {
         Ok(p) => p,
         Err(e) => {
-            state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+            state.upload_processing.reset(&app);
             return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
         }
     };
@@ -600,11 +608,13 @@ pub async fn add_files(
     // is nothing to do, leaving a `Processing N files…` banner stuck
     // until the next sync cycle (which could be minutes away).
     //
-    // The `clear_if_after` is safe even if we never called `begin`
-    // (e.g. `total_count` was 0 above): it short-circuits on
-    // `started_at.is_none()`.
+    // Unconditional `reset` is correct: the batch never produced any
+    // upload work, so there is no future cycle whose epoch we need
+    // to gate against. `reset` is safe even if `begin` was never
+    // called (e.g. `total_count` was 0 above): it short-circuits when
+    // state is already inactive.
     if added.is_empty() {
-        state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+        state.upload_processing.reset(&app);
     }
 
     // Always trigger sync so successfully added files get uploaded
