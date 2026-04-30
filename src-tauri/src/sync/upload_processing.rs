@@ -54,6 +54,39 @@ impl UploadProcessingState {
     fn started_at_for_test(&self) -> Option<std::time::Instant> {
         self.inner.lock().expect("upload_processing mutex poisoned").started_at
     }
+
+    /// Test-only entry point that mirrors [`Self::begin`] without
+    /// emitting a Tauri event. Production code calls `begin`.
+    #[cfg(test)]
+    fn begin_for_test(&self, count: u64) {
+        let mut g = self.inner.lock().expect("upload_processing mutex poisoned");
+        g.pending_files = g.pending_files.saturating_add(count);
+        if g.started_at.is_none() {
+            g.started_at = Some(Instant::now());
+        }
+    }
+
+    /// Test-only entry point that mirrors [`Self::clear_if_after`] without
+    /// emitting a Tauri event.
+    #[cfg(test)]
+    fn clear_if_after_for_test(&self, event_at: Instant) {
+        let mut g = self.inner.lock().expect("upload_processing mutex poisoned");
+        if let Some(started_at) = g.started_at {
+            if event_at >= started_at {
+                g.pending_files = 0;
+                g.started_at = None;
+            }
+        }
+    }
+
+    /// Test-only entry point that mirrors [`Self::reset`] without
+    /// emitting a Tauri event.
+    #[cfg(test)]
+    fn reset_for_test(&self) {
+        let mut g = self.inner.lock().expect("upload_processing mutex poisoned");
+        g.pending_files = 0;
+        g.started_at = None;
+    }
 }
 
 #[cfg(test)]
