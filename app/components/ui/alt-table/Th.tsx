@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils";
 import { Header, flexRender } from "@tanstack/react-table";
 import { ChevronDown } from "@/components/ui/icons";
+import { ArrowUpDown } from "lucide-react";
 import React from "react";
 
 export interface ThProps<TData, TValue>
@@ -72,12 +73,19 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
             )}
           >
             {flexRender(header.column.columnDef.header, header.getContext())}
-            {sortOrder && canSort && (
+            {sortOrder ? (
               <ChevronDown
                 className={cn(
                   "absolute mt-0.5 -right-5 w-4 text-primary-50 duration-300",
                   sortOrder === "asc" && "rotate-180"
                 )}
+              />
+            ) : (
+              // Unsorted affordance — signals the column is clickable. The
+              // active-sort branch above replaces this once a sort is applied.
+              <ArrowUpDown
+                aria-hidden="true"
+                className="absolute mt-0.5 -right-5 w-3.5 text-grey-70/60"
               />
             )}
           </button>

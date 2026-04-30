@@ -928,14 +928,17 @@ const FilesTable: FC<FilesTableProps> = memo(
 
     const table = useReactTable(tableConfig);
 
-    // Get sorted rows — show all visible items (no client-side slicing).
-    // Include enrichedAllFiles in deps so rows recompute when the data source changes
-    // (e.g. folder tab switch). useReactTable returns a stable reference, so
-    // without enrichedAllFiles this memo would stay stale.
+    // useReactTable returns a stable `table` reference across renders, so
+    // `[table, ...]` deps alone never re-fire when sorting state changes.
+    // We MUST include `sorting` so getRowModel() (which yields freshly
+    // sorted rows) is re-read on every sort toggle, and so getHeaderGroups()
+    // is re-read so each Th picks up the new getIsSorted() value (sort
+    // chevron + active style). `enrichedAllFiles` keeps the rows in sync
+    // when the data source changes (folder tab switch, sync re-enrichment).
     const visibleRows = useMemo(() => {
       return table.getRowModel().rows;
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [table, enrichedAllFiles]);
+    }, [table, enrichedAllFiles, sorting]);
 
     const headerRows = useMemo(
       () =>
@@ -953,7 +956,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             ))}
           </TableModule.Tr>
         )),
-      [table, columnWidths, handleResizeStart, justResized]
+      [table, columnWidths, handleResizeStart, justResized, sorting]
     );
 
     const tableBody = useMemo(
