@@ -78,6 +78,17 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     // — much longer than Sonner's default ~4s. Caller-provided
     // `toastId` (rare path used to update an in-flight toast) wins.
     const localToastId = options?.toastId ?? UPLOAD_PROCESSING_TOAST_ID;
+    if (options?.toastId !== undefined && options.toastId !== UPLOAD_PROCESSING_TOAST_ID) {
+      // A caller passed a non-shared toastId. The
+      // `useUploadProcessing` hook only dismisses
+      // `UPLOAD_PROCESSING_TOAST_ID`, so a custom id will leak —
+      // the toast will stay stuck after sync starts and stack
+      // with subsequent uploads. Surface the misuse here.
+      console.warn(
+        "[useFilesUpload] caller passed a non-shared toastId; toast will not auto-dismiss when sync starts. Use UPLOAD_PROCESSING_TOAST_ID instead.",
+        { toastId: options.toastId },
+      );
+    }
     toast.loading(startText, {
       id: localToastId,
       closeButton: true,

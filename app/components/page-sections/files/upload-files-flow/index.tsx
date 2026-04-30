@@ -239,9 +239,14 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
         ? formatDisplayName(files[0].name)
         : `${files.length} files`;
 
-    const toastId = toast.loading(
-      `Preparing ${firstFileName} for upload...`
-    );
+    // Use the shared UPLOAD_PROCESSING_TOAST_ID so the toast survives
+    // across the prepare → add → sync-start window and gets dismissed
+    // by the `useUploadProcessing` hook when Rust signals the cycle
+    // has begun. Without this, an auto-generated id makes the dismiss
+    // in the hook a no-op and leaves the toast stacked when the next
+    // upload starts.
+    const toastId = UPLOAD_PROCESSING_TOAST_ID;
+    toast.loading(`Preparing ${firstFileName} for upload...`, { id: toastId });
 
     try {
       const processedPaths = await writeBrowserFilesToDisk(files);
