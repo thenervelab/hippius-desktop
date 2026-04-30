@@ -24,6 +24,7 @@ import { toast } from "sonner";
 
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { AbstractIconWrapper, Icons } from "@/components/ui";
+import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import { listShares, reshare, revokeShare, type ShareSummary } from "@/app/lib/tauri/shares";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
@@ -38,6 +39,12 @@ export default function MySharesPage() {
   const { polkadotAddress } = useWalletAuth();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const queryClient = useQueryClient();
+  // Revoke is destructive and irreversible — the row click queues a token
+  // here; `confirmRevoke` only fires after the user accepts in the
+  // `ConfirmDialog`. Keeping the token (not a boolean) lets us reuse the
+  // same dialog for any row without an extra "which token?" piece of state.
+  const [tokenPendingRevoke, setTokenPendingRevoke] = React.useState<string | null>(null);
+  const [revokeBusy, setRevokeBusy] = React.useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: [SHARES_QUERY_KEY, polkadotAddress],
@@ -46,14 +53,21 @@ export default function MySharesPage() {
     refetchInterval: REFRESH_INTERVAL_MS,
   });
 
-  const onRevoke = async (token: string) => {
+  const queueRevoke = (token: string) => setTokenPendingRevoke(token);
+
+  const confirmRevoke = async () => {
+    if (!tokenPendingRevoke) return;
+    setRevokeBusy(true);
     try {
-      await revokeShare(token);
+      await revokeShare(tokenPendingRevoke);
       toast.success("Share revoked");
       // Refresh immediately rather than waiting for the 30s tick.
       queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY, polkadotAddress] });
     } catch (err) {
       toast.error(`Could not revoke share: ${errorMessage(err)}`);
+    } finally {
+      setRevokeBusy(false);
+      setTokenPendingRevoke(null);
     }
   };
 
@@ -115,12 +129,30 @@ export default function MySharesPage() {
                 key={row.shareToken}
                 row={row}
                 onCopy={onCopy}
-                onRevoke={onRevoke}
+                onRevoke={queueRevoke}
                 onReshare={onReshare}
               />
             ))}
           </div>
         )}
+
+        <ConfirmDialog
+          // Treating `tokenPendingRevoke !== null` as the open signal lets the
+          // dialog double as a "which token are we asking about?" carrier —
+          // closing it (cancel, escape, outside-click) zeroes the token in
+          // `onOpenChange`, so the page settles back to a clean state.
+          open={tokenPendingRevoke !== null}
+          onOpenChange={(open) => {
+            if (!open) setTokenPendingRevoke(null);
+          }}
+          variant="danger"
+          title="Revoke this link?"
+          description="Anyone with the link will lose access immediately. This can't be undone."
+          confirmText="Revoke"
+          cancelText="Cancel"
+          onConfirm={confirmRevoke}
+          isLoading={revokeBusy}
+        />
       </div>
     </DashboardTitleWrapper>
   );
