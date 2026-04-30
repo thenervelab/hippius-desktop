@@ -15,10 +15,13 @@ use crate::app_state::AppState;
 use crate::auth::account_key::account_key;
 use crate::billing::eligibility::{InsufficientCreditsAction, require_eligible};
 use crate::error::{AppError, Result};
+use crate::shares::SqliteShareKeystore;
 use crate::shares::capabilities::fetch_capabilities;
 use crate::shares::client::build_account_client;
+use crate::shares::history::{self, HistoryEntry};
 use crate::shares::origin;
-use crate::shares::SqliteShareKeystore;
+use chrono::Utc;
+use hcfs_client::client::share::ShareSummary as UpstreamShareSummary;
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
 use std::path::{Component, Path, PathBuf};
@@ -207,10 +210,7 @@ async fn create_share_inner(state: &AppState, account_id: &str, folder_label: &s
     // will surface as `text/plain`. The recipient's browser is the
     // second line of validation (it sniffs and re-validates against
     // its own rules), so we accept the cheap guess here.
-    let mime_type = mime_guess::from_path(&local_path)
-        .first_or_octet_stream()
-        .essence_str()
-        .to_owned();
+    let mime_type = mime_guess::from_path(&local_path).first_or_octet_stream().essence_str().to_owned();
 
     info!(
         label = %folder_label,
@@ -266,11 +266,7 @@ async fn create_share_inner(state: &AppState, account_id: &str, folder_label: &s
 /// `share_keystore`, and returns a `ShareLink` whose `share_url` already
 /// contains the `#k=<key>` URL fragment.
 #[tauri::command]
-pub async fn hcfs_create_share(
-    state: tauri::State<'_, AppState>,
-    folder_label: String,
-    relative_path: String,
-) -> Result<ShareLink> {
+pub async fn hcfs_create_share(state: tauri::State<'_, AppState>, folder_label: String, relative_path: String) -> Result<ShareLink> {
     let account_id = state.current_account_id().map_err(AppError::Other)?;
 
     // Capability + eligibility gates. The capability call is a single
@@ -316,9 +312,7 @@ pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String
     // instead.
     let mut origins = origin::fetch_for_tokens(pool, &[share_token.as_str()]).await?;
     let Some(origin) = origins.remove(&share_token) else {
-        return Err(AppError::Validation(
-            "Reshare is unavailable for this link on this device.".into(),
-        ));
+        return Err(AppError::Validation("Reshare is unavailable for this link on this device.".into()));
     };
 
     // Best-effort revoke of the old token. The server's revoke is
@@ -400,6 +394,38 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
     let owner = account_key(&account_id);
     origin::prune(pool, &owner, &tokens).await;
 
+    // Diff the previous active-list snapshot against the current one
+    // and persist any tokens that have left the set. Best-effort: a
+    // diff/upsert failure must never fail the user-facing list call.
+    // The cache is per-account (mirrors origin::prune's scoping) and
+    // lives only in memory — see AppState::share_active_list_cache.
+    let previous_snapshot = state.share_active_list_cache.lock().map_or_else(
+        |e| {
+            warn!(error = %e, "share_active_list_cache lock poisoned; skipping diff");
+            Vec::new()
+        },
+        |guard| guard.get(&account_id).cloned().unwrap_or_default(),
+    );
+    let now = Utc::now();
+    let events = history::diff_active_lists(&previous_snapshot, &summaries, now);
+    for event in events {
+        if let Err(e) = history::record_event(pool, &account_id, &event.entry).await {
+            warn!(
+                share_token = %event.entry.share_token,
+                end_reason = ?event.end_reason,
+                error = %e,
+                "shared_link_history upsert failed (non-fatal)"
+            );
+        }
+    }
+    // Replace the snapshot with the current list so the next call
+    // diffs against this baseline. We store the upstream summaries
+    // (not the wire ShareSummary) because the diff path and the
+    // revoke-here lookup both consume `UpstreamShareSummary`.
+    if let Ok(mut cache) = state.share_active_list_cache.lock() {
+        cache.insert(account_id.clone(), summaries.clone());
+    }
+
     let wire = summaries
         .into_iter()
         .map(|s| {
@@ -431,12 +457,48 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
 pub async fn hcfs_revoke_share(state: tauri::State<'_, AppState>, share_token: String) -> Result<()> {
     let account_id = state.current_account_id().map_err(AppError::Other)?;
     let pool = state.pool()?;
+
+    // Snapshot the cached active-list entry for this token BEFORE the
+    // revoke fires so we can carry filename/mime/timestamps into the
+    // history row. Cloning out of the lock keeps the mutex-hold to
+    // microseconds. A `None` here is the rare race where the user
+    // revokes before this device has called `list_shares` even once;
+    // history::entry_for_revoke_here handles that minimally.
+    let cached_summary: Option<UpstreamShareSummary> = state.share_active_list_cache.lock().ok().and_then(|guard| {
+        guard
+            .get(&account_id)
+            .and_then(|list| list.iter().find(|s| s.share_token == share_token).cloned())
+    });
+
     let client = build_account_client(pool, &account_id).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
     client
         .revoke_share(&share_token, &keystore)
         .await
         .map_err(|e| AppError::Hcfs(format!("revoke_share: {e}")))?;
+
+    // Record the revoke in the history sidecar. Best-effort — a
+    // history miss is purely cosmetic (the row won't appear in the
+    // FE's history list until the next call_share that detects it as
+    // RevokedElsewhere), never a reason to fail a successful revoke.
+    let entry: HistoryEntry = history::entry_for_revoke_here(share_token.clone(), cached_summary.as_ref(), Utc::now());
+    if let Err(e) = history::record_event(pool, &account_id, &entry).await {
+        warn!(
+            share_token = %share_token,
+            error = %e,
+            "Failed to record shared_link_history after successful revoke"
+        );
+    }
+
+    // Drop the active-list cache entry for this token so a near-immediate
+    // follow-up `list_shares` doesn't re-detect it as RevokedElsewhere
+    // (the server has the revoke, but the cached snapshot still shows it).
+    if let Ok(mut cache) = state.share_active_list_cache.lock()
+        && let Some(list) = cache.get_mut(&account_id)
+    {
+        list.retain(|s| s.share_token != share_token);
+    }
+
     // Drop the sidecar row so the per-file badge clears and the
     // Reshare button stops offering this token. Idempotent — a missing
     // row is fine — and best-effort: a sidecar leftover after a
@@ -449,6 +511,40 @@ pub async fn hcfs_revoke_share(state: tauri::State<'_, AppState>, share_token: S
             "Failed to forget share_origin after successful revoke"
         );
     }
+    Ok(())
+}
+
+// ─── History IPC commands ──────────────────────────────────────────────────
+
+/// List all share-link history rows for the current account, newest
+/// first. See [`crate::shares::history`] for the lifecycle and
+/// `EndReason` semantics.
+#[tauri::command]
+pub async fn hcfs_list_share_history(state: tauri::State<'_, AppState>) -> Result<Vec<HistoryEntry>> {
+    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let pool = state.pool()?;
+    Ok(history::list_for_account(pool, &account_id).await?)
+}
+
+/// Remove a single history row. Idempotent — calling on a missing row
+/// returns `Ok(())` so the FE doesn't have to special-case "I just
+/// tapped Remove twice".
+#[tauri::command]
+pub async fn hcfs_remove_share_history(state: tauri::State<'_, AppState>, share_token: String) -> Result<()> {
+    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let pool = state.pool()?;
+    history::remove_one(pool, &account_id, &share_token).await?;
+    Ok(())
+}
+
+/// Bulk clear all history rows for the current account. Scoped per
+/// account so a multi-account install never wipes another account's
+/// rows.
+#[tauri::command]
+pub async fn hcfs_clear_share_history(state: tauri::State<'_, AppState>) -> Result<()> {
+    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let pool = state.pool()?;
+    history::clear_all_for_account(pool, &account_id).await?;
     Ok(())
 }
 

@@ -37,6 +37,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "user_preferences",
     "share_keystore",
     "share_origin",
+    "shared_link_history",
 ];
 
 /// Read the column names of a table via `PRAGMA table_info(...)`.
@@ -385,7 +386,9 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
     // Seed with OS hostname if no row exists yet
     {
-        let existing = sqlx::query("SELECT id FROM device_settings WHERE id = 1").fetch_optional(&mut *tx).await?;
+        let existing = sqlx::query("SELECT id FROM device_settings WHERE id = 1")
+            .fetch_optional(&mut *tx)
+            .await?;
         if existing.is_none() {
             let hostname = hostname::get().map_or_else(|_| "My Device".to_string(), |h| h.to_string_lossy().into_owned());
             sqlx::query("INSERT INTO device_settings (id, device_name) VALUES (1, ?)")
@@ -557,6 +560,35 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(&mut *tx)
     .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS share_origin_owner_idx ON share_origin (owner, folder_label)")
+        .execute(&mut *tx)
+        .await?;
+
+    // Per-device snapshot of share tokens that have left the active set
+    // (expired server-side, revoked locally, or revoked from another
+    // device). The composite PRIMARY KEY makes `record_event` idempotent
+    // under repeat diffs without per-device coordination, and the
+    // (account_id, ended_at) index keeps the DESC list query off a full
+    // scan once the table grows. See `crate::shares::history` for the
+    // module-level rationale and lifecycle.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS shared_link_history (
+            account_id     TEXT NOT NULL,
+            share_token    TEXT NOT NULL,
+            filename       TEXT,
+            folder_label   TEXT,
+            relative_path  TEXT,
+            plaintext_size INTEGER,
+            mime_type      TEXT,
+            created_at     TEXT NOT NULL,
+            expires_at     TEXT NOT NULL,
+            ended_at       TEXT NOT NULL,
+            end_reason     TEXT NOT NULL,
+            PRIMARY KEY (account_id, share_token)
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS shared_link_history_account_ended_idx ON shared_link_history (account_id, ended_at DESC)")
         .execute(&mut *tx)
         .await?;
 

@@ -88,6 +88,23 @@ pub struct AppState {
     /// Nebula first) from the re-entrant one triggered by the post-
     /// cleanup `app.exit(0)` (allow the exit to proceed).
     pub nebula_stopped: AtomicBool,
+    /// Per-account snapshot of the most recent `hcfs_list_shares`
+    /// result. Used by `crate::shares::history::diff_active_lists` to
+    /// detect tokens that have left the active set since the last
+    /// refresh, and by `hcfs_revoke_share` to recover filename/mime/
+    /// timestamps for the cached `ShareSummary` of the token being
+    /// revoked.
+    ///
+    /// Lost on app restart. The plan's design doc accepts the tradeoff:
+    /// rows that vanish while the app is closed don't surface in
+    /// history, which is acceptable because (a) `hcfs_list_shares` only
+    /// returns currently-active tokens — historical knowledge is purely
+    /// local presentation state — and (b) a persistent snapshot table
+    /// would add a write path on every refresh for marginal benefit.
+    ///
+    /// Mutex held only for the snapshot read at revoke time and the
+    /// snapshot write at end of list — lock duration is microseconds.
+    pub share_active_list_cache: Mutex<HashMap<String, Vec<hcfs_client::client::share::ShareSummary>>>,
 }
 
 impl Default for AppState {
@@ -146,6 +163,7 @@ impl AppState {
             // the dialog gets a chance to run before any sync init races in.
             recovery_gate: tokio::sync::watch::channel(RecoveryGateState::Skipped).0,
             nebula_stopped: AtomicBool::new(false),
+            share_active_list_cache: Mutex::new(HashMap::new()),
         }
     }
 
