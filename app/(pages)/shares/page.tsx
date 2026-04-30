@@ -29,6 +29,7 @@ import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/lib/utils";
+import { pickShareRowDisplay } from "./shareRowDisplay";
 
 const SHARES_QUERY_KEY = "shares-list";
 const REFRESH_INTERVAL_MS = 30_000;
@@ -140,6 +141,7 @@ function ShareRow({ row, onCopy, onRevoke, onReshare }: ShareRowProps) {
   // button up front so the user gets a tooltip instead of a toast.
   // See `app/lib/tauri/shares.ts::reshare` for the Rust contract.
   const canReshare = Boolean(row.folderLabel && row.relativePath);
+  const display = pickShareRowDisplay(row);
 
   return (
     <div className="flex items-center gap-3 p-3 bg-white border border-grey-80 rounded-lg hover:border-grey-70 transition-colors">
@@ -149,8 +151,16 @@ function ShareRow({ row, onCopy, onRevoke, onReshare }: ShareRowProps) {
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-grey-10 truncate" title={row.filename}>
-            {row.filename}
+          <span
+            className={cn(
+              "text-sm truncate",
+              display.isPlaceholder
+                ? "italic text-grey-50"
+                : "font-medium text-grey-10",
+            )}
+            title={display.text}
+          >
+            {display.text}
           </span>
           {expired && (
             // Server reaps in the background — render the badge
@@ -171,7 +181,11 @@ function ShareRow({ row, onCopy, onRevoke, onReshare }: ShareRowProps) {
         <RowButton
           onClick={() => onCopy(row.shareUrl)}
           disabled={!row.shareUrl}
-          title={row.shareUrl ? "Copy link" : "Key not on this device"}
+          title={
+            row.shareUrl
+              ? "Copy link"
+              : "The link can only be copied from the device that created it."
+          }
           icon={<Icons.Copy className="size-3.5" />}
           label="Copy"
         />
@@ -181,7 +195,7 @@ function ShareRow({ row, onCopy, onRevoke, onReshare }: ShareRowProps) {
           title={
             canReshare
               ? "Revoke this link and mint a new one with a fresh expiry"
-              : "Reshare unavailable: this device doesn't know which file the share came from"
+              : "Reshare requires the device that created this link."
           }
           icon={<Icons.Refresh className="size-3.5" />}
           label="Reshare"
