@@ -46,6 +46,14 @@ impl UploadProcessingState {
         let g = self.inner.lock().expect("upload_processing mutex poisoned");
         (g.started_at.is_some(), g.pending_files)
     }
+
+    /// Test-only accessor exposing the internal `started_at` so tests
+    /// can assert that subsequent `begin` calls during an active
+    /// window do not re-stamp the original start time.
+    #[cfg(test)]
+    fn started_at_for_test(&self) -> Option<std::time::Instant> {
+        self.inner.lock().expect("upload_processing mutex poisoned").started_at
+    }
 }
 
 #[cfg(test)]
@@ -82,13 +90,27 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_begins_accumulate() {
+    fn sequential_begins_accumulate() {
         let s = UploadProcessingState::new();
         s.begin_for_test(4);
         s.begin_for_test(3);
         let (active, count) = s.snapshot();
         assert!(active);
         assert_eq!(count, 7);
+    }
+
+    #[test]
+    fn second_begin_does_not_restamp_started_at() {
+        let s = UploadProcessingState::new();
+        s.begin_for_test(1);
+        let first_stamp = s.started_at_for_test();
+        assert!(first_stamp.is_some());
+        // Sleep so a faulty re-stamp implementation would produce a
+        // strictly-later Instant on the second call.
+        std::thread::sleep(Duration::from_millis(2));
+        s.begin_for_test(1);
+        let second_stamp = s.started_at_for_test();
+        assert_eq!(first_stamp, second_stamp, "begin must not restamp started_at while active");
     }
 
     #[test]
