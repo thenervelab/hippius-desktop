@@ -8,7 +8,6 @@ import BlockChainStats from "@/components/dashboard-title-wrapper/BlockChainStat
 import ConflictsBanner from "@/components/ui/ConflictsBanner";
 import MigrationBanner from "@/components/ui/MigrationBanner";
 import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert";
-import UploadProcessingBanner from "@/components/ui/UploadProcessingBanner";
 
 export default function ResponsiveContent({
   children,
@@ -35,7 +34,6 @@ export default function ResponsiveContent({
             </div>
           </div>
           <ConflictsBanner />
-          <UploadProcessingBanner />
           <MigrationBanner />
           {/* `SyncReauthRequiredAlert` auto-renders null unless Rust's
               `restore_session` flagged `sync_requires_reauth = true`

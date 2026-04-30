@@ -111,13 +111,12 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       if (result.failed.length > 0) {
         const failedNames = result.failed.map((f) => f.name).join(", ");
         toast.warning(`${result.added.length} files added, ${result.failed.length} failed: ${failedNames}`, { duration: 6000, closeButton: true });
-      } else {
-        const addedText =
-          filePaths.length === 1
-            ? `${firstFileName} added. Your sync will start soon.`
-            : `${filePaths.length} files added. Your sync will start soon.`;
-        toast.success(addedText, { duration: 4000, closeButton: true });
       }
+      // Success path: no separate "Your sync will start soon" toast — the
+      // `useUploadProcessing` hook now owns the "Processing… Sync will
+      // start shortly…" feedback driven by the Rust
+      // `hcfs_upload_processing` event, which persists from the IPC call
+      // through to the moment the sync cycle starts.
 
       refetchUserFiles();
       queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });

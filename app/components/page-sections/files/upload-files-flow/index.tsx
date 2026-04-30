@@ -333,14 +333,10 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       if (result.failed.length > 0) {
         const failedNames = result.failed.map((f) => f.name).join(", ");
         toast.warning(`${result.added.length} added, ${result.failed.length} failed: ${failedNames}`, { duration: 6000, closeButton: true });
-      } else {
-        toast.success(
-          fileCount === 1
-            ? "File added. Your sync will start soon."
-            : `${fileCount} files added. Your sync will start soon.`,
-          { duration: 4000, closeButton: true }
-        );
       }
+      // Success path: no separate "Your sync will start soon" toast — the
+      // `useUploadProcessing` hook now owns that feedback (see comment in
+      // `app/lib/hooks/useFilesUpload/index.ts`).
 
       queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
       props.onSuccess();
