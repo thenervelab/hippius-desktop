@@ -7,11 +7,13 @@
 // network traffic — opening the file list and `/shares` in the same
 // session triggers exactly one `hcfs_list_shares` round-trip.
 //
-// The `select` projects the array into a `Map<label, Set<relativePath>>`
-// so per-row lookups are O(1) instead of O(N). Equality on the
-// projected Map is identity-based; TanStack only fires a re-render
-// when `data` actually changes, which means a poll that returns the
-// same set won't re-render every file row.
+// The `select` projects the array into a `Map<label, Map<relPath,
+// ShareSummary[]>>`. The leaf is an array because a single file can
+// have multiple active shares (one per Reshare), and the badge tooltip
+// needs every row to compute "soonest expires in 3h" across all of
+// them. Per-row lookup stays O(1). Equality on the projected Map is
+// identity-based; TanStack only fires a re-render when `data` actually
+// changes.
 //
 // Gated by `shareFeatureEnabledAtom`: if the server doesn't advertise
 // shares, the query stays disabled and the hook returns an empty index
@@ -32,27 +34,35 @@ const SHARES_QUERY_KEY = "shares-list";
 // either side without the other risks two parallel polls.
 const REFRESH_INTERVAL_MS = 30_000;
 
-type SharedIndex = Map<string, Set<string>>;
+type SharedIndex = Map<string, Map<string, ShareSummary[]>>;
 
 interface UseSharedFilesResult {
-  /** True when this `(label, relativePath)` pair is currently shared. */
+  /** True when this `(label, relativePath)` pair has at least one active share. */
   isShared: (label: string | null | undefined, relativePath: string | null | undefined) => boolean;
+  /** Active share rows for this `(label, relativePath)` pair. Empty array for unshared files. */
+  getSharesFor: (label: string | null | undefined, relativePath: string | null | undefined) => ShareSummary[];
   /** True while the first fetch is in flight. */
   isLoading: boolean;
 }
 
 const EMPTY_INDEX: SharedIndex = new Map();
+const EMPTY_ROWS: ShareSummary[] = [];
 
 function buildIndex(rows: ShareSummary[]): SharedIndex {
   const index: SharedIndex = new Map();
   for (const row of rows) {
     if (!row.folderLabel || !row.relativePath) continue;
-    let bucket = index.get(row.folderLabel);
-    if (!bucket) {
-      bucket = new Set();
-      index.set(row.folderLabel, bucket);
+    let folder = index.get(row.folderLabel);
+    if (!folder) {
+      folder = new Map();
+      index.set(row.folderLabel, folder);
     }
-    bucket.add(row.relativePath);
+    const list = folder.get(row.relativePath);
+    if (list) {
+      list.push(row);
+    } else {
+      folder.set(row.relativePath, [row]);
+    }
   }
   return index;
 }
@@ -71,17 +81,27 @@ export function useSharedFiles(): UseSharedFilesResult {
 
   const index = data ?? EMPTY_INDEX;
 
-  // Stable identity per `index` so callers that pass the helper into
-  // a memo dependency don't churn unnecessarily.
-  const isShared = useMemo(
-    () =>
-      (label: string | null | undefined, relativePath: string | null | undefined): boolean => {
-        if (!label || !relativePath) return false;
-        const bucket = index.get(label);
-        return bucket ? bucket.has(relativePath) : false;
-      },
-    [index]
-  );
+  // Stable identity per `index` so callers that pass either helper into
+  // a memo dependency don't churn unnecessarily. `isShared` is derived
+  // from `getSharesFor` so the two surfaces can never disagree.
+  const { getSharesFor, isShared } = useMemo(() => {
+    const get = (
+      label: string | null | undefined,
+      relativePath: string | null | undefined,
+    ): ShareSummary[] => {
+      if (!label || !relativePath) return EMPTY_ROWS;
+      const folder = index.get(label);
+      if (!folder) return EMPTY_ROWS;
+      return folder.get(relativePath) ?? EMPTY_ROWS;
+    };
+    return {
+      getSharesFor: get,
+      isShared: (
+        label: string | null | undefined,
+        relativePath: string | null | undefined,
+      ): boolean => get(label, relativePath).length > 0,
+    };
+  }, [index]);
 
-  return { isShared, isLoading: isLoading && shareEnabled };
+  return { isShared, getSharesFor, isLoading: isLoading && shareEnabled };
 }
