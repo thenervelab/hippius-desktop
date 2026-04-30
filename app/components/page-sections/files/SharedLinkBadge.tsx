@@ -38,11 +38,12 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({ label, actualName, isFolder
           <span
             className={cn(
               "inline-flex items-center justify-center text-primary-50 flex-shrink-0",
+              "bg-primary-95 rounded-full p-1",
               className
             )}
             aria-label="Shared via public link"
           >
-            <LinkIcon className="size-3.5" />
+            <LinkIcon className="size-4" />
           </span>
         </Tooltip.Trigger>
         <Tooltip.Portal>
