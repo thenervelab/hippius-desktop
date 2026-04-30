@@ -47,6 +47,64 @@ impl UploadProcessingState {
         (g.started_at.is_some(), g.pending_files)
     }
 
+    /// Increment `pending_files` by `count` and stamp `started_at` if
+    /// not already set. Emits `hcfs_upload_processing` with
+    /// `{ active: true, pending_files }`.
+    ///
+    /// Called from `add_file` / `add_files` / `add_folder` AFTER the
+    /// eligibility check (so an ineligible user never sees a flash) and
+    /// BEFORE the disk copy (so the banner appears the moment real work
+    /// starts).
+    pub fn begin(&self, app: &tauri::AppHandle, count: u64) {
+        let pending = {
+            let mut g = self.inner.lock().expect("upload_processing mutex poisoned");
+            g.pending_files = g.pending_files.saturating_add(count);
+            if g.started_at.is_none() {
+                g.started_at = Some(Instant::now());
+            }
+            g.pending_files
+        };
+        emit(app, true, pending);
+    }
+
+    /// Clear state if `event_at` is at or after `started_at`. No-op when
+    /// inactive or when the event predates the current upload session
+    /// (file-watcher activity from before any user upload). Idempotent.
+    ///
+    /// Called from `handle_transfer_progress` for the first upload-direction
+    /// chunk of any file, and from `SyncCompleted` / non-cancel `SyncError`
+    /// terminal paths.
+    pub fn clear_if_after(&self, app: &tauri::AppHandle, event_at: Instant) {
+        let did_clear = {
+            let mut g = self.inner.lock().expect("upload_processing mutex poisoned");
+            match g.started_at {
+                Some(started_at) if event_at >= started_at => {
+                    g.pending_files = 0;
+                    g.started_at = None;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if did_clear {
+            emit(app, false, 0);
+        }
+    }
+
+    /// Unconditional clear used by logout / `stop_sync`.
+    pub fn reset(&self, app: &tauri::AppHandle) {
+        let did_clear = {
+            let mut g = self.inner.lock().expect("upload_processing mutex poisoned");
+            let was_active = g.started_at.is_some() || g.pending_files > 0;
+            g.pending_files = 0;
+            g.started_at = None;
+            was_active
+        };
+        if did_clear {
+            emit(app, false, 0);
+        }
+    }
+
     /// Test-only accessor exposing the internal `started_at` so tests
     /// can assert that subsequent `begin` calls during an active
     /// window do not re-stamp the original start time.
@@ -87,6 +145,21 @@ impl UploadProcessingState {
         g.pending_files = 0;
         g.started_at = None;
     }
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct UploadProcessingPayload {
+    active: bool,
+    pending_files: u64,
+}
+
+fn emit(app: &tauri::AppHandle, active: bool, pending_files: u64) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        crate::sync::events::UPLOAD_PROCESSING,
+        UploadProcessingPayload { active, pending_files },
+    );
 }
 
 #[cfg(test)]
