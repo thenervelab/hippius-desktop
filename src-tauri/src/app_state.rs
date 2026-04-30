@@ -40,6 +40,10 @@ pub struct AppState {
     pub oauth: OAuthState,
     pub nebula: NebulaState,
     pub migration: MigrationState,
+    /// Tracks the disk-copy + encryption window for user-initiated
+    /// uploads. Drives the top-of-page processing banner. See
+    /// `crate::sync::upload_processing`.
+    pub upload_processing: std::sync::Arc<crate::sync::upload_processing::UploadProcessingState>,
     /// HTTP client for HCFS health checks (accepts self-signed certs in debug).
     pub health_client: reqwest::Client,
     /// HTTP client for Hippius API calls (reuses connection pool + TLS cache).
@@ -110,6 +114,7 @@ impl AppState {
             oauth: OAuthState::new(),
             nebula: NebulaState::new(),
             migration: MigrationState::new(),
+            upload_processing: std::sync::Arc::new(crate::sync::upload_processing::UploadProcessingState::new()),
             health_client,
             // Explicit timeouts. Without them a hung connection (e.g. a
             // billing-server blip during `check_action_eligibility`) would
