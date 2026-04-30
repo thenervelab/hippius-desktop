@@ -473,26 +473,65 @@ pub async fn add_files(
     };
     crate::billing::eligibility::require_eligible(&state, &account_id, action).await?;
 
+    // Sum the file count for the banner. Each direct file path counts
+    // as 1; each directory path gets a recursive walk via
+    // `count_regular_files`. `.max(1)` per-directory ensures even an
+    // unwalkable dir bumps the count by 1 so the banner still appears.
+    // The outer `.max(1)` covers the degenerate case of an entirely
+    // empty batch — the FE falls back to the generic copy. Released
+    // either by the first upload chunk (success path, via
+    // `handle_transfer_progress`) or by the early-return error paths
+    // below (failure paths). Per-file errors inside the loop go into
+    // `failed` and the function returns Ok, so the success path leaves
+    // the window open for sync events to clear naturally (Task 9).
+    let mut total_count: u64 = 0;
+    for fp in &file_paths {
+        let p = Path::new(fp);
+        if p.is_dir() {
+            total_count = total_count.saturating_add(count_regular_files(p).await.max(1));
+        } else {
+            total_count = total_count.saturating_add(1);
+        }
+    }
+    state.upload_processing.begin(&app, total_count.max(1));
+
     // When a subfolder is specified, resolve the effective target directory.
     // This replaces the path-join logic that was previously in TypeScript.
     // Async canonicalize so a slow filesystem doesn't block the tokio worker.
+    //
+    // After `begin` above, every fallible early-return path here MUST call
+    // `clear_if_after` first — otherwise the banner sits there until the
+    // watchdog timeout while the IPC has already failed.
     let target_path = if let Some(ref sub) = subfolder {
         // Reject traversal components
         if sub.contains("..") {
+            state.upload_processing.clear_if_after(&app, std::time::Instant::now());
             return Err(crate::error::AppError::Other("Subfolder path contains traversal component".into()));
         }
         let target = Path::new(&sync_path).join(sub);
-        if !target.exists() {
-            std::fs::create_dir_all(&target).map_err(|e| crate::error::AppError::Other(format!("Failed to create subfolder: {e}")))?;
+        if !target.exists()
+            && let Err(e) = std::fs::create_dir_all(&target)
+        {
+            state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+            return Err(crate::error::AppError::Other(format!("Failed to create subfolder: {e}")));
         }
         // Verify resolved path stays within sync root.
-        let canonical_root = tokio::fs::canonicalize(Path::new(&sync_path))
-            .await
-            .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
-        let canonical_target = tokio::fs::canonicalize(&target)
-            .await
-            .map_err(|e| crate::error::AppError::Other(format!("Invalid subfolder path: {e}")))?;
+        let canonical_root = match tokio::fs::canonicalize(Path::new(&sync_path)).await {
+            Ok(p) => p,
+            Err(e) => {
+                state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+                return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
+            }
+        };
+        let canonical_target = match tokio::fs::canonicalize(&target).await {
+            Ok(p) => p,
+            Err(e) => {
+                state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+                return Err(crate::error::AppError::Other(format!("Invalid subfolder path: {e}")));
+            }
+        };
         if !canonical_target.starts_with(&canonical_root) {
+            state.upload_processing.clear_if_after(&app, std::time::Instant::now());
             return Err(crate::error::AppError::Other("Subfolder escapes sync folder".into()));
         }
         target.to_string_lossy().to_string()
@@ -503,9 +542,13 @@ pub async fn add_files(
     // Canonicalize the target directory ONCE before the loop so each
     // per-file call doesn't re-pay the `realpath` syscall (which can be
     // 10–100 ms on slow filesystems and blocks the tokio worker).
-    let canonical_target = tokio::fs::canonicalize(Path::new(&target_path))
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
+    let canonical_target = match tokio::fs::canonicalize(Path::new(&target_path)).await {
+        Ok(p) => p,
+        Err(e) => {
+            state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+            return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
+        }
+    };
 
     let mut added = Vec::new();
     let mut failed = Vec::new();
