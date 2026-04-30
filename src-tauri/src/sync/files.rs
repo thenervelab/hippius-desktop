@@ -194,11 +194,7 @@ pub async fn add_folder(
 /// Validation + copy logic for `add_folder`, factored out so the public
 /// command can wrap the result in begin/clear-on-Err bookkeeping for
 /// the upload-processing banner without nesting too deeply.
-async fn add_folder_with_app_inner(
-    sync_path: &str,
-    folder_path: &str,
-    subfolder: Option<&str>,
-) -> Result<String> {
+async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder: Option<&str>) -> Result<String> {
     let source = Path::new(folder_path);
     let name = source
         .file_name()
@@ -1324,7 +1320,11 @@ pub async fn list_sync_folder_grouped_inner(
         false
     };
 
-    Ok(GroupedListing { folders, files, pending_backfill })
+    Ok(GroupedListing {
+        folders,
+        files,
+        pending_backfill,
+    })
 }
 
 /// Filter criteria for the files page, matching the frontend `FilterCriteria`.
@@ -1967,7 +1967,10 @@ mod tests {
 
     #[test]
     fn filter_search_matches_name_case_insensitive() {
-        let files = vec![make_file("Report.pdf", 1_000, "docs", 0, false), make_file("photo.png", 1_000, "docs", 0, false)];
+        let files = vec![
+            make_file("Report.pdf", 1_000, "docs", 0, false),
+            make_file("photo.png", 1_000, "docs", 0, false),
+        ];
         let criteria = FileFilterCriteria {
             search_term: Some("REPORT".into()),
             file_types: None,
@@ -2001,10 +2004,10 @@ mod tests {
     #[test]
     fn filter_size_si_thresholds() {
         let files = vec![
-            make_file("tiny.txt", 500, "d", 0, false),               // Small
-            make_file("medium.zip", 50_000_000, "d", 0, false),      // Medium
-            make_file("large.bin", 500_000_000, "d", 0, false),      // Large
-            make_file("huge.iso", 5_000_000_000, "d", 0, false),     // Very Large
+            make_file("tiny.txt", 500, "d", 0, false),           // Small
+            make_file("medium.zip", 50_000_000, "d", 0, false),  // Medium
+            make_file("large.bin", 500_000_000, "d", 0, false),  // Large
+            make_file("huge.iso", 5_000_000_000, "d", 0, false), // Very Large
         ];
         // "Medium" + "Very Large" selected — boundaries match the UI's SI labels.
         let criteria = FileFilterCriteria {

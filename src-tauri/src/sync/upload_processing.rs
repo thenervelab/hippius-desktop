@@ -156,10 +156,7 @@ struct UploadProcessingPayload {
 
 fn emit(app: &tauri::AppHandle, active: bool, pending_files: u64) {
     use tauri::Emitter;
-    let _ = app.emit(
-        crate::sync::events::UPLOAD_PROCESSING,
-        UploadProcessingPayload { active, pending_files },
-    );
+    let _ = app.emit(crate::sync::events::UPLOAD_PROCESSING, UploadProcessingPayload { active, pending_files });
 }
 
 #[cfg(test)]

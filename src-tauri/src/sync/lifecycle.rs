@@ -348,30 +348,23 @@ async fn register_drive(app: &AppHandle, sync: &Arc<SyncRunner>, manager: DriveM
 /// so the Files page re-queries and renders the freshly-populated
 /// "DATE UPLOADED" column. Silently fails open — drive init must stay
 /// usable even when the server is unreachable.
-fn spawn_reconcile_timestamps(
-    app: &AppHandle,
-    sync: Arc<SyncRunner>,
-    manager_arc: Arc<TokioMutex<DriveManager>>,
-    label: String,
-) {
+fn spawn_reconcile_timestamps(app: &AppHandle, sync: Arc<SyncRunner>, manager_arc: Arc<TokioMutex<DriveManager>>, label: String) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let manager = manager_arc.lock().await;
         match manager.reconcile_remote_timestamps().await {
-            Ok(true) => {
-                match manager.load_sync_state().await {
-                    Ok(state) => {
-                        let paths = build_synced_paths_from_state(&state);
-                        sync.update_synced_paths_cache(&label, paths);
-                        drop(manager);
-                        let _ = app.emit(crate::sync::events::ACTIVITY_UPDATED, ());
-                        info!(label = %label, "reconcile_remote_timestamps: cache refreshed");
-                    }
-                    Err(e) => {
-                        warn!(label = %label, error = %e, "reconcile_remote_timestamps: post-fetch state reload failed");
-                    }
+            Ok(true) => match manager.load_sync_state().await {
+                Ok(state) => {
+                    let paths = build_synced_paths_from_state(&state);
+                    sync.update_synced_paths_cache(&label, paths);
+                    drop(manager);
+                    let _ = app.emit(crate::sync::events::ACTIVITY_UPDATED, ());
+                    info!(label = %label, "reconcile_remote_timestamps: cache refreshed");
                 }
-            }
+                Err(e) => {
+                    warn!(label = %label, error = %e, "reconcile_remote_timestamps: post-fetch state reload failed");
+                }
+            },
             Ok(false) => {
                 debug!(label = %label, "reconcile_remote_timestamps: skipped (fresh)");
             }
@@ -2195,12 +2188,8 @@ mod tests {
 
         callback("folder/file.txt", &fid_hex, "cid-1", "uploaded", Some(&ts));
 
-        let cache = sync
-            .get_cached_synced_paths(&label)
-            .expect("cache should have an entry for the label");
-        let info = cache
-            .get("folder/file.txt")
-            .expect("rel path should be present in cache");
+        let cache = sync.get_cached_synced_paths(&label).expect("cache should have an entry for the label");
+        let info = cache.get("folder/file.txt").expect("rel path should be present in cache");
         assert_eq!(info.uploaded_at, 1_700_000_000);
         assert_eq!(info.updated_at, 1_700_000_100);
         assert_eq!(&*info.arion_cid, "cid-1");
