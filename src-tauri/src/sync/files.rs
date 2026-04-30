@@ -166,7 +166,40 @@ pub async fn add_folder(
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
     crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FolderUpload).await?;
 
-    let source = Path::new(&folder_path);
+    // Pre-walk the source tree so the banner shows an accurate count.
+    // Cheap relative to the full copy (no file-content reads). `.max(1)`
+    // ensures the banner shows for at least one file even when the walk
+    // failed and returned 0 — the generic "Processing your files…"
+    // fallback in the FE is preferable to a banner that never appears
+    // for a real folder upload.
+    let count = count_regular_files(Path::new(&folder_path)).await;
+    state.upload_processing.begin(&app, count.max(1));
+
+    let result = add_folder_with_app_inner(&sync_path, &folder_path, subfolder.as_deref()).await;
+    match result {
+        Ok(name) => {
+            // Trigger sync so the uploaded folder gets synced
+            use tauri::Manager;
+            let s = app.state::<crate::app_state::AppState>().sync.clone();
+            let _ = trigger_sync(&s).await;
+            Ok(name)
+        }
+        Err(e) => {
+            state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+            Err(e)
+        }
+    }
+}
+
+/// Validation + copy logic for `add_folder`, factored out so the public
+/// command can wrap the result in begin/clear-on-Err bookkeeping for
+/// the upload-processing banner without nesting too deeply.
+async fn add_folder_with_app_inner(
+    sync_path: &str,
+    folder_path: &str,
+    subfolder: Option<&str>,
+) -> Result<String> {
+    let source = Path::new(folder_path);
     let name = source
         .file_name()
         .and_then(|n| n.to_str())
@@ -179,8 +212,8 @@ pub async fn add_folder(
     }
 
     // Resolve target directory (with optional subfolder)
-    let sync_root = Path::new(&sync_path);
-    let target_dir = if let Some(ref sub) = subfolder {
+    let sync_root = Path::new(sync_path);
+    let target_dir = if let Some(sub) = subfolder {
         // Reject traversal components before creating directories
         if sub.contains("..") {
             return Err(crate::error::AppError::Other("Subfolder path contains traversal component".into()));
@@ -216,14 +249,36 @@ pub async fn add_folder(
 
     copy_dir_recursive(source, &canonical_dest, 0).await?;
 
-    // Trigger sync so the uploaded folder gets synced
-    {
-        use tauri::Manager;
-        let s = app.state::<crate::app_state::AppState>().sync.clone();
-        let _ = trigger_sync(&s).await;
-    }
-
     Ok(name)
+}
+
+/// Count regular files (non-directory, non-symlink) under `root`,
+/// recursively. Used by `add_folder` and `add_files` to size the
+/// `begin` count for the upload-processing banner. Returns 0 on any
+/// I/O error — the banner falls back to the generic "Processing your
+/// files…" copy which is acceptable.
+///
+/// Iterative depth-first walk via an explicit stack to avoid recursive
+/// async-fn boxing. Does not read file contents — only iterates
+/// directory entries — so the cost is bounded by what `copy_dir_recursive`
+/// is about to do anyway.
+async fn count_regular_files(root: &std::path::Path) -> u64 {
+    use tokio::fs;
+
+    let mut count: u64 = 0;
+    let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(mut entries) = fs::read_dir(&dir).await else { continue };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let Ok(ft) = entry.file_type().await else { continue };
+            if ft.is_dir() {
+                stack.push(entry.path());
+            } else if ft.is_file() {
+                count = count.saturating_add(1);
+            }
+        }
+    }
+    count
 }
 
 /// Internal folder copy — no sync trigger (caller handles it).
