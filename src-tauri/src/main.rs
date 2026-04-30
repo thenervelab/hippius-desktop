@@ -250,6 +250,7 @@ fn main() {
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_list_shares,
             crate::shares::commands::hcfs_revoke_share,
+            crate::shares::commands::hcfs_reshare,
             crate::shares::capabilities::hcfs_get_capabilities,
             // Device settings
             get_device_name,

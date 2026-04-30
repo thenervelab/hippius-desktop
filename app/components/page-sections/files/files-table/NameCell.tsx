@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { buildFolderPath } from "@/app/utils/folderPathUtils";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
+import SharedLinkBadge from "@/components/page-sections/files/SharedLinkBadge";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { ArrowUpFromLine, ArrowDownToLine } from "lucide-react";
 
@@ -24,6 +25,10 @@ type NameCellProps = {
   source?: string;
   mainReqHash?: string;
   syncStatus?: SyncStatusType;
+  /** Drive label for this file. Required for the per-file shared
+   *  badge to look the file up in the shares index — the badge
+   *  silently no-ops when missing, so old call sites keep working. */
+  label?: string;
 };
 
 const SyncStatusIcon: FC<{ status?: SyncStatusType }> = ({ status }) => {
@@ -89,6 +94,7 @@ const NameCell: FC<NameCellProps> = ({
   source,
   mainReqHash,
   syncStatus,
+  label,
 }) => {
   const { icon: Icon, color } = getFileIcon(fileType, isFolder);
   const { getParam } = useUrlParams();
@@ -146,7 +152,17 @@ const NameCell: FC<NameCellProps> = ({
             textClassName={cn(
               isPreviewable && "group-hover:text-primary-50 group-hover:underline cursor-pointer"
             )}
-            suffix={<SyncStatusIcon status={syncStatus} />}
+            suffix={
+              <>
+                <SyncStatusIcon status={syncStatus} />
+                <SharedLinkBadge
+                  label={label}
+                  actualName={actualName}
+                  isFolder={isFolder}
+                  className="ml-1.5"
+                />
+              </>
+            }
           />
         </div>
       )}

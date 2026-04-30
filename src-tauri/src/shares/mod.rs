@@ -10,5 +10,6 @@ pub mod capabilities;
 pub mod client;
 pub mod commands;
 pub mod keystore;
+pub mod origin;
 
 pub use keystore::SqliteShareKeystore;

@@ -36,6 +36,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "onboarding",
     "user_preferences",
     "share_keystore",
+    "share_origin",
 ];
 
 /// Read the column names of a table via `PRAGMA table_info(...)`.
@@ -531,6 +532,33 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(&mut *tx)
     .await?;
+
+    // Sidecar of `share_keystore` that records which local file each
+    // share was minted from. We need this so the UI can answer two
+    // questions the keystore can't: "is this file currently shared?"
+    // (per-row badge in the file list) and "reshare the same file with
+    // a fresh TTL" (the Reshare button on the My Shares page).
+    //
+    // Lives in the desktop and never leaves it: the server only sees
+    // ciphertext, and exposing `(folder_label, relative_path)` upstream
+    // would break the share_keystore trait we share with the WASM
+    // recipient. `owner` is the same `account_key` hash `sync_paths`
+    // uses, so a per-account prune in `hcfs_list_shares` can scope
+    // safely without touching another account's rows.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS share_origin (
+            share_token TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            folder_label TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS share_origin_owner_idx ON share_origin (owner, folder_label)")
+        .execute(&mut *tx)
+        .await?;
 
     tx.commit().await?;
     Ok(())

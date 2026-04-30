@@ -6,18 +6,19 @@ import { AppVersion, Icons, RevealTextLine } from "@/components/ui";
 import cn from "@/app/lib/utils/cn";
 import NavItem from "./NavItem";
 import { navItems, footerNavItems } from "./NavData";
-import { useAtom, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import {
   settingsDialogOpenAtom,
   sidebarCollapsedAtom,
   activeSettingsTabAtom,
 } from "@/app/components/sidebar/sideBarAtoms";
+import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { InView } from "react-intersection-observer";
 import FooterNavItem from "./FooterNavItems";
 import SettingsWidthDialog from "@/components/page-sections/settings/SettingsDialog";
 import SettingsDialogContent from "@/components/page-sections/settings/SettingsDialogContent";
 import CheckForUpdateDialog from "../updater/CheckForUpdateDialog";
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
 const AUTO_COLLAPSE_WIDTH = 1000;
@@ -74,6 +75,21 @@ const Sidebar: React.FC = () => {
   );
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
   const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
+  // Hide capability-gated nav items until the server says they're
+  // supported. `shareFeatureEnabledAtom` stays `false` while the
+  // capability fetch is in flight, so a slow first load never flickers
+  // the entry in then out. The only `true→false` transition is logout
+  // (`useServerCapabilities` resets the atom on session end), which is
+  // the desired UX — the entry should disappear with the session.
+  const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
+  const visibleNavItems = useMemo(
+    () =>
+      navItems.filter((item) => {
+        if (item.featureFlag === "shares") return shareEnabled;
+        return true;
+      }),
+    [shareEnabled]
+  );
 
   const toggleSidebar = () => {
     setCollapsed(!collapsed);
@@ -174,7 +190,7 @@ const Sidebar: React.FC = () => {
           </div> */}
 
             <div className="flex gap-4 flex-col flex-1 pt-4 border-t border-gray-80 w-full overflow-y-auto min-h-0">
-              {navItems.map((item) => {
+              {visibleNavItems.map((item) => {
                 // Check if current path matches or starts with the item path (for child routes)
                 const isActive =
                   item.path === "/"

@@ -1,25 +1,34 @@
 // "My Shares" page — lists every active share-token this device's
-// keystore knows about for the logged-in account, with Copy and
-// Revoke affordances per row.
+// keystore knows about for the logged-in account, with Copy, Reshare,
+// and Revoke affordances per row.
 //
 // Refresh strategy: TanStack Query with a 30-second `refetchInterval`
 // so the list stays in step with server-side TTL expiry without the
 // user reloading. Page is gated by `shareFeatureEnabledAtom` — if the
 // connected hcfs-server doesn't advertise `shares: true`, we render a
-// short "feature unavailable" message instead of an empty list.
+// short "feature unavailable" panel instead of an empty list.
+//
+// Layout follows the app's standard page-sections pattern:
+// `DashboardTitleWrapper` owns the sticky header (set globally in
+// `ResponsiveContent`), white card rows with `AbstractIconWrapper`
+// icons mirror the look of `NotificationItem`, and action buttons
+// reuse the `bg-grey-90` button class shared by the rest of the app.
 
 "use client";
 
 import React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAtomValue } from "jotai";
-import { Copy, Loader2, Trash2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { listShares, revokeShare, type ShareSummary } from "@/app/lib/tauri/shares";
+import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
+import { AbstractIconWrapper, Icons } from "@/components/ui";
+import { listShares, reshare, revokeShare, type ShareSummary } from "@/app/lib/tauri/shares";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { cn } from "@/lib/utils";
 
 const SHARES_QUERY_KEY = "shares-list";
 const REFRESH_INTERVAL_MS = 30_000;
@@ -47,6 +56,26 @@ export default function MySharesPage() {
     }
   };
 
+  const onReshare = async (token: string) => {
+    try {
+      const link = await reshare(token);
+      // Auto-copy mirrors the create-share modal: the user pressed
+      // Reshare *to share again*, so the new URL on the clipboard is
+      // the obvious next step.
+      try {
+        await navigator.clipboard.writeText(link.shareUrl);
+        toast.success("New link copied to clipboard");
+      } catch {
+        // Clipboard rejection (Safari focus rules etc.) shouldn't
+        // hide the success — the row will repaint with the new URL.
+        toast.success("Link reshared with a fresh expiry");
+      }
+      queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY, polkadotAddress] });
+    } catch (err) {
+      toast.error(`Could not reshare: ${errorMessage(err)}`);
+    }
+  };
+
   const onCopy = async (url: string | null) => {
     if (!url) {
       toast.error("This share's key is not on this device — copy it from the device that created it.");
@@ -60,40 +89,39 @@ export default function MySharesPage() {
     }
   };
 
-  if (!shareEnabled) {
-    return (
-      <div className="p-6">
-        <h1 className="text-xl font-medium text-grey-10 mb-2">My Shares</h1>
-        <p className="text-sm text-grey-30">File sharing is not enabled on this server.</p>
-      </div>
-    );
-  }
-
   return (
-    <div className="p-6">
-      <h1 className="text-xl font-medium text-grey-10 mb-4">My Shares</h1>
+    <DashboardTitleWrapper mainText="Shared Links">
+      <div className="mt-4">
+        {!shareEnabled && <FeatureUnavailable />}
 
-      {isLoading && (
-        <div className="flex items-center gap-2 text-sm text-grey-30">
-          <Loader2 className="size-4 animate-spin" />
-          Loading shares…
-        </div>
-      )}
+        {shareEnabled && isLoading && (
+          <div className="flex items-center gap-2 text-sm text-grey-30 p-6">
+            <Loader2 className="size-4 animate-spin" />
+            Loading shared links…
+          </div>
+        )}
 
-      {error && <p className="text-sm text-error-50">Couldn&apos;t load shares: {errorMessage(error)}</p>}
+        {shareEnabled && error && (
+          <p className="text-sm text-error-50 p-6">Couldn&apos;t load shares: {errorMessage(error)}</p>
+        )}
 
-      {!isLoading && !error && data && data.length === 0 && (
-        <p className="text-sm text-grey-30">You haven&apos;t shared any files yet.</p>
-      )}
+        {shareEnabled && !isLoading && !error && data && data.length === 0 && <EmptyState />}
 
-      {!isLoading && data && data.length > 0 && (
-        <ul className="divide-y divide-grey-80 border border-grey-80 rounded">
-          {data.map((row) => (
-            <ShareRow key={row.shareToken} row={row} onCopy={onCopy} onRevoke={onRevoke} />
-          ))}
-        </ul>
-      )}
-    </div>
+        {shareEnabled && !isLoading && data && data.length > 0 && (
+          <div className="flex flex-col gap-2">
+            {data.map((row) => (
+              <ShareRow
+                key={row.shareToken}
+                row={row}
+                onCopy={onCopy}
+                onRevoke={onRevoke}
+                onReshare={onReshare}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </DashboardTitleWrapper>
   );
 }
 
@@ -101,13 +129,24 @@ interface ShareRowProps {
   row: ShareSummary;
   onCopy: (url: string | null) => void;
   onRevoke: (token: string) => void;
+  onReshare: (token: string) => void;
 }
 
-function ShareRow({ row, onCopy, onRevoke }: ShareRowProps) {
+function ShareRow({ row, onCopy, onRevoke, onReshare }: ShareRowProps) {
   const expiresMs = Date.parse(row.expiresAt);
   const expired = !Number.isNaN(expiresMs) && expiresMs <= Date.now();
+  // Reshare needs to know the source file. The Rust IPC will reject a
+  // token whose `share_origin` row is missing, but we disable the
+  // button up front so the user gets a tooltip instead of a toast.
+  // See `app/lib/tauri/shares.ts::reshare` for the Rust contract.
+  const canReshare = Boolean(row.folderLabel && row.relativePath);
+
   return (
-    <li className="flex items-center justify-between gap-3 px-3 py-2.5">
+    <div className="flex items-center gap-3 p-3 bg-white border border-grey-80 rounded-lg hover:border-grey-70 transition-colors">
+      <AbstractIconWrapper className="size-10 shrink-0">
+        <Icons.Link className="absolute size-5 text-primary-50" />
+      </AbstractIconWrapper>
+
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-grey-10 truncate" title={row.filename}>
@@ -122,38 +161,109 @@ function ShareRow({ row, onCopy, onRevoke }: ShareRowProps) {
             </span>
           )}
         </div>
-        <p className="text-xs text-grey-30 mt-0.5">
+        <p className="text-xs text-grey-50 mt-0.5">
           {formatBytes(row.plaintextSize)} · created {formatRelative(row.createdAt)} ·{" "}
           {expired ? "expired" : `expires ${formatRelative(row.expiresAt)}`}
         </p>
       </div>
-      <div className="flex items-center gap-1 shrink-0">
-        <button
+
+      <div className="flex items-center gap-2 shrink-0">
+        <RowButton
           onClick={() => onCopy(row.shareUrl)}
           disabled={!row.shareUrl}
           title={row.shareUrl ? "Copy link" : "Key not on this device"}
-          className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-grey-30 hover:text-grey-10 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <Copy className="size-3.5" />
-          Copy
-        </button>
-        <button
+          icon={<Icons.Copy className="size-3.5" />}
+          label="Copy"
+        />
+        <RowButton
+          onClick={() => onReshare(row.shareToken)}
+          disabled={!canReshare}
+          title={
+            canReshare
+              ? "Revoke this link and mint a new one with a fresh expiry"
+              : "Reshare unavailable: this device doesn't know which file the share came from"
+          }
+          icon={<Icons.Refresh className="size-3.5" />}
+          label="Reshare"
+        />
+        <RowButton
           onClick={() => onRevoke(row.shareToken)}
-          className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-error-50 hover:text-error-60"
-        >
-          <Trash2 className="size-3.5" />
-          Revoke
-        </button>
+          title="Revoke this share"
+          icon={<Icons.Trash className="size-3.5" />}
+          label="Revoke"
+          variant="danger"
+        />
       </div>
-    </li>
+    </div>
+  );
+}
+
+interface RowButtonProps {
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+  icon: React.ReactNode;
+  label: string;
+  /** `danger` swaps the hover accent to error tones for destructive actions. */
+  variant?: "default" | "danger";
+}
+
+function RowButton({ onClick, disabled, title, icon, label, variant = "default" }: RowButtonProps) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={cn(
+        "flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors",
+        "focus:outline-none focus:ring-2",
+        variant === "danger"
+          ? "text-error-60 bg-grey-90 hover:bg-error-60 hover:text-white active:bg-error-70 focus:ring-error-50"
+          : "text-grey-10 bg-grey-90 hover:bg-primary-50 hover:text-white active:bg-primary-70 focus:ring-primary-50",
+        "disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-grey-90 disabled:hover:text-grey-10"
+      )}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="flex flex-col items-center justify-center text-center p-12 bg-white border border-grey-80 rounded-lg">
+      <AbstractIconWrapper className="size-12 mb-3">
+        <Icons.Link className="absolute size-6 text-primary-50" />
+      </AbstractIconWrapper>
+      <h3 className="text-grey-10 font-medium text-base">No shared links</h3>
+      <p className="text-xs text-grey-60 mt-1 max-w-sm">
+        Right-click any synced file and choose &ldquo;Share via link&rdquo; to mint a public link. Active links
+        appear here with options to copy, refresh the expiry, or revoke.
+      </p>
+    </div>
+  );
+}
+
+function FeatureUnavailable() {
+  return (
+    <div className="flex flex-col items-center justify-center text-center p-12 bg-white border border-grey-80 rounded-lg">
+      <AbstractIconWrapper className="size-12 mb-3">
+        <Icons.Link className="absolute size-6 text-grey-40" />
+      </AbstractIconWrapper>
+      <h3 className="text-grey-10 font-medium text-base">File sharing unavailable</h3>
+      <p className="text-xs text-grey-60 mt-1 max-w-sm">
+        The connected server doesn&apos;t advertise the file-sharing capability. Update the server, or
+        connect to one that supports public links.
+      </p>
+    </div>
   );
 }
 
 /**
  * Compact byte formatter — KB/MB/GB step, one decimal where it adds
  * resolution. Local helper because `formatBytes.ts` in `lib/utils`
- * uses a different verbose style ("1.50 megabytes") that doesn't
- * fit the narrow row layout.
+ * uses a different verbose style ("1.50 megabytes") that doesn't fit
+ * the narrow row layout.
  */
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;

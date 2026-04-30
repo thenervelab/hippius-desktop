@@ -54,6 +54,15 @@ export interface ShareSummary {
   expiresAt: string;
   /** Recipient URL with the `#k=<key>` fragment, or `null` if the key is unknown locally. */
   shareUrl: string | null;
+  /**
+   * Drive label and relative path of the source file. `null` for legacy
+   * shares created before the `share_origin` sidecar table existed and
+   * for shares minted on a different device — both surface the same
+   * way: no per-file badge, no Reshare button. Copy and Revoke still
+   * work in either case.
+   */
+  folderLabel: string | null;
+  relativePath: string | null;
 }
 
 export async function getServerCapabilities(accountId: string): Promise<ServerCapabilities> {
@@ -70,4 +79,20 @@ export async function listShares(): Promise<ShareSummary[]> {
 
 export async function revokeShare(shareToken: string): Promise<void> {
   await invoke<void>("hcfs_revoke_share", { shareToken });
+}
+
+/**
+ * Revoke an existing share and immediately mint a fresh one for the
+ * same source file. Effectively extends the TTL — hcfs-server has no
+ * native "extend share" endpoint, so the desktop synthesises one out
+ * of the existing primitives.
+ *
+ * Throws a `Validation` error from the Rust layer when this device
+ * doesn't know which file the share came from (legacy share, different
+ * device, wiped DB). The `/shares` page disables the Reshare button
+ * for those rows up front so the user shouldn't reach that branch via
+ * UI, but the IPC enforces the same invariant for direct callers.
+ */
+export async function reshare(shareToken: string): Promise<ShareLink> {
+  return invoke<ShareLink>("hcfs_reshare", { shareToken });
 }

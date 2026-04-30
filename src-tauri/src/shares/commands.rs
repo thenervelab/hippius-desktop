@@ -17,6 +17,7 @@ use crate::billing::eligibility::{InsufficientCreditsAction, require_eligible};
 use crate::error::{AppError, Result};
 use crate::shares::capabilities::fetch_capabilities;
 use crate::shares::client::build_account_client;
+use crate::shares::origin;
 use crate::shares::SqliteShareKeystore;
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
@@ -73,6 +74,14 @@ pub struct ShareSummary {
     pub created_at: String,
     pub expires_at: String,
     pub share_url: Option<String>,
+    /// `(folder_label, relative_path)` of the source file, if this
+    /// device knows it. `None` for legacy shares created before the
+    /// `share_origin` sidecar table existed, or for shares minted on
+    /// a different device whose origin row was never replicated. Both
+    /// surface the same way in the UI: no per-file badge, no Reshare
+    /// button — but Copy and Revoke still work.
+    pub folder_label: Option<String>,
+    pub relative_path: Option<String>,
 }
 
 // ─── Path resolution ───────────────────────────────────────────────────────
@@ -159,37 +168,28 @@ async fn require_shares_supported(state: &AppState, account_id: &str) -> Result<
 
 // ─── Commands ──────────────────────────────────────────────────────────────
 
-/// Mint a public share link for a file already inside a synced folder.
+/// Inner share-creation pipeline shared by [`hcfs_create_share`] and
+/// [`hcfs_reshare`].
 ///
-/// Resolves the on-disk plaintext path from `(folder_label, relative_path)`,
-/// streams it through `hcfs_client::HcfsClient::create_share` (single-shot
-/// for ≤ 8 MiB, chunked above), persists the per-share key in our
-/// `share_keystore`, and returns a `ShareLink` whose `share_url` already
-/// contains the `#k=<key>` URL fragment.
-#[tauri::command]
-pub async fn hcfs_create_share(
-    state: tauri::State<'_, AppState>,
-    folder_label: String,
-    relative_path: String,
-) -> Result<ShareLink> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
-
-    // 1. Capability + eligibility gates. The capability call is a
-    //    single anonymous HTTP request; we accept the round-trip so
-    //    that an old server hides the feature instead of failing the
-    //    create_share call with a 404 several KB into a multipart
-    //    upload.
-    require_shares_supported(&state, &account_id).await?;
-    require_eligible(&state, &account_id, InsufficientCreditsAction::Sharing).await?;
-
+/// Caller responsibilities (everything outside the pipeline):
+/// - extract `account_id`,
+/// - run [`require_shares_supported`] and [`require_eligible`],
+/// - hand us the `(folder_label, relative_path)` of the source file.
+///
+/// We do everything else: resolve the plaintext path, run the
+/// streaming share via hcfs-client, persist the origin sidecar, and
+/// return the wire `ShareLink`. Reshare reuses this verbatim so a
+/// reshared link is indistinguishable from a freshly-minted one
+/// (same TTL, same keystore lifecycle, same sidecar invariants).
+async fn create_share_inner(state: &AppState, account_id: &str, folder_label: &str, relative_path: &str) -> Result<ShareLink> {
     let pool = state.pool()?;
 
-    // 2. Resolve the local plaintext path. Synced-folder files are
-    //    stored unencrypted on disk (the sync engine encrypts on the
-    //    way out), so no folder-key dance is required here — we just
-    //    need a `tokio::fs::File`.
-    let sync_root = sync_root_for_label(pool, &account_id, &folder_label).await?;
-    let local_path = resolve_inside_sync_root(&sync_root, &relative_path).await?;
+    // Resolve the local plaintext path. Synced-folder files are
+    // stored unencrypted on disk (the sync engine encrypts on the
+    // way out), so no folder-key dance is required here — we just
+    // need a `tokio::fs::File`.
+    let sync_root = sync_root_for_label(pool, account_id, folder_label).await?;
+    let local_path = resolve_inside_sync_root(&sync_root, relative_path).await?;
 
     let metadata = tokio::fs::metadata(&local_path).await?;
     if !metadata.is_file() {
@@ -220,11 +220,11 @@ pub async fn hcfs_create_share(
         "Creating share"
     );
 
-    // 3. Build the client, open the file, run the share. The keystore
-    //    persists the per-share key automatically inside hcfs-client
-    //    via `ShareKeystore::put`, so on success the row is in our
-    //    DB before we even return.
-    let client = build_account_client(pool, &account_id).await?;
+    // Build the client, open the file, run the share. The keystore
+    // persists the per-share key automatically inside hcfs-client
+    // via `ShareKeystore::put`, so on success the row is in our DB
+    // before we even return.
+    let client = build_account_client(pool, account_id).await?;
     let mut reader = tokio::fs::File::open(&local_path).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
     let result = client
@@ -235,11 +235,115 @@ pub async fn hcfs_create_share(
             AppError::Hcfs(format!("create_share: {e}"))
         })?;
 
+    // Record the (folder_label, relative_path) the share was minted
+    // from in the local sidecar so the per-file badge and Reshare
+    // button can find it later. A failure here does NOT fail the
+    // user-facing share — the link is already live; missing the
+    // sidecar row only means the file won't render its "Shared" badge
+    // until a future create_share for the same path repopulates the
+    // row. We log at warn so a stuck sidecar shows up in support logs.
+    let owner = account_key(account_id);
+    if let Err(e) = origin::record(pool, &result.share_token, &owner, folder_label, relative_path).await {
+        warn!(
+            share_token = %result.share_token,
+            error = %e,
+            "Failed to record share_origin (share itself succeeded)"
+        );
+    }
+
     Ok(ShareLink {
         share_token: result.share_token,
         share_url: result.share_url,
         expires_at: result.expires_at.to_rfc3339(),
     })
+}
+
+/// Mint a public share link for a file already inside a synced folder.
+///
+/// Resolves the on-disk plaintext path from `(folder_label, relative_path)`,
+/// streams it through `hcfs_client::HcfsClient::create_share` (single-shot
+/// for ≤ 8 MiB, chunked above), persists the per-share key in our
+/// `share_keystore`, and returns a `ShareLink` whose `share_url` already
+/// contains the `#k=<key>` URL fragment.
+#[tauri::command]
+pub async fn hcfs_create_share(
+    state: tauri::State<'_, AppState>,
+    folder_label: String,
+    relative_path: String,
+) -> Result<ShareLink> {
+    let account_id = state.current_account_id().map_err(AppError::Other)?;
+
+    // Capability + eligibility gates. The capability call is a single
+    // anonymous HTTP request; we accept the round-trip so that an old
+    // server hides the feature instead of failing create_share with a
+    // 404 several KB into a multipart upload.
+    require_shares_supported(&state, &account_id).await?;
+    require_eligible(&state, &account_id, InsufficientCreditsAction::Sharing).await?;
+
+    create_share_inner(&state, &account_id, &folder_label, &relative_path).await
+}
+
+/// Revoke an existing share and immediately mint a new one for the
+/// same source file. Effectively a TTL extension built out of the
+/// primitives we already have, since hcfs-server doesn't expose an
+/// "extend share" endpoint.
+///
+/// Looks up `(folder_label, relative_path)` from the local
+/// `share_origin` sidecar — which means reshare is only available on
+/// the device that originally minted the share. A token whose origin
+/// row was lost (legacy share, different device, wiped DB) returns a
+/// `Validation` error so the FE can disable the button rather than
+/// silently fail.
+///
+/// The new link gets a fresh expiry from the server (same TTL policy
+/// as `hcfs_create_share`); the old token is revoked first so the
+/// caller can hand out the new URL with confidence the old one stops
+/// working. If the revoke fails (e.g. the token already expired
+/// server-side), we still proceed with the new share — the FE's
+/// reshare intent is "give me a working link from this file", not "I
+/// require the old token to be alive".
+#[tauri::command]
+pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String) -> Result<ShareLink> {
+    let account_id = state.current_account_id().map_err(AppError::Other)?;
+
+    require_shares_supported(&state, &account_id).await?;
+    require_eligible(&state, &account_id, InsufficientCreditsAction::Sharing).await?;
+
+    let pool = state.pool()?;
+
+    // Look up the source file. A miss here is a hard "this device
+    // can't reshare this token" — caller must use Copy/Revoke
+    // instead.
+    let mut origins = origin::fetch_for_tokens(pool, &[share_token.as_str()]).await?;
+    let Some(origin) = origins.remove(&share_token) else {
+        return Err(AppError::Validation(
+            "Reshare is unavailable for this link on this device.".into(),
+        ));
+    };
+
+    // Best-effort revoke of the old token. The server's revoke is
+    // idempotent (already-missing tokens succeed), so we tolerate any
+    // error here and proceed — see the doc comment for the rationale.
+    let client = build_account_client(pool, &account_id).await?;
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    if let Err(e) = client.revoke_share(&share_token, &keystore).await {
+        warn!(
+            share_token = %share_token,
+            error = %e,
+            "Reshare: revoke of old token failed; continuing with new share"
+        );
+    }
+    // Drop the sidecar row for the old token regardless — the new
+    // share will write its own. Best-effort.
+    if let Err(e) = origin::forget(pool, &share_token).await {
+        warn!(
+            share_token = %share_token,
+            error = %e,
+            "Reshare: forget of old origin failed (non-fatal)"
+        );
+    }
+
+    create_share_inner(&state, &account_id, &origin.folder_label, &origin.relative_path).await
 }
 
 /// List all of this caller's currently-active shares, newest first.
@@ -274,10 +378,35 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
     // offers Revoke.
     let tokens: Vec<&str> = summaries.iter().map(|s| s.share_token.as_str()).collect();
     let key_map = keystore.get_many(&tokens).map_err(|e| AppError::Hcfs(format!("keystore lookup: {e}")))?;
+    // Same batched-IN trick as the keystore: one round-trip for the
+    // whole page so the per-file badge and Reshare button can resolve
+    // origin in O(1) per row.
+    let origin_map = origin::fetch_for_tokens(pool, &tokens).await.unwrap_or_else(|e| {
+        // A sidecar miss is never fatal — fall back to "no origin
+        // known" for every row so the page still renders.
+        warn!(error = %e, "share_origin fetch failed; rendering without origins");
+        std::collections::HashMap::new()
+    });
+
+    // Mirror server-side TTL reaping into our local sidecar so the
+    // table doesn't accumulate dangling rows after expiry. Scoped to
+    // this `owner` so a multi-account install never cross-evicts.
+    // Best-effort: prune logs but does not return errors.
+    //
+    // Correctness depends on `summaries` (and therefore `tokens`) being
+    // the complete unpaged list of this owner's active shares — see
+    // `origin::prune`'s "Caller invariant" doc. If hcfs-server ever
+    // paginates `list_shares`, swap this prune for a TTL-based reaper.
+    let owner = account_key(&account_id);
+    origin::prune(pool, &owner, &tokens).await;
+
     let wire = summaries
         .into_iter()
         .map(|s| {
             let share_url = key_map.get(&s.share_token).map(|k| build_share_url(CONSOLE_BASE_URL, &s.share_token, k));
+            let (folder_label, relative_path) = origin_map
+                .get(&s.share_token)
+                .map_or((None, None), |o| (Some(o.folder_label.clone()), Some(o.relative_path.clone())));
             ShareSummary {
                 share_token: s.share_token,
                 filename: s.filename,
@@ -287,6 +416,8 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
                 created_at: s.created_at.to_rfc3339(),
                 expires_at: s.expires_at.to_rfc3339(),
                 share_url,
+                folder_label,
+                relative_path,
             }
         })
         .collect();
@@ -306,6 +437,18 @@ pub async fn hcfs_revoke_share(state: tauri::State<'_, AppState>, share_token: S
         .revoke_share(&share_token, &keystore)
         .await
         .map_err(|e| AppError::Hcfs(format!("revoke_share: {e}")))?;
+    // Drop the sidecar row so the per-file badge clears and the
+    // Reshare button stops offering this token. Idempotent — a missing
+    // row is fine — and best-effort: a sidecar leftover after a
+    // successful revoke would only show up as a "ghost" badge until
+    // the next prune in `hcfs_list_shares`, never as a security issue.
+    if let Err(e) = origin::forget(pool, &share_token).await {
+        warn!(
+            share_token = %share_token,
+            error = %e,
+            "Failed to forget share_origin after successful revoke"
+        );
+    }
     Ok(())
 }
 

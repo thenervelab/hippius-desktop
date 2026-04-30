@@ -16,6 +16,11 @@ export interface NavItemData {
   isActive?: boolean;
   comingSoon?: boolean;
   subMenuItems?: SubMenuItemData[];
+  // Capability gate consulted by the sidebar before rendering this
+  // item. `"shares"` hides the entry until the connected hcfs-server
+  // advertises `shares: true` (see `shareFeatureEnabledAtom`). Adding
+  // a new gate is one entry here plus one branch in the sidebar.
+  featureFlag?: "shares";
 }
 
 export interface FooterNavItemData {
@@ -34,6 +39,12 @@ export const navItems: NavItemData[] = [
     label: "Drive",
     path: "/files",
     icon: <Icons.DocumentText />,
+  },
+  {
+    label: "Shared Links",
+    path: "/shares",
+    icon: <Icons.Link />,
+    featureFlag: "shares",
   },
   {
     label: "Virtual Machines",

@@ -22,7 +22,7 @@
 
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useAtom } from "jotai";
 import { AlertCircle } from "lucide-react";
@@ -161,7 +161,7 @@ export default function ShareFileModal() {
             </div>
           )}
 
-          {state.kind === "done" && <DoneBody link={state.link} filename={filename} onCopy={onCopy} />}
+          {state.kind === "done" && <DoneBody link={state.link} onCopy={onCopy} />}
 
           {state.kind === "error" && (
             <div className="flex items-start gap-2 text-error-70 mb-2">
@@ -210,7 +210,7 @@ export default function ShareFileModal() {
                 Open in browser
               </CardButton>
               <CardButton className="w-full text-[1.125rem]" variant="secondary" onClick={close}>
-                Close
+                Done
               </CardButton>
               <button
                 type="button"
@@ -237,27 +237,34 @@ export default function ShareFileModal() {
 // to `CopyText` without porting the test queries first.
 function DoneBody({
   link,
-  filename,
   onCopy,
 }: {
   link: ShareLink;
-  filename: string;
   onCopy: () => void | Promise<void>;
 }) {
   const expiresAtPretty = formatExpiresAt(link.expiresAt);
+  // Auto-size the textarea to its content so the URL is never clipped
+  // and no scrollbar ever appears. `useLayoutEffect` runs before paint,
+  // avoiding a one-frame flash where the field is too short and shows
+  // a scrollbar.
+  const urlRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = urlRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [link.shareUrl]);
   return (
     <div>
-      <p className="text-sm text-grey-10 mb-1">
-        Anyone with this link can download <span className="font-medium">{filename || "this file"}</span>.
-      </p>
       {expiresAtPretty && <p className="text-xs text-grey-50 mb-3">Expires {expiresAtPretty}.</p>}
       <div className="border border-grey-80 rounded-lg bg-white p-3 flex items-start gap-2">
         <textarea
+          ref={urlRef}
           readOnly
           value={link.shareUrl}
           onFocus={(e) => e.currentTarget.select()}
-          rows={2}
-          className="flex-1 text-xs font-mono bg-transparent resize-none outline-none break-all text-grey-10"
+          rows={1}
+          className="flex-1 text-xs font-mono bg-transparent resize-none outline-none overflow-hidden break-all text-grey-10"
         />
         <button
           type="button"
