@@ -18,6 +18,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import { isNotReady } from "@/lib/utils/dispatchTauriError";
+import { UPLOAD_PROCESSING_TOAST_ID } from "@/lib/hooks/useUploadProcessing";
 
 // ── Shared types ───────────────────────────────────────────────────────────────
 
@@ -296,8 +297,14 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
     setUploadProgress(0);
 
     const fileCount = files.length;
-    const loadingToastId = toast.loading(
-      fileCount === 1 ? "Adding file..." : `Adding ${fileCount} files...`
+    // Use the shared UPLOAD_PROCESSING_TOAST_ID so this toast persists
+    // until Rust's `hcfs_upload_processing { active: false }` event
+    // (handled in `useUploadProcessing`). `duration: Infinity` keeps
+    // it visible across the disk-copy + encryption + sync-prep window.
+    const loadingToastId = UPLOAD_PROCESSING_TOAST_ID;
+    toast.loading(
+      fileCount === 1 ? "Adding file..." : `Adding ${fileCount} files...`,
+      { id: loadingToastId, duration: Infinity, closeButton: true }
     );
 
     // Listen for per-file progress events from Rust
@@ -329,23 +336,31 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
         forFolder: true,
       });
 
-      toast.dismiss(loadingToastId);
       if (result.failed.length > 0) {
+        // Partial-failure overwrites the loading toast with a warning;
+        // explicit dismiss not needed because we reuse the same id.
         const failedNames = result.failed.map((f) => f.name).join(", ");
-        toast.warning(`${result.added.length} added, ${result.failed.length} failed: ${failedNames}`, { duration: 6000, closeButton: true });
+        toast.warning(`${result.added.length} added, ${result.failed.length} failed: ${failedNames}`, {
+          id: loadingToastId,
+          duration: 6000,
+          closeButton: true,
+        });
       }
-      // Success path: no separate "Your sync will start soon" toast — the
-      // `useUploadProcessing` hook now owns that feedback (see comment in
-      // `app/lib/hooks/useFilesUpload/index.ts`).
+      // Success path: do NOT dismiss the loading toast here. The
+      // `useUploadProcessing` hook dismisses `UPLOAD_PROCESSING_TOAST_ID`
+      // on the Rust `hcfs_upload_processing { active: false }` event,
+      // which fires when the sync cycle actually starts.
 
       queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
       props.onSuccess();
     } catch (error) {
-      toast.dismiss(loadingToastId);
+      // Reuse the same toast id so the error overwrites the loading
+      // toast instead of stacking — matches the partial-failure path.
       toast.error(
         `Failed to add ${fileCount === 1 ? "file" : "files"}: ${
           error instanceof Error ? error.message : String(error)
-        }`
+        }`,
+        { id: loadingToastId, closeButton: true }
       );
     } finally {
       unlisten();

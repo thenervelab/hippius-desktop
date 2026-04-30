@@ -4,34 +4,36 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect } from "react";
 import { toast } from "sonner";
 
+/**
+ * Stable Sonner toast ID. The IPC call sites
+ * (`useFilesUpload/index.ts` and
+ * `app/components/page-sections/files/upload-files-flow/index.tsx`)
+ * SHOW the loading toast with this ID; this hook is responsible for
+ * DISMISSING it when Rust signals the sync cycle has actually started
+ * (i.e. the upload-processing window is over).
+ *
+ * Sharing one ID across "show" and "dismiss" sites prevents the
+ * stacked-toasts UX bug where a separate "Processing N files…" toast
+ * would briefly appear alongside the IPC site's "Adding codex.dmg…"
+ * toast.
+ */
+export const UPLOAD_PROCESSING_TOAST_ID = "hcfs-upload-processing";
+
 interface UploadProcessingPayload {
   active: boolean;
   pendingFiles: number;
 }
 
 /**
- * Stable Sonner toast ID. The same ID is reused across active=true
- * events so multiple updates within a single processing window
- * mutate the SAME toast (no stacking / flicker), and the
- * `toast.dismiss(...)` call when active=false targets exactly that
- * one toast.
- */
-const UPLOAD_PROCESSING_TOAST_ID = "hcfs-upload-processing";
-
-/**
- * Drives a single top-center Sonner toast off the Rust
- * `hcfs_upload_processing` event. Lifecycle:
- *  - `active: true`  → show / update `toast.loading(...)` with the
- *    pending-file count.
- *  - `active: false` → dismiss the toast.
+ * Listens to `hcfs_upload_processing` and dismisses the IPC-site
+ * loading toast (`UPLOAD_PROCESSING_TOAST_ID`) when Rust signals
+ * `active: false` — i.e. the sync cycle for the user's upload has
+ * begun and the bottom-right widget now has real per-file data.
  *
- * The toast intentionally has no auto-dismiss duration (it stays
- * visible until Rust signals the sync cycle has begun, at which
- * point the bottom-right sync widget takes over with real per-file
- * progress).
- *
- * No business logic — Rust owns lifecycle. This hook is a thin
- * Sonner adapter.
+ * No business logic — Rust owns lifecycle. This hook is a pure
+ * dismiss-on-event adapter. We deliberately do NOT show a toast on
+ * `active: true` — that's the IPC call site's job (it has the
+ * filename / batch count for the toast text).
  */
 export function useUploadProcessing() {
   useEffect(() => {
@@ -40,17 +42,7 @@ export function useUploadProcessing() {
 
     listen<UploadProcessingPayload>("hcfs_upload_processing", (e) => {
       if (cancelled) return;
-      const { active, pendingFiles } = e.payload;
-      if (active) {
-        const label =
-          pendingFiles === 0
-            ? "Processing your files. Sync will start shortly…"
-            : `Processing ${pendingFiles} ${pendingFiles === 1 ? "file" : "files"}. Sync will start shortly…`;
-        toast.loading(label, {
-          id: UPLOAD_PROCESSING_TOAST_ID,
-          duration: Infinity,
-        });
-      } else {
+      if (!e.payload.active) {
         toast.dismiss(UPLOAD_PROCESSING_TOAST_ID);
       }
     })
@@ -67,8 +59,7 @@ export function useUploadProcessing() {
       cancelled = true;
       unsub?.();
       // Belt-and-suspenders: dismiss on unmount so a stuck toast
-      // can't survive a re-mount (e.g. after a hot reload during
-      // dev, or an auth-driven re-render).
+      // can't survive a hot reload during dev or auth-driven re-render.
       toast.dismiss(UPLOAD_PROCESSING_TOAST_ID);
     };
   }, []);

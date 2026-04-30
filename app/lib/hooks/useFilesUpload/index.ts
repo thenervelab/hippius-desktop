@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { basename } from "@tauri-apps/api/path";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
+import { UPLOAD_PROCESSING_TOAST_ID } from "@/lib/hooks/useUploadProcessing";
 
 export type UploadFilesHandlers = {
   onSuccess?: () => void;
@@ -70,13 +71,18 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         `Adding ${filePaths.length} files to sync folder…`
         : msgs?.startSingle ?? `Adding ${firstFileName} to sync folder…`;
 
-    // If a toastId is given, update that toast; otherwise create a new one
-    let localToastId = options?.toastId;
-    if (localToastId !== undefined) {
-      toast.loading(startText, { id: localToastId, closeButton: true });
-    } else {
-      localToastId = toast.loading(startText, { closeButton: true });
-    }
+    // Use the shared UPLOAD_PROCESSING_TOAST_ID so the toast persists
+    // until Rust's `hcfs_upload_processing { active: false }` event
+    // (handled in `useUploadProcessing`). `duration: Infinity` keeps
+    // it visible across the disk-copy + encryption + sync-prep window
+    // — much longer than Sonner's default ~4s. Caller-provided
+    // `toastId` (rare path used to update an in-flight toast) wins.
+    const localToastId = options?.toastId ?? UPLOAD_PROCESSING_TOAST_ID;
+    toast.loading(startText, {
+      id: localToastId,
+      closeButton: true,
+      duration: Infinity,
+    });
 
     setRequestState("uploading");
     setProgress(0);
@@ -106,17 +112,20 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         forFolder: false,
       });
 
-      // Show result AFTER the work completes
-      toast.dismiss(localToastId);
       if (result.failed.length > 0) {
+        // Partial-failure overwrites the loading toast with a warning;
+        // explicit dismiss not needed because we reuse the same id.
         const failedNames = result.failed.map((f) => f.name).join(", ");
-        toast.warning(`${result.added.length} files added, ${result.failed.length} failed: ${failedNames}`, { duration: 6000, closeButton: true });
+        toast.warning(`${result.added.length} files added, ${result.failed.length} failed: ${failedNames}`, {
+          id: localToastId,
+          duration: 6000,
+          closeButton: true,
+        });
       }
-      // Success path: no separate "Your sync will start soon" toast — the
-      // `useUploadProcessing` hook now owns the "Processing… Sync will
-      // start shortly…" feedback driven by the Rust
-      // `hcfs_upload_processing` event, which persists from the IPC call
-      // through to the moment the sync cycle starts.
+      // Success path: do NOT dismiss the loading toast here. The
+      // `useUploadProcessing` hook dismisses `UPLOAD_PROCESSING_TOAST_ID`
+      // on the Rust `hcfs_upload_processing { active: false }` event,
+      // which fires when the sync cycle actually starts.
 
       refetchUserFiles();
       queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
@@ -136,8 +145,9 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
           : msgs?.errorMultiple?.(filePaths.length) ??
           `Failed to add ${filePaths.length} files`;
 
-      toast.dismiss(localToastId);
-      toast.error(errorText);
+      // Reuse the same toast id so the error overwrites the loading
+      // toast instead of stacking — matches the partial-failure path.
+      toast.error(errorText, { id: localToastId, closeButton: true });
     }
   }
 
