@@ -212,6 +212,15 @@ impl SyncEventHandler for TauriSyncBridge {
                 let app_state = app.state::<crate::app_state::AppState>();
                 app_state.sync.emit_snapshot(true);
 
+                // Defensive clear: if the cycle finished without ever
+                // emitting a non-zero upload tick (empty plan,
+                // already-synced batch, downloads/deletes only), the
+                // first-chunk path in `handle_transfer_progress` never
+                // ran and the banner would otherwise stay raised.
+                // `clear_if_after` is idempotent so the common case
+                // (real upload already cleared it) is a no-op.
+                app_state.upload_processing.clear_if_after(&app, std::time::Instant::now());
+
                 // Update per-file failure counters from the finalized session.
                 update_failure_counts(&app, &label);
 
@@ -255,6 +264,16 @@ impl SyncEventHandler for TauriSyncBridge {
                 if error == events::CANCELLED_MARKER {
                     tracing::debug!(label = %label, "Silenced sync cancel (not emitted as error)");
                     return;
+                }
+                // Defensive clear on real (non-cancel) errors: if the
+                // session aborted mid-encryption the first-chunk path
+                // never ran and the banner would stay raised. Cancels
+                // are intentionally skipped above — those go through
+                // `stop_sync`'s reset path.
+                {
+                    use tauri::Manager;
+                    let app_state = app.state::<crate::app_state::AppState>();
+                    app_state.upload_processing.clear_if_after(&app, std::time::Instant::now());
                 }
                 let _ = app.emit(
                     events::SYNC_ERROR,

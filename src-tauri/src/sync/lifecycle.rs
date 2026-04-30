@@ -1656,6 +1656,17 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
         }
         let _ = crate::sync::progress::update_file_progress(&ctx.sync, path_str, bytes, total, file_action, Some(&*ctx.label));
 
+        // First non-zero upload chunk for any file ends the
+        // "processing" window — the bottom-right widget now has real
+        // per-file progress and the top banner can vanish. Idempotent
+        // and cheap (single mutex tick + early return when state is
+        // already cleared) so calling on every chunk is fine.
+        if matches!(ctx.direction, TransferDirection::Upload) && bytes > 0 {
+            use tauri::Manager;
+            let app_state = ctx.app.state::<crate::app_state::AppState>();
+            app_state.upload_processing.clear_if_after(&ctx.app, std::time::Instant::now());
+        }
+
         if crate::sync::logic::is_file_completion_tick(bytes, total) {
             let action = match ctx.direction {
                 TransferDirection::Upload => SyncActivityAction::Uploaded,
