@@ -113,10 +113,10 @@ export default function ShareFileModal() {
     if (state.kind !== "done") return;
     try {
       await revokeShare(state.link.shareToken);
-      toast.success("Share revoked");
+      toast.success("Share link revoked");
       close();
     } catch (err) {
-      toast.error(`Could not revoke share: ${errorMessage(err)}`);
+      toast.error(`Could not revoke share link: ${errorMessage(err)}`);
     }
   };
 
