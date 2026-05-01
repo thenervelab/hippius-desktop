@@ -26,11 +26,18 @@ import {
 import { iconMap } from "@/app/lib/helpers/notificationIcons";
 import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import ArchiveAllConfirmationDialog from "./ArchiveAllConfirmationDialog";
 
 const Notifications = () => {
   const [activeTab, setActiveTab] = useState("All");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [onlyUnread, setOnlyUnread] = useState(false);
+  // Confirmation modal for "Delete All". Same two-state shape used by
+  // the notifications dropdown (`NotificationMenuContent.tsx`) so the
+  // two surfaces behave identically — open the dialog on click, run
+  // the actual delete only after the user confirms.
+  const [isArchiveDialogOpen, setIsArchiveDialogOpen] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
   const [settingsDialogOpen] = useAtom(settingsDialogOpenAtom);
@@ -178,14 +185,31 @@ const Notifications = () => {
     refreshUnread();
   };
 
-  const handleArchiveAll = async () => {
+  // The "Delete All" button only opens the confirmation modal — the
+  // actual delete runs in `handleArchiveAllConfirm` once the user
+  // accepts. Previously the button called the delete directly with
+  // no confirmation, which (a) bypassed the dialog the dropdown was
+  // already wired up to, and (b) had no error handling, so a failing
+  // backend call left the UI silently broken.
+  const handleArchiveAllConfirm = async () => {
     const userAddress = oauthSession?.substrateAddress || polkadotAddress;
-    if (!userAddress) return;
-    await deleteAllNotifications(userAddress);
-    toast.success("All notifications deleted");
-    await refresh();
-    await refreshUnread();
-    // Removed window.dispatchEvent. We refetch directly.
+    if (!userAddress) {
+      setIsArchiveDialogOpen(false);
+      return;
+    }
+    setIsArchiving(true);
+    try {
+      await deleteAllNotifications(userAddress);
+      await refresh();
+      await refreshUnread();
+      toast.success("All notifications deleted");
+    } catch (error) {
+      console.log("Delete all notifications error:", error);
+      toast.error("Failed to delete notifications");
+    } finally {
+      setIsArchiving(false);
+      setIsArchiveDialogOpen(false);
+    }
   };
 
   const handleOpenSettings = () => {
@@ -235,10 +259,12 @@ const Notifications = () => {
             >
               Mark all as Read
             </button>
-            {/* New: Delete All */}
+            {/* Delete All — opens the confirmation dialog. The actual
+                delete fires from the dialog's onConfirm so we never
+                wipe state without an explicit user yes. */}
             <button
               className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-error-60 hover:text-white active:bg-error-70 active:text-white text-grey-10 leading-5 text-[0.875rem] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-grey-90 disabled:hover:text-grey-10"
-              onClick={handleArchiveAll}
+              onClick={() => setIsArchiveDialogOpen(true)}
               disabled={visible.length === 0}
               title={
                 visible.length === 0
@@ -281,6 +307,13 @@ const Notifications = () => {
           </>
         )}
       </div>
+
+      <ArchiveAllConfirmationDialog
+        open={isArchiveDialogOpen}
+        onClose={() => setIsArchiveDialogOpen(false)}
+        onConfirm={handleArchiveAllConfirm}
+        loading={isArchiving}
+      />
     </DashboardTitleWrapper>
   );
 };
