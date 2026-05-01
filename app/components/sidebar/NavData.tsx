@@ -41,12 +41,6 @@ export const navItems: NavItemData[] = [
     icon: <Icons.DocumentText />,
   },
   {
-    label: "Shared Links",
-    path: "/shares",
-    icon: <Icons.Link />,
-    featureFlag: "shares",
-  },
-  {
     label: "Virtual Machines",
     path: "/vm",
     icon: <Server className="size-4" />,
