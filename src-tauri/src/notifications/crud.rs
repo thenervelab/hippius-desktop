@@ -344,15 +344,26 @@ pub async fn delete_notification(state: tauri::State<'_, AppState>, id: i64) -> 
     Ok(())
 }
 
-/// Soft-delete all notifications for a user.
+/// Soft-delete every notification visible to a user — both rows scoped
+/// to their address AND `'system'` rows (Hippius update prompts and
+/// other app-wide events). Mirrors the read-side filter in
+/// `list_notifications` and `unread_count_inner`, which both pull
+/// `user_address = ? OR user_address = 'system'`. Without this match,
+/// "Delete All" silently misses what the list shows, and a deleted
+/// "Update Available" notification re-surfaces on the next refresh.
 #[tauri::command]
 pub async fn delete_all_notifications(state: tauri::State<'_, AppState>, user_address: String) -> Result<(), AppError> {
     let pool = state.pool()?;
 
-    sqlx::query("UPDATE notifications SET is_deleted = 1, deleted_at = CAST(strftime('%s','now') * 1000 AS INTEGER) WHERE user_address = ?")
-        .bind(&user_address)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE notifications \
+         SET is_deleted = 1, deleted_at = CAST(strftime('%s','now') * 1000 AS INTEGER) \
+         WHERE (user_address = ? OR user_address = 'system') \
+         AND is_deleted = 0",
+    )
+    .bind(&user_address)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }

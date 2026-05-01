@@ -241,11 +241,15 @@ async fn soft_delete_all_for_user() {
     insert_notification(&pool, alice, None, None, "a2").await;
     insert_notification(&pool, bob, None, None, "b1").await;
 
-    // Soft-delete all for alice — mirrors delete_all_notifications
+    // Soft-delete all for alice + the system queue — mirrors
+    // delete_all_notifications post-fix. The condition matches
+    // list_notifications / unread_count_inner so the three queries
+    // operate on the same row set.
     sqlx::query(
         "UPDATE notifications SET is_deleted = 1, \
          deleted_at = CAST(strftime('%s','now') * 1000 AS INTEGER) \
-         WHERE user_address = ?",
+         WHERE (user_address = ? OR user_address = 'system') \
+         AND is_deleted = 0",
     )
     .bind(alice)
     .execute(&pool)
@@ -254,6 +258,61 @@ async fn soft_delete_all_for_user() {
 
     assert_eq!(count_notifications(&pool, alice).await, 0);
     assert_eq!(count_notifications(&pool, bob).await, 1);
+}
+
+/// Regression: system notifications (user_address = 'system') must be
+/// soft-deleted along with the calling user's rows. They are part of
+/// the same visible queue (list_notifications joins them in), so
+/// "Delete All" must remove them too — otherwise an "Update Available"
+/// system notification persists across deletes.
+#[tokio::test]
+async fn soft_delete_all_includes_system_rows() {
+    let pool = setup_db().await;
+    let alice = "alice";
+    let bob = "bob";
+
+    insert_notification(&pool, alice, None, None, "a1").await;
+    insert_notification(&pool, "system", Some("Hippius"), Some("0.1.94"), "Update Available").await;
+    insert_notification(&pool, bob, None, None, "b1").await;
+
+    // Same SQL the production command runs.
+    sqlx::query(
+        "UPDATE notifications SET is_deleted = 1, \
+         deleted_at = CAST(strftime('%s','now') * 1000 AS INTEGER) \
+         WHERE (user_address = ? OR user_address = 'system') \
+         AND is_deleted = 0",
+    )
+    .bind(alice)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // What alice sees through list_notifications — both her rows and
+    // system rows — must be empty.
+    let (visible_for_alice,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE (user_address = ? OR user_address = 'system') AND is_deleted = 0",
+    )
+    .bind(alice)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(visible_for_alice, 0);
+
+    // Bob — a different account — must be untouched. Multi-account
+    // installs cannot cross-evict.
+    assert_eq!(count_notifications(&pool, bob).await, 1);
+
+    // The system row must be soft-deleted (is_deleted = 1), not
+    // hard-deleted, so the "have we ever shown this version?" check
+    // (`hippius_version_notification_exists`) keeps returning true and
+    // the updater doesn't immediately re-insert the row.
+    let (system_total,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM notifications WHERE user_address = 'system'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(system_total, 1, "system row should still exist (soft-deleted)");
 }
 
 #[tokio::test]
