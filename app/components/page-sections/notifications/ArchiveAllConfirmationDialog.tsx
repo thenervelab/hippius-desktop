@@ -71,8 +71,21 @@ const ArchiveAllConfirmationDialog: React.FC<ArchiveAllConfirmationProps> = ({
                         This action cannot be undone.
                     </div>
 
-                    {/* Action Buttons */}
+                    {/* Action Buttons. Convention across the app: Cancel
+                        sits on the left (the safe escape hatch the user
+                        reaches first), the destructive confirm on the
+                        right (matches OS-level dialogs on macOS/Windows
+                        and the alert-mode ConfirmDialog primitive). */}
                     <div className="flex gap-4 mb-6">
+                        <CardButton
+                            className="w-full"
+                            variant="secondary"
+                            onClick={onClose}
+                            disabled={loading}
+                        >
+                            Cancel
+                        </CardButton>
+
                         <CardButton
                             className="text-base w-full"
                             variant="error"
@@ -81,15 +94,6 @@ const ArchiveAllConfirmationDialog: React.FC<ArchiveAllConfirmationProps> = ({
                             loading={loading}
                         >
                             {loading ? "Deleting..." : "Delete All"}
-                        </CardButton>
-
-                        <CardButton
-                            className="w-full"
-                            variant="secondary"
-                            onClick={onClose}
-                            disabled={loading}
-                        >
-                            Cancel
                         </CardButton>
                     </div>
                 </div>
