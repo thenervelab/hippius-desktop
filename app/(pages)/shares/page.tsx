@@ -135,7 +135,7 @@ export default function MySharesPage() {
 
   const onCopy = async (url: string | null) => {
     if (!url) {
-      toast.error("This share's key is not on this device — copy it from the device that created it.");
+      toast.error("This link was created in the console — copy it from there.");
       return;
     }
     try {
@@ -299,7 +299,7 @@ function ShareRow({ row, onCopy, onRevoke, onReshare }: ShareRowProps) {
           title={
             row.shareUrl
               ? "Copy link"
-              : "The link can only be copied from the device that created it."
+              : "This link was created in the console — copy it from there."
           }
           icon={<Icons.Copy className="size-3.5" />}
           label="Copy"
@@ -310,7 +310,7 @@ function ShareRow({ row, onCopy, onRevoke, onReshare }: ShareRowProps) {
           title={
             canReshare
               ? "Revoke this link and mint a new one with a fresh expiry"
-              : "Reshare requires the device that created this link."
+              : "Reshare requires the console where this link was created."
           }
           icon={<Icons.Refresh className="size-3.5" />}
           label="Reshare"

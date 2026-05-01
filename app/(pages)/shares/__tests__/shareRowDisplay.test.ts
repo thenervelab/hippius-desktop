@@ -23,9 +23,9 @@ describe("pickShareRowDisplay", () => {
     });
   });
 
-  it("returns the cross-device placeholder when shareUrl is null", () => {
+  it("returns the console-origin placeholder when shareUrl is null", () => {
     expect(pickShareRowDisplay({ ...baseRow, shareUrl: null })).toEqual({
-      text: "Shared from another device",
+      text: "Created from the console",
       isPlaceholder: true,
     });
   });
@@ -49,12 +49,12 @@ describe("pickHistoryRowDisplay", () => {
     });
   });
 
-  it("returns the cross-device placeholder when filename is null", () => {
+  it("returns the console-origin placeholder when filename is null", () => {
     // History rows captured by the diff path on a device that never
     // had the keystore entry surface with `filename: null` — the same
     // marker the active-list helper handles via `shareUrl === null`.
     expect(pickHistoryRowDisplay(null)).toEqual({
-      text: "Shared from another device",
+      text: "Created from the console",
       isPlaceholder: true,
     });
   });
