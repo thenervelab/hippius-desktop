@@ -90,6 +90,10 @@ export default function MySharesPage() {
   // same dialog for any row without an extra "which token?" piece of state.
   const [tokenPendingRevoke, setTokenPendingRevoke] = React.useState<string | null>(null);
   const [revokeBusy, setRevokeBusy] = React.useState(false);
+  // Token whose reshare IPC is currently in flight. Used to replace
+  // that row's 3-dot button with a spinner so the user knows we are
+  // working, and to prevent a second reshare click on the same row.
+  const [resharingToken, setResharingToken] = React.useState<string | null>(null);
   // `clearAllOpen` drives the "Clear all history" confirmation dialog.
   // Single boolean (not a token carrier) because the action is global —
   // there is nothing per-row to remember while the dialog is open.
@@ -146,6 +150,7 @@ export default function MySharesPage() {
   };
 
   const onReshare = async (token: string) => {
+    setResharingToken(token);
     try {
       const link = await reshare(token);
       // Auto-copy mirrors the create-share modal: the user pressed
@@ -162,6 +167,8 @@ export default function MySharesPage() {
       queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY, polkadotAddress] });
     } catch (err) {
       toast.error(`Could not reshare: ${errorMessage(err)}`);
+    } finally {
+      setResharingToken(null);
     }
   };
 
@@ -228,6 +235,7 @@ export default function MySharesPage() {
                 onCopy={onCopy}
                 onRevoke={queueRevoke}
                 onReshare={onReshare}
+                resharingToken={resharingToken}
               />
             )}
           </SectionPanel>
@@ -351,9 +359,10 @@ interface ActiveSharesTableProps {
   onCopy: (url: string | null) => void;
   onRevoke: (token: string) => void;
   onReshare: (token: string) => void;
+  resharingToken: string | null;
 }
 
-function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare }: ActiveSharesTableProps) {
+function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare, resharingToken }: ActiveSharesTableProps) {
   // Server returns rows newest-first by createdAt. Default the visible
   // sort cursor to that order so the chevron in the column header
   // reflects what the user is actually seeing.
@@ -427,11 +436,12 @@ function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare }: ActiveSharesTa
             onCopy={onCopy}
             onRevoke={onRevoke}
             onReshare={onReshare}
+            isResharing={row.original.shareToken === resharingToken}
           />
         ),
       }),
     ],
-    [onCopy, onRevoke, onReshare],
+    [onCopy, onRevoke, onReshare, resharingToken],
   );
 
   const table = useReactTable({
@@ -477,12 +487,22 @@ function ActiveActionsCell({
   onCopy,
   onRevoke,
   onReshare,
+  isResharing,
 }: {
   row: ShareSummary;
   onCopy: (url: string | null) => void;
   onRevoke: (token: string) => void;
   onReshare: (token: string) => void;
+  isResharing: boolean;
 }) {
+  if (isResharing) {
+    return (
+      <div className="flex justify-center items-center h-8">
+        <Loader2 className="size-4 animate-spin text-grey-40" />
+      </div>
+    );
+  }
+
   const canReshare = Boolean(row.folderLabel && row.relativePath);
   const items: ActionItem[] = [
     {
