@@ -212,7 +212,7 @@ export function LoginForm({
     return (
         <div className="opacity-0 animate-fade-in-0.5 w-full flex justify-center">
             <div
-                className="w-full max-w-[min(25.3125rem,405px)] bg-grey-light-100 rounded-[8px] p-[min(1rem,16px)] flex flex-col gap-[min(0.75rem,12px)] items-center overflow-hidden"
+                className="w-full max-w-[min(25.3125rem,405px)] bg-grey-light-100 dark:bg-black-500 rounded-[8px] p-[min(1rem,16px)] flex flex-col gap-[min(0.75rem,12px)] items-center overflow-hidden"
                 style={{
                     boxShadow:
                         "0px 14px 31px 0px rgba(0,0,0,0.06), 0px 56px 56px 0px rgba(0,0,0,0.05), 0px 126px 76px 0px rgba(0,0,0,0.03), 0px 224px 90px 0px rgba(0,0,0,0.01)",
@@ -220,7 +220,7 @@ export function LoginForm({
             >
                 <LogoDecoration />
 
-                <h1 className="w-full text-center text-grey-10 font-medium text-[min(1.75rem,28px)] leading-[min(2.25rem,36px)] tracking-[-0.03em]">
+                <h1 className="w-full text-center text-grey-10 dark:text-grey-light-100 font-medium text-[min(1.75rem,28px)] leading-[min(2.25rem,36px)] tracking-[-0.03em]">
                     Sign In to Hippius
                 </h1>
 
@@ -260,7 +260,7 @@ export function LoginForm({
                         </div>
                     )}
 
-                    <div className="h-px w-full bg-grey-80" />
+                    <div className="h-px w-full bg-grey-80 dark:bg-[#494949]" />
 
                     <p className="w-full text-center text-[min(0.75rem,12px)] leading-[min(1.125rem,18px)] tracking-[-0.02em] text-grey-dark-800 font-medium">
                         By continuing you agree to our
@@ -270,7 +270,7 @@ export function LoginForm({
                             onClick={() =>
                                 openUrl("https://hippius.com/terms-and-conditions")
                             }
-                            className="font-semibold text-primary-50 hover:text-primary-60 transition-colors cursor-pointer"
+                            className="font-semibold text-primary-50 dark:text-primary-65 hover:text-primary-60 transition-colors cursor-pointer"
                         >
                             Terms and Conditions
                         </button>{" "}
@@ -278,7 +278,7 @@ export function LoginForm({
                         <button
                             type="button"
                             onClick={() => openUrl("https://hippius.com/privacy-policy")}
-                            className="font-semibold text-primary-50 hover:text-primary-60 transition-colors cursor-pointer"
+                            className="font-semibold text-primary-50 dark:text-primary-65 hover:text-primary-60 transition-colors cursor-pointer"
                         >
                             Privacy Policy
                         </button>
@@ -295,7 +295,7 @@ export function LoginForm({
 
 function LogoDecoration() {
     return (
-        <div className="relative size-[min(3.5rem,56px)] overflow-hidden bg-grey-light-100">
+        <div className="relative size-[min(3.5rem,56px)] overflow-hidden bg-grey-light-100 dark:bg-black-500">
             <div
                 className="absolute inset-0 opacity-70"
                 style={{
@@ -305,10 +305,17 @@ function LogoDecoration() {
                 }}
             />
             <div
-                className="absolute inset-0"
+                className="absolute inset-0 dark:hidden"
                 style={{
                     background:
                         "radial-gradient(50% 70% at 50% 50%, rgba(255,255,255,0) 0%, #ffffff 100%)",
+                }}
+            />
+            <div
+                className="absolute inset-0 hidden dark:block"
+                style={{
+                    background:
+                        "radial-gradient(50% 70% at 50% 50%, rgba(22,22,22,0) 0%, #161616 100%)",
                 }}
             />
             <HippiusLogo className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 size-[min(2rem,32px)] rounded" />

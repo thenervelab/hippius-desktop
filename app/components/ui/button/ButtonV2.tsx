@@ -3,6 +3,7 @@ import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { getDiagonalTextureSvgBackgroundImage } from "@/lib/ui-textures";
 
 const CornerDots = ({
   dotSize = 4,
@@ -78,6 +79,38 @@ const CornerDots = ({
   );
 };
 
+const ButtonTexture = ({
+  color,
+  opacity,
+  size,
+  lineWidth,
+  className,
+}: {
+  color?: string;
+  opacity?: number;
+  size?: number;
+  lineWidth?: number;
+  className?: string;
+}) => {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "pointer-events-none absolute inset-0 -z-[1] rounded-[inherit] opacity-0 transition-opacity duration-200 group-hover:opacity-100",
+        className,
+      )}
+      style={{
+        backgroundImage: getDiagonalTextureSvgBackgroundImage({
+          color,
+          opacity,
+          size,
+          lineWidth,
+        }),
+      }}
+    />
+  );
+};
+
 const buttonVariants = cva(
   "font-geist group relative isolate overflow-visible inline-flex items-center justify-center whitespace-nowrap transition-all duration-150 disabled:pointer-events-none disabled:opacity-50 cursor-pointer active:translate-y-[2px] active:scale-[0.98] active:shadow-none",
   {
@@ -121,7 +154,12 @@ type BaseProps = VariantProps<typeof buttonVariants> & {
   asChild?: boolean;
   dotSize?: number;
   dotColor?: React.CSSProperties["borderColor"];
-  hideDots?: boolean;
+  texture?: boolean;
+  textureColor?: string;
+  textureOpacity?: number;
+  textureSize?: number;
+  textureLineWidth?: number;
+  textureClassName?: string;
 };
 
 type AsLinkProps = BaseProps & {
@@ -151,13 +189,18 @@ const Button = React.forwardRef<
       children,
       dotSize = 4,
       dotColor,
-      hideDots = false,
+      texture = false,
+      textureColor,
+      textureOpacity,
+      textureSize,
+      textureLineWidth,
+      textureClassName,
       ...props
     },
     ref,
   ) => {
     const classes = cn(buttonVariants({ variant, size, className }));
-    const showDots = !hideDots && variant !== "ghost";
+    const showDots = variant !== "ghost";
 
     if ("asLink" in props && props.asLink) {
       const { asLink, href, target, rel, ...rest } = props as AsLinkProps;
@@ -171,6 +214,15 @@ const Button = React.forwardRef<
           ref={ref as React.Ref<HTMLAnchorElement>}
           {...(rest as object)}
         >
+          {showDots && texture ? (
+            <ButtonTexture
+              color={textureColor}
+              opacity={textureOpacity}
+              size={textureSize}
+              lineWidth={textureLineWidth}
+              className={textureClassName}
+            />
+          ) : null}
           {showDots ? (
             <CornerDots
               dotSize={dotSize}
@@ -194,6 +246,15 @@ const Button = React.forwardRef<
         ref={ref as React.Ref<HTMLButtonElement>}
         {...buttonProps}
       >
+        {showDots && texture ? (
+          <ButtonTexture
+            color={textureColor}
+            opacity={textureOpacity}
+            size={textureSize}
+            lineWidth={textureLineWidth}
+            className={textureClassName}
+          />
+        ) : null}
         {showDots ? (
           <CornerDots dotSize={dotSize} dotColor={dotColor} variant={variant} />
         ) : null}

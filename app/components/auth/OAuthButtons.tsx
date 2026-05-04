@@ -55,6 +55,8 @@ function AuthButton({
   disabled = false,
   isLoading = false,
   className,
+  texture = false,
+  textureClassName,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
@@ -62,6 +64,8 @@ function AuthButton({
   disabled?: boolean;
   isLoading?: boolean;
   className?: string;
+  texture?: boolean;
+  textureClassName?: string;
 }) {
   return (
     <Button
@@ -71,6 +75,11 @@ function AuthButton({
       variant="default"
       size="auto"
       dotSize={6}
+      texture={texture}
+      textureClassName={textureClassName}
+      textureColor="rgba(53, 53, 53, 1)"
+      textureSize={5}
+      textureLineWidth={0.7}
       className={cn(AUTH_BUTTON_CLASSES, className)}
     >
       {isLoading ? (
@@ -147,6 +156,8 @@ export function OAuthButton({
       disabled={disabled}
       isLoading={isLoading}
       className={className}
+      texture
+      textureClassName="hidden dark:md:block"
     />
   );
 }
@@ -166,6 +177,8 @@ export function AccessKeyButton({
       label="Continue with Access Key"
       onClick={onClick}
       disabled={disabled}
+      texture
+      textureClassName="hidden dark:md:block"
       className={className}
     />
   );

@@ -76,7 +76,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
   return (
     <div className="opacity-0 animate-fade-in-0.5 w-full flex justify-center">
       <div
-        className="w-full max-w-[495px] bg-grey-light-100 rounded-[8px] p-[min(1rem,16px)] flex flex-col gap-[min(1.625rem,26px)] items-center overflow-hidden"
+        className="w-full max-w-[495px] bg-grey-light-100 dark:bg-black-500 rounded-[8px] p-[min(1rem,16px)] flex flex-col gap-[min(1.625rem,26px)] items-center overflow-hidden"
         style={{
           boxShadow:
             "0px 14px 31px 0px rgba(0,0,0,0.06), 0px 56px 56px 0px rgba(0,0,0,0.05), 0px 126px 76px 0px rgba(0,0,0,0.03), 0px 224px 90px 0px rgba(0,0,0,0.01)",
@@ -84,7 +84,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
       >
         <div className="flex flex-col gap-[min(0.75rem,12px)] items-center w-full">
           <LogoDecoration />
-          <h1 className="w-full text-center text-grey-10 font-medium text-[min(1.5rem,24px)] leading-[min(2rem,32px)]">
+          <h1 className="w-full text-center text-grey-10 dark:text-grey-light-100 font-medium text-[min(1.5rem,24px)] leading-[min(2rem,32px)]">
             Log In to Hippius
           </h1>
         </div>
@@ -95,7 +95,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
             className="flex flex-col gap-[min(1rem,16px)] items-center w-full"
           >
             <div className="flex flex-col gap-[min(0.5rem,8px)] items-start w-full">
-              <p className="font-medium text-[min(1.125rem,18px)] leading-[min(1.5rem,24px)] tracking-[-0.02em] text-grey-10">
+              <p className="font-medium text-[min(1.125rem,18px)] leading-[min(1.5rem,24px)] tracking-[-0.02em] text-grey-10 dark:text-grey-light-100">
                 Enter Your Access Key To Continue
               </p>
 
@@ -124,7 +124,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
                     <button
                       type="button"
                       onClick={() => setShowSecret((s) => !s)}
-                      className="text-grey-dark-800 hover:text-grey-10 transition-colors cursor-pointer"
+                      className="text-grey-dark-800 hover:text-grey-10 dark:hover:text-grey-light-100 transition-colors cursor-pointer"
                       aria-label={
                         showSecret ? "Hide access key" : "Show access key"
                       }
@@ -174,7 +174,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
               dotSize={4}
               onClick={onBack}
               disabled={logginIn}
-              className="w-full h-[min(3.25rem,52px)] gap-[min(0.625rem,10px)] px-[min(0.625rem,10px)] py-[min(0.625rem,10px)] text-[min(1.125rem,18px)] tracking-[-0.02em] font-normal text-grey-10 leading-[1.109] border border-grey-80 bg-white hover:bg-grey-90"
+              className="w-full h-[min(3.25rem,52px)] gap-[min(0.625rem,10px)] px-[min(0.625rem,10px)] py-[min(0.625rem,10px)] text-[min(1.125rem,18px)] tracking-[-0.02em] font-normal text-grey-10 dark:text-grey-light-100 leading-[1.109] border border-grey-80 dark:border-[#494949] bg-white dark:bg-[#2c2c2c] hover:bg-grey-90 dark:hover:bg-[#2e2e2e]"
             >
               <span>Choose another log in method</span>
               <ArrowRight className="size-4" />
@@ -188,7 +188,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
               onClick={() =>
                 openUrl("https://hippius.com/terms-and-conditions")
               }
-              className="font-semibold text-primary-50 hover:text-primary-60 transition-colors cursor-pointer"
+              className="font-semibold text-primary-50 dark:text-primary-65 hover:text-primary-60 transition-colors cursor-pointer"
             >
               Terms and Conditions
             </button>{" "}
@@ -196,7 +196,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
             <button
               type="button"
               onClick={() => openUrl("https://hippius.com/privacy-policy")}
-              className="font-semibold text-primary-50 hover:text-primary-60 transition-colors cursor-pointer"
+              className="font-semibold text-primary-50 dark:text-primary-65 hover:text-primary-60 transition-colors cursor-pointer"
             >
               Privacy Policy
             </button>
@@ -213,7 +213,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
 
 function LogoDecoration() {
   return (
-    <div className="relative size-[min(3.5rem,56px)] overflow-hidden bg-grey-light-100">
+    <div className="relative size-[min(3.5rem,56px)] overflow-hidden bg-grey-light-100 dark:bg-black-500">
       <div
         className="absolute inset-0 opacity-70"
         style={{
@@ -223,10 +223,17 @@ function LogoDecoration() {
         }}
       />
       <div
-        className="absolute inset-0"
+        className="absolute inset-0 dark:hidden"
         style={{
           background:
             "radial-gradient(50% 70% at 50% 50%, rgba(255,255,255,0) 0%, #ffffff 100%)",
+        }}
+      />
+      <div
+        className="absolute inset-0 hidden dark:block"
+        style={{
+          background:
+            "radial-gradient(50% 70% at 50% 50%, rgba(22,22,22,0) 0%, #161616 100%)",
         }}
       />
       <HippiusLogo className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 size-[min(2rem,32px)] rounded" />
