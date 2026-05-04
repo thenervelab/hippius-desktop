@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import DialogContainer from "../../ui/DialogContainer";
 import { Button } from "../../ui/button";
-import ProgressBar from "../../auth/onboarding/ProgressBar";
 import { toast } from "sonner";
 import { Graphsheet } from "@/components/ui";
 import {
@@ -19,10 +18,8 @@ import {
   Users,
   Camera,
   AlertTriangle,
-  CheckCircle2,
   Download,
   ArrowLeft,
-  RefreshCw,
   X,
 } from "lucide-react";
 
@@ -33,8 +30,6 @@ interface MnemonicBackupDialogProps {
   onClose?: () => void;
 }
 
-const TOTAL_STEPS = 4;
-const CHALLENGE_COUNT = 3;
 const MIN_PASSWORD_LENGTH = 8;
 
 export function MnemonicBackupDialog({
@@ -54,17 +49,10 @@ export function MnemonicBackupDialog({
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
   const [backupCreated, setBackupCreated] = useState(false);
 
-  // Verification state
-  const [challengeIndices, setChallengeIndices] = useState<number[]>([]);
-  const [answers, setAnswers] = useState<string[]>(["", "", ""]);
-  const [hasAttempted, setHasAttempted] = useState(false);
-  const [shakeFields, setShakeFields] = useState<boolean[]>([false, false, false]);
-
   const clipboardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const words = useMemo(() => mnemonic.split(" "), [mnemonic]);
 
-  // Determine if we can close the dialog (not during sensitive operations)
   const canClose = !isCreatingBackup;
 
   const handleClose = useCallback(() => {
@@ -76,7 +64,6 @@ export function MnemonicBackupDialog({
     }
   }, [canClose, onClose, onConfirm]);
 
-  // Reset all state when dialog opens or closes
   useEffect(() => {
     if (open) {
       setStep(1);
@@ -87,35 +74,16 @@ export function MnemonicBackupDialog({
       setEncryptConfirm("");
       setIsCreatingBackup(false);
       setBackupCreated(false);
-      setChallengeIndices([]);
-      setAnswers(["", "", ""]);
-      setHasAttempted(false);
-      setShakeFields([false, false, false]);
     } else {
-      // Clear sensitive state when dialog closes
       setEncryptPassword("");
       setEncryptConfirm("");
       setShowMnemonic(false);
-      // Cancel any pending clipboard clear timer
       if (clipboardTimerRef.current) {
         clearTimeout(clipboardTimerRef.current);
         clipboardTimerRef.current = null;
       }
     }
   }, [open]);
-
-  const generateChallengeIndices = useCallback(() => {
-    const indices: number[] = [];
-    while (indices.length < CHALLENGE_COUNT) {
-      const idx = Math.floor(Math.random() * words.length);
-      if (!indices.includes(idx)) indices.push(idx);
-    }
-    indices.sort((a, b) => a - b);
-    setChallengeIndices(indices);
-    setAnswers(["", "", ""]);
-    setHasAttempted(false);
-    setShakeFields([false, false, false]);
-  }, [words.length]);
 
   const handleCopy = async () => {
     try {
@@ -125,7 +93,9 @@ export function MnemonicBackupDialog({
       // Clear clipboard after 30 seconds for security
       if (clipboardTimerRef.current) clearTimeout(clipboardTimerRef.current);
       clipboardTimerRef.current = setTimeout(() => {
-        navigator.clipboard.writeText("").catch((err: unknown) => console.warn("[MnemonicBackupDialog] Failed to clear clipboard:", err));
+        navigator.clipboard.writeText("").catch((err: unknown) =>
+          console.warn("[MnemonicBackupDialog] Failed to clear clipboard:", err)
+        );
         clipboardTimerRef.current = null;
       }, 30000);
     } catch (err) {
@@ -140,8 +110,8 @@ export function MnemonicBackupDialog({
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
       const { invoke } = await import("@tauri-apps/api/core");
-
       const { downloadDir } = await import("@tauri-apps/api/path");
+
       let saveDir = "";
       try {
         saveDir = await downloadDir();
@@ -155,7 +125,6 @@ export function MnemonicBackupDialog({
       });
 
       if (!filePath) {
-        // User cancelled save dialog
         setIsCreatingBackup(false);
         return;
       }
@@ -178,38 +147,6 @@ export function MnemonicBackupDialog({
     }
   };
 
-  const handleGoToStep3 = () => {
-    generateChallengeIndices();
-    setStep(3);
-  };
-
-  const checkAnswer = (index: number): boolean => {
-    if (challengeIndices[index] === undefined) return false;
-    return answers[index].toLowerCase().trim() === words[challengeIndices[index]].toLowerCase();
-  };
-
-  const handleVerify = () => {
-    setHasAttempted(true);
-    const allCorrect = challengeIndices.every(
-      (wordIdx, i) => answers[i].toLowerCase().trim() === words[wordIdx].toLowerCase()
-    );
-
-    if (allCorrect) {
-      setStep(4);
-    } else {
-      // Shake incorrect fields
-      const newShake = challengeIndices.map(
-        (wordIdx, i) => answers[i].toLowerCase().trim() !== words[wordIdx].toLowerCase()
-      );
-      setShakeFields(newShake);
-      setTimeout(() => setShakeFields([false, false, false]), 300);
-    }
-  };
-
-  const handleShuffle = () => {
-    generateChallengeIndices();
-  };
-
   const passwordsValid =
     encryptPassword.length >= MIN_PASSWORD_LENGTH &&
     encryptPassword === encryptConfirm;
@@ -222,13 +159,12 @@ export function MnemonicBackupDialog({
     }
   };
 
-  // Step icon and title mapping
-  const stepConfig: Record<number, { icon: React.ReactNode; title: string }> = {
-    1: { icon: <Shield className="size-5 text-grey-100" />, title: "Secure Your Mnemonic Seed" },
-    2: { icon: <Eye className="size-5 text-grey-100" />, title: "Your Mnemonic Seed" },
-    3: { icon: <CheckCircle2 className="size-5 text-grey-100" />, title: "Verify Your Mnemonic Seed" },
-    4: { icon: <CheckCircle2 className="size-5 text-grey-100" />, title: "Mnemonic Seed Secured!" },
-  };
+  const stepIcon =
+    step === 1 ? (
+      <Shield className="size-5 text-grey-100" />
+    ) : (
+      <Eye className="size-5 text-grey-100" />
+    );
 
   return (
     <Dialog.Root open={open} onOpenChange={handleOpenChange}>
@@ -236,23 +172,24 @@ export function MnemonicBackupDialog({
         className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[35rem] h-fit"
         preventClose={!canClose}
       >
-        <Dialog.Title className="sr-only">{stepConfig[step]?.title}</Dialog.Title>
+        <Dialog.Title className="sr-only">
+          {step === 1 ? "Secure Your Mnemonic Seed" : "Your Mnemonic Seed"}
+        </Dialog.Title>
 
         <div className="px-5 py-5 flex flex-col gap-4">
-          {/* Header: Back button + Close button */}
+          {/* Header: Back + Close */}
           <div className="flex items-center justify-between">
             <div className="w-8">
-              {step > 1 && step < 4 && (
+              {step === 2 && (
                 <button
                   type="button"
-                  onClick={() => setStep(step - 1)}
+                  onClick={() => setStep(1)}
                   className="flex items-center gap-1 text-sm text-grey-40 hover:text-grey-20 transition-colors"
                 >
                   <ArrowLeft className="w-4 h-4" />
                 </button>
               )}
             </div>
-
             <button
               type="button"
               onClick={handleClose}
@@ -263,10 +200,7 @@ export function MnemonicBackupDialog({
             </button>
           </div>
 
-          {/* Progress Bar */}
-          <ProgressBar totalSteps={TOTAL_STEPS} currentStep={step} />
-
-          {/* Icon Header — Graphsheet pattern (matching other dialogs) */}
+          {/* Icon header */}
           <div className="flex flex-col items-center text-center gap-3">
             <div className="size-14 flex justify-center items-center relative">
               <Graphsheet
@@ -284,12 +218,12 @@ export function MnemonicBackupDialog({
               />
               <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
               <div className="h-8 w-8 bg-primary-50 rounded-lg flex items-center justify-center z-20">
-                {stepConfig[step]?.icon}
+                {stepIcon}
               </div>
             </div>
           </div>
 
-          {/* Step 1: Security Best Practices */}
+          {/* Step 1: Security best practices */}
           {step === 1 && (
             <div className="animate-fade-in-from-b-0.3 flex flex-col gap-4">
               <div className="text-center">
@@ -297,7 +231,8 @@ export function MnemonicBackupDialog({
                   Secure Your Mnemonic Seed
                 </h2>
                 <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
-                  Your mnemonic seed is the only way to restore access to your account and encrypted files.
+                  Your mnemonic seed is the only way to restore access to your
+                  account and encrypted files.
                 </Dialog.Description>
               </div>
 
@@ -332,7 +267,7 @@ export function MnemonicBackupDialog({
             </div>
           )}
 
-          {/* Step 2: Display Mnemonic Seed */}
+          {/* Step 2: View mnemonic + optional encrypted backup */}
           {step === 2 && (
             <div className="animate-fade-in-from-b-0.3 flex flex-col gap-4">
               <div className="text-center">
@@ -340,15 +275,16 @@ export function MnemonicBackupDialog({
                   Your Mnemonic Seed
                 </h2>
                 <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
-                  Write down each word in order. You&apos;ll need to verify them in the next step.
+                  Write down each word in order and store it somewhere safe.
                 </Dialog.Description>
               </div>
 
-              {/* Word Grid */}
+              {/* Word grid */}
               <div className="bg-grey-90 rounded-lg p-4 relative">
                 <div
-                  className={`grid grid-cols-3 gap-2 transition-all duration-200 ${!showMnemonic ? "blur-md select-none" : ""
-                    }`}
+                  className={`grid grid-cols-3 gap-2 transition-all duration-200 ${
+                    !showMnemonic ? "blur-md select-none" : ""
+                  }`}
                 >
                   {words.map((word, index) => (
                     <div
@@ -363,7 +299,6 @@ export function MnemonicBackupDialog({
                   ))}
                 </div>
 
-                {/* Show/Hide Overlay */}
                 {!showMnemonic && (
                   <button
                     type="button"
@@ -378,7 +313,7 @@ export function MnemonicBackupDialog({
                 )}
               </div>
 
-              {/* Action Buttons */}
+              {/* Action buttons */}
               <div className="flex gap-2 flex-wrap">
                 <button
                   type="button"
@@ -386,13 +321,9 @@ export function MnemonicBackupDialog({
                   className="flex items-center gap-2 px-3 py-2 text-sm text-grey-20 bg-grey-90 hover:bg-grey-80 rounded-md transition-colors border border-grey-80"
                 >
                   {showMnemonic ? (
-                    <>
-                      <EyeOff className="w-4 h-4" /> Hide
-                    </>
+                    <><EyeOff className="w-4 h-4" /> Hide</>
                   ) : (
-                    <>
-                      <Eye className="w-4 h-4" /> Show
-                    </>
+                    <><Eye className="w-4 h-4" /> Show</>
                   )}
                 </button>
                 <button
@@ -401,13 +332,9 @@ export function MnemonicBackupDialog({
                   className="flex items-center gap-2 px-3 py-2 text-sm text-grey-20 bg-grey-90 hover:bg-grey-80 rounded-md transition-colors border border-grey-80"
                 >
                   {copied ? (
-                    <>
-                      <Check className="w-4 h-4 text-success-50" /> Copied
-                    </>
+                    <><Check className="w-4 h-4 text-success-50" /> Copied</>
                   ) : (
-                    <>
-                      <Copy className="w-4 h-4" /> Copy
-                    </>
+                    <><Copy className="w-4 h-4" /> Copy</>
                   )}
                 </button>
                 {!backupCreated && (
@@ -422,12 +349,12 @@ export function MnemonicBackupDialog({
                 )}
                 {backupCreated && (
                   <div className="flex items-center gap-2 px-3 py-2 text-sm text-success-50">
-                    <CheckCircle2 className="w-4 h-4" /> Encrypted backup saved
+                    <Check className="w-4 h-4" /> Encrypted backup saved
                   </div>
                 )}
               </div>
 
-              {/* Encrypt Form */}
+              {/* Encrypt form */}
               {showEncryptForm && (
                 <div className="animate-slideDown bg-grey-90 rounded-lg p-4 border border-grey-80 flex flex-col gap-3">
                   <p className="text-xs text-grey-40">
@@ -470,134 +397,9 @@ export function MnemonicBackupDialog({
                 </div>
               )}
 
-              {/* Bottom Navigation */}
               <div className="flex justify-end mt-1">
-                <Button onClick={handleGoToStep3}>
-                  I Have Written It Down
-                </Button>
+                <Button onClick={onConfirm}>Done</Button>
               </div>
-            </div>
-          )}
-
-          {/* Step 3: Verification Challenge */}
-          {step === 3 && (
-            <div className="animate-fade-in-from-b-0.3 flex flex-col gap-4">
-              <div className="text-center">
-                <h2 className="text-xl font-semibold text-grey-10">
-                  Verify Your Mnemonic Seed
-                </h2>
-                <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
-                  Enter the requested words to confirm you&apos;ve saved your phrase correctly.
-                </Dialog.Description>
-              </div>
-
-              <div className="flex flex-col gap-3">
-                {challengeIndices.map((wordIdx, i) => {
-                  const isCorrect = checkAnswer(i);
-                  const isIncorrect = hasAttempted && !isCorrect && answers[i].trim().length > 0;
-
-                  return (
-                    <div key={`${wordIdx}-${i}`} className="flex flex-col gap-1">
-                      <label className="text-sm text-grey-30 font-medium">
-                        Word #{wordIdx + 1}
-                      </label>
-                      <div className="relative">
-                        <input
-                          type="text"
-                          autoComplete="off"
-                          placeholder={`Enter word #${wordIdx + 1}`}
-                          value={answers[i]}
-                          onChange={(e) => {
-                            const newAnswers = [...answers];
-                            newAnswers[i] = e.target.value;
-                            setAnswers(newAnswers);
-                          }}
-                          className={`w-full px-3 py-2.5 text-sm bg-grey-100 border rounded-md focus:outline-none transition-colors pr-10 ${shakeFields[i] ? "animate-shake" : ""
-                            } ${isCorrect && answers[i].trim().length > 0
-                              ? "border-success-50"
-                              : isIncorrect
-                                ? "border-error-50"
-                                : "border-grey-80 focus:border-primary-50"
-                            }`}
-                        />
-                        {isCorrect && answers[i].trim().length > 0 && (
-                          <Check className="w-4 h-4 text-success-50 absolute right-3 top-1/2 -translate-y-1/2" />
-                        )}
-                        {isIncorrect && (
-                          <X className="w-4 h-4 text-error-50 absolute right-3 top-1/2 -translate-y-1/2" />
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="flex justify-between items-center">
-                <button
-                  type="button"
-                  onClick={handleShuffle}
-                  className="flex items-center gap-1.5 text-sm text-grey-40 hover:text-grey-20 transition-colors"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" /> Shuffle words
-                </button>
-                <Button onClick={handleVerify}>
-                  Verify
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {/* Step 4: Completion */}
-          {step === 4 && (
-            <div className="animate-fade-in-from-b-0.3 flex flex-col items-center gap-5 py-2">
-              <div className="animate-scale-in-100%-0.3">
-                <div className="w-16 h-16 rounded-full bg-success-50/10 flex items-center justify-center">
-                  <CheckCircle2 className="w-9 h-9 text-success-50" />
-                </div>
-              </div>
-
-              <div className="text-center">
-                <h2 className="text-xl font-semibold text-grey-10">
-                  Mnemonic Seed Secured!
-                </h2>
-                <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
-                  Your mnemonic seed has been verified. Your files are protected.
-                </Dialog.Description>
-              </div>
-
-              <div className="w-full bg-grey-90 rounded-lg p-4 flex flex-col gap-2.5 border border-grey-80">
-                <div className="flex items-center gap-2.5">
-                  <Check className="w-4 h-4 text-success-50 flex-shrink-0" />
-                  <span className="text-sm text-grey-20">Mnemonic seed viewed</span>
-                </div>
-                <div className="flex items-center gap-2.5">
-                  <Check className="w-4 h-4 text-success-50 flex-shrink-0" />
-                  <span className="text-sm text-grey-20">Verification passed</span>
-                </div>
-                <div className="flex items-center gap-2.5">
-                  {backupCreated ? (
-                    <Check className="w-4 h-4 text-success-50 flex-shrink-0" />
-                  ) : (
-                    <span className="w-4 h-4 flex items-center justify-center text-grey-50 text-xs flex-shrink-0">
-                      —
-                    </span>
-                  )}
-                  <span
-                    className={`text-sm ${backupCreated ? "text-grey-20" : "text-grey-50"}`}
-                  >
-                    Encrypted backup {backupCreated ? "created" : "skipped"}
-                  </span>
-                </div>
-              </div>
-
-              <p className="text-xs text-grey-40 text-center max-w-xs">
-                Keep your mnemonic seed safe. You will need it to restore access to your
-                encrypted files on a new device.
-              </p>
-
-              <Button onClick={onConfirm} className="w-full">
-                Done
-              </Button>
             </div>
           )}
         </div>
