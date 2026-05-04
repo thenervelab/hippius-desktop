@@ -28,11 +28,12 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import { useAtomValue } from "jotai";
-import { Copy as CopyIcon, Loader2, MoreVertical, RefreshCcw, Trash2 } from "lucide-react";
+import { Check, Copy as CopyIcon, Loader2, MoreVertical, RefreshCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { AbstractIconWrapper, Icons } from "@/components/ui";
+import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
 import { Button } from "@/components/ui/button";
 import * as TableModule from "@/components/ui/alt-table";
 import TableActionMenu, { type ActionItem } from "@/app/components/ui/alt-table/TableActionMenu";
@@ -47,6 +48,7 @@ import {
 } from "@/app/lib/tauri/shareHistory";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { formatBytes } from "@/lib/utils/formatBytes";
 import { formatRelative } from "@/app/lib/utils/timeRelative";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/lib/utils";
@@ -56,15 +58,24 @@ const SHARES_QUERY_KEY = "shares-list";
 const HISTORY_QUERY_KEY = "shares-history-list";
 const REFRESH_INTERVAL_MS = 30_000;
 
-// Column width percentages — same five-column layout for both tables
-// (Name | Size | Created | Expires/Ended | actions). The actions
-// column is intentionally narrow because it only ever holds a 3-dot
-// menu trigger; widening it leaves an awkward gap on the right edge.
+// Column width percentages. Active Shares has six columns (Name | Link |
+// Size | Created | Expires | actions); History keeps the original five
+// (Name | Size | Created | Ended | actions). The `link` key is only
+// used by the active table — History rows have no live URL to copy.
 const COLUMN_WIDTHS: Record<string, number> = {
-  name: 46,
+  name: 33,
+  link: 30,
+  size: 10,
+  created: 12,
+  endsAt: 11,
+  actions: 4,
+};
+
+const HISTORY_COLUMN_WIDTHS: Record<string, number> = {
+  name: 42,
   size: 14,
   created: 18,
-  endsAt: 18,
+  endsAt: 22,
   actions: 4,
 };
 
@@ -364,6 +375,13 @@ function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare }: ActiveSharesTa
           ),
         cell: (info) => <ActiveNameCell row={info.row.original} />,
       }),
+      activeColumnHelper.display({
+        id: "link",
+        header: "LINK",
+        enableSorting: false,
+        enableResizing: false,
+        cell: ({ row }) => <LinkCell shareUrl={row.original.shareUrl} />,
+      }),
       activeColumnHelper.accessor("plaintextSize", {
         id: "size",
         header: "SIZE",
@@ -426,7 +444,7 @@ function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare }: ActiveSharesTa
     getRowId: (row) => row.shareToken,
   });
 
-  return <RenderedTable table={table} />;
+  return <RenderedTable table={table} columnWidths={COLUMN_WIDTHS} />;
 }
 
 function ActiveNameCell({ row }: { row: ShareSummary }) {
@@ -439,18 +457,17 @@ function ActiveNameCell({ row }: { row: ShareSummary }) {
       <AbstractIconWrapper className="size-8 shrink-0">
         <Icons.Link className="absolute size-4 text-primary-50" />
       </AbstractIconWrapper>
-      <div className="flex items-center gap-2 min-w-0">
-        <span
-          className={cn(
-            "text-sm truncate",
-            display.isPlaceholder ? "italic text-grey-50" : "font-medium text-grey-10",
-          )}
-          title={display.text}
-        >
+      {display.isPlaceholder ? (
+        <span className="text-sm italic text-grey-50 truncate" title={display.text}>
           {display.text}
         </span>
-        {expired && <Badge tone="muted">Expired</Badge>}
-      </div>
+      ) : (
+        <MiddleTruncatedName
+          name={display.text}
+          textClassName="text-sm font-medium text-grey-10"
+          suffix={expired ? <span className="ml-1.5"><Badge tone="muted">Expired</Badge></span> : undefined}
+        />
+      )}
     </div>
   );
 }
@@ -592,7 +609,7 @@ function HistoryTable({ rows, onRemove }: HistoryTableProps) {
     getRowId: (row) => row.shareToken,
   });
 
-  return <RenderedTable table={table} />;
+  return <RenderedTable table={table} columnWidths={HISTORY_COLUMN_WIDTHS} />;
 }
 
 function HistoryNameCell({ entry }: { entry: ShareHistoryEntry }) {
@@ -602,18 +619,24 @@ function HistoryNameCell({ entry }: { entry: ShareHistoryEntry }) {
       <AbstractIconWrapper className="size-8 shrink-0">
         <Icons.Link className="absolute size-4 text-grey-40" />
       </AbstractIconWrapper>
-      <div className="flex items-center gap-2 min-w-0">
-        <span
-          className={cn(
-            "text-sm truncate",
-            display.isPlaceholder ? "italic text-grey-50" : "font-medium text-grey-10",
-          )}
-          title={display.text}
-        >
-          {display.text}
-        </span>
-        <HistoryStatusBadge reason={entry.endReason} />
-      </div>
+      {display.isPlaceholder ? (
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-sm italic text-grey-50 truncate" title={display.text}>
+            {display.text}
+          </span>
+          <HistoryStatusBadge reason={entry.endReason} />
+        </div>
+      ) : (
+        <MiddleTruncatedName
+          name={display.text}
+          textClassName="text-sm font-medium text-grey-10"
+          suffix={
+            <span className="ml-1.5">
+              <HistoryStatusBadge reason={entry.endReason} />
+            </span>
+          }
+        />
+      )}
     </div>
   );
 }
@@ -628,7 +651,13 @@ function HistoryNameCell({ entry }: { entry: ShareHistoryEntry }) {
  * the My Drive table 1:1. Generic over both the active-shares and
  * history row shapes.
  */
-function RenderedTable<T>({ table }: { table: ReturnType<typeof useReactTable<T>> }) {
+function RenderedTable<T>({
+  table,
+  columnWidths,
+}: {
+  table: ReturnType<typeof useReactTable<T>>;
+  columnWidths: Record<string, number>;
+}) {
   return (
     <TableModule.TableWrapper>
       <TableModule.Table className="w-full table-fixed">
@@ -640,7 +669,7 @@ function RenderedTable<T>({ table }: { table: ReturnType<typeof useReactTable<T>
                   key={header.id}
                   header={header}
                   align={header.id === "actions" ? "center" : "left"}
-                  columnWidth={COLUMN_WIDTHS[header.id]}
+                  columnWidth={columnWidths[header.id]}
                   // Shares table has fixed proportions (CSS-defined), so
                   // hide the resize handle entirely. The drag affordance
                   // adds visual noise without offering anything useful.
@@ -660,7 +689,7 @@ function RenderedTable<T>({ table }: { table: ReturnType<typeof useReactTable<T>
                     "font-medium px-2.5 py-3 border-x border-grey-80 text-grey-60 text-sm last:border-r-0 first:border-l-0 overflow-hidden align-middle",
                     cell.column.id === "actions" && "p-0",
                   )}
-                  style={{ width: `${COLUMN_WIDTHS[cell.column.id]}%` }}
+                  style={{ width: `${columnWidths[cell.column.id]}%` }}
                 >
                   <div className="w-full min-w-0">
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -672,6 +701,53 @@ function RenderedTable<T>({ table }: { table: ReturnType<typeof useReactTable<T>
         </TableModule.TBody>
       </TableModule.Table>
     </TableModule.TableWrapper>
+  );
+}
+
+/**
+ * Inline link cell for the active-shares table. Renders a truncated
+ * URL with a copy icon that flips to a green check for 2 s after a
+ * successful copy. When the key is absent (cross-device share), shows
+ * a muted placeholder — the 3-dot menu explains why.
+ */
+function LinkCell({ shareUrl }: { shareUrl: string | null }) {
+  const [copied, setCopied] = React.useState(false);
+
+  const handleCopy = async () => {
+    if (!shareUrl || copied) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      toast.success("Link copied to clipboard");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Could not copy link");
+    }
+  };
+
+  if (!shareUrl) {
+    return <span className="text-grey-50 text-xs italic">Not available on this device</span>;
+  }
+  return (
+    <div className="flex items-center gap-1.5 min-w-0">
+      <span className="text-xs text-primary-50 font-mono truncate" title={shareUrl}>
+        {shareUrl}
+      </span>
+      <button
+        type="button"
+        onClick={handleCopy}
+        title={copied ? "Copied!" : "Copy link"}
+        aria-label="Copy link"
+        className={cn(
+          "shrink-0 p-1 rounded transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-50",
+          copied
+            ? "text-success-50"
+            : "text-grey-40 hover:text-grey-10 hover:bg-grey-90",
+        )}
+      >
+        {copied ? <Check className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+      </button>
+    </div>
   );
 }
 
@@ -763,15 +839,3 @@ function FeatureUnavailable() {
   );
 }
 
-/**
- * Compact byte formatter — KB/MB/GB step, one decimal where it adds
- * resolution. Local helper because `formatBytes.ts` in `lib/utils`
- * uses a different verbose style ("1.50 megabytes") that doesn't fit
- * the narrow row layout.
- */
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-  return `${(n / 1024 ** 3).toFixed(1)} GB`;
-}
