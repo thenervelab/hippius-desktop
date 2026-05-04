@@ -11,11 +11,11 @@
 import { useState, useEffect } from "react";
 import { OAuthButtonsGroup } from "./OAuthButtons";
 import { AccessKeyLoginForm } from "./AccessKeyLoginForm";
-import * as Typography from "@/components/ui/typography";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
 import { useRouter } from "next/navigation";
+import { HippiusLogo } from "@/components/ui/icons";
 
 export function LoginForm({
     onHideHeaderChange,
@@ -210,129 +210,108 @@ export function LoginForm({
     }
 
     return (
-        <div className="opacity-0 animate-fade-in-0.5 w-full">
-            <div className="space-y-[min(1.5rem,24px)] text-grey-10 w-full">
-                <Typography.P size="xl" className="text-grey-10 font-medium !text-[min(2rem,32px)]">
-                    Log In to Hippius
-                </Typography.P>
-
-                <div className="space-y-[min(0.5rem,8px)]">
-                    <OAuthButtonsGroup onAccessKeyClick={() => setShowAccessKeyForm(true)} />
-                </div>
-
-                {showDevOAuthInjector && (
-                    <div className="mt-4 rounded-lg border border-dashed border-grey-80 bg-grey-95 p-3 dark:border-[#353535] dark:bg-[#202020]">
-                        <p className="mb-2 text-xs font-semibold text-grey-20 dark:text-white">
-                            Dev: inject OAuth callback URL
-                        </p>
-                        <p className="mb-2 text-[10px] text-grey-40 dark:text-[#a1a1a1]">
-                            Paste the <code>hippiusapp://auth/callback?...</code> (or raw console callback)
-                            URL from the browser to bypass OS deep-link routing.
-                        </p>
-                        <textarea
-                            value={devOAuthUrl}
-                            onChange={(e) => setDevOAuthUrl(e.target.value)}
-                            placeholder="hippiusapp://auth/callback?code=...&state=...&username=...&id=..."
-                            className="mb-2 h-20 w-full rounded border border-grey-80 bg-white p-2 font-mono text-[11px] text-grey-10 dark:border-[#353535] dark:bg-[#161616] dark:text-white"
-                        />
-                        <div className="flex items-center justify-between gap-2">
-                            <button
-                                type="button"
-                                onClick={handleDevInjectOAuthUrl}
-                                className="rounded bg-primary-50 px-3 py-1 text-xs font-medium text-white hover:bg-primary-60"
-                            >
-                                Inject
-                            </button>
-                            {devOAuthStatus && (
-                                <span className="text-[10px] text-grey-40 dark:text-[#a1a1a1]">
-                                    {devOAuthStatus}
-                                </span>
-                            )}
-                        </div>
-                    </div>
-                )}
-            </div>
-
-            {/* ✅ Deep link debug panel (remove later) */}
-            {/* <div className="mt-4 rounded-lg border border-grey-90 bg-grey-95 p-3">
-                <div className="flex items-center justify-between">
-                    <p className="text-xs font-semibold text-grey-20">Deep link debug</p>
-
-                    <button
-                        onClick={() => {
-                            setDlRaw(null);
-                            setDlLogs([]);
-                        }}
-                        className="text-xs text-primary-50 hover:underline"
-                    >
-                        Clear
-                    </button>
-                </div>
-
-                <div className="mt-2 space-y-2">
-                    <div className="text-xs text-grey-40 font-mono break-all">
-                        <div className="text-grey-20 font-semibold mb-1">Last URL</div>
-                        {dlRaw || "— (none received yet)"}
-                    </div>
-
-                    <div className="text-xs text-grey-40 font-mono">
-                        <div className="text-grey-20 font-semibold mb-1">Parsed</div>
-                        <pre className="whitespace-pre-wrap break-all">
-                            {JSON.stringify(dlParsed, null, 2)}
-                        </pre>
-                    </div>
-
-                    <div className="text-xs text-grey-40 font-mono">
-                        <div className="text-grey-20 font-semibold mb-1">Logs</div>
-                        <div className="max-h-40 overflow-y-auto space-y-1">
-                            {dlLogs.length ? (
-                                dlLogs.map((l, i) => (
-                                    <div key={i} className="border-b border-grey-90 pb-1">
-                                        {l}
-                                    </div>
-                                ))
-                            ) : (
-                                <div>—</div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <button
-                onClick={() => {
-                    console.log("[LoginForm] Testing callback with token...");
-                    router.push(
-                        "/auth/callback?code=4079f037e61943db802a081cb7d6e4603cb09b1af28f51a72975ad06d6a723b2&username=ahmad_rao&id=1333"
-                    );
+        <div className="opacity-0 animate-fade-in-0.5 w-full flex justify-center">
+            <div
+                className="w-full max-w-[min(25.3125rem,405px)] bg-grey-light-100 rounded-[8px] p-[min(1rem,16px)] flex flex-col gap-[min(0.75rem,12px)] items-center overflow-hidden"
+                style={{
+                    boxShadow:
+                        "0px 14px 31px 0px rgba(0,0,0,0.06), 0px 56px 56px 0px rgba(0,0,0,0.05), 0px 126px 76px 0px rgba(0,0,0,0.03), 0px 224px 90px 0px rgba(0,0,0,0.01)",
                 }}
-                className="mt-4 block w-full text-center text-sm text-primary-50 hover:text-primary-60 font-medium hover:underline"
             >
-                🧪 Test Callback (Dev Only)
-            </button> */}
+                <LogoDecoration />
 
-            <div className="text-center mt-[min(1rem,16px)]">
-                <p className="text-[min(0.75rem,12px)] text-grey-60 font-semibold">
-                    By continuing, you agree to our{" "}
-                    <button
-                        onClick={() => openUrl("https://hippius.com/terms-and-conditions")}
-                        className="text-primary-50 font-semibold hover:text-primary-60 transition-colors cursor-pointer"
-                    >
-                        Terms and Conditions
-                    </button>{" "}
-                    and{" "}
-                    <button
-                        onClick={() => openUrl("https://hippius.com/privacy-policy")}
-                        className="text-primary-50 font-semibold hover:text-primary-60 transition-colors cursor-pointer"
-                    >
-                        Privacy Policy
-                    </button>
-                </p>
-            </div>
+                <h1 className="w-full text-center text-grey-10 font-medium text-[min(1.75rem,28px)] leading-[min(2.25rem,36px)] tracking-[-0.03em]">
+                    Sign In to Hippius
+                </h1>
 
-            <div className="mt-[min(0.5rem,8px)] text-center text-[min(0.75rem,12px)] text-grey-70 font-medium">
-                <p>Version {version}</p>
+                <div className="flex flex-col gap-[min(1rem,16px)] items-center w-full">
+                    <OAuthButtonsGroup
+                        onAccessKeyClick={() => setShowAccessKeyForm(true)}
+                    />
+
+                    {showDevOAuthInjector && (
+                        <div className="w-full rounded-lg border border-dashed border-grey-80 bg-grey-light-500 p-3">
+                            <p className="mb-2 text-xs font-semibold text-grey-20">
+                                Dev: inject OAuth callback URL
+                            </p>
+                            <p className="mb-2 text-[10px] text-grey-40">
+                                Paste the <code>hippiusapp://auth/callback?...</code> URL.
+                            </p>
+                            <textarea
+                                value={devOAuthUrl}
+                                onChange={(e) => setDevOAuthUrl(e.target.value)}
+                                placeholder="hippiusapp://auth/callback?code=...&state=...&username=...&id=..."
+                                className="mb-2 h-20 w-full rounded border border-grey-80 bg-white p-2 font-mono text-[11px] text-grey-10"
+                            />
+                            <div className="flex items-center justify-between gap-2">
+                                <button
+                                    type="button"
+                                    onClick={handleDevInjectOAuthUrl}
+                                    className="rounded bg-primary-50 px-3 py-1 text-xs font-medium text-white hover:bg-primary-60"
+                                >
+                                    Inject
+                                </button>
+                                {devOAuthStatus && (
+                                    <span className="text-[10px] text-grey-40">
+                                        {devOAuthStatus}
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="h-px w-full bg-grey-80" />
+
+                    <p className="w-full text-center text-[min(0.75rem,12px)] leading-[min(1.125rem,18px)] tracking-[-0.02em] text-grey-dark-800 font-medium">
+                        By continuing you agree to our
+                        <br />
+                        <button
+                            type="button"
+                            onClick={() =>
+                                openUrl("https://hippius.com/terms-and-conditions")
+                            }
+                            className="font-semibold text-primary-50 hover:text-primary-60 transition-colors cursor-pointer"
+                        >
+                            Terms and Conditions
+                        </button>{" "}
+                        and{" "}
+                        <button
+                            type="button"
+                            onClick={() => openUrl("https://hippius.com/privacy-policy")}
+                            className="font-semibold text-primary-50 hover:text-primary-60 transition-colors cursor-pointer"
+                        >
+                            Privacy Policy
+                        </button>
+                    </p>
+
+                    <p className="text-[min(0.75rem,12px)] leading-[min(1.125rem,18px)] tracking-[-0.02em] text-grey-dark-600 font-medium">
+                        Version {version}
+                    </p>
+                </div>
             </div>
+        </div>
+    );
+}
+
+function LogoDecoration() {
+    return (
+        <div className="relative size-[min(3.5rem,56px)] overflow-hidden bg-grey-light-100">
+            <div
+                className="absolute inset-0 opacity-70"
+                style={{
+                    backgroundImage:
+                        "linear-gradient(to right, rgba(31,80,189,0.35) 1px, transparent 1px), linear-gradient(to bottom, rgba(31,80,189,0.35) 1px, transparent 1px)",
+                    backgroundSize: "16px 16px",
+                }}
+            />
+            <div
+                className="absolute inset-0"
+                style={{
+                    background:
+                        "radial-gradient(50% 70% at 50% 50%, rgba(255,255,255,0) 0%, #ffffff 100%)",
+                }}
+            />
+            <HippiusLogo className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 size-[min(2rem,32px)] rounded" />
         </div>
     );
 }

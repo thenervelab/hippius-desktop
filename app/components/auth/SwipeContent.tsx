@@ -1,50 +1,32 @@
-import {
-  GlobalReliability,
-  SecureFilesWithBlockChain,
-  SmartAffordableStorage,
-  EarnWithRefferals,
-} from "@/components/ui/icons";
-// import CircularShield from "@/components/ui/icons/CircularShield";
+export interface SwipeSlide {
+  title: string;
+  description: string;
+  image: string;
+}
 
-export const SWIPE_CONTENT = [
+export const SWIPE_CONTENT: SwipeSlide[] = [
   {
-    heading: "Transparent, Decentralized, Cloud Storage",
-    text: "Global Reliability",
-    subText:
-      "Powered by a decentralized network of hardware providers, not a single point of failure.",
-    icon: <GlobalReliability className="xl:h-[min(16.875rem,270px)] h-[min(10rem,160px)] w-full" />,
+    title: "Decentralized Storage",
+    description:
+      "A global network of independent nodes. Your files stay safe and accessible even if part of the network goes offline.",
+    image: "/assets/signup/1.png",
   },
   {
-    heading: "Secure Your Files with Blockchain",
-    text: "Track Every File with Arion Hash",
-    subText:
-      "Your files are stored securely on our decentralized blockchain, with Arion Hash tracking ensuring traceability and preventing unauthorized access",
-
-    icon: (
-      <SecureFilesWithBlockChain className="xl:h-[min(16.875rem,270px)] h-[min(10rem,160px)] w-full" />
-    ),
+    title: "Confidential Computing",
+    description:
+      "Hardware-encrypted virtual machines. Not even the host can read your code or your data.",
+    image: "/assets/signup/2.png",
   },
   {
-    heading: "Smart Affordable Storage",
-    text: "Pay Only for What You Use",
-    subText:
-      "Store your data with cost-effective rates and no hidden fees, powered by transparent blockchain technology",
-    icon: <SmartAffordableStorage className="xl:h-[min(16.875rem,270px)] h-[min(10rem,160px)] w-full" />,
+    title: "Bridge & Staking",
+    description:
+      "Stake your tokens and earn as the Hippius network grows. Transparent, non-custodial, on-chain.",
+    image: "/assets/signup/3.png",
   },
   {
-    heading: "Earn Continuously with Referrals",
-    text: "Share Your Unique Code",
-    subText:
-      "Generate a unique referral code and share it with anyone—earn ongoing rewards based on referred users’ usage, all tracked on the blockchain",
-    icon: <EarnWithRefferals className="xl:h-[min(16.875rem,270px)] h-[min(10rem,160px)] w-full" />,
+    title: "Referrals",
+    description:
+      "Invite friends and earn credits every time they use Hippius. Credits apply directly to your storage and compute.",
+    image: "/assets/signup/4.png",
   },
-  // {
-  //   heading: "Your Secret Phrase: The Key to Your Account",
-  //   text: "Simple, Secure, Fully Yours",
-  //   subText:
-  //     "No third-party logins here! Your unique word phrase (mnemonic) unlocks a decentralized world. We don’t store it, so keep it safe and take full control.",
-  //   icon: (
-  //     <CircularShield className="xl:size-[16.875rem] size-[10rem] text-primary-80" />
-  //   ),
-  // },
 ];

@@ -4,8 +4,6 @@ import React, { ReactNode, Suspense } from "react";
 import { RevealTextLine } from "@/components/ui";
 import LeftCarouselPanel from "./LeftCarouselPanel";
 import { LucideLoader2 } from "lucide-react";
-import BaseAuthLayout from "./BaseAuthLayout";
-import HippiusHeader from "./HippiusHeader";
 
 interface AuthLayoutProps {
   children: ReactNode;
@@ -13,34 +11,34 @@ interface AuthLayoutProps {
   hideHeader?: boolean;
 }
 
-const AuthLayout = ({ children, isVerify = false, hideHeader = false }: AuthLayoutProps) => {
+const AuthLayout = ({ children }: AuthLayoutProps) => {
   return (
-    <BaseAuthLayout>
-      <>
+    <main
+      className="relative h-full w-full flex items-stretch p-[min(0.25rem,4px)] overflow-y-auto no-scrollbar"
+    >
+      <div className="w-[42%] shrink-0 grow-0 h-full">
         <RevealTextLine
           rotate
           reveal={true}
-          parentClassName="w-full h-full min-h-full max-h-full"
-          className="w-full h-full min-h-full max-h-full"
+          parentClassName="w-full h-full"
+          className="w-full h-full"
         >
           <LeftCarouselPanel />
         </RevealTextLine>
-        <div className="flex flex-col items-start h-full overflow-y-auto no-scrollbar">
-          <div className="my-auto flex flex-col items-start w-full">
-            {!hideHeader && <HippiusHeader isVerify={isVerify} />}
-            <Suspense
-              fallback={
-                <div className="flex h-full w-full items-center justify-center opacity-0 grow animate-fade-in-0.5">
-                  <LucideLoader2 className="animate-spin text-primary-50" />
-                </div>
-              }
-            >
-              {children}
-            </Suspense>
-          </div>
-        </div>
-      </>
-    </BaseAuthLayout>
+      </div>
+
+      <div className="w-[58%] shrink-0 grow-0 h-full flex items-center justify-center px-[min(2rem,32px)]">
+        <Suspense
+          fallback={
+            <div className="flex h-full w-full items-center justify-center opacity-0 grow animate-fade-in-0.5">
+              <LucideLoader2 className="animate-spin text-primary-50" />
+            </div>
+          }
+        >
+          {children}
+        </Suspense>
+      </div>
+    </main>
   );
 };
 export default AuthLayout;

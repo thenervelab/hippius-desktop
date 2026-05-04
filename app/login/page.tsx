@@ -24,8 +24,13 @@ export default function LoginPage() {
   }
 
   return (
-    <AuthLayout hideHeader={hideHeader}>
-      <LoginForm onHideHeaderChange={setHideHeader} />
-    </AuthLayout>
+    <div
+      className="fixed inset-0 bg-cover bg-center bg-no-repeat"
+      style={{ backgroundImage: "url('/app-background.png')" }}
+    >
+      <AuthLayout hideHeader={hideHeader}>
+        <LoginForm onHideHeaderChange={setHideHeader} />
+      </AuthLayout>
+    </div>
   );
 }

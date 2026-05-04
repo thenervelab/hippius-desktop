@@ -1,5 +1,5 @@
 "use client";
-import { Geist } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import localFont from "next/font/local";
 import "@/app/globals.css";
 import Providers from "@/components/providers";
@@ -11,20 +11,27 @@ import { WalletAuthProvider } from "./lib/wallet-auth-context";
 import PreAuthProvider from "@/app/components/auth/PreAuthProvider";
 import { Suspense } from "react";
 import PageLoader from "@/app/components/PageLoader";
-import SplashWrapper from "./components/splash-screen";
+// import SplashWrapper from "./components/splash-screen";
 import { NavigationLoaderProvider } from "./lib/hooks/useNavigationLoader";
 import UpdateChecker from "@/components/updater/UpdateChecker";
 import TrayNavigationListener from "@/app/components/tray/TrayNavigationListener";
 import ZoomController from "@/app/components/ZoomController";
-
-const digitalFonts = localFont({
-  src: "./fonts/DigitalNumbers-Regular.ttf",
-  display: "swap",
-});
+import { cn } from "./lib/utils";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+const digitalFonts = localFont({
+  src: "./fonts/DigitalNumbers-Regular.ttf",
+  variable: "--font-digital",
+  display: "swap",
 });
 
 export default function RootLayout({
@@ -35,7 +42,12 @@ export default function RootLayout({
   return (
     <html lang="en" className="scroll-smooth">
       <body
-        className={`${digitalFonts.className} ${geistSans.className} ${geistSans.variable} bg-grey-100 text-grey-10 antialiased font-sans`}
+        className={cn(
+          geistSans.variable,
+          geistMono.variable,
+          geistSans.className,
+          "bg-grey-100 text-grey-10 antialiased font-geist",
+        )}
       >
         <Providers>
           <WalletAuthProvider>
@@ -45,13 +57,11 @@ export default function RootLayout({
                 <NavigationLoaderProvider>
                   <TrayNavigationListener />
                   <ZoomController />
-                  <SplashWrapper preventClose={false}>
-                    <Suspense fallback={<PageLoader />}>
-                      <div className="flex min-h-screen h-screen">
-                        {children}
-                      </div>
-                    </Suspense>
-                  </SplashWrapper>
+                  {/* <SplashWrapper preventClose={false}> */}
+                  <Suspense fallback={<PageLoader />}>
+                    <div className="flex min-h-screen h-screen">{children}</div>
+                  </Suspense>
+                  {/* </SplashWrapper> */}
 
                   <Toaster
                     position="top-center"
