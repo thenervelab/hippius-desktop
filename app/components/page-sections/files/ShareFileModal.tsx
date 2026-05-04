@@ -25,7 +25,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useAtom } from "jotai";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Check } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 
@@ -242,11 +242,8 @@ function DoneBody({
   link: ShareLink;
   onCopy: () => void | Promise<void>;
 }) {
+  const [copied, setCopied] = useState(false);
   const expiresAtPretty = formatExpiresAt(link.expiresAt);
-  // Auto-size the textarea to its content so the URL is never clipped
-  // and no scrollbar ever appears. `useLayoutEffect` runs before paint,
-  // avoiding a one-frame flash where the field is too short and shows
-  // a scrollbar.
   const urlRef = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
     const el = urlRef.current;
@@ -254,6 +251,14 @@ function DoneBody({
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
   }, [link.shareUrl]);
+
+  const handleCopy = async () => {
+    if (copied) return;
+    await onCopy();
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
     <div>
       {expiresAtPretty && <p className="text-xs text-grey-50 mb-3">Expires {expiresAtPretty}.</p>}
@@ -268,12 +273,19 @@ function DoneBody({
         />
         <button
           type="button"
-          onClick={onCopy}
-          title="Copy link"
+          onClick={handleCopy}
+          title={copied ? "Copied!" : "Copy link"}
           aria-label="Copy link"
-          className="px-1.5 py-1 border border-grey-80 rounded bg-grey-90 hover:bg-grey-80 transition-colors shrink-0"
+          className={`px-1.5 py-1 border rounded transition-colors shrink-0 ${
+            copied
+              ? "border-success-90 bg-success-100 text-success-50"
+              : "border-grey-80 bg-grey-90 hover:bg-grey-80 text-grey-10"
+          }`}
         >
-          <Icons.Copy className="size-4 text-grey-10" />
+          {copied
+            ? <Check className="size-4" />
+            : <Icons.Copy className="size-4" />
+          }
         </button>
       </div>
     </div>
