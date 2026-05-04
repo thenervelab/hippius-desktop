@@ -12,10 +12,12 @@ html {
 
 :root {
   /* Primary Shades */
+  --brand-dark: 97 140 232;
   --primary-100: 233 239 251;
   --primary-90: 211 223 248;
   --primary-80: 180 200 243;
   --primary-70: 137 168 236;
+  --primary-65: 97 140 232;
   --primary-60: 93 135 229;
   --primary-50: 49 103 221;
   --primary-40: 31 81 190;
@@ -26,6 +28,7 @@ html {
   /* Grey Shades */
   --grey-100: 255 255 255;
   --grey-90: 244 244 244;
+  --grey-85: 235 235 235;
   --grey-80: 227 227 227;
   --grey-70: 163 163 163;
   --grey-60: 125 125 125;
@@ -34,6 +37,38 @@ html {
   --grey-30: 42 42 42;
   --grey-20: 29 29 29;
   --grey-10: 10 10 10;
+
+  /* New Grey Palette */
+  --grey-primary-bg: 235 235 235; /* #ebebeb */
+  --grey-light-100: 255 255 255; /* #ffffff */
+  --grey-light-200: 251 251 251; /* #fbfbfb */
+  --grey-light-300: 248 248 248; /* #f8f8f8 */
+  --grey-light-400: 245 245 245; /* #f5f5f5 */
+  --grey-light-500: 244 244 244; /* #f4f4f4 */
+  --grey-light-600: 243 243 243; /* #f3f3f3 */
+  --grey-light-700: 242 242 242; /* #f2f2f2 */
+  --grey-light-800: 240 240 240; /* #f0f0f0 */
+  --grey-dark-100: 227 227 227; /* #e3e3e3 */
+  --grey-dark-200: 209 209 209; /* #d1d1d1 */
+  --grey-dark-300: 206 206 206; /* #cecece */
+  --grey-dark-400: 183 183 183; /* #b7b7b7 */
+  --grey-dark-500: 182 182 182; /* #b6b6b6 */
+  --grey-dark-600: 163 163 163; /* #a3a3a3 */
+  --grey-dark-700: 151 151 151; /* #979797 */
+  --grey-dark-800: 125 125 125; /* #7d7d7d */
+  --grey-dark-900: 96 96 96; /* #606060 */
+
+  /* Black Palette */
+  --black-primary-bg: 30 30 30; /* #1e1e1e */
+  --black-100: 67 67 67; /* #434343 */
+  --black-200: 54 54 54; /* #363636 */
+  --black-300: 49 49 49; /* #313131 */
+  --black-400: 44 44 44; /* #2c2c2c */
+  --black-500: 22 22 22; /* #161616 */
+  --black-600: 17 17 17; /* #111111 */
+  --black-700: 10 10 10; /* #0a0a0a */
+  --black-800: 5 5 5; /* #050505 */
+  --black-900: 0 0 0; /* #000000 */
 
   /* Success Shades */
   --success-100: 246 254 249;
