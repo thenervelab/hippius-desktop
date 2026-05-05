@@ -41,7 +41,7 @@ use crate::billing::charts::{
 use crate::billing::credits::{check_sync_eligibility, get_user_credits};
 use crate::billing::eligibility::check_action_eligibility;
 use crate::billing::queries::{
-    get_add_credit_events, get_balance_transfers, get_billing_transactions, get_credits, get_deposit_address, get_files_count, get_files_size,
+    get_add_credit_events, get_balance_transfers, get_billing_transactions, get_credits, get_deposit_address, get_drive_storage_stats, get_files_size,
     get_marketplace_credits, get_system_balance,
 };
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
@@ -323,7 +323,7 @@ fn main() {
             get_balance_transfers,
             get_add_credit_events,
             get_files_size,
-            get_files_count,
+            get_drive_storage_stats,
             get_deposit_address,
             // Notifications
             get_notification_settings,

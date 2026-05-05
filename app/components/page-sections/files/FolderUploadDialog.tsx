@@ -16,7 +16,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { useAtomValue } from "jotai";
 import { queryClientAtom } from "jotai-tanstack-query";
-import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
+import { DRIVE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { GET_USER_IPFS_FILES_QUERY_KEY } from "@/app/lib/hooks/use-user-files";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
@@ -109,7 +109,7 @@ export default function FolderUploadDialog({
             });
 
             // Refresh file list AFTER backend has added the folder so list_sync_folder sees it
-            queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
+            queryClient.invalidateQueries({ queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY] });
             queryClient.invalidateQueries({ queryKey: [GET_USER_IPFS_FILES_QUERY_KEY] });
             if (onRefresh) {
                 onRefresh();

@@ -6,7 +6,7 @@ import FileDropzone from "./FileDropzone";
 import { useSetAtom, useAtomValue } from "jotai";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
 import { queryClientAtom } from "jotai-tanstack-query";
-import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
+import { DRIVE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { basename } from "@tauri-apps/api/path";
@@ -356,7 +356,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       // on the Rust `hcfs_upload_processing { active: false }` event,
       // which fires when the sync cycle actually starts.
 
-      queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
+      queryClient.invalidateQueries({ queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY] });
       props.onSuccess();
     } catch (error) {
       // Reuse the same toast id so the error overwrites the loading

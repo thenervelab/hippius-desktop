@@ -7,8 +7,7 @@ import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
 import { invoke } from "@tauri-apps/api/core";
 import { Account } from "@/lib/types";
-import { useRemoteStorageStats } from "@/app/lib/hooks/api/useRemoteStorageStats";
-import useFilesCount from "@/app/lib/hooks/api/useFilesCount";
+import { useDriveStorageStats } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { toast } from "sonner";
 
@@ -22,15 +21,16 @@ export default function DetailList() {
     refetch: refetchCredits,
   } = useUserCredits();
 
+  // Single drive-scoped query feeds both the storage and file-count cards.
+  // Loading state is shared so the two cards never flash inconsistent values.
   const {
-    data: remoteStats,
-    isLoading: isRemoteStatsLoading,
-  } = useRemoteStorageStats();
-
-  const {
-    data: fileCount,
-    isLoading: isFileCountLoading,
-  } = useFilesCount();
+    data: driveStats,
+    isLoading: isDriveStatsLoading,
+  } = useDriveStorageStats();
+  const remoteStats = driveStats;
+  const isRemoteStatsLoading = isDriveStatsLoading;
+  const fileCount = driveStats?.fileCount;
+  const isFileCountLoading = isDriveStatsLoading;
 
   // Fetch marketplace credits for Total Credits Used (all-time)
   const { data: marketplaceCredits, isLoading: isLoadingMarketplaceCredits } =
