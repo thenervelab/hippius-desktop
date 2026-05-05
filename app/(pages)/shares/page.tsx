@@ -454,17 +454,13 @@ function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare, resharingToken }
 function ActiveNameCell({ row }: { row: ShareSummary }) {
   const expiresMs = Date.parse(row.expiresAt);
   const expired = !Number.isNaN(expiresMs) && expiresMs <= Date.now();
-  // shareUrl is null when this device's keystore lacks the per-share
-  // key — typically a share minted on another device (console or
-  // another desktop). The filename is still real (server-plaintext);
-  // we only need to flag why Copy and Reshare are unavailable. The
-  // expired badge takes precedence: a forgotten-key share past its
-  // expiry is just an expired share, origin is no longer actionable.
-  const fromAnotherDevice = row.shareUrl === null;
+  // The "minted on another device" signal is already conveyed by the
+  // empty link column ("Not available on this device") and the
+  // disabled Copy/Reshare items in the row menu — adding a name-cell
+  // badge for it just made the row noisy. The Expired badge stays;
+  // it's the only one carrying information neither column repeats.
   const suffix = expired ? (
     <span className="ml-1.5"><Badge tone="muted">Expired</Badge></span>
-  ) : fromAnotherDevice ? (
-    <span className="ml-1.5"><Badge tone="muted-italic">From another device</Badge></span>
   ) : undefined;
 
   return (
