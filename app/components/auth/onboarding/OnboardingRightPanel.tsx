@@ -10,11 +10,20 @@ interface OnboardingRightPanelProps {
 
 const OnboardingRightPanel = ({ screen }: OnboardingRightPanelProps) => {
   return (
-    // Transparent — background image from the outer login-page wrapper shows through
-    <div className="w-full h-full flex items-center justify-center">
+    // Fill the motion.div (absolute inset-0) from the parent
+    <div className="w-full h-full relative overflow-hidden">
 
-      {/* App preview card — floats in center like the sign-in card on the login page */}
-      <div className="relative w-[82%] h-[76%] rounded-[12px] overflow-hidden
+      {/*
+        Preview card:
+        - Starts at 30% from the top → occupies the bottom 70% of the panel
+        - 10% left margin so the background image is visible on the left
+        - Extends 6% past the right edge (clipped by overflow-hidden above)
+          giving the "slides off-screen to the right" effect from Figma
+        - Bottom flush with the panel edge (no bottom gap)
+        - Only top corners are rounded; bottom edges reach the panel boundary
+      */}
+      <div className="absolute top-[30%] left-[10%] right-[-6%] bottom-0
+                      rounded-tl-[14px] rounded-tr-[14px] overflow-hidden
                       shadow-2xl
                       border border-black/[0.06] dark:border-white/[0.05]">
 
