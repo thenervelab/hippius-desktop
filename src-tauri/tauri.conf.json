@@ -40,7 +40,7 @@
         "title": "Hippius",
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 12, "y": 16 },
+        "trafficLightPosition": { "x": 12, "y": 27 },
         "width": 1320,
         "height": 1000,
         "minWidth": 900,

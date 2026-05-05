@@ -10,9 +10,8 @@ interface OnboardingRightPanelProps {
 
 const OnboardingRightPanel = ({ screen }: OnboardingRightPanelProps) => {
   return (
-    // Matches the login page right-side background: clean solid color, no dot texture
-    <div className="flex-1 relative overflow-hidden flex items-center justify-center
-                    bg-grey-primary-bg dark:bg-black-primary-bg">
+    // Transparent — background image from the outer login-page wrapper shows through
+    <div className="w-full h-full flex items-center justify-center">
 
       {/* App preview card — floats in center like the sign-in card on the login page */}
       <div className="relative w-[82%] h-[76%] rounded-[12px] overflow-hidden
