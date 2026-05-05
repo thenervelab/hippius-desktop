@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect } from "react";
-import { InView } from "react-intersection-observer";
 import { useAtom } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
-import { RevealTextLine } from "@/app/components/ui";
+import { Button } from "@/components/ui/button/ButtonV2";
 import cn from "@/app/lib/utils/cn";
 import { vpnConnectedAtom, vpnLoadingAtom } from "./vpnAtoms";
 
@@ -34,32 +33,28 @@ const VPNIconButton: React.FC<{
 
     fetchVpnStatus();
   }, [setIsConnected, setIsLoading]);
+
   return (
-    <InView triggerOnce>
-      {({ inView, ref }) => (
-        <div ref={ref} className="flex items-center justify-center h-full mr-4">
-          <RevealTextLine reveal={inView} className={className}>
-            <span
-              className={cn(
-                "border rounded-[0.25rem] relative flex items-center justify-center h-[2.25rem] min-w-[2.25rem] px-2 transition-colors duration-200",
-                isConnected
-                  ? "bg-primary-50 border-primary-50"
-                  : "bg-white border-grey-80"
-              )}
-            >
-              <span
-                className={cn(
-                  "font-medium text-[0.625rem] leading-4 tracking-[-0.2px]",
-                  isConnected ? "text-white" : "text-grey-10"
-                )}
-              >
-                VPN
-              </span>
-            </span>
-          </RevealTextLine>
-        </div>
+    <Button
+      type="button"
+      variant="defaultStable"
+      size="auto"
+      className={cn(
+        "relative inline-flex items-center justify-center gap-[7px] px-[10px] py-[8px]",
+        "rounded-[8px] border border-grey-dark-100",
+        "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16),0px_1px_0px_0px_white,0px_1px_0px_0px_white]",
+        "bg-[#fefefe] text-black-600 hover:bg-[#fefefe] hover:rounded-[8px]",
+        "transition-colors duration-150 active:translate-y-0 active:scale-100",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50 focus-visible:ring-offset-2",
+        isConnected &&
+          "bg-primary-50 border-primary-50 text-white hover:bg-primary-50",
+        className,
       )}
-    </InView>
+    >
+      <span className="font-medium text-[14px] leading-[1.109] tracking-[-0.28px] whitespace-nowrap">
+        VPN
+      </span>
+    </Button>
   );
 };
 
