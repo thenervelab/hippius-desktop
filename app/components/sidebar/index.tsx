@@ -71,7 +71,7 @@ const Sidebar: React.FC = () => {
     };
   }, [setCollapsed]);
   const [settingsDialogOpen, setSettingsDialogOpen] = useAtom(
-    settingsDialogOpenAtom
+    settingsDialogOpenAtom,
   );
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
   const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
@@ -88,7 +88,7 @@ const Sidebar: React.FC = () => {
         if (item.featureFlag === "shares") return shareEnabled;
         return true;
       }),
-    [shareEnabled]
+    [shareEnabled],
   );
 
   const toggleSidebar = () => {
@@ -108,7 +108,7 @@ const Sidebar: React.FC = () => {
         triggerSyncPathRefresh((prev) => prev + 1);
       }
     },
-    [setSettingsDialogOpen, triggerSyncPathRefresh]
+    [setSettingsDialogOpen, triggerSyncPathRefresh],
   );
 
   return (
@@ -131,8 +131,8 @@ const Sidebar: React.FC = () => {
           <div
             ref={ref}
             className={cn(
-              "fixed top-0 left-0 bottom-0 bg-white flex flex-col ml-4 my-4 border border-grey-80 rounded transition-all duration-300 ease-in-out z-50",
-              collapsed ? "w-[3rem]" : "w-[10.625rem]"
+              "fixed top-[54px] left-0 bottom-0 bg-white flex flex-col ml-4  border border-grey-80 rounded transition-all duration-300 ease-in-out z-50",
+              collapsed ? "w-[3rem]" : "w-[10.625rem]",
             )}
           >
             <div className="flex flex-col items-start w-full">
@@ -163,7 +163,7 @@ const Sidebar: React.FC = () => {
                 <Icons.SideBarLeft
                   className={cn(
                     "size-4 transition-transform duration-300 text-grey-40",
-                    collapsed && "transform rotate-180"
+                    collapsed && "transform rotate-180",
                   )}
                 />
               </RevealTextLine>
@@ -235,7 +235,7 @@ const Sidebar: React.FC = () => {
               reveal={inView}
               className={cn(
                 "flex w-full text-xs font-digital text-grey-40 transition-all duration-300 border-b border-gray-80",
-                collapsed ? "justify-center p-2" : "px-4 py-3"
+                collapsed ? "justify-center p-2" : "px-4 py-3",
               )}
             >
               <>
@@ -253,7 +253,7 @@ const Sidebar: React.FC = () => {
               <div
                 className={cn(
                   "transition-all duration-300 relative group cursor-pointer py-2",
-                  "hover:bg-gray-100 hover:text-primary-40 text-grey-40"
+                  "hover:bg-gray-100 hover:text-primary-40 text-grey-40",
                 )}
                 onClick={() => setOpen(true)}
               >

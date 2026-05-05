@@ -1,4 +1,5 @@
 import Sidebar from "@/components/sidebar";
+import TopBar from "@/components/top-bar";
 import ResponsiveContent from "./ResponsiveContent";
 import OnBoardingGuard from "./OnBoardingGuard";
 import SyncEventLogger from "./SyncEventLogger";
@@ -30,10 +31,13 @@ export default function ProtectedLayout({
       <RecoveryEventListener />
       <AccountRecoveryDialog />
       <ExistingUserRecoveryPrompt />
-      <div className="flex min-h-screen w-full bg-cover bg-center bg-no-repeat bg-fixed bg-[url('/logged-in-app-background.png')] dark:bg-[url('/logged-in-app-background-dark.png')]">
-        <SyncFilesHandler />
-        <Sidebar />
-        <ResponsiveContent>{children}</ResponsiveContent>
+      <div className="flex flex-col min-h-screen w-full bg-cover bg-center bg-no-repeat bg-fixed bg-[url('/logged-in-app-background.png')] dark:bg-[url('/logged-in-app-background-dark.png')]">
+        <TopBar />
+        <div className="flex flex-1 min-h-0 w-full">
+          <SyncFilesHandler />
+          <Sidebar />
+          <ResponsiveContent>{children}</ResponsiveContent>
+        </div>
       </div>
     </OnBoardingGuard>
   );

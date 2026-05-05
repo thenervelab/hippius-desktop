@@ -27,13 +27,17 @@ const Home: React.FC = () => {
   const { data: filesData, isLoading: isLoadingFiles } = useFiles();
 
   // Transform marketplace credits to the format expected by the chart
-  const [transformedCreditsData, setTransformedCreditsData] = useState<Account[]>([]);
+  const [transformedCreditsData, setTransformedCreditsData] = useState<
+    Account[]
+  >([]);
   useEffect(() => {
     if (!marketplaceCredits?.length) {
       setTransformedCreditsData([]);
       return;
     }
-    invoke<Account[]>("transform_marketplace_credits", { credits: marketplaceCredits })
+    invoke<Account[]>("transform_marketplace_credits", {
+      credits: marketplaceCredits,
+    })
       .then(setTransformedCreditsData)
       .catch(() => setTransformedCreditsData([]));
   }, [marketplaceCredits]);
@@ -50,7 +54,7 @@ const Home: React.FC = () => {
   return (
     <>
       <DashboardTitleWrapper
-        mainText="Welcome to Hippius"
+        mainText="Overview"
         subText="Secure & Encrypted Storage with Easy Sync and Real-Time Tracking"
       >
         <div className="mt-6">
@@ -80,7 +84,6 @@ const Home: React.FC = () => {
           </div>
         </div>
       </DashboardTitleWrapper>
-
     </>
   );
 };
