@@ -24,9 +24,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-cover bg-center bg-no-repeat bg-[url('/app-background.png')] dark:bg-[url('/app-background-dark.png')]"
-    >
+    <div className="fixed inset-0 bg-cover bg-center bg-no-repeat bg-[url('/logged-out-app-background.png')] dark:bg-[url('/logged-out-app-background-dark.png')]">
       <AuthLayout hideHeader={hideHeader}>
         <LoginForm onHideHeaderChange={setHideHeader} />
       </AuthLayout>

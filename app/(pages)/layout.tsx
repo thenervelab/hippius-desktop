@@ -30,7 +30,7 @@ export default function ProtectedLayout({
       <RecoveryEventListener />
       <AccountRecoveryDialog />
       <ExistingUserRecoveryPrompt />
-      <div className="flex min-h-screen w-full">
+      <div className="flex min-h-screen w-full bg-cover bg-center bg-no-repeat bg-fixed bg-[url('/logged-in-app-background.png')] dark:bg-[url('/logged-in-app-background-dark.png')]">
         <SyncFilesHandler />
         <Sidebar />
         <ResponsiveContent>{children}</ResponsiveContent>
