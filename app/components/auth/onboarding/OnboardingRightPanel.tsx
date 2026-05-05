@@ -10,50 +10,17 @@ interface OnboardingRightPanelProps {
 
 const OnboardingRightPanel = ({ screen }: OnboardingRightPanelProps) => {
   return (
-    // Figma: light outer bg #EBEBEB, dark outer bg #1C1C1C
+    // Matches the login page right-side background: clean solid color, no dot texture
     <div className="flex-1 relative overflow-hidden flex items-center justify-center
-                    bg-[#EBEBEB] dark:bg-[#1C1C1C]">
+                    bg-grey-primary-bg dark:bg-black-primary-bg">
 
-      {/* Dot pattern — light mode */}
-      <div
-        className="absolute inset-0 dark:hidden"
-        style={{
-          backgroundImage: "radial-gradient(circle, #C8C8C8 1px, transparent 1px)",
-          backgroundSize: "28px 28px",
-        }}
-      />
-      {/* Dot pattern — dark mode (very subtle) */}
-      <div
-        className="absolute inset-0 hidden dark:block"
-        style={{
-          backgroundImage: "radial-gradient(circle, #EBEBEB 1px, transparent 1px)",
-          backgroundSize: "28px 28px",
-          opacity: 0.06,
-        }}
-      />
-
-      {/* Radial vignette to add depth around the card */}
-      <div
-        className="absolute inset-0 dark:hidden pointer-events-none"
-        style={{
-          background: "radial-gradient(ellipse 70% 70% at 50% 50%, transparent 40%, rgba(0,0,0,0.06) 100%)",
-        }}
-      />
-      <div
-        className="absolute inset-0 hidden dark:block pointer-events-none"
-        style={{
-          background: "radial-gradient(ellipse 70% 70% at 50% 50%, transparent 40%, rgba(0,0,0,0.4) 100%)",
-        }}
-      />
-
-      {/* App preview card */}
+      {/* App preview card — floats in center like the sign-in card on the login page */}
       <div className="relative w-[82%] h-[76%] rounded-[12px] overflow-hidden
                       shadow-2xl
-                      border border-black/[0.08] dark:border-white/[0.06]">
+                      border border-black/[0.06] dark:border-white/[0.05]">
 
         {screen.previewImageDark ? (
           <>
-            {/* Light image — hidden in dark mode when dark variant exists */}
             <Image
               src={screen.previewImage}
               alt={`Preview for ${screen.heading}`}
@@ -61,7 +28,6 @@ const OnboardingRightPanel = ({ screen }: OnboardingRightPanelProps) => {
               unoptimized
               className="object-cover object-top dark:opacity-0 transition-opacity duration-300"
             />
-            {/* Dark image — overlaid on top */}
             <Image
               src={screen.previewImageDark}
               alt={`Preview for ${screen.heading}`}

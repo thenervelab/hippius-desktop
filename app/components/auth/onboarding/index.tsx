@@ -35,8 +35,8 @@ const Onboarding: React.FC<{
   return (
     <div className="flex w-full h-full">
 
-      {/* ── Left column — header + content share same background ── */}
-      <div className="w-[42%] shrink-0 h-full flex flex-col bg-white dark:bg-black-500">
+      {/* ── Left column — same bg as LeftCarouselPanel on the login page ── */}
+      <div className="w-[42%] shrink-0 h-full flex flex-col bg-grey-light-200 dark:bg-black-500">
 
         {/* Title bar — reuse AuthTitleBar (handles Mac/Win traffic-light padding).
             Wrap in a relative row so we can overlay the Skip button on the right. */}
@@ -46,17 +46,15 @@ const Onboarding: React.FC<{
         >
           <AuthTitleBar />
 
-          {!isFirstPanel && (
-            <button
-              onClick={handleOnBoardingDone}
-              className="absolute right-5 pointer-events-auto
-                         text-[14px] font-medium text-grey-50 dark:text-grey-dark-700
-                         hover:text-grey-10 dark:hover:text-grey-primary-bg
-                         transition-colors"
-            >
-              Skip
-            </button>
-          )}
+          <button
+            onClick={handleOnBoardingDone}
+            className="absolute right-5 pointer-events-auto
+                       text-[14px] font-medium text-grey-50 dark:text-grey-dark-700
+                       hover:text-grey-10 dark:hover:text-grey-primary-bg
+                       transition-colors"
+          >
+            Skip
+          </button>
         </div>
 
         {/* Left panel fills the remaining height */}
