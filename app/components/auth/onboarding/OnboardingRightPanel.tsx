@@ -23,9 +23,7 @@ const OnboardingRightPanel = ({ screen }: OnboardingRightPanelProps) => {
         - Only top corners are rounded; bottom edges reach the panel boundary
       */}
       <div className="absolute top-[30%] left-[10%] right-[-6%] bottom-0
-                      rounded-tl-[14px] rounded-tr-[14px] overflow-hidden
-                      shadow-2xl
-                      border border-black/[0.06] dark:border-white/[0.05]">
+                      rounded-tl-[14px] rounded-tr-[14px] overflow-hidden">
 
         {screen.previewImageDark ? (
           <>
