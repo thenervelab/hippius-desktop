@@ -1,10 +1,9 @@
 "use client";
 
 import React, { useState } from "react";
-import { ChevronDown } from "lucide-react";
-import { HippiusLogo } from "@/components/ui/icons";
 import { ONBOARDING_SCREENS } from "./onboardingData";
 import { setOnboardingDone } from "@/app/lib/helpers/onboardingDb";
+import AuthTitleBar from "@/components/auth/AuthTitleBar";
 import OnboardingLeftPanel from "./OnboardingLeftPanel";
 import OnboardingRightPanel from "./OnboardingRightPanel";
 
@@ -39,27 +38,21 @@ const Onboarding: React.FC<{
       {/* ── Left column — header + content share same background ── */}
       <div className="w-[42%] shrink-0 h-full flex flex-col bg-white dark:bg-black-500">
 
-        {/* Title bar — drag region, no separate dark bg needed (inherits parent) */}
+        {/* Title bar — reuse AuthTitleBar (handles Mac/Win traffic-light padding).
+            Wrap in a relative row so we can overlay the Skip button on the right. */}
         <div
-          data-tauri-drag-region
-          className="flex items-center justify-between pl-20 pr-5 h-11 shrink-0
+          className="relative flex items-center shrink-0
                      border-b border-grey-80 dark:border-black-300"
         >
-          <div className="flex items-center gap-2 select-none pointer-events-none">
-            <HippiusLogo className="size-7 bg-primary-50 rounded-[5px] text-white shrink-0" />
-            <span className="text-[18px] font-medium leading-[23px]
-                             text-grey-10 dark:text-grey-primary-bg">
-              Hippius
-            </span>
-            <ChevronDown className="size-3.5 text-grey-50 dark:text-grey-dark-700" />
-          </div>
+          <AuthTitleBar />
 
           {!isFirstPanel && (
             <button
               onClick={handleOnBoardingDone}
-              className="text-[14px] font-medium text-grey-50 dark:text-grey-dark-700
+              className="absolute right-5 pointer-events-auto
+                         text-[14px] font-medium text-grey-50 dark:text-grey-dark-700
                          hover:text-grey-10 dark:hover:text-grey-primary-bg
-                         transition-colors pointer-events-auto"
+                         transition-colors"
             >
               Skip
             </button>
