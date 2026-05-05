@@ -1,27 +1,63 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { ONBOARDING_SCREENS } from "./onboardingData";
 import { setOnboardingDone } from "@/app/lib/helpers/onboardingDb";
 import AuthTitleBar from "@/components/auth/AuthTitleBar";
 import OnboardingLeftPanel from "./OnboardingLeftPanel";
 import OnboardingRightPanel from "./OnboardingRightPanel";
 
+// Slide variants — direction: +1 = forward (next), -1 = backward (previous)
+const slideVariants = {
+  enter: (dir: number) => ({
+    x: dir >= 0 ? 48 : -48,
+    opacity: 0,
+  }),
+  center: {
+    x: 0,
+    opacity: 1,
+  },
+  exit: (dir: number) => ({
+    x: dir >= 0 ? -48 : 48,
+    opacity: 0,
+  }),
+};
+
+const slideTransition = {
+  duration: 0.28,
+  ease: [0.4, 0, 0.2, 1],
+};
+
+const fadeVariants = {
+  enter: { opacity: 0 },
+  center: { opacity: 1 },
+  exit: { opacity: 0 },
+};
+
+const fadeTransition = { duration: 0.3, ease: "easeInOut" };
+
 const Onboarding: React.FC<{
   setOnboardingCompleted: (completed: boolean) => void;
 }> = ({ setOnboardingCompleted }) => {
   const [currentPanelIndex, setCurrentPanelIndex] = useState(0);
+  const directionRef = useRef(1); // tracks last navigation direction for animation
+
   const isFirstPanel = currentPanelIndex === 0;
   const isLastPanel = currentPanelIndex === ONBOARDING_SCREENS.length - 1;
   const currentScreen = ONBOARDING_SCREENS[currentPanelIndex];
 
   const handlePrevious = () => {
-    if (currentPanelIndex > 0) setCurrentPanelIndex(currentPanelIndex - 1);
+    if (currentPanelIndex > 0) {
+      directionRef.current = -1;
+      setCurrentPanelIndex((i) => i - 1);
+    }
   };
 
   const handleNext = async () => {
     if (!isLastPanel) {
-      setCurrentPanelIndex(currentPanelIndex + 1);
+      directionRef.current = 1;
+      setCurrentPanelIndex((i) => i + 1);
     } else {
       await handleOnBoardingDone();
     }
@@ -45,8 +81,8 @@ const Onboarding: React.FC<{
         <div className="w-[42%] shrink-0 h-full flex flex-col
                         bg-grey-light-200 dark:bg-black-500 rounded-[11px] overflow-hidden">
 
-          {/* Titlebar — no border-b, same as LeftCarouselPanel */}
-          <div className="relative">
+          {/* Titlebar stays fixed — only the content below it animates */}
+          <div className="relative shrink-0">
             <AuthTitleBar />
 
             {!isFirstPanel && (
@@ -63,24 +99,48 @@ const Onboarding: React.FC<{
             )}
           </div>
 
-          <OnboardingLeftPanel
-            key={currentPanelIndex}
-            screen={currentScreen}
-            currentPanelIndex={currentPanelIndex}
-            totalScreens={ONBOARDING_SCREENS.length}
-            isFirstPanel={isFirstPanel}
-            handlePrevious={handlePrevious}
-            handleNext={handleNext}
-            handleOnBoardingDone={handleOnBoardingDone}
-          />
+          {/* Animated slide content */}
+          <div className="flex-1 min-h-0 overflow-hidden relative">
+            <AnimatePresence custom={directionRef.current} mode="wait">
+              <motion.div
+                key={currentPanelIndex}
+                custom={directionRef.current}
+                variants={slideVariants}
+                initial="enter"
+                animate="center"
+                exit="exit"
+                transition={slideTransition}
+                className="absolute inset-0 flex flex-col"
+              >
+                <OnboardingLeftPanel
+                  screen={currentScreen}
+                  currentPanelIndex={currentPanelIndex}
+                  totalScreens={ONBOARDING_SCREENS.length}
+                  isFirstPanel={isFirstPanel}
+                  handlePrevious={handlePrevious}
+                  handleNext={handleNext}
+                  handleOnBoardingDone={handleOnBoardingDone}
+                />
+              </motion.div>
+            </AnimatePresence>
+          </div>
         </div>
 
-        {/* ── Right panel — transparent so background image shows through ── */}
-        <div className="flex-1 h-full">
-          <OnboardingRightPanel
-            key={`preview-${currentPanelIndex}`}
-            screen={currentScreen}
-          />
+        {/* ── Right panel — crossfades between slides ── */}
+        <div className="flex-1 h-full relative">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={`preview-${currentPanelIndex}`}
+              variants={fadeVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={fadeTransition}
+              className="absolute inset-0"
+            >
+              <OnboardingRightPanel screen={currentScreen} />
+            </motion.div>
+          </AnimatePresence>
         </div>
 
       </main>

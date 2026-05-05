@@ -27,6 +27,7 @@ export const ONBOARDING_SCREENS: OnboardingScreen[] = [
     body: "Hippius syncs your folders to a global network of independent nodes. No single company stores your data, and no one but you holds the keys.",
     pills: [],
     previewImage: "/assets/onboarding/home.png",
+    // previewImageDark: "/assets/onboarding/home-dark.png",
     nextLabel: "Get Started",
   },
   {
@@ -45,6 +46,7 @@ export const ONBOARDING_SCREENS: OnboardingScreen[] = [
       "Free downloads always",
     ],
     previewImage: "/assets/onboarding/home.png",
+    // previewImageDark: "/assets/onboarding/billing-dark.png",
     nextLabel: "Next",
   },
   {
@@ -60,6 +62,7 @@ export const ONBOARDING_SCREENS: OnboardingScreen[] = [
       "Every action, one click",
     ],
     previewImage: "/assets/onboarding/multi-folder-sync.png",
+    // previewImageDark: "/assets/onboarding/multi-folder-sync-dark.png",
     nextLabel: "Next",
   },
   {
@@ -78,6 +81,7 @@ export const ONBOARDING_SCREENS: OnboardingScreen[] = [
       "Not stored by Hippius",
     ],
     previewImage: "/assets/onboarding/recovery-phrase.png",
+    // previewImageDark: "/assets/onboarding/unlock-password-dark.png",
     nextLabel: "Next",
   },
   {
@@ -93,6 +97,7 @@ export const ONBOARDING_SCREENS: OnboardingScreen[] = [
       "True data ownership",
     ],
     previewImage: "/assets/onboarding/recovery-phrase.png",
+    // previewImageDark: "/assets/onboarding/recovery-phrase-dark.png",
     nextLabel: "Sign In",
   },
 ];
