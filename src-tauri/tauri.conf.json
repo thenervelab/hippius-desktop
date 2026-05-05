@@ -38,6 +38,7 @@
       {
         "dragDropEnabled": true,
         "title": "Hippius",
+        "titleBarStyle": "Overlay",
         "width": 1320,
         "height": 1000,
         "minWidth": 900,

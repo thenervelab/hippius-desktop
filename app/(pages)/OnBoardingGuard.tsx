@@ -24,6 +24,12 @@ export default function OnBoardingGuard({
 
   useEffect(() => {
     if (isAuthenticated && !isLoading) {
+      // Always show onboarding during development for easy iteration
+      if (process.env.NODE_ENV === "development") {
+        setDone(false);
+        setChecking(false);
+        return;
+      }
       isOnboardingDone()
         .then((d) => setDone(d))
         .catch((err: unknown) => {

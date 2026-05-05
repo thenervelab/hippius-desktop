@@ -1,158 +1,86 @@
-import React, { useEffect, useState } from "react";
-import { CardButton, Icons, RevealTextLine } from "@/components/ui";
-import { ONBOARDING_SCREENS } from "./onboardingData";
+"use client";
 
-import HippiusHeader from "@/components/auth/HippiusHeader";
-import { InView } from "react-intersection-observer";
-import ProgressBar from "./ProgressBar";
+import React from "react";
+import Image from "next/image";
+import { OnboardingScreen } from "./onboardingData";
 
 interface OnboardingRightPanelProps {
-  currentPanelIndex: number;
-  isFirstPanel: boolean;
-  isLastPanel: boolean;
-  handlePrevious: () => void;
-  handleNext: () => void;
-  handleOnBoardingDone: () => void;
+  screen: OnboardingScreen;
 }
 
-const OnboardingRightPanel = ({
-  currentPanelIndex,
-  isFirstPanel,
-  isLastPanel,
-  handlePrevious,
-  handleNext,
-  handleOnBoardingDone
-}: OnboardingRightPanelProps) => {
-  const currentPanel = ONBOARDING_SCREENS[currentPanelIndex];
-  const total = ONBOARDING_SCREENS.length;
-  const step = currentPanelIndex + 1;
-
-  const [animate, setAnimate] = useState(false);
-  useEffect(() => {
-    setAnimate(false);
-    const t = setTimeout(() => setAnimate(true), 20);
-    return () => clearTimeout(t);
-  }, [currentPanelIndex]);
+const OnboardingRightPanel = ({ screen }: OnboardingRightPanelProps) => {
   return (
-    <InView>
-      {({ inView, ref }) => (
-        <div ref={ref} className="relative h-full w-full">
-            <div className="absolute z-3 inset-0 flex flex-col justify-between h-full w-full overflow-y-auto no-scrollbar">
-            <div className="flex flex-col w-full">
-                <div className="flex justify-between gap-[min(1rem,16px)] items-center mb-[min(2.5rem,40px)]">
-                <HippiusHeader isOnboarding />
-                {(!isFirstPanel || !isLastPanel) && (
-                    <div className="text-grey-60 text-[min(1rem,16px)] font-medium cursor-pointer"
-                    onClick={handleOnBoardingDone}
-                  >
-                    <RevealTextLine
-                      rotate
-                      reveal={inView}
-                      className="delay-300 hover:underline"
-                    >
-                      Skip
-                    </RevealTextLine>
-                  </div>
-                )}
-              </div>
+    // Figma: light outer bg #EBEBEB, dark outer bg #1C1C1C
+    <div className="flex-1 relative overflow-hidden flex items-center justify-center
+                    bg-[#EBEBEB] dark:bg-[#1C1C1C]">
 
-              <div className="flex flex-col ">
-                <RevealTextLine
-                  rotate
-                  reveal={inView && animate}
-                  key={`title-${currentPanelIndex}`}
-                  parentClassName="mb-[min(1.5rem,24px)] w-full"
-                  className="delay-300 w-full"
-                >
-                    <div className="flex justify-between text-[min(1.5rem,24px)] font-medium text-grey-10 w-full">
-                    <div>{currentPanel.screentTitleText}</div>
-                    <div>
-                      {currentPanel.id} / {ONBOARDING_SCREENS.length}
-                    </div>
-                  </div>
-                </RevealTextLine>
+      {/* Dot pattern — light mode */}
+      <div
+        className="absolute inset-0 dark:hidden"
+        style={{
+          backgroundImage: "radial-gradient(circle, #C8C8C8 1px, transparent 1px)",
+          backgroundSize: "28px 28px",
+        }}
+      />
+      {/* Dot pattern — dark mode (very subtle) */}
+      <div
+        className="absolute inset-0 hidden dark:block"
+        style={{
+          backgroundImage: "radial-gradient(circle, #EBEBEB 1px, transparent 1px)",
+          backgroundSize: "28px 28px",
+          opacity: 0.06,
+        }}
+      />
 
-                <ProgressBar totalSteps={total} currentStep={step} />
-                {/* Bullet points */}
-                {currentPanel.bulletPoints &&
-                  currentPanel.bulletPoints.length > 0 && (
-                    <>
-                      <div className="mt-[min(2.5rem,40px)]">
-                        <RevealTextLine
-                          rotate
-                          reveal={inView && animate}
-                          className="delay-300"
-                          key={`head-${currentPanelIndex}`}
-                        >
-                          <h2 className="text-[min(1.5rem,24px)] text-primary-50">
-                            What Makes Us Stand Out
-                          </h2>
-                        </RevealTextLine>
+      {/* Radial vignette to add depth around the card */}
+      <div
+        className="absolute inset-0 dark:hidden pointer-events-none"
+        style={{
+          background: "radial-gradient(ellipse 70% 70% at 50% 50%, transparent 40%, rgba(0,0,0,0.06) 100%)",
+        }}
+      />
+      <div
+        className="absolute inset-0 hidden dark:block pointer-events-none"
+        style={{
+          background: "radial-gradient(ellipse 70% 70% at 50% 50%, transparent 40%, rgba(0,0,0,0.4) 100%)",
+        }}
+      />
 
-                        <div className="flex flex-col gap-[min(1rem,16px)] mt-[min(1rem,16px)]">
-                          {currentPanel.bulletPoints.map((point, index) => (
-                            <RevealTextLine
-                              rotate
-                              reveal={inView && animate}
-                              className={`delay-${400 + index * 100}`}
-                              key={`pt-${currentPanelIndex}-${index}`}
-                            >
-                              <div className="flex items-center gap-2">
-                                <Icons.ArrowRight className="text-primary-90 size-5" />
+      {/* App preview card */}
+      <div className="relative w-[82%] h-[76%] rounded-[12px] overflow-hidden
+                      shadow-2xl
+                      border border-black/[0.08] dark:border-white/[0.06]">
 
-                                <span className="text-grey-50 font-medium text-[min(1rem,16px)] leadin-[1.375rem]">
-                                  {point}
-                                </span>
-                              </div>
-                            </RevealTextLine>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  )}
-              </div>
-            </div>
-
-            <div className="flex gap-[min(5rem,80px)] self-end h-[min(3.125rem,50px)] w-full">
-              {!isFirstPanel && (
-                <CardButton
-                  className="w-full"
-                  variant="secondary"
-                  onClick={handlePrevious}
-                >
-                  <div className="flex items-center gap-2 text-[min(1.125rem,18px)] font-medium text-grey-10">
-                    Previous
-                  </div>
-                </CardButton>
-              )}
-
-              <CardButton className="w-full" onClick={handleNext}>
-                <div className="flex items-center gap-2">
-                  {isFirstPanel ? (
-                    <span className="flex items-center text-[min(1.125rem,18px)] font-medium">
-                      Get Started
-                    </span>
-                  ) : isLastPanel ? (
-                    <>
-                      <span className="flex items-center text-[min(1.125rem,18px)] font-medium">
-                        Continue
-                      </span>
-                      <Icons.ArrowRight className="size-4" />
-                    </>
-                  ) : (
-                    <>
-                      <span className="flex items-center text-[min(1.125rem,18px)] font-medium">
-                        Next
-                      </span>
-                    </>
-                  )}
-                </div>
-              </CardButton>
-            </div>
-          </div>
-        </div>
-      )}
-    </InView>
+        {screen.previewImageDark ? (
+          <>
+            {/* Light image — hidden in dark mode when dark variant exists */}
+            <Image
+              src={screen.previewImage}
+              alt={`Preview for ${screen.heading}`}
+              fill
+              unoptimized
+              className="object-cover object-top dark:opacity-0 transition-opacity duration-300"
+            />
+            {/* Dark image — overlaid on top */}
+            <Image
+              src={screen.previewImageDark}
+              alt={`Preview for ${screen.heading}`}
+              fill
+              unoptimized
+              className="object-cover object-top opacity-0 dark:opacity-100 transition-opacity duration-300"
+            />
+          </>
+        ) : (
+          <Image
+            src={screen.previewImage}
+            alt={`Preview for ${screen.heading}`}
+            fill
+            unoptimized
+            className="object-cover object-top"
+          />
+        )}
+      </div>
+    </div>
   );
 };
 

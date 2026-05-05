@@ -1,47 +1,161 @@
-import { InView } from "react-intersection-observer";
-import BackgroundRings from "./BackgroundRings";
-import LeftPanelItem from "./LeftPanelItem";
-import { ONBOARDING_SCREENS } from "./onboardingData";
+"use client";
+
+import React from "react";
+import { ArrowRight } from "lucide-react";
+import ProgressBar from "./ProgressBar";
+import { OnboardingScreen } from "./onboardingData";
 
 interface OnboardingLeftPanelProps {
+  screen: OnboardingScreen;
   currentPanelIndex: number;
+  totalScreens: number;
+  isFirstPanel: boolean;
+  handlePrevious: () => void;
+  handleNext: () => void;
+  handleOnBoardingDone: () => void;
 }
 
 const OnboardingLeftPanel = ({
-  currentPanelIndex
+  screen,
+  currentPanelIndex,
+  totalScreens,
+  isFirstPanel,
+  handlePrevious,
+  handleNext,
+  handleOnBoardingDone,
 }: OnboardingLeftPanelProps) => {
-  const currentPanel = ONBOARDING_SCREENS[currentPanelIndex];
-
   return (
-    <InView key={currentPanelIndex}>
-      {({ inView, ref }) => (
-        <div
-          ref={ref}
-          className="
-            relative
-            w-full
-            h-full
-            rounded-lg
-            bg-primary-100
-            overflow-hidden
-            pt-8
-          "
-        >
-          {/* Background layer */}
-          <BackgroundRings />
+    // No background or width here — the parent column in index.tsx owns those
+    <div className="flex-1 overflow-y-auto no-scrollbar">
+      <div className="flex flex-col h-full px-20 pt-14 pb-20 min-h-0">
 
-          {/* Content */}
-          <LeftPanelItem
-            titleText={currentPanel.titleText}
-            description={currentPanel.description}
-            imagePath={currentPanel.imagePath}
-            imageMarginBottom={currentPanel.imageMarginBottom}
-            inView={inView}
-            imagClassName={currentPanel.imageClassName}
+        {/* ── Top content ── */}
+        <div className="flex flex-col gap-8">
+
+          {/* Badges */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {screen.badges.map((badge) => (
+              <span
+                key={badge.text}
+                className={
+                  badge.variant === "primary"
+                    ? "inline-flex items-center rounded-[40px] px-[7px] py-[3px] text-[10px] font-medium leading-[12.4px] bg-primary-50 text-grey-primary-bg"
+                    : "inline-flex items-center rounded-[40px] px-[7px] py-[3px] text-[10px] font-medium leading-[12.4px] bg-[#E89702] text-grey-primary-bg"
+                }
+              >
+                {badge.text}
+              </span>
+            ))}
+          </div>
+
+          {/* Heading + subtitle */}
+          <div className="flex flex-col gap-1">
+            <h1
+              className="text-[28px] leading-[36px] font-medium text-grey-10 dark:text-grey-primary-bg"
+              style={{ letterSpacing: "-0.84px" }}
+            >
+              {screen.heading}
+            </h1>
+            <p
+              className="text-[16px] leading-[22px] font-medium text-grey-50 dark:text-[#B6B6B6]"
+              style={{ letterSpacing: "-0.32px" }}
+            >
+              {screen.subtitle}
+            </p>
+          </div>
+
+          {/* Progress bar */}
+          <ProgressBar
+            totalSteps={totalScreens}
+            currentStep={currentPanelIndex + 1}
           />
+
+          {/* Feature link + body */}
+          <div className="flex flex-col gap-3">
+            <p
+              className="text-[16px] leading-[20px] font-medium text-primary-50 dark:text-[#618CE8]"
+              style={{ letterSpacing: "-0.32px" }}
+            >
+              {screen.featureLink}
+            </p>
+            <p
+              className="text-[16px] leading-[22px] font-medium text-grey-50 dark:text-[#979797]"
+              style={{ letterSpacing: "-0.32px" }}
+            >
+              {screen.body}
+            </p>
+          </div>
+
+          {/* Feature chips */}
+          {screen.pills.length > 0 && (
+            <div className="flex flex-col gap-3">
+              <p
+                className="text-[16px] leading-[20px] font-medium text-grey-10 dark:text-[#EBEBEB]"
+                style={{ letterSpacing: "-0.32px" }}
+              >
+                What makes us stand out?
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {screen.pills.map((pill) => (
+                  <span
+                    key={pill}
+                    className="inline-flex items-center rounded-[8px] px-[17px] py-[6px]
+                               text-[14px] leading-[20px] font-medium
+                               bg-white border border-grey-80 text-grey-50
+                               dark:bg-black-400 dark:border-transparent dark:text-grey-dark-600"
+                  >
+                    {pill}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-      )}
-    </InView>
+
+        {/* Spacer pushes buttons to bottom */}
+        <div className="flex-1 min-h-8" />
+
+        {/* ── Bottom navigation ── */}
+        <div className="flex flex-col gap-[18px]">
+          <button
+            onClick={handleNext}
+            className="w-full h-[52px] flex items-center justify-center gap-2 rounded-[6px]
+                       bg-primary-50 hover:bg-primary-40 text-white
+                       text-[18px] font-normal leading-[20px] transition-colors"
+            style={{ letterSpacing: "-0.36px" }}
+          >
+            <span>{screen.nextLabel}</span>
+            <ArrowRight className="size-4" />
+          </button>
+
+          {isFirstPanel ? (
+            <button
+              onClick={handleOnBoardingDone}
+              className="w-full h-[52px] flex items-center justify-center rounded-[6px]
+                         bg-white hover:bg-grey-light-400 border border-grey-80 text-grey-10
+                         dark:bg-white/[0.03] dark:hover:bg-white/[0.06]
+                         dark:border-[#313131] dark:text-[#EBEBEB]
+                         text-[18px] font-normal leading-[20px] transition-colors"
+              style={{ letterSpacing: "-0.36px" }}
+            >
+              Skip
+            </button>
+          ) : (
+            <button
+              onClick={handlePrevious}
+              className="w-full h-[52px] flex items-center justify-center rounded-[6px]
+                         bg-white hover:bg-grey-light-400 border border-grey-80 text-grey-10
+                         dark:bg-white/[0.03] dark:hover:bg-white/[0.06]
+                         dark:border-[#313131] dark:text-[#EBEBEB]
+                         text-[18px] font-normal leading-[20px] transition-colors"
+              style={{ letterSpacing: "-0.36px" }}
+            >
+              Back
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 };
 
