@@ -18,11 +18,11 @@ const AuthTitleBar = () => {
     <div
       data-tauri-drag-region
       className={cn(
-        "relative z-10 flex items-start w-full select-none h-[44px] shrink-0",
+        "relative z-10 flex items-center w-full select-none h-[44px] shrink-0",
         isMac ? "pl-[80px]" : "pl-[12px]"
       )}
     >
-      <div className="flex items-center gap-[8px] px-[4px] rounded-[9px] pointer-events-none">
+      <div className="flex items-center gap-[8px] px-[4px] py-[5px] rounded-[9px] pointer-events-none">
         <HippiusLogo className="size-[28px] rounded-[6px]" />
         <span className="font-medium text-[18px] leading-none text-grey-10 dark:text-grey-light-100">
           Hippius

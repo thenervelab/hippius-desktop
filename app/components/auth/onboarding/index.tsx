@@ -40,16 +40,14 @@ const Onboarding: React.FC<{
 
         {/* Title bar — reuse AuthTitleBar (handles Mac/Win traffic-light padding).
             Wrap in a relative row so we can overlay the Skip button on the right. */}
-        <div
-          className="relative flex items-center shrink-0
-                     border-b border-grey-80 dark:border-black-300"
-        >
+        <div className="relative border-b border-grey-80 dark:border-black-300">
           <AuthTitleBar />
 
           {!isFirstPanel && (
             <button
               onClick={handleOnBoardingDone}
-              className="absolute right-5 pointer-events-auto
+              className="absolute top-0 right-5 h-full flex items-center
+                         pointer-events-auto
                          text-[14px] font-medium text-grey-50 dark:text-grey-dark-700
                          hover:text-grey-10 dark:hover:text-grey-primary-bg
                          transition-colors"
