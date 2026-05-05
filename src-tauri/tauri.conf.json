@@ -39,15 +39,15 @@
         "dragDropEnabled": true,
         "title": "Hippius",
         "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 12, "y": 15 },
         "width": 1320,
         "height": 1000,
         "minWidth": 900,
         "minHeight": 650,
         "visible": true,
         "center": true,
-        "resizable": true,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true
+        "resizable": true
       }
     ],
     "withGlobalTauri": false,
