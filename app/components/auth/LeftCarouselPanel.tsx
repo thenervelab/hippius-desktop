@@ -8,7 +8,7 @@ import "swiper/css/pagination";
 
 const LeftCarouselPanel = () => {
   return (
-    <div className="relative w-full h-full min-h-full max-h-full rounded-[11px] bg-grey-light-200 overflow-hidden">
+    <div className="relative w-full h-full min-h-full max-h-full rounded-[11px] bg-grey-light-200 dark:bg-black-500 overflow-hidden">
       <InView triggerOnce>
         {({ inView, ref }) => (
           <div ref={ref} className="w-full h-full min-h-full max-h-full ">
@@ -35,7 +35,7 @@ const LeftCarouselPanel = () => {
                     }`}
                   >
                     <div className="w-full px-[min(2.5rem,40px)] 2xl:px-[66px] flex flex-col gap-[4px]">
-                      <p className="text-[min(1.75rem,28px)] leading-[min(2rem,32px)] tracking-[-0.03em] font-medium text-grey-10 max-w-[min(33rem,527px)]">
+                      <p className="text-[min(1.75rem,28px)] leading-[min(2rem,32px)] tracking-[-0.03em] font-medium text-grey-10 dark:text-grey-primary-bg max-w-[min(33rem,527px)]">
                         {item.title}
                       </p>
                       <p className="text-[min(1rem,16px)] leading-[min(1.375rem,22px)] tracking-[-0.02em] text-grey-50 max-w-[min(33rem,527px)]">
@@ -47,7 +47,13 @@ const LeftCarouselPanel = () => {
                       <img
                         src={item.image}
                         alt={item.title}
-                        className="absolute left-0 top-1/2 -translate-y-[57%] w-full h-auto block select-none pointer-events-none"
+                        className="absolute left-0 top-1/2 -translate-y-[57%] w-full h-auto block select-none pointer-events-none dark:hidden"
+                        draggable={false}
+                      />
+                      <img
+                        src={item.imageDark}
+                        alt={item.title}
+                        className="absolute left-0 top-1/2 -translate-y-[57%] w-full h-auto hidden select-none pointer-events-none dark:block"
                         draggable={false}
                       />
                     </div>
@@ -77,6 +83,11 @@ const LeftCarouselPanel = () => {
         }
         .auth-carousel-bullet-active {
           opacity: 1 !important;
+        }
+        @media (prefers-color-scheme: dark) {
+          .auth-carousel-bullet {
+            background: #ebebeb !important;
+          }
         }
       `}</style>
     </div>
