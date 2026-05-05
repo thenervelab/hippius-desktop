@@ -18,7 +18,7 @@ const AuthTitleBar = () => {
     <div
       data-tauri-drag-region
       className={cn(
-        "relative z-10 flex items-center w-full select-none h-[28px] shrink-0",
+        "relative z-10 flex items-center w-full select-none h-[44px] shrink-0",
         isMac ? "pl-[80px]" : "pl-[12px]"
       )}
     >
