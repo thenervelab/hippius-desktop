@@ -3,15 +3,17 @@ import { InView } from "react-intersection-observer";
 import { SWIPE_CONTENT } from "./SwipeContent";
 import { Swiper, SwiperSlide } from "swiper/react";
 import { Pagination, Autoplay } from "swiper/modules";
+import AuthTitleBar from "./AuthTitleBar";
 import "swiper/css";
 import "swiper/css/pagination";
 
 const LeftCarouselPanel = () => {
   return (
-    <div className="relative w-full h-full min-h-full max-h-full rounded-[11px] bg-grey-light-200 dark:bg-black-500 overflow-hidden">
+    <div className="relative w-full h-full min-h-full max-h-full rounded-[11px] bg-grey-light-200 dark:bg-black-500 overflow-hidden flex flex-col">
+      <AuthTitleBar />
       <InView triggerOnce>
         {({ inView, ref }) => (
-          <div ref={ref} className="w-full h-full min-h-full max-h-full ">
+          <div ref={ref} className="flex-1 min-h-0 w-full">
             <Swiper
               modules={[Pagination, Autoplay]}
               pagination={{
@@ -83,11 +85,6 @@ const LeftCarouselPanel = () => {
         }
         .auth-carousel-bullet-active {
           opacity: 1 !important;
-        }
-        @media (prefers-color-scheme: dark) {
-          .auth-carousel-bullet {
-            background: #ebebeb !important;
-          }
         }
       `}</style>
     </div>
