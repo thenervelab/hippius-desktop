@@ -1,8 +1,5 @@
-export type BadgeVariant = "primary" | "coming-soon";
-
 export interface OnboardingBadge {
   text: string;
-  variant: BadgeVariant;
 }
 
 export interface OnboardingScreen {
@@ -21,7 +18,7 @@ export interface OnboardingScreen {
 export const ONBOARDING_SCREENS: OnboardingScreen[] = [
   {
     id: 1,
-    badges: [{ text: "Get Started", variant: "primary" }],
+    badges: [{ text: "Get Started" }],
     heading: "Welcome to Hippius",
     subtitle:
       "Your personal cloud — encrypted, decentralized, and fully under your control.",
@@ -34,7 +31,7 @@ export const ONBOARDING_SCREENS: OnboardingScreen[] = [
   },
   {
     id: 2,
-    badges: [{ text: "Credits & Billing", variant: "primary" }],
+    badges: [{ text: "Credits & Billing" }],
     heading: "Pay for what you use. Nothing more.",
     subtitle:
       "Top up once and let Hippius handle the rest — billed by the block, not the month.",
@@ -52,14 +49,10 @@ export const ONBOARDING_SCREENS: OnboardingScreen[] = [
   },
   {
     id: 3,
-    badges: [
-      { text: "Files & Actions", variant: "primary" },
-      { text: "Coming Soon", variant: "coming-soon" },
-    ],
+    badges: [{ text: "Files & Actions" }],
     heading: "Your files, fully in your hands",
     subtitle: "Browse, preview, and manage everything from one place.",
-    featureLink:
-      "Right-click any file to see everything you can do with it",
+    featureLink: "Right-click any file to see everything you can do with it",
     body: "Preview images, videos, and PDFs directly in the app. Download, reveal in Finder, or track any file live on the Hipstats explorer.",
     pills: [
       "Track any file on-chain",
@@ -71,7 +64,7 @@ export const ONBOARDING_SCREENS: OnboardingScreen[] = [
   },
   {
     id: 4,
-    badges: [{ text: "Unlock Password", variant: "primary" }],
+    badges: [{ text: "Unlock Password" }],
     heading: "One password. Desktop, web, everywhere.",
     subtitle:
       "Set it once — it works across all your devices and the web console.",
@@ -89,15 +82,10 @@ export const ONBOARDING_SCREENS: OnboardingScreen[] = [
   },
   {
     id: 5,
-    badges: [
-      { text: "Recovery Phrase", variant: "primary" },
-      { text: "Coming Soon", variant: "coming-soon" },
-    ],
+    badges: [{ text: "Recovery Phrase" }],
     heading: "Your phrase is your master key",
-    subtitle:
-      "This 12-word phrase is the only way to recover your account.",
-    featureLink:
-      "Lose your phrase and your files are gone — no exceptions",
+    subtitle: "This 12-word phrase is the only way to recover your account.",
+    featureLink: "Lose your phrase and your files are gone — no exceptions",
     body: "Write it down on paper. Store it somewhere offline and secure. Never share it — not even with Hippius support. Keep copies in at least two different locations.",
     pills: [
       "Only you hold the keys",

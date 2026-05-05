@@ -46,15 +46,17 @@ const Onboarding: React.FC<{
         >
           <AuthTitleBar />
 
-          <button
-            onClick={handleOnBoardingDone}
-            className="absolute right-5 pointer-events-auto
-                       text-[14px] font-medium text-grey-50 dark:text-grey-dark-700
-                       hover:text-grey-10 dark:hover:text-grey-primary-bg
-                       transition-colors"
-          >
-            Skip
-          </button>
+          {!isFirstPanel && (
+            <button
+              onClick={handleOnBoardingDone}
+              className="absolute right-5 pointer-events-auto
+                         text-[14px] font-medium text-grey-50 dark:text-grey-dark-700
+                         hover:text-grey-10 dark:hover:text-grey-primary-bg
+                         transition-colors"
+            >
+              Skip
+            </button>
+          )}
         </div>
 
         {/* Left panel fills the remaining height */}

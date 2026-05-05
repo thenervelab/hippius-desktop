@@ -2,6 +2,7 @@
 
 import React from "react";
 import { ArrowRight } from "lucide-react";
+import { Button } from "@/components/ui/button/ButtonV2";
 import ProgressBar from "./ProgressBar";
 import { OnboardingScreen } from "./onboardingData";
 
@@ -37,11 +38,7 @@ const OnboardingLeftPanel = ({
             {screen.badges.map((badge) => (
               <span
                 key={badge.text}
-                className={
-                  badge.variant === "primary"
-                    ? "inline-flex items-center rounded-[40px] px-[7px] py-[3px] text-[10px] font-medium leading-[12.4px] bg-primary-50 text-grey-primary-bg"
-                    : "inline-flex items-center rounded-[40px] px-[7px] py-[3px] text-[10px] font-medium leading-[12.4px] bg-[#E89702] text-grey-primary-bg"
-                }
+                className="inline-flex items-center rounded-[40px] px-[7px] py-[3px] text-[10px] font-medium leading-[12.4px] bg-primary-50 text-grey-primary-bg"
               >
                 {badge.text}
               </span>
@@ -117,41 +114,40 @@ const OnboardingLeftPanel = ({
 
         {/* ── Bottom navigation ── */}
         <div className="flex flex-col gap-[18px]">
-          <button
+          <Button
+            variant="primary"
             onClick={handleNext}
-            className="w-full h-[52px] flex items-center justify-center gap-2 rounded-[6px]
-                       bg-primary-50 hover:bg-primary-40 text-white
-                       text-[18px] font-normal leading-[20px] transition-colors"
+            className="w-full h-[52px] rounded-[6px] text-[18px] font-normal"
             style={{ letterSpacing: "-0.36px" }}
           >
-            <span>{screen.nextLabel}</span>
-            <ArrowRight className="size-4" />
-          </button>
+            {screen.nextLabel}
+            <ArrowRight className="size-4 ml-2" />
+          </Button>
 
           {isFirstPanel ? (
-            <button
+            <Button
+              variant="defaultStable"
               onClick={handleOnBoardingDone}
-              className="w-full h-[52px] flex items-center justify-center rounded-[6px]
-                         bg-white hover:bg-grey-light-400 border border-grey-80 text-grey-10
+              className="w-full h-[52px] rounded-[6px] text-[18px] font-normal
+                         border border-grey-80
                          dark:bg-white/[0.03] dark:hover:bg-white/[0.06]
-                         dark:border-[#313131] dark:text-[#EBEBEB]
-                         text-[18px] font-normal leading-[20px] transition-colors"
+                         dark:border-[#313131] dark:text-[#EBEBEB]"
               style={{ letterSpacing: "-0.36px" }}
             >
               Skip
-            </button>
+            </Button>
           ) : (
-            <button
+            <Button
+              variant="defaultStable"
               onClick={handlePrevious}
-              className="w-full h-[52px] flex items-center justify-center rounded-[6px]
-                         bg-white hover:bg-grey-light-400 border border-grey-80 text-grey-10
+              className="w-full h-[52px] rounded-[6px] text-[18px] font-normal
+                         border border-grey-80
                          dark:bg-white/[0.03] dark:hover:bg-white/[0.06]
-                         dark:border-[#313131] dark:text-[#EBEBEB]
-                         text-[18px] font-normal leading-[20px] transition-colors"
+                         dark:border-[#313131] dark:text-[#EBEBEB]"
               style={{ letterSpacing: "-0.36px" }}
             >
               Back
-            </button>
+            </Button>
           )}
         </div>
       </div>
