@@ -36,11 +36,11 @@ export interface ShareLink {
  * currently-active shares (revoked rows are reaped before they could
  * surface here), so there is intentionally no `revokedAt` field.
  *
- * `shareUrl` is `null` when the keystore on this device has lost the
- * key for this token (different device, wiped DB). In that case
- * `filename` will also be `"<unknown>"` because hcfs-client decrypts
- * filenames with the same keystore lookup. The row is still useful —
- * the user can revoke it.
+ * `filename` is always the real plaintext name returned by the server.
+ * `shareUrl` is independent: it's `null` when the keystore on this
+ * device has lost the key (different device, wiped DB) — in that case
+ * the UI hides the Copy button but still offers Revoke and shows the
+ * filename normally.
  */
 export interface ShareSummary {
   shareToken: string;
