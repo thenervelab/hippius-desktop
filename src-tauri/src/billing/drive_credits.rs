@@ -22,7 +22,10 @@ use crate::billing::charts::{
 use crate::error::AppError;
 use chrono::NaiveDate;
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 const ENDPOINT: &str = "/user-credits-by-storage-history";
 const DRIVE_STORAGE_TYPE: &str = "drive";
@@ -40,6 +43,11 @@ const MAX_PAGES: u32 = 50;
 /// counted exactly once; mirrors the existing `/marketplace/credit`
 /// query convention.
 const CREDITS_CONSUMED_EVENT: &str = "CreditsConsumed";
+
+/// Cache window for the per-account event slice. Aligns with the FE's
+/// 30 s `useInvokeQuery` `staleTime` so a tile and its sibling chart
+/// see the same data without an extra round-trip.
+const CACHE_TTL: Duration = Duration::from_secs(30);
 
 /// One row of `/user-credits-by-storage-history`.
 ///
@@ -78,6 +86,46 @@ struct HistoryPage {
     data: Vec<DriveCreditEvent>,
     #[serde(default)]
     pagination: Pagination,
+}
+
+/// One cache slot per account.
+struct CacheEntry {
+    fetched_at: Instant,
+    events: Vec<DriveCreditEvent>,
+}
+
+/// Process-wide event cache. The mutex is `tokio::sync::Mutex` so
+/// holding it across the indexer fetch is sound; that's deliberate —
+/// the lock acts as a single-flight gate so when the home page mounts
+/// and fires `get_drive_storage_chart`, `get_drive_credits_chart`, and
+/// `get_drive_credits_total` concurrently, only the first call hits
+/// the indexer and the other two wait briefly then read the freshly
+/// cached entry. Without this they'd issue three independent fetches
+/// of the same data on every page render.
+fn cache() -> &'static Mutex<HashMap<String, CacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, CacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Cached wrapper around [`fetch_all_drive_events`]. Returns the cached
+/// vector on hit; on miss, fetches under the lock so concurrent callers
+/// serialize and share one round-trip.
+async fn cached_drive_events(state: &crate::app_state::AppState, account_id: &str) -> Result<Vec<DriveCreditEvent>, AppError> {
+    let mut guard = cache().lock().await;
+    if let Some(entry) = guard.get(account_id)
+        && entry.fetched_at.elapsed() < CACHE_TTL
+    {
+        return Ok(entry.events.clone());
+    }
+    let events = fetch_all_drive_events(state, account_id).await?;
+    guard.insert(
+        account_id.to_string(),
+        CacheEntry {
+            fetched_at: Instant::now(),
+            events: events.clone(),
+        },
+    );
+    Ok(events)
 }
 
 /// Walk the indexer's pages and collect every drive-scoped event for
@@ -271,7 +319,7 @@ pub async fn get_drive_storage_chart(
     account_id: String,
     range: String,
 ) -> Result<Vec<ChartPoint>, AppError> {
-    let events = fetch_all_drive_events(&state, &account_id).await?;
+    let events = cached_drive_events(&state, &account_id).await?;
     Ok(build_storage_chart(&events, &range))
 }
 
@@ -285,7 +333,7 @@ pub async fn get_drive_credits_chart(
     account_id: String,
     range: String,
 ) -> Result<Vec<ChartPoint>, AppError> {
-    let events = fetch_all_drive_events(&state, &account_id).await?;
+    let events = cached_drive_events(&state, &account_id).await?;
     Ok(build_credits_chart(&events, &range))
 }
 
@@ -296,7 +344,7 @@ pub async fn get_drive_credits_chart(
 /// Propagates [`AppError::Api`] from the underlying indexer request.
 #[tauri::command]
 pub async fn get_drive_credits_total(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<f64, AppError> {
-    let events = fetch_all_drive_events(&state, &account_id).await?;
+    let events = cached_drive_events(&state, &account_id).await?;
     Ok(events
         .iter()
         .filter(|e| e.event_name == CREDITS_CONSUMED_EVENT)

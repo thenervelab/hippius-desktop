@@ -149,6 +149,12 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
   const [formattedChartData, setFormattedChartData] = useState<ChartPoint[]>(
     [],
   );
+  // selfFetch charts own their own loading state — the legacy callers
+  // pass `isLoading` in via props (TanStack Query is upstream of them),
+  // but selfFetch callers can't, so without this the spinner would be
+  // skipped during the initial IPC and users would briefly see the
+  // empty-state copy instead.
+  const [isFetching, setIsFetching] = useState(false);
 
   // Scale factor: at 16px root = 1, at 13px root ≈ 0.81
   const remScale = useRemScale();
@@ -161,18 +167,26 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
     if (selfFetch) {
       if (!accountId) {
         setFormattedChartData([]);
+        setIsFetching(false);
         return;
       }
+      // Cancellation guard: if `accountId` or `timeRange` changes
+      // before the in-flight call resolves, the stale promise must
+      // not race to overwrite the newer fetch's data.
+      let cancelled = false;
+      setIsFetching(true);
       invoke<ChartPoint[]>(invokeCommand, {
         accountId,
         range: timeRange,
       })
-        .then(setFormattedChartData)
+        .then((d) => { if (!cancelled) setFormattedChartData(d); })
         .catch((err: unknown) => {
+          if (cancelled) return;
           console.error("[ChartTrends] Failed to fetch chart data via", invokeCommand, ":", err);
           setFormattedChartData([]);
-        });
-      return;
+        })
+        .finally(() => { if (!cancelled) setIsFetching(false); });
+      return () => { cancelled = true; };
     }
     if (!chartData?.length) {
       setFormattedChartData([]);
@@ -321,7 +335,7 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
 
   const chartContent = (
     <div className="relative w-full h-full flex">
-      {isLoading ? (
+      {(isLoading || isFetching) ? (
         <div className="flex items-center justify-center w-full h-full">
           <Icons.Loader className="size-8 animate-spin text-primary-60" />
         </div>
