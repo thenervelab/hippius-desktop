@@ -107,7 +107,7 @@ const Sidebar: React.FC = () => {
           <div
             ref={ref}
             className={cn(
-              "fixed top-[54px] left-0 bottom-0 bg-transparent flex flex-col overflow-hidden transition-all duration-300 ease-in-out z-50",
+              "fixed top-[54px] left-0 bottom-0 bg-transparent  flex flex-col overflow-hidden transition-all duration-300 ease-in-out z-50",
               collapsed ? "w-[3.8125rem]" : "w-[16.4375rem]",
             )}
           >

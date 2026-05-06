@@ -77,6 +77,7 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
         onClick={handleCopyAddress}
         className={cn(
           "flex items-center gap-1.5 rounded-lg py-2 hover:bg-black/5 transition-colors duration-200 min-w-0 overflow-hidden",
+          "dark:hover:bg-white/10",
           !collapsed && "flex-1",
         )}
       >
@@ -90,14 +91,14 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
         </span>
         {!collapsed && (
           <span className="flex flex-col items-start min-w-0 flex-1 whitespace-nowrap">
-            <span className="text-sm font-medium font-inter leading-none text-zinc-800 tracking-[-0.4px] truncate w-full text-left">
+            <span className="text-sm font-medium font-inter leading-none text-zinc-800 dark:text-grey-light-600 tracking-[-0.4px] truncate w-full text-left">
               {displayAddress.slice(0, 6)}...
               {displayAddress.slice(displayAddress.length - 5)}
             </span>
             <span className="flex items-center gap-1 mt-1 whitespace-nowrap">
-              <BoxSimple className="size-[13px] text-black-700 flex-shrink-0" />
+              <BoxSimple className="size-[13px] text-black-700 dark:text-grey-dark-600 flex-shrink-0" />
               {isConnected && blockNumber != null && (
-                <span className="text-[10px] font-medium leading-[14px] text-primary-50 tracking-[-0.2px]">
+                <span className="text-[10px] font-medium leading-[14px] text-primary-50 dark:text-primary-brand-dark tracking-[-0.2px]">
                   # {blockNumber.toString()}
                 </span>
               )}
@@ -114,7 +115,7 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
             onClick={handleSendIconClick}
             className=" hover:scale-110 rounded-full duration-300 p-1 flex justify-center transition-transform"
           >
-            <Icons.Send className="size-4 text-zinc-500" />
+            <Icons.Send className="size-4 text-zinc-500 dark:text-grey-dark-600" />
           </button>
         </CustomTooltip2>
       )}

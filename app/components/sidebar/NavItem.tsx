@@ -45,8 +45,7 @@ const NavItem: React.FC<NavItemProps> = ({
   const hasActiveChild = useMemo(
     () =>
       subMenuItems.some(
-        (sub) =>
-          pathname === sub.path || pathname.startsWith(sub.path + "/"),
+        (sub) => pathname === sub.path || pathname.startsWith(sub.path + "/"),
       ),
     [pathname, subMenuItems],
   );
@@ -77,14 +76,16 @@ const NavItem: React.FC<NavItemProps> = ({
       className={cn(
         "flex items-center gap-2 p-[10px] w-full overflow-hidden transition-colors duration-200",
         active
-          ? "bg-white/60 rounded-[12px]"
-          : "rounded-[6px] hover:bg-white/30",
+          ? "bg-white/60 dark:bg-white/20 rounded-[12px]"
+          : "rounded-[6px] hover:bg-white/30 dark:hover:bg-white/10",
       )}
     >
       <span
         className={cn(
           "size-[18px] flex-shrink-0 flex items-center justify-center",
-          active ? "text-primary-50" : "text-[#606060]",
+          active
+            ? "text-primary-50 dark:text-primary-brand-dark"
+            : "text-[#606060] dark:text-grey-dark-600",
           comingSoon && "opacity-40",
         )}
       >
@@ -95,7 +96,9 @@ const NavItem: React.FC<NavItemProps> = ({
           <span
             className={cn(
               "text-[14px] font-medium leading-5 tracking-[-0.28px] whitespace-nowrap overflow-hidden text-ellipsis transition-opacity duration-300",
-              active ? "text-[#0a0a0a]" : "text-[#606060]",
+              active
+                ? "text-[#0a0a0a] dark:text-grey-light-100"
+                : "text-[#606060] dark:text-grey-dark-600",
               comingSoon && "text-gray-400",
             )}
           >
@@ -109,10 +112,10 @@ const NavItem: React.FC<NavItemProps> = ({
           )}
 
           {hasSubMenu && (
-            <span className="ml-auto size-5 flex-shrink-0 flex items-center justify-center rounded-md bg-[#0000000A]">
+            <span className="ml-auto size-5 flex-shrink-0 flex items-center justify-center rounded-md bg-[#0000000A] dark:bg-white/10">
               <ChevronDown
                 className={cn(
-                  "size-3 text-black transition-transform duration-200",
+                  "size-3 text-black transition-transform duration-200 dark:text-grey-dark-600",
                   !submenuOpen && "-rotate-90",
                 )}
                 strokeWidth={2}
@@ -175,15 +178,17 @@ const NavItem: React.FC<NavItemProps> = ({
                     className={cn(
                       "flex items-center gap-2 p-[10px] transition-colors duration-200",
                       subActive
-                        ? "bg-white/60 text-[#0a0a0a] rounded-[12px]"
-                        : "rounded-[6px] text-[#606060] hover:bg-black/5",
+                        ? "bg-white/60 dark:bg-white/20 text-[#0a0a0a] dark:text-grey-light-100 rounded-[12px]"
+                        : "rounded-[6px] text-[#606060] dark:text-grey-dark-600 hover:bg-black/5 dark:hover:bg-white/10",
                     )}
                   >
                     {sub.icon && (
                       <span
                         className={cn(
                           "size-[18px] flex-shrink-0 flex items-center justify-center",
-                          subActive ? "text-primary-50" : "text-[#606060]",
+                          subActive
+                            ? "text-primary-50 dark:text-primary-brand-dark"
+                            : "text-[#606060] dark:text-grey-dark-600",
                         )}
                       >
                         {sub.icon}

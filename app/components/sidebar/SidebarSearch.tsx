@@ -55,6 +55,7 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
         className={cn(
           "flex items-center w-full rounded-[12px] bg-[#0000000F] p-[10px] text-[#1111114D] transition-colors overflow-hidden",
           "hover:bg-[#00000014] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#1111111A]",
+          "dark:bg-white/[0.06] dark:text-white/30 dark:hover:bg-white/10 dark:focus-visible:ring-white/10",
         )}
       >
         <span className="size-[18px] flex-shrink-0 flex items-center justify-center">
@@ -71,10 +72,10 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
         onClick={() => inputRef.current?.focus()}
         className={cn(
           "flex items-center gap-2 w-full rounded-[12px] bg-[#0000000F] px-3 py-2",
-          "transition-colors focus-within:ring-1 focus-within:ring-[#1111111f]",
+          "transition-colors focus-within:ring-1 focus-within:ring-[#1111111f] dark:bg-white/[0.06] dark:focus-within:ring-white/10",
         )}
       >
-        <span className="size-[18px] flex-shrink-0 flex items-center justify-center text-[#1111114D]">
+        <span className="size-[18px] flex-shrink-0 flex items-center justify-center text-[#1111114D] dark:text-white/30">
           <Icons.Search className="size-[18px]" />
         </span>
         <input
@@ -85,7 +86,7 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
           placeholder="Search Files"
           autoComplete="off"
           spellCheck={false}
-          className="min-w-0 flex-1 border-0 bg-transparent p-0 outline-none text-[14px] leading-5 font-medium text-black placeholder:text-[#1111114D]"
+          className="min-w-0 flex-1 border-0 bg-transparent p-0 outline-none text-[14px] leading-5 font-medium text-black placeholder:text-[#1111114D] dark:text-white dark:placeholder:text-white/30"
         />
         {hasValue ? (
           <button
@@ -99,13 +100,13 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
             }}
             className={cn(
               "flex items-center justify-center rounded-md px-1.5 py-0.5",
-              "text-[#1111114D] transition-colors hover:text-[#11111180]",
+              "text-[#1111114D] transition-colors hover:text-[#11111180] dark:text-white/30 dark:hover:text-white/70",
             )}
           >
             <Icons.Close className="size-3.5" />
           </button>
         ) : (
-          <span className="flex items-center gap-1 rounded-md text-[#1111114D] px-1.5 py-0.5 text-[11px] font-medium">
+          <span className="flex items-center gap-1 rounded-md text-[#1111114D] dark:text-white/30 px-1.5 py-0.5 text-[11px] font-medium">
             <Command className="size-3.5" strokeWidth={1.5} />
             <span>F</span>
           </span>
