@@ -143,7 +143,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
 
   return (
     <InView triggerOnce>
-      {({ inView, ref }) => (
+      {({ ref }) => (
         <div ref={ref} className="flex flex-col h-full overflow-y-auto">
           {/* Header — Figma: padding=12, gap=12, border-b #e3e3e3 */}
           <div

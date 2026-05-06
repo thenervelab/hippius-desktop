@@ -1,14 +1,12 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { IconComponent } from "@/app/lib/types";
 import { cn } from "@/app/lib/utils";
 import NotificationContextMenu from "./NotificationContextMenu";
 import { useSetAtom } from "jotai";
 import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
-import { getVersion } from "@tauri-apps/api/app";
-import { isVersionGreaterOrEqual } from "@/lib/utils/versionCompare";
 import { Trash2 } from "lucide-react";
 
 // Unread accent color per notification type (Figma: subscription/money=red, others=blue)
@@ -44,7 +42,6 @@ interface NotificationItemProps {
 const NotificationItem: React.FC<NotificationItemProps> = ({
   id,
   notificationType,
-  notificationSubType,
   notificationText,
   unread = false,
   selected = false,
@@ -54,16 +51,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
 }) => {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [isArchiving, setIsArchiving] = useState(false);
-  const [currentVersion, setCurrentVersion] = useState<string>("");
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
-
-  useEffect(() => {
-    getVersion()
-      .then(setCurrentVersion)
-      .catch((err: unknown) =>
-        console.warn("[NotificationItem] Failed to get app version:", err)
-      );
-  }, []);
 
   const accentColor = unread
     ? (TYPE_ACCENT[notificationType] ?? "#3067dd")
