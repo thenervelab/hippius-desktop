@@ -21,7 +21,7 @@ export default function ResponsiveContent({
       <main
         className={cn(
           "flex flex-col h-screen transition-all duration-300 ease-in-out overflow-hidden",
-          collapsed ? "ml-[3.75rem]" : "ml-[11.625rem]"
+          collapsed ? "ml-[3.8125rem]" : "ml-[16.4375rem]"
         )}
       >
         {/* Sticky toolbar — always visible at the top */}

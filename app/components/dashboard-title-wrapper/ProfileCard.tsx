@@ -6,25 +6,31 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import dynamic from "next/dynamic";
 import { openAppLink } from "@/app/lib/utils/links";
+import cn from "@/app/lib/utils/cn";
 import { Icons } from "../ui";
 import CustomTooltip2 from "../ui/CustomTooltip2";
 import BoxSimple from "../ui/icons/BoxSimple";
 
 const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
 
-const ProfileCard: React.FC = () => {
+interface ProfileCardProps {
+  collapsed?: boolean;
+}
+
+const ProfileCard: React.FC<ProfileCardProps> = ({ collapsed = false }) => {
   const { oauthSession, polkadotAddress } = useWalletAuth();
   const { blockNumber, isConnected } = usePolkadotApi();
 
   // Prefer OAuth substrate address; fall back to locally-derived address for mnemonic logins.
-  const displayAddress = oauthSession?.substrateAddress || polkadotAddress || null;
+  const displayAddress =
+    oauthSession?.substrateAddress || polkadotAddress || null;
 
   const handleCopyAddress = () => {
     if (!displayAddress) return;
 
     const truncatedAddress = `${displayAddress.slice(
       0,
-      6
+      6,
     )}...${displayAddress.slice(displayAddress.length - 5)}`;
 
     navigator.clipboard.writeText(displayAddress).then(() => {
@@ -50,54 +56,60 @@ const ProfileCard: React.FC = () => {
     }
   };
 
-  if (displayAddress) {
-    return (
-      <div className="flex max-h-[3.125rem]">
-        <div
-          className="bg-white hover:bg-primary-100/60 animate-fade-in-0.3 flex items-center gap-x-2 duration-300 transition-colors rounded-full cursor-pointer"
-          onClick={handleCopyAddress}
-        >
-          <div className="size-10 font-medium flex items-center justify-center cursor-pointer">
-            <Avatar
-              colors={["#D3DFF8", "#183E91", "#3167DE", "#A6F4C5"]}
-              name={displayAddress}
-              size={40}
-              variant="pixel"
-            />
-          </div>
-          <div className="py-1 pl-1 pr-2">
-            <div className="flex gap-0">
-              <button className="rounded-l-full font-semibold">
-                <span className="cursor-pointer">
-                  {displayAddress.slice(0, 6)}...
-                  {displayAddress.slice(displayAddress.length - 5)}
-                </span>
-              </button>
-            </div>
-            <div className="flex gap-x-1 items-center">
-              <BoxSimple className="size-4" />
+  if (!displayAddress) return null;
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-1.5 w-full",
+        collapsed && "justify-center",
+      )}
+    >
+      <button
+        type="button"
+        onClick={handleCopyAddress}
+        className={cn(
+          "flex items-center gap-1.5 rounded-lg px-1 py-1 hover:bg-black/5 transition-colors duration-200 min-w-0",
+          collapsed ? "justify-center" : "flex-1",
+        )}
+      >
+        <span className="size-[30px] rounded-full overflow-hidden flex-shrink-0">
+          <Avatar
+            colors={["#D3DFF8", "#183E91", "#3167DE", "#A6F4C5"]}
+            name={displayAddress}
+            size={30}
+            variant="pixel"
+          />
+        </span>
+        {!collapsed && (
+          <span className="flex flex-col items-start min-w-0 flex-1">
+            <span className="text-sm font-medium leading-none text-zinc-800 tracking-[-0.4px] truncate w-full text-left">
+              {displayAddress.slice(0, 6)}...
+              {displayAddress.slice(displayAddress.length - 5)}
+            </span>
+            <span className="flex items-center gap-1 mt-1">
+              <BoxSimple className="size-[13px] text-primary-50" />
               {isConnected && blockNumber != null && (
-                <span className="text-success-40 text-xs font-semibold">
+                <span className="text-[10px] font-medium leading-[14px] text-primary-50 tracking-[-0.2px]">
                   # {blockNumber.toString()}
                 </span>
               )}
-            </div>
-          </div>
-        </div>
-        <CustomTooltip2
-          className="self-start"
-          tooltipContent="View on Hipstats"
-        >
+            </span>
+          </span>
+        )}
+      </button>
+      {!collapsed && (
+        <CustomTooltip2 className="self-start" tooltipContent="View on Hipstats">
           <button
             onClick={handleSendIconClick}
-            className="mt-1 hover:scale-110 rounded-full duration-300 rounded-r-full p-1 flex justify-center transition-transform"
+            className="mt-1 hover:scale-110 rounded-full duration-300 p-1 flex justify-center transition-transform"
           >
             <Icons.Send className="size-4 text-primary-10" />
           </button>
         </CustomTooltip2>
-      </div>
-    );
-  }
+      )}
+    </div>
+  );
 };
 
 export default ProfileCard;

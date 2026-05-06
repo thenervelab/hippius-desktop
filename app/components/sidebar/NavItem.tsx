@@ -1,10 +1,8 @@
 import Link from "next/link";
 import cn from "@/app/lib/utils/cn";
-import { Graphsheet, RevealTextLine } from "@/components/ui";
+import { RevealTextLine } from "@/components/ui";
 import { ChevronDown } from "lucide-react";
-import * as NavigationMenu from "@radix-ui/react-navigation-menu";
 import { SubMenuItemData } from "./NavData";
-import SubMenuList from "./SubMenuList";
 import { activeSubMenuItemAtom } from "./sideBarAtoms";
 import { usePathname } from "next/navigation";
 
@@ -34,18 +32,22 @@ const NavItem: React.FC<NavItemProps> = ({
   inView,
   comingSoon,
   onClick,
-  subMenuItems = []
+  subMenuItems = [],
 }) => {
-  const [openValue, setOpenValue] = useState<string | undefined>(undefined);
-
   const hasSubMenu = subMenuItems.length > 0;
-  const setActiveSubMenuItem = useSetAtom(
-    activeSubMenuItemAtom
-  );
-
-
+  const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   const pathname = usePathname();
   const pendingClearRef = useRef<string | null>(null);
+
+  const [submenuOpen, setSubmenuOpen] = useState(active ?? false);
+
+  useEffect(() => {
+    if (active) setSubmenuOpen(true);
+  }, [active]);
+
+  useEffect(() => {
+    if (collapsed) setSubmenuOpen(false);
+  }, [collapsed]);
 
   useEffect(() => {
     if (pendingClearRef.current && pathname === pendingClearRef.current) {
@@ -54,67 +56,52 @@ const NavItem: React.FC<NavItemProps> = ({
     }
   }, [pathname, setActiveSubMenuItem]);
 
-  const navContent = (
+  const itemContent = (
     <RevealTextLine
       reveal={inView}
       parentClassName="block"
-      className="flex items-center py-1.5 px-3.5 h-8 overflow-hidden"
-    >
-      {active && (
-        <Graphsheet
-          majorCell={{
-            lineColor: [31, 80, 189, 1.0],
-            lineWidth: 2,
-            cellDim: 40
-          }}
-          minorCell={{
-            lineColor: [49, 103, 211, 1.0],
-            lineWidth: 1,
-            cellDim: 5
-          }}
-          className={"absolute w-full h-full top-0 bottom-0 left-0 opacity-20"}
-        />
+      className={cn(
+        "flex items-center gap-2 p-2.5 rounded-[12px] w-full overflow-hidden",
+        active && "bg-white/60",
+        !active && !comingSoon && "hover:bg-white/30",
+        collapsed && "justify-center",
       )}
-
-      <div
-        className={cn(
-          "absolute left-[0.1875rem] bg-primary-50 w-0.5 h-[1.375rem] rounded-3xl",
-          !active && "opacity-0  transition-opacity duration-300",
-          !active &&
-          label !== "Logout" &&
-          !comingSoon &&
-          "group-hover:opacity-100 group-[[data-state=open]]:opacity-100"
-        )}
-      />
-
+    >
       <span
-        className={cn("size-4 flex-shrink-0", {
-          "opacity-40": comingSoon
-        })}
+        className={cn(
+          "size-[18px] flex-shrink-0 flex items-center justify-center",
+          active ? "text-[#0a0a0a]" : "text-grey-40",
+          comingSoon && "opacity-40",
+        )}
       >
         {icon}
       </span>
       {!collapsed && (
-        <div className="ml-1.5 flex items-center w-full">
+        <div className="flex items-center w-full min-w-0">
           <span
             className={cn(
-              "text-sm font-medium whitespace-nowrap overflow-hidden transition-opacity duration-300",
-              comingSoon && "text-gray-400"
+              "text-sm font-medium leading-5 tracking-[-0.28px] whitespace-nowrap overflow-hidden text-ellipsis transition-opacity duration-300",
+              active ? "text-[#0a0a0a]" : "text-grey-40",
+              comingSoon && "text-gray-400",
             )}
           >
             {label}
           </span>
 
-
-          {comingSoon && !collapsed && (
-            <span className=" text-[0.5625rem]  text-amber-700 px-1.5 py-0.5 rounded-sm whitespace-nowrap absolute right-0 -top-1">
+          {comingSoon && (
+            <span className="text-[0.5625rem] text-amber-700 px-1.5 py-0.5 rounded-sm whitespace-nowrap absolute right-0 -top-1">
               Coming Soon
             </span>
           )}
 
-          {hasSubMenu && !collapsed && (
-            <div className="z-20 h-4 w-4 border border-primary-80 bg-primary-100 rounded-[0.25rem] flex items-center justify-center ml-auto">
-              <ChevronDown className="transition-transform duration-200 w-[0.75rem] h-[0.75rem] text-primary-50 group-[[data-state=open]]:-rotate-90" />
+          {hasSubMenu && (
+            <div className="ml-auto h-5 w-5 rounded-md flex items-center justify-center bg-black/5 flex-shrink-0">
+              <ChevronDown
+                className={cn(
+                  "size-3 text-grey-40 transition-transform duration-200",
+                  !submenuOpen && "-rotate-90",
+                )}
+              />
             </div>
           )}
         </div>
@@ -122,106 +109,106 @@ const NavItem: React.FC<NavItemProps> = ({
     </RevealTextLine>
   );
 
-  // If comingSoon is true, render a div instead of a Link
   if (comingSoon) {
     return (
       <div
         className={cn(
           "transition-all duration-300 relative group cursor-not-allowed opacity-70",
-          className
+          className,
         )}
       >
-        {navContent}
+        {itemContent}
       </div>
     );
   }
 
   if (hasSubMenu) {
-    const ITEM_VALUE = label;
-
-    const closeMenu = () => setOpenValue?.(undefined);
     return (
-      <NavigationMenu.Root
-        value={openValue}
-        onValueChange={setOpenValue}
-        className="z-[999]"
-      >
-        <NavigationMenu.List className="list-none m-0 p-0 z-[999]">
-          <NavigationMenu.Item value={ITEM_VALUE} className="relative h-8">
-            <NavigationMenu.Trigger
-              className={cn(
-                "transition-all duration-300 relative group w-full text-left",
-                {
-                  "bg-blue-50 text-primary-40": active,
-                  "hover:bg-gray-100 hover:text-primary-40 text-grey-40 [&[data-state=open]]:bg-gray-100 [&[data-state=open]]:text-primary-40":
-                    !active
-                },
-                className
-              )}
-            >
-              {/* <Link href={href} onClick={handleClick}> */}
-              {navContent}
-              {/* </Link> */}
-            </NavigationMenu.Trigger>
+      <div className={cn("flex flex-col w-full", className)}>
+        <button
+          type="button"
+          aria-expanded={collapsed ? undefined : submenuOpen}
+          onClick={() => {
+            if (collapsed) {
+              // When collapsed, navigate to the parent path or first child
+              const target = href || subMenuItems[0]?.path;
+              if (target) window.location.href = target;
+              return;
+            }
+            setSubmenuOpen((prev) => !prev);
+          }}
+          className="transition-all duration-300 relative group w-full text-left"
+        >
+          {itemContent}
+        </button>
 
-            <NavigationMenu.Content className="absolute left-full top-0 z-[999] bg-white rounded shadow-tooltip border border-grey-80">
-              <SubMenuList
-                items={subMenuItems}
-                inView={inView}
-                onItemClick={closeMenu}
-              />
-            </NavigationMenu.Content>
-          </NavigationMenu.Item>
-          <NavigationMenu.Indicator />
-        </NavigationMenu.List>
-      </NavigationMenu.Root>
+        <div
+          aria-hidden={collapsed || !submenuOpen}
+          className={cn(
+            "grid overflow-hidden transition-[grid-template-rows] duration-200 ease-out",
+            !collapsed && submenuOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+          )}
+        >
+          <div className="overflow-hidden">
+            <div className="flex flex-col pl-4 pt-1 gap-y-0.5">
+              {subMenuItems.map((sub) => {
+                const subActive =
+                  pathname === sub.path ||
+                  pathname.startsWith(sub.path + "/");
+                return (
+                  <Link
+                    key={sub.path + sub.label}
+                    href={sub.path}
+                    className={cn(
+                      "flex items-center gap-2 p-2 rounded-[10px] transition-colors duration-200",
+                      subActive
+                        ? "bg-white/60 text-[#0a0a0a]"
+                        : "text-grey-40 hover:bg-white/30",
+                    )}
+                  >
+                    {sub.icon && (
+                      <span className="size-[18px] flex-shrink-0 flex items-center justify-center">
+                        {sub.icon}
+                      </span>
+                    )}
+                    <span className="text-sm font-medium leading-5 tracking-[-0.28px] truncate">
+                      {sub.label}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
     );
   }
 
-  // If onClick is provided, render a button instead of a Link
   if (onClick) {
     return (
       <button
         onClick={onClick}
         className={cn(
           "transition-all duration-300 relative group w-full text-left",
-          {
-            "bg-blue-50 text-primary-40": active,
-            "hover:bg-gray-100 hover:text-primary-40 text-grey-40":
-              !active && label !== "Logout",
-            "hover:bg-gray-100 hover:text-red-600 text-error-50":
-              label === "Logout"
-          },
-          className
+          className,
         )}
       >
-        {navContent}
+        {itemContent}
       </button>
     );
   }
 
-  // Otherwise, render a regular Link
   return (
     <Link
       href={href}
-      className={cn(
-        "transition-all duration-300 relative group",
-        {
-          "bg-blue-50 text-primary-40": active,
-          "hover:bg-gray-100 hover:text-primary-40 text-grey-40":
-            !active && label !== "Logout",
-          "hover:bg-gray-100 hover:text-red-600 text-error-50":
-            label === "Logout"
-        },
-        className
-      )}
+      className={cn("transition-all duration-300 relative group", className)}
       onClick={() => {
         if (pathname !== href) {
           pendingClearRef.current = href;
         }
       }}
     >
-      {navContent}
+      {itemContent}
     </Link>
   );
 };

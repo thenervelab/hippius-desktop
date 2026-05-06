@@ -1,5 +1,5 @@
 import { Icons } from "@/components/ui";
-import { Server, Share2Icon } from "lucide-react";
+import { Monitor, Server, Share2Icon } from "lucide-react";
 import Support from "../ui/icons/Support";
 
 export interface SubMenuItemData {
@@ -23,58 +23,75 @@ export interface NavItemData {
   featureFlag?: "shares";
 }
 
-export interface FooterNavItemData {
+export interface NavSection {
   label: string;
-  icon: React.ReactNode;
+  items: NavItemData[];
 }
 
-export const navItems: NavItemData[] = [
-  {
-    label: "Home",
-    path: "/",
-    icon: <Icons.Home />,
-    isActive: true,
-  },
-  {
-    label: "Drive",
-    path: "/files",
-    icon: <Icons.DocumentText />,
-  },
-  {
-    label: "Virtual Machines",
-    path: "/vm",
-    icon: <Server className="size-4" />,
-  },
-  // {
-  //   label: "Wallet",
-  //   path: "/wallet",
-  //   icon: <Icons.Wallet />
-  // },
-  {
-    label: "Billing",
-    path: "/billing",
-    icon: <Icons.CreditCard />,
-  },
-  {
-    label: "Referrals",
-    path: "/referrals",
-    icon: <Share2Icon className="size-4" />,
-  },
-  {
-    label: "Help & Support",
-    path: "/support",
-    icon: <Support className="size-4" />,
-  },
-  {
-    label: "Settings",
-    path: "/settings",
-    icon: <Icons.Setting />,
-  },
-];
+const ICON_CLASS = "size-[18px]";
 
-export const footerNavItems: FooterNavItemData[] = [
+export const navSections: NavSection[] = [
   {
-    label: "Logout",
-    icon: <Icons.Logout />,
+    label: "ESSENTIALS",
+    items: [
+      {
+        label: "Overview",
+        path: "/",
+        icon: <Icons.Home className={ICON_CLASS} />,
+        isActive: true,
+      },
+    ],
+  },
+  {
+    label: "INFRASTRUCTURE",
+    items: [
+      {
+        label: "My Drive",
+        path: "/files",
+        icon: <Icons.Category className={ICON_CLASS} />,
+      },
+      {
+        label: "Confidential Computing",
+        path: "/vm",
+        icon: <Monitor className={ICON_CLASS} strokeWidth={1.5} />,
+        subMenuItems: [
+          {
+            label: "Virtual Machines",
+            path: "/vm",
+            icon: <Server className={ICON_CLASS} strokeWidth={1.5} />,
+          },
+        ],
+      },
+    ],
+  },
+  {
+    label: "ACCOUNT",
+    items: [
+      {
+        label: "Billing",
+        path: "/billing",
+        icon: <Icons.CreditCard className={ICON_CLASS} />,
+      },
+      {
+        label: "Wallet",
+        path: "/wallet",
+        icon: <Icons.Wallet className={ICON_CLASS} />,
+      },
+      {
+        label: "Referrals",
+        path: "/referrals",
+        icon: <Share2Icon className={ICON_CLASS} strokeWidth={1.5} />,
+      },
+    ],
+  },
+  {
+    label: "SUPPORT",
+    items: [
+      {
+        label: "Help & Support",
+        path: "/support",
+        icon: <Support className={ICON_CLASS} />,
+      },
+    ],
   },
 ];
