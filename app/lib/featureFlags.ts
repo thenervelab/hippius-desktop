@@ -23,4 +23,4 @@
  * IPCs and the `useDriveCreditsTotal` FE hook stay live so the flip
  * needs no other code changes.
  */
-export const DRIVE_SCOPED_CREDITS_ENABLED = false;
+export const DRIVE_SCOPED_CREDITS_ENABLED = true;
