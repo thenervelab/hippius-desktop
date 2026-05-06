@@ -22,8 +22,10 @@ const OnboardingRightPanel = ({ screen }: OnboardingRightPanelProps) => {
         - Bottom flush with the panel edge (no bottom gap)
         - Only top corners are rounded; bottom edges reach the panel boundary
       */}
-      <div className="absolute top-[16%] left-[10%] right-[-6%] bottom-0
-                      rounded-tl-[14px] rounded-tr-[14px] overflow-hidden">
+      <div
+        className="absolute top-[16%] right-[0] bottom-0 rounded-tl-[14px] rounded-tr-[14px] overflow-hidden"
+        style={{ left: screen.previewLeft ?? "10%" }}
+      >
 
         {screen.previewImageDark ? (
           <>
@@ -32,14 +34,14 @@ const OnboardingRightPanel = ({ screen }: OnboardingRightPanelProps) => {
               alt={`Preview for ${screen.heading}`}
               fill
               unoptimized
-              className="object-cover object-top dark:opacity-0 transition-opacity duration-300"
+              className="object-cover object-left-top dark:opacity-0 transition-opacity duration-300"
             />
             <Image
               src={screen.previewImageDark}
               alt={`Preview for ${screen.heading}`}
               fill
               unoptimized
-              className="object-cover object-top opacity-0 dark:opacity-100 transition-opacity duration-300"
+              className="object-cover object-left-top opacity-0 dark:opacity-100 transition-opacity duration-300"
             />
           </>
         ) : (
@@ -48,7 +50,7 @@ const OnboardingRightPanel = ({ screen }: OnboardingRightPanelProps) => {
             alt={`Preview for ${screen.heading}`}
             fill
             unoptimized
-            className="object-cover object-top"
+            className="object-cover object-left-top"
           />
         )}
       </div>

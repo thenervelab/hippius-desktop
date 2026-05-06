@@ -74,11 +74,12 @@ const Onboarding: React.FC<{
                     bg-[url('/logged-out-app-background.png')]
                     dark:bg-[url('/logged-out-app-background-dark.png')]">
 
-      {/* Same inner layout as AuthLayout — 4px padding, left 42% / right fills */}
-      <main className="relative h-full w-full flex items-stretch p-[min(0.25rem,4px)] overflow-y-auto no-scrollbar">
+      {/* Left panel has 4px inset on all sides; right panel is flush on right + bottom */}
+      <main className="relative h-full w-full flex items-stretch pt-[min(0.25rem,4px)] pl-[min(0.25rem,4px)] overflow-y-auto no-scrollbar">
 
         {/* ── Left column — rounded to match LeftCarouselPanel ── */}
-        <div className="w-[42%] shrink-0 h-full flex flex-col
+        <div className="w-[42%] shrink-0 flex flex-col
+                        mb-[min(0.25rem,4px)]
                         bg-grey-light-200 dark:bg-black-500 rounded-[11px] overflow-hidden">
 
           {/* Titlebar stays fixed — only the content below it animates */}
@@ -127,7 +128,7 @@ const Onboarding: React.FC<{
         </div>
 
         {/* ── Right panel — crossfades between slides ── */}
-        <div className="flex-1 h-full relative">
+        <div className="flex-1 relative">
           <AnimatePresence mode="wait">
             <motion.div
               key={`preview-${currentPanelIndex}`}
