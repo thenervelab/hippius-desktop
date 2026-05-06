@@ -96,7 +96,7 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
               {displayAddress.slice(displayAddress.length - 5)}
             </span>
             <span className="flex items-center gap-1 mt-1 whitespace-nowrap">
-              <BoxSimple className="size-[13px] text-black-700 dark:text-grey-dark-600 flex-shrink-0" />
+              <BoxSimple className="size-[13px] text-black-700 dark:text-grey-light-600 flex-shrink-0" />
               {isConnected && blockNumber != null && (
                 <span className="text-[10px] font-medium leading-[14px] text-primary-50 dark:text-primary-brand-dark tracking-[-0.2px]">
                   # {blockNumber.toString()}
