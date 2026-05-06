@@ -4,9 +4,8 @@ import { useState, useEffect, ReactNode, useMemo } from "react";
 import { Icons } from "@/components/ui";
 import DetailsCard from "./DetailsCard";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
-import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
+import { useDriveCreditsTotal } from "@/app/lib/hooks/api/useDriveCreditsTotal";
 import { invoke } from "@tauri-apps/api/core";
-import { Account } from "@/lib/types";
 import { useDriveStorageStats } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { toast } from "sonner";
@@ -32,21 +31,13 @@ export default function DetailList() {
   const fileCount = driveStats?.fileCount;
   const isFileCountLoading = isDriveStatsLoading;
 
-  // Fetch marketplace credits for Total Credits Used (all-time)
-  const { data: marketplaceCredits, isLoading: isLoadingMarketplaceCredits } =
-    useMarketplaceCredits();
-
-  // Transform marketplace credits to the format expected by the chart
-  const [transformedCreditsData, setTransformedCreditsData] = useState<Account[]>([]);
-  useEffect(() => {
-    if (!marketplaceCredits?.length) {
-      setTransformedCreditsData([]);
-      return;
-    }
-    invoke<Account[]>("transform_marketplace_credits", { credits: marketplaceCredits })
-      .then(setTransformedCreditsData)
-      .catch(() => setTransformedCreditsData([]));
-  }, [marketplaceCredits]);
+  // Drive-scoped credit total: same indexer endpoint backs the Credit
+  // Usage chart, so this tile and the chart can never disagree about
+  // what counts as "drive credit usage".
+  const {
+    data: driveCreditsTotal,
+    isLoading: isLoadingDriveCreditsTotal,
+  } = useDriveCreditsTotal();
 
   const handleRefreshCredits = async () => {
     try {
@@ -90,17 +81,13 @@ export default function DetailList() {
     return fileCount ?? 0;
   };
 
-  // Calculate all-time Total Credits Used from marketplace credits
-  // Using the SAME LOGIC as CreditUsageTrends component
-  // Get the LAST point from ALL DATA (complete dataset, not filtered by time range)
+  // Drive-scoped all-time credit usage. Same indexer endpoint as the
+  // Credit Usage chart, so the tile and the chart agree by construction.
   const getTotalCreditsUsed = useMemo(() => {
-    if (isLoadingMarketplaceCredits) return "Loading...";
-    if (!transformedCreditsData || transformedCreditsData.length === 0) return "0";
-    // This contains the all-time cumulative total
-    const lastPoint = transformedCreditsData[transformedCreditsData.length - 1];
-    const allTimeTotal = Number(lastPoint.total_balance) / Math.pow(10, 18);
-    return allTimeTotal.toFixed(6);
-  }, [transformedCreditsData, isLoadingMarketplaceCredits]);
+    if (isLoadingDriveCreditsTotal) return "Loading...";
+    if (driveCreditsTotal === undefined || driveCreditsTotal === null) return "0";
+    return driveCreditsTotal.toFixed(6);
+  }, [driveCreditsTotal, isLoadingDriveCreditsTotal]);
 
   const getTotalStorageUsed = useMemo(() => {
     if (isRemoteStatsLoading) return "Loading...";
@@ -138,8 +125,8 @@ export default function DetailList() {
       title: "Total Credit Used",
       value: getTotalCreditsUsed,
       showRefresh: false,
-      isLoading: isLoadingMarketplaceCredits,
-      info: "All time total credits consumed for storage services since account creation.",
+      isLoading: isLoadingDriveCreditsTotal,
+      info: "All-time credits consumed for drive storage. Matches the scope shown in the Credit Usage chart below.",
     },
     {
       id: "total-storage-used",

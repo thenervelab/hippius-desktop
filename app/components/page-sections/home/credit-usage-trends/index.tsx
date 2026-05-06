@@ -1,11 +1,15 @@
 import { Icons } from "@/components/ui";
-import { Account } from "@/app/lib/types/accounts";
 import { ChartPoint } from "@/lib/types/chartTypes";
 import ChartTrends, { ChartTrendsConfig } from "@/components/ui/chart-trends";
 import CreditUsedTooltip from "./CreditsUsedTooltip";
 
+// Drive-scoped: the chart and the "Total Credit Used" tile in DetailList
+// both feed off /user-credits-by-storage-history?storage_type=drive, so
+// the chart and the card always agree about scope (replaces the old
+// wallet-wide /marketplace/credit + transform_marketplace_credits flow).
 const config: ChartTrendsConfig = {
-  invokeCommand: "format_credits_chart",
+  invokeCommand: "get_drive_credits_chart",
+  selfFetch: true,
   title: "Credit Usage",
   icon: <Icons.Tag2 className="relative size-4 @sm:size-5 text-primary-50" />,
   emptyText: "No Credits Data Available",
@@ -31,7 +35,7 @@ const config: ChartTrendsConfig = {
 };
 
 const CreditUsageTrends: React.FC<{
-  chartData?: Account[];
+  accountId?: string;
   isLoading?: boolean;
   className?: string;
   onRetry?: () => void;

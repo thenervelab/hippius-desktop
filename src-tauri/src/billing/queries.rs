@@ -117,43 +117,12 @@ pub async fn get_deposit_address(state: tauri::State<'_, crate::app_state::AppSt
 // Indexer queries (credits, marketplace, balance history, events)
 // ---------------------------------------------------------------------------
 
-/// Fetch marketplace credit consumption events (`CreditsConsumed`) from the indexer.
-#[tauri::command]
-pub async fn get_marketplace_credits(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    page: Option<i64>,
-    limit: Option<i64>,
-) -> Result<serde_json::Value, AppError> {
-    let indexer = IndexerClient::from_env(state.api_client.clone())?;
-    let page_str = page.unwrap_or(1).to_string();
-    let limit_str = limit.unwrap_or(10).to_string();
-    let params = vec![
-        ("account_id", account_id.as_str()),
-        ("event_name", "CreditsConsumed"),
-        ("page", page_str.as_str()),
-        ("limit", limit_str.as_str()),
-    ];
-    Ok(indexer.get::<serde_json::Value>("/marketplace/credit", &params).await?)
-}
-
-/// Fetch the time-series of total file size stored by an account.
-///
-/// Used by the home-page **Storage Usage Trends** chart. Returns the raw
-/// indexer payload shaped as `{ data: [{ total_files_size, ... }] }` because
-/// the chart consumes the time-series directly. The header card has its
-/// own dedicated, drive-scoped command [`get_drive_storage_stats`].
-#[tauri::command]
-pub async fn get_files_size(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    days_ago: Option<i64>,
-) -> Result<serde_json::Value, AppError> {
-    let indexer = IndexerClient::from_env(state.api_client.clone())?;
-    let days_str = days_ago.unwrap_or(30).to_string();
-    let params = vec![("account_id", account_id.as_str()), ("days_ago", days_str.as_str())];
-    Ok(indexer.get::<serde_json::Value>("/user-total-file-size", &params).await?)
-}
+// Indexer queries: drive-scoped marketplace + storage history are now
+// served exclusively by `crate::billing::drive_credits` (one IPC per
+// view, fed by `/user-credits-by-storage-history?storage_type=drive`).
+// The wallet-wide `/marketplace/credit` and `/user-total-file-size`
+// endpoints are intentionally not exposed — every previous consumer
+// has switched to the drive-scoped equivalent.
 
 // ---------------------------------------------------------------------------
 // Drive storage stats (header card on Files / Home pages)

@@ -34,7 +34,7 @@ const timeRangeOptions: Option[] = [
 export type ChartTrendsVariant = "card" | "panel";
 
 export interface ChartTrendsConfig {
-  /** Rust invoke command name (e.g. "format_credits_chart") */
+  /** Rust invoke command name (e.g. "get_drive_credits_chart") */
   invokeCommand: string;
   /** Chart title text */
   title: string;
@@ -71,6 +71,14 @@ export interface ChartTrendsConfig {
   ) => ReactNode;
   /** Visual layout: "card" uses Card+RevealTextLine, "panel" uses plain div with border */
   variant?: ChartTrendsVariant;
+  /**
+   * When true, the chart's IPC takes ownership of fetching and is invoked
+   * with `{ accountId, range }` instead of `{ accounts, range }`. The
+   * `chartData` prop is ignored and the empty-data short-circuit is
+   * skipped — used for backend-owned series like the drive credit/storage
+   * history that subsume the legacy fetch+format split.
+   */
+  selfFetch?: boolean;
 }
 
 export interface ChartTrendsProps {
@@ -79,6 +87,11 @@ export interface ChartTrendsProps {
   isLoading?: boolean;
   className?: string;
   onRetry?: () => void;
+  /**
+   * Required when `config.selfFetch` is true: the active wallet
+   * address that the backend command will scope its query to.
+   */
+  accountId?: string;
 }
 
 // Default y-axis tick label props (baseline values at 16px root font-size)
@@ -109,6 +122,7 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
   chartData,
   isLoading,
   className,
+  accountId,
 }) => {
   const {
     invokeCommand,
@@ -128,6 +142,7 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
     gridBgClass,
     renderTooltip,
     variant = "card",
+    selfFetch = false,
   } = config;
 
   const [timeRange, setTimeRange] = useState<string>("last7days");
@@ -139,6 +154,26 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
   const remScale = useRemScale();
 
   useEffect(() => {
+    // selfFetch charts let the backend own the query; the FE no longer
+    // pre-fetches and passes `accounts`. This branch waits for an
+    // accountId before invoking — without it the backend has nothing to
+    // scope the query to.
+    if (selfFetch) {
+      if (!accountId) {
+        setFormattedChartData([]);
+        return;
+      }
+      invoke<ChartPoint[]>(invokeCommand, {
+        accountId,
+        range: timeRange,
+      })
+        .then(setFormattedChartData)
+        .catch((err: unknown) => {
+          console.error("[ChartTrends] Failed to fetch chart data via", invokeCommand, ":", err);
+          setFormattedChartData([]);
+        });
+      return;
+    }
     if (!chartData?.length) {
       setFormattedChartData([]);
       return;
@@ -152,7 +187,7 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
         console.error("[ChartTrends] Failed to format chart data via", invokeCommand, ":", err);
         setFormattedChartData([]);
       });
-  }, [chartData, timeRange, invokeCommand]);
+  }, [chartData, timeRange, invokeCommand, selfFetch, accountId]);
 
   // Compute Y-ticks
   const yTicks = useMemo(() => {

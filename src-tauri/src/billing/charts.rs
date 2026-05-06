@@ -10,8 +10,11 @@
 //! 2. Generate an inclusive date range for the requested period
 //! 3. Carry-forward fill: days without data inherit the last known balance
 //!
-//! Also includes [`transform_marketplace_credits`] (cumulative daily running
-//! totals) and [`calculate_storage_cost`] (pricing model computation).
+//! Also includes [`calculate_storage_cost`] (pricing model computation).
+//!
+//! Drive-scoped storage and credit chart formatters live in
+//! [`crate::billing::drive_credits`] — they fetch and format in one
+//! IPC instead of the FE-fetch + Rust-format split this module uses.
 
 use chrono::{Datelike, NaiveDate, Utc, Weekday};
 use serde::{Deserialize, Serialize};
@@ -50,7 +53,7 @@ const WEEKDAYS_FULL: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "T
 const MONTHS_SHORT: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /// Hippius creation date (March 11, 2025) — lower bound for "max" range.
-fn hippius_creation_date() -> NaiveDate {
+pub(super) fn hippius_creation_date() -> NaiveDate {
     NaiveDate::from_ymd_opt(2025, 3, 11).unwrap()
 }
 
@@ -72,7 +75,7 @@ fn hippius_creation_date() -> NaiveDate {
 /// f64 path silently coerced some of these formats to numeric values;
 /// the new path returns `"0"` consistently. All current callers build
 /// `raw` via `format!("{}", _ as u128)` so they always pass pure digits.
-fn format_balance(raw: &str, decimals: usize) -> String {
+pub(super) fn format_balance(raw: &str, decimals: usize) -> String {
     let value = crate::blockchain::convert::planck_to_hip_with_decimals(raw, decimals);
     if value == "0" {
         return "0".to_string();
@@ -81,7 +84,7 @@ fn format_balance(raw: &str, decimals: usize) -> String {
 }
 
 /// Format bytes using SI units (1000-based): B, KB, MB, GB, TB, PB.
-fn format_bytes(bytes: f64) -> String {
+pub(super) fn format_bytes(bytes: f64) -> String {
     if bytes == 0.0 {
         return "0 B".to_string();
     }
@@ -95,7 +98,7 @@ fn format_bytes(bytes: f64) -> String {
 }
 
 /// Generate an inclusive date range from `start` to `end`.
-fn get_all_dates_in_range(start: NaiveDate, end: NaiveDate) -> Vec<NaiveDate> {
+pub(super) fn get_all_dates_in_range(start: NaiveDate, end: NaiveDate) -> Vec<NaiveDate> {
     let mut dates = Vec::new();
     let mut cur = start;
     while cur <= end {
@@ -108,11 +111,11 @@ fn get_all_dates_in_range(start: NaiveDate, end: NaiveDate) -> Vec<NaiveDate> {
     dates
 }
 
-fn normalize_date(date: NaiveDate) -> String {
+pub(super) fn normalize_date(date: NaiveDate) -> String {
     date.format("%Y-%m-%d").to_string()
 }
 
-fn date_to_iso(date: NaiveDate) -> String {
+pub(super) fn date_to_iso(date: NaiveDate) -> String {
     format!("{}T00:00:00.000Z", normalize_date(date))
 }
 
@@ -156,7 +159,7 @@ fn add_commas_to_int(s: &str) -> String {
 }
 
 /// Parse an ISO timestamp string to a `NaiveDate`, trying multiple formats.
-fn parse_timestamp_to_date(ts: &str) -> Option<NaiveDate> {
+pub(super) fn parse_timestamp_to_date(ts: &str) -> Option<NaiveDate> {
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
         return Some(dt.date_naive());
     }
@@ -188,16 +191,16 @@ fn weekday_index(d: NaiveDate) -> usize {
     }
 }
 
-fn weekday_name(d: NaiveDate) -> &'static str {
+pub(super) fn weekday_name(d: NaiveDate) -> &'static str {
     WEEKDAYS_FULL[weekday_index(d)]
 }
 
-fn dd_mon_label(d: NaiveDate) -> String {
+pub(super) fn dd_mon_label(d: NaiveDate) -> String {
     format!("{} {}", d.day(), MONTHS_SHORT[d.month0() as usize])
 }
 
 /// Compute the start date for a given range keyword.
-fn range_start(range: &str, today: NaiveDate) -> Option<NaiveDate> {
+pub(super) fn range_start(range: &str, today: NaiveDate) -> Option<NaiveDate> {
     match range {
         "last7days" => today.checked_sub_signed(chrono::Duration::days(6)),
         "last30days" => today.checked_sub_signed(chrono::Duration::days(29)),
@@ -345,137 +348,15 @@ fn build_chart(accounts: &[AccountInput], range: &str, divide_by_1e18: bool, inc
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-/// Format account data for a credits usage chart.
-///
-/// Divides `total_balance` by 10^18 to get credit values.
-/// Uses carry-forward fill for missing days.
-#[tauri::command]
-pub fn format_credits_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, crate::error::AppError> {
-    Ok(build_chart(&accounts, &range, true, false))
-}
-
-/// Format account data for a storage usage chart.
-///
-/// `total_balance` represents raw bytes (no division).
-/// Uses carry-forward fill for missing days.
-#[tauri::command]
-pub fn format_storage_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, crate::error::AppError> {
-    Ok(build_chart(&accounts, &range, false, false))
-}
-
 /// Format account data for a balance chart (includes credit field).
 ///
 /// Divides both `total_balance` and `credit` by 10^18.
-/// Uses carry-forward fill for missing days.
+/// Uses carry-forward fill for missing days. Powers the wallet and
+/// billing-page balance trends; the home-page storage and credit
+/// trends are now drive-scoped via `billing::drive_credits` instead.
 #[tauri::command]
 pub fn format_balance_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, crate::error::AppError> {
     Ok(build_chart(&accounts, &range, true, true))
-}
-
-// ---------------------------------------------------------------------------
-// Marketplace credits transformation
-// ---------------------------------------------------------------------------
-
-/// Raw marketplace credit event from the indexer.
-#[derive(Deserialize, Clone, Debug)]
-pub struct MarketplaceCreditInput {
-    pub amount: String,
-    pub date: String,
-}
-
-/// Cumulative daily credit total, shaped to match the `Account` struct
-/// the frontend chart components expect.
-#[derive(Serialize, Clone, Debug)]
-pub struct MarketplaceCreditOutput {
-    pub account_id: String,
-    pub block_number: u64,
-    pub nonce: u64,
-    pub consumers: u64,
-    pub providers: u64,
-    pub sufficients: u64,
-    pub free_balance: String,
-    pub reserved_balance: String,
-    pub misc_frozen_balance: String,
-    pub fee_frozen_balance: String,
-    pub total_balance: String,
-    pub processed_timestamp: String,
-}
-
-/// Transform marketplace credits into cumulative daily running totals.
-///
-/// Groups credits by date, fills date gaps, and computes cumulative sums.
-/// Returns an `Account`-shaped vec so the result can be fed directly into
-/// the same chart components as balance data.
-#[tauri::command]
-pub fn transform_marketplace_credits(credits: Vec<MarketplaceCreditInput>) -> Result<Vec<MarketplaceCreditOutput>, crate::error::AppError> {
-    if credits.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let mut daily: std::collections::BTreeMap<String, (u128, String)> = std::collections::BTreeMap::new();
-
-    for credit in &credits {
-        let date_key = parse_date_key(&credit.date);
-        let raw_amount = credit.amount.parse::<u128>().unwrap_or(0);
-        let entry = daily.entry(date_key).or_insert((0, credit.date.clone()));
-        entry.0 += raw_amount;
-    }
-
-    if daily.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let first_key = daily.keys().next().unwrap().clone();
-    let last_key = daily.keys().last().unwrap().clone();
-
-    let start_date =
-        NaiveDate::parse_from_str(&first_key, "%Y-%m-%d").map_err(|e| crate::error::AppError::Validation(format!("Invalid start date: {e}")))?;
-    let end_date =
-        NaiveDate::parse_from_str(&last_key, "%Y-%m-%d").map_err(|e| crate::error::AppError::Validation(format!("Invalid end date: {e}")))?;
-
-    let mut results = Vec::new();
-    let mut cumulative: u128 = 0;
-    let mut current = start_date;
-    let fallback_ts = credits[0].date.clone();
-
-    while current <= end_date {
-        let key = current.format("%Y-%m-%d").to_string();
-        let timestamp = if let Some((amount, ts)) = daily.get(&key) {
-            cumulative += amount;
-            ts.clone()
-        } else {
-            fallback_ts.clone()
-        };
-
-        results.push(MarketplaceCreditOutput {
-            account_id: String::new(),
-            block_number: 0,
-            nonce: 0,
-            consumers: 0,
-            providers: 0,
-            sufficients: 0,
-            free_balance: "0".to_string(),
-            reserved_balance: "0".to_string(),
-            misc_frozen_balance: "0".to_string(),
-            fee_frozen_balance: "0".to_string(),
-            total_balance: cumulative.to_string(),
-            processed_timestamp: timestamp,
-        });
-
-        current += chrono::Duration::days(1);
-    }
-
-    Ok(results)
-}
-
-fn parse_date_key(date_str: &str) -> String {
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S%.fZ") {
-        return dt.format("%Y-%m-%d").to_string();
-    }
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S") {
-        return dt.format("%Y-%m-%d").to_string();
-    }
-    date_str.chars().take(10).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -751,70 +632,6 @@ mod tests {
 
         let d2 = parse_timestamp_to_date("2025-03-15");
         assert_eq!(d2, Some(NaiveDate::from_ymd_opt(2025, 3, 15).unwrap()));
-    }
-
-    #[test]
-    fn transform_empty_input() {
-        let result = transform_marketplace_credits(vec![]).unwrap();
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn transform_single_day() {
-        let credits = vec![MarketplaceCreditInput {
-            amount: "1000000000000000000".into(),
-            date: "2025-03-15T10:00:00.000Z".into(),
-        }];
-        let result = transform_marketplace_credits(credits).unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].total_balance, "1000000000000000000");
-    }
-
-    #[test]
-    fn transform_fills_gaps() {
-        let credits = vec![
-            MarketplaceCreditInput {
-                amount: "100".into(),
-                date: "2025-03-10T00:00:00.000Z".into(),
-            },
-            MarketplaceCreditInput {
-                amount: "200".into(),
-                date: "2025-03-13T00:00:00.000Z".into(),
-            },
-        ];
-        let result = transform_marketplace_credits(credits).unwrap();
-        assert_eq!(result.len(), 4);
-        assert_eq!(result[0].total_balance, "100");
-        assert_eq!(result[1].total_balance, "100");
-        assert_eq!(result[2].total_balance, "100");
-        assert_eq!(result[3].total_balance, "300");
-    }
-
-    #[test]
-    fn transform_duplicate_dates() {
-        let credits = vec![
-            MarketplaceCreditInput {
-                amount: "100".into(),
-                date: "2025-03-15T10:00:00.000Z".into(),
-            },
-            MarketplaceCreditInput {
-                amount: "200".into(),
-                date: "2025-03-15T14:00:00.000Z".into(),
-            },
-        ];
-        let result = transform_marketplace_credits(credits).unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].total_balance, "300");
-    }
-
-    #[test]
-    fn transform_large_values() {
-        let credits = vec![MarketplaceCreditInput {
-            amount: "999999999999999999999".into(),
-            date: "2025-03-15T00:00:00.000Z".into(),
-        }];
-        let result = transform_marketplace_credits(credits).unwrap();
-        assert_eq!(result[0].total_balance, "999999999999999999999");
     }
 
     #[test]
