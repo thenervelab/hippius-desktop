@@ -18,7 +18,10 @@ const NotificationList: React.FC<NotificationListProps> = ({
   onRefresh,
 }) => {
   return (
-    <div className="flex flex-col gap-4 w-full border border-grey-80 rounded p-4 overflow-y-auto overflow-x-hidden pr-2" style={{ maxHeight: 'calc(100vh - 12rem)' }}>
+    <div
+      className="flex flex-col w-full border border-grey-80 rounded-lg overflow-y-auto overflow-x-hidden divide-y divide-grey-90 bg-white"
+      style={{ maxHeight: "calc(100vh - 12rem)" }}
+    >
       {notifications.map((notification) => (
         <NotificationItem
           key={notification.id}

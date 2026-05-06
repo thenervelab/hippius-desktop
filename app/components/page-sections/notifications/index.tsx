@@ -23,6 +23,7 @@ import { iconMap } from "@/app/lib/helpers/notificationIcons";
 import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import ArchiveAllConfirmationDialog from "./ArchiveAllConfirmationDialog";
+import NotificationHubStats from "./NotificationHubStats";
 import { cn } from "@/app/lib/utils";
 
 const Notifications = () => {
@@ -179,8 +180,13 @@ const Notifications = () => {
       mainText="Notifications Hub"
       subText="Store. Compute. Own your infrastructure."
     >
+      {/* Stats header bar */}
+      <div className="mt-4 flex items-center justify-end">
+        <NotificationHubStats />
+      </div>
+
       {/* Controls row */}
-      <div className="mt-6 flex items-center justify-between gap-3 flex-wrap">
+      <div className="mt-4 flex items-center justify-between gap-3 flex-wrap">
         {/* Left: type tabs */}
         {tabs.length > 0 && (
           <TabList
