@@ -168,12 +168,13 @@ const Notifications = () => {
   }, [refresh]);
 
   return (
-    <DashboardTitleWrapper
-      mainText="Notifications Hub"
-      subText="Store. Compute. Own your infrastructure."
-    >
-      {/* Stats header bar */}
-      <div className="mt-4 flex items-center justify-end">
+    <DashboardTitleWrapper mainText="Notifications">
+      {/* Page heading + stats row */}
+      <div className="mt-4 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-[1.75rem] font-bold text-grey-10 leading-tight">Notifications Hub</h1>
+          <p className="text-sm text-grey-50 mt-1">Store. Compute. Own your infrastructure.</p>
+        </div>
         <NotificationHubStats />
       </div>
 
