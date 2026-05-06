@@ -2,27 +2,26 @@
 
 import React, { useState, useEffect } from "react";
 import { IconComponent } from "@/app/lib/types";
-import { Icons } from "@/components/ui";
 import { cn } from "@/app/lib/utils";
-import { handleButtonLink } from "@/app/lib/utils/links";
-import TimeAgo from "react-timeago";
 import NotificationContextMenu from "./NotificationContextMenu";
-import { useRouter } from "next/navigation";
 import { useSetAtom } from "jotai";
 import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
 import { getVersion } from "@tauri-apps/api/app";
 import { isVersionGreaterOrEqual } from "@/lib/utils/versionCompare";
+import { Trash2 } from "lucide-react";
 
-const TYPE_COLORS: Record<string, string> = {
-  Hippius:      "bg-primary-50",
-  Files:        "bg-primary-50",
-  Storage:      "bg-primary-50",
-  Blockchain:   "bg-success-50",
-  Balance:      "bg-warning-50",
-  Credits:      "bg-warning-50",
-  Subscription: "bg-error-50",
+// Unread accent color per notification type (Figma: subscription/money=red, others=blue)
+const TYPE_ACCENT: Record<string, string> = {
+  Subscription: "#ff6d61",
+  Balance:      "#ff6d61",
+  Credits:      "#ff6d61",
+  Files:        "#3067dd",
+  Hippius:      "#3067dd",
+  Blockchain:   "#3067dd",
+  Storage:      "#3067dd",
 };
+const READ_ACCENT = "#b6b6b6";
 
 interface NotificationItemProps {
   id?: number;
@@ -47,10 +46,6 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
   notificationType,
   notificationSubType,
   notificationText,
-  notificationTime,
-  timestamp,
-  buttonText,
-  buttonLink,
   unread = false,
   selected = false,
   onClick,
@@ -60,7 +55,6 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [isArchiving, setIsArchiving] = useState(false);
   const [currentVersion, setCurrentVersion] = useState<string>("");
-  const router = useRouter();
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
 
   useEffect(() => {
@@ -71,19 +65,9 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
       );
   }, []);
 
-  const isUpdateNotification =
-    notificationType === "Hippius" &&
-    notificationSubType &&
-    buttonLink === "Install Update";
-  const isUpdateAlreadyInstalled =
-    isUpdateNotification &&
-    currentVersion &&
-    isVersionGreaterOrEqual(currentVersion, notificationSubType);
-  const shouldShowButton = buttonText && buttonLink && !isUpdateAlreadyInstalled;
-
-  const handleLinkClick = (e: React.MouseEvent) => {
-    handleButtonLink(e, buttonLink, router);
-  };
+  const accentColor = unread
+    ? (TYPE_ACCENT[notificationType] ?? "#3067dd")
+    : READ_ACCENT;
 
   const handleReadStatusToggle = () => {
     if (id && onReadStatusChange) {
@@ -110,65 +94,55 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
     }
   };
 
-  const dotColor = TYPE_COLORS[notificationType] ?? "bg-grey-60";
-
   return (
     <>
       <div
         className={cn(
-          "flex items-start gap-3 px-4 py-3.5 cursor-pointer transition-colors group relative border-l-[3px]",
+          "flex items-start gap-2.5 px-2.5 py-3 rounded-lg cursor-pointer transition-colors group relative",
           selected
-            ? "border-primary-50 bg-primary-100 dark:bg-primary-100/10"
-            : "border-transparent hover:bg-grey-95 dark:hover:bg-grey-95/10",
+            ? "bg-[#dfe5f7] ring-1 ring-[#618ce8]"
+            : unread
+            ? "bg-[#f8f8f8] hover:bg-[#f0f0f0]"
+            : "bg-[#f5f5f5] hover:bg-[#eeeeee]",
           isArchiving && "opacity-0 scale-[0.98] transition-all duration-150"
         )}
         onClick={onClick}
         onContextMenu={handleContextMenu}
       >
-        {/* Type color dot */}
-        <div className={cn("mt-1.5 size-2 rounded-full flex-shrink-0", dotColor)} />
+        {/* Left accent line — Figma: Vector w=2px, color varies by type/read state */}
+        <div
+          className="w-0.5 self-stretch rounded-full flex-shrink-0 min-h-[1.125rem]"
+          style={{ backgroundColor: accentColor }}
+        />
 
         {/* Content */}
-        <div className="flex-1 min-w-0 pr-6">
+        <div className="flex-1 min-w-0">
           <p
-            className={cn(
-              "text-sm font-semibold leading-5 truncate",
-              selected ? "text-primary-40" : "text-grey-10"
-            )}
+            className="text-[14px] font-medium leading-[18.2px] truncate"
+            style={{ color: "#0a0a0a" }}
           >
             {notificationType}
           </p>
-          <p className="text-xs text-grey-50 leading-[1.125rem] truncate mt-0.5">
+          <p
+            className="text-[13px] font-medium leading-[16.9px] truncate mt-0.5"
+            style={{ color: "#0a0a0a" }}
+          >
             {notificationText}
           </p>
-          <span className="text-[0.6875rem] text-grey-60 mt-1 block">
-            {timestamp ? <TimeAgo date={timestamp} /> : notificationTime}
-          </span>
         </div>
 
-        {/* Right: View button + unread dot */}
-        <div className="flex flex-col items-end gap-1.5 flex-shrink-0 min-w-[4rem]">
-          {shouldShowButton && (
-            <button
-              onClick={handleLinkClick}
-              className="text-xs font-medium text-primary-50 hover:text-primary-40 flex items-center gap-0.5 whitespace-nowrap transition-colors"
-            >
-              {buttonText}
-              <Icons.ArrowRight className="size-3" />
-            </button>
-          )}
-          {unread && (
-            <div className="size-2 rounded-full bg-primary-50 flex-shrink-0" />
-          )}
-        </div>
+        {/* Unread indicator dot */}
+        {unread && (
+          <div className="size-2 rounded-full bg-[#3067dd] flex-shrink-0 mt-1" />
+        )}
 
         {/* Delete on hover */}
         <button
-          className="absolute top-3.5 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-grey-60 hover:text-error-50"
+          className="absolute top-2.5 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-[#b6b6b6] hover:text-[#ff6d61]"
           onClick={handleDelete}
           title="Delete notification"
         >
-          <Icons.Trash className="size-3.5" />
+          <Trash2 className="size-3.5" />
         </button>
       </div>
 

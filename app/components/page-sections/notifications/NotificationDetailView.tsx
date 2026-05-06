@@ -1,22 +1,15 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { isVersionGreaterOrEqual } from "@/lib/utils/versionCompare";
-import { CardButton, Icons } from "@/components/ui";
 import { IconComponent } from "@/app/lib/types";
-import NotificationType from "./NotificationType";
 import { handleButtonLink } from "@/app/lib/utils/links";
-import { MoreVertical, ArrowUpCircle, ArrowDownCircle, Trash2 } from "lucide-react";
+import { ArrowUpCircle, ArrowDownCircle, Trash2, MoreVertical } from "lucide-react";
 import TimeAgo from "react-timeago";
 import NotificationContextMenu from "./NotificationContextMenu";
-import RevealTextLine from "@/components/ui/reveal-text-line";
 import { InView } from "react-intersection-observer";
 import { useRouter } from "next/navigation";
 import BasicMarkdown from "@/components/updater/BasicMarkdown";
 import { getVersion } from "@tauri-apps/api/app";
-import {
-  cn,
-  getFilePartsFromFileName,
-  getFileTypeFromExtension,
-} from "@/lib/utils";
+import { cn, getFilePartsFromFileName, getFileTypeFromExtension } from "@/lib/utils";
 import { getFileIcon, formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import type { SyncedFileDetail } from "@/lib/hooks/useFilesNotification";
@@ -32,6 +25,17 @@ export function parseFileDetails(type: string, releaseNotes: string): SyncedFile
   }
   return [];
 }
+
+// Figma: icon circle background color per type
+const ICON_BG: Record<string, string> = {
+  Subscription: "#fc7d73",
+  Balance:      "#fc7d73",
+  Credits:      "#fc7d73",
+  Files:        "#3067dd",
+  Hippius:      "#f8a84b",
+  Blockchain:   "#3067dd",
+  Storage:      "#3067dd",
+};
 
 interface NotificationDetailViewProps {
   selectedNotification: {
@@ -51,25 +55,22 @@ interface NotificationDetailViewProps {
   onReadStatusChange?: (id: number, isUnread: boolean) => void;
 }
 
-
 const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   selectedNotification,
   onReadStatusChange,
 }) => {
   const router = useRouter();
-  const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-  } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [currentVersion, setCurrentVersion] = useState<string>("");
 
   useEffect(() => {
     getVersion()
       .then(setCurrentVersion)
-      .catch((err: unknown) => console.warn("[NotificationDetailView] Failed to get app version:", err));
+      .catch((err: unknown) =>
+        console.warn("[NotificationDetailView] Failed to get app version:", err)
+      );
   }, []);
 
-  // Group file details by action for summary counts — must be before early return
   const fileSummary = useMemo(() => {
     if (!selectedNotification) return null;
     const releaseNotesText = selectedNotification.releaseNotes?.trim() ?? "";
@@ -84,7 +85,13 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   }, [selectedNotification]);
 
   if (!selectedNotification) {
-    return <div className="w-full" style={{ height: 'calc(100vh - 12rem)' }}></div>;
+    return (
+      <div className="w-full h-full flex items-center justify-center">
+        <p className="text-[14px] font-medium" style={{ color: "#b6b6b6" }}>
+          Select a notification to view details
+        </p>
+      </div>
+    );
   }
 
   const {
@@ -102,35 +109,26 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
     unread = false,
   } = selectedNotification;
 
-  // For Hippius update notifications, hide button if already on this version or newer
-  const isUpdateNotification =
-    type === "Hippius" && subType && actionLink === "Install Update";
+  const isUpdateNotification = type === "Hippius" && subType && actionLink === "Install Update";
   const isUpdateAlreadyInstalled =
-    isUpdateNotification &&
-    currentVersion &&
-    isVersionGreaterOrEqual(currentVersion, subType);
+    isUpdateNotification && currentVersion && isVersionGreaterOrEqual(currentVersion, subType);
   const shouldShowButton = actionText && !isUpdateAlreadyInstalled;
 
   const releaseNotesText = releaseNotes?.trim() ?? "";
   const hasReleaseNotes = releaseNotesText.length > 0;
-
-  // Parse file details from releaseNotes for Files-type notifications
   const fileDetails = parseFileDetails(type, releaseNotesText);
-
   const isFilesNotification = type === "Files" && fileDetails.length > 0;
   const hasRegularReleaseNotes = hasReleaseNotes && !isFilesNotification;
   const descriptionText = hasRegularReleaseNotes
     ? `${description}${description.endsWith(".") ? "" : "."} See what's new below.`
     : description;
 
+  const iconBg = ICON_BG[type] ?? "#3067dd";
+
   const handleMoreClick = (e: React.MouseEvent) => {
     e.preventDefault();
-    const button = e.currentTarget;
-    const rect = button.getBoundingClientRect();
-    setContextMenu({
-      x: rect.left,
-      y: rect.bottom,
-    });
+    const rect = e.currentTarget.getBoundingClientRect();
+    setContextMenu({ x: rect.left, y: rect.bottom });
   };
 
   const handleReadStatusToggle = () => {
@@ -146,110 +144,121 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
-        <div
-          ref={ref}
-          className="w-full flex gap-3 border border-grey-80 rounded p-4" style={{ height: 'calc(100vh - 12rem)' }}
-        >
-          <div className="min-w-[2rem] size-8 flex items-center justify-center rounded-lg bg-primary-95 flex-shrink-0">
-            <Icon className="text-primary-40 size-5" />
-          </div>
-          <div className="flex flex-col min-h-0 flex-1 min-w-0">
-            {/* Type badge */}
-            <RevealTextLine rotate reveal={inView} className="delay-200">
-              <NotificationType type={type} />
-            </RevealTextLine>
+        <div ref={ref} className="flex flex-col h-full overflow-y-auto">
+          {/* Header — Figma: padding=12, gap=12, border-b #e3e3e3 */}
+          <div
+            className="flex items-start gap-3 px-3 py-3 border-b flex-shrink-0"
+            style={{ borderColor: "#e3e3e3" }}
+          >
+            {/* Icon circle — Figma: fill=type-based color, ~106px radius (fully round) */}
+            <div
+              className="size-9 rounded-full flex items-center justify-center flex-shrink-0"
+              style={{ backgroundColor: iconBg }}
+            >
+              <Icon className="size-5 text-white" />
+            </div>
 
-            {/* Title */}
-            <RevealTextLine rotate reveal={inView} className="delay-300">
-              <h2 className="text-[1.375rem] leading-8 font-semibold text-grey-10 mt-[0.1875rem] mb-[0.4375rem]">
-                {title}
-              </h2>
-            </RevealTextLine>
-
-            {/* Description */}
-            <RevealTextLine rotate reveal={inView} className="delay-400">
-              <p className="text-sm text-grey-30 font-medium leading-5 mb-[0.4375rem] break-all">
-                {descriptionText}
+            <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+              {/* Figma: type name Geist w500 14px lh=18px #0a0a0a */}
+              <p className="text-[14px] font-medium truncate" style={{ color: "#0a0a0a" }}>
+                {type}
               </p>
-            </RevealTextLine>
+              {/* Figma: description preview Geist w500 13px lh=16.9px #0a0a0a */}
+              <p className="text-[13px] font-medium truncate" style={{ color: "#0a0a0a" }}>
+                {title}
+              </p>
+            </div>
 
-            {/* File details for sync notifications */}
+            {/* Figma: timestamp Geist w500 13px #0a0a0a */}
+            <span
+              className="text-[13px] font-medium flex-shrink-0"
+              style={{ color: "#0a0a0a" }}
+            >
+              {timestamp ? <TimeAgo date={timestamp} /> : time}
+            </span>
+
+            <button
+              className="text-[#b6b6b6] hover:text-[#0a0a0a] p-1 rounded transition-colors flex-shrink-0"
+              onClick={handleMoreClick}
+            >
+              <MoreVertical className="size-4" />
+            </button>
+          </div>
+
+          {/* Body — Figma: padding L/R=24, T/B=9, gap=16 */}
+          <div className="px-6 py-[9px] flex flex-col gap-4 flex-1">
+            {/* Main body text — Figma: Geist w500 16px lh=20.8px #0a0a0a */}
+            <p
+              className="text-[16px] font-medium leading-[20.8px] break-words"
+              style={{ color: "#0a0a0a" }}
+            >
+              {descriptionText}
+            </p>
+
+            {/* File details for Files-type notifications */}
             {isFilesNotification && fileSummary && (
-              <div className="mt-2 mb-3">
-                {/* Summary counters */}
-                <div className="flex items-center gap-3 mb-3">
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-2 flex-wrap">
                   {fileSummary.uploaded.length > 0 && (
-                    <div className="flex items-center gap-1.5 px-2.5 py-1 bg-primary-95 border border-primary-80 rounded-full">
-                      <ArrowUpCircle className="size-3.5 text-primary-50" />
-                      <span className="text-xs font-medium text-primary-40">
-                        {fileSummary.uploaded.length} uploaded
-                      </span>
-                    </div>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#eef2ff] border border-[#c7d7f8] rounded-full text-xs font-medium text-[#3067dd]">
+                      <ArrowUpCircle className="size-3.5" />
+                      {fileSummary.uploaded.length} uploaded
+                    </span>
                   )}
                   {fileSummary.downloaded.length > 0 && (
-                    <div className="flex items-center gap-1.5 px-2.5 py-1 bg-success-90 border border-success-70 rounded-full">
-                      <ArrowDownCircle className="size-3.5 text-success-50" />
-                      <span className="text-xs font-medium text-success-40">
-                        {fileSummary.downloaded.length} downloaded
-                      </span>
-                    </div>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#f0fdf4] border border-[#bbf7d0] rounded-full text-xs font-medium text-[#16a34a]">
+                      <ArrowDownCircle className="size-3.5" />
+                      {fileSummary.downloaded.length} downloaded
+                    </span>
                   )}
                   {fileSummary.deleted.length > 0 && (
-                    <div className="flex items-center gap-1.5 px-2.5 py-1 bg-error-90 border border-error-70 rounded-full">
-                      <Trash2 className="size-3.5 text-error-50" />
-                      <span className="text-xs font-medium text-error-40">
-                        {fileSummary.deleted.length} deleted
-                      </span>
-                    </div>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#fef2f2] border border-[#fecaca] rounded-full text-xs font-medium text-[#dc2626]">
+                      <Trash2 className="size-3.5" />
+                      {fileSummary.deleted.length} deleted
+                    </span>
                   )}
                 </div>
 
-                {/* File list */}
-                <div className="max-h-[17.5rem] overflow-y-auto rounded-lg border border-grey-80 divide-y divide-grey-90">
+                <div
+                  className="max-h-[17.5rem] overflow-y-auto rounded-lg border divide-y"
+                  style={{ borderColor: "#e3e3e3" }}
+                >
                   {fileDetails.map((file, index) => {
                     const { fileFormat } = getFilePartsFromFileName(file.fileName);
                     const fileType = getFileTypeFromExtension(fileFormat || null);
-                    const { icon: FileIcon, color } = getFileIcon(fileType ? fileType : undefined, false);
+                    const { icon: FileIcon, color } = getFileIcon(fileType ?? undefined, false);
                     const isDeleted = file.action === "local_delete" || file.action === "remote_delete";
                     const isUpload = file.action === "upload";
                     return (
                       <div
                         key={`${file.fileName}-${index}`}
-                        className="flex items-center gap-3 px-3 py-2.5 bg-white hover:bg-grey-98 transition-colors"
+                        className="flex items-center gap-3 px-3 py-2.5 bg-white hover:bg-[#f8f8f8] transition-colors"
                       >
-                        {/* File icon */}
-                        <div className="size-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-grey-95">
+                        <div className="size-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-[#f3f3f3]">
                           <FileIcon className={cn("size-5", color)} />
                         </div>
-
-                        {/* File name + size */}
                         <div className="flex flex-col justify-center min-w-0 flex-1">
-                          <span className="text-sm font-medium text-grey-10 truncate" title={file.fileName}>
+                          <span className="text-[14px] font-medium truncate" style={{ color: "#0a0a0a" }} title={file.fileName}>
                             {formatDisplayName(file.fileName)}
                           </span>
                           {file.totalBytes > 0 && (
-                            <span className="text-xs text-grey-60">
+                            <span className="text-[12px]" style={{ color: "#b6b6b6" }}>
                               {formatBytes(file.totalBytes)}
                             </span>
                           )}
                         </div>
-
-                        {/* Action badge */}
                         <div className="flex-shrink-0">
                           {isDeleted ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-error-90 text-error-50">
-                              <Trash2 className="size-3" />
-                              Deleted
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#fef2f2] text-[#dc2626]">
+                              <Trash2 className="size-3" /> Deleted
                             </span>
                           ) : isUpload ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-primary-95 text-primary-50">
-                              <ArrowUpCircle className="size-3" />
-                              Uploaded
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#eef2ff] text-[#3067dd]">
+                              <ArrowUpCircle className="size-3" /> Uploaded
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-success-90 text-success-50">
-                              <ArrowDownCircle className="size-3" />
-                              Downloaded
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#f0fdf4] text-[#16a34a]">
+                              <ArrowDownCircle className="size-3" /> Downloaded
                             </span>
                           )}
                         </div>
@@ -260,48 +269,56 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
               </div>
             )}
 
+            {/* Release notes */}
             {hasRegularReleaseNotes && (
-              <div className="mt-2 mb-2">
-                <div className="flex items-center gap-2 text-grey-50">
-                  <Icons.Note2 className="size-5" />
-                  <span className="text-base font-bold">Release Notes</span>
-                </div>
-                <div className=" max-h-[17.5rem] overflow-y-auto pr-2">
-                  <BasicMarkdown text={releaseNotesText} />
-                </div>
+              <div className="max-h-[17.5rem] overflow-y-auto">
+                <BasicMarkdown text={releaseNotesText} />
               </div>
             )}
-            {/* Time */}
-            <RevealTextLine rotate reveal={inView} className="delay-500">
-              <span className="text-xs text-grey-60 leading-[1.125rem] mb-[0.4375rem]">
-                {timestamp ? <TimeAgo date={timestamp} /> : time}
-              </span>
-            </RevealTextLine>
 
-            {/* Action button */}
+            {/* Action buttons — Figma: gap=24 */}
             {shouldShowButton && (
-              <CardButton
-                className="max-w-[9.5rem] h-10"
-                onClick={handleLinkClick}
-              >
-                <span className="flex items-center text-lg font-medium">
+              <div className="flex items-center gap-6 pt-2">
+                {/* Mark as read — Figma: fill=#fff, stroke=#eaeaea, radius=6, px=19, py=8 */}
+                <button
+                  className="px-[19px] py-2 rounded-md border text-[14px] font-medium transition-colors hover:bg-[#f5f5f5]"
+                  style={{
+                    backgroundColor: "#ffffff",
+                    borderColor: "#eaeaea",
+                    color: "#111111",
+                  }}
+                  onClick={handleReadStatusToggle}
+                >
+                  {unread ? "Mark as read" : "Mark as unread"}
+                </button>
+                {/* Primary action — Figma: fill=#3067dd, radius=6, px=19, py=8 */}
+                <button
+                  className="px-[19px] py-2 rounded-md text-white text-[14px] font-medium transition-colors hover:opacity-90"
+                  style={{ backgroundColor: "#3067dd" }}
+                  onClick={handleLinkClick}
+                >
                   {actionText}
-                </span>
-              </CardButton>
+                </button>
+              </div>
+            )}
+
+            {!shouldShowButton && id && (
+              <div className="flex items-center gap-6 pt-2">
+                <button
+                  className="px-[19px] py-2 rounded-md border text-[14px] font-medium transition-colors hover:bg-[#f5f5f5]"
+                  style={{
+                    backgroundColor: "#ffffff",
+                    borderColor: "#eaeaea",
+                    color: "#111111",
+                  }}
+                  onClick={handleReadStatusToggle}
+                >
+                  {unread ? "Mark as read" : "Mark as unread"}
+                </button>
+              </div>
             )}
           </div>
-          <button
-            className="text-grey-70 p-2 hover:bg-primary-100 rounded self-start ml-auto"
-            onClick={handleMoreClick}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              handleMoreClick(e);
-            }}
-          >
-            <MoreVertical className="size-4" />
-          </button>
 
-          {/* Context Menu */}
           {contextMenu && (
             <NotificationContextMenu
               x={contextMenu.x}
@@ -310,9 +327,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
               onClose={() => setContextMenu(null)}
               onToggleReadStatus={handleReadStatusToggle}
               notificationId={id}
-              onArchived={() => {
-                setContextMenu(null);
-              }}
+              onArchived={() => setContextMenu(null)}
               onArchiveStart={() => {}}
             />
           )}

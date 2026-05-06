@@ -2,7 +2,6 @@
 
 import React from "react";
 import { useRouter } from "next/navigation";
-import { Icons } from "@/components/ui";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import useSubscriptionData from "@/app/lib/hooks/useSubscriptionData";
 
@@ -20,42 +19,55 @@ const NotificationHubStats: React.FC = () => {
     if (!activeSubscription?.has_subscription) return "No plan";
     const sub = activeSubscription.subscription;
     const storage = sub.storage_limit ?? sub.plan_name ?? "—";
-    const price = sub.amount != null ? `$${sub.amount}/${sub.interval === "month" ? "mo." : sub.interval}` : "";
+    const price =
+      sub.amount != null
+        ? `$${sub.amount}/${sub.interval === "month" ? "mo." : sub.interval}`
+        : "";
     return price ? `${storage} (${price})` : storage;
   })();
 
-  const hasActivePlan =
-    !isSubLoading && !!activeSubscription?.has_subscription;
+  const hasActivePlan = !isSubLoading && !!activeSubscription?.has_subscription;
 
   return (
-    <div className="flex items-center gap-3 flex-wrap">
-      {/* Wallet / Staking */}
-      <div className="flex items-center gap-3 px-4 py-2.5 border border-grey-80 rounded-lg bg-white">
-        <div className="flex items-center gap-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-primary-50">
-          <Icons.Wallet className="size-3.5" />
-          Wallet
+    /* Figma: fill=#f3f3f3, stroke=#f4f4f4, radius=8, px=14 */
+    <div className="flex items-stretch bg-[#f3f3f3] border border-[#f4f4f4] rounded-lg overflow-hidden shrink-0">
+      {/* Wallet / Staking — Figma: border-r=#e3e3e3, pr=20, py=11 */}
+      <div className="flex items-center gap-8 pl-3.5 pr-5 py-[11px] border-r border-[#e3e3e3]">
+        <div className="flex flex-col gap-0.5">
+          {/* Figma: label text=Geist w700 12px #3067dd tracking=-0.36 */}
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-[#3067dd]">
+            Wallet
+          </span>
+          <span className="text-[12px] font-bold text-[#3067dd] tracking-[-0.036em] leading-[18px]">
+            {stakedDisplay} staked
+          </span>
         </div>
-        <div className="h-4 w-px bg-grey-80" />
-        <span className="text-sm font-semibold text-grey-10">{stakedDisplay}</span>
-        <span className="text-xs text-grey-50">staked</span>
+        {/* Figma: Stake button fill=#3067dd, radius=6, px=16, py=8, text white Geist w500 14px */}
         <button
           onClick={() => router.push("/stake?tab=stake")}
-          className="ml-1 px-3 h-7 rounded-lg border border-grey-80 text-xs font-semibold text-grey-10 hover:bg-grey-95 hover:border-grey-60 transition-colors"
+          className="px-4 py-2 rounded-md text-white text-[14px] font-medium tracking-[-0.02em] hover:opacity-90 transition-opacity"
+          style={{ backgroundColor: "#3067dd" }}
         >
           Stake
         </button>
       </div>
 
-      {/* Active Plan */}
-      <div className="flex items-center gap-3 px-4 py-2.5 border border-grey-80 rounded-lg bg-white">
-        <div className="flex items-center gap-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-primary-50">
-          <span
-            className={`size-2 rounded-full ${hasActivePlan ? "bg-primary-50" : "bg-grey-60"}`}
-          />
-          Active Plan
+      {/* Active Plan — Figma: pl=20, pr=20, py=11 */}
+      <div className="flex items-center px-5 py-[11px]">
+        <div className="flex flex-col gap-0.5">
+          <div className="flex items-center gap-1">
+            <span
+              className="size-2 rounded-full flex-shrink-0"
+              style={{ backgroundColor: hasActivePlan ? "#3067dd" : "#b6b6b6" }}
+            />
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-[#3067dd]">
+              Active Plan
+            </span>
+          </div>
+          <span className="text-[12px] font-bold text-[#3067dd] tracking-[-0.036em] leading-[18px]">
+            {planDisplay}
+          </span>
         </div>
-        <div className="h-4 w-px bg-grey-80" />
-        <span className="text-sm font-semibold text-grey-10">{planDisplay}</span>
       </div>
     </div>
   );
