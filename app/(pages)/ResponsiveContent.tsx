@@ -2,9 +2,6 @@
 import { useAtom } from "jotai";
 import { sidebarCollapsedAtom } from "@/components/sidebar/sideBarAtoms";
 import cn from "@/app/lib/utils/cn";
-import HeaderText from "@/components/dashboard-title-wrapper/HeaderText";
-import ProfileCard from "@/components/dashboard-title-wrapper/ProfileCard";
-import BlockChainStats from "@/components/dashboard-title-wrapper/BlockChainStats";
 import ConflictsBanner from "@/components/ui/ConflictsBanner";
 import MigrationBanner from "@/components/ui/MigrationBanner";
 import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert";
@@ -20,27 +17,14 @@ export default function ResponsiveContent({
     <div className="grid w-full overflow-hidden">
       <main
         className={cn(
-          "flex flex-col h-screen transition-all duration-300 ease-in-out overflow-hidden",
+          "flex flex-col h-screen transition-all duration-300 ease-in-out overflow-hidden bg-white",
           collapsed ? "ml-[3.8125rem]" : "ml-[16.4375rem]"
         )}
       >
-        {/* Sticky toolbar — always visible at the top */}
-        <div className="sticky top-0 z-30 bg-white px-4 pt-4 pb-2">
-          <div className="justify-between flex flex-wrap relative gap-x-4 gap-y-1 min-w-0">
-            <HeaderText />
-            <div className="flex -mt-2 gap-2 items-center justify-center shrink-0">
-              <BlockChainStats />
-              <ProfileCard />
-            </div>
-          </div>
+        {/* System alerts — sticky so they stay visible while scrolling */}
+        <div className="sticky top-0 z-30 bg-white px-4">
           <ConflictsBanner />
           <MigrationBanner />
-          {/* `SyncReauthRequiredAlert` auto-renders null unless Rust's
-              `restore_session` flagged `sync_requires_reauth = true`
-              (keychain-miss for a mnemonic user). Mounting it here in
-              the sticky toolbar makes it visible on every authenticated
-              route — the previous FilesContainer-only mount missed
-              users whose last-visited page was /wallet, /billing, etc. */}
           <SyncReauthRequiredAlert className="mt-2" />
         </div>
 
