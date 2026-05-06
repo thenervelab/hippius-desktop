@@ -19,13 +19,13 @@ const NotificationMenuFooter: React.FC<NotificationMenuFooterProps> = ({
   };
 
   return (
-    <div className="flex items-center justify-end p-4 border-t border-grey-80">
+    <div className="flex items-center justify-center px-4 py-3 border-t border-grey-80">
       <Link
         href="/notifications"
         onClick={handleClick}
-        className="text-grey-10 font-medium text-sm hover:underline"
+        className="text-primary-50 hover:text-primary-40 font-medium text-sm transition-colors flex items-center gap-1"
       >
-        View all notifications
+        View More
       </Link>
     </div>
   );

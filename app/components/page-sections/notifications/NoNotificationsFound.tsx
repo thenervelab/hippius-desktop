@@ -1,6 +1,5 @@
 import React from "react";
-import { Icons, AbstractIconWrapper, RevealTextLine } from "@/components/ui";
-import { InView } from "react-intersection-observer";
+import { Icons } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
 interface NoNotificationsFoundProps {
@@ -11,29 +10,20 @@ const NoNotificationsFound: React.FC<NoNotificationsFoundProps> = ({
   heightClassName = "h-[80.9vh]",
 }) => {
   return (
-    <InView triggerOnce>
-      {({ ref, inView }) => (
-        <div
-          ref={ref}
-          className={cn(
-            "p-6 flex flex-col items-center justify-center text-center w-full",
-            heightClassName
-          )}
-        >
-          <AbstractIconWrapper className="size-12 mb-3 bg-gray-100">
-            <Icons.Notification className="relative size-6 text-primary-50" />
-          </AbstractIconWrapper>
-          <h3 className="text-grey-10 font-medium text-base block">
-            <RevealTextLine reveal={!!inView}>No Notifications</RevealTextLine>
-          </h3>
-          <p className="text-xs text-grey-60 mt-1">
-            <RevealTextLine reveal={!!inView}>
-              Try adjusting the options to see more results.
-            </RevealTextLine>
-          </p>
-        </div>
+    <div
+      className={cn(
+        "flex flex-col items-center justify-center text-center w-full px-6",
+        heightClassName
       )}
-    </InView>
+    >
+      <div className="size-14 rounded-full bg-grey-95 flex items-center justify-center mb-4">
+        <Icons.Notification className="size-7 text-grey-60" />
+      </div>
+      <h3 className="text-grey-10 font-semibold text-base">Nothing here</h3>
+      <p className="text-sm text-grey-50 mt-1.5 max-w-[16rem] leading-5">
+        This is the notifications center. Any update will be present here.
+      </p>
+    </div>
   );
 };
 

@@ -1,5 +1,8 @@
 import { cn } from "@/app/lib/utils";
-import { X } from "lucide-react";
+import Link from "next/link";
+import { Icons } from "@/components/ui";
+import { isViewingRecentFilesAtom } from "@/components/sidebar/sideBarAtoms";
+import { useSetAtom } from "jotai";
 
 interface NotificationMenuHeaderProps {
   count: number;
@@ -9,28 +12,39 @@ interface NotificationMenuHeaderProps {
 const NotificationMenuHeader: React.FC<NotificationMenuHeaderProps> = ({
   count,
   onClose,
-}) => (
-  <div className="flex items-center justify-between p-4 border-b border-grey-80 ">
-    <div className="flex items-center gap-3">
-      <span className="font-medium text-2xl">Notifications</span>
-      {count > 0 && (
-        <span
-          className={cn(
-            "inline-flex items-center justify-center rounded-full bg-primary-50 text-white text-[0.6875rem] px-1 font-semibold min-w-4 min-h-4",
-            count > 99 && "w-6 h-6"
-          )}
-        >
-          {count}
-        </span>
-      )}
+}) => {
+  const setIsViewingRecentFiles = useSetAtom(isViewingRecentFilesAtom);
+
+  const handleViewAll = () => {
+    setIsViewingRecentFiles(false);
+    onClose?.();
+  };
+
+  return (
+    <div className="flex items-center justify-between px-4 py-3 border-b border-grey-80">
+      <div className="flex items-center gap-2">
+        <span className="font-semibold text-base text-grey-10">Notifications</span>
+        {count > 0 && (
+          <span
+            className={cn(
+              "inline-flex items-center justify-center rounded-full bg-primary-50 text-white text-[0.625rem] px-1.5 py-0.5 font-semibold min-w-[1.125rem]",
+              count > 99 && "px-2"
+            )}
+          >
+            {count}
+          </span>
+        )}
+      </div>
+      <Link
+        href="/notifications"
+        onClick={handleViewAll}
+        className="flex items-center gap-1 text-xs font-semibold text-primary-50 hover:text-primary-40 transition-colors uppercase tracking-wide"
+      >
+        View All
+        <Icons.ArrowRight className="size-3" />
+      </Link>
     </div>
-    <button
-      className="p-1 text-grey-10 hover:bg-grey-90 rounded"
-      onClick={onClose}
-    >
-      <X size={16} />
-    </button>
-  </div>
-);
+  );
+};
 
 export default NotificationMenuHeader;
