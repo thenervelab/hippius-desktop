@@ -69,13 +69,13 @@ const TopBarLogoMenu = () => {
               "flex items-center gap-[8px] px-[4px] py-[5px] rounded-[9px]",
               "transition-colors duration-150",
               "hover:bg-white/30 data-[state=open]:bg-white/30",
-              "dark:hover:bg-white/10 dark:data-[state=open]:bg-white/0",
+              "dark:hover:bg-white/10 dark:data-[state=open]:bg-white/10",
             )}
           >
             <HippiusLogo className="size-[28px] rounded-[6px] shrink-0" />
             <span
               className={cn(
-                "font-medium text-[18px] leading-none text-black-700 dark:text-grey-light-100",
+                "font-medium text-[18px] leading-none text-black-700 dark:text-grey-light-300",
                 "overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out",
                 collapsed
                   ? "max-w-0 opacity-0 -ml-[8px]"
@@ -85,7 +85,7 @@ const TopBarLogoMenu = () => {
               Hippius
             </span>
             <span className="flex items-center justify-center w-[25px] h-[24px] shrink-0">
-              <ChevronDown className="size-[12px] text-black-700/60 dark:text-grey-light-100/60" />
+              <ChevronDown className="size-[12px] text-black-700/60 dark:text-grey-light-300/60" />
             </span>
           </button>
         </DropdownMenuTrigger>

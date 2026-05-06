@@ -129,7 +129,7 @@ const Sidebar: React.FC = () => {
                   >
                     <span
                       className={cn(
-                        "text-[10px] font-medium tracking-[-0.2px] text-black/40 uppercase whitespace-nowrap overflow-hidden text-ellipsis",
+                        "text-[10px] font-medium tracking-[-0.2px] text-black/40 dark:text-white/40 uppercase whitespace-nowrap overflow-hidden text-ellipsis",
                         collapsed && "flex-1 min-w-0",
                       )}
                     >
