@@ -37,7 +37,7 @@ const TopBarTitle = () => {
       }}
       aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
       className={cn(
-        "animate-fade-in-from-b-0.3 group flex items-center gap-2 rounded-[10px] py-1 pl-1.5 pr-2 opacity-0 transition-colors hover:bg-[#00000014] dark:hover:bg-[rgba(54,54,54,0.72)]",
+        "animate-fade-in-from-b-0.3 group flex items-center gap-2 rounded-[10px] py-1 pl-1.5 pr-2 opacity-0 transition-colors hover:bg-white/30 dark:hover:bg-[rgba(54,54,54,0.72)]",
       )}
     >
       <SidebarToggleMark collapsed={collapsed} />

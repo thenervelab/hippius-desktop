@@ -1,7 +1,6 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { AppVersion } from "@/components/ui";
 import cn from "@/app/lib/utils/cn";
 import NavItem from "./NavItem";
 import { navSections } from "./NavData";
@@ -16,7 +15,8 @@ import SettingsWidthDialog from "@/components/page-sections/settings/SettingsDia
 import SettingsDialogContent from "@/components/page-sections/settings/SettingsDialogContent";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
-import ProfileCard from "@/components/dashboard-title-wrapper/ProfileCard";
+import SidebarSearch from "./SidebarSearch";
+import SidebarFooter from "./SidebarFooter";
 
 const AUTO_COLLAPSE_WIDTH = 1100;
 
@@ -107,26 +107,30 @@ const Sidebar: React.FC = () => {
           <div
             ref={ref}
             className={cn(
-              "fixed top-[54px] left-0 bottom-0 bg-transparent flex flex-col transition-all duration-300 ease-in-out z-50",
+              "fixed top-[54px] left-0 bottom-0 bg-transparent flex flex-col overflow-hidden transition-all duration-300 ease-in-out z-50",
               collapsed ? "w-[3.8125rem]" : "w-[16.4375rem]",
             )}
           >
-            <div className="flex flex-col flex-1 min-h-0 overflow-y-auto px-3 pt-3 pb-2 gap-y-[10px]">
+            <div className="flex flex-col flex-1 min-h-0 overflow-y-auto px-3 pt-3 pb-2 overflow-x-hidden">
+              <SidebarSearch collapsed={collapsed} />
+
               {visibleSections.map((section) => (
                 <div
                   key={section.label}
-                  className="flex flex-col gap-y-1.5 w-full"
+                  className="flex flex-col gap-y-1.5 w-full pt-[10px]"
                 >
                   <div
                     className={cn(
-                      "flex items-center px-2.5 py-1.5",
-                      collapsed ? "justify-center" : "justify-start",
+                      "flex items-center py-1.5",
+                      collapsed
+                        ? "px-0 justify-stretch"
+                        : "justify-start px-2.5",
                     )}
                   >
                     <span
                       className={cn(
                         "text-[10px] font-medium tracking-[-0.2px] text-black/40 uppercase whitespace-nowrap overflow-hidden text-ellipsis",
-                        collapsed && "w-full text-center",
+                        collapsed && "flex-1 min-w-0",
                       )}
                     >
                       {section.label}
@@ -135,17 +139,23 @@ const Sidebar: React.FC = () => {
 
                   <div className="flex flex-col w-full gap-y-0.5">
                     {section.items.map((item) => {
+                      // Only the most-specific entry should look active. If
+                      // any sub-item matches the current route, suppress the
+                      // parent's active visual — child-active still drives
+                      // submenu auto-expand inside NavItem.
+                      const hasActiveChild =
+                        item.subMenuItems?.some(
+                          (sub) =>
+                            pathname === sub.path ||
+                            pathname.startsWith(sub.path + "/"),
+                        ) ?? false;
+
                       const isActive =
-                        item.path === "/"
+                        !hasActiveChild &&
+                        (item.path === "/"
                           ? pathname === item.path
                           : pathname === item.path ||
-                            pathname.startsWith(item.path + "/") ||
-                            (item.subMenuItems?.some(
-                              (sub) =>
-                                pathname === sub.path ||
-                                pathname.startsWith(sub.path + "/"),
-                            ) ??
-                              false);
+                            pathname.startsWith(item.path + "/"));
 
                       return (
                         <NavItem
@@ -166,51 +176,7 @@ const Sidebar: React.FC = () => {
               ))}
             </div>
 
-            <div className="flex flex-col w-full px-3 pb-3 pt-2 gap-y-1">
-              <ProfileCard collapsed={collapsed} />
-
-              {/* Update App option commented out per request
-              <div
-                className={cn(
-                  "transition-all duration-300 relative group cursor-pointer rounded-md",
-                  "hover:bg-black/5 text-grey-40",
-                )}
-                onClick={() => setOpen(true)}
-              >
-                <div
-                  className={cn(
-                    "flex items-center py-1.5 px-2.5",
-                    collapsed && "justify-center",
-                  )}
-                >
-                  <span className="size-4 flex-shrink-0">
-                    <Icons.TrendUp />
-                  </span>
-                  {!collapsed && (
-                    <span className="text-sm font-medium whitespace-nowrap ml-2 overflow-hidden">
-                      Update App
-                    </span>
-                  )}
-                </div>
-              </div>
-              */}
-
-              <div
-                className={cn(
-                  "flex w-full text-xs font-medium text-grey-40 px-2.5 py-1",
-                  collapsed && "justify-center px-1",
-                )}
-              >
-                <span className={cn(collapsed && "text-[0.625rem]")}>
-                  {!collapsed ? "Version " : <AppVersion />}
-                </span>
-                {!collapsed && (
-                  <span className="whitespace-nowrap overflow-hidden">
-                    <AppVersion />
-                  </span>
-                )}
-              </div>
-            </div>
+            <SidebarFooter collapsed={collapsed} />
           </div>
         )}
       </InView>

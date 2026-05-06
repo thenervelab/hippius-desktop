@@ -15,9 +15,16 @@ const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
 
 interface ProfileCardProps {
   collapsed?: boolean;
+  // When true, the row is horizontally centered. SidebarFooter only sets this
+  // once the collapse animation has finished, so the centering doesn't
+  // interfere with the in-flight transition.
+  centered?: boolean;
 }
 
-const ProfileCard: React.FC<ProfileCardProps> = ({ collapsed = false }) => {
+const ProfileCard: React.FC<ProfileCardProps> = ({
+  collapsed = false,
+  centered = false,
+}) => {
   const { oauthSession, polkadotAddress } = useWalletAuth();
   const { blockNumber, isConnected } = usePolkadotApi();
 
@@ -61,16 +68,16 @@ const ProfileCard: React.FC<ProfileCardProps> = ({ collapsed = false }) => {
   return (
     <div
       className={cn(
-        "flex items-center gap-1.5 w-full",
-        collapsed && "justify-center",
+        "flex items-center gap-1.5 w-full overflow-hidden h-11",
+        centered && "justify-center",
       )}
     >
       <button
         type="button"
         onClick={handleCopyAddress}
         className={cn(
-          "flex items-center gap-1.5 rounded-lg px-1 py-1 hover:bg-black/5 transition-colors duration-200 min-w-0",
-          collapsed ? "justify-center" : "flex-1",
+          "flex items-center gap-1.5 rounded-lg py-2 hover:bg-black/5 transition-colors duration-200 min-w-0 overflow-hidden",
+          !collapsed && "flex-1",
         )}
       >
         <span className="size-[30px] rounded-full overflow-hidden flex-shrink-0">
@@ -82,13 +89,13 @@ const ProfileCard: React.FC<ProfileCardProps> = ({ collapsed = false }) => {
           />
         </span>
         {!collapsed && (
-          <span className="flex flex-col items-start min-w-0 flex-1">
-            <span className="text-sm font-medium leading-none text-zinc-800 tracking-[-0.4px] truncate w-full text-left">
+          <span className="flex flex-col items-start min-w-0 flex-1 whitespace-nowrap">
+            <span className="text-sm font-medium font-inter leading-none text-zinc-800 tracking-[-0.4px] truncate w-full text-left">
               {displayAddress.slice(0, 6)}...
               {displayAddress.slice(displayAddress.length - 5)}
             </span>
-            <span className="flex items-center gap-1 mt-1">
-              <BoxSimple className="size-[13px] text-primary-50" />
+            <span className="flex items-center gap-1 mt-1 whitespace-nowrap">
+              <BoxSimple className="size-[13px] text-black-700 flex-shrink-0" />
               {isConnected && blockNumber != null && (
                 <span className="text-[10px] font-medium leading-[14px] text-primary-50 tracking-[-0.2px]">
                   # {blockNumber.toString()}
@@ -99,12 +106,15 @@ const ProfileCard: React.FC<ProfileCardProps> = ({ collapsed = false }) => {
         )}
       </button>
       {!collapsed && (
-        <CustomTooltip2 className="self-start" tooltipContent="View on Hipstats">
+        <CustomTooltip2
+          className="self-center"
+          tooltipContent="View on Hipstats"
+        >
           <button
             onClick={handleSendIconClick}
-            className="mt-1 hover:scale-110 rounded-full duration-300 p-1 flex justify-center transition-transform"
+            className=" hover:scale-110 rounded-full duration-300 p-1 flex justify-center transition-transform"
           >
-            <Icons.Send className="size-4 text-primary-10" />
+            <Icons.Send className="size-4 text-zinc-500" />
           </button>
         </CustomTooltip2>
       )}

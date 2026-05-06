@@ -1,5 +1,5 @@
 "use client";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter as InterFont, Geist, Geist_Mono } from "next/font/google";
 import localFont from "next/font/local";
 import "@/app/globals.css";
 import Providers from "@/components/providers";
@@ -17,6 +17,11 @@ import UpdateChecker from "@/components/updater/UpdateChecker";
 import TrayNavigationListener from "@/app/components/tray/TrayNavigationListener";
 import ZoomController from "@/app/components/ZoomController";
 import { cn } from "./lib/utils";
+const inter = InterFont({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-inter",
+});
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -43,6 +48,7 @@ export default function RootLayout({
     <html lang="en" className="scroll-smooth">
       <body
         className={cn(
+          inter.variable,
           geistSans.variable,
           geistMono.variable,
           geistSans.className,

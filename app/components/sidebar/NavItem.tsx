@@ -3,10 +3,10 @@ import cn from "@/app/lib/utils/cn";
 import { RevealTextLine } from "@/components/ui";
 import { ChevronDown } from "lucide-react";
 import { SubMenuItemData } from "./NavData";
-import { activeSubMenuItemAtom } from "./sideBarAtoms";
+import { activeSubMenuItemAtom, sidebarCollapsedAtom } from "./sideBarAtoms";
 import { usePathname } from "next/navigation";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useSetAtom } from "jotai";
 
 interface NavItemProps {
@@ -36,14 +36,28 @@ const NavItem: React.FC<NavItemProps> = ({
 }) => {
   const hasSubMenu = subMenuItems.length > 0;
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
+  const setSidebarCollapsed = useSetAtom(sidebarCollapsedAtom);
   const pathname = usePathname();
   const pendingClearRef = useRef<string | null>(null);
 
-  const [submenuOpen, setSubmenuOpen] = useState(active ?? false);
+  // A child being active should auto-expand the submenu, but must NOT cause
+  // the parent row itself to render as active.
+  const hasActiveChild = useMemo(
+    () =>
+      subMenuItems.some(
+        (sub) =>
+          pathname === sub.path || pathname.startsWith(sub.path + "/"),
+      ),
+    [pathname, subMenuItems],
+  );
+
+  const [submenuOpen, setSubmenuOpen] = useState(
+    (active ?? false) || hasActiveChild,
+  );
 
   useEffect(() => {
-    if (active) setSubmenuOpen(true);
-  }, [active]);
+    if (active || hasActiveChild) setSubmenuOpen(true);
+  }, [active, hasActiveChild]);
 
   useEffect(() => {
     if (collapsed) setSubmenuOpen(false);
@@ -61,16 +75,16 @@ const NavItem: React.FC<NavItemProps> = ({
       reveal={inView}
       parentClassName="block"
       className={cn(
-        "flex items-center gap-2 p-2.5 rounded-[12px] w-full overflow-hidden",
-        active && "bg-white/60",
-        !active && !comingSoon && "hover:bg-white/30",
-        collapsed && "justify-center",
+        "flex items-center gap-2 p-[10px] w-full overflow-hidden transition-colors duration-200",
+        active
+          ? "bg-white/60 rounded-[12px]"
+          : "rounded-[6px] hover:bg-white/30",
       )}
     >
       <span
         className={cn(
           "size-[18px] flex-shrink-0 flex items-center justify-center",
-          active ? "text-[#0a0a0a]" : "text-grey-40",
+          active ? "text-primary-50" : "text-[#606060]",
           comingSoon && "opacity-40",
         )}
       >
@@ -80,8 +94,8 @@ const NavItem: React.FC<NavItemProps> = ({
         <div className="flex items-center w-full min-w-0">
           <span
             className={cn(
-              "text-sm font-medium leading-5 tracking-[-0.28px] whitespace-nowrap overflow-hidden text-ellipsis transition-opacity duration-300",
-              active ? "text-[#0a0a0a]" : "text-grey-40",
+              "text-[14px] font-medium leading-5 tracking-[-0.28px] whitespace-nowrap overflow-hidden text-ellipsis transition-opacity duration-300",
+              active ? "text-[#0a0a0a]" : "text-[#606060]",
               comingSoon && "text-gray-400",
             )}
           >
@@ -95,14 +109,15 @@ const NavItem: React.FC<NavItemProps> = ({
           )}
 
           {hasSubMenu && (
-            <div className="ml-auto h-5 w-5 rounded-md flex items-center justify-center bg-black/5 flex-shrink-0">
+            <span className="ml-auto size-5 flex-shrink-0 flex items-center justify-center rounded-md bg-[#0000000A]">
               <ChevronDown
                 className={cn(
-                  "size-3 text-grey-40 transition-transform duration-200",
+                  "size-3 text-black transition-transform duration-200",
                   !submenuOpen && "-rotate-90",
                 )}
+                strokeWidth={2}
               />
-            </div>
+            </span>
           )}
         </div>
       )}
@@ -130,9 +145,8 @@ const NavItem: React.FC<NavItemProps> = ({
           aria-expanded={collapsed ? undefined : submenuOpen}
           onClick={() => {
             if (collapsed) {
-              // When collapsed, navigate to the parent path or first child
-              const target = href || subMenuItems[0]?.path;
-              if (target) window.location.href = target;
+              setSidebarCollapsed(false);
+              setSubmenuOpen(true);
               return;
             }
             setSubmenuOpen((prev) => !prev);
@@ -153,25 +167,29 @@ const NavItem: React.FC<NavItemProps> = ({
             <div className="flex flex-col pl-4 pt-1 gap-y-0.5">
               {subMenuItems.map((sub) => {
                 const subActive =
-                  pathname === sub.path ||
-                  pathname.startsWith(sub.path + "/");
+                  pathname === sub.path || pathname.startsWith(sub.path + "/");
                 return (
                   <Link
                     key={sub.path + sub.label}
                     href={sub.path}
                     className={cn(
-                      "flex items-center gap-2 p-2 rounded-[10px] transition-colors duration-200",
+                      "flex items-center gap-2 p-[10px] transition-colors duration-200",
                       subActive
-                        ? "bg-white/60 text-[#0a0a0a]"
-                        : "text-grey-40 hover:bg-white/30",
+                        ? "bg-white/60 text-[#0a0a0a] rounded-[12px]"
+                        : "rounded-[6px] text-[#606060] hover:bg-black/5",
                     )}
                   >
                     {sub.icon && (
-                      <span className="size-[18px] flex-shrink-0 flex items-center justify-center">
+                      <span
+                        className={cn(
+                          "size-[18px] flex-shrink-0 flex items-center justify-center",
+                          subActive ? "text-primary-50" : "text-[#606060]",
+                        )}
+                      >
                         {sub.icon}
                       </span>
                     )}
-                    <span className="text-sm font-medium leading-5 tracking-[-0.28px] truncate">
+                    <span className="text-[14px] font-medium leading-5 tracking-[-0.28px] truncate">
                       {sub.label}
                     </span>
                   </Link>

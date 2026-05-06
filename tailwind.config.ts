@@ -2,7 +2,7 @@ import type { Config } from "tailwindcss";
 import containerQueries from "@tailwindcss/container-queries";
 
 export default {
-  // darkMode: "class",
+  darkMode: "class",
   content: [
     "./pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
@@ -54,6 +54,7 @@ export default {
           "radial-gradient(70% 70% at 50% 50%, rgba(255, 255, 255, 0) 0%, #FFFFFF 100%)",
       },
       fontFamily: {
+        inter: "var(--font-inter)",
         sans: "var(--font-geist-sans)",
         mono: "var(--font-geist-mono)",
         digital: "digitalFonts",

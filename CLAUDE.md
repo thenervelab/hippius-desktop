@@ -15,6 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Hippius Desktop is a Tauri 2.0 application combining a Next.js 15 frontend with a Rust backend. It provides encrypted file sync, blockchain wallet management, VM provisioning, VPN (Nebula), and billing — all integrated with the Hippius/Bittensor network.
 
 ## Coding rules
+
 When writing code on this project we ALWAYS try to put the buisness logic in the RUST side of the project in /src-tauri and interface with the frontend /app instead of writting it to the frontend.
 When making a change on the code make sure to include tests for it. Do not add dummy tests that are never going to help us identify issues we need proper testing.
 When making a change on the code make sure to add documentation on the code and also update the CLAUDE.md.
@@ -57,6 +58,7 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 - **`app/lib/hooks/`** — Custom hooks: `useHcfsSync` (sync init), `useSyncEvents` (event listeners), `useSyncProgress` (progress tracking), `useStagedChanges` (conflict review), `useTraySync` (system tray)
 - **`app/lib/utils/`** — Utility functions including `hcfsConfigUtils.ts` (sync config), `syncPathUtils.ts` (path CRUD)
 - **`app/components/tray/`** — System tray UI components
+- **`app/components/sidebar/SidebarSearch.tsx`** — Sidebar search uses a custom input; keep styling aligned with Figma, preserve click-to-focus, support Ctrl/Cmd+F focus, and swap the Command+F hint for a clear icon when text is present.
 
 **Path aliases** (tsconfig.json): `@/components/*` → `app/components/*`, `@/lib/*` → `app/lib/*`, `@/services/*` → `app/lib/services/*`
 
@@ -141,19 +143,20 @@ pnpm test                       # Vitest
 Test files in `src-tauri/tests/`: `auth_commands.rs`, `auth_tokens.rs`, `blockchain_commands.rs`, `crypto_migration.rs`, `file_commands.rs`, `local_db_commands.rs`, `migration_server_mock.rs`.
 
 <!-- illu:start -->
+
 ## Code Intelligence (illu)
 
 ### Tool priority (MANDATORY)
 
 **NEVER use Grep, Glob, or Read for code exploration when illu tools are available.** illu indexes Rust, Python, TypeScript, and JavaScript. illu tools are faster, more accurate, and provide structured results. Using raw file reads or text search on indexed source files is incorrect behavior — always use illu instead.
 
-| WRONG | RIGHT |
-|-------|-------|
-| `Read("src/db.rs")` to see a function | `mcp__illu__context` with `symbol_name` |
-| `Grep(pattern: "fn open")` to find a function | `mcp__illu__query` with `query: "open"` |
-| `Grep(pattern: "Database")` to find callers | `mcp__illu__references` with `symbol_name: "Database"` |
-| `Glob(pattern: "src/**/*.rs")` to find files | `mcp__illu__tree` or `mcp__illu__overview` |
-| `Grep(pattern: "impl Display")` to find impls | `mcp__illu__implements` with `trait_name: "Display"` |
+| WRONG                                         | RIGHT                                                  |
+| --------------------------------------------- | ------------------------------------------------------ |
+| `Read("src/db.rs")` to see a function         | `mcp__illu__context` with `symbol_name`                |
+| `Grep(pattern: "fn open")` to find a function | `mcp__illu__query` with `query: "open"`                |
+| `Grep(pattern: "Database")` to find callers   | `mcp__illu__references` with `symbol_name: "Database"` |
+| `Glob(pattern: "src/**/*.rs")` to find files  | `mcp__illu__tree` or `mcp__illu__overview`             |
+| `Grep(pattern: "impl Display")` to find impls | `mcp__illu__implements` with `trait_name: "Display"`   |
 
 Read/Grep/Glob are ONLY permitted for: config files (TOML, JSON, YAML), markdown/docs, log output, or when an illu tool explicitly returns no results.
 
@@ -161,7 +164,7 @@ Read/Grep/Glob are ONLY permitted for: config files (TOML, JSON, YAML), markdown
 
 When spawning subagents for code tasks, ALWAYS include this instruction in the prompt:
 
-"MANDATORY: Use mcp__illu__* tools instead of Grep/Glob/Read for ALL code exploration (Rust, Python, TypeScript/JavaScript). NEVER use Read to view source files — use mcp__illu__context instead. NEVER use Grep to search code — use mcp__illu__query instead. Only use Read/Grep/Glob for non-code content (config, docs, logs)."
+"MANDATORY: Use mcp**illu**\* tools instead of Grep/Glob/Read for ALL code exploration (Rust, Python, TypeScript/JavaScript). NEVER use Read to view source files — use mcp**illu**context instead. NEVER use Grep to search code — use mcp**illu**query instead. Only use Read/Grep/Glob for non-code content (config, docs, logs)."
 
 Prefer `illu-explore`, `illu-review`, `illu-refactor` agents when available.
 
