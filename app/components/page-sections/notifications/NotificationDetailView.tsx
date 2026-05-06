@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { isVersionGreaterOrEqual } from "@/lib/utils/versionCompare";
-import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
+import { CardButton, Icons } from "@/components/ui";
 import { IconComponent } from "@/app/lib/types";
 import NotificationType from "./NotificationType";
 import { handleButtonLink } from "@/app/lib/utils/links";
@@ -150,9 +150,9 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
           ref={ref}
           className="w-full flex gap-3 border border-grey-80 rounded p-4" style={{ height: 'calc(100vh - 12rem)' }}
         >
-          <AbstractIconWrapper className="min-w-[2rem] size-8 text-primary-40">
-            <Icon className="absolute text-primary-40 size-5" />
-          </AbstractIconWrapper>
+          <div className="min-w-[2rem] size-8 flex items-center justify-center rounded-lg bg-primary-95 flex-shrink-0">
+            <Icon className="text-primary-40 size-5" />
+          </div>
           <div className="flex flex-col min-h-0 flex-1 min-w-0">
             {/* Type badge */}
             <RevealTextLine rotate reveal={inView} className="delay-200">
@@ -218,9 +218,9 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
                         className="flex items-center gap-3 px-3 py-2.5 bg-white hover:bg-grey-98 transition-colors"
                       >
                         {/* File icon */}
-                        <AbstractIconWrapper className="size-8 flex-shrink-0">
-                          <FileIcon className={cn("size-5 relative", color)} />
-                        </AbstractIconWrapper>
+                        <div className="size-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-grey-95">
+                          <FileIcon className={cn("size-5", color)} />
+                        </div>
 
                         {/* File name + size */}
                         <div className="flex flex-col justify-center min-w-0 flex-1">

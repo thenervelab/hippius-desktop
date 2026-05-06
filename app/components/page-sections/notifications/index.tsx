@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { Icons } from "@/components/ui";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
-import TabList from "@/components/ui/tabs/TabList";
+
 import NotificationList from "./NotificationList";
 import NotificationDetailView from "./NotificationDetailView";
 import NoNotificationsFound from "./NoNotificationsFound";
@@ -19,9 +19,10 @@ import {
 import { UiNotification } from "./types";
 import { useNotifications } from "@/lib/hooks/useNotifications";
 import { useSearchParams } from "next/navigation";
-import { iconMap } from "@/app/lib/helpers/notificationIcons";
+
 import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { iconMap } from "@/app/lib/helpers/notificationIcons";
 import ArchiveAllConfirmationDialog from "./ArchiveAllConfirmationDialog";
 import NotificationHubStats from "./NotificationHubStats";
 import { cn } from "@/app/lib/utils";
@@ -46,17 +47,8 @@ const Notifications = () => {
 
   const tabs = useMemo(
     () => [
-      ...(enabledTypes.length > 0
-        ? [{ tabName: "All", icon: <Icons.MaximizeCircle /> }]
-        : []),
-      ...enabledTypes.map((type) => ({
-        tabName: type,
-        icon: iconMap[type] ? (
-          React.createElement(iconMap[type])
-        ) : (
-          <Icons.Document />
-        ),
-      })),
+      ...(enabledTypes.length > 0 ? [{ tabName: "All" }] : []),
+      ...enabledTypes.map((type) => ({ tabName: type })),
     ],
     [enabledTypes]
   );
@@ -187,17 +179,28 @@ const Notifications = () => {
 
       {/* Controls row */}
       <div className="mt-4 flex items-center justify-between gap-3 flex-wrap">
-        {/* Left: type tabs */}
+        {/* Left: plain text type tabs with | separators */}
         {tabs.length > 0 && (
-          <TabList
-            tabs={tabs}
-            width="min-w-[5.5625rem]"
-            height="h-[2rem]"
-            gap="gap-1"
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            className="max-w-fit p-1 border border-grey-80"
-          />
+          <div className="flex items-center gap-0">
+            {tabs.map((tab, i) => (
+              <React.Fragment key={tab.tabName}>
+                {i > 0 && (
+                  <span className="text-grey-70 text-sm px-2 select-none">|</span>
+                )}
+                <button
+                  onClick={() => setActiveTab(tab.tabName)}
+                  className={cn(
+                    "text-sm font-semibold uppercase tracking-wide transition-colors",
+                    activeTab === tab.tabName
+                      ? "text-grey-10"
+                      : "text-grey-50 hover:text-grey-30"
+                  )}
+                >
+                  {tab.tabName}
+                </button>
+              </React.Fragment>
+            ))}
+          </div>
         )}
 
         {/* Right: read-filter + actions */}
@@ -219,12 +222,18 @@ const Notifications = () => {
               <button
                 onClick={() => setOnlyUnread(true)}
                 className={cn(
-                  "px-3 h-full text-sm font-medium transition-colors border-l border-grey-80",
+                  "px-3 h-full text-sm font-medium transition-colors border-l border-grey-80 flex items-center gap-1.5",
                   onlyUnread
                     ? "bg-primary-50 text-white"
                     : "text-grey-40 hover:text-grey-10 hover:bg-grey-95"
                 )}
               >
+                <span
+                  className={cn(
+                    "size-2 rounded-full flex-shrink-0",
+                    onlyUnread ? "bg-white" : "bg-grey-50"
+                  )}
+                />
                 Unread
               </button>
             </div>
@@ -258,17 +267,21 @@ const Notifications = () => {
           <NoNotificationsFound />
         ) : (
           <>
-            <NotificationList
-              notifications={visible}
-              selectedNotificationId={selectedId}
-              onSelectNotification={onItemClick}
-              onReadStatusChange={onReadToggle}
-              onRefresh={handleRefreshNotifications}
-            />
-            <NotificationDetailView
-              selectedNotification={detail}
-              onReadStatusChange={onReadToggle}
-            />
+            <div className="w-[38%] flex-shrink-0">
+              <NotificationList
+                notifications={visible}
+                selectedNotificationId={selectedId}
+                onSelectNotification={onItemClick}
+                onReadStatusChange={onReadToggle}
+                onRefresh={handleRefreshNotifications}
+              />
+            </div>
+            <div className="flex-1 min-w-0">
+              <NotificationDetailView
+                selectedNotification={detail}
+                onReadStatusChange={onReadToggle}
+              />
+            </div>
           </>
         )}
       </div>
