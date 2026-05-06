@@ -162,7 +162,7 @@ export default function DetailList() {
       value: getTotalFiles(),
       showRefresh: false,
       isLoading: isFileCountLoading,
-      info: "Total number of files stored on the Hippius network.",
+      info: "Total number of files in your Drive.",
     },
     {
       id: "total-credits-used",
