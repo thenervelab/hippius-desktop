@@ -166,7 +166,7 @@ export default function DetailList() {
       isLoading: isLoadingTotalCreditsUsed,
       info: DRIVE_SCOPED_CREDITS_ENABLED
         ? "All-time credits consumed for drive storage. Matches the scope shown in the Credit Usage chart below."
-        : "All-time credits consumed across drive + S3 storage. Matches the scope shown in the Credit Usage chart below.",
+        : "Credits consumption includes both drive + S3 storage.",
     },
     {
       id: "total-storage-used",
