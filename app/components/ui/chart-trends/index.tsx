@@ -36,8 +36,12 @@ export type ChartTrendsVariant = "card" | "panel";
 export interface ChartTrendsConfig {
   /** Rust invoke command name (e.g. "get_drive_credits_chart") */
   invokeCommand: string;
-  /** Chart title text */
-  title: string;
+  /**
+   * Chart title. `ReactNode` so a config can attach an inline
+   * affordance (e.g. an InfoTooltip) next to the title text without
+   * the wrapper having to know.
+   */
+  title: ReactNode;
   /** Icon rendered beside the title */
   icon: ReactNode;
   /** Text shown when no data is available */

@@ -117,12 +117,29 @@ pub async fn get_deposit_address(state: tauri::State<'_, crate::app_state::AppSt
 // Indexer queries (credits, marketplace, balance history, events)
 // ---------------------------------------------------------------------------
 
-// Indexer queries: drive-scoped marketplace + storage history are now
-// served exclusively by `crate::billing::drive_credits` (one IPC per
-// view, fed by `/user-credits-by-storage-history?storage_type=drive`).
-// The wallet-wide `/marketplace/credit` and `/user-total-file-size`
-// endpoints are intentionally not exposed — every previous consumer
-// has switched to the drive-scoped equivalent.
+/// Fetch marketplace credit consumption events (`CreditsConsumed`)
+/// from the indexer. Wallet-wide scope (drive + S3 + every other
+/// product). Backs the legacy home-page Credit Usage chart and Total
+/// Credit Used tile while `DRIVE_SCOPED_CREDITS_ENABLED` is off; the
+/// drive-scoped sibling lives in `crate::billing::drive_credits`.
+#[tauri::command]
+pub async fn get_marketplace_credits(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    page: Option<i64>,
+    limit: Option<i64>,
+) -> Result<serde_json::Value, AppError> {
+    let indexer = IndexerClient::from_env(state.api_client.clone())?;
+    let page_str = page.unwrap_or(1).to_string();
+    let limit_str = limit.unwrap_or(10).to_string();
+    let params = vec![
+        ("account_id", account_id.as_str()),
+        ("event_name", "CreditsConsumed"),
+        ("page", page_str.as_str()),
+        ("limit", limit_str.as_str()),
+    ];
+    Ok(indexer.get::<serde_json::Value>("/marketplace/credit", &params).await?)
+}
 
 // ---------------------------------------------------------------------------
 // Drive storage stats (header card on Files / Home pages)

@@ -34,12 +34,15 @@ use crate::auth::logout::logout_full;
 use crate::auth::oauth::{complete_oauth_flow, parse_oauth_deep_link, start_oauth_flow};
 use crate::auth::session_restore::{is_token_valid, restore_session};
 use crate::auth::ssh_keys::{create_ssh_key, delete_ssh_key, list_ssh_keys};
-use crate::billing::charts::{calculate_storage_capacity, calculate_storage_cost, format_balance_chart};
+use crate::billing::charts::{
+    calculate_storage_capacity, calculate_storage_cost, format_balance_chart, format_credits_chart, transform_marketplace_credits,
+};
 use crate::billing::credits::{check_sync_eligibility, get_user_credits};
 use crate::billing::drive_credits::{get_drive_credits_chart, get_drive_credits_total, get_drive_storage_chart};
 use crate::billing::eligibility::check_action_eligibility;
 use crate::billing::queries::{
-    get_add_credit_events, get_balance_transfers, get_billing_transactions, get_credits, get_deposit_address, get_drive_storage_stats, get_system_balance,
+    get_add_credit_events, get_balance_transfers, get_billing_transactions, get_credits, get_deposit_address, get_drive_storage_stats,
+    get_marketplace_credits, get_system_balance,
 };
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
 use crate::blockchain::convert::{planck_to_hip_full, to_plancks};
@@ -315,6 +318,7 @@ fn main() {
             get_subscription_data,
             create_subscription,
             get_customer_portal_url,
+            get_marketplace_credits,
             get_system_balance,
             get_balance_transfers,
             get_add_credit_events,
@@ -386,7 +390,9 @@ fn main() {
             sp_get_snapshot,
             sp_dismiss_sync_widget,
             // Chart data formatting
+            format_credits_chart,
             format_balance_chart,
+            transform_marketplace_credits,
             calculate_storage_cost,
             calculate_storage_capacity,
         ]);
