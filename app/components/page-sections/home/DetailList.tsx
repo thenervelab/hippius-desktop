@@ -35,14 +35,21 @@ export default function DetailList() {
   const isFileCountLoading = isDriveStatsLoading;
 
   // Total Credit Used data sources — picked by the same gate that
-  // drives the chart so the tile and the chart always agree on scope.
-  // Drive-scoped path: matches the chart's drive-only IPC.
-  // Wallet-wide path: marketplace credits cumulative, matches the
-  // legacy chart and the InfoTooltip's "drive + S3" wording.
+  // drives the chart so the tile and the chart always agree on scope
+  // and the same indexer endpoint is queried for both surfaces. Each
+  // hook's `enabled` flag is the inverse of the other so exactly one
+  // IPC fires for the tile per gate state.
+  //
+  // Wallet-wide (gate off): marketplace credits cumulative — the tile
+  // takes the last point of the same `transformedCreditsData` series
+  // the chart renders, so the displayed values are derived from one
+  // shared computation and cannot drift.
+  // Drive-scoped (gate on): get_drive_credits_total IPC, matching the
+  // chart's get_drive_credits_chart endpoint.
   const {
     data: driveCreditsTotal,
     isLoading: isLoadingDriveCreditsTotal,
-  } = useDriveCreditsTotal();
+  } = useDriveCreditsTotal({ enabled: DRIVE_SCOPED_CREDITS_ENABLED });
   const {
     data: marketplaceCredits,
     isLoading: isLoadingMarketplaceCredits,
