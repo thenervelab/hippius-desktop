@@ -17,7 +17,7 @@ export default function ResponsiveContent({
     <div className="grid w-full overflow-hidden">
       <main
         className={cn(
-          "flex flex-col h-full transition-all duration-300 ease-in-out overflow-hidden bg-grey-light-200 rounded-[11px] rounded-br-none dark:bg-black-900 mr-1",
+          "flex flex-col h-[calc(100%-0.25rem)] transition-all duration-300 ease-in-out overflow-hidden bg-grey-light-200 rounded-[11px] dark:bg-black-900 mr-1 mb-1",
           collapsed ? "ml-[3.8125rem]" : "ml-[16.4375rem]",
         )}
       >
