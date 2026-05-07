@@ -158,7 +158,7 @@ const Notifications = () => {
 
   return (
     <DashboardTitleWrapper mainText="Notifications">
-      <div className="mt-3 mb-1 flex flex-1 flex-col rounded-[11px] pb-3 bg-[#fbfbfb] dark:bg-black-primary-bg">
+      <div className="mt-3 mb-1 mr-1 flex flex-1 flex-col rounded-[11px] pb-3 bg-[#fbfbfb] dark:bg-black-primary-bg">
 
         <PageHeader
           title="Notifications Hub"
