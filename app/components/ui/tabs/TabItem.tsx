@@ -43,8 +43,8 @@ const TabItem: React.FC<TabItemProps> = ({
         iconOnly ? "w-[2.5rem]" : width,
         height,
         isActive
-          ? "bg-grey-light-300 border border-grey-dark-100 shadow-[0px_12.26px_3.831px_0px_rgba(0,0,0,0.00),0px_8.429px_3.065px_0px_rgba(0,0,0,0.01),0px_4.597px_3.065px_0px_rgba(0,0,0,0.04),0px_2.299px_2.299px_0px_rgba(0,0,0,0.08),0px_0.766px_0.766px_0px_rgba(0,0,0,0.09)] text-black-900 dark:bg-black-500 dark:border-black-300 dark:text-grey-light-100 dark:shadow-[0px_0px_0px_1px_black]"
-          : "opacity-50 text-black-900 hover:opacity-75 dark:text-grey-light-100",
+          ? "bg-[#f8f8f8] border border-[#e3e3e3] text-[#000000] shadow-[0px_12.26px_3.831px_0px_rgba(0,0,0,0.00),0px_8.429px_3.065px_0px_rgba(0,0,0,0.01),0px_4.597px_3.065px_0px_rgba(0,0,0,0.04),0px_2.299px_2.299px_0px_rgba(0,0,0,0.08),0px_0.766px_0.766px_0px_rgba(0,0,0,0.09)] dark:bg-[#161616] dark:border-[#313131] dark:text-[#ffffff] dark:shadow-[0px_0px_0px_1px_black]"
+          : "opacity-50 text-[#000000] hover:opacity-75 dark:text-[#ffffff]",
         tabItemClassName,
       )}
       onClick={onClick}
@@ -59,7 +59,7 @@ const TabItem: React.FC<TabItemProps> = ({
           <span
             className={cn(
               "flex shrink-0 items-center justify-center text-current",
-              isActive && "text-primary-50",
+              isActive && "text-[#3167dd]",
             )}
           >
             {icon}

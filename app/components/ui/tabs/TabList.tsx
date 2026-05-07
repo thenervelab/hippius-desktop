@@ -42,7 +42,7 @@ const TabList: React.FC<TabListProps> = ({
   return (
     <div
       className={cn(
-        "inline-flex rounded-[6px] bg-grey-primary-bg p-1 dark:bg-black-primary-bg",
+        "inline-flex rounded-[6px] bg-[#ebebeb] p-1 dark:bg-[#1e1e1e]",
         gap,
         className,
       )}
