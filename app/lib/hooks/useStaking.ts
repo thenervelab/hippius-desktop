@@ -121,6 +121,7 @@ export const useStaking = () => {
     };
 
     return {
+        isLoading,
         stakingInfo,
         operations,
         refetch,
