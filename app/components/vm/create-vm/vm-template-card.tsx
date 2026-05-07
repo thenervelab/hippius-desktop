@@ -133,13 +133,12 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
         <div className="px-4 pb-4">
           <Button
             className={`flex gap-x-2 items-center  h-[2.625rem] w-full`}
-            icon={<Icons.ArrowRight className="size-4" />}
             onClick={() => onSelect(template)}
           >
-            {" "}
             <span className="font-medium text-base leading-[1.375rem] tracking-tight">
               Set Up Virtual Machine
             </span>
+            <Icons.ArrowRight className="size-4" />
           </Button>
         </div>
       )}

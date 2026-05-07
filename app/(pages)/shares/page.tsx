@@ -777,7 +777,7 @@ function RowActionMenu({ items }: { items: ActionItem[] }) {
       <TableActionMenu dropdownTitle="" items={items}>
         <Button
           variant="ghost"
-          size="md"
+          size="auto"
           className="h-8 w-8 p-0 text-grey-70 action-menu-area"
         >
           <MoreVertical className="size-4" />

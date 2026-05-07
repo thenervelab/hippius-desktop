@@ -171,7 +171,7 @@ export const getDesktopColumns = (
         >
           <Button
             variant="ghost"
-            size="md"
+            size="auto"
             className="h-8 w-16 p-0 text-grey-70 action-menu-area"
           >
             <MoreVertical className="size-4" />

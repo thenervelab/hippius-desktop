@@ -2,7 +2,7 @@
 
 import React from "react";
 import { ArrowRight } from "lucide-react";
-import { Button } from "@/components/ui/button/ButtonV2";
+import { Button } from "@/components/ui/button";
 import ProgressBar from "./ProgressBar";
 import { OnboardingScreen } from "./onboardingData";
 

@@ -5,7 +5,7 @@ import { Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { Icons } from "@/components/ui";
-import { Button } from "@/components/ui/button/ButtonV2";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/app/lib/utils";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import useSubscriptionData from "@/app/lib/hooks/useSubscriptionData";

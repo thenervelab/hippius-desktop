@@ -1,7 +1,7 @@
 "use client";
 
 import { Icons } from "@/app/components/ui";
-import { Button } from "@/components/ui/button/ButtonV2";
+import { Button } from "@/components/ui/button";
 import cn from "@/app/lib/utils/cn";
 
 const NotificationIconButton: React.FC<{

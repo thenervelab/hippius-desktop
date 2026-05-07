@@ -373,7 +373,7 @@ const CardView: FC<CardViewProps> = ({
                       >
                         <Button
                           variant="ghost"
-                          size="md"
+                          size="auto"
                           className="text-grey-70 focus:outline-none focus:ring-0 focus:ring-transparent active:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
                         >
                           <MoreVertical className="size-4" />

@@ -9,7 +9,7 @@
 
 import React, { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Input } from "@/components/ui/input/InputV2";
+import { Input } from "@/components/ui/input";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Loader2 } from "lucide-react";
 import {
@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/icons";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
-import { Button } from "@/components/ui/button/ButtonV2";
+import { Button } from "@/components/ui/button";
 
 interface AccessKeyLoginFormProps {
   onBack: () => void;

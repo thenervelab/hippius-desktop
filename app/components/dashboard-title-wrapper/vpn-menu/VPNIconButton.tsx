@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useAtom } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
-import { Button } from "@/components/ui/button/ButtonV2";
+import { Button } from "@/components/ui/button";
 import cn from "@/app/lib/utils/cn";
 import { vpnConnectedAtom, vpnLoadingAtom } from "./vpnAtoms";
 

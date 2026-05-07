@@ -289,7 +289,7 @@ function TreeRow({
           >
             <Button
               variant="ghost"
-              size="md"
+              size="auto"
               className="h-6 w-6 p-0 text-grey-60 opacity-0 group-hover:opacity-100 transition-opacity action-menu-area"
             >
               <MoreVertical className="size-3.5" />

@@ -172,7 +172,7 @@ export function RemoteFoldersSection({
                             },
                           ] satisfies ActionItem[]}
                         >
-                          <Button variant="ghost" size="md" className="h-8 w-8 p-0 text-grey-70 action-menu-area">
+                          <Button variant="ghost" size="auto" className="h-8 w-8 p-0 text-grey-70 action-menu-area">
                             <MoreVertical className="size-4" />
                           </Button>
                         </TableActionMenu>

@@ -14,7 +14,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { OAuthProvider } from "@/app/lib/types/oAuth";
 import { LucideLoader2 } from "lucide-react";
 import * as Icons from "@/components/ui/icons";
-import { Button } from "@/components/ui/button/ButtonV2";
+import { Button } from "@/components/ui/button";
 
 interface OAuthButtonProps {
   provider: OAuthProvider;

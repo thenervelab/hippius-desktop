@@ -145,7 +145,7 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
             <TableActionMenu dropdownTitle="Address Options" items={menuItems}>
               <Button
                 variant="ghost"
-                size="md"
+                size="auto"
                 className="h-8 w-8 p-0 text-grey-70"
               >
                 <MoreVertical className="size-4" />

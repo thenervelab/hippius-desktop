@@ -5,7 +5,7 @@ import * as Checkbox from "@radix-ui/react-checkbox";
 import { Check, ArrowRight } from "lucide-react";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { Icons } from "@/components/ui";
-import { Button } from "@/components/ui/button/ButtonV2";
+import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { useNotificationPreferences } from "@/app/lib/hooks/useNotificationPreferences";
 import { useSetAtom } from "jotai";
