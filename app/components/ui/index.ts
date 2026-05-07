@@ -36,3 +36,8 @@ export { default as ChartGridOverlay } from "./chart-grid-overly";
 export { default as CustomTooltip } from "./CustomTooltip";
 export { default as ComingSoon } from "./ComingSoon";
 export { default as SyncPausedAlert, IS_SYNC_PAUSED, SYNC_PAUSED_MESSAGE, useSyncPaused } from "./SyncPausedAlert";
+export { BackgroundContainerFrame } from "./BackgroundContainerFrame";
+export { BackgroundHippo } from "./BackgroundHippo";
+export { BackgroundContainer, default as BackgroundContainerDefault } from "./BackgroundContainer";
+export { FramedDialog, default as FramedDialogDefault } from "./FramedDialog";
+export type { FramedDialogProps } from "./FramedDialog";
