@@ -348,30 +348,23 @@ async fn register_drive(app: &AppHandle, sync: &Arc<SyncRunner>, manager: DriveM
 /// so the Files page re-queries and renders the freshly-populated
 /// "DATE UPLOADED" column. Silently fails open — drive init must stay
 /// usable even when the server is unreachable.
-fn spawn_reconcile_timestamps(
-    app: &AppHandle,
-    sync: Arc<SyncRunner>,
-    manager_arc: Arc<TokioMutex<DriveManager>>,
-    label: String,
-) {
+fn spawn_reconcile_timestamps(app: &AppHandle, sync: Arc<SyncRunner>, manager_arc: Arc<TokioMutex<DriveManager>>, label: String) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let manager = manager_arc.lock().await;
         match manager.reconcile_remote_timestamps().await {
-            Ok(true) => {
-                match manager.load_sync_state().await {
-                    Ok(state) => {
-                        let paths = build_synced_paths_from_state(&state);
-                        sync.update_synced_paths_cache(&label, paths);
-                        drop(manager);
-                        let _ = app.emit(crate::sync::events::ACTIVITY_UPDATED, ());
-                        info!(label = %label, "reconcile_remote_timestamps: cache refreshed");
-                    }
-                    Err(e) => {
-                        warn!(label = %label, error = %e, "reconcile_remote_timestamps: post-fetch state reload failed");
-                    }
+            Ok(true) => match manager.load_sync_state().await {
+                Ok(state) => {
+                    let paths = build_synced_paths_from_state(&state);
+                    sync.update_synced_paths_cache(&label, paths);
+                    drop(manager);
+                    let _ = app.emit(crate::sync::events::ACTIVITY_UPDATED, ());
+                    info!(label = %label, "reconcile_remote_timestamps: cache refreshed");
                 }
-            }
+                Err(e) => {
+                    warn!(label = %label, error = %e, "reconcile_remote_timestamps: post-fetch state reload failed");
+                }
+            },
             Ok(false) => {
                 debug!(label = %label, "reconcile_remote_timestamps: skipped (fresh)");
             }
@@ -845,8 +838,11 @@ pub(crate) async fn initialize_sync_inner(
     // `auto_init_sync` checks once before iterating all drives).
     if !skip_credits_check && let Ok(acct) = app_state.current_account_id() {
         let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool_owned.clone());
-        if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
-            let balance: f64 = resp.get("balance").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        if let Ok(resp) = client
+            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &acct)
+            .await
+        {
+            let balance: f64 = resp.balance.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0);
             if balance <= 0.0 {
                 return Err(crate::error::AppError::Validation(
                     "Insufficient credits. Please add credits to your account before syncing.".into(),
@@ -1008,6 +1004,12 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     if let Ok(mut cache) = app_state.drive_status_cache.lock() {
         cache.clear();
     }
+
+    // 0c. Reset the upload-processing banner state so a logout / account
+    //     switch doesn't leave a stale "Processing N files…" banner up
+    //     for the next user. The reset is unconditional (clears even if
+    //     no upload was active) to make this path idempotent.
+    app_state.upload_processing.reset(&app);
 
     // 1. Cancel every drive's cancellation token FIRST so the sync loop
     //    sees a clean shutdown signal and can persist state before exiting.
@@ -1526,8 +1528,11 @@ async fn auto_init_sync_inner(
     if let Ok(acct) = state.current_account_id() {
         let pool_owned = state.pool()?.clone();
         let client = crate::api::client::ApiClient::new(state.api_client.clone(), pool_owned);
-        if let Ok(resp) = client.get::<serde_json::Value>("/api/billing/credits/balance/", &acct).await {
-            let balance: f64 = resp.get("balance").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        if let Ok(resp) = client
+            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &acct)
+            .await
+        {
+            let balance: f64 = resp.balance.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0);
             if balance <= 0.0 {
                 return Err(crate::error::AppError::Validation(
                     "Insufficient credits. Please add credits to your account before syncing.".into(),
@@ -1539,26 +1544,41 @@ async fn auto_init_sync_inner(
     // 9. Initialize each path with the pre-resolved mnemonic. Passing
     //    `Some(..)` guarantees every drive takes the `existing_mnemonic`
     //    branch of `initialize_sync_inner` and never touches the auth
-    //    lock fallback — the loop is fully deterministic even if the
+    //    lock fallback — fan-out is fully deterministic even if the
     //    auth state churns underneath it.
+    //
+    //    Initialization is fanned out concurrently with `join_all`. Each
+    //    `initialize_sync_inner` call does multiple DB hits + HCFS probe
+    //    + drive unlock + folder registration — for N drives the
+    //    sequential cost is sum(N), the concurrent cost is max(N). The
+    //    per-drive locks owned by `SyncRunner.drives` already isolate
+    //    the work; the shared resources (DB pool, reqwest client,
+    //    HCFS server) all support concurrent callers.
+    let init_futures = regular.iter().map(|sp| {
+        let app = app.clone();
+        let account_id = account_id.clone();
+        let label = sp.label.clone();
+        let mnemonic = resolved_mnemonic.as_str().to_owned();
+        async move {
+            let result = initialize_sync_inner(app, account_id, label.clone(), Some(mnemonic), true, true).await;
+            (label, result)
+        }
+    });
+    let init_results = futures_util::future::join_all(init_futures).await;
+
+    // `join_all` preserves input order, so each `init_results[i]` aligns
+    // with `regular[i]`. The zip below re-pairs every result with its
+    // sync_path so the path-aware `DriveStatus::Error` emit on failure
+    // can read the right `sp.path`.
     let mut any_initialized = false;
-    for sp in &regular {
-        match initialize_sync_inner(
-            app.clone(),
-            account_id.clone(),
-            sp.label.clone(),
-            Some(resolved_mnemonic.as_str().to_owned()),
-            true,
-            true,
-        )
-        .await
-        {
-            Ok(result) => {
-                info!(label = %sp.label, user_id = %result.user_id, "Sync initialized");
+    for ((label, result), sp) in init_results.into_iter().zip(regular.iter()) {
+        match result {
+            Ok(r) => {
+                info!(label = %label, user_id = %r.user_id, "Sync initialized");
                 any_initialized = true;
             }
             Err(e) => {
-                warn!(label = %sp.label, error = %e, "Failed to init sync");
+                warn!(label = %label, error = %e, "Failed to init sync");
                 // Only emit `Error` for non-recoverable failures.
                 // `NotReady(*)` errors (mnemonic unavailable, signing
                 // key missing, config missing, etc.) have their own
@@ -1634,6 +1654,21 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
             info!("{} started [{}]: {} ({} bytes)", dir_name, ctx.label, file_name, total);
         }
         let _ = crate::sync::progress::update_file_progress(&ctx.sync, path_str, bytes, total, file_action, Some(&*ctx.label));
+
+        // First non-zero upload chunk for any file ends the
+        // "processing" window — the bottom-right widget now has real
+        // per-file progress and the top banner can vanish. Gated on
+        // `sync_session_epoch` so chunks from an in-flight cycle
+        // that started BEFORE the activating `begin` do NOT clear the
+        // banner. Idempotent (single mutex tick + early return when
+        // state is already cleared) so calling on every chunk is
+        // fine.
+        if matches!(ctx.direction, TransferDirection::Upload) && bytes > 0 {
+            use tauri::Manager;
+            let app_state = ctx.app.state::<crate::app_state::AppState>();
+            let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+            app_state.upload_processing.clear_if_session_advanced(&ctx.app, epoch);
+        }
 
         if crate::sync::logic::is_file_completion_tick(bytes, total) {
             let action = match ctx.direction {
@@ -2157,12 +2192,8 @@ mod tests {
 
         callback("folder/file.txt", &fid_hex, "cid-1", "uploaded", Some(&ts));
 
-        let cache = sync
-            .get_cached_synced_paths(&label)
-            .expect("cache should have an entry for the label");
-        let info = cache
-            .get("folder/file.txt")
-            .expect("rel path should be present in cache");
+        let cache = sync.get_cached_synced_paths(&label).expect("cache should have an entry for the label");
+        let info = cache.get("folder/file.txt").expect("rel path should be present in cache");
         assert_eq!(info.uploaded_at, 1_700_000_000);
         assert_eq!(info.updated_at, 1_700_000_100);
         assert_eq!(&*info.arion_cid, "cid-1");

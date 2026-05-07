@@ -112,7 +112,13 @@ pub fn normalize_decimal_digits(raw: &str) -> String {
     if sign_is_negative && result != "0" { "0".to_string() } else { result }
 }
 
-fn planck_to_hip_with_decimals(planck: &str, max_fraction_digits: usize) -> String {
+/// Pure string-divmod conversion of a planck string to a HIP-units string with
+/// at most `max_fraction_digits` fraction digits, trailing zeros stripped.
+///
+/// Public to the crate so chart formatters can use the same precision-preserving
+/// conversion as `planck_to_hip` instead of routing through `f64`, which silently
+/// loses precision for any value above ~9 HIP at 6 decimals (2^53 / 10^18 ≈ 9).
+pub(crate) fn planck_to_hip_with_decimals(planck: &str, max_fraction_digits: usize) -> String {
     let trimmed = planck.trim();
     if trimmed.is_empty() || !trimmed.chars().all(|c| c.is_ascii_digit()) {
         return "0".to_string();

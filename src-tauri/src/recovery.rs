@@ -44,47 +44,31 @@ impl RecoveryGateState {
     }
 }
 
-/// Canonical production hcfs-server URL.
+/// Ensure an `hcfs_config` row exists for the account.
 ///
-/// Used as the default when `hcfs_config.server_url` is empty — i.e. on a fresh
-/// device after OAuth login but before the user has configured sync. Recovery
-/// needs a URL to fetch the sealed mnemonic blob from, and the normal config
-/// save path requires a drive password the user hasn't entered yet.
-pub const DEFAULT_HCFS_SERVER_URL: &str = "https://arion.hippius.com";
-
-/// Ensure an `hcfs_config` row exists for the account with a non-empty
-/// `server_url`, seeding `DEFAULT_HCFS_SERVER_URL` when missing.
+/// Idempotent. The row's `server_url` is left empty — that is the
+/// auto-detect sentinel that hcfs-client interprets as "race the regional
+/// endpoints and pick the faster one" (see
+/// `crate::sync::config::normalize_for_region_probe`). Older builds
+/// stored `https://arion.hippius.com` here; that legacy value is
+/// transparently rewritten to empty at read time, so existing users
+/// transparently opt into auto-detect without a DB migration.
 ///
-/// Idempotent: if a row already exists with a non-empty URL, leaves it alone.
-/// Drive password remains untouched — this runs before the user has chosen
-/// one, so `drive_password` stays empty and `encryption_version` stays 0.
+/// Drive password remains untouched — this runs before the user has
+/// chosen one, so `drive_password` stays empty and `encryption_version`
+/// stays 0.
 pub(crate) async fn seed_hcfs_server_url_if_missing(pool: &SqlitePool, account_id: &str) -> Result<()> {
     let owner = account_key(account_id);
 
-    // Create a row if one doesn't exist yet. Drive password is empty; later
-    // sync setup will populate it via the normal save_hcfs_config path.
+    // Create a row if one doesn't exist yet. server_url defaults to '' via
+    // the schema's NOT NULL DEFAULT '' — auto-detect fires on first sync.
     sqlx::query(
         r"
         INSERT OR IGNORE INTO hcfs_config
             (owner, server_url, drive_password, encryption_version, updated_at)
-        VALUES (?, ?, '', 0, CURRENT_TIMESTAMP)
+        VALUES (?, '', '', 0, CURRENT_TIMESTAMP)
         ",
     )
-    .bind(&owner)
-    .bind(DEFAULT_HCFS_SERVER_URL)
-    .execute(pool)
-    .await?;
-
-    // If the row existed but with an empty URL (e.g. partial earlier state),
-    // fill it in. Does nothing when URL is already set.
-    sqlx::query(
-        r"
-        UPDATE hcfs_config
-        SET server_url = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE owner = ? AND (server_url IS NULL OR server_url = '')
-        ",
-    )
-    .bind(DEFAULT_HCFS_SERVER_URL)
     .bind(&owner)
     .execute(pool)
     .await?;
@@ -915,7 +899,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn seeds_default_url_when_no_row_exists() {
+    async fn seeds_empty_url_when_no_row_exists() {
         let pool = setup_pool().await;
         seed_hcfs_server_url_if_missing(&pool, "5TestAccountId").await.unwrap();
 
@@ -926,7 +910,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(row.0, DEFAULT_HCFS_SERVER_URL);
+        // Empty server_url is the auto-detect sentinel that triggers
+        // hcfs-client's region probe. The seed function deliberately
+        // does NOT write a default URL; per CLAUDE.md "Replace, don't
+        // deprecate" — the legacy single-region URL is gone, not dual-tracked.
+        assert_eq!(row.0, "");
         assert_eq!(row.1, "");
         assert_eq!(row.2, 0);
     }
@@ -996,7 +984,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fills_empty_url_on_existing_row() {
+    async fn leaves_empty_url_alone_on_existing_row() {
+        // The pre-region-probe version of `seed_hcfs_server_url_if_missing`
+        // would overwrite an empty `server_url` with the legacy single-region
+        // default. That UPDATE branch is gone — empty IS the new default
+        // (it's the auto-detect sentinel hcfs-client looks for). This test
+        // pins the new contract: an existing row with empty URL is left
+        // alone, so the next call to `get_server_url` returns "" and
+        // hcfs-client races the regional endpoints.
         let pool = setup_pool().await;
         let owner = account_key("5TestAccountId");
         sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, '', '', 0)")
@@ -1012,7 +1007,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(url, DEFAULT_HCFS_SERVER_URL);
+        assert_eq!(url, "");
     }
 
     #[test]

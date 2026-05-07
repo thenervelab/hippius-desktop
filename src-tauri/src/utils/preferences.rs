@@ -33,28 +33,40 @@ pub async fn set_onboarding_done(state: tauri::State<'_, AppState>, done: bool) 
 // ── User Preferences ────────────────────────────────────────────────────
 
 /// Get a user preference value by key. Returns None if the key doesn't exist.
+///
+/// Thin IPC wrapper over [`get_user_preference_internal`] so the SQL is
+/// defined in exactly one place — the IPC and background-task paths
+/// can't drift on the query shape.
 #[tauri::command]
 pub async fn get_user_preference(state: tauri::State<'_, AppState>, key: String) -> Result<Option<String>, AppError> {
-    let pool = state.pool()?;
+    get_user_preference_internal(state.pool()?, &key).await
+}
 
+/// Save a user preference (upsert). Timestamps with current epoch millis.
+#[tauri::command]
+pub async fn save_user_preference(state: tauri::State<'_, AppState>, key: String, value: String) -> Result<(), AppError> {
+    save_user_preference_internal(state.pool()?, &key, &value).await
+}
+
+/// Read a user preference using a `&SqlitePool` directly. Useful from
+/// non-IPC contexts (background tasks) that don't have a Tauri State.
+pub async fn get_user_preference_internal(pool: &sqlx::SqlitePool, key: &str) -> Result<Option<String>, AppError> {
     let row = sqlx::query_as::<_, (String,)>("SELECT preference_value FROM user_preferences WHERE preference_key = ?")
-        .bind(&key)
+        .bind(key)
         .fetch_optional(pool)
         .await?;
 
     Ok(row.map(|(v,)| v))
 }
 
-/// Save a user preference (upsert). Timestamps with current epoch millis.
-#[tauri::command]
-pub async fn save_user_preference(state: tauri::State<'_, AppState>, key: String, value: String) -> Result<(), AppError> {
-    let pool = state.pool()?;
-
+/// Write a user preference using a `&SqlitePool` directly. Useful from
+/// non-IPC contexts (background tasks) that don't have a Tauri State.
+pub async fn save_user_preference_internal(pool: &sqlx::SqlitePool, key: &str, value: &str) -> Result<(), AppError> {
     sqlx::query(
         "INSERT OR REPLACE INTO user_preferences (preference_key, preference_value, updated_at) VALUES (?, ?, CAST(strftime('%s','now') * 1000 AS INTEGER))",
     )
-    .bind(&key)
-    .bind(&value)
+    .bind(key)
+    .bind(value)
     .execute(pool)
     .await?;
 

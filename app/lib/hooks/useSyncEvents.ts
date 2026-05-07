@@ -21,7 +21,7 @@ import {
   type SyncEngineHealthState,
 } from "../store/syncAtoms";
 import { queryClientAtom } from "jotai-tanstack-query";
-import { REMOTE_STORAGE_STATS_QUERY_KEY } from "./api/useRemoteStorageStats";
+import { DRIVE_STORAGE_STATS_QUERY_KEY } from "./api/useDriveStorageStats";
 
 interface SyncOutcome {
   label?: string;
@@ -99,7 +99,7 @@ export function useSyncEvents() {
 
           if (totalCompleted > 0) {
             queryClient.invalidateQueries({
-              queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY],
+              queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY],
             });
           }
         }],

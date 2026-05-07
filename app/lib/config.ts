@@ -3,6 +3,11 @@ export const REFERRAL_CODE_CONFIG = {
 } as const;
 
 export const HCFS_CONFIG = {
-  defaultServerUrl: "https://arion.hippius.com",
+  // Empty string is the auto-detect sentinel that the Rust backend forwards
+  // to hcfs-client; the client races the regional `*-arion.hippius.com`
+  // endpoints (EU and US) and picks the faster one. Setting an explicit
+  // URL here would skip the probe — keep this empty unless you intentionally
+  // want to pin every desktop install to a single region.
+  defaultServerUrl: "",
   apiKey: "Arion",
 } as const;

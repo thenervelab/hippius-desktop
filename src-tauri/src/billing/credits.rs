@@ -43,6 +43,17 @@ pub struct CreditBalance {
     pub hip: String,
 }
 
+/// Wire shape of `/api/billing/credits/balance/`. Decoded directly into
+/// this struct instead of `serde_json::Value` so we skip the dynamic
+/// allocation of a `Map<String, Value>` plus boxed `Value::String` per
+/// HTTP response.
+#[derive(serde::Deserialize)]
+pub(crate) struct CreditBalanceResponse {
+    /// Balance in HIP units as a decimal string (e.g. `"1.5"`).
+    #[serde(default)]
+    pub balance: Option<String>,
+}
+
 /// Fetch the credit balance.
 ///
 /// The API returns `{ "balance": "1.5" }`. This command converts to
@@ -52,8 +63,8 @@ pub struct CreditBalance {
 #[tauri::command]
 pub async fn get_user_credits(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<CreditBalance, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
-    let resp: serde_json::Value = client.get("/api/billing/credits/balance/", &account_id).await?;
-    let balance_str = resp.get("balance").and_then(|v| v.as_str()).unwrap_or("0");
+    let resp: CreditBalanceResponse = client.get("/api/billing/credits/balance/", &account_id).await?;
+    let balance_str = resp.balance.as_deref().unwrap_or("0");
     let planck = credits_to_planck(balance_str);
     let hip = crate::blockchain::convert::planck_to_hip(&planck);
     Ok(CreditBalance { planck, hip })

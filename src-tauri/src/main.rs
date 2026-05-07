@@ -22,6 +22,7 @@ pub mod infra;
 pub mod nebula;
 pub mod notifications;
 pub mod recovery;
+pub mod shares;
 pub mod sync;
 #[cfg(test)]
 mod test_helpers;
@@ -34,13 +35,13 @@ use crate::auth::oauth::{complete_oauth_flow, parse_oauth_deep_link, start_oauth
 use crate::auth::session_restore::{is_token_valid, restore_session};
 use crate::auth::ssh_keys::{create_ssh_key, delete_ssh_key, list_ssh_keys};
 use crate::billing::charts::{
-    calculate_storage_capacity, calculate_storage_cost, format_balance_chart, format_credits_chart, format_storage_chart,
-    transform_marketplace_credits,
+    calculate_storage_capacity, calculate_storage_cost, format_balance_chart, format_credits_chart, transform_marketplace_credits,
 };
 use crate::billing::credits::{check_sync_eligibility, get_user_credits};
+use crate::billing::drive_credits::{get_drive_credits_chart, get_drive_credits_total, get_drive_storage_chart};
 use crate::billing::eligibility::check_action_eligibility;
 use crate::billing::queries::{
-    get_add_credit_events, get_balance_transfers, get_billing_transactions, get_credits, get_deposit_address, get_files_count, get_files_size,
+    get_add_credit_events, get_balance_transfers, get_billing_transactions, get_credits, get_deposit_address, get_drive_storage_stats,
     get_marketplace_credits, get_system_balance,
 };
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
@@ -95,7 +96,7 @@ use crate::utils::support::{
 use crate::utils::tray_menu::get_tray_menu_data;
 use futures_util::FutureExt;
 use sqlx::Row;
-use sqlx::sqlite::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 use tauri::{Builder, Emitter, Manager, Wry, path::BaseDirectory};
 #[cfg(target_os = "linux")]
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -245,6 +246,15 @@ fn main() {
             // Remote folder browsing & one-off download
             list_remote_folder_files,
             download_remote_file,
+            // File sharing (link-based public shares)
+            crate::shares::commands::hcfs_create_share,
+            crate::shares::commands::hcfs_list_shares,
+            crate::shares::commands::hcfs_revoke_share,
+            crate::shares::commands::hcfs_reshare,
+            crate::shares::commands::hcfs_list_share_history,
+            crate::shares::commands::hcfs_remove_share_history,
+            crate::shares::commands::hcfs_clear_share_history,
+            crate::shares::capabilities::hcfs_get_capabilities,
             // Device settings
             get_device_name,
             set_device_name,
@@ -312,8 +322,10 @@ fn main() {
             get_system_balance,
             get_balance_transfers,
             get_add_credit_events,
-            get_files_size,
-            get_files_count,
+            get_drive_storage_stats,
+            get_drive_storage_chart,
+            get_drive_credits_chart,
+            get_drive_credits_total,
             get_deposit_address,
             // Notifications
             get_notification_settings,
@@ -379,7 +391,6 @@ fn main() {
             sp_dismiss_sync_widget,
             // Chart data formatting
             format_credits_chart,
-            format_storage_chart,
             format_balance_chart,
             transform_marketplace_credits,
             calculate_storage_cost,
@@ -505,6 +516,31 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     })
 }
 
+/// Open the application's SQLite pool with desktop-app-tuned PRAGMAs.
+///
+/// - **WAL** journal mode: readers don't block writers and vice-versa, which
+///   matters because every IPC command goes through this pool.
+/// - **`synchronous=NORMAL`**: at most one in-flight transaction is lost on
+///   power loss, which is acceptable here — all persisted state is
+///   re-derivable from server-of-record (HCFS, blockchain).
+/// - **`busy_timeout=5s`**: rare contention waits at the driver level instead
+///   of surfacing `SQLITE_BUSY` immediately to the IPC caller.
+/// - **`foreign_keys=ON`**: enforce referential integrity (off by default in
+///   SQLite for backwards compatibility).
+/// - **`max_connections=8`**: the IPC fan-in is small; eight is plenty and
+///   keeps fd usage tight.
+async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Error> {
+    let connect_opts = SqliteConnectOptions::new()
+        .filename(db_path)
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .foreign_keys(true);
+
+    SqlitePoolOptions::new().max_connections(8).connect_with(connect_opts).await
+}
+
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");
@@ -567,12 +603,9 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
 
             std::fs::create_dir_all(&db_dir).expect("Failed to create .hippius directory");
 
-            if !db_path.exists() {
-                std::fs::File::create(&db_path).expect("Failed to create database file");
-            }
-
-            let db_url = format!("sqlite:{}", db_path.display());
-            let pool = match SqlitePool::connect(&db_url).await {
+            // The DB file itself is created by `SqliteConnectOptions::create_if_missing(true)`
+            // inside `open_db_pool`, so no explicit `File::create` is needed here.
+            let pool = match open_db_pool(&db_path).await {
                 Ok(pool) => pool,
                 Err(e) => {
                     error!("FATAL: Failed to open database at {}: {e}", db_path.display());

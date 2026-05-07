@@ -1119,19 +1119,80 @@ pub async fn setup_nebula_background(app: AppHandle) -> Result<(), String> {
 
 // --- Internal helpers for background setup (avoid tauri::State) ---
 
+/// Preference key for the last GitHub release-info check. Stored as an
+/// epoch-ms string so the value parses cleanly with `i64::from_str`.
+const NEBULA_LAST_RELEASE_CHECK_KEY: &str = "nebula_last_release_check_ms";
+/// Skip the unauthenticated GitHub API call if the last successful check
+/// was less than this many milliseconds ago. 24 hours is comfortably
+/// inside GitHub's 60 req/hour anonymous rate limit while still giving
+/// users a same-day path to a new Nebula release.
+const NEBULA_RELEASE_CHECK_TTL_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// Pure predicate for the release-check skip decision.
+///
+/// Returns `true` when a cached check from `last_ms` is fresh enough that
+/// `now_ms - last_ms < ttl_ms`, given the precondition that the install
+/// is already healthy (caller's responsibility to verify). `saturating_sub`
+/// defends against backwards clock jumps (NTP correction, manual change):
+/// a negative diff saturates to 0, which is `< ttl_ms`, so a clock that
+/// jumped backwards triggers a skip rather than a panic — acceptable
+/// because the next non-skewed launch within the TTL will recover.
+///
+/// Extracted so the gate logic is unit-testable without an `AppHandle`.
+fn should_skip_release_check(now_ms: i64, last_ms: i64, ttl_ms: i64) -> bool {
+    now_ms.saturating_sub(last_ms) < ttl_ms
+}
+
 async fn run_check_nebula_requirements(app: &AppHandle) -> Result<(), String> {
     let installed_version = check_nebula_installation().await.map_err(|e| e.to_string())?;
+    // Resolve the AppState handle once — it's a typemap lookup but
+    // there's no reason to do it three times.
+    let app_state = app.state::<crate::app_state::AppState>();
+    // Cache the cert-binary existence check; we read it again inside the
+    // post-fetch install-decision branch below and re-running the
+    // syscall on every launch is needless work.
+    let cert_binary_exists = get_nebula_cert_binary_path().map(|p| p.exists()).unwrap_or(false);
 
-    let client = &app.state::<crate::app_state::AppState>().api_client;
+    // Skip the GitHub release probe entirely when (a) we already have a
+    // working install and (b) we successfully checked GitHub within the
+    // TTL window. This drops a per-launch unauthenticated `api.github.com`
+    // call to once-per-day per user.
+    if installed_version.is_some() && cert_binary_exists {
+        if let Ok(pool) = app_state.pool()
+            && let Ok(Some(last_str)) = crate::utils::preferences::get_user_preference_internal(pool, NEBULA_LAST_RELEASE_CHECK_KEY).await
+            && let Ok(last_ms) = last_str.parse::<i64>()
+        {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            if should_skip_release_check(now_ms, last_ms, NEBULA_RELEASE_CHECK_TTL_MS) {
+                debug!(
+                    age_hours = now_ms.saturating_sub(last_ms) / (60 * 60 * 1000),
+                    "Skipping Nebula release check (cached result is fresh)"
+                );
+                return Ok(());
+            }
+        }
+    }
+
+    let client = &app_state.api_client;
     let latest_release = fetch_latest_release(client).await.map_err(|e| e.to_string())?;
     let latest_version = latest_release.tag_name.clone();
+
+    // Record the successful check timestamp so subsequent launches can
+    // short-circuit until the TTL elapses.
+    if let Ok(pool) = app_state.pool() {
+        let now_ms = chrono::Utc::now().timestamp_millis().to_string();
+        if let Err(e) = crate::utils::preferences::save_user_preference_internal(pool, NEBULA_LAST_RELEASE_CHECK_KEY, &now_ms).await {
+            warn!(error = %e, "Failed to persist nebula_last_release_check_ms; next launch will re-fetch");
+        }
+    }
 
     let mut needs_install = false;
     if installed_version.is_none() {
         info!("Not installed, will install");
         needs_install = true;
     } else if let Some(ref installed) = installed_version {
-        let cert_binary_exists = get_nebula_cert_binary_path().map(|p| p.exists()).unwrap_or(false);
+        // Reuse the cert_binary_exists value computed at the top of the
+        // function — same syscall result, no need to re-stat.
         if installed != &latest_version {
             info!("Update available: {} -> {}", installed, latest_version);
             needs_install = true;
@@ -1372,16 +1433,24 @@ pub async fn start_nebula_internal(
         use std::process::Stdio;
 
         // On macOS, start directly. setsid is not standard.
-        let child = std::process::Command::new(&binary_path)
+        // Use tokio::process::Command and persist the Child in NebulaState so
+        // stop_nebula can kill+wait the process directly instead of polling
+        // `ps` 50× over 5 seconds.
+        let child = tokio::process::Command::new(&binary_path)
             .arg("-config")
             .arg(&config_file)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .kill_on_drop(false)
             .spawn()
             .map_err(|e| format!("Failed to spawn nebula: {e}"))?;
 
-        info!("Started with PID: {}", child.id());
+        // Log a bare PID number when available. tokio::process::Child::id()
+        // returns Option<u32> (None after wait/kill, never None pre-wait),
+        // so the unwrap_or_else fallback string only fires post-mortem.
+        info!("Started with PID: {}", child.id().map_or_else(|| "<unknown>".to_string(), |p| p.to_string()));
+        *nebula_state.child.lock().await = Some(child);
     }
 
     #[cfg(target_os = "windows")]
@@ -1581,9 +1650,53 @@ pub async fn stop_nebula(nebula_state: &crate::nebula::state::NebulaState) -> Re
     // Stop the background ping task first
     stop_ping_task(nebula_state);
 
+    // Fast path: if we own the Child handle (macOS: nebula spawned directly
+    // by us), kill+wait it directly. This skips the 50× `ps` polling that
+    // the fallback path needs because the kernel signals us when our own
+    // child exits.
+    //
+    // We extract the Child from under the lock in a small scoped block so
+    // the MutexGuard is dropped before the kill+wait awaits — otherwise the
+    // lock would be held for several seconds across the wait and serialize
+    // every concurrent stop call.
+    let owned_child = {
+        let mut guard = nebula_state.child.lock().await;
+        guard.take()
+    };
+    if let Some(mut child) = owned_child {
+        debug!("Stopping nebula via owned Child handle");
+        if let Err(e) = child.kill().await {
+            warn!("Failed to send kill to nebula child: {e}");
+        }
+        match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+            Ok(Ok(status)) => {
+                info!("Nebula child exited (status: {status})");
+                return Ok(());
+            }
+            Ok(Err(e)) => {
+                warn!("Nebula child wait failed: {e}");
+                // Fall through to the pkill path in case the process is somehow
+                // still around or the child handle was stale.
+            }
+            Err(_) => {
+                warn!("Nebula child wait timed out after 5s; falling back to pkill");
+                // The Child is dropped here. We deliberately spawn with
+                // kill_on_drop(false) (line 1425) so this drop is a no-op
+                // — we don't want a stray drop-time SIGTERM racing against
+                // the pkill recovery below. The pkill+ps polling that
+                // follows is the actual cleanup path: if `child.kill()`
+                // already worked but wait() lost the SIGCHLD (rare but
+                // possible under signal masking), pkill will see no
+                // matching process and exit cleanly; if the kill failed,
+                // pkill issues a fresh SIGTERM by name.
+            }
+        }
+    }
+
     #[cfg(unix)]
     {
-        // Use pkill to terminate nebula process with exact name match
+        // Fallback: pkill + poll. Used when we don't own the Child (Linux
+        // setsid path) or when the kill+wait above failed/timed out.
         let output = tokio::process::Command::new("pkill")
             .arg("-x")
             .arg("nebula")
@@ -1823,15 +1936,14 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
         }
     }
 
-    // If not found by name, try to find by IP range (Nebula uses 100.64.0.0/10 by default)
+    // If not found by name, try to find by IP range (Nebula uses 100.64.0.0/10 by default).
+    // All shell-out probes below use `tokio::process::Command` with a short
+    // timeout so a hung `ifconfig`/`netstat`/`ip` doesn't block the tokio
+    // worker thread for the whole IPC handler.
     #[cfg(target_os = "linux")]
     {
-        use std::process::Command;
-
-        // Run ip -o -4 addr show to find interfaces with Nebula IPs
-        if let Ok(output) = Command::new("ip").args(["-o", "-4", "addr", "show"]).output() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            for line in output_str.lines() {
+        if let Some(output) = run_iface_probe("ip", &["-o", "-4", "addr", "show"]).await {
+            for line in output.lines() {
                 if line.contains(target_ip) {
                     // Extract interface name (it's the second field in the output)
                     if let Some(iface) = line.split_whitespace().nth(1) {
@@ -1847,15 +1959,12 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
     // On macOS, try to find the interface with the Nebula IP
     #[cfg(target_os = "macos")]
     {
-        use std::process::Command;
-
         // Method 1: ifconfig
         debug!("Trying ifconfig...");
-        if let Ok(output) = Command::new("ifconfig").arg("-a").output() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
+        if let Some(output) = run_iface_probe("ifconfig", &["-a"]).await {
             let mut current_iface = None;
 
-            for line in output_str.lines() {
+            for line in output.lines() {
                 // Check for interface line (starts with non-whitespace)
                 if !line.starts_with('\t') && !line.starts_with(' ') && line.contains(':') {
                     current_iface = Some(line.split(':').next().unwrap_or("").trim());
@@ -1873,12 +1982,11 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
         // Method 2: netstat -rn (Routing table)
         // This is often more reliable for finding which interface hosts an IP
         debug!("Trying netstat -rn...");
-        if let Ok(output) = Command::new("netstat").args(["-rn", "-f", "inet"]).output() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
+        if let Some(output) = run_iface_probe("netstat", &["-rn", "-f", "inet"]).await {
             // Look for lines containing the IP
             // Example: 100.64.0.1/32      link#15            UCS             utun4
             // Or:      100.64.0.1         100.64.0.1         UH              utun4
-            for line in output_str.lines() {
+            for line in output.lines() {
                 if line.contains(target_ip) {
                     // The interface is usually the last column or one of the last
                     let parts: Vec<&str> = line.split_whitespace().collect();
@@ -1902,6 +2010,88 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
     }
 
     None
+}
+
+/// Default timeout used by [`run_iface_probe`]. Two seconds is comfortably
+/// longer than any healthy `ip`/`ifconfig`/`netstat` call (low-tens of
+/// milliseconds) but short enough that a hung syscall doesn't stall the
+/// tokio worker for the whole `get_nebula_stats` IPC.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const IFACE_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Run a network-interface probe (`ip` / `ifconfig` / `netstat`) with the
+/// default timeout, returning its stdout as a UTF-8 string on success.
+///
+/// Async + timeout keeps these calls from stalling the tokio worker thread
+/// on a hung syscall, which `get_nebula_stats` was paying every UI tick.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn run_iface_probe(program: &str, args: &[&str]) -> Option<String> {
+    run_iface_probe_with_timeout(program, args, IFACE_PROBE_TIMEOUT).await
+}
+
+/// Underlying helper used by [`run_iface_probe`]. Exposed only to tests so
+/// they can drive the timeout path with a small duration instead of having
+/// to wait the production 2 s.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn run_iface_probe_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
+    let fut = tokio::process::Command::new(program).args(args).output();
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(Ok(output)) => Some(String::from_utf8_lossy(&output.stdout).into_owned()),
+        Ok(Err(e)) => {
+            debug!("{program} probe failed: {e}");
+            None
+        }
+        Err(_) => {
+            warn!("{program} probe timed out after {:?}", timeout);
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod iface_probe_tests {
+    use super::*;
+    use std::time::Instant;
+
+    /// Regression: the timeout branch must fire when the subprocess outlasts
+    /// the budget. We run `sleep 5` against a 100 ms budget; the call must
+    /// return `None` within a small multiple of the budget (allowing for
+    /// process spawn latency on slow CI runners).
+    #[tokio::test]
+    async fn iface_probe_returns_none_on_timeout() {
+        let start = Instant::now();
+        let out = run_iface_probe_with_timeout("sleep", &["5"], Duration::from_millis(100)).await;
+        let elapsed = start.elapsed();
+        assert!(out.is_none(), "expected timeout to return None, got Some");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "timeout took {:?} — expected close to 100 ms, fairly under 2 s",
+            elapsed
+        );
+    }
+
+    /// Sanity: the success branch returns the subprocess stdout.
+    #[tokio::test]
+    async fn iface_probe_returns_stdout_on_success() {
+        let out = run_iface_probe_with_timeout("echo", &["hello"], Duration::from_secs(2)).await;
+        assert_eq!(out.as_deref().map(str::trim), Some("hello"));
+    }
+
+    /// Spawn-error branch: nonexistent program should return `None` quickly,
+    /// not panic and not hit the timeout path.
+    #[tokio::test]
+    async fn iface_probe_returns_none_on_spawn_error() {
+        let start = Instant::now();
+        let out = run_iface_probe_with_timeout("__nonexistent_binary__", &[], Duration::from_secs(5)).await;
+        let elapsed = start.elapsed();
+        assert!(out.is_none(), "expected spawn error to return None");
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "spawn error took {:?} — should be near-instant, well under the 5 s budget",
+            elapsed
+        );
+    }
 }
 
 #[tauri::command]
@@ -2218,5 +2408,51 @@ mod tests {
         let is_zip = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("zip"));
         let is_tar_gz = name.to_ascii_lowercase().ends_with(".tar.gz");
         assert!(is_zip || is_tar_gz, "Expected .zip or .tar.gz, got '{name}'");
+    }
+
+    /// Within the TTL window, a fresh check should skip a re-fetch.
+    #[test]
+    fn release_check_skips_when_cache_is_fresh() {
+        let ttl = NEBULA_RELEASE_CHECK_TTL_MS;
+        // 1 hour ago, well inside a 24-hour TTL.
+        let last = 1_700_000_000_000;
+        let now = last + 60 * 60 * 1000;
+        assert!(should_skip_release_check(now, last, ttl));
+    }
+
+    /// Beyond the TTL, a fresh fetch is required.
+    #[test]
+    fn release_check_forces_fetch_when_cache_is_stale() {
+        let ttl = NEBULA_RELEASE_CHECK_TTL_MS;
+        // 25 hours ago, just past the 24-hour TTL.
+        let last = 1_700_000_000_000;
+        let now = last + 25 * 60 * 60 * 1000;
+        assert!(!should_skip_release_check(now, last, ttl));
+    }
+
+    /// Edge: exactly TTL_MS elapsed → still considered stale (strict <).
+    #[test]
+    fn release_check_is_strictly_less_than_ttl() {
+        let ttl = NEBULA_RELEASE_CHECK_TTL_MS;
+        let last = 1_700_000_000_000;
+        assert!(!should_skip_release_check(last + ttl, last, ttl));
+        assert!(should_skip_release_check(last + ttl - 1, last, ttl));
+    }
+
+    /// A backwards-clock jump must NOT panic (uses saturating_sub) and
+    /// must skip the check, since the next non-skewed launch will recover.
+    /// Documents the fail-safe behavior the production gate relies on.
+    #[test]
+    fn release_check_handles_backwards_clock_via_saturation() {
+        let ttl = NEBULA_RELEASE_CHECK_TTL_MS;
+        // "now" is BEFORE "last" (clock jumped back).
+        let last = 1_700_000_000_000;
+        let now = last - 60 * 60 * 1000;
+        // saturating_sub on signed i64 returns i64::MIN…0 → here it underflow-saturates
+        // to a large negative; on i64 the actual semantics: now.saturating_sub(last)
+        // produces a value < 0 only via wrapping, but signed saturating_sub clamps
+        // to i64::MIN if it would overflow. For reasonable timestamps this is just
+        // a normal subtraction returning negative, which is < ttl_ms → skip.
+        assert!(should_skip_release_check(now, last, ttl));
     }
 }

@@ -33,3 +33,4 @@ src-tauri/.env
 
 # Git worktrees (local development)
 .worktrees/
+.claude

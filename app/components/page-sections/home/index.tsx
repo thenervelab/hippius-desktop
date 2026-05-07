@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useSetAtom } from "jotai";
 import {
   activeSubMenuItemAtom,
@@ -6,37 +6,15 @@ import {
 } from "@/app/components/sidebar/sideBarAtoms";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import DetailList from "./DetailList";
-import CreditUsageTrends from "./credit-usage-trends";
-import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
-import { invoke } from "@tauri-apps/api/core";
-import { Account } from "@/lib/types";
 import StorageUsageTrends from "./storage-usage-trends";
-import useFiles from "@/app/lib/hooks/api/useFilesSize";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import Ipfs from "@/app/components/page-sections/files/FilesContainer";
 import { IS_SYNC_PAUSED, SyncPausedAlert } from "@/components/ui";
 
 const Home: React.FC = () => {
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   const setIsViewingRecentFiles = useSetAtom(isViewingRecentFilesAtom);
-
-  // Fetch marketplace credits with a higher limit to get good chart data
-  const { data: marketplaceCredits, isLoading: isLoadingCredits } =
-    useMarketplaceCredits();
-
-  // Fetch files data for storage usage chart
-  const { data: filesData, isLoading: isLoadingFiles } = useFiles();
-
-  // Transform marketplace credits to the format expected by the chart
-  const [transformedCreditsData, setTransformedCreditsData] = useState<Account[]>([]);
-  useEffect(() => {
-    if (!marketplaceCredits?.length) {
-      setTransformedCreditsData([]);
-      return;
-    }
-    invoke<Account[]>("transform_marketplace_credits", { credits: marketplaceCredits })
-      .then(setTransformedCreditsData)
-      .catch(() => setTransformedCreditsData([]));
-  }, [marketplaceCredits]);
+  const { polkadotAddress } = useWalletAuth();
 
   useEffect(() => {
     setActiveSubMenuItem("");
@@ -54,9 +32,6 @@ const Home: React.FC = () => {
         subText="Secure & Encrypted Storage with Easy Sync and Real-Time Tracking"
       >
         <div className="mt-6">
-          {/* <NebulaTest /> */}
-          {/* Stats Cards */}
-          {/* Sync Paused Alert */}
           {IS_SYNC_PAUSED && (
             <div className="mb-4">
               <SyncPausedAlert variant="inline" />
@@ -65,22 +40,14 @@ const Home: React.FC = () => {
 
           <DetailList />
 
-          <div className="gap-4 mt-6 w-full h-full grid grid-cols-1 @xl:grid-cols-2">
-            <CreditUsageTrends
-              chartData={transformedCreditsData}
-              isLoading={isLoadingCredits}
-            />
-            <StorageUsageTrends
-              chartData={filesData || []}
-              isLoading={isLoadingFiles}
-            />
+          <div className="gap-4 mt-6 w-full h-full grid grid-cols-1">
+            <StorageUsageTrends accountId={polkadotAddress ?? undefined} />
           </div>
           <div id="recent-files">
             <Ipfs isRecentFiles />
           </div>
         </div>
       </DashboardTitleWrapper>
-
     </>
   );
 };

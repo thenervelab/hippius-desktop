@@ -344,15 +344,26 @@ pub async fn delete_notification(state: tauri::State<'_, AppState>, id: i64) -> 
     Ok(())
 }
 
-/// Soft-delete all notifications for a user.
+/// Soft-delete every notification visible to a user — both rows scoped
+/// to their address AND `'system'` rows (Hippius update prompts and
+/// other app-wide events). Mirrors the read-side filter in
+/// `list_notifications` and `unread_count_inner`, which both pull
+/// `user_address = ? OR user_address = 'system'`. Without this match,
+/// "Delete All" silently misses what the list shows, and a deleted
+/// "Update Available" notification re-surfaces on the next refresh.
 #[tauri::command]
 pub async fn delete_all_notifications(state: tauri::State<'_, AppState>, user_address: String) -> Result<(), AppError> {
     let pool = state.pool()?;
 
-    sqlx::query("UPDATE notifications SET is_deleted = 1, deleted_at = CAST(strftime('%s','now') * 1000 AS INTEGER) WHERE user_address = ?")
-        .bind(&user_address)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE notifications \
+         SET is_deleted = 1, deleted_at = CAST(strftime('%s','now') * 1000 AS INTEGER) \
+         WHERE (user_address = ? OR user_address = 'system') \
+         AND is_deleted = 0",
+    )
+    .bind(&user_address)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
@@ -372,55 +383,36 @@ pub async fn delete_system_notification_by_version(state: tauri::State<'_, AppSt
     Ok(())
 }
 
-/// Get the count of unread, non-deleted notifications for a user.
+/// Pool-scoped implementation of [`get_unread_count`], extracted so the
+/// integration tests can exercise the production query directly instead
+/// of mirroring it. Single round-trip via a correlated subquery so the
+/// notification badge counter — which is polled on every screen — costs
+/// one pool acquire and one prepared statement.
 ///
-/// Only counts notifications whose `notification_type` matches an enabled
+/// Counts notifications whose `notification_type` matches an enabled
 /// preference label, plus any "Hippius" system notifications which are
 /// always shown regardless of preferences.
-#[tauri::command]
-pub async fn get_unread_count(state: tauri::State<'_, AppState>, user_address: String) -> Result<i64, AppError> {
-    let pool = state.pool()?;
-
-    // Fetch enabled notification type labels (e.g. ["Credits"])
-    let enabled: Vec<String> = sqlx::query_as::<_, (String,)>("SELECT label FROM notification_preferences WHERE enabled = 1")
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .map(|(l,)| l)
-        .collect();
-
-    if enabled.is_empty() {
-        // Only count system ("Hippius") notifications when no types enabled
-        let row = sqlx::query_as::<_, (i64,)>(
-            "SELECT COUNT(*) FROM notifications \
-             WHERE (user_address = ? OR user_address = 'system') \
-             AND is_unread = 1 AND is_deleted = 0 \
-             AND notification_type = 'Hippius'",
-        )
-        .bind(&user_address)
-        .fetch_one(pool)
-        .await?;
-        return Ok(row.0);
-    }
-
-    // Build placeholders for the IN clause
-    let placeholders: Vec<&str> = enabled.iter().map(|_| "?").collect();
-    let in_clause = placeholders.join(", ");
-    let query = format!(
+pub async fn unread_count_inner(pool: &sqlx::SqlitePool, user_address: &str) -> Result<i64, AppError> {
+    let (count,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM notifications \
          WHERE (user_address = ? OR user_address = 'system') \
          AND is_unread = 1 AND is_deleted = 0 \
-         AND (notification_type IN ({in_clause}) OR notification_type = 'Hippius')"
-    );
+         AND (notification_type = 'Hippius' \
+              OR notification_type IN (SELECT label FROM notification_preferences WHERE enabled = 1))",
+    )
+    .bind(user_address)
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
 
-    let mut q = sqlx::query_as::<_, (i64,)>(&query).bind(&user_address);
-    for label in &enabled {
-        q = q.bind(label);
-    }
-
-    let row = q.fetch_one(pool).await?;
-
-    Ok(row.0)
+/// Get the count of unread, non-deleted notifications for a user.
+///
+/// Thin IPC wrapper over [`unread_count_inner`] so the SQL is exercised
+/// directly by the integration tests in `tests/local_db_commands.rs`.
+#[tauri::command]
+pub async fn get_unread_count(state: tauri::State<'_, AppState>, user_address: String) -> Result<i64, AppError> {
+    unread_count_inner(state.pool()?, &user_address).await
 }
 
 /// Check if a credit notification with the given timestamp already exists.

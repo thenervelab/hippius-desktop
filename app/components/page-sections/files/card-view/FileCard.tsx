@@ -13,6 +13,7 @@ import {
   getFileIcon,
 } from "@/lib/utils/fileTypeUtils";
 import { Folder2 } from "@/components/ui/icons";
+import SharedLinkBadge from "@/components/page-sections/files/SharedLinkBadge";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
 
 /** Fetch a URL into a same-origin blob URL (needed for canvas thumbnail extraction). */
@@ -326,6 +327,12 @@ const FileCard: React.FC<FileCardProps> = ({
             )}
             <Icon className={cn("size-5 mr-1 flex-shrink-0", color)} />
             <span className="text-sm text-grey-20 truncate">{displayName}</span>
+            <SharedLinkBadge
+              label={file.label}
+              actualName={file.actualFileName}
+              isFolder={file.isFolder}
+              className="ml-1.5"
+            />
           </div>
         )}
         <div className="flex-shrink-0 ml-1">{actionMenu}</div>

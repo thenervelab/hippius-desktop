@@ -16,7 +16,7 @@ import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { getFullPath } from "@/app/utils/folderPathUtils";
 import { useAtomValue } from "jotai";
 import { queryClientAtom } from "jotai-tanstack-query";
-import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
+import { DRIVE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { getLastBrowseDirectory, saveLastBrowseDirectory } from "@/lib/utils/userPreferencesDb";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
@@ -107,7 +107,7 @@ export default function FolderToFolderUploadDialog({
             });
 
             // Refresh file list AFTER backend has added the folder so list_sync_folder sees it
-            queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
+            queryClient.invalidateQueries({ queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY] });
             if (onRefresh) {
                 onRefresh();
             }

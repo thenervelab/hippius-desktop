@@ -34,10 +34,14 @@ const timeRangeOptions: Option[] = [
 export type ChartTrendsVariant = "card" | "panel";
 
 export interface ChartTrendsConfig {
-  /** Rust invoke command name (e.g. "format_credits_chart") */
+  /** Rust invoke command name (e.g. "get_drive_credits_chart") */
   invokeCommand: string;
-  /** Chart title text */
-  title: string;
+  /**
+   * Chart title. `ReactNode` so a config can attach an inline
+   * affordance (e.g. an InfoTooltip) next to the title text without
+   * the wrapper having to know.
+   */
+  title: ReactNode;
   /** Icon rendered beside the title */
   icon: ReactNode;
   /** Text shown when no data is available */
@@ -71,6 +75,14 @@ export interface ChartTrendsConfig {
   ) => ReactNode;
   /** Visual layout: "card" uses Card+RevealTextLine, "panel" uses plain div with border */
   variant?: ChartTrendsVariant;
+  /**
+   * When true, the chart's IPC takes ownership of fetching and is invoked
+   * with `{ accountId, range }` instead of `{ accounts, range }`. The
+   * `chartData` prop is ignored and the empty-data short-circuit is
+   * skipped — used for backend-owned series like the drive credit/storage
+   * history that subsume the legacy fetch+format split.
+   */
+  selfFetch?: boolean;
 }
 
 export interface ChartTrendsProps {
@@ -79,6 +91,11 @@ export interface ChartTrendsProps {
   isLoading?: boolean;
   className?: string;
   onRetry?: () => void;
+  /**
+   * Required when `config.selfFetch` is true: the active wallet
+   * address that the backend command will scope its query to.
+   */
+  accountId?: string;
 }
 
 // Default y-axis tick label props (baseline values at 16px root font-size)
@@ -109,6 +126,7 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
   chartData,
   isLoading,
   className,
+  accountId,
 }) => {
   const {
     invokeCommand,
@@ -128,17 +146,52 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
     gridBgClass,
     renderTooltip,
     variant = "card",
+    selfFetch = false,
   } = config;
 
   const [timeRange, setTimeRange] = useState<string>("last7days");
   const [formattedChartData, setFormattedChartData] = useState<ChartPoint[]>(
     [],
   );
+  // selfFetch charts own their own loading state — the legacy callers
+  // pass `isLoading` in via props (TanStack Query is upstream of them),
+  // but selfFetch callers can't, so without this the spinner would be
+  // skipped during the initial IPC and users would briefly see the
+  // empty-state copy instead.
+  const [isFetching, setIsFetching] = useState(false);
 
   // Scale factor: at 16px root = 1, at 13px root ≈ 0.81
   const remScale = useRemScale();
 
   useEffect(() => {
+    // selfFetch charts let the backend own the query; the FE no longer
+    // pre-fetches and passes `accounts`. This branch waits for an
+    // accountId before invoking — without it the backend has nothing to
+    // scope the query to.
+    if (selfFetch) {
+      if (!accountId) {
+        setFormattedChartData([]);
+        setIsFetching(false);
+        return;
+      }
+      // Cancellation guard: if `accountId` or `timeRange` changes
+      // before the in-flight call resolves, the stale promise must
+      // not race to overwrite the newer fetch's data.
+      let cancelled = false;
+      setIsFetching(true);
+      invoke<ChartPoint[]>(invokeCommand, {
+        accountId,
+        range: timeRange,
+      })
+        .then((d) => { if (!cancelled) setFormattedChartData(d); })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          console.error("[ChartTrends] Failed to fetch chart data via", invokeCommand, ":", err);
+          setFormattedChartData([]);
+        })
+        .finally(() => { if (!cancelled) setIsFetching(false); });
+      return () => { cancelled = true; };
+    }
     if (!chartData?.length) {
       setFormattedChartData([]);
       return;
@@ -152,7 +205,7 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
         console.error("[ChartTrends] Failed to format chart data via", invokeCommand, ":", err);
         setFormattedChartData([]);
       });
-  }, [chartData, timeRange, invokeCommand]);
+  }, [chartData, timeRange, invokeCommand, selfFetch, accountId]);
 
   // Compute Y-ticks
   const yTicks = useMemo(() => {
@@ -286,7 +339,7 @@ const ChartTrends: React.FC<ChartTrendsProps> = ({
 
   const chartContent = (
     <div className="relative w-full h-full flex">
-      {isLoading ? (
+      {(isLoading || isFetching) ? (
         <div className="flex items-center justify-center w-full h-full">
           <Icons.Loader className="size-8 animate-spin text-primary-60" />
         </div>

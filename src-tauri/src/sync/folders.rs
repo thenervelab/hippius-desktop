@@ -10,7 +10,7 @@ use tracing::{error, info, warn};
 use crate::auth::account_key::account_key;
 use crate::auth::tokens::get_api_token;
 use crate::error::Result;
-use crate::sync::config::{ACCEPT_INVALID_CERTS, get_hcfs_config_internal};
+use crate::sync::config::{ACCEPT_INVALID_CERTS, get_hcfs_config_internal, normalize_for_region_probe};
 use crate::sync::lifecycle::start_sync_loop;
 use crate::sync::lifecycle::{initialize_sync_inner, remove_drive};
 use crate::sync::mnemonic::{config_dir_for_folder, folder_hash};
@@ -120,11 +120,10 @@ pub(crate) async fn get_all_sync_paths_internal(pool: &SqlitePool, account_id: &
 /// Internal helper to list remote folders without Tauri State params.
 pub(crate) async fn list_remote_folders_internal(pool: &SqlitePool, account_id: &str) -> Result<Vec<RemoteFolderInfoResult>> {
     let config = get_hcfs_config_internal(pool, account_id).await?;
-    let server_url = if config.server_url.is_empty() {
-        "https://arion.hippius.com".to_string()
-    } else {
-        config.server_url
-    };
+    // Empty string is hcfs-client's region-probe sentinel; legacy
+    // single-region URL gets rewritten to empty so existing users
+    // transparently opt in. See `normalize_for_region_probe`.
+    let server_url = normalize_for_region_probe(&config.server_url);
 
     let bearer_token = get_api_token(pool, account_id)
         .await?
@@ -165,11 +164,9 @@ pub async fn list_remote_folders(state: tauri::State<'_, crate::app_state::AppSt
     info!("Listing remote folders for account '{}'", account_id);
     let pool = state.pool()?;
     let config = get_hcfs_config_internal(pool, &account_id).await?;
-    let server_url = if config.server_url.is_empty() {
-        "https://arion.hippius.com".to_string()
-    } else {
-        config.server_url
-    };
+    // See `normalize_for_region_probe` — empty signals hcfs-client to
+    // race the regional endpoints; legacy single-region URL also empties.
+    let server_url = normalize_for_region_probe(&config.server_url);
 
     let bearer_token = get_api_token(pool, &account_id)
         .await?
@@ -272,26 +269,45 @@ pub async fn restore_remote_folders(
         account_id
     );
     let pool = state.pool()?;
-    let mut results = Vec::with_capacity(folders.len());
-    let mut any_success = false;
 
-    for folder in &folders {
-        match restore_single_folder(&app, pool, &account_id, &base_path, &folder.label, existing_mnemonic.as_deref()).await {
+    // Fan out per-folder restore concurrently — each `restore_single_folder`
+    // does HCFS server probe + DB writes + drive bootstrap, none of which
+    // share mutable state across folders. For N folders this turns
+    // sum(N) latency into max(N) latency. We pass `start_loop=false` to
+    // each and start the sync loop once at the end so all restored drives
+    // are picked up in a single pass (preserving the prior behavior).
+    let restore_futures = folders.iter().map(|folder| {
+        let app = app.clone();
+        let account_id = account_id.clone();
+        let base_path = base_path.clone();
+        let label = folder.label.clone();
+        let existing_mnemonic = existing_mnemonic.clone();
+        async move {
+            let outcome = restore_single_folder(&app, pool, &account_id, &base_path, &label, existing_mnemonic.as_deref()).await;
+            (label, outcome)
+        }
+    });
+    let outcomes = futures_util::future::join_all(restore_futures).await;
+
+    let mut results = Vec::with_capacity(outcomes.len());
+    let mut any_success = false;
+    for (label, outcome) in outcomes {
+        match outcome {
             Ok(()) => {
                 any_success = true;
                 results.push(RestoreResult {
-                    label: folder.label.clone(),
+                    label,
                     success: true,
                     error: None,
                 });
             }
             Err(e) => {
-                error!("Failed to restore remote folder '{}': {e}", folder.label);
-                if let Err(rollback_err) = crate::sync::paths::remove_sync_path_internal(pool, &account_id, &folder.label).await {
-                    warn!("Failed to rollback sync path for '{}': {rollback_err}", folder.label);
+                error!("Failed to restore remote folder '{}': {e}", label);
+                if let Err(rollback_err) = crate::sync::paths::remove_sync_path_internal(pool, &account_id, &label).await {
+                    warn!("Failed to rollback sync path for '{}': {rollback_err}", label);
                 }
                 results.push(RestoreResult {
-                    label: folder.label.clone(),
+                    label,
                     success: false,
                     error: Some(e.to_string()),
                 });
@@ -335,11 +351,9 @@ pub async fn delete_remote_folder(
     info!("Deleting remote folder '{}' for account '{}'", label, account_id);
     let pool = state.pool()?;
     let config = get_hcfs_config_internal(pool, &account_id).await?;
-    let server_url = if config.server_url.is_empty() {
-        "https://arion.hippius.com".to_string()
-    } else {
-        config.server_url
-    };
+    // See `normalize_for_region_probe` — empty signals hcfs-client to
+    // race the regional endpoints; legacy single-region URL also empties.
+    let server_url = normalize_for_region_probe(&config.server_url);
 
     let bearer_token = get_api_token(pool, &account_id)
         .await?

@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { Header, flexRender } from "@tanstack/react-table";
-import { ChevronDown } from "@/components/ui/icons";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import React from "react";
 
 export interface ThProps<TData, TValue>
@@ -11,6 +11,12 @@ export interface ThProps<TData, TValue>
   columnWidth?: number; // percentage
   onResizeStart?: (columnId: string, startX: number) => void;
   preventSort?: boolean;
+  /**
+   * Hide the resize handle entirely — used by tables that don't want
+   * user-resizable columns (e.g. the shares page, where rows are
+   * narrow and resizing adds visual clutter without value).
+   */
+  disableResize?: boolean;
 }
 
 export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
@@ -23,22 +29,24 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
     columnWidth,
     onResizeStart,
     preventSort,
+    disableResize,
     ...rest
   } = props;
 
   const sortOrder = header.column.getIsSorted();
   const canSort = header.column.getCanSort();
 
-  // Allow resizing all except an "actions" column (if you use one)
-  const canResize = header.id !== "actions";
+  // Allow resizing all except an "actions" column (if you use one),
+  // unless the consumer has explicitly disabled resize for this table.
+  const canResize = !disableResize && header.id !== "actions";
 
   return (
     <th
       className={cn(
         "font-semibold text-xs px-2.5 border-x first:border-l-transparent last:border-r-transparent border-b py-3 text-grey-70 relative",
-        canSort && "pr-8 cursor-pointer hover:bg-gray-50/30",
+        canSort && "cursor-pointer hover:bg-gray-50/30",
         sortOrder && canSort && cn("text-primary-50", activeSortClassName),
-        className
+        className,
       )}
       style={{
         width: columnWidth ? `${columnWidth}%` : undefined,
@@ -61,25 +69,18 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
           "flex w-full",
           align === "center" && "justify-center",
           align === "left" && "justify-start",
-          align === "right" && "justify-end"
+          align === "right" && "justify-end",
         )}
       >
         {canSort ? (
           <button
             className={cn(
-              "relative flex h-fit w-fit whitespace-nowrap",
-              header.column.columnDef.header !== "hALPHA EARNED" && "uppercase"
+              "inline-flex items-center gap-1 whitespace-nowrap",
+              header.column.columnDef.header !== "hALPHA EARNED" && "uppercase",
             )}
           >
             {flexRender(header.column.columnDef.header, header.getContext())}
-            {sortOrder && canSort && (
-              <ChevronDown
-                className={cn(
-                  "absolute mt-0.5 -right-5 w-4 text-primary-50 duration-300",
-                  sortOrder === "asc" && "rotate-180"
-                )}
-              />
-            )}
+            <SortIndicator sortOrder={sortOrder} />
           </button>
         ) : (
           <span className="uppercase">
@@ -99,5 +100,44 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
         />
       )}
     </th>
+  );
+}
+
+/**
+ * Stacked up/down chevron pair used as the sort affordance on every
+ * sortable column header.
+ *
+ * Same shape in all three states (unsorted / asc / desc) — only the
+ * tint changes — so the visual paradigm stays consistent. Previously
+ * the active state showed a single ChevronDown while the inactive
+ * state showed `ArrowUpDown`, which read as "two different icons".
+ *
+ * - Unsorted: both chevrons dim (signals the column is sortable).
+ * - Ascending: top chevron tinted primary, bottom dim.
+ * - Descending: bottom chevron tinted primary, top dim.
+ */
+function SortIndicator({ sortOrder }: { sortOrder: false | "asc" | "desc" }) {
+  const ascActive = sortOrder === "asc";
+  const descActive = sortOrder === "desc";
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-flex flex-col items-center leading-none shrink-0"
+    >
+      <ChevronUp
+        className={cn(
+          "size-3 -mb-[3px]",
+          ascActive ? "text-primary-50" : "text-grey-70/40",
+        )}
+        strokeWidth={2.5}
+      />
+      <ChevronDown
+        className={cn(
+          "size-3",
+          descActive ? "text-primary-50" : "text-grey-70/40",
+        )}
+        strokeWidth={2.5}
+      />
+    </span>
   );
 }

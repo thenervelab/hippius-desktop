@@ -194,7 +194,13 @@ pub(crate) async fn upsert_migration_status(
 /// format is detected, `pending_count` and `total_size` are derived
 /// from the file list.
 pub(crate) async fn fetch_migration_summary(client: &reqwest::Client, server_url: &str, user_id: &str) -> Result<ServerMigrationResponse> {
-    let url = format!("{}/migration/{}", server_url.trim_end_matches('/'), user_id);
+    // `server_url` is empty when the user is in auto-detect mode (the
+    // sentinel hcfs-client uses to race regional endpoints). Reqwest
+    // would reject `format!("{}/migration/...", "", ...)` with
+    // `builder error: missing scheme`, so collapse the empty case to
+    // a regional URL here. See `crate::sync::region::resolve_base_url`.
+    let base = crate::sync::region::resolve_base_url(server_url);
+    let url = format!("{}/migration/{}", base.trim_end_matches('/'), user_id);
     let resp = client
         .get(&url)
         // Old servers may take a while enumerating large buckets
@@ -742,7 +748,9 @@ pub async fn start_server_migration(
 
     // Call server endpoint — use a longer timeout since the server
     // validates credentials and sets up the migration job.
-    let url = format!("{}/migration/start", server_url.trim_end_matches('/'));
+    // Same auto-detect-empty-string handling as `fetch_migration_summary`.
+    let server_base = crate::sync::region::resolve_base_url(&server_url);
+    let url = format!("{}/migration/start", server_base.trim_end_matches('/'));
     tracing::info!("[Migration] Posting to {url}");
 
     let resp = state
@@ -775,7 +783,7 @@ pub async fn start_server_migration(
         // If a previous job is still active, cancel it and retry once.
         if text.contains("job_exists") {
             tracing::warn!("[Migration] Existing job found — cancelling and retrying");
-            let cancel_url = format!("{}/migration/cancel", server_url.trim_end_matches('/'));
+            let cancel_url = format!("{}/migration/cancel", server_base.trim_end_matches('/'));
             let _ = state
                 .migration
                 .client
@@ -839,7 +847,9 @@ pub async fn start_server_migration(
 async fn poll_migration_status_internal(state: &crate::app_state::AppState, account_id: &str) -> Result<ServerMigrationStatus> {
     let pool = state.pool()?;
     let server_url = get_server_url(pool, account_id).await?;
-    let url = format!("{}/migration/{}/status", server_url.trim_end_matches('/'), account_id);
+    // Same auto-detect-empty-string handling as `fetch_migration_summary`.
+    let server_base = crate::sync::region::resolve_base_url(&server_url);
+    let url = format!("{}/migration/{}/status", server_base.trim_end_matches('/'), account_id);
 
     let result = async {
         let resp = state.migration.client.get(&url).send().await?;

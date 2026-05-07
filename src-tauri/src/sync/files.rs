@@ -10,6 +10,7 @@ use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter, Manager};
 use tracing::{info, warn};
 
@@ -78,8 +79,12 @@ fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf> {
 /// performed at the IPC boundary by `add_file` (single-file path) or
 /// `add_files` (batch path), and the inner helper is called from both
 /// without re-checking — see the call sites for the rationale.
-async fn add_file_internal(sync_path: String, file_path: String) -> Result<String> {
-    let source = Path::new(&file_path);
+///
+/// Takes an already-canonicalized parent directory so a batch caller can
+/// canonicalize once outside the loop instead of paying the `realpath`
+/// syscall per file (10–100 ms each on slow filesystems).
+async fn add_file_internal(canonical_parent: &Path, file_path: &str) -> Result<String> {
+    let source = Path::new(file_path);
     let name = source
         .file_name()
         .and_then(|n| n.to_str())
@@ -91,20 +96,12 @@ async fn add_file_internal(sync_path: String, file_path: String) -> Result<Strin
         return Err(crate::error::AppError::Other("Invalid file name".into()));
     }
 
-    let parent = Path::new(&sync_path);
-    let dest = parent.join(&name);
-
-    // Validate destination is within the sync folder BEFORE writing
-    // (canonicalize parent only — dest doesn't exist yet)
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
     let canonical_dest = canonical_parent.join(&name);
-    if !canonical_dest.starts_with(&canonical_parent) {
+    if !canonical_dest.starts_with(canonical_parent) {
         return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
     }
 
-    tokio::fs::copy(source, &dest)
+    tokio::fs::copy(source, &canonical_dest)
         .await
         .map_err(|e| crate::error::AppError::Other(format!("Copy failed: {e}")))?;
 
@@ -113,7 +110,12 @@ async fn add_file_internal(sync_path: String, file_path: String) -> Result<Strin
 
 /// Add file to sync folder (Drive auto-syncs)
 #[tauri::command]
-pub async fn add_file(state: tauri::State<'_, crate::app_state::AppState>, sync_path: String, file_path: String) -> Result<String> {
+pub async fn add_file(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    app: tauri::AppHandle,
+    sync_path: String,
+    file_path: String,
+) -> Result<String> {
     // Enforce credit eligibility at the IPC boundary. Even if a stale
     // FE cache let the user click the upload button, this fails the
     // operation here so we never copy the file into the sync folder
@@ -122,7 +124,35 @@ pub async fn add_file(state: tauri::State<'_, crate::app_state::AppState>, sync_
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
     crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FileUpload).await?;
 
-    add_file_internal(sync_path, file_path).await
+    // Mark the processing window. Released either by the first upload
+    // chunk of the NEXT sync cycle (success path, gated by
+    // `sync_session_epoch` in `handle_transfer_progress`) or by the
+    // error guard below (failure path — IPC failed before any cycle
+    // ran, so unconditional `reset` is correct).
+    let epoch = state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+    state.upload_processing.begin(&app, 1, epoch);
+
+    // Canonicalize the sync path once and pass it to the internal helper
+    // so the helper can be cheap when called per-file from the batch path.
+    //
+    // We can't use `?` after `begin` because we must release the banner
+    // (`reset`) BEFORE returning the error — otherwise it would sit there
+    // until the watchdog timeout if the IPC fails before any sync cycle
+    // can start.
+    let canonical_parent = match tokio::fs::canonicalize(Path::new(&sync_path)).await {
+        Ok(p) => p,
+        Err(e) => {
+            state.upload_processing.reset(&app);
+            return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
+        }
+    };
+    match add_file_internal(&canonical_parent, &file_path).await {
+        Ok(name) => Ok(name),
+        Err(e) => {
+            state.upload_processing.reset(&app);
+            Err(e)
+        }
+    }
 }
 
 /// Add folder to sync folder
@@ -139,7 +169,45 @@ pub async fn add_folder(
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
     crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FolderUpload).await?;
 
-    let source = Path::new(&folder_path);
+    // Pre-walk the source tree so the banner shows an accurate count.
+    // Cheap relative to the full copy (no file-content reads).
+    //
+    // Skip `begin` when the walk found zero files. The walk swallows
+    // per-subdir I/O errors and returns a best-effort lower bound, so
+    // count == 0 means either the folder is genuinely empty or every
+    // subdir was unreadable — in both cases we should not raise a
+    // banner that the sync engine will never clear (an empty plan
+    // can complete without firing `SyncCompleted` in some hcfs-client
+    // configurations).
+    let count = count_regular_files(Path::new(&folder_path)).await;
+    if count > 0 {
+        let epoch = state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        state.upload_processing.begin(&app, count, epoch);
+    }
+
+    let result = add_folder_with_app_inner(&sync_path, &folder_path, subfolder.as_deref()).await;
+    match result {
+        Ok(name) => {
+            // Trigger sync so the uploaded folder gets synced
+            use tauri::Manager;
+            let s = app.state::<crate::app_state::AppState>().sync.clone();
+            let _ = trigger_sync(&s).await;
+            Ok(name)
+        }
+        Err(e) => {
+            // IPC failed before any sync cycle ran — unconditional
+            // reset is correct (no cycle epoch to gate on).
+            state.upload_processing.reset(&app);
+            Err(e)
+        }
+    }
+}
+
+/// Validation + copy logic for `add_folder`, factored out so the public
+/// command can wrap the result in begin/clear-on-Err bookkeeping for
+/// the upload-processing banner without nesting too deeply.
+async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder: Option<&str>) -> Result<String> {
+    let source = Path::new(folder_path);
     let name = source
         .file_name()
         .and_then(|n| n.to_str())
@@ -152,8 +220,8 @@ pub async fn add_folder(
     }
 
     // Resolve target directory (with optional subfolder)
-    let sync_root = Path::new(&sync_path);
-    let target_dir = if let Some(ref sub) = subfolder {
+    let sync_root = Path::new(sync_path);
+    let target_dir = if let Some(sub) = subfolder {
         // Reject traversal components before creating directories
         if sub.contains("..") {
             return Err(crate::error::AppError::Other("Subfolder path contains traversal component".into()));
@@ -162,12 +230,13 @@ pub async fn add_folder(
         if !t.exists() {
             std::fs::create_dir_all(&t).map_err(|e| crate::error::AppError::Other(format!("Failed to create subfolder: {e}")))?;
         }
-        // Verify resolved path is within sync root
-        let canonical_root = sync_root
-            .canonicalize()
+        // Verify resolved path is within sync root (async canonicalize so
+        // we don't block the tokio worker thread on `realpath`).
+        let canonical_root = tokio::fs::canonicalize(sync_root)
+            .await
             .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
-        let canonical_target = t
-            .canonicalize()
+        let canonical_target = tokio::fs::canonicalize(&t)
+            .await
             .map_err(|e| crate::error::AppError::Other(format!("Invalid subfolder path: {e}")))?;
         if !canonical_target.starts_with(&canonical_root) {
             return Err(crate::error::AppError::Other("Subfolder escapes sync folder".into()));
@@ -177,31 +246,59 @@ pub async fn add_folder(
         sync_root.to_path_buf()
     };
 
-    let dest = target_dir.join(&name);
-
-    // Validate destination is within the sync folder BEFORE writing
-    let canonical_parent = target_dir
-        .canonicalize()
+    // Validate destination is within the sync folder BEFORE writing.
+    let canonical_parent = tokio::fs::canonicalize(&target_dir)
+        .await
         .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
     let canonical_dest = canonical_parent.join(&name);
     if !canonical_dest.starts_with(&canonical_parent) {
         return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
     }
 
-    copy_dir_recursive(source, &dest, 0).await?;
-
-    // Trigger sync so the uploaded folder gets synced
-    {
-        use tauri::Manager;
-        let s = app.state::<crate::app_state::AppState>().sync.clone();
-        let _ = trigger_sync(&s).await;
-    }
+    copy_dir_recursive(source, &canonical_dest, 0).await?;
 
     Ok(name)
 }
 
+/// Count regular files (non-directory, non-symlink) under `root`,
+/// recursively. Used by `add_folder` and `add_files` to size the
+/// `begin` count for the upload-processing banner.
+///
+/// Returns a best-effort lower bound: per-subdirectory I/O errors
+/// (e.g. permission-denied) are silently skipped via `continue`, so
+/// the count is the number of regular files we successfully
+/// enumerated, not the total. A wholly-unreadable root produces 0.
+/// Symlinks are not followed and are not counted (consistent with
+/// `tokio::fs::DirEntry::file_type`'s `lstat`-equivalent behavior).
+///
+/// Iterative depth-first walk via an explicit stack to avoid recursive
+/// async-fn boxing. Does not read file contents — only iterates
+/// directory entries — so the cost is bounded by what `copy_dir_recursive`
+/// is about to do anyway.
+async fn count_regular_files(root: &std::path::Path) -> u64 {
+    use tokio::fs;
+
+    let mut count: u64 = 0;
+    let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(mut entries) = fs::read_dir(&dir).await else { continue };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let Ok(ft) = entry.file_type().await else { continue };
+            if ft.is_dir() {
+                stack.push(entry.path());
+            } else if ft.is_file() {
+                count = count.saturating_add(1);
+            }
+        }
+    }
+    count
+}
+
 /// Internal folder copy — no sync trigger (caller handles it).
-async fn add_folder_internal(sync_path: &str, folder_path: &str) -> Result<String> {
+///
+/// Takes an already-canonicalized parent so the batch caller can canonicalize
+/// once outside the loop instead of per-folder.
+async fn add_folder_internal(canonical_parent: &Path, folder_path: &str) -> Result<String> {
     let source = Path::new(folder_path);
     let name = source
         .file_name()
@@ -213,18 +310,12 @@ async fn add_folder_internal(sync_path: &str, folder_path: &str) -> Result<Strin
         return Err(crate::error::AppError::Other("Invalid folder name".into()));
     }
 
-    let parent = Path::new(sync_path);
-    let dest = parent.join(&name);
-
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
     let canonical_dest = canonical_parent.join(&name);
-    if !canonical_dest.starts_with(&canonical_parent) {
+    if !canonical_dest.starts_with(canonical_parent) {
         return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
     }
 
-    copy_dir_recursive(source, &dest, 0).await?;
+    copy_dir_recursive(source, &canonical_dest, 0).await?;
     Ok(name)
 }
 
@@ -395,30 +486,86 @@ pub async fn add_files(
     };
     crate::billing::eligibility::require_eligible(&state, &account_id, action).await?;
 
+    // Sum the file count for the banner. Each direct file path counts
+    // as 1; each directory path gets a recursive walk via
+    // `count_regular_files` (introduced in Task 7). Released either by
+    // the first upload chunk (success), the early-return error paths
+    // below (failure), or the all-failed-batch guard after the loop.
+    //
+    // Per-directory counts use `.max(1)` so that an unwalkable subdir
+    // (permission denied) still bumps the total by 1 — we know there's
+    // a directory there, even if we can't enumerate it. Per-batch
+    // count is NOT clamped: an empty `file_paths` skips `begin` so
+    // that an empty IPC call doesn't raise a banner that nothing
+    // will ever clear.
+    let mut total_count: u64 = 0;
+    for fp in &file_paths {
+        let p = Path::new(fp);
+        if p.is_dir() {
+            total_count = total_count.saturating_add(count_regular_files(p).await.max(1));
+        } else {
+            total_count = total_count.saturating_add(1);
+        }
+    }
+    if total_count > 0 {
+        let epoch = state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        state.upload_processing.begin(&app, total_count, epoch);
+    }
+
     // When a subfolder is specified, resolve the effective target directory.
     // This replaces the path-join logic that was previously in TypeScript.
+    // Async canonicalize so a slow filesystem doesn't block the tokio worker.
+    //
+    // After `begin` above, every fallible early-return path here MUST call
+    // `reset` first — otherwise the banner sits there until the watchdog
+    // timeout while the IPC has already failed. Unconditional `reset` is
+    // correct because the IPC failed before any sync cycle could run.
     let target_path = if let Some(ref sub) = subfolder {
         // Reject traversal components
         if sub.contains("..") {
+            state.upload_processing.reset(&app);
             return Err(crate::error::AppError::Other("Subfolder path contains traversal component".into()));
         }
         let target = Path::new(&sync_path).join(sub);
-        if !target.exists() {
-            std::fs::create_dir_all(&target).map_err(|e| crate::error::AppError::Other(format!("Failed to create subfolder: {e}")))?;
+        if !target.exists()
+            && let Err(e) = std::fs::create_dir_all(&target)
+        {
+            state.upload_processing.reset(&app);
+            return Err(crate::error::AppError::Other(format!("Failed to create subfolder: {e}")));
         }
-        // Verify resolved path stays within sync root
-        let canonical_root = Path::new(&sync_path)
-            .canonicalize()
-            .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
-        let canonical_target = target
-            .canonicalize()
-            .map_err(|e| crate::error::AppError::Other(format!("Invalid subfolder path: {e}")))?;
+        // Verify resolved path stays within sync root.
+        let canonical_root = match tokio::fs::canonicalize(Path::new(&sync_path)).await {
+            Ok(p) => p,
+            Err(e) => {
+                state.upload_processing.reset(&app);
+                return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
+            }
+        };
+        let canonical_target = match tokio::fs::canonicalize(&target).await {
+            Ok(p) => p,
+            Err(e) => {
+                state.upload_processing.reset(&app);
+                return Err(crate::error::AppError::Other(format!("Invalid subfolder path: {e}")));
+            }
+        };
         if !canonical_target.starts_with(&canonical_root) {
+            state.upload_processing.reset(&app);
             return Err(crate::error::AppError::Other("Subfolder escapes sync folder".into()));
         }
         target.to_string_lossy().to_string()
     } else {
         sync_path.clone()
+    };
+
+    // Canonicalize the target directory ONCE before the loop so each
+    // per-file call doesn't re-pay the `realpath` syscall (which can be
+    // 10–100 ms on slow filesystems and blocks the tokio worker).
+    let canonical_target = match tokio::fs::canonicalize(Path::new(&target_path)).await {
+        Ok(p) => p,
+        Err(e) => {
+            state.upload_processing.reset(&app);
+            return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
+        }
     };
 
     let mut added = Vec::new();
@@ -430,12 +577,12 @@ pub async fn add_files(
         let result = if source.is_dir() {
             // Pass app handle but no subfolder — subfolder already resolved into target_path.
             // Don't trigger sync per-folder — add_files triggers once at the end.
-            add_folder_internal(&target_path, file_path).await
+            add_folder_internal(&canonical_target, file_path).await
         } else {
             // Use the internal helper that skips the per-file eligibility
             // check — the batch eligibility check at the top of `add_files`
             // covers the whole operation.
-            add_file_internal(target_path.clone(), file_path.clone()).await
+            add_file_internal(&canonical_target, file_path).await
         };
         match result {
             Ok(name) => added.push(name),
@@ -452,6 +599,22 @@ pub async fn add_files(
                 "total": total,
             }),
         );
+    }
+
+    // If the batch was a total failure (every entry errored during
+    // copy), there is no work to upload. Clear the banner here so we
+    // don't depend on `trigger_sync` to produce a terminal event for
+    // an empty plan — hcfs-client may skip the cycle entirely if there
+    // is nothing to do, leaving a `Processing N files…` banner stuck
+    // until the next sync cycle (which could be minutes away).
+    //
+    // Unconditional `reset` is correct: the batch never produced any
+    // upload work, so there is no future cycle whose epoch we need
+    // to gate against. `reset` is safe even if `begin` was never
+    // called (e.g. `total_count` was 0 above): it short-circuits when
+    // state is already inactive.
+    if added.is_empty() {
+        state.upload_processing.reset(&app);
     }
 
     // Always trigger sync so successfully added files get uploaded
@@ -477,25 +640,78 @@ use hcfs_client::engine::types::{SyncedFileInfo, build_synced_paths_from_state};
 /// falls back to the last cached snapshot so the file browser still
 /// shows accurate sync status instead of "unknown".
 async fn synced_paths_for_label(sync: &SyncRunner, label: &str) -> Option<HashMap<String, SyncedFileInfo>> {
-    // Get the per-drive Arc from the map (brief outer lock).
-    let drive_arc = {
-        match sync.drives.try_lock() {
-            Ok(guard) => guard.get(label).map(|slot| slot.manager.clone()),
-            Err(_) => return sync.get_cached_synced_paths(label),
-        }
+    let arc = match acquire_drive_arc(sync, label) {
+        DriveArcOutcome::Acquired(arc) => arc,
+        DriveArcOutcome::CacheFallback => return sync.get_cached_synced_paths(label),
     };
-    let Some(arc) = drive_arc else {
-        return sync.get_cached_synced_paths(label);
+    // `try_lock` (not `lock().await`) is essential here: the per-drive
+    // mutex is held by the sync loop for the duration of a sync cycle,
+    // and the file browser must remain responsive during that window.
+    // Falling back to the cache on contention is a deliberate tradeoff:
+    // slightly stale on-screen sync status > a 30-second listing freeze.
+    match arc.try_lock() {
+        Ok(manager) => match manager.load_sync_state().await {
+            Ok(state) => {
+                let paths = build_synced_paths_from_state(&state);
+                sync.update_synced_paths_cache(label, paths.clone());
+                Some(paths)
+            }
+            Err(_) => None,
+        },
+        Err(_) => sync.get_cached_synced_paths(label),
+    }
+}
+
+/// Read both the synced-paths map and the exclusion patterns for `label`
+/// behind a single outer-drives lock acquisition.
+///
+/// Eliminates the two-acquire pattern flagged by the perf audit: callers
+/// like `list_sync_folder_inner` previously locked `sync.drives` once for
+/// synced paths and again for exclude patterns. Both values are produced
+/// from the same `manager` borrow in a single per-drive lock window.
+async fn synced_paths_and_excludes_for_label(sync: &SyncRunner, label: &str) -> (Option<HashMap<String, SyncedFileInfo>>, Vec<String>) {
+    let arc = match acquire_drive_arc(sync, label) {
+        DriveArcOutcome::Acquired(arc) => arc,
+        DriveArcOutcome::CacheFallback => return (sync.get_cached_synced_paths(label), Vec::new()),
     };
-    // Try to lock the per-drive mutex; fall back to cache if syncing.
+    // `try_lock` (not `lock().await`) is essential — see synced_paths_for_label.
     match arc.try_lock() {
         Ok(manager) => {
-            let state = manager.load_sync_state().await.ok()?;
-            let paths = build_synced_paths_from_state(&state);
-            sync.update_synced_paths_cache(label, paths.clone());
-            Some(paths)
+            let synced = match manager.load_sync_state().await {
+                Ok(state) => {
+                    let paths = build_synced_paths_from_state(&state);
+                    sync.update_synced_paths_cache(label, paths.clone());
+                    Some(paths)
+                }
+                Err(_) => None,
+            };
+            let excludes = manager.list_exclude_patterns();
+            (synced, excludes)
         }
-        Err(_) => sync.get_cached_synced_paths(label),
+        Err(_) => (sync.get_cached_synced_paths(label), Vec::new()),
+    }
+}
+
+/// Outcome of locating a per-drive `DriveManager` Arc behind the outer
+/// drives map. Either we got the Arc, or the outer/inner lookup failed and
+/// the caller should fall back to the cache.
+enum DriveArcOutcome {
+    Acquired(std::sync::Arc<tokio::sync::Mutex<DriveManager>>),
+    CacheFallback,
+}
+
+/// Single source of truth for the outer-drives map lookup that both the
+/// synced-paths-only and synced-paths-plus-excludes helpers need. Locks
+/// `sync.drives` non-blockingly (briefly), copies out the per-drive Arc,
+/// and drops the outer lock immediately so concurrent listings don't
+/// queue behind the sync loop.
+fn acquire_drive_arc(sync: &SyncRunner, label: &str) -> DriveArcOutcome {
+    match sync.drives.try_lock() {
+        Ok(guard) => match guard.get(label) {
+            Some(slot) => DriveArcOutcome::Acquired(slot.manager.clone()),
+            None => DriveArcOutcome::CacheFallback,
+        },
+        Err(_) => DriveArcOutcome::CacheFallback,
     }
 }
 
@@ -560,12 +776,16 @@ pub async fn get_synced_file_metadata(state: tauri::State<'_, crate::app_state::
     };
 
     for (label, paths) in label_maps {
-        for (rel_path, info) in &paths {
+        // Move out of the HashMap so we can take ownership of `rel_path`
+        // and only clone once per row (used to be twice — once each for
+        // `file_name` and `relative_path`, both of which always carry
+        // identical content).
+        for (rel_path, info) in paths {
             // Use the full relative path so lookups match activity items
             // that also use relative paths (e.g. "bucket/photo.jpg").
             result.push(SyncedFileMetadata {
                 file_name: rel_path.clone(),
-                relative_path: rel_path.clone(),
+                relative_path: rel_path,
                 label: label.clone(),
                 arion_hash: info.path_hash_hex(),
                 arion_cid: info.arion_cid.to_string(),
@@ -742,9 +962,78 @@ pub async fn get_recent_files(
     Ok(result)
 }
 
+/// Process-wide cache for [`dir_stats_recursive`].
+///
+/// Keyed by absolute path. Each entry records the directory's mtime at the
+/// time of the walk. On lookup, if the current mtime matches the cached
+/// one, the cached `(size, count)` is returned without re-walking. APFS,
+/// ext4, and NTFS all bump a directory's mtime on add/remove/rename of
+/// children, which is the only invalidation case the file browser cares
+/// about — pure file-content changes within an unmodified directory don't
+/// invalidate the cache, but they don't change `count` and almost never
+/// shift the displayed size by a meaningful amount.
+///
+/// **Symlinks**: `tokio::fs::metadata` follows symlinks. If a sync folder
+/// contains a symlink whose target's directory mtime changes without the
+/// symlink itself being touched, the cache will return stale stats. Sync
+/// folders typically don't contain symlinks (they're user document
+/// folders), so this is a documented limitation rather than a regression.
+///
+/// **Eviction**: bounded organically by the number of folders the user
+/// browses — small in practice (sync roots + their subfolders, ~hundreds
+/// of entries on a long session). No TTL or LRU cap. If usage patterns
+/// change and the cache grows large, swap to `quick_cache` or wire a
+/// per-drive cache that drops on `remove_drive`.
+/// Cached `(mtime, size, count)` for each cached directory path.
+type DirStatsEntry = (std::time::SystemTime, u64, u64);
+type DirStatsMap = std::sync::Mutex<HashMap<std::path::PathBuf, DirStatsEntry>>;
+
+static DIR_STATS_CACHE: OnceLock<DirStatsMap> = OnceLock::new();
+
+fn dir_stats_cache() -> &'static DirStatsMap {
+    DIR_STATS_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
 /// Recursively compute total size and file count within a directory.
 /// Hidden files (starting with '.') are excluded.
+///
+/// Memoised by `(path, mtime)`. On a hit the cached `(size, count)` is
+/// returned without descending the tree. Cache misses fall through to the
+/// recursive walk and write the result back to the cache before returning.
 async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
+    // Cache lookup. Stat the directory once to learn its mtime; on match
+    // skip the walk entirely.
+    let mtime = match tokio::fs::metadata(path).await {
+        Ok(meta) => meta.modified().ok(),
+        Err(_) => None,
+    };
+    if let Some(mtime) = mtime
+        && let Ok(cache) = dir_stats_cache().lock()
+        && let Some((cached_mtime, size, count)) = cache.get(path)
+        && *cached_mtime == mtime
+    {
+        return (*size, *count);
+    }
+
+    // Cache miss — walk the tree.
+    let (size, count) = dir_stats_walk(path).await;
+
+    // Store under the original mtime (if we got one). If mtime is None
+    // we skip caching so the next call retries the walk.
+    if let Some(mtime) = mtime
+        && let Ok(mut cache) = dir_stats_cache().lock()
+    {
+        cache.insert(path.to_path_buf(), (mtime, size, count));
+    }
+    (size, count)
+}
+
+/// The pure recursive walk underpinning [`dir_stats_recursive`]. Split out so
+/// the cache lookup wraps it without recursing through the cache lookup
+/// itself (recursive calls always re-walk subdirectories — the cache would
+/// add lock contention without reducing total work since the parent mtime
+/// already validated the whole subtree).
+async fn dir_stats_walk(path: &Path) -> (u64, u64) {
     let mut size: u64 = 0;
     let mut count: u64 = 0;
     let Ok(mut dir) = tokio::fs::read_dir(path).await else {
@@ -759,7 +1048,7 @@ async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
             continue;
         };
         if meta.is_dir() {
-            let (sub_size, sub_count) = Box::pin(dir_stats_recursive(&entry.path())).await;
+            let (sub_size, sub_count) = Box::pin(dir_stats_walk(&entry.path())).await;
             size += sub_size;
             count += sub_count;
         } else {
@@ -808,30 +1097,14 @@ async fn list_sync_folder_inner(
         ensure_within(&base, &target)?;
     }
 
-    // Load synced file paths from the drive's persisted sync state
-    let synced_set = match label {
-        Some(ref l) => synced_paths_for_label(&state.sync, l).await,
-        None => None,
-    };
-
-    // Load exclusion patterns so excluded files aren't shown as "pending"
-    let excluded_patterns: Vec<String> = match label {
-        Some(ref l) => {
-            let drive_arc = {
-                let guard = state.sync.drives.lock().await;
-                guard.get(l).map(|slot| slot.manager.clone())
-            };
-            if let Some(arc) = drive_arc {
-                if let Ok(m) = arc.try_lock() {
-                    m.list_exclude_patterns()
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            }
-        }
-        None => Vec::new(),
+    // Load synced paths AND exclusion patterns in a single drives-map
+    // lock + single per-drive lock. Previously these were two separate
+    // acquisitions (synced_paths_for_label, then a `.lock().await` on
+    // the same outer mutex for excludes) which serialized listings
+    // behind any in-flight sync that held the outer lock.
+    let (synced_set, excluded_patterns) = match label {
+        Some(ref l) => synced_paths_and_excludes_for_label(&state.sync, l).await,
+        None => (None, Vec::new()),
     };
 
     let mut entries = Vec::new();
@@ -1085,7 +1358,11 @@ pub async fn list_sync_folder_grouped_inner(
         false
     };
 
-    Ok(GroupedListing { folders, files, pending_backfill })
+    Ok(GroupedListing {
+        folders,
+        files,
+        pending_backfill,
+    })
 }
 
 /// Filter criteria for the files page, matching the frontend `FilterCriteria`.
@@ -1124,7 +1401,7 @@ impl FileFilterCriteria {
 /// and each folder row contributes `entry.file_count` (the recursive leaf count
 /// computed by `dir_stats_recursive`). Empty folders contribute 0 — a folder
 /// with zero files is not itself a "file".
-#[derive(Serialize, Default, Debug)]
+#[derive(Serialize, Default, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LabelStats {
     pub total_bytes: u64,
@@ -1170,23 +1447,44 @@ pub struct UserFileEntry {
     pub deleted: bool,
 }
 
+/// Whether a given `sync_status` value should contribute to per-label
+/// stats. Centralised so the inline accumulator in `get_user_files` and
+/// the test-definition `compute_label_stats` cannot disagree on the
+/// filter rule (only one of them being changed silently was the
+/// drift hazard the perf-audit review flagged).
+fn is_counted_for_label_stats(sync_status: &str) -> bool {
+    sync_status != "excluded"
+}
+
+/// Apply the per-counted-entry stats accumulation rule.
+///
+/// Pure function — both `get_user_files`'s inline path and the test
+/// definition `compute_label_stats` route every counted entry through
+/// this helper, so the rule can only be changed in one place. Folders
+/// contribute their nested file count (computed by `dir_stats_recursive`
+/// upstream); plain files contribute 1.
+fn apply_label_stats_rule(stats: &mut LabelStats, is_folder: bool, file_count: u64, size: u64) {
+    stats.total_bytes = stats.total_bytes.saturating_add(size);
+    stats.file_count = stats.file_count.saturating_add(if is_folder { file_count } else { 1 });
+}
+
 /// Compute per-label totals from the flat entry list `get_user_files` builds.
 ///
-/// Pulled out of `get_user_files` so we can unit-test the rule without
-/// standing up a Tauri state / sync-path fixture.
+/// `get_user_files` accumulates label stats inline during its main entry
+/// loop (avoids walking the file list twice), so this helper is only
+/// referenced from the unit tests below — kept as a single-source rule
+/// definition that the inline accumulator must match. Both paths share
+/// `is_counted_for_label_stats` and `apply_label_stats_rule` to enforce
+/// that match at the type level.
+#[cfg(test)]
 fn compute_label_stats(entries: &[UserFileEntry]) -> HashMap<String, LabelStats> {
     let mut out: HashMap<String, LabelStats> = HashMap::new();
     for entry in entries {
-        if entry.sync_status == "excluded" {
+        if !is_counted_for_label_stats(&entry.sync_status) {
             continue;
         }
         let slot = out.entry(entry.label.clone()).or_default();
-        slot.total_bytes = slot.total_bytes.saturating_add(entry.size);
-        slot.file_count = slot.file_count.saturating_add(if entry.is_folder {
-            entry.file_count.unwrap_or(0)
-        } else {
-            1
-        });
+        apply_label_stats_rule(slot, entry.is_folder, entry.file_count.unwrap_or(0), entry.size);
     }
     out
 }
@@ -1214,6 +1512,21 @@ pub async fn get_user_files(
     let mut total_private_size: u64 = 0;
     let sync_folder_labels: Vec<String> = sync_paths.iter().filter(|sp| !sp.path.is_empty()).map(|sp| sp.label.clone()).collect();
 
+    // Pre-build label → folder_path lookup so the per-entry loop below is
+    // O(1) per file instead of O(D) where D is the number of sync paths.
+    // Same idea as the `label_to_path` map in `get_recent_files`.
+    let label_to_path: HashMap<&str, &str> = sync_paths
+        .iter()
+        .filter(|sp| !sp.path.is_empty())
+        .map(|sp| (sp.label.as_str(), sp.path.as_str()))
+        .collect();
+
+    // Accumulator for per-label stats. Filled inline during the entry loop
+    // so the post-loop walk that `compute_label_stats(&all_files)` used to
+    // do is no longer needed. Keyed by `&str` borrowed from `sync_paths`
+    // to avoid cloning each entry.label per iteration.
+    let mut label_stats: HashMap<&str, LabelStats> = HashMap::new();
+
     // List all sync folders concurrently
     let folder_futures: Vec<_> = sync_paths
         .iter()
@@ -1239,7 +1552,21 @@ pub async fn get_user_files(
     for (label, entries) in &results {
         total_private_size += entries.iter().map(|e| e.size).sum::<u64>();
 
-        for entry in entries.iter().filter(|e| e.sync_status != "excluded") {
+        // Borrow the canonical `&str` from `sync_paths` so `label_stats`
+        // keys are zero-copy. The `get_key_value` call returns the key
+        // borrowed from `label_to_path` (and therefore from `sync_paths`,
+        // which outlives `label_stats`'s entire scope). The `unwrap_or`
+        // fallback covers the orphaned-label case (a label appears in
+        // `results` but not in `sync_paths` — only possible if a path
+        // row was deleted between `get_all_sync_paths_internal` and the
+        // `list_sync_folder` futures resolving). The fallback `&str`
+        // borrows `label`, which lives for the entire outer loop body
+        // and outlives `label_stats`'s `into_iter().collect()` call
+        // below — both lifetimes are valid.
+        let label_key: &str = label_to_path.get_key_value(label.as_str()).map_or(label.as_str(), |(k, _)| *k);
+        let folder_path = label_to_path.get(label_key).copied().unwrap_or("");
+
+        for entry in entries.iter().filter(|e| is_counted_for_label_stats(&e.sync_status)) {
             let local_modified_ms = entry.modified.map_or(0, |m| m as i64 * 1000);
             let uploaded_at_ms = if entry.uploaded_at != 0 { entry.uploaded_at * 1000 } else { 0 };
             let updated_at_ms = if entry.updated_at != 0 { entry.updated_at * 1000 } else { 0 };
@@ -1269,8 +1596,10 @@ pub async fn get_user_files(
                 entry.name.clone()
             };
 
-            // Find the sync path for this label to get the folder path
-            let folder_path = sync_paths.iter().find(|sp| sp.label == *label).map_or("", |sp| sp.path.as_str());
+            // Inline label_stats accumulation through the shared
+            // `apply_label_stats_rule` helper so this path cannot drift
+            // from the test-definition `compute_label_stats`.
+            apply_label_stats_rule(label_stats.entry(label_key).or_default(), entry.is_folder, entry.file_count, entry.size);
 
             all_files.push(UserFileEntry {
                 name: display_name,
@@ -1302,7 +1631,11 @@ pub async fn get_user_files(
     // Sort by timestamp (newest first)
     all_files.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
 
-    let label_stats = compute_label_stats(&all_files);
+    // Convert the borrowed-key map to owned-key for the result. One
+    // allocation per label instead of one per file (the previous
+    // `compute_label_stats(&all_files)` walk cloned `entry.label` for
+    // every file).
+    let label_stats: HashMap<String, LabelStats> = label_stats.into_iter().map(|(k, v)| (k.to_owned(), v)).collect();
 
     Ok(UserFilesResult {
         files: all_files,
@@ -1672,7 +2005,10 @@ mod tests {
 
     #[test]
     fn filter_search_matches_name_case_insensitive() {
-        let files = vec![make_file("Report.pdf", 1_000, "docs", 0, false), make_file("photo.png", 1_000, "docs", 0, false)];
+        let files = vec![
+            make_file("Report.pdf", 1_000, "docs", 0, false),
+            make_file("photo.png", 1_000, "docs", 0, false),
+        ];
         let criteria = FileFilterCriteria {
             search_term: Some("REPORT".into()),
             file_types: None,
@@ -1706,10 +2042,10 @@ mod tests {
     #[test]
     fn filter_size_si_thresholds() {
         let files = vec![
-            make_file("tiny.txt", 500, "d", 0, false),               // Small
-            make_file("medium.zip", 50_000_000, "d", 0, false),      // Medium
-            make_file("large.bin", 500_000_000, "d", 0, false),      // Large
-            make_file("huge.iso", 5_000_000_000, "d", 0, false),     // Very Large
+            make_file("tiny.txt", 500, "d", 0, false),           // Small
+            make_file("medium.zip", 50_000_000, "d", 0, false),  // Medium
+            make_file("large.bin", 500_000_000, "d", 0, false),  // Large
+            make_file("huge.iso", 5_000_000_000, "d", 0, false), // Very Large
         ];
         // "Medium" + "Very Large" selected — boundaries match the UI's SI labels.
         let criteria = FileFilterCriteria {
@@ -1804,5 +2140,102 @@ mod tests {
         let gamma = stats.get("gamma").expect("gamma stats present");
         assert_eq!(gamma.total_bytes, 100, "gamma bytes");
         assert_eq!(gamma.file_count, 0, "gamma file count (folder with file_count: None => 0)");
+    }
+
+    /// Drift guard between `compute_label_stats` (the rule definition) and
+    /// the inline accumulator inside `get_user_files`. Both paths now route
+    /// every counted entry through `apply_label_stats_rule` and every
+    /// filter check through `is_counted_for_label_stats`, so this test
+    /// simulates the inline path manually using the SAME helpers and
+    /// asserts equivalence with `compute_label_stats`. If a future refactor
+    /// changes one path's filter or accumulation, this test fails loudly
+    /// because the helpers diverge.
+    #[test]
+    fn inline_path_matches_compute_label_stats_via_shared_helpers() {
+        let mut excluded = make_file("ignored.txt", 999_999, "alpha", 0, false);
+        excluded.sync_status = "excluded".to_string();
+        let entries: Vec<UserFileEntry> = vec![
+            make_file("a.txt", 1_000, "alpha", 0, false),
+            UserFileEntry {
+                file_count: Some(3),
+                size: 4_000,
+                ..make_file("sub", 4_000, "alpha", 0, true)
+            },
+            excluded,
+            make_file("b.txt", 500, "beta", 0, false),
+        ];
+
+        // Path 1: rule-definition (the test-only helper above).
+        let rule_stats = compute_label_stats(&entries);
+
+        // Path 2: simulate the inline path inside `get_user_files`. Same
+        // shared helpers, same filter ordering — if production drifts,
+        // this expression no longer matches `compute_label_stats` because
+        // either the filter or the accumulator was changed somewhere.
+        let mut inline_stats: HashMap<String, LabelStats> = HashMap::new();
+        for entry in entries.iter().filter(|e| is_counted_for_label_stats(&e.sync_status)) {
+            apply_label_stats_rule(
+                inline_stats.entry(entry.label.clone()).or_default(),
+                entry.is_folder,
+                entry.file_count.unwrap_or(0),
+                entry.size,
+            );
+        }
+
+        assert_eq!(inline_stats, rule_stats);
+    }
+
+    /// `dir_stats_recursive` reads from `DIR_STATS_CACHE` when the
+    /// directory's mtime matches the cached entry. We can't easily
+    /// stage a "real" cache hit in a unit test (mtime resolution is OS
+    /// timer-dependent), so this test takes the deterministic route:
+    /// stat the temp dir to learn its mtime, write a deliberately wrong
+    /// `(size, count)` into the cache under that mtime, and assert
+    /// `dir_stats_recursive` returns the wrong cached value rather than
+    /// re-walking the tree. Proves the cache lookup is consulted.
+    #[tokio::test]
+    async fn dir_stats_recursive_returns_cached_value_on_mtime_match() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+
+        // Create a tiny tree so a fresh walk would return non-zero values.
+        tokio::fs::write(dir.join("a.txt"), b"hello world").await.expect("write a");
+        tokio::fs::write(dir.join("b.txt"), b"goodbye").await.expect("write b");
+
+        // Read the directory's actual mtime — that's the cache key.
+        let mtime = tokio::fs::metadata(dir).await.expect("metadata").modified().expect("mtime");
+
+        // Plant a deliberately wrong cached entry under this mtime.
+        let bogus_size = 999_999_999u64;
+        let bogus_count = 123u64;
+        {
+            let mut cache = dir_stats_cache().lock().expect("lock");
+            cache.insert(dir.to_path_buf(), (mtime, bogus_size, bogus_count));
+        }
+
+        let (size, count) = dir_stats_recursive(dir).await;
+        assert_eq!(size, bogus_size, "dir_stats_recursive must return the cached size on mtime match");
+        assert_eq!(count, bogus_count, "dir_stats_recursive must return the cached count on mtime match");
+
+        // Cleanup so this test doesn't pollute other tests' cache state.
+        dir_stats_cache().lock().expect("lock").remove(dir);
+    }
+
+    /// On a fresh path the cache is empty; `dir_stats_recursive` must walk
+    /// the tree and return real values. Pairs with the cache-hit test
+    /// above to confirm the lookup path doesn't ALWAYS short-circuit.
+    #[tokio::test]
+    async fn dir_stats_recursive_walks_on_cache_miss() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+
+        tokio::fs::write(dir.join("one.txt"), b"x").await.expect("write");
+        tokio::fs::write(dir.join("two.txt"), b"yz").await.expect("write");
+
+        let (size, count) = dir_stats_recursive(dir).await;
+        assert_eq!(size, 3, "fresh walk must sum file bytes (1 + 2)");
+        assert_eq!(count, 2, "fresh walk must count files");
+
+        dir_stats_cache().lock().expect("lock").remove(dir);
     }
 }

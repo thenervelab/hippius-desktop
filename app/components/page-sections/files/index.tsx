@@ -12,7 +12,7 @@ export default function Files() {
   return (
     <>
       <DashboardTitleWrapper
-        mainText="Your Files"
+        mainText="My Drive"
         subText="All uploaded files are private and securely encrypted."
         infoTooltip={
           <button

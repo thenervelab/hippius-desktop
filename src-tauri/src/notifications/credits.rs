@@ -365,38 +365,74 @@ pub struct NotificationInput {
     pub description: String,
 }
 
+/// Pool-scoped implementation of [`create_credit_notifications`].
+///
+/// Uses a multi-row `INSERT … VALUES (…), (…), …` instead of N separate
+/// INSERTs to avoid the per-row `Query` allocation + statement-cache lookup
+/// inside the loop. Chunked to stay safely under SQLite's 32 766 default
+/// `SQLITE_MAX_VARIABLE_NUMBER` — at 4 binds per row, 100 rows = 400 binds,
+/// which leaves a generous margin even on platforms with the older 999 cap.
+///
+/// Extracted from the `#[tauri::command]` wrapper so the integration tests
+/// can exercise it directly with a `&SqlitePool`.
+pub async fn create_credit_notifications_inner(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    notifications: &[NotificationInput],
+) -> Result<u32, AppError> {
+    if notifications.is_empty() {
+        return Ok(0);
+    }
+
+    let mut total = 0u32;
+
+    // One transaction across all chunks so the whole call is one fsync.
+    let mut tx = pool.begin().await?;
+
+    const ROWS_PER_CHUNK: usize = 100;
+    for chunk in notifications.chunks(ROWS_PER_CHUNK) {
+        // Build the VALUES list once per chunk: "(?, 'Credits', ?, ?, ?, ...), (...), ..."
+        // The four ? placeholders bind (user_address, subtype, title, description).
+        // 'Credits', the static link fields, 1, the now-ms expression, and 0 are
+        // baked into the SQL because they don't vary per row.
+        let mut sql = String::from(
+            "INSERT INTO notifications (\
+                user_address, notification_type, notification_subtype, \
+                title_text, description, link_text, link, \
+                is_unread, creation_time, is_deleted\
+             ) VALUES ",
+        );
+        for i in 0..chunk.len() {
+            if i > 0 {
+                sql.push_str(", ");
+            }
+            sql.push_str(
+                "(?, 'Credits', ?, ?, ?, 'Jump to Files', '/files', 1, CAST(strftime('%s','now') * 1000 AS INTEGER), 0)",
+            );
+        }
+
+        let mut q = sqlx::query(&sql);
+        for n in chunk {
+            q = q.bind(account_id).bind(&n.subtype).bind(&n.title).bind(&n.description);
+        }
+        q.execute(&mut *tx).await?;
+
+        // chunk.len() always fits in u32 (capped at ROWS_PER_CHUNK = 100).
+        total += u32::try_from(chunk.len()).unwrap_or(u32::MAX);
+    }
+
+    tx.commit().await?;
+    Ok(total)
+}
+
 /// Persist multiple notifications in a single call.
+///
+/// Thin IPC wrapper over [`create_credit_notifications_inner`].
 #[tauri::command]
 pub async fn create_credit_notifications(
     state: tauri::State<'_, AppState>,
     account_id: String,
     notifications: Vec<NotificationInput>,
 ) -> Result<u32, AppError> {
-    let pool = state.pool()?;
-    let mut count = 0u32;
-
-    // Wrap all INSERTs in a single transaction (1 fsync instead of N)
-    let mut tx = pool.begin().await?;
-    for n in &notifications {
-        sqlx::query(
-            r"
-            INSERT INTO notifications (
-                user_address, notification_type, notification_subtype,
-                title_text, description, link_text, link,
-                is_unread, creation_time, is_deleted
-            )
-            VALUES (?, 'Credits', ?, ?, ?, 'Jump to Files', '/files', 1, CAST(strftime('%s','now') * 1000 AS INTEGER), 0)
-            ",
-        )
-        .bind(&account_id)
-        .bind(&n.subtype)
-        .bind(&n.title)
-        .bind(&n.description)
-        .execute(&mut *tx)
-        .await?;
-        count += 1;
-    }
-    tx.commit().await?;
-
-    Ok(count)
+    create_credit_notifications_inner(state.pool()?, &account_id, &notifications).await
 }

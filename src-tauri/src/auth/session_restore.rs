@@ -261,33 +261,50 @@ pub async fn restore_session(
                         }
                     }
                     info!("Restoring OAuth session for {:?}", substrate_address);
-                    // Re-arm the Tauri asset protocol scope for every
-                    // configured sync path. The static scope in
-                    // `tauri.conf.json` only covers `$HOME/.hippius/**`;
-                    // user-chosen folders need a runtime `allow_directory`
-                    // call each launch. `auto_init_sync` also does this
-                    // in step 4, but if the mnemonic is unrecoverable
-                    // (keychain evicted, reauth required), `auto_init_sync`
-                    // aborts before the scope is expanded — and on
-                    // macOS release builds the first `asset://` read of
-                    // a sync-folder file then re-triggers the system
-                    // folder-permission dialog every launch. Priming
-                    // the scope here makes the bootstrap deterministic.
-                    if let Some(ref addr) = substrate_address {
-                        arm_asset_scope_for_account(&app, &state, addr).await;
-                    }
+                    // Re-arm the Tauri asset protocol scope and probe the
+                    // OAuth recovery state concurrently. Both are post-auth
+                    // reads with no shared mutable state, so they run in
+                    // parallel via `tokio::join!`. Pre-parallelization the
+                    // recovery probe alone could add seconds of cold-start
+                    // latency on a slow network.
+                    //
+                    // Asset scope: the static scope in `tauri.conf.json`
+                    // only covers `$HOME/.hippius/**`; user-chosen folders
+                    // need a runtime `allow_directory` call each launch.
+                    // `auto_init_sync` also does this in step 4, but if
+                    // the mnemonic is unrecoverable (keychain evicted,
+                    // reauth required), `auto_init_sync` aborts before
+                    // the scope is expanded — on macOS release builds the
+                    // first `asset://` read of a sync-folder file then
+                    // re-triggers the system folder-permission dialog
+                    // every launch. Priming the scope here makes
+                    // bootstrap deterministic.
+                    //
+                    // Recovery probe: for OAuth-provider sessions, emit
+                    // `oauth_recovery_check_needed` if a dialog is
+                    // required. Mirrors `complete_oauth_flow` so
+                    // returning OAuth users also get the signup / unlock
+                    // prompt on session restore — otherwise the dialog
+                    // only ever fires on fresh OAuth, and a frontend
+                    // listener subscribing after the fresh-OAuth emit
+                    // leaves the account permanently unrecoverable with
+                    // no UI.
+                    let asset_scope_fut = async {
+                        if let Some(ref addr) = substrate_address {
+                            arm_asset_scope_for_account(&app, &state, addr).await;
+                        }
+                    };
+                    let recovery_probe_fut = async {
+                        if auth_type == "oauth" {
+                            Some(crate::recovery::check_recovery_state_inner(&state).await)
+                        } else {
+                            None
+                        }
+                    };
+                    let (_, recovery_result) = tokio::join!(asset_scope_fut, recovery_probe_fut);
 
-                    // For OAuth-provider sessions, probe the recovery
-                    // state and emit `oauth_recovery_check_needed` if a
-                    // dialog is required. Mirrors `complete_oauth_flow`
-                    // so returning OAuth users also get the signup /
-                    // unlock prompt on session restore — otherwise the
-                    // dialog only ever fires on fresh OAuth, and any
-                    // race in which the frontend listener subscribed
-                    // after the fresh-OAuth emit leaves the account
-                    // permanently unrecoverable with no UI.
-                    if auth_type == "oauth" {
-                        match crate::recovery::check_recovery_state_inner(&state).await {
+                    if let Some(rc_result) = recovery_result {
+                        match rc_result {
                             Ok(recovery_check) => {
                                 let gate_target = match recovery_check.recommended_flow {
                                     crate::recovery::RecoveryFlow::Proceed => crate::recovery::RecoveryGateState::Skipped,
@@ -421,38 +438,58 @@ pub async fn restore_session(
     let logout_time_ms = if eff_minutes == -1 { None } else { Some(eff_minutes * 60_000) };
 
     let mut sync_requires_reauth = false;
-    if let Some(ref addr) = row.substrate_address {
-        // Same flow as the OAuth-JSON branch above. See `rehydrate_or_restored`.
+    // The post-rehydrate work splits into two halves:
+    // - sync portion: outcome match (mutex write under sync lock, no awaits)
+    //   plus mnemonic extraction (also sync, under the same mutex).
+    // - async portion: encryption migration (DB I/O) + asset scope rearm.
+    //   Both are reads of state with no shared mutable state, so they
+    //   run concurrently via `tokio::join!`.
+    let migrate_input: Option<(sqlx::SqlitePool, zeroize::Zeroizing<String>)> = if let Some(ref addr) = row.substrate_address {
         let outcome = rehydrate_or_restored(&state, addr, auth_type);
         sync_requires_reauth = matches!(outcome, RehydrateOutcome::NeedsActiveAccount(AuthCapabilities::Restored));
         match outcome {
             RehydrateOutcome::AlreadyWritten => {
-                // Mnemonic is in AuthInfo — run encryption migration.
-                // Extract the mnemonic BEFORE awaiting (can't hold mutex across await).
+                // Mnemonic is in AuthInfo — prepare encryption migration inputs.
+                // Extract the mnemonic synchronously under the auth mutex so we
+                // never hold the lock across an `.await`.
                 if let Ok(pool) = state.pool() {
                     let mnemonic_str = state
                         .auth
                         .lock()
                         .ok()
                         .and_then(|g| g.mnemonic.as_deref().map(|s| zeroize::Zeroizing::new(s.to_owned())));
-                    if let Some(m) = mnemonic_str
-                        && let Err(e) = crate::crypto::store::migrate_if_needed(pool, &m, addr).await
-                    {
-                        warn!(error = %e, "Encryption migration failed — will retry on next login");
-                    }
+                    mnemonic_str.map(|m| (pool.clone(), m))
+                } else {
+                    None
                 }
             }
             RehydrateOutcome::NeedsActiveAccount(cap) => {
                 state.set_active_account(addr, cap)?;
+                None
             }
         }
-    }
+    } else {
+        None
+    };
     info!("Restoring DB session for {:?}", row.substrate_address);
-    // Re-arm the asset protocol scope for the restored account — same
-    // rationale as the OAuth branch above.
-    if let Some(ref addr) = row.substrate_address {
-        arm_asset_scope_for_account(&app, &state, addr).await;
-    }
+
+    // Re-arm the asset protocol scope for the restored account in parallel
+    // with the encryption migration — same rationale as the OAuth branch
+    // above. Both are pure async I/O on independent subsystems.
+    let migrate_addr = row.substrate_address.clone();
+    let migrate_fut = async move {
+        if let (Some((pool, m)), Some(addr)) = (migrate_input, migrate_addr.as_ref())
+            && let Err(e) = crate::crypto::store::migrate_if_needed(&pool, &m, addr).await
+        {
+            warn!(error = %e, "Encryption migration failed — will retry on next login");
+        }
+    };
+    let asset_scope_fut = async {
+        if let Some(ref addr) = row.substrate_address {
+            arm_asset_scope_for_account(&app, &state, addr).await;
+        }
+    };
+    tokio::join!(migrate_fut, asset_scope_fut);
     // Signal auth-ready for the DB-fallback restore path as well. The
     // FE's `auto_init_sync` retry listens on this single event for both
     // restore branches.

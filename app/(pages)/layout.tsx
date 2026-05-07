@@ -8,6 +8,7 @@ import MigrationChecker from "./MigrationChecker";
 import InsufficientCreditsDialog from "@/components/page-sections/files/InsufficientCreditsDialog";
 import FailedFilesListener from "./FailedFilesListener";
 import FailedFilesModal from "@/components/page-sections/files/FailedFilesModal";
+import ShareFileModal from "@/components/page-sections/files/ShareFileModal";
 import AccountRecoveryDialog from "@/components/recovery/AccountRecoveryDialog";
 import RecoveryEventListener from "@/components/recovery/RecoveryEventListener";
 import ExistingUserRecoveryPrompt from "@/components/recovery/ExistingUserRecoveryPrompt";
@@ -25,6 +26,7 @@ export default function ProtectedLayout({
       <MigrationChecker />
       <InsufficientCreditsDialog />
       <FailedFilesModal />
+      <ShareFileModal />
       <RecoveryEventListener />
       <AccountRecoveryDialog />
       <ExistingUserRecoveryPrompt />

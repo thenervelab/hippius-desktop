@@ -24,10 +24,16 @@ import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { Button } from "@/components/ui/button";
 import {
   Download,
+  Link2,
   MoreVertical,
   Folder,
   FolderOpen,
 } from "lucide-react";
+import { useAtomValue, useSetAtom } from "jotai";
+import {
+  shareFeatureEnabledAtom,
+  shareModalFileAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
 import SelectionActionBar from "../SelectionActionBar";
@@ -151,6 +157,11 @@ const FilesTable: FC<FilesTableProps> = memo(
     onHeaderContextMenu,
   }) => {
     const { polkadotAddress } = useWalletAuth();
+    // Share-feature gating: only show the menu item when the connected
+    // hcfs-server advertises `shares: true`. The atom is populated once
+    // per session by `useServerCapabilities` (mounted in SyncEventLogger).
+    const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
+    const setShareModalFile = useSetAtom(shareModalFileAtom);
     // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads.
     // Also suppress the "pending" upload arrow for files that just finished downloading
     // (they appear locally before the synced-set updates, so the backend marks them "pending").
@@ -160,8 +171,32 @@ const FilesTable: FC<FilesTableProps> = memo(
     // (actualFileName = "photo.jpg"), while subfolder views use relative paths
     // (actualFileName = "subfolder/photo.jpg"). The snapshot always has the full path.
     const snapshot = useSyncSnapshot();
+    // Stable signature of the actionable snapshot rows. The snapshot atom
+    // is replaced wholesale on every progress event (~250ms during sync,
+    // see useSyncSnapshotListener), so `snapshot.files` gets a new
+    // reference every tick even when nothing material changed for the
+    // file table. Reducing first to this string lets the downstream
+    // `enrichedAllFiles` memo skip its O(allFiles) re-map whenever the
+    // actionable set is content-equal — which is the common case during
+    // a sync of large files where bytes change but row status doesn't.
+    const actionSignature = useMemo(() => {
+      const parts: string[] = [];
+      for (const f of snapshot.files) {
+        const isInFlight =
+          f.status !== "completed" &&
+          (f.action === "upload" || f.action === "download");
+        const isCompletedDownload =
+          f.status === "completed" && f.action === "download";
+        if (isInFlight || isCompletedDownload) {
+          parts.push(`${f.path}|${f.fileName}|${f.status}|${f.action}`);
+        }
+      }
+      parts.sort();
+      return parts.join(",");
+    }, [snapshot.files]);
+
     const enrichedAllFiles = useMemo(() => {
-      if (!snapshot.isActive && snapshot.files.length === 0) return allFiles;
+      if (actionSignature === "") return allFiles;
 
       // Index by full path (preferred, no collisions) and basename (fallback)
       const actionByPath = new Map<string, "upload" | "download">();
@@ -178,7 +213,6 @@ const FilesTable: FC<FilesTableProps> = memo(
           completedDownloadNames.add(f.fileName);
         }
       }
-      if (actionByPath.size === 0 && completedDownloadPaths.size === 0) return allFiles;
 
       return allFiles.map((file) => {
         const key = file.actualFileName || file.name;
@@ -198,7 +232,12 @@ const FilesTable: FC<FilesTableProps> = memo(
         }
         return file;
       });
-    }, [allFiles, snapshot.isActive, snapshot.files]);
+      // `snapshot.files` is intentionally captured by the closure rather
+      // than declared as a dep: when actionSignature is unchanged the
+      // snapshot.files contents are equivalent (same actionable rows,
+      // different reference), so re-running would just re-allocate.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [allFiles, actionSignature]);
 
     // Sentinel ref for infinite scroll
     const sentinelRef = useRef<HTMLDivElement>(null);
@@ -222,7 +261,6 @@ const FilesTable: FC<FilesTableProps> = memo(
     }, [hasMore, loadMore]);
 
     const [sorting, setSorting] = useState<SortingState>([]);
-    const [prevFileCount, setPrevFileCount] = useState<number>(0);
     const { getParam } = useUrlParams();
     const router = useRouter();
     const {
@@ -403,6 +441,21 @@ const FilesTable: FC<FilesTableProps> = memo(
               },
             ]
             : []),
+          // Share via link — same gating as the right-click context menu
+          // in `app/components/ui/context-menu/index.tsx`. Hidden for
+          // folders, mid-flight files, and old hcfs-servers that don't
+          // advertise `shares: true`.
+          ...(!file.isFolder && file.syncStatus === "synced" && shareEnabled
+            ? [
+              {
+                icon: <Link2 className="size-4" />,
+                itemTitle: "Share via link",
+                onItemClick: () => {
+                  setShareModalFile(file);
+                },
+              },
+            ]
+            : []),
           // Always show delete option, but disabled for unpinned files
           {
             icon: <Icons.Trash className="size-4" />,
@@ -430,6 +483,8 @@ const FilesTable: FC<FilesTableProps> = memo(
         getParam,
         router,
         polkadotAddress,
+        shareEnabled,
+        setShareModalFile,
       ]
     );
 
@@ -476,6 +531,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         className="px-2.5 py-3"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
+                        label={info.row.original.label}
                         arionHash={info.row.original.arionHash}
                         isAssigned={info.row.original.isAssigned}
                         fileType={fileType}
@@ -493,6 +549,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         <NameCell
                           rawName={info.getValue()}
                           actualName={info.row.original.actualFileName}
+                          label={info.row.original.label}
                           arionHash={info.row.original.arionHash}
                           isAssigned={info.row.original.isAssigned}
                           fileType={fileType}
@@ -515,6 +572,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         className="px-2.5 py-3"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
+                        label={info.row.original.label}
                         arionHash={info.row.original.arionHash}
                         isAssigned={info.row.original.isAssigned}
                         fileType={fileType}
@@ -531,6 +589,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         <NameCell
                           rawName={info.getValue()}
                           actualName={info.row.original.actualFileName}
+                          label={info.row.original.label}
                           arionHash={info.row.original.arionHash}
                           isAssigned={info.row.original.isAssigned}
                           fileType={fileType}
@@ -553,6 +612,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         className="px-2.5 py-3"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
+                        label={info.row.original.label}
                         arionHash={info.row.original.arionHash}
                         isAssigned={info.row.original.isAssigned}
                         fileType={fileType}
@@ -569,6 +629,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         <NameCell
                           rawName={info.getValue()}
                           actualName={info.row.original.actualFileName}
+                          label={info.row.original.label}
                           arionHash={info.row.original.arionHash}
                           isAssigned={info.row.original.isAssigned}
                           fileType={fileType}
@@ -589,6 +650,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   className="px-2.5 py-3"
                   rawName={info.getValue()}
                   actualName={info.row.original.actualFileName}
+                  label={info.row.original.label}
                   arionHash={info.row.original.arionHash}
                   isAssigned={info.row.original.isAssigned}
                   fileType={fileType || "document"}
@@ -824,18 +886,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       };
     }, [isResizing, handleResizeMove, handleResizeEnd]);
 
-    // Reset sorting when files change significantly (like switching views)
-    useEffect(() => {
-      // Check if we have a significant change in the number of files
-      // which indicates a view switch (private/public) or major filter change
-      if (prevFileCount > 0 && Math.abs(allFiles.length - prevFileCount) > 5) {
-        setSorting([]);
-      }
-
-      // Update the previous file count
-      setPrevFileCount(allFiles.length);
-    }, [allFiles.length, prevFileCount]);
-
     const handleSortingChange = useCallback((updaterOrValue: SortingState | ((old: SortingState) => SortingState)) => {
       setSorting(updaterOrValue);
     }, []);
@@ -858,8 +908,19 @@ const FilesTable: FC<FilesTableProps> = memo(
         enableColumnResizing: true,
         enableExpanding: false,
         enableGrouping: false,
-        // Use stable ID generation
-        getRowId: (row: FormattedUserFile, index: number) => row.arionHash ? `${row.arionHash}-${index}` : `${row.actualFileName || row.name}-${index}`,
+        // Row identity must be stable across re-orderings (sort, filter,
+        // sync re-enrichment). Including the array index would change the
+        // ID whenever rows reorder, which causes TanStack to drop per-row
+        // state (selection, sort cursor) and triggers DOM unmount/remount
+        // of cells — same anti-flicker rationale documented for
+        // SyncStatusDialog in CLAUDE.md. `label::actualFileName` is the
+        // canonical unique key (sync_paths enforces UNIQUE relative paths
+        // per drive, so label + path is globally unique); arionHash is
+        // unsuitable on its own because it's "pending"/empty for
+        // not-yet-uploaded rows AND identical files synced to two drives
+        // share the same hash.
+        getRowId: (row: FormattedUserFile) =>
+          `${row.label ?? ""}::${row.actualFileName ?? row.name}`,
 
       }),
       [columns, enrichedAllFiles, sorting, handleSortingChange]
@@ -867,14 +928,17 @@ const FilesTable: FC<FilesTableProps> = memo(
 
     const table = useReactTable(tableConfig);
 
-    // Get sorted rows — show all visible items (no client-side slicing).
-    // Include enrichedAllFiles in deps so rows recompute when the data source changes
-    // (e.g. folder tab switch). useReactTable returns a stable reference, so
-    // without enrichedAllFiles this memo would stay stale.
+    // useReactTable returns a stable `table` reference across renders, so
+    // `[table, ...]` deps alone never re-fire when sorting state changes.
+    // We MUST include `sorting` so getRowModel() (which yields freshly
+    // sorted rows) is re-read on every sort toggle, and so getHeaderGroups()
+    // is re-read so each Th picks up the new getIsSorted() value (sort
+    // chevron + active style). `enrichedAllFiles` keeps the rows in sync
+    // when the data source changes (folder tab switch, sync re-enrichment).
     const visibleRows = useMemo(() => {
       return table.getRowModel().rows;
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [table, enrichedAllFiles]);
+    }, [table, enrichedAllFiles, sorting]);
 
     const headerRows = useMemo(
       () =>
@@ -892,7 +956,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             ))}
           </TableModule.Tr>
         )),
-      [table, columnWidths, handleResizeStart, justResized]
+      [table, columnWidths, handleResizeStart, justResized, sorting]
     );
 
     const tableBody = useMemo(
