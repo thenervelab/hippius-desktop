@@ -379,7 +379,7 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
             {yGridLines.map((line, i) => (
               <span
                 key={i}
-                className="absolute right-0 -translate-y-1/2 font-medium text-[12px] leading-[18px] text-grey-10/30 dark:text-grey-dark-500 whitespace-nowrap"
+                className="absolute right-0 -translate-y-1/2 font-medium text-[12px] leading-[18px] text-grey-10/30 dark:text-grey-dark-900 whitespace-nowrap"
                 style={{ top: `${line.pct}%` }}
               >
                 {formatYTickValue(line.label, yLabelPrecision)}
@@ -482,7 +482,7 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
                 <span
                   key={i}
                   className={cn(
-                    "absolute whitespace-nowrap font-medium text-[12px] leading-[18px] text-grey-10/30 dark:text-grey-dark-500",
+                    "absolute whitespace-nowrap font-medium text-[12px] leading-[18px] text-grey-10/30 dark:text-grey-dark-900",
                     !isFirst &&
                       (isLast ? "-translate-x-full" : "-translate-x-1/2"),
                   )}

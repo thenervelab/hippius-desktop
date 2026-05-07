@@ -73,14 +73,14 @@ const HomepageHeader: FC = () => {
   return (
     <div
       className={cn(
-        "grid grid-cols-1 @4xl:grid-cols-[1fr_1fr]  items-stretch gap-3",
+        "grid grid-cols-1 @4xl:grid-cols-[1fr_1fr]  items-stretch gap-3 mt-3",
       )}
     >
       <div className="flex flex-col items-start justify-center gap-0.5 px-1">
         <p className="text-[24px] font-medium leading-8 text-black-700 dark:text-white">
           Welcome to Hippius
         </p>
-        <p className="text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-dark-800 dark:text-grey-dark-500">
+        <p className="text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-dark-800">
           Store. Compute. Own your infrastructure.
         </p>
       </div>
@@ -89,11 +89,11 @@ const HomepageHeader: FC = () => {
         className={cn(
           "flex items-stretch gap-3.5 rounded-[8px] px-3.5",
           "border border-grey-light-500 bg-grey-light-600",
-          "dark:border-black-300 dark:bg-black-300/40",
+          "dark:border-black-300 dark:bg-black-primary-bg",
         )}
       >
         <div className="flex flex-1 min-w-0 items-stretch">
-          <div className="flex flex-1 min-w-0 items-center justify-between gap-3 border-r border-grey-dark-100 pr-5 py-[11px] dark:border-black-300">
+          <div className="flex flex-1 min-w-0 items-center justify-between gap-3 border-r border-grey-dark-100 pr-5 py-[11px] dark:border-black-500">
             <div className="flex flex-col items-start justify-center gap-[3px]">
               <div className="flex items-center gap-1">
                 <Icons.Wallet className="size-[18px] text-primary-40 dark:text-primary-brand-dark" />
@@ -128,7 +128,7 @@ const HomepageHeader: FC = () => {
             </Button>
           </div>
 
-          <div className="flex w-[200px] flex-col items-start justify-center gap-[3px] border-r border-grey-dark-100 px-5 py-[11px] dark:border-black-300">
+          <div className="flex w-[200px] flex-col items-start justify-center gap-[3px] border-r border-grey-dark-100 px-5 py-[11px] dark:border-black-500">
             <div className="flex items-center gap-1">
               <span className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-primary-40/20">
                 <span className="size-[6.15px] rounded-full bg-primary-40" />

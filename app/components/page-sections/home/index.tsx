@@ -27,21 +27,23 @@ const Home: React.FC = () => {
   return (
     <>
       <DashboardTitleWrapper mainText="Overview">
-        <HomepageHeader />
-        <div className="mt-3">
-          {IS_SYNC_PAUSED && (
-            <div className="mb-4">
-              <SyncPausedAlert variant="inline" />
+        <div className="pr-2">
+          <HomepageHeader />
+          <div className="mt-3">
+            {IS_SYNC_PAUSED && (
+              <div className="mb-4">
+                <SyncPausedAlert variant="inline" />
+              </div>
+            )}
+
+            <div className="mb-3 grid gap-4 grid-cols-1 @xl:grid-cols-2">
+              <AvailableCreditsCard />
+              <StorageUsageCard />
             </div>
-          )}
 
-          <div className="mb-3 grid gap-4 grid-cols-1 @xl:grid-cols-2">
-            <AvailableCreditsCard />
-            <StorageUsageCard />
-          </div>
-
-          <div id="recent-files">
-            <Ipfs isRecentFiles />
+            <div id="recent-files">
+              <Ipfs isRecentFiles />
+            </div>
           </div>
         </div>
       </DashboardTitleWrapper>

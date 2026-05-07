@@ -365,7 +365,7 @@ const StorageBarChart: React.FC<StorageBarChartProps> = ({
         {yGridLines.map((line, i) => (
           <span
             key={i}
-            className="absolute right-0 -translate-y-1/2 font-medium text-[12px] leading-[18px] text-grey-10/30 dark:text-grey-dark-500 whitespace-nowrap"
+            className="absolute right-0 -translate-y-1/2 font-medium text-[12px] leading-[18px] text-grey-10/30 dark:text-grey-dark-900 whitespace-nowrap"
             style={{ top: `${line.pct}%` }}
           >
             {line.label}
@@ -458,7 +458,7 @@ const StorageBarChart: React.FC<StorageBarChartProps> = ({
         {xLabels.map((label, i) => (
           <span
             key={i}
-            className="absolute whitespace-nowrap font-medium text-[12px] leading-[18px] text-grey-10/30 dark:text-grey-dark-500 -translate-x-1/2"
+            className="absolute whitespace-nowrap font-medium text-[12px] leading-[18px] text-grey-10/30 dark:text-grey-dark-900 -translate-x-1/2"
             style={{ left: `${label.pct}%` }}
           >
             {label.label}

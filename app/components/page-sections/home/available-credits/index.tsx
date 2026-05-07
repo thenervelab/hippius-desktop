@@ -144,7 +144,7 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
       className={cn(
         "flex flex-col items-center w-full rounded-[8px] border",
         "bg-grey-light-300 border-grey-dark-100",
-        "dark:bg-black-300/40 dark:border-black-300",
+        "dark:bg-black-primary-bg dark:border-black-300",
         "shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]",
         className,
       )}
@@ -201,7 +201,7 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
         className={cn(
           "flex flex-col items-start w-full flex-1 rounded-[8px] border",
           "bg-white border-grey-dark-100",
-          "dark:bg-black-primary-bg dark:border-black-300",
+          "dark:bg-black-600 dark:border-black-300",
         )}
       >
         <div className="flex w-full items-start justify-center gap-1 pt-3 px-4">
@@ -217,7 +217,7 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
                   <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white">
                     {balanceDisplay}
                   </span>
-                  <span className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-grey-dark-500 pb-[3px]">
+                  <span className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 pb-[3px]">
                     credits
                   </span>
                 </>
