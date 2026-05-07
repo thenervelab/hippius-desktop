@@ -28,7 +28,19 @@ export function useDriveStorageStats() {
     command: "get_drive_storage_stats",
     queryKey: (addr) => [DRIVE_STORAGE_STATS_QUERY_KEY, addr],
     options: {
-      staleTime: 60_000,
+      // The indexer ingests new shards asynchronously and can run
+      // hours behind the chain when load spikes (observed 26h on
+      // 2026-05-06). We can't fix the lag, but we can make sure the
+      // tile is never the bottleneck once the indexer catches up:
+      //   * staleTime: 0 — every refetch trigger actually refetches.
+      //   * refetchOnWindowFocus — refocusing the desktop after a
+      //     break pulls fresh totals without a manual reload.
+      //   * refetchInterval: 30 s — gentle background poll so an
+      //     idle home page eventually shows the new numbers without
+      //     the user touching anything.
+      staleTime: 0,
+      refetchOnWindowFocus: true,
+      refetchInterval: 30_000,
     },
   });
 }
