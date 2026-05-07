@@ -17,8 +17,8 @@ export default function ResponsiveContent({
     <div className="grid w-full overflow-hidden">
       <main
         className={cn(
-          "flex flex-col h-screen transition-all duration-300 ease-in-out overflow-hidden bg-white",
-          collapsed ? "ml-[3.8125rem]" : "ml-[16.4375rem]"
+          "flex flex-col h-screen transition-all duration-300 ease-in-out overflow-hidden bg-grey-light-200 rounded-[11px] dark:bg-black-900",
+          collapsed ? "ml-[3.8125rem]" : "ml-[16.4375rem]",
         )}
       >
         {/* System alerts — sticky so they stay visible while scrolling */}
