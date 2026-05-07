@@ -87,10 +87,10 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
         className={cn(
           "flex items-start gap-2.5 px-2.5 py-3 rounded-lg cursor-pointer transition-colors group relative",
           selected
-            ? "bg-[#dfe5f7] ring-1 ring-[#618ce8] dark:bg-primary-50/20 dark:ring-primary-brand-dark"
+            ? "bg-[#dfe5f7] ring-1 ring-[#618ce8] dark:bg-[rgba(97,140,232,0.2)] dark:ring-[#618ce8]"
             : unread
-            ? "bg-[#f8f8f8] hover:bg-[#f0f0f0] dark:bg-black-400 dark:hover:bg-black-300"
-            : "bg-[#f5f5f5] hover:bg-[#eeeeee] dark:bg-black-400 dark:hover:bg-black-300",
+            ? "bg-[#f8f8f8] hover:bg-[#f0f0f0] dark:bg-white/[0.02] dark:hover:bg-white/[0.05]"
+            : "hover:bg-[#f8f8f8] dark:hover:bg-white/[0.03]",
           isArchiving && "opacity-0 scale-[0.98] transition-all duration-150"
         )}
         onClick={onClick}
@@ -112,19 +112,19 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
           </p>
         </div>
 
-        {/* Unread indicator dot */}
-        {unread && (
-          <div className="size-2 rounded-full bg-primary-50 flex-shrink-0 mt-1" />
-        )}
-
-        {/* Delete on hover */}
-        <button
-          className="absolute top-2.5 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-grey-dark-500 hover:text-[#ff6d61] dark:text-grey-dark-400 dark:hover:text-[#ff6d61]"
-          onClick={handleDelete}
-          title="Delete notification"
-        >
-          <Trash2 className="size-3.5" />
-        </button>
+        {/* Shared slot: unread dot fades out on hover, trash fades in */}
+        <div className="relative flex-shrink-0 flex items-center justify-center size-4 self-start mt-1">
+          {unread && (
+            <div className="absolute size-2 rounded-full bg-primary-50 transition-opacity duration-150 group-hover:opacity-0" />
+          )}
+          <button
+            className="absolute opacity-0 group-hover:opacity-100 transition-opacity duration-150 text-[#a3a3a3] hover:text-[#ff6d61] dark:text-[#616161] dark:hover:text-[#ff6d61]"
+            onClick={handleDelete}
+            title="Delete notification"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        </div>
       </div>
 
       {contextMenu && (

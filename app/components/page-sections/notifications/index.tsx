@@ -22,8 +22,6 @@ import { iconMap } from "@/app/lib/helpers/notificationIcons";
 import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import ArchiveAllConfirmationDialog from "./ArchiveAllConfirmationDialog";
-import { cn } from "@/app/lib/utils";
-import TabList from "@/components/ui/tabs/TabList";
 import PageHeader from "@/components/ui/page-header";
 
 const Notifications = () => {
@@ -49,7 +47,7 @@ const Notifications = () => {
 
   const tabs = useMemo(
     () => [
-      ...(enabledTypes.length > 0 ? [{ tabName: "All" }] : []),
+      ...(enabledTypes.length > 0 ? [{ tabName: "All", displayName: "All" }] : []),
       ...enabledTypes.map((type) => ({
         tabName: type,
         displayName: CATEGORY_DISPLAY[type] ?? type,
@@ -171,48 +169,44 @@ const Notifications = () => {
             {/* Tabs + filter row */}
             <div className="flex items-center justify-between border-b border-grey-dark-100 dark:border-black-300 px-2.5 py-2 gap-2.5 flex-wrap">
               {tabs.length > 0 && (
-                <TabList
-                  tabs={tabs}
-                  activeTab={activeTab}
-                  onTabChange={setActiveTab}
-                  width="w-auto"
-                  height="h-[32px]"
-                />
+                <div className="inline-flex items-center gap-1 rounded-[6px] bg-[#ebebeb] p-[3px] dark:bg-black">
+                  {tabs.map((tab) => {
+                    const isActive = activeTab === tab.tabName;
+                    return (
+                      <button
+                        key={tab.tabName}
+                        onClick={() => setActiveTab(tab.tabName)}
+                        className={`flex items-center px-[6px] py-px rounded-[3px] font-mono text-[12px] font-medium leading-5 uppercase tracking-[-0.24px] whitespace-nowrap text-black dark:text-white border transition-[opacity,background-color,border-color,box-shadow] ${isActive ? "tab-pill-active" : "border-transparent opacity-50 hover:opacity-75"}`}
+                      >
+                        {tab.displayName ?? tab.tabName}
+                      </button>
+                    );
+                  })}
+                </div>
               )}
 
               {tabs.length > 0 && (
                 <div className="flex items-center gap-3 flex-wrap">
                   {/* All / Unread toggle */}
-                  <div className="flex items-center border border-grey-dark-100 dark:border-black-300 rounded-md p-1 gap-1 bg-[#eaeaea] dark:bg-black-300">
-                    <button
-                      onClick={() => setOnlyUnread(false)}
-                      className={cn(
-                        "flex items-center gap-1.5 px-3 py-[5px] rounded-[3px] text-[13px] font-medium tracking-[-0.26px] transition-colors text-[#000000] dark:text-white",
-                        !onlyUnread
-                          ? "bg-[#f8f8f8] dark:bg-black-200 border border-grey-dark-100 dark:border-black-100"
-                          : "bg-transparent border border-transparent hover:bg-white/30 dark:hover:bg-black-200/50"
-                      )}
-                    >
-                      <span className={cn("size-2 rounded-full flex-shrink-0", !onlyUnread ? "bg-[#3167dd]" : "bg-[#a3a3a3]")} />
-                      All
-                    </button>
-                    <button
-                      onClick={() => setOnlyUnread(true)}
-                      className={cn(
-                        "flex items-center gap-1.5 px-3 py-[5px] rounded-[3px] text-[13px] font-medium tracking-[-0.26px] transition-colors text-[#1e1e1e] dark:text-white",
-                        onlyUnread
-                          ? "bg-[#f8f8f8] dark:bg-black-200 border border-grey-dark-100 dark:border-black-100"
-                          : "bg-transparent border border-transparent hover:bg-white/30 dark:hover:bg-black-200/50"
-                      )}
-                    >
-                      <span className={cn("size-2 rounded-full flex-shrink-0", onlyUnread ? "bg-[#3167dd]" : "bg-[#a3a3a3]")} />
-                      Unread
-                    </button>
+                  <div className="inline-flex items-center gap-1 rounded-[6px] border border-[#e3e3e3] bg-[#ebebeb] p-[3px] drop-shadow-[0px_1px_0px_white] dark:border-[#313131] dark:bg-black dark:drop-shadow-none">
+                    {(["all", "unread"] as const).map((id) => {
+                      const isActive = id === (onlyUnread ? "unread" : "all");
+                      return (
+                        <button
+                          key={id}
+                          onClick={() => setOnlyUnread(id === "unread")}
+                          className={`flex items-center gap-[6px] px-3 py-[2px] rounded-[3px] text-[13px] font-medium leading-[1.109] tracking-[-0.26px] whitespace-nowrap text-black dark:text-white border transition-[opacity,background-color,border-color,box-shadow] ${isActive ? "tab-pill-active" : "border-transparent opacity-50 hover:opacity-75"}`}
+                        >
+                          <span className={`size-[7px] flex-shrink-0 rounded-full ${isActive ? "bg-[#3167dd]" : "bg-black/40 dark:bg-white/40"}`} />
+                          {id === "all" ? "All" : "Unread"}
+                        </button>
+                      );
+                    })}
                   </div>
 
                   {/* Mark all as read */}
                   <button
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-md border border-grey-dark-100 dark:border-black-300 text-[14px] font-medium tracking-[-0.28px] transition-colors bg-[#fefefe] dark:bg-black-300 text-[#111111] dark:text-white hover:bg-[#f5f5f5] dark:hover:bg-black-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="flex items-center h-[30px] px-[10px] gap-2 text-[14px] font-medium tracking-[-0.28px] rounded-[7px] bg-[#fefefe] border border-[#e3e3e3] text-[#111] shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)] hover:bg-[#f5f5f5] dark:bg-[#1e1e1e] dark:border-[#313131] dark:text-white dark:shadow-[0px_0px_0px_1px_black] dark:hover:bg-[#252525] disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
                     onClick={handleAllRead}
                     disabled={visible.length === 0}
                   >
@@ -221,10 +215,10 @@ const Notifications = () => {
 
                   {/* Notifications Settings */}
                   <button
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-md border border-grey-dark-100 dark:border-black-300 text-[14px] font-medium tracking-[-0.28px] transition-colors bg-[#fefefe] dark:bg-black-300 text-[#111111] dark:text-white hover:bg-[#f5f5f5] dark:hover:bg-black-200"
+                    className="flex items-center h-[30px] px-[10px] gap-2 text-[14px] font-medium tracking-[-0.28px] rounded-[7px] bg-[#fefefe] border border-[#e3e3e3] text-[#111] shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)] hover:bg-[#f5f5f5] dark:bg-[#1e1e1e] dark:border-[#313131] dark:text-white dark:shadow-[0px_0px_0px_1px_black] dark:hover:bg-[#252525] whitespace-nowrap"
                     onClick={() => setIsSettingsOpen(true)}
                   >
-                    <Settings className="size-4" />
+                    <Settings className="size-[14px]" />
                     Notifications Settings
                   </button>
                 </div>
@@ -243,7 +237,7 @@ const Notifications = () => {
                 </div>
               ) : (
                 <>
-                  <div className="w-[38%] flex-shrink-0 border-r border-grey-dark-100 dark:border-black-300 overflow-hidden">
+                  <div className="w-1/2 flex-shrink-0 border-r border-grey-dark-100 dark:border-black-300 overflow-hidden">
                     <NotificationList
                       notifications={visible}
                       selectedNotificationId={selectedId}
@@ -252,11 +246,19 @@ const Notifications = () => {
                       onRefresh={handleRefreshNotifications}
                     />
                   </div>
-                  <div className="flex-1 min-w-0 overflow-hidden">
-                    <NotificationDetailView
-                      selectedNotification={detail}
-                      onReadStatusChange={onReadToggle}
-                    />
+                  <div className="w-1/2 flex-shrink-0 overflow-hidden">
+                    {detail ? (
+                      <NotificationDetailView
+                        selectedNotification={detail}
+                        onReadStatusChange={onReadToggle}
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center h-full gap-2 px-6 text-center">
+                        <p className="text-[14px] font-medium text-grey-dark-500 dark:text-grey-dark-400">
+                          Select a notification to view details
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </>
               )}
