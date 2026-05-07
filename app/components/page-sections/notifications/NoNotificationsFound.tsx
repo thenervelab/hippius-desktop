@@ -16,11 +16,11 @@ const NoNotificationsFound: React.FC<NoNotificationsFoundProps> = ({
         heightClassName
       )}
     >
-      <div className="size-14 rounded-full bg-grey-95 dark:bg-black-400 flex items-center justify-center mb-4">
-        <Icons.Notification className="size-7 text-grey-60 dark:text-grey-dark-400" />
+      <div className="size-[72px] rounded-2xl bg-grey-light-400 dark:bg-black-400 border border-grey-dark-100 dark:border-black-300 flex items-center justify-center mb-4 shadow-sm">
+        <Icons.Notification className="size-8 text-primary-50" />
       </div>
-      <h3 className="text-grey-10 dark:text-white font-semibold text-base">Nothing here</h3>
-      <p className="text-sm text-grey-50 dark:text-grey-dark-700 mt-1.5 max-w-[16rem] leading-5">
+      <h3 className="text-[#0a0a0a] dark:text-white font-bold text-[16px] tracking-[-0.32px]">Nothing here</h3>
+      <p className="text-[13px] text-grey-dark-800 dark:text-grey-dark-600 mt-2 max-w-[15rem] leading-5">
         This is the notifications center. Any update will be present here.
       </p>
     </div>
