@@ -1,21 +1,16 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { IconComponent } from "@/app/lib/types";
-import { Icons } from "@/components/ui";
 import { cn } from "@/app/lib/utils";
-import { handleButtonLink } from "@/app/lib/utils/links";
-import TimeAgo from "react-timeago";
 import NotificationContextMenu from "@/components/page-sections/notifications/NotificationContextMenu";
-import { useRouter } from "next/navigation";
 import { useSetAtom } from "jotai";
-import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
 import { useNotifications } from "@/lib/hooks/useNotifications";
 import { getVersion } from "@tauri-apps/api/app";
 import { isVersionGreaterOrEqual } from "@/lib/utils/versionCompare";
+import { IconComponent } from "@/app/lib/types";
+import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
 
-// Per-type color dot for the status indicator
 const TYPE_COLORS: Record<string, string> = {
   Subscription: "bg-error-50",
   Files: "bg-primary-50",
@@ -48,19 +43,15 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
   notificationType,
   notificationSubType,
   notificationText,
-  notificationTime,
-  timestamp,
   buttonText,
   buttonLink,
   unread = false,
   onClick,
   onReadStatusChange,
-  onClose,
 }) => {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [isArchiving, setIsArchiving] = useState(false);
   const [currentVersion, setCurrentVersion] = useState<string>("");
-  const router = useRouter();
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const { refresh } = useNotifications();
 
@@ -82,11 +73,6 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
     isVersionGreaterOrEqual(currentVersion, notificationSubType);
   const shouldShowButton = buttonText && buttonLink && !isUpdateAlreadyInstalled;
 
-  const handleLinkClick = (e: React.MouseEvent) => {
-    handleButtonLink(e, buttonLink, router);
-    onClose?.();
-  };
-
   const handleReadStatusToggle = () => {
     if (id && onReadStatusChange) {
       onReadStatusChange(id, !unread);
@@ -98,8 +84,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
     setContextMenu({ x: e.clientX, y: e.clientY });
   };
 
-  const handleDelete = async (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleArchive = async () => {
     if (!id) return;
     try {
       setIsArchiving(true);
@@ -112,42 +97,60 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
     }
   };
 
-  const dotColor = TYPE_COLORS[notificationType] ?? "bg-grey-60";
+  const typeColor = TYPE_COLORS[notificationType] ?? "bg-grey-dark-200";
+  const showRightColumn = unread || !!shouldShowButton;
 
   return (
     <>
       <div
         className={cn(
-          "flex items-start gap-3 px-4 py-3 hover:bg-grey-light-300 dark:hover:bg-[#252525] cursor-pointer transition-colors group relative",
+          "flex gap-[10px] items-start px-[10px] py-[12px] rounded-[8px] cursor-pointer transition-colors relative",
+          "hover:bg-grey-light-300 dark:hover:bg-[#252525]",
+          unread && "bg-grey-light-300 dark:bg-[#1e1e1e]",
           isArchiving && "opacity-0 scale-[0.98] transition-all duration-150"
         )}
         onClick={onClick}
         onContextMenu={handleContextMenu}
       >
-        {/* Unread dot */}
-        <div className={cn("mt-[5px] size-2 rounded-full flex-shrink-0", unread ? "bg-primary-50" : "bg-transparent")} />
+        {/* Left colored indicator line */}
+        <div
+          className={cn(
+            "w-[2px] self-stretch rounded-full flex-shrink-0 mt-[2px]",
+            unread ? typeColor : "bg-grey-dark-100 dark:bg-[#3a3a3a]"
+          )}
+        />
 
         {/* Content */}
-        <div className="flex-1 min-w-0">
-          <p className="text-[13px] font-semibold text-[#0a0a0a] dark:text-white leading-[1.25rem] truncate">
+        <div className="flex-1 min-w-0 flex flex-col gap-[2px]">
+          <p className="text-[14px] font-medium text-[#0a0a0a] dark:text-white leading-normal truncate">
             {notificationType}
           </p>
-          <p className="text-[12px] text-grey-dark-800 dark:text-grey-dark-600 leading-[1.125rem] truncate mt-0.5">
+          <p className="text-[13px] font-medium text-[#0a0a0a] dark:text-white opacity-40 leading-normal line-clamp-2">
             {notificationText}
           </p>
-          <span className="text-[11px] text-grey-dark-600 dark:text-grey-dark-700 mt-1 block">
-            {timestamp ? <TimeAgo date={timestamp} /> : notificationTime}
-          </span>
         </div>
 
-        {/* View → always visible */}
-        <button
-          onClick={(e) => { e.stopPropagation(); onClick?.(); }}
-          className="flex-shrink-0 mt-0.5 text-[12px] font-medium text-primary-50 hover:text-primary-40 flex items-center gap-0.5 transition-colors"
-        >
-          View
-          <Icons.ArrowRight className="size-3" />
-        </button>
+        {/* Right: badge dot (top) + view button (bottom) */}
+        {showRightColumn && (
+          <div className="flex flex-col items-end justify-between self-stretch flex-shrink-0 gap-2">
+            {unread ? (
+              <div className={cn("size-[13px] rounded-full flex-shrink-0", typeColor)} />
+            ) : (
+              <div />
+            )}
+            {shouldShowButton ? (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClick?.();
+                }}
+                className="px-[9px] py-[5px] rounded-[21px] bg-white dark:bg-[#1e1e1e] border border-grey-dark-100 dark:border-[#333] text-[10px] font-medium text-[#111] dark:text-white tracking-[-0.2px] whitespace-nowrap shadow-[0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)] hover:opacity-80 transition-opacity"
+              >
+                View →
+              </button>
+            ) : null}
+          </div>
+        )}
       </div>
 
       {contextMenu && (
@@ -159,7 +162,10 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
           onToggleReadStatus={handleReadStatusToggle}
           notificationId={id}
           onArchived={() => setContextMenu(null)}
-          onArchiveStart={() => setIsArchiving(true)}
+          onArchiveStart={() => {
+            setIsArchiving(true);
+            handleArchive();
+          }}
         />
       )}
     </>

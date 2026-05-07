@@ -18,7 +18,7 @@ const NotificationMenuList: React.FC<NotificationListProps> = ({
   onClose,
 }) => {
   return (
-    <div className="flex flex-col divide-y divide-grey-dark-100 dark:divide-black-300 w-full">
+    <div className="flex flex-col gap-[4px] p-[4px] w-full">
       {notifications.map((notification) => (
         <NotificationMenuItem
           key={notification.id}

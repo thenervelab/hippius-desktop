@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
 import { useSetAtom } from "jotai";
 import { isViewingRecentFilesAtom } from "@/components/sidebar/sideBarAtoms";
 
@@ -20,16 +19,18 @@ const NotificationMenuFooter: React.FC<NotificationMenuFooterProps> = ({
   };
 
   return (
-    <div className="flex items-center justify-between px-4 py-3 border-t border-grey-dark-100 dark:border-black-300">
-      <Link
-        href="/notifications"
-        onClick={handleClick}
-        className="text-[13px] font-medium text-grey-dark-800 dark:text-grey-dark-600 hover:text-[#0a0a0a] dark:hover:text-white transition-colors"
-      >
+    <Link
+      href="/notifications"
+      onClick={handleClick}
+      className="flex items-center gap-[4px] h-[32px] px-[16px] border-t border-grey-dark-100 dark:border-black-300 bg-grey-light-400 dark:bg-[#111111] shadow-[inset_0px_2px_0px_0px_white] dark:shadow-none hover:brightness-95 dark:hover:bg-[#1a1a1a] transition-all overflow-hidden w-full shrink-0"
+    >
+      <span className="flex-1 min-w-0 font-medium text-[12px] leading-[18px] text-grey-dark-800 dark:text-grey-dark-600 tracking-[-0.24px] truncate">
         View More
-      </Link>
-      <ArrowRight className="size-3.5 text-grey-dark-800 dark:text-grey-dark-600" />
-    </div>
+      </span>
+      <span className="font-medium text-[12px] leading-[18px] text-grey-dark-800 dark:text-grey-dark-600 tracking-[-0.24px] shrink-0">
+        →
+      </span>
+    </Link>
   );
 };
 
