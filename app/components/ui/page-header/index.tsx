@@ -39,13 +39,13 @@ const PageHeader: React.FC<PageHeaderProps> = ({ title, subtitle, className }) =
   return (
     <div
       className={cn(
-        "flex items-center justify-between gap-3.5 pl-4 pr-3 py-3 flex-wrap",
+        "flex items-center justify-between gap-3.5 px-3 py-3 flex-wrap",
         "shadow-[0px_1px_0px_0px_white] dark:shadow-[0px_1px_0px_0px_rgba(255,255,255,0.03)]",
         className,
       )}
     >
       {/* Left: title + optional subtitle */}
-      <div className="flex flex-col gap-0.5">
+      <div className="flex flex-col gap-0.5 pl-1">
         <h1 className="text-[24px] font-medium leading-8 text-grey-10 dark:text-white">
           {title}
         </h1>
