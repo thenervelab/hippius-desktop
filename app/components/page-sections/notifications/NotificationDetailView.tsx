@@ -13,6 +13,7 @@ import { cn, getFilePartsFromFileName, getFileTypeFromExtension } from "@/lib/ut
 import { getFileIcon, formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import type { SyncedFileDetail } from "@/lib/hooks/useFilesNotification";
+import { Button } from "@/components/ui/button/ButtonV2";
 
 export function parseFileDetails(type: string, releaseNotes: string): SyncedFileDetail[] {
   if (type !== "Files" || !releaseNotes) return [];
@@ -30,7 +31,7 @@ const ICON_BG: Record<string, string> = {
   Balance:      "#fc7d73",
   Credits:      "#fc7d73",
   Files:        "#3067dd",
-  Hippius:      "#f8a84b",
+  Hippius:      "#3067dd",
   Blockchain:   "#3067dd",
   Storage:      "#3067dd",
 };
@@ -126,7 +127,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   const handleMoreClick = (e: React.MouseEvent) => {
     e.preventDefault();
     const rect = e.currentTarget.getBoundingClientRect();
-    setContextMenu({ x: rect.left, y: rect.bottom });
+    setContextMenu({ x: rect.right, y: rect.bottom });
   };
 
   const handleReadStatusToggle = () => {
@@ -146,10 +147,10 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
           {/* Header */}
           <div className="flex items-start gap-3 px-3 py-3 border-b border-grey-dark-100 dark:border-black-300 flex-shrink-0">
             <div
-              className="size-9 rounded-full flex items-center justify-center flex-shrink-0"
+              className="size-9 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden"
               style={{ backgroundColor: iconBg }}
             >
-              <Icon className="size-5 text-white" />
+              <Icon className={cn("text-white", type === "Hippius" ? "size-6" : "size-5")} />
             </div>
 
             <div className="flex flex-col gap-0.5 flex-1 min-w-0">
@@ -260,29 +261,35 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
             {/* Action buttons */}
             {shouldShowButton && (
               <div className="flex items-center gap-6 pt-2">
-                <button
-                  className="px-[19px] py-2 rounded-md border border-[#eaeaea] dark:border-black-300 text-[14px] font-medium transition-colors bg-white dark:bg-black-400 text-[#111111] dark:text-white hover:bg-[#f5f5f5] dark:hover:bg-black-300"
+                <Button
+                  variant="defaultStable"
+                  size="auto"
+                  className="px-[19px] py-2 text-[14px] font-medium tracking-[-0.28px]"
                   onClick={handleReadStatusToggle}
                 >
                   {unread ? "Mark as read" : "Mark as unread"}
-                </button>
-                <button
-                  className="px-[19px] py-2 rounded-md text-white text-[14px] font-medium transition-colors bg-primary-50 hover:opacity-90"
+                </Button>
+                <Button
+                  variant="primary"
+                  size="auto"
+                  className="px-[19px] py-2 text-[14px] font-medium tracking-[-0.28px]"
                   onClick={handleLinkClick}
                 >
                   {actionText}
-                </button>
+                </Button>
               </div>
             )}
 
             {!shouldShowButton && id && (
               <div className="flex items-center gap-6 pt-2">
-                <button
-                  className="px-[19px] py-2 rounded-md border border-[#eaeaea] dark:border-black-300 text-[14px] font-medium transition-colors bg-white dark:bg-black-400 text-[#111111] dark:text-white hover:bg-[#f5f5f5] dark:hover:bg-black-300"
+                <Button
+                  variant="defaultStable"
+                  size="auto"
+                  className="px-[19px] py-2 text-[14px] font-medium tracking-[-0.28px]"
                   onClick={handleReadStatusToggle}
                 >
                   {unread ? "Mark as read" : "Mark as unread"}
-                </button>
+                </Button>
               </div>
             )}
           </div>

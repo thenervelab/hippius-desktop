@@ -47,22 +47,28 @@ const NotificationContextMenu: React.FC<NotificationContextMenuProps> = ({
     };
   }, [onClose]);
 
-  // Calculate position to ensure menu stays within viewport
-  const menuStyle = {
-    top: `${Math.min(y, window.innerHeight - 100)}px`,
-    left: `${Math.min(x, window.innerWidth - 200)}px`,
-  };
+  const MENU_WIDTH = 220;
+  const MENU_HEIGHT = 80;
+  const GAP = 4;
+
+  // Flip left if menu would overflow right edge; flip up if it would overflow bottom
+  const left = x + MENU_WIDTH > window.innerWidth
+    ? Math.max(0, x - MENU_WIDTH)
+    : x;
+  const top = y + MENU_HEIGHT > window.innerHeight
+    ? Math.max(0, y - MENU_HEIGHT - GAP)
+    : y + GAP;
 
   return createPortal(
     <div
       className="fixed z-50"
-      style={menuStyle}
+      style={{ top, left }}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="bg-white border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] rounded-lg overflow-hidden p-0 min-w-[13.75rem]">
-        <div className="flex flex-col">
+      <div className="bg-white dark:bg-[#1e1e1e] border border-[#e3e3e3] dark:border-[#313131] shadow-[0px_8px_24px_0px_rgba(0,0,0,0.12)] dark:shadow-[0px_8px_24px_0px_rgba(0,0,0,0.4)] rounded-lg overflow-hidden min-w-[13.75rem]">
+        <div className="flex flex-col p-1">
           <button
-            className="flex items-center gap-2 p-2 text-xs font-medium text-grey-30 hover:text-primary-60 hover:bg-primary-100 active:bg-primary-70 active:text-primary-80 transition-colors"
+            className="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] font-medium text-[#0a0a0a] dark:text-[#f8f8f8] hover:bg-[#f5f5f5] dark:hover:bg-[#2a2a2a] transition-colors"
             onClick={() => {
               onToggleReadStatus();
               onClose();
@@ -70,12 +76,12 @@ const NotificationContextMenu: React.FC<NotificationContextMenuProps> = ({
           >
             {isUnread ? (
               <>
-                <Icons.Eye className="size-4" />
+                <Icons.Eye className="size-[15px] opacity-60" />
                 <span>Mark as read</span>
               </>
             ) : (
               <>
-                <Icons.EyeOff className="size-4" />
+                <Icons.EyeOff className="size-[15px] opacity-60" />
                 <span>Mark as unread</span>
               </>
             )}
@@ -83,7 +89,7 @@ const NotificationContextMenu: React.FC<NotificationContextMenuProps> = ({
 
           {typeof notificationId === "number" && (
             <button
-              className="flex items-center gap-2 p-2 text-xs font-medium text-grey-30 hover:text-error-60 hover:bg-error-50/10 active:bg-error-60/20 transition-colors"
+              className="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] font-medium text-[#ff6d61] hover:bg-[#ff6d61]/10 dark:hover:bg-[#ff6d61]/10 transition-colors"
               onClick={async () => {
                 try {
                   onArchiveStart?.();
@@ -91,13 +97,13 @@ const NotificationContextMenu: React.FC<NotificationContextMenuProps> = ({
                   await deleteNotification(notificationId);
                   await refresh();
                   await refreshUnread();
-                  onArchived?.(); // Keep this to handle any additional cleanup
+                  onArchived?.();
                 } finally {
-                  onClose(); // Close the context menu, but not the notification menu
+                  onClose();
                 }
               }}
             >
-              <Icons.Trash className="size-4" />
+              <Icons.Trash className="size-[15px] opacity-80" />
               <span>Delete this notification</span>
             </button>
           )}
