@@ -37,7 +37,7 @@ interface ContextMenuProps {
   ) => void;
   /**
    * Open the "Share via link" modal for this file. Wired from
-   * `FilesContent` via `shareModalFileAtom`. The menu hides the
+   * `DriveContent` via `shareModalFileAtom`. The menu hides the
    * Share row when this is omitted, so consumers that don't want
    * the feature don't need a no-op handler.
    */

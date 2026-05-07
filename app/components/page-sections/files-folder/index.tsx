@@ -16,22 +16,22 @@ import { cn } from "@/lib/utils";
 import {
   FormattedUserFile,
 } from "@/app/lib/hooks/use-user-files";
-import FilesContent from "@/app/components/page-sections/files/FilesContent";
+import DriveContent from "@/app/components/page-sections/drive/DriveContent";
 import { toast } from "sonner";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import { FileTypes } from "@/lib/types/fileTypes";
 import { generateActiveFilters } from "@/lib/utils/fileFilterUtils";
 import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import { SearchInput } from "@/components/ui";
-import FilterChips from "@/app/components/page-sections/files/filter-chips";
+import FilterChips from "@/app/components/page-sections/drive/filter-chips";
 import { downloadFolder } from "@/app/lib/utils/downloadFolder";
-import AddFileToFolderButton from "@/app/components/page-sections/files/AddFileToFolderButton";
+import AddFileToFolderButton from "@/app/components/page-sections/drive/AddFileToFolderButton";
 import {
   getViewModePreference,
   saveViewModePreference,
 } from "@/lib/utils/userPreferencesDb";
 import { getFullPath } from "@/app/utils/folderPathUtils";
-import AddFolderToFolderButton from "@/app/components/page-sections/files/AddFolderToFolderButton";
+import AddFolderToFolderButton from "@/app/components/page-sections/drive/AddFolderToFolderButton";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
@@ -522,7 +522,7 @@ export default function FolderView({
                 </p>
               </div>
             ) : (
-              <FilesContent
+              <DriveContent
                 isRecentFiles={false}
                 isLoading={false}
                 filteredData={filteredData}

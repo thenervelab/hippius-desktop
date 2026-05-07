@@ -12,7 +12,7 @@ import useUserFiles from "@/app/lib/hooks/use-user-files";
 import useRecentFiles from "@/lib/hooks/use-recent-files";
 import { WaitAMoment } from "@/components/ui";
 import * as Typography from "@/components/ui/typography";
-import FilesOnboarding from "./FilesOnboarding";
+import DriveOnboarding from "./DriveOnboarding";
 import {
   getPrivateSyncPath,
   removeSyncPath,
@@ -28,8 +28,8 @@ import {
   ActiveFilter,
 } from "@/lib/utils/fileFilterUtils";
 import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
-import FilesHeader from "./FilesHeader";
-import FilesContent from "./FilesContent";
+import DriveHeader from "./DriveHeader";
+import DriveContent from "./DriveContent";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   settingsDialogOpenAtom,
@@ -61,7 +61,7 @@ import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
-const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
+const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
 
   // Indexer-based stats (same source as Home page for consistency)
@@ -96,7 +96,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const addButtonRef = useRef<{ openWithFiles(files: FileList): Promise<void>; openWithPaths(paths: string[]): Promise<void>; isDialogOpen(): boolean }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
 
-  // Folder upload dialog state (lifted from FilesHeader so context menus can trigger it)
+  // Folder upload dialog state (lifted from DriveHeader so context menus can trigger it)
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
 
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState(
@@ -196,7 +196,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   // Rust by useDriveStatuses). The previous local state + manual
   // get_all_sync_paths fetch was a stale mirror that lied whenever
   // the user paused / resumed from another surface (settings,
-  // tray submenu, FilesOnboarding). Reading from the atom keeps
+  // tray submenu, DriveOnboarding). Reading from the atom keeps
   // every per-drive UI in sync without round-trips.
   const driveStatuses = useAtomValue(driveStatusesAtom);
   // `pausedLabels` is "labels not currently active" — includes both
@@ -864,14 +864,14 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     );
   } else if (isSyncPathConfigured === false && !isRecentFiles) {
     content = (
-      <FilesOnboarding
+      <DriveOnboarding
         onSyncStarted={handleOnboardingSyncStarted}
       />
     );
   } else if (showCurrentStartSyncingSelector && !isRecentFiles) {
     // Show onboarding when Start Syncing is clicked
     content = (
-      <FilesOnboarding
+      <DriveOnboarding
         onSyncStarted={handleOnboardingSyncStarted}
       />
     );
@@ -907,7 +907,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             <SyncConnectivityAlert variant={isRecentFiles ? "compact" : "banner"} />
           </div>
 
-          <FilesHeader
+          <DriveHeader
             isRecentFiles={isRecentFiles}
             isRefetching={isRefetching}
             isFetching={isFetching}
@@ -956,7 +956,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             />
           )}
 
-          <FilesContent
+          <DriveContent
             isRecentFiles={isRecentFiles}
             isLoading={isLoading}
             filteredData={filteredData}
@@ -1048,4 +1048,4 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   );
 };
 
-export default FilesContainer;
+export default DriveContainer;

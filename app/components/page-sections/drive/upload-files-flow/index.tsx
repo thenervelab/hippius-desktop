@@ -4,7 +4,7 @@ import useFilesUpload from "@/lib/hooks/useFilesUpload";
 import { Icons, CardButton } from "@/components/ui";
 import FileDropzone from "./FileDropzone";
 import { useSetAtom, useAtomValue } from "jotai";
-import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
+import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import { queryClientAtom } from "jotai-tanstack-query";
 import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
 import { Trash2 } from "lucide-react";

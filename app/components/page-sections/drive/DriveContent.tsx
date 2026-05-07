@@ -35,7 +35,7 @@ import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import NoMatchingResults from "./NoMatchingResults";
 import BackgroundContextMenu from "@/app/components/ui/context-menu/BackgroundContextMenu";
 
-interface FilesContentProps {
+interface DriveContentProps {
   isRecentFiles?: boolean;
   isLoading: boolean;
   filteredData: Array<FormattedUserFile & { timestamp?: Date | null }>;
@@ -54,7 +54,7 @@ interface FilesContentProps {
   onAddSyncFolder?: () => void;
 }
 
-const FilesContent: FC<FilesContentProps> = ({
+const DriveContent: FC<DriveContentProps> = ({
   isRecentFiles = false,
   isLoading,
   filteredData,
@@ -469,4 +469,4 @@ const FilesContent: FC<FilesContentProps> = ({
   );
 };
 
-export default memo(FilesContent);
+export default memo(DriveContent);

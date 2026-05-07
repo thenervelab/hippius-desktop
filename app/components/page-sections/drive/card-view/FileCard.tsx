@@ -13,7 +13,7 @@ import {
   getFileIcon,
 } from "@/lib/utils/fileTypeUtils";
 import { Folder2 } from "@/components/ui/icons";
-import SharedLinkBadge from "@/components/page-sections/files/SharedLinkBadge";
+import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
 
 /** Fetch a URL into a same-origin blob URL (needed for canvas thumbnail extraction). */

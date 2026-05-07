@@ -1,7 +1,7 @@
 /**
  * Stats Source Selection Tests
  *
- * Verify the FilesContainer logic that decides whether to show
+ * Verify the DriveContainer logic that decides whether to show
  * indexer-based stats (top-level "All" view) or per-tab aggregates
  * sourced from Rust (`labelStats`) for folder tabs, and a reduce
  * over the filtered list for search/filter active states.
@@ -12,7 +12,7 @@
 import { describe, it, expect } from "vitest";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 
-// ─── Extract the decision logic from FilesContainer for testability ──
+// ─── Extract the decision logic from DriveContainer for testability ──
 
 interface StatsSourceInput {
   isRecentFiles: boolean;
@@ -28,7 +28,7 @@ interface StatsSourceInput {
 }
 
 /**
- * Mirrors the formattedStorageSize useMemo in FilesContainer.
+ * Mirrors the formattedStorageSize useMemo in DriveContainer.
  * Returns the storage size string that would be displayed.
  */
 function resolveStorageSize(input: StatsSourceInput): string {
@@ -47,7 +47,7 @@ function resolveStorageSize(input: StatsSourceInput): string {
 }
 
 /**
- * Mirrors the displayedFileCount useMemo in FilesContainer.
+ * Mirrors the displayedFileCount useMemo in DriveContainer.
  * Returns the file count that would be displayed.
  */
 function resolveFileCount(input: StatsSourceInput): number {
@@ -108,7 +108,7 @@ describe("Storage Size Source Selection", () => {
   });
 
   it("returns '0 B' when the folder tab is absent from labelStats", () => {
-    // Mirrors the `?? 0` defensive fallback in FilesContainer's
+    // Mirrors the `?? 0` defensive fallback in DriveContainer's
     // formattedStorageSize — a folder tab that hasn't had its stats
     // populated yet should render "0 B", not throw or show stale data.
     const result = resolveStorageSize({

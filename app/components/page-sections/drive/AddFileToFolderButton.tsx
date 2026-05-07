@@ -12,7 +12,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Icons } from "@/components/ui";
 import PrivacyBadge from "@/components/ui/PrivacyBadge";
 import { cn } from "@/lib/utils";
-import { uploadToIpfsAndSubmitToBlockcahinRequestStateAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
+import { uploadToIpfsAndSubmitToBlockcahinRequestStateAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import { useAtomValue } from "jotai";
 import UploadFilesFlow from "./upload-files-flow";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";

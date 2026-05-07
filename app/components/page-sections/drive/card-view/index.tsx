@@ -24,8 +24,8 @@ import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
 import { useRouter } from "next/navigation";
 
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { FileViewSharedState } from "@/app/components/page-sections/files/shared/FileViewUtils";
-import FileDetailsDialogContent from "@/app/components/page-sections/files/file-details-dialog-content";
+import { FileViewSharedState } from "@/app/components/page-sections/drive/shared/FileViewUtils";
+import FileDetailsDialogContent from "@/app/components/page-sections/drive/file-details-dialog-content";
 import SidebarDialog from "@/app/components/ui/SidebarDialog";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { Folder } from "@/app/components/ui/icons";

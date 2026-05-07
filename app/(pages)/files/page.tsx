@@ -2,7 +2,7 @@
 
 import DashboardTitleWrapper from "@/app/components/dashboard-title-wrapper";
 import FolderView from "@/app/components/page-sections/files-folder";
-import { Files } from "@/components/page-sections";
+import { Drive } from "@/components/page-sections";
 import { FC } from "react";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 
@@ -28,7 +28,7 @@ const FilesPage: FC = () => {
             </DashboardTitleWrapper>
         );
     }
-    return <Files />;
+    return <Drive />;
 };
 
 export default FilesPage;

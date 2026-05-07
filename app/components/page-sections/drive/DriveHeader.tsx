@@ -24,7 +24,7 @@ import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
 
-interface FilesHeaderProps {
+interface DriveHeaderProps {
   isRecentFiles?: boolean;
   isRefetching?: boolean;
   isFetching?: boolean;
@@ -60,7 +60,7 @@ interface FilesHeaderProps {
   onSetFolderUploadOpen?: (open: boolean) => void;
 }
 
-const FilesHeader: FC<FilesHeaderProps> = ({
+const DriveHeader: FC<DriveHeaderProps> = ({
   isRecentFiles = false,
   isRefetching = false,
   isFetching = false,
@@ -168,7 +168,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
           <RefreshButton
             refetching={isRefetching || isFetching}
             onClick={() => {
-              invoke("trigger_sync_now").catch((err: unknown) => console.warn("[FilesHeader] trigger_sync_now failed:", err));
+              invoke("trigger_sync_now").catch((err: unknown) => console.warn("[DriveHeader] trigger_sync_now failed:", err));
               refetchUserFiles();
             }}
           />
@@ -311,4 +311,4 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   );
 };
 
-export default FilesHeader;
+export default DriveHeader;

@@ -8,7 +8,7 @@ import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import HomepageHeader from "./HomepageHeader";
 import AvailableCreditsCard from "./available-credits";
 import StorageUsageCard from "./storage-usage-bars";
-import Ipfs from "@/app/components/page-sections/files/FilesContainer";
+import Drive from "@/app/components/page-sections/drive/DriveContainer";
 import { IS_SYNC_PAUSED, SyncPausedAlert } from "@/components/ui";
 
 const Home: React.FC = () => {
@@ -42,7 +42,7 @@ const Home: React.FC = () => {
             </div>
 
             <div id="recent-files">
-              <Ipfs isRecentFiles />
+              <Drive isRecentFiles />
             </div>
           </div>
         </div>

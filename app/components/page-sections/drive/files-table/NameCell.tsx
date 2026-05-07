@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { buildFolderPath } from "@/app/utils/folderPathUtils";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
-import SharedLinkBadge from "@/components/page-sections/files/SharedLinkBadge";
+import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { ArrowUpFromLine, ArrowDownToLine } from "lucide-react";
 

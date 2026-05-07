@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { InView } from "react-intersection-observer";
 import SectionHeader from "./SectionHeader";
-import SyncFolderSelector from "@/app/components/page-sections/files/SyncFolderSelector";
+import SyncFolderSelector from "@/app/components/page-sections/drive/SyncFolderSelector";
 import {
   getPrivateSyncPath,
   setPrivateSyncPath,

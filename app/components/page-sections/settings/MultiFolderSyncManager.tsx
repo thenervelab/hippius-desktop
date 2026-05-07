@@ -44,8 +44,8 @@ export default function MultiFolderSyncManager() {
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
   // change. The pause/resume buttons in this manager and in sibling
-  // surfaces (the tray submenu, FilesContainer's tab menu,
-  // FilesOnboarding) all flow through the same Rust events, which
+  // surfaces (the tray submenu, DriveContainer's tab menu,
+  // DriveOnboarding) all flow through the same Rust events, which
   // land in driveStatusesAtom — this effect makes the local list
   // reflect them without optimistic mutations that would lie when
   // the user pauses from another surface.

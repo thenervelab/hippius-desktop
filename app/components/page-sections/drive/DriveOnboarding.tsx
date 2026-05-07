@@ -33,11 +33,11 @@ import {
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { useAtomValue } from "jotai";
 
-interface FilesOnboardingProps {
+interface DriveOnboardingProps {
   onSyncStarted: () => void;
 }
 
-const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
+const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   onSyncStarted,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
@@ -549,4 +549,4 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
   );
 };
 
-export default FilesOnboarding;
+export default DriveOnboarding;

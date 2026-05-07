@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useAtom } from "jotai";
 import { pendingConflictsAtom } from "@/lib/store/syncAtoms";
 import { useStagedChanges } from "@/lib/hooks/useStagedChanges";
-import StagedChangesDialog from "@/components/page-sections/files/StagedChangesDialog";
+import StagedChangesDialog from "@/components/page-sections/drive/StagedChangesDialog";
 import { Icons } from "@/components/ui";
 import { invoke } from "@tauri-apps/api/core";
 import type { ConflictResolution } from "@/lib/types/syncTypes";

@@ -17,7 +17,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 
 import UploadFilesFlow from "./upload-files-flow";
 import { Icons } from "@/components/ui";
-import { uploadToIpfsAndSubmitToBlockcahinRequestStateAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
+import { uploadToIpfsAndSubmitToBlockcahinRequestStateAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import { useAtomValue } from "jotai";
 import PrivacyBadge from "@/components/ui/PrivacyBadge";
 
