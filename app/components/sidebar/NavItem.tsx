@@ -179,7 +179,7 @@ const NavItem: React.FC<NavItemProps> = ({
                       "flex items-center gap-2 p-[10px] transition-colors duration-200",
                       subActive
                         ? "bg-white/60 dark:bg-white/20 text-[#0a0a0a] dark:text-grey-light-100 rounded-[12px]"
-                        : "rounded-[6px] text-[#606060] dark:text-grey-dark-600 hover:bg-black/5 dark:hover:bg-white/10",
+                        : "rounded-[6px] text-[#606060] dark:text-grey-dark-600 hover:bg-white/30 dark:hover:bg-white/10",
                     )}
                   >
                     {sub.icon && (

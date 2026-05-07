@@ -86,10 +86,8 @@ const LeftCarouselPanel = () => {
         .auth-carousel-bullet-active {
           opacity: 1 !important;
         }
-        @media (prefers-color-scheme: dark) {
-          .auth-carousel-bullet {
-            background: #ebebeb !important;
-          }
+        .dark .auth-carousel-bullet {
+          background: #ebebeb !important;
         }
       `}</style>
     </div>
