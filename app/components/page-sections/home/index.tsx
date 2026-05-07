@@ -6,6 +6,7 @@ import {
 } from "@/app/components/sidebar/sideBarAtoms";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import DetailList from "./DetailList";
+import HomepageHeader from "./HomepageHeader";
 import CreditUsageTrends from "./credit-usage-trends";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
 import { invoke } from "@tauri-apps/api/core";
@@ -53,10 +54,8 @@ const Home: React.FC = () => {
 
   return (
     <>
-      <DashboardTitleWrapper
-        mainText="Overview"
-        subText="Secure & Encrypted Storage with Easy Sync and Real-Time Tracking"
-      >
+      <DashboardTitleWrapper mainText="Overview">
+        <HomepageHeader />
         <div className="mt-6">
           {/* <NebulaTest /> */}
           {/* Stats Cards */}
