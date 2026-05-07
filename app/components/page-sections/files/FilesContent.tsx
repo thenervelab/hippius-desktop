@@ -25,6 +25,8 @@ import PdfDialog from "./files-table/PdfDialog";
 import { toast } from "sonner";
 import { useFileViewShared } from "./shared/FileViewUtils";
 import FileContextMenu from "@/app/components/ui/context-menu";
+import { useSetAtom } from "jotai";
+import { shareModalFileAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { downloadFile } from "@/app/lib/utils/downloadFile";
 import { CloudUploadIcon, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -74,6 +76,10 @@ const FilesContent: FC<FilesContentProps> = ({
   const [animateCloud, setAnimateCloud] = useState(false);
   const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
+  // Opens `ShareFileModal` (mounted at the layout level) for the
+  // selected file. Setting the atom is the only handoff — the modal
+  // owns its own lifecycle from there.
+  const setShareModalFile = useSetAtom(shareModalFileAtom);
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
@@ -400,6 +406,10 @@ const FilesContent: FC<FilesContentProps> = ({
           onShowFileDetails={(file) => {
             setFileDetailsFile(file);
             setIsFileDetailsOpen(true);
+            setContextMenu(null);
+          }}
+          onShareFile={(file) => {
+            setShareModalFile(file);
             setContextMenu(null);
           }}
         />

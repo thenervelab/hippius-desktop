@@ -5,7 +5,13 @@ import {
   MoreVertical,
   Download,
   FolderOpen,
+  Link2,
 } from "lucide-react";
+import { useAtomValue, useSetAtom } from "jotai";
+import {
+  shareFeatureEnabledAtom,
+  shareModalFileAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
 import { cn } from "@/lib/utils";
 
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
@@ -75,6 +81,11 @@ const CardView: FC<CardViewProps> = ({
 
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
+  // Share-feature gating: hidden unless the connected hcfs-server
+  // advertises `shares: true`. Atom populated once per session by
+  // `useServerCapabilities` (mounted in SyncEventLogger).
+  const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
+  const setShareModalFile = useSetAtom(shareModalFileAtom);
   const { getParam } = useUrlParams();
   const { isSelectionMode, enterSelectionModeAndSelectFile, } = useFileSelection();
 
@@ -306,6 +317,26 @@ const CardView: FC<CardViewProps> = ({
                                   } catch (error) {
                                     console.error("Failed to open Explorer:", error);
                                   }
+                                },
+                              },
+                            ]
+                            : []),
+                          // Share via link — same gating as the right-click
+                          // context menu and the table-view 3-dots menu:
+                          // hidden for folders, mid-flight files, and old
+                          // hcfs-servers without the `shares` capability.
+                          ...(!file.isFolder && file.syncStatus === "synced" && shareEnabled
+                            ? [
+                              {
+                                icon: <Link2 className="size-4" />,
+                                itemTitle: "Share via link",
+                                onItemClick: (e?: React.MouseEvent) => {
+                                  if (e) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                  }
+                                  setOpenMenuIndex(null);
+                                  setShareModalFile(file);
                                 },
                               },
                             ]

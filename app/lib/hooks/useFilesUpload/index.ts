@@ -5,11 +5,12 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useSetAtom, useAtomValue } from "jotai";
 import { uploadProgressAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
 import { queryClientAtom } from "jotai-tanstack-query";
-import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
+import { DRIVE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { toast } from "sonner";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { basename } from "@tauri-apps/api/path";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
+import { UPLOAD_PROCESSING_TOAST_ID } from "@/lib/hooks/useUploadProcessing";
 
 export type UploadFilesHandlers = {
   onSuccess?: () => void;
@@ -70,13 +71,29 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         `Adding ${filePaths.length} files to sync folder…`
         : msgs?.startSingle ?? `Adding ${firstFileName} to sync folder…`;
 
-    // If a toastId is given, update that toast; otherwise create a new one
-    let localToastId = options?.toastId;
-    if (localToastId !== undefined) {
-      toast.loading(startText, { id: localToastId, closeButton: true });
-    } else {
-      localToastId = toast.loading(startText, { closeButton: true });
+    // Use the shared UPLOAD_PROCESSING_TOAST_ID so the toast persists
+    // until Rust's `hcfs_upload_processing { active: false }` event
+    // (handled in `useUploadProcessing`). `duration: Infinity` keeps
+    // it visible across the disk-copy + encryption + sync-prep window
+    // — much longer than Sonner's default ~4s. Caller-provided
+    // `toastId` (rare path used to update an in-flight toast) wins.
+    const localToastId = options?.toastId ?? UPLOAD_PROCESSING_TOAST_ID;
+    if (options?.toastId !== undefined && options.toastId !== UPLOAD_PROCESSING_TOAST_ID) {
+      // A caller passed a non-shared toastId. The
+      // `useUploadProcessing` hook only dismisses
+      // `UPLOAD_PROCESSING_TOAST_ID`, so a custom id will leak —
+      // the toast will stay stuck after sync starts and stack
+      // with subsequent uploads. Surface the misuse here.
+      console.warn(
+        "[useFilesUpload] caller passed a non-shared toastId; toast will not auto-dismiss when sync starts. Use UPLOAD_PROCESSING_TOAST_ID instead.",
+        { toastId: options.toastId },
+      );
     }
+    toast.loading(startText, {
+      id: localToastId,
+      closeButton: true,
+      duration: Infinity,
+    });
 
     setRequestState("uploading");
     setProgress(0);
@@ -106,21 +123,23 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         forFolder: false,
       });
 
-      // Show result AFTER the work completes
-      toast.dismiss(localToastId);
       if (result.failed.length > 0) {
+        // Partial-failure overwrites the loading toast with a warning;
+        // explicit dismiss not needed because we reuse the same id.
         const failedNames = result.failed.map((f) => f.name).join(", ");
-        toast.warning(`${result.added.length} files added, ${result.failed.length} failed: ${failedNames}`, { duration: 6000, closeButton: true });
-      } else {
-        const addedText =
-          filePaths.length === 1
-            ? `${firstFileName} added. Your sync will start soon.`
-            : `${filePaths.length} files added. Your sync will start soon.`;
-        toast.success(addedText, { duration: 4000, closeButton: true });
+        toast.warning(`${result.added.length} files added, ${result.failed.length} failed: ${failedNames}`, {
+          id: localToastId,
+          duration: 6000,
+          closeButton: true,
+        });
       }
+      // Success path: do NOT dismiss the loading toast here. The
+      // `useUploadProcessing` hook dismisses `UPLOAD_PROCESSING_TOAST_ID`
+      // on the Rust `hcfs_upload_processing { active: false }` event,
+      // which fires when the sync cycle actually starts.
 
       refetchUserFiles();
-      queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
+      queryClient.invalidateQueries({ queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY] });
 
       // finish up
       setRequestState("idle");
@@ -137,8 +156,9 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
           : msgs?.errorMultiple?.(filePaths.length) ??
           `Failed to add ${filePaths.length} files`;
 
-      toast.dismiss(localToastId);
-      toast.error(errorText);
+      // Reuse the same toast id so the error overwrites the loading
+      // toast instead of stacking — matches the partial-failure path.
+      toast.error(errorText, { id: localToastId, closeButton: true });
     }
   }
 

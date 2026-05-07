@@ -36,6 +36,14 @@ pub struct BlockSubscriptionState {
     pub latest_block: AtomicU64,
     pub is_connected: AtomicBool,
     pub handle: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Monotonic millisecond timestamp of the last `block_number_updated`
+    /// emit. Used to throttle high-frequency block emits during catch-up
+    /// bursts. Zero means "never emitted, allow immediately."
+    pub last_emit_ms: AtomicU64,
+    /// Set to `true` while a deferred trailing-edge emit task is sleeping.
+    /// Ensures only one such task runs at a time so a burst of throttled
+    /// blocks doesn't spawn N redundant flush tasks.
+    pub deferred_emit_in_flight: AtomicBool,
 }
 
 impl Default for BlockSubscriptionState {
@@ -51,6 +59,8 @@ impl BlockSubscriptionState {
             latest_block: AtomicU64::new(0),
             is_connected: AtomicBool::new(false),
             handle: tokio::sync::Mutex::new(None),
+            last_emit_ms: AtomicU64::new(0),
+            deferred_emit_in_flight: AtomicBool::new(false),
         }
     }
 }

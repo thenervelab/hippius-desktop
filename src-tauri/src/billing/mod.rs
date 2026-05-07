@@ -2,6 +2,7 @@
 
 pub mod charts;
 pub mod credits;
+pub mod drive_credits;
 pub mod eligibility;
 pub mod queries;
 pub mod subscriptions;

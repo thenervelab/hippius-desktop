@@ -19,8 +19,35 @@ use sqlx::sqlite::SqlitePool;
 /// HCFS server works without manual trust store setup. Release builds verify
 /// certificates the same way every other `reqwest::Client` in the codebase
 /// does, protecting bearer tokens and sync metadata from MITM tampering on
-/// the path to `arion.hippius.com`.
+/// the path to the regional `*-arion.hippius.com` endpoints.
 pub(crate) const ACCEPT_INVALID_CERTS: bool = cfg!(debug_assertions);
+
+/// The legacy single-region production URL that older builds wrote into
+/// `hcfs_config.server_url` (and that the FE used to seed in the setup
+/// dialog). hcfs-client's region-probe behavior triggers when `base_url`
+/// is empty — a non-empty URL is treated as an explicit override and skips
+/// the probe. To opt every existing user into the EU/US race without a DB
+/// migration, we treat this exact legacy value as the auto-detect sentinel
+/// and rewrite it to an empty string before handing the config to
+/// hcfs-client. Users who explicitly chose a different URL keep that
+/// override; users who never customised stop hitting the single legacy
+/// region.
+const LEGACY_SINGLE_REGION_URL: &str = "https://arion.hippius.com";
+
+/// Normalise a server URL read from the DB or supplied by the FE so that
+/// hcfs-client's region probe fires when the user is on the legacy default.
+///
+/// Returns `""` for the empty input AND for [`LEGACY_SINGLE_REGION_URL`];
+/// any other value is passed through untouched. The empty string is the
+/// signal hcfs-client uses to enable [`hcfs_client::client::region::pick_fastest`]
+/// — see `client/mod.rs::resolve_base_url` upstream.
+pub(crate) fn normalize_for_region_probe(server_url: &str) -> String {
+    if server_url.is_empty() || server_url == LEGACY_SINGLE_REGION_URL {
+        String::new()
+    } else {
+        server_url.to_string()
+    }
+}
 
 /// HCFS server configuration returned by `get_hcfs_config`.
 #[derive(serde::Serialize, Clone)]
@@ -185,12 +212,11 @@ pub(crate) async fn load_sync_config(pool: &SqlitePool, account_id: &str, label:
     let drive_password = get_drive_password(pool, account_id, Some(mnemonic)).await?;
     let config = get_hcfs_config_internal(pool, account_id).await?;
 
-    let server_url = if config.server_url.is_empty() {
-        "https://arion.hippius.com".to_string()
-    } else {
-        config.server_url
-    };
-    debug!("Server URL: {}", server_url);
+    // Empty string is hcfs-client's "race the regional endpoints and pick
+    // the faster one" sentinel. We rewrite the legacy single-region URL
+    // to empty too — see normalize_for_region_probe.
+    let server_url = normalize_for_region_probe(&config.server_url);
+    debug!("Server URL: {}", if server_url.is_empty() { "<auto-detect>" } else { server_url.as_str() });
 
     Ok(SyncConfig {
         sync_path,
@@ -263,5 +289,44 @@ mod tests {
         assert_eq!(cfg.bearer_token, "");
         assert_eq!(cfg.ss58_address, "");
         assert_eq!(cfg.folder_hash, "");
+    }
+
+    // ── normalize_for_region_probe ──────────────────────────────────
+
+    /// Empty input is the canonical auto-detect sentinel: hcfs-client
+    /// reads `base_url=""` as "race the regional endpoints."
+    #[test]
+    fn normalize_passes_empty_through() {
+        assert_eq!(normalize_for_region_probe(""), "");
+    }
+
+    /// The legacy single-region URL gets rewritten to empty so existing
+    /// users transparently opt into auto-detect — the whole point of
+    /// option (c) from the audit. Without this, every upgrading user
+    /// stays pinned to the legacy region forever.
+    #[test]
+    fn normalize_rewrites_legacy_single_region_to_empty() {
+        assert_eq!(normalize_for_region_probe(LEGACY_SINGLE_REGION_URL), "");
+        assert_eq!(normalize_for_region_probe("https://arion.hippius.com"), "");
+    }
+
+    /// Any other value (regional URL the probe might have written back, a
+    /// self-hosted server, an internal staging endpoint) is an explicit
+    /// user override — pass through verbatim.
+    #[test]
+    fn normalize_passes_explicit_overrides_through() {
+        assert_eq!(normalize_for_region_probe("https://eu-central-1-arion.hippius.com"), "https://eu-central-1-arion.hippius.com");
+        assert_eq!(normalize_for_region_probe("https://us-east-1-arion.hippius.com"), "https://us-east-1-arion.hippius.com");
+        assert_eq!(normalize_for_region_probe("https://my-self-hosted.example"), "https://my-self-hosted.example");
+        assert_eq!(normalize_for_region_probe("http://localhost:8080"), "http://localhost:8080");
+    }
+
+    /// Trailing slash variant of the legacy URL is NOT rewritten — the
+    /// rewrite is exact-match by design. Trailing-slash mismatches in
+    /// stored URLs would have been user-typed customisations, and the
+    /// safest assumption is "respect what the user typed."
+    #[test]
+    fn normalize_is_exact_match_for_legacy() {
+        assert_eq!(normalize_for_region_probe("https://arion.hippius.com/"), "https://arion.hippius.com/");
     }
 }

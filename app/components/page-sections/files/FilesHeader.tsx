@@ -19,6 +19,7 @@ import { FileTypes } from "@/lib/types/fileTypes";
 import { IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import { useAtomValue } from "jotai";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
@@ -92,6 +93,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   const isFolderUploadOpen = isFolderUploadOpenProp ?? isFolderUploadOpenLocal;
   const setIsFolderUploadOpen = onSetFolderUploadOpen ?? setIsFolderUploadOpenLocal;
   const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
+  const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const { checkEligibility } = useCreditCheck();
 
   const { navigateToFilesView } = useFilesNavigation();
@@ -270,6 +272,19 @@ const FilesHeader: FC<FilesHeaderProps> = ({
                 className="h-9"
                 onClick={isRecentFiles && hasNoSyncPaths ? onNavigateToSettings : onStartSyncing}
               />
+            )}
+
+            {/* Shared Links navigation — secondary/ghost style so it does
+                not compete with the primary "Upload File" CTA. Hidden when
+                the connected hcfs-server doesn't advertise `shares: true`. */}
+            {shareEnabled && (
+              <button
+                onClick={() => push("/shares")}
+                className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 text-sm font-medium transition-colors hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white focus:outline-none focus:ring-2 focus:ring-primary-50"
+              >
+                <Icons.Link className="size-4" />
+                <span className="ml-1">Shared Links</span>
+              </button>
             )}
           </>
         </div>

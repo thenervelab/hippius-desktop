@@ -1,12 +1,15 @@
 import { Icons } from "@/components/ui";
-import { Account } from "@/app/lib/types/accounts";
 import { ChartPoint } from "@/lib/types/chartTypes";
 import ChartTrends, { ChartTrendsConfig } from "@/components/ui/chart-trends";
 import StorageUsedTooltip from "./StorageUsedTooltip";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 
+// Drive-scoped: the chart and the "Total Storage Used" tile in
+// DetailList both feed off /user-credits-by-storage-history?storage_type=drive,
+// so the panel and the card can never report different totals.
 const config: ChartTrendsConfig = {
-  invokeCommand: "format_storage_chart",
+  invokeCommand: "get_drive_storage_chart",
+  selfFetch: true,
   title: "Storage Usage",
   icon: <Icons.Chart className="relative size-4 @sm:size-5 text-primary-50" />,
   emptyText: "No Storage Usage Data Available",
@@ -36,7 +39,7 @@ const config: ChartTrendsConfig = {
 };
 
 const StorageUsageTrends: React.FC<{
-  chartData?: Account[];
+  accountId?: string;
   isLoading?: boolean;
   className?: string;
   onRetry?: () => void;

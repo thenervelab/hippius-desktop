@@ -23,22 +23,28 @@ fn master_mnemonic_path(account_id: &str) -> Result<PathBuf> {
     Ok(home.join(".hippius").join("drives").join(key).join("master_enc_mnemonic.json"))
 }
 
-/// Read `hcfs_config.server_url` for this account; fall back to the
-/// production default when the row is missing or holds an empty string.
+/// Read `hcfs_config.server_url` for this account, normalised for
+/// hcfs-client's region probe.
+///
+/// Returns an empty string when the DB row is missing, holds an empty
+/// string, or holds the legacy single-region URL — those three cases all
+/// signal hcfs-client to race the regional endpoints and pick the
+/// faster one. Any explicitly chosen URL is passed through verbatim.
 ///
 /// This is the canonical "where does this account's HCFS server live?"
 /// lookup; other modules (migration, one-shot backfill) delegate here so
-/// the default URL and the empty-string fallback only live in one place.
+/// the empty-vs-explicit decision lives in exactly one place.
 pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Result<String> {
     let owner = account_key(account_id);
     let result: Option<(String,)> = sqlx::query_as("SELECT server_url FROM hcfs_config WHERE owner = ?")
         .bind(&owner)
         .fetch_optional(pool)
         .await?;
-    match result {
-        Some((url,)) if !url.is_empty() => Ok(url),
-        _ => Ok("https://arion.hippius.com".to_string()),
-    }
+    let raw = match result {
+        Some((url,)) => url,
+        None => String::new(),
+    };
+    Ok(crate::sync::config::normalize_for_region_probe(&raw))
 }
 
 /// Derive the per-folder encryption key from the master mnemonic.

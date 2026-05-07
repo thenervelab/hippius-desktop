@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Download, Trash2, FolderOpen } from "lucide-react";
+import { Download, Link2, Trash2, FolderOpen } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
+import { useAtomValue } from "jotai";
 import { toast } from "sonner";
 
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -15,6 +16,7 @@ import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { Folder } from "@/components/ui/icons";
 import cn from "@/app/lib/utils/cn";
+import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 
 const getFileManagerLabel = () => {
   if (typeof navigator !== "undefined" && /win/i.test(navigator.platform)) return "Explorer";
@@ -33,6 +35,13 @@ interface ContextMenuProps {
     file: FormattedUserFile,
     polkadotAddress: string
   ) => void;
+  /**
+   * Open the "Share via link" modal for this file. Wired from
+   * `FilesContent` via `shareModalFileAtom`. The menu hides the
+   * Share row when this is omitted, so consumers that don't want
+   * the feature don't need a no-op handler.
+   */
+  onShareFile?: (file: FormattedUserFile) => void;
 }
 
 export default function FileContextMenu({
@@ -44,10 +53,12 @@ export default function FileContextMenu({
   onSelectFile,
   onShowFileDetails,
   onFileDownload,
+  onShareFile,
 }: ContextMenuProps) {
   const [mounted, setMounted] = useState(false);
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
+  const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
 
   useEffect(() => {
     setMounted(true);
@@ -202,6 +213,33 @@ export default function FileContextMenu({
               </button>
             ) : null;
           })()}
+
+          {/*
+            Share via link — appears only when:
+            - the file is not a folder (folder-shares are out of scope for v1),
+            - the sync engine has finished uploading it (`syncStatus === "synced"`)
+              so the recipient's anonymous fetch will succeed,
+            - the server advertises `shares: true` (capability gating), AND
+            - a parent wired `onShareFile`.
+            Folders, in-flight files, and old-server deployments all hide
+            the row entirely rather than showing a disabled item — fewer
+            edge cases for the user to interpret.
+          */}
+          {!file.isFolder
+            && file.syncStatus === "synced"
+            && shareEnabled
+            && onShareFile && (
+              <button
+                className={menuItemClass}
+                onClick={() => {
+                  onShareFile(file);
+                  onClose();
+                }}
+              >
+                <Link2 className="size-4" />
+                <span>Share via link</span>
+              </button>
+            )}
 
           <button
             className={cn("flex items-center gap-2 p-2 text-xs font-medium hover:bg-grey-90", {

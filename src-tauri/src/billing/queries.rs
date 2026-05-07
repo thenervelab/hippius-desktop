@@ -10,6 +10,15 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Hard cap on indexer `limit` query-param values for chart endpoints.
+///
+/// The downstream dedup-by-day pipeline collapses any practical range
+/// (longest is "all-time", which is ≤ 2 years × 365 days = 730 daily
+/// points) to a small fixed-size series. 2000 covers that with margin.
+/// Server-side clamp lives here, not in the FE — see CLAUDE.md
+/// "Business logic MUST live in the Rust backend."
+const INDEXER_MAX_LIMIT: i64 = 2000;
+
 // ---------------------------------------------------------------------------
 // Typed response structs for indexer API deserialization
 // ---------------------------------------------------------------------------
@@ -108,7 +117,11 @@ pub async fn get_deposit_address(state: tauri::State<'_, crate::app_state::AppSt
 // Indexer queries (credits, marketplace, balance history, events)
 // ---------------------------------------------------------------------------
 
-/// Fetch marketplace credit consumption events (`CreditsConsumed`) from the indexer.
+/// Fetch marketplace credit consumption events (`CreditsConsumed`)
+/// from the indexer. Wallet-wide scope (drive + S3 + every other
+/// product). Backs the legacy home-page Credit Usage chart and Total
+/// Credit Used tile while `DRIVE_SCOPED_CREDITS_ENABLED` is off; the
+/// drive-scoped sibling lives in `crate::billing::drive_credits`.
 #[tauri::command]
 pub async fn get_marketplace_credits(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -128,30 +141,81 @@ pub async fn get_marketplace_credits(
     Ok(indexer.get::<serde_json::Value>("/marketplace/credit", &params).await?)
 }
 
-/// Fetch total file size stored by an account over a time window.
-#[tauri::command]
-pub async fn get_files_size(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    days_ago: Option<i64>,
-) -> Result<serde_json::Value, AppError> {
-    let indexer = IndexerClient::from_env(state.api_client.clone())?;
-    let days_str = days_ago.unwrap_or(30).to_string();
-    let params = vec![("account_id", account_id.as_str()), ("days_ago", days_str.as_str())];
-    Ok(indexer.get::<serde_json::Value>("/user-total-file-size", &params).await?)
+// ---------------------------------------------------------------------------
+// Drive storage stats (header card on Files / Home pages)
+// ---------------------------------------------------------------------------
+
+/// Latest-snapshot row from `/user-extended-storage-metrics?storage=drive`.
+///
+/// The indexer encodes both numbers as strings to dodge JSON's 53-bit
+/// integer ceiling (file totals can exceed 2^53 bytes). `#[serde(default)]`
+/// guards against an absent field producing a hard parse error in a UI
+/// header that must always render.
+#[derive(Deserialize, Default)]
+struct DriveStorageRow {
+    #[serde(default)]
+    drive_files_size: String,
+    #[serde(default)]
+    drive_files_count: String,
 }
 
-/// Fetch total file count for an account over a time window.
+/// UI-ready drive storage totals consumed by the Files / Home page header.
+///
+/// Both fields default to `0` when the indexer has no snapshot yet (cold
+/// start, brand-new account) — verified empirically against test account
+/// `5CrG8K6P…vP7Q` which returned snapshots with `"0"`/`"0"`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveStorageStats {
+    pub total_bytes: u64,
+    pub file_count: u64,
+}
+
+/// Parse a numeric string from the indexer.
+///
+/// A malformed string is a server bug, but a header that should always
+/// render is the wrong place to surface it. Coerce to 0 and log so the
+/// drift is observable instead of silent.
+fn parse_indexer_u64(field: &str, raw: &str) -> u64 {
+    match raw.parse::<u64>() {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!(field, raw, error = %err, "indexer returned non-numeric drive metric — coercing to 0");
+            0
+        }
+    }
+}
+
+/// Fetch the latest drive-only storage totals (size + file count) for an account.
+///
+/// Hits `/user-extended-storage-metrics?storage=drive&limit=1` and reads
+/// `data[0]`. Replaces the previous two-IPC pattern (`get_files_size` +
+/// `get_files_count`) with a single round-trip whose values are always
+/// internally consistent — the old pair could disagree because each had its
+/// own stale-time clock and could hit the indexer at different snapshots.
+///
+/// # Errors
+///
+/// Returns [`AppError::Api`] if the indexer request fails or the response
+/// is not valid JSON. An empty `data` array is *not* an error — it returns
+/// `{ totalBytes: 0, fileCount: 0 }`.
 #[tauri::command]
-pub async fn get_files_count(
+pub async fn get_drive_storage_stats(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
-    days_ago: Option<i64>,
-) -> Result<serde_json::Value, AppError> {
+) -> Result<DriveStorageStats, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
-    let days_str = days_ago.unwrap_or(30).to_string();
-    let params = vec![("account_id", account_id.as_str()), ("days_ago", days_str.as_str())];
-    Ok(indexer.get::<serde_json::Value>("/user-total-files-count", &params).await?)
+    let params = [("account_id", account_id.as_str()), ("storage", "drive"), ("limit", "1")];
+    let response: IndexerResponse<DriveStorageRow> = indexer.get("/user-extended-storage-metrics", &params).await?;
+
+    let Some(row) = response.data.into_iter().next() else {
+        return Ok(DriveStorageStats { total_bytes: 0, file_count: 0 });
+    };
+
+    Ok(DriveStorageStats {
+        total_bytes: parse_indexer_u64("drive_files_size", &row.drive_files_size),
+        file_count: parse_indexer_u64("drive_files_count", &row.drive_files_count),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +269,17 @@ pub async fn get_credits(
 ) -> Result<Vec<CreditObject>, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
-    let limit_str = limit.unwrap_or(100_000).to_string();
+    // The chart pipeline downstream deduplicates to latest-per-day, so we
+    // only ever need enough rows to cover the longest range the FE asks
+    // for. A year is 365 days, two years 730; INDEXER_MAX_LIMIT covers any
+    // practical chart range with margin and avoids pulling MBs of JSON
+    // the dedup loop will throw away.
+    //
+    // Server-side cap: per CLAUDE.md "Business logic MUST live in the
+    // Rust backend." Even when the frontend passes an explicit
+    // `Some(100_000)` (today's `useCredits.ts` default), we clamp here
+    // so the over-fetch can't bypass the cap from the IPC boundary.
+    let limit_str = limit.unwrap_or(INDEXER_MAX_LIMIT).min(INDEXER_MAX_LIMIT).to_string();
     let params = vec![
         ("account_id", account_id.as_str()),
         ("page", page_str.as_str()),
@@ -263,7 +337,10 @@ pub async fn get_system_balance(
 ) -> Result<Vec<BalanceObject>, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
-    let limit_str = limit.unwrap_or(20_000).to_string();
+    // Same reasoning + same server-side cap as `get_credits` above. The
+    // FE's `useSystemBalance.ts` default of 20_000 is silently clamped
+    // to INDEXER_MAX_LIMIT here.
+    let limit_str = limit.unwrap_or(INDEXER_MAX_LIMIT).min(INDEXER_MAX_LIMIT).to_string();
     let params = vec![
         ("account_id", account_id.as_str()),
         ("page", page_str.as_str()),
@@ -478,4 +555,62 @@ pub async fn get_add_credit_events(
             hash: e.extrinsic_hash.clone().unwrap_or_default(),
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_well_formed_indexer_numeric_string() {
+        // 39_251_200_367 is the live `drive_files_size` observed for account
+        // 5DL9k…6pU on 2026-05-05; explicitly larger than `i32::MAX` so a
+        // future regression to a 32-bit type would fail this assertion.
+        assert_eq!(parse_indexer_u64("drive_files_size", "39251200367"), 39_251_200_367);
+        assert_eq!(parse_indexer_u64("drive_files_count", "75857"), 75_857);
+        assert_eq!(parse_indexer_u64("any", "0"), 0);
+    }
+
+    #[test]
+    fn coerces_malformed_numeric_string_to_zero() {
+        // The header card must always render; a malformed indexer value is
+        // logged at warn! rather than propagated as a parse error.
+        assert_eq!(parse_indexer_u64("drive_files_size", ""), 0);
+        assert_eq!(parse_indexer_u64("drive_files_size", "not-a-number"), 0);
+        assert_eq!(parse_indexer_u64("drive_files_size", "-1"), 0);
+    }
+
+    #[test]
+    fn extended_metrics_response_deserializes_to_drive_storage_row() {
+        // Response shape verified live against
+        // /user-extended-storage-metrics?storage=drive&limit=1 on 2026-05-05.
+        // Fields beyond the two we read (id, block_number, account_id,
+        // timestamp, processed_timestamp) must be silently ignored.
+        let body = r#"{
+            "data": [{
+                "id": 5322,
+                "block_number": 5647319,
+                "account_id": "5DL9k",
+                "drive_files_size": "39251200367",
+                "drive_files_count": "75857",
+                "timestamp": 1777978926000,
+                "processed_timestamp": "2026-05-05T12:00:00Z"
+            }],
+            "pagination": {"page": 1, "limit": 1, "total": 1, "total_pages": 1}
+        }"#;
+        let parsed: IndexerResponse<DriveStorageRow> = serde_json::from_str(body).expect("indexer response should deserialize");
+        let row = parsed.data.into_iter().next().expect("row present");
+        assert_eq!(row.drive_files_size, "39251200367");
+        assert_eq!(row.drive_files_count, "75857");
+    }
+
+    #[test]
+    fn empty_data_array_yields_zero_stats() {
+        // New accounts and cold indexers return `data: []`. The header
+        // must render `0 B / 0` rather than error — verified against
+        // account 5CrG8K6P… which the indexer had not yet snapshotted.
+        let body = r#"{"data": [], "pagination": {"page": 1, "limit": 1, "total": 0, "total_pages": 0}}"#;
+        let parsed: IndexerResponse<DriveStorageRow> = serde_json::from_str(body).expect("empty response should deserialize");
+        assert!(parsed.data.is_empty());
+    }
 }

@@ -3,6 +3,8 @@
 import { useSyncEvents } from "@/lib/hooks/useSyncEvents";
 import { useSyncSnapshotListener } from "@/lib/hooks/useSyncSnapshot";
 import { useDriveStatuses } from "@/lib/hooks/useDriveStatuses";
+import { useServerCapabilities } from "@/lib/hooks/useServerCapabilities";
+import { useUploadProcessing } from "@/lib/hooks/useUploadProcessing";
 
 /**
  * Invisible component that mounts the cross-cutting sync hooks:
@@ -16,7 +18,12 @@ import { useDriveStatuses } from "@/lib/hooks/useDriveStatuses";
  */
 export default function SyncEventLogger() {
   useSyncEvents();
+  useUploadProcessing();
   useSyncSnapshotListener();
   useDriveStatuses();
+  // Caches `serverCapabilitiesAtom` once per session so share UI surfaces
+  // can gate themselves on `shares: true` without each surface fetching
+  // separately. Cleared automatically on logout.
+  useServerCapabilities();
   return null;
 }
