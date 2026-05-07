@@ -56,7 +56,7 @@ const TopBarLogoMenu = () => {
       className={cn(
         "flex items-center select-none h-full shrink-0 transition-[min-width] duration-300 ease-in-out",
         isMac ? "pl-[80px]" : "pl-[12px]",
-        !isMac && (collapsed ? "min-w-0" : "min-w-[243px]"),
+        collapsed ? "min-w-0" : "min-w-[243px]",
       )}
     >
       <DropdownMenu>
