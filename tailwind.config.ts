@@ -42,6 +42,8 @@ export default {
           "0 2px 9px 0 rgba(61, 140, 250, 0.60) inset, 0 4px 4px 0 rgba(4, 65, 149, 0.10)",
         "outer-action-button":
           " 0 2px 9px 0 rgba(61, 140, 250, 0.60) inset, 0 4px 4px 0 rgba(4, 65, 149, 0.10)",
+        "tab-active":
+          "0px 12.26px 3.831px 0px rgba(0,0,0,0), 0px 8.429px 3.065px 0px rgba(0,0,0,0.01), 0px 4.597px 3.065px 0px rgba(0,0,0,0.04), 0px 2.299px 2.299px 0px rgba(0,0,0,0.08), 0px 0.766px 0.766px 0px rgba(0,0,0,0.09)",
       },
       backgroundImage: {
         "white-cloud-gradient":

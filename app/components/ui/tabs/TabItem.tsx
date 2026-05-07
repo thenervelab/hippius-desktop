@@ -11,7 +11,12 @@ export interface TabItemProps {
   isActive: boolean;
   onClick: () => void;
   width?: string;
+  /** Fixed height Tailwind class (e.g. `h-[36px]`). Ignored when `paddingY` is set. */
   height?: string;
+  /** Horizontal padding Tailwind class. Defaults to `px-3`. */
+  paddingX?: string;
+  /** Vertical padding Tailwind class (e.g. `py-[3px]`). When set, overrides `height`. */
+  paddingY?: string;
   isJustifyStart?: boolean;
   showTooltip?: boolean;
   iconOnly?: boolean;
@@ -26,6 +31,8 @@ const TabItem: React.FC<TabItemProps> = ({
   onClick,
   width = "min-w-[148px]",
   height = "h-[36px]",
+  paddingX = "px-3",
+  paddingY,
   isJustifyStart = false,
   showTooltip = true,
   iconOnly = false,
@@ -39,9 +46,10 @@ const TabItem: React.FC<TabItemProps> = ({
     <div
       data-tab-label={dataLabel ?? label}
       className={cn(
-        "flex shrink-0 cursor-pointer items-center justify-center rounded-[3px] px-3 transition-opacity duration-200",
+        "flex shrink-0 cursor-pointer items-center justify-center rounded-[3px] transition-opacity duration-200",
+        paddingX,
+        paddingY ? paddingY : height,
         iconOnly ? "w-[2.5rem]" : width,
-        height,
         isActive
           ? "bg-[#f8f8f8] border border-[#e3e3e3] text-[#000000] shadow-[0px_12.26px_3.831px_0px_rgba(0,0,0,0.00),0px_8.429px_3.065px_0px_rgba(0,0,0,0.01),0px_4.597px_3.065px_0px_rgba(0,0,0,0.04),0px_2.299px_2.299px_0px_rgba(0,0,0,0.08),0px_0.766px_0.766px_0px_rgba(0,0,0,0.09)] dark:bg-[#161616] dark:border-[#313131] dark:text-[#ffffff] dark:shadow-[0px_0px_0px_1px_black]"
           : "opacity-50 text-[#000000] hover:opacity-75 dark:text-[#ffffff]",

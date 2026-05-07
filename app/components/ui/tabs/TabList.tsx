@@ -17,6 +17,10 @@ interface TabListProps {
   onTabChange: (value: string) => void;
   width?: string;
   height?: string;
+  /** Horizontal padding Tailwind class for each tab item. Defaults to `px-3`. */
+  tabItemPaddingX?: string;
+  /** Vertical padding Tailwind class for each tab item (e.g. `py-[3px]`). When set, overrides `height`. */
+  tabItemPaddingY?: string;
   /** Gap between tab items (Tailwind class). Defaults to `gap-1`. */
   gap?: string;
   className?: string;
@@ -32,6 +36,8 @@ const TabList: React.FC<TabListProps> = ({
   onTabChange,
   width = "min-w-[148px]",
   height = "h-[36px]",
+  tabItemPaddingX,
+  tabItemPaddingY,
   gap = "gap-1",
   className,
   tabItemClassName,
@@ -59,6 +65,8 @@ const TabList: React.FC<TabListProps> = ({
             onClick={() => onTabChange(tabIdentifier)}
             width={width}
             height={height}
+            paddingX={tabItemPaddingX}
+            paddingY={tabItemPaddingY}
             isJustifyStart={isJustifyStart}
             showTooltip={showTooltip}
             iconOnly={iconOnly}
