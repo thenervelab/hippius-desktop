@@ -43,10 +43,17 @@ const Notifications = () => {
   const { notifications, refresh, markRead, markUnread, markAllRead } =
     useNotifications();
 
+  const CATEGORY_DISPLAY: Record<string, string> = {
+    Files: "Storage",
+  };
+
   const tabs = useMemo(
     () => [
       ...(enabledTypes.length > 0 ? [{ tabName: "All" }] : []),
-      ...enabledTypes.map((type) => ({ tabName: type })),
+      ...enabledTypes.map((type) => ({
+        tabName: type,
+        displayName: CATEGORY_DISPLAY[type] ?? type,
+      })),
     ],
     [enabledTypes]
   );
@@ -186,7 +193,7 @@ const Notifications = () => {
                           : "bg-transparent border border-transparent hover:bg-white/30 dark:hover:bg-black-200/50"
                       )}
                     >
-                      <span className="size-2 rounded-full bg-primary-50 flex-shrink-0" />
+                      <span className={cn("size-2 rounded-full flex-shrink-0", !onlyUnread ? "bg-[#3167dd]" : "bg-[#a3a3a3]")} />
                       All
                     </button>
                     <button
@@ -198,7 +205,7 @@ const Notifications = () => {
                           : "bg-transparent border border-transparent hover:bg-white/30 dark:hover:bg-black-200/50"
                       )}
                     >
-                      <span className="size-2 rounded-full bg-[#1e1e1e] dark:bg-grey-dark-400 flex-shrink-0" />
+                      <span className={cn("size-2 rounded-full flex-shrink-0", onlyUnread ? "bg-[#3167dd]" : "bg-[#a3a3a3]")} />
                       Unread
                     </button>
                   </div>
