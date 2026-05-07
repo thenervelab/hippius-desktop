@@ -109,7 +109,7 @@ export default function DetailList() {
       value: getTotalStorageUsed,
       showRefresh: false,
       isLoading: isRemoteStatsLoading,
-      info: "Total storage space used on the Hippius network.",
+      info: "Total storage used by your Drives",
     },
   ];
 
