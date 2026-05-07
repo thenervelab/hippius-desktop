@@ -77,11 +77,11 @@ const NotificationsSettingsDialog: React.FC<NotificationsSettingsDialogProps> = 
           <label
             key={item.id}
             htmlFor={item.id}
-            className="flex items-start gap-3 cursor-pointer rounded-lg border border-grey-dark-100 dark:border-black-300 bg-grey-light-200 dark:bg-black-400 px-4 py-3 hover:bg-grey-light-300 dark:hover:bg-black-300 transition-colors"
+            className="group flex items-start gap-3 cursor-pointer rounded-lg border border-grey-dark-100 dark:border-black-300 bg-grey-light-200 dark:bg-black-400 px-4 py-3 hover:bg-grey-light-300 dark:hover:bg-black-300 transition-colors"
           >
             <Checkbox.Root
               id={item.id}
-              className="mt-0.5 size-4 rounded border border-grey-70 dark:border-black-300 flex items-center justify-center bg-white dark:bg-black-300 data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 dark:data-[state=checked]:bg-primary-brand-dark dark:data-[state=checked]:border-primary-brand-dark shrink-0 transition-colors"
+              className="mt-0.5 size-4 rounded border border-grey-70 dark:border-[#555555] flex items-center justify-center bg-white dark:bg-black-300 dark:group-hover:bg-black-400 dark:group-hover:border-[#666666] data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 dark:data-[state=checked]:bg-primary-brand-dark dark:data-[state=checked]:border-primary-brand-dark dark:data-[state=checked]:group-hover:bg-primary-brand-dark dark:data-[state=checked]:group-hover:border-primary-brand-dark shrink-0 transition-colors"
               checked={checkedItems[item.id] ?? false}
               onCheckedChange={() =>
                 setCheckedItems((prev) => ({ ...prev, [item.id]: !prev[item.id] }))
