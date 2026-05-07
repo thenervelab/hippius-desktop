@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useMemo, useCallback } from "react";
+import { cn } from "@/lib/utils";
 import { Settings } from "lucide-react";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import NotificationList from "./NotificationList";
@@ -169,14 +170,17 @@ const Notifications = () => {
             {/* Tabs + filter row */}
             <div className="flex items-center justify-between border-b border-grey-dark-100 dark:border-black-300 px-2.5 py-2 gap-2.5 flex-wrap">
               {tabs.length > 0 && (
-                <div className="inline-flex items-center gap-1 rounded-[6px] bg-[#ebebeb] p-[3px] dark:bg-black">
+                <div className="inline-flex items-center gap-1 rounded-[6px] bg-[#ebebeb] p-[3px] dark:bg-[#000000]">
                   {tabs.map((tab) => {
                     const isActive = activeTab === tab.tabName;
                     return (
                       <button
                         key={tab.tabName}
                         onClick={() => setActiveTab(tab.tabName)}
-                        className={`flex items-center px-[6px] py-px rounded-[3px] font-mono text-[12px] font-medium leading-5 uppercase tracking-[-0.24px] whitespace-nowrap text-black dark:text-white border transition-[opacity,background-color,border-color,box-shadow] ${isActive ? "tab-pill-active" : "border-transparent opacity-50 hover:opacity-75"}`}
+                        className={cn(
+                          "flex items-center px-[6px] py-px rounded-[3px] font-mono text-[12px] font-medium leading-5 uppercase tracking-[-0.24px] whitespace-nowrap text-black dark:text-white border border-[#e3e3e3] dark:border-[#313131] bg-[#f8f8f8] dark:bg-[#1e1e1e] shadow-tab-active transition-[opacity,background-color,border-color,box-shadow]",
+                          !isActive && "!bg-transparent !border-transparent !shadow-none opacity-50 hover:opacity-75",
+                        )}
                       >
                         {tab.displayName ?? tab.tabName}
                       </button>
@@ -188,14 +192,17 @@ const Notifications = () => {
               {tabs.length > 0 && (
                 <div className="flex items-center gap-3 flex-wrap">
                   {/* All / Unread toggle */}
-                  <div className="inline-flex items-center gap-1 rounded-[6px] border border-[#e3e3e3] bg-[#ebebeb] p-[3px] drop-shadow-[0px_1px_0px_white] dark:border-[#313131] dark:bg-black dark:drop-shadow-none">
+                  <div className="inline-flex items-center gap-1 rounded-[6px] border border-[#e3e3e3] bg-[#ebebeb] p-[3px] drop-shadow-[0px_1px_0px_white] dark:border-[#313131] dark:bg-[#000000] dark:drop-shadow-none">
                     {(["all", "unread"] as const).map((id) => {
                       const isActive = id === (onlyUnread ? "unread" : "all");
                       return (
                         <button
                           key={id}
                           onClick={() => setOnlyUnread(id === "unread")}
-                          className={`flex items-center gap-[6px] px-3 py-[2px] rounded-[3px] text-[13px] font-medium leading-[1.109] tracking-[-0.26px] whitespace-nowrap text-black dark:text-white border transition-[opacity,background-color,border-color,box-shadow] ${isActive ? "tab-pill-active" : "border-transparent opacity-50 hover:opacity-75"}`}
+                          className={cn(
+                            "flex items-center gap-[6px] px-3 h-[24px] rounded-[3px] text-[13px] font-medium leading-[1.109] tracking-[-0.26px] whitespace-nowrap text-black dark:text-white border border-[#e3e3e3] dark:border-[#313131] bg-[#f8f8f8] dark:bg-[#1e1e1e] shadow-tab-active transition-[opacity,background-color,border-color,box-shadow]",
+                            !isActive && "!bg-transparent !border-transparent !shadow-none opacity-50 hover:opacity-75",
+                          )}
                         >
                           <span className={`size-[7px] flex-shrink-0 rounded-full ${isActive ? "bg-[#3167dd]" : "bg-black/40 dark:bg-white/40"}`} />
                           {id === "all" ? "All" : "Unread"}
