@@ -68,7 +68,7 @@ const NotificationsSettingsDialog: React.FC<NotificationsSettingsDialogProps> = 
     >
       <p className="text-[14px] text-grey-50 dark:text-grey-dark-700 text-center leading-[1.5] mb-6 -mt-2">
         Choose which updates you&apos;d like to receive in your inbox.
-        You&apos;re in control—check only the notifications that matter to you.
+        You&apos;re in control, check only the notifications that matter to you.
       </p>
 
       {/* Preference rows */}
