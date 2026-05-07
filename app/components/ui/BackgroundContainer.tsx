@@ -34,7 +34,6 @@ function gradientLine(
 function DecorationLines({ isDialog = false }: { isDialog?: boolean }) {
   const lightColor = "#dcdcdc";
   const darkColor = "#2c2c2c";
-  const hLen = isDialog ? "50vw" : "100vw";
   const vLen = isDialog ? "100vh" : "200vh";
 
   return (
@@ -42,53 +41,42 @@ function DecorationLines({ isDialog = false }: { isDialog?: boolean }) {
       aria-hidden="true"
       className="pointer-events-none absolute inset-0 -z-10 overflow-visible block"
     >
-      {/* Light mode lines */}
-      <div className="dark:hidden">
-        {(["top", "bottom"] as const).map((p) => (
-          <div
-            key={p}
-            className={cn(
-              "absolute left-1/2 h-px w-[100vw] -translate-x-1/2",
-              p === "top" ? "top-0" : "bottom-0",
-            )}
-            style={{ background: gradientLine("horizontal", lightColor) }}
-          />
-        ))}
-        {(["left", "right"] as const).map((p) => (
-          <div
-            key={p}
-            className={cn(
-              "absolute top-1/2 w-px -translate-y-1/2",
-              p === "left" ? "left-0" : "right-0",
-            )}
-            style={{ height: "200vh", background: gradientLine("vertical", lightColor) }}
-          />
-        ))}
-      </div>
-
-      {/* Dark mode lines */}
-      <div className="hidden dark:block">
-        {(["top", "bottom"] as const).map((p) => (
-          <div
-            key={p}
-            className={cn(
-              "absolute left-1/2 h-px -translate-x-1/2",
-              p === "top" ? "top-0" : "bottom-0",
-            )}
-            style={{ width: hLen, background: gradientLine("horizontal", darkColor, 14, 86) }}
-          />
-        ))}
-        {(["left", "right"] as const).map((p) => (
-          <div
-            key={p}
-            className={cn(
-              "absolute top-1/2 w-px -translate-y-1/2",
-              p === "left" ? "left-0" : "right-0",
-            )}
-            style={{ height: vLen, background: gradientLine("vertical", darkColor, 14, 86) }}
-          />
-        ))}
-      </div>
+      {/* Top line */}
+      <div
+        className="absolute top-0 left-1/2 h-px -translate-x-1/2 dark:hidden"
+        style={{ width: "100vw", background: gradientLine("horizontal", lightColor) }}
+      />
+      <div
+        className="absolute top-0 left-1/2 h-px -translate-x-1/2 hidden dark:block"
+        style={{ width: "100vw", background: gradientLine("horizontal", darkColor, 14, 86) }}
+      />
+      {/* Bottom line */}
+      <div
+        className="absolute bottom-0 left-1/2 h-px -translate-x-1/2 dark:hidden"
+        style={{ width: "100vw", background: gradientLine("horizontal", lightColor) }}
+      />
+      <div
+        className="absolute bottom-0 left-1/2 h-px -translate-x-1/2 hidden dark:block"
+        style={{ width: "100vw", background: gradientLine("horizontal", darkColor, 14, 86) }}
+      />
+      {/* Left line */}
+      <div
+        className="absolute top-1/2 left-0 w-px -translate-y-1/2 dark:hidden"
+        style={{ height: "200vh", background: gradientLine("vertical", lightColor) }}
+      />
+      <div
+        className="absolute top-1/2 left-0 w-px -translate-y-1/2 hidden dark:block"
+        style={{ height: vLen, background: gradientLine("vertical", darkColor, 14, 86) }}
+      />
+      {/* Right line */}
+      <div
+        className="absolute top-1/2 right-0 w-px -translate-y-1/2 dark:hidden"
+        style={{ height: "200vh", background: gradientLine("vertical", lightColor) }}
+      />
+      <div
+        className="absolute top-1/2 right-0 w-px -translate-y-1/2 hidden dark:block"
+        style={{ height: vLen, background: gradientLine("vertical", darkColor, 14, 86) }}
+      />
     </div>
   );
 }
@@ -117,29 +105,24 @@ export function BackgroundContainer({
         {/* Guide lines */}
         {!hideBackgroundDecorations && <DecorationLines isDialog={isDialog} />}
 
-        {/* Corner connector icons */}
-        {[
-          "absolute top-0 left-0 -translate-x-1/2 -translate-y-1/2",
-          "absolute top-0 right-0 translate-x-1/2 -translate-y-1/2",
-          "absolute bottom-0 left-0 -translate-x-1/2 translate-y-1/2",
-          "absolute bottom-0 right-0 translate-x-1/2 translate-y-1/2",
-        ].map((pos, i) => (
-          <BackgroundHippo
-            key={i}
-            fillClassName={fillClassName}
-            strokeClassName={strokeClassName}
-            className={cn("size-[22px] pointer-events-none z-[30] block", pos)}
-          />
-        ))}
+        {/* Corner hippo logos */}
+        <BackgroundHippo fillClassName={fillClassName} strokeClassName={strokeClassName}
+          className="absolute top-0 left-0 size-[22px] pointer-events-none z-[30] hidden sm:block -translate-x-1/2 -translate-y-1/2" />
+        <BackgroundHippo fillClassName={fillClassName} strokeClassName={strokeClassName}
+          className="absolute top-0 right-0 size-[22px] pointer-events-none z-[30] hidden sm:block translate-x-1/2 -translate-y-1/2" />
+        <BackgroundHippo fillClassName={fillClassName} strokeClassName={strokeClassName}
+          className="absolute bottom-0 left-0 size-[22px] pointer-events-none z-[30] hidden sm:block -translate-x-1/2 translate-y-1/2" />
+        <BackgroundHippo fillClassName={fillClassName} strokeClassName={strokeClassName}
+          className="absolute bottom-0 right-0 size-[22px] pointer-events-none z-[30] hidden sm:block translate-x-1/2 translate-y-1/2" />
 
-        {/* Diagonal-line frame SVG — light */}
+        {/* Diagonal-stripe frame — light mode */}
         <BackgroundContainerFrame
-          className="absolute inset-0 h-full w-full pointer-events-none dark:hidden block"
+          className="absolute inset-0 h-full w-full pointer-events-none dark:hidden hidden sm:block"
         />
-        {/* Diagonal-line frame SVG — dark */}
+        {/* Diagonal-stripe frame — dark mode */}
         <BackgroundContainerFrame
           tone="dark"
-          className="absolute inset-0 h-full w-full pointer-events-none hidden dark:block"
+          className="absolute inset-0 hidden h-full w-full pointer-events-none dark:sm:block"
         />
 
         {/* Dot pattern + edge blur (opt-in) */}
