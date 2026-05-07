@@ -128,7 +128,7 @@ export function BackgroundContainer({
             key={i}
             fillClassName={fillClassName}
             strokeClassName={strokeClassName}
-            className={cn("size-[22px] pointer-events-none z-[12] block", pos)}
+            className={cn("size-[22px] pointer-events-none z-[30] block", pos)}
           />
         ))}
 
