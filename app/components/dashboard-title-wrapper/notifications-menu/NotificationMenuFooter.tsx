@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 import { useSetAtom } from "jotai";
 import { isViewingRecentFilesAtom } from "@/components/sidebar/sideBarAtoms";
 
@@ -19,14 +20,15 @@ const NotificationMenuFooter: React.FC<NotificationMenuFooterProps> = ({
   };
 
   return (
-    <div className="flex items-center justify-center px-4 py-3 border-t border-grey-80">
+    <div className="flex items-center justify-between px-4 py-3 border-t border-grey-dark-100 dark:border-black-300">
       <Link
         href="/notifications"
         onClick={handleClick}
-        className="text-primary-50 hover:text-primary-40 font-medium text-sm transition-colors flex items-center gap-1"
+        className="text-[13px] font-medium text-grey-dark-800 dark:text-grey-dark-600 hover:text-[#0a0a0a] dark:hover:text-white transition-colors"
       >
         View More
       </Link>
+      <ArrowRight className="size-3.5 text-grey-dark-800 dark:text-grey-dark-600" />
     </div>
   );
 };

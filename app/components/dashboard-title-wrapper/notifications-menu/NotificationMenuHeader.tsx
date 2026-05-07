@@ -1,6 +1,5 @@
-import { cn } from "@/app/lib/utils";
 import Link from "next/link";
-import { Icons } from "@/components/ui";
+import { LayoutGrid, ArrowRight } from "lucide-react";
 import { isViewingRecentFilesAtom } from "@/components/sidebar/sideBarAtoms";
 import { useSetAtom } from "jotai";
 
@@ -21,27 +20,26 @@ const NotificationMenuHeader: React.FC<NotificationMenuHeaderProps> = ({
   };
 
   return (
-    <div className="flex items-center justify-between px-4 py-3 border-b border-grey-80">
+    <div className="flex items-center justify-between px-4 py-3.5 border-b border-grey-dark-100 dark:border-black-300">
       <div className="flex items-center gap-2">
-        <span className="font-semibold text-base text-grey-10">Notifications</span>
+        <LayoutGrid className="size-[15px] text-primary-50 flex-shrink-0" />
+        <span className="font-bold text-[15px] leading-none text-[#0a0a0a] dark:text-white tracking-[-0.3px]">
+          Notifications
+        </span>
         {count > 0 && (
-          <span
-            className={cn(
-              "inline-flex items-center justify-center rounded-full bg-primary-50 text-white text-[0.625rem] px-1.5 py-0.5 font-semibold min-w-[1.125rem]",
-              count > 99 && "px-2"
-            )}
-          >
-            {count}
+          <span className="inline-flex items-center justify-center rounded-full bg-primary-50 text-white text-[10px] font-semibold min-w-[18px] h-[18px] px-1">
+            {count > 99 ? "99+" : count}
           </span>
         )}
       </div>
+
       <Link
         href="/notifications"
         onClick={handleViewAll}
-        className="flex items-center gap-1 text-xs font-semibold text-primary-50 hover:text-primary-40 transition-colors uppercase tracking-wide"
+        className="flex items-center gap-1 text-[11px] font-semibold text-primary-50 hover:text-primary-40 transition-colors uppercase tracking-wide"
       >
         View All
-        <Icons.ArrowRight className="size-3" />
+        <ArrowRight className="size-3" />
       </Link>
     </div>
   );

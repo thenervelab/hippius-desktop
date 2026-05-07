@@ -118,51 +118,35 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
     <>
       <div
         className={cn(
-          "flex items-start gap-3 px-4 py-3 hover:bg-grey-95 cursor-pointer transition-colors group relative border-b border-grey-90 last:border-b-0",
+          "flex items-start gap-3 px-4 py-3 hover:bg-grey-light-300 dark:hover:bg-[#252525] cursor-pointer transition-colors group relative",
           isArchiving && "opacity-0 scale-[0.98] transition-all duration-150"
         )}
         onClick={onClick}
         onContextMenu={handleContextMenu}
       >
-        {/* Type color dot */}
-        <div className={cn("mt-1.5 size-2 rounded-full flex-shrink-0", dotColor)} />
+        {/* Unread dot */}
+        <div className={cn("mt-[5px] size-2 rounded-full flex-shrink-0", unread ? "bg-primary-50" : "bg-transparent")} />
 
         {/* Content */}
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-grey-10 leading-[1.25rem] truncate">
+          <p className="text-[13px] font-semibold text-[#0a0a0a] dark:text-white leading-[1.25rem] truncate">
             {notificationType}
           </p>
-          <p className="text-xs text-grey-50 leading-[1.125rem] truncate mt-0.5">
+          <p className="text-[12px] text-grey-dark-800 dark:text-grey-dark-600 leading-[1.125rem] truncate mt-0.5">
             {notificationText}
           </p>
-          <span className="text-[0.6875rem] text-grey-60 mt-1 block">
+          <span className="text-[11px] text-grey-dark-600 dark:text-grey-dark-700 mt-1 block">
             {timestamp ? <TimeAgo date={timestamp} /> : notificationTime}
           </span>
         </div>
 
-        {/* View button + unread indicator */}
-        <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
-          {shouldShowButton && (
-            <button
-              onClick={handleLinkClick}
-              className="text-xs font-medium text-primary-50 hover:text-primary-40 flex items-center gap-0.5 transition-colors"
-            >
-              View
-              <Icons.ArrowRight className="size-3" />
-            </button>
-          )}
-          {unread && (
-            <div className="size-1.5 rounded-full bg-primary-50" />
-          )}
-        </div>
-
-        {/* Delete on hover */}
+        {/* View → always visible */}
         <button
-          className="absolute top-3 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-grey-60 hover:text-error-50"
-          onClick={handleDelete}
-          title="Delete notification"
+          onClick={(e) => { e.stopPropagation(); onClick?.(); }}
+          className="flex-shrink-0 mt-0.5 text-[12px] font-medium text-primary-50 hover:text-primary-40 flex items-center gap-0.5 transition-colors"
         >
-          <Icons.Trash className="size-3.5" />
+          View
+          <Icons.ArrowRight className="size-3" />
         </button>
       </div>
 
