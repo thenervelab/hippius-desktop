@@ -27,7 +27,7 @@ const Home: React.FC = () => {
   return (
     <>
       <DashboardTitleWrapper mainText="Overview">
-        <div className="pr-2">
+        <div className="px-3">
           <HomepageHeader />
           <div className="mt-3">
             {IS_SYNC_PAUSED && (
