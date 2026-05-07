@@ -59,13 +59,13 @@ export function FramedDialog({
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
       <Dialog.Portal>
         {/* Backdrop */}
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-white/[0.72] backdrop-blur-[5.75px] dark:bg-[rgba(4,4,4,0.4)] dark:backdrop-blur-[11.5px]" />
+        <Dialog.Overlay className="fixed inset-0 z-[60] bg-white/[0.4] backdrop-blur-[20px] dark:bg-[rgba(4,4,4,0.2)] dark:backdrop-blur-[20px]" />
 
         {/* Full-screen positioner — click outside closes */}
         <Dialog.Content
           ref={contentRef}
           aria-describedby={undefined}
-          className="fixed top-0 left-0 right-0 h-screen z-50 flex items-center justify-center p-3 sm:p-6"
+          className="fixed top-0 left-0 right-0 h-screen z-[61] flex items-center justify-center p-3 sm:p-6"
           onClick={onClose}
         >
           <BackgroundContainer
