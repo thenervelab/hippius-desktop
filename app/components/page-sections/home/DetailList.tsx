@@ -4,12 +4,8 @@ import { useState, useEffect, ReactNode, useMemo } from "react";
 import { Icons } from "@/components/ui";
 import DetailsCard from "./DetailsCard";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
-import { useDriveCreditsTotal } from "@/app/lib/hooks/api/useDriveCreditsTotal";
-import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
-import { Account } from "@/lib/types";
 import { invoke } from "@tauri-apps/api/core";
 import { useDriveStorageStats } from "@/app/lib/hooks/api/useDriveStorageStats";
-import { DRIVE_SCOPED_CREDITS_ENABLED } from "@/app/lib/featureFlags";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { toast } from "sonner";
 
@@ -33,38 +29,6 @@ export default function DetailList() {
   const isRemoteStatsLoading = isDriveStatsLoading;
   const fileCount = driveStats?.fileCount;
   const isFileCountLoading = isDriveStatsLoading;
-
-  // Total Credit Used data sources — picked by the same gate that
-  // drives the chart so the tile and the chart always agree on scope
-  // and the same indexer endpoint is queried for both surfaces. Each
-  // hook's `enabled` flag is the inverse of the other so exactly one
-  // IPC fires for the tile per gate state.
-  //
-  // Wallet-wide (gate off): marketplace credits cumulative — the tile
-  // takes the last point of the same `transformedCreditsData` series
-  // the chart renders, so the displayed values are derived from one
-  // shared computation and cannot drift.
-  // Drive-scoped (gate on): get_drive_credits_total IPC, matching the
-  // chart's get_drive_credits_chart endpoint.
-  const {
-    data: driveCreditsTotal,
-    isLoading: isLoadingDriveCreditsTotal,
-  } = useDriveCreditsTotal({ enabled: DRIVE_SCOPED_CREDITS_ENABLED });
-  const {
-    data: marketplaceCredits,
-    isLoading: isLoadingMarketplaceCredits,
-  } = useMarketplaceCredits(undefined, { enabled: !DRIVE_SCOPED_CREDITS_ENABLED });
-  const [transformedCreditsData, setTransformedCreditsData] = useState<Account[]>([]);
-  useEffect(() => {
-    if (DRIVE_SCOPED_CREDITS_ENABLED) return;
-    if (!marketplaceCredits?.length) {
-      setTransformedCreditsData([]);
-      return;
-    }
-    invoke<Account[]>("transform_marketplace_credits", { credits: marketplaceCredits })
-      .then(setTransformedCreditsData)
-      .catch(() => setTransformedCreditsData([]));
-  }, [marketplaceCredits]);
 
   const handleRefreshCredits = async () => {
     try {
@@ -108,32 +72,6 @@ export default function DetailList() {
     return fileCount ?? 0;
   };
 
-  // All-time credit usage — wallet-wide while the gate is off, drive-
-  // scoped when on. The wallet-wide total is the last cumulative
-  // point of the marketplace-credits transform, mirroring the legacy
-  // implementation byte-for-byte so users see no value drift across
-  // a release that only flips the gate.
-  const isLoadingTotalCreditsUsed = DRIVE_SCOPED_CREDITS_ENABLED
-    ? isLoadingDriveCreditsTotal
-    : isLoadingMarketplaceCredits;
-  const getTotalCreditsUsed = useMemo(() => {
-    if (DRIVE_SCOPED_CREDITS_ENABLED) {
-      if (isLoadingDriveCreditsTotal) return "Loading...";
-      if (driveCreditsTotal === undefined || driveCreditsTotal === null) return "0";
-      return driveCreditsTotal.toFixed(6);
-    }
-    if (isLoadingMarketplaceCredits) return "Loading...";
-    if (!transformedCreditsData.length) return "0";
-    const lastPoint = transformedCreditsData[transformedCreditsData.length - 1];
-    const allTimeTotal = Number(lastPoint.total_balance) / Math.pow(10, 18);
-    return allTimeTotal.toFixed(6);
-  }, [
-    driveCreditsTotal,
-    isLoadingDriveCreditsTotal,
-    transformedCreditsData,
-    isLoadingMarketplaceCredits,
-  ]);
-
   const getTotalStorageUsed = useMemo(() => {
     if (isRemoteStatsLoading) return "Loading...";
     if (!remoteStats?.totalBytes) return "0 B";
@@ -165,17 +103,6 @@ export default function DetailList() {
       info: "Total number of files in your Drive.",
     },
     {
-      id: "total-credits-used",
-      icon: Icons.Tag2,
-      title: "Total Credit Used",
-      value: getTotalCreditsUsed,
-      showRefresh: false,
-      isLoading: isLoadingTotalCreditsUsed,
-      info: DRIVE_SCOPED_CREDITS_ENABLED
-        ? "All-time credits consumed for drive storage. Matches the scope shown in the Credit Usage chart below."
-        : "Credits consumption includes both drive + S3 storage.",
-    },
-    {
       id: "total-storage-used",
       icon: Icons.Chart,
       title: "Total Storage Used",
@@ -187,7 +114,7 @@ export default function DetailList() {
   ];
 
   return (
-    <div className="grid grid-cols-1 @md:grid-cols-2 @3xl:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 @md:grid-cols-3 gap-4">
       {detailCards.map((card) => (
         <DetailsCard
           key={card.id}
