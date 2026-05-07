@@ -523,9 +523,9 @@ pub struct StorageCapacityInfo {
 
 /// Calculate storage capacity for given credit amounts.
 ///
-/// Replaces the duplicated binary search in `billing/plans/page.tsx` and
-/// `home/DetailList.tsx`. Returns max GB, formatted display string, and
-/// ideal usage description for each credit amount.
+/// Replaces the duplicated binary search in `billing/plans/page.tsx`.
+/// Returns max GB, formatted display string, and ideal usage description
+/// for each credit amount.
 #[tauri::command]
 pub fn calculate_storage_capacity(credits_per_month: Vec<f64>) -> Vec<StorageCapacityInfo> {
     credits_per_month
@@ -551,12 +551,16 @@ pub fn calculate_storage_capacity(credits_per_month: Vec<f64>) -> Vec<StorageCap
             }
 
             let storage_display = if credits <= 3.0 {
-                let rounded_gb = (max_gb / 1000) * 1000;
-                let storage_tb = max_gb / 1000;
-                format!("≈{rounded_gb} GB / {storage_tb} TB Storage on Hippius")
+                let gb_str = add_commas_to_int(&max_gb.to_string());
+                format!("(≈{gb_str} GB/mo Storage on Hippius)")
             } else {
-                let storage_tb = max_gb / 1000;
-                format!("≈{storage_tb} TB Storage on Hippius")
+                let storage_tb = max_gb as f64 / 1000.0;
+                let tb_str = if storage_tb >= 10.0 {
+                    add_commas_to_int(&(storage_tb.floor() as u64).to_string())
+                } else {
+                    format!("{storage_tb:.2}")
+                };
+                format!("(≈{tb_str} TB/mo Storage on Hippius)")
             };
 
             let usage_description = if credits <= 3.0 {
@@ -849,5 +853,67 @@ mod tests {
     fn storage_cost_first_hour() {
         let cost = calculate_storage_cost("ipfs".into(), "first-hour".into(), 1.0).unwrap();
         assert!((cost - 0.000_031_5).abs() < 1e-10);
+    }
+
+    /// Regression: the previous formatter did integer division `max_gb / 1000`
+    /// for credits ≤ 3, which collapsed any sub-1000 GB capacity to "0 TB".
+    /// A 0.74-credit balance (~246 GB) rendered as "≈0 GB / 0 TB" in the UI.
+    /// The fix matches the console formatter: GB units when credits ≤ 3,
+    /// TB units (with 2-decimal precision under 10 TB) when credits > 3.
+    #[test]
+    fn storage_display_small_credits_shows_gb() {
+        let info = calculate_storage_capacity(vec![0.74]);
+        assert_eq!(info.len(), 1);
+        let display = &info[0].storage_display;
+        assert!(
+            display.contains(" GB/mo Storage on Hippius"),
+            "expected GB unit, got: {display}"
+        );
+        // Sanity: must NOT collapse to "0 GB" — the bug we are fixing.
+        assert!(
+            !display.starts_with("(≈0 GB"),
+            "regressed to zero-GB display: {display}"
+        );
+        // Storage capacity itself should be in the hundreds-of-GB range.
+        assert!(info[0].storage_gb > 100, "got {} GB", info[0].storage_gb);
+    }
+
+    #[test]
+    fn storage_display_zero_credits() {
+        let info = calculate_storage_capacity(vec![0.0]);
+        assert_eq!(info[0].storage_gb, 0);
+        assert_eq!(info[0].storage_display, "(≈0 GB/mo Storage on Hippius)");
+    }
+
+    #[test]
+    fn storage_display_medium_credits_shows_tb_with_decimals() {
+        // 10 credits → ~3.3 TB, well under the 10 TB threshold so we expect
+        // the two-decimal TB format.
+        let info = calculate_storage_capacity(vec![10.0]);
+        let display = &info[0].storage_display;
+        assert!(
+            display.contains(" TB/mo Storage on Hippius"),
+            "expected TB unit, got: {display}"
+        );
+        assert!(
+            display.contains('.'),
+            "expected fractional TB under 10 TB, got: {display}"
+        );
+    }
+
+    #[test]
+    fn storage_display_large_credits_shows_integer_tb() {
+        // 1000 credits → ~333 TB, above the 10 TB threshold so we expect
+        // an integer TB value with thousands grouping.
+        let info = calculate_storage_capacity(vec![1000.0]);
+        let display = &info[0].storage_display;
+        assert!(
+            display.contains(" TB/mo Storage on Hippius"),
+            "expected TB unit, got: {display}"
+        );
+        assert!(
+            !display.contains('.'),
+            "expected integer TB above 10 TB, got: {display}"
+        );
     }
 }
