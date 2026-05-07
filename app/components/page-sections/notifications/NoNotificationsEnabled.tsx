@@ -22,22 +22,22 @@ const NoNotificationsEnabled: React.FC<NoNotificationsEnabledProps> = ({
             heightClassName
           )}
         >
-          <AbstractIconWrapper className="size-12 mb-3 bg-gray-100">
-            <Icons.Setting className="relative size-6 text-primary-50" />
+          <AbstractIconWrapper className="size-12 mb-3 bg-gray-100 dark:bg-black-400">
+            <Icons.Setting className="relative size-6 text-primary-50 dark:text-primary-brand-dark" />
           </AbstractIconWrapper>
-          <h3 className="text-grey-10 font-medium text-base block">
+          <h3 className="text-grey-10 dark:text-white font-medium text-base block">
             <RevealTextLine reveal={!!inView}>
               Notifications Disabled
             </RevealTextLine>
           </h3>
-          <p className="text-xs text-grey-60 mt-1 mb-4">
+          <p className="text-xs text-grey-60 dark:text-grey-dark-700 mt-1 mb-4">
             <RevealTextLine reveal={!!inView}>
               You have not enabled any notification preferences. Enable
               notifications to stay updated.
             </RevealTextLine>
           </p>
           <button
-            className="px-4 py-2.5 bg-grey-90 rounded text-grey-10 leading-5 text-[0.875rem] font-medium flex items-center gap-2 transition-colors hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white focus:outline-none focus:ring-2 focus:ring-primary-50"
+            className="px-4 py-2.5 bg-grey-90 dark:bg-black-300 rounded text-grey-10 dark:text-white leading-5 text-[0.875rem] font-medium flex items-center gap-2 transition-colors hover:bg-primary-50 dark:hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white focus:outline-none focus:ring-2 focus:ring-primary-50"
             onClick={onOpenSettings}
           >
             <Icons.Setting className="size-4" />

@@ -9,7 +9,6 @@ import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
 import { Trash2 } from "lucide-react";
 
-// Unread accent color per notification type (Figma: subscription/money=red, others=blue)
 const TYPE_ACCENT: Record<string, string> = {
   Subscription: "#ff6d61",
   Balance:      "#ff6d61",
@@ -88,16 +87,16 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
         className={cn(
           "flex items-start gap-2.5 px-2.5 py-3 rounded-lg cursor-pointer transition-colors group relative",
           selected
-            ? "bg-[#dfe5f7] ring-1 ring-[#618ce8]"
+            ? "bg-[#dfe5f7] ring-1 ring-[#618ce8] dark:bg-primary-50/20 dark:ring-primary-brand-dark"
             : unread
-            ? "bg-[#f8f8f8] hover:bg-[#f0f0f0]"
-            : "bg-[#f5f5f5] hover:bg-[#eeeeee]",
+            ? "bg-[#f8f8f8] hover:bg-[#f0f0f0] dark:bg-black-400 dark:hover:bg-black-300"
+            : "bg-[#f5f5f5] hover:bg-[#eeeeee] dark:bg-black-400 dark:hover:bg-black-300",
           isArchiving && "opacity-0 scale-[0.98] transition-all duration-150"
         )}
         onClick={onClick}
         onContextMenu={handleContextMenu}
       >
-        {/* Left accent line — Figma: Vector w=2px, color varies by type/read state */}
+        {/* Accent line */}
         <div
           className="w-0.5 self-stretch rounded-full flex-shrink-0 min-h-[1.125rem]"
           style={{ backgroundColor: accentColor }}
@@ -105,28 +104,22 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
 
         {/* Content */}
         <div className="flex-1 min-w-0">
-          <p
-            className="text-[14px] font-medium leading-[18.2px] truncate"
-            style={{ color: "#0a0a0a" }}
-          >
+          <p className="text-[14px] font-medium leading-[18.2px] truncate text-[#0a0a0a] dark:text-white">
             {notificationType}
           </p>
-          <p
-            className="text-[13px] font-medium leading-[16.9px] truncate mt-0.5"
-            style={{ color: "#0a0a0a" }}
-          >
+          <p className="text-[13px] font-medium leading-[16.9px] truncate mt-0.5 text-[#0a0a0a] dark:text-grey-dark-700">
             {notificationText}
           </p>
         </div>
 
         {/* Unread indicator dot */}
         {unread && (
-          <div className="size-2 rounded-full bg-[#3067dd] flex-shrink-0 mt-1" />
+          <div className="size-2 rounded-full bg-primary-50 flex-shrink-0 mt-1" />
         )}
 
         {/* Delete on hover */}
         <button
-          className="absolute top-2.5 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-[#b6b6b6] hover:text-[#ff6d61]"
+          className="absolute top-2.5 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-grey-dark-500 hover:text-[#ff6d61] dark:text-grey-dark-400 dark:hover:text-[#ff6d61]"
           onClick={handleDelete}
           title="Delete notification"
         >

@@ -14,7 +14,6 @@ import { getFileIcon, formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import type { SyncedFileDetail } from "@/lib/hooks/useFilesNotification";
 
-/** Parse file details JSON from releaseNotes for Files-type notifications. */
 export function parseFileDetails(type: string, releaseNotes: string): SyncedFileDetail[] {
   if (type !== "Files" || !releaseNotes) return [];
   try {
@@ -26,7 +25,6 @@ export function parseFileDetails(type: string, releaseNotes: string): SyncedFile
   return [];
 }
 
-// Figma: icon circle background color per type
 const ICON_BG: Record<string, string> = {
   Subscription: "#fc7d73",
   Balance:      "#fc7d73",
@@ -87,7 +85,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   if (!selectedNotification) {
     return (
       <div className="w-full h-full flex items-center justify-center">
-        <p className="text-[14px] font-medium" style={{ color: "#b6b6b6" }}>
+        <p className="text-[14px] font-medium text-grey-dark-500 dark:text-grey-dark-400">
           Select a notification to view details
         </p>
       </div>
@@ -145,12 +143,8 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
     <InView triggerOnce>
       {({ ref }) => (
         <div ref={ref} className="flex flex-col h-full overflow-y-auto">
-          {/* Header — Figma: padding=12, gap=12, border-b #e3e3e3 */}
-          <div
-            className="flex items-start gap-3 px-3 py-3 border-b flex-shrink-0"
-            style={{ borderColor: "#e3e3e3" }}
-          >
-            {/* Icon circle — Figma: fill=type-based color, ~106px radius (fully round) */}
+          {/* Header */}
+          <div className="flex items-start gap-3 px-3 py-3 border-b border-grey-dark-100 dark:border-black-300 flex-shrink-0">
             <div
               className="size-9 rounded-full flex items-center justify-center flex-shrink-0"
               style={{ backgroundColor: iconBg }}
@@ -159,70 +153,57 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
             </div>
 
             <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-              {/* Figma: type name Geist w500 14px lh=18px #0a0a0a */}
-              <p className="text-[14px] font-medium truncate" style={{ color: "#0a0a0a" }}>
+              <p className="text-[14px] font-medium truncate text-[#0a0a0a] dark:text-white">
                 {type}
               </p>
-              {/* Figma: description preview Geist w500 13px lh=16.9px #0a0a0a */}
-              <p className="text-[13px] font-medium truncate" style={{ color: "#0a0a0a" }}>
+              <p className="text-[13px] font-medium truncate text-[#0a0a0a] dark:text-grey-dark-700">
                 {title}
               </p>
             </div>
 
-            {/* Figma: timestamp Geist w500 13px #0a0a0a */}
-            <span
-              className="text-[13px] font-medium flex-shrink-0"
-              style={{ color: "#0a0a0a" }}
-            >
+            <span className="text-[13px] font-medium flex-shrink-0 text-[#0a0a0a] dark:text-grey-dark-400">
               {timestamp ? <TimeAgo date={timestamp} /> : time}
             </span>
 
             <button
-              className="text-[#b6b6b6] hover:text-[#0a0a0a] p-1 rounded transition-colors flex-shrink-0"
+              className="text-grey-dark-500 dark:text-grey-dark-400 hover:text-[#0a0a0a] dark:hover:text-white p-1 rounded transition-colors flex-shrink-0"
               onClick={handleMoreClick}
             >
               <MoreVertical className="size-4" />
             </button>
           </div>
 
-          {/* Body — Figma: padding L/R=24, T/B=9, gap=16 */}
+          {/* Body */}
           <div className="px-6 py-[9px] flex flex-col gap-4 flex-1">
-            {/* Main body text — Figma: Geist w500 16px lh=20.8px #0a0a0a */}
-            <p
-              className="text-[16px] font-medium leading-[20.8px] break-words"
-              style={{ color: "#0a0a0a" }}
-            >
+            <p className="text-[16px] font-medium leading-[20.8px] break-words text-[#0a0a0a] dark:text-grey-light-100">
               {descriptionText}
             </p>
 
-            {/* File details for Files-type notifications */}
+            {/* File details */}
             {isFilesNotification && fileSummary && (
               <div className="flex flex-col gap-3">
                 <div className="flex items-center gap-2 flex-wrap">
                   {fileSummary.uploaded.length > 0 && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#eef2ff] border border-[#c7d7f8] rounded-full text-xs font-medium text-[#3067dd]">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#eef2ff] dark:bg-primary-50/10 border border-[#c7d7f8] dark:border-primary-50/20 rounded-full text-xs font-medium text-[#3067dd] dark:text-primary-brand-dark">
                       <ArrowUpCircle className="size-3.5" />
                       {fileSummary.uploaded.length} uploaded
                     </span>
                   )}
                   {fileSummary.downloaded.length > 0 && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#f0fdf4] border border-[#bbf7d0] rounded-full text-xs font-medium text-[#16a34a]">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#f0fdf4] dark:bg-success-50/10 border border-[#bbf7d0] dark:border-success-50/20 rounded-full text-xs font-medium text-[#16a34a] dark:text-success-40">
                       <ArrowDownCircle className="size-3.5" />
                       {fileSummary.downloaded.length} downloaded
                     </span>
                   )}
                   {fileSummary.deleted.length > 0 && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#fef2f2] border border-[#fecaca] rounded-full text-xs font-medium text-[#dc2626]">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#fef2f2] dark:bg-[#ff6d61]/10 border border-[#fecaca] dark:border-[#ff6d61]/20 rounded-full text-xs font-medium text-[#dc2626] dark:text-[#ff6d61]">
                       <Trash2 className="size-3.5" />
                       {fileSummary.deleted.length} deleted
                     </span>
                   )}
                 </div>
 
-                <div
-                  className="max-h-[17.5rem] overflow-y-auto rounded-lg border divide-y"
-                  style={{ borderColor: "#e3e3e3" }}
-                >
+                <div className="max-h-[17.5rem] overflow-y-auto rounded-lg border border-grey-dark-100 dark:border-black-300 divide-y divide-grey-dark-100 dark:divide-black-300">
                   {fileDetails.map((file, index) => {
                     const { fileFormat } = getFilePartsFromFileName(file.fileName);
                     const fileType = getFileTypeFromExtension(fileFormat || null);
@@ -232,32 +213,32 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
                     return (
                       <div
                         key={`${file.fileName}-${index}`}
-                        className="flex items-center gap-3 px-3 py-2.5 bg-white hover:bg-[#f8f8f8] transition-colors"
+                        className="flex items-center gap-3 px-3 py-2.5 bg-white dark:bg-black-400 hover:bg-[#f8f8f8] dark:hover:bg-black-300 transition-colors"
                       >
-                        <div className="size-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-[#f3f3f3]">
+                        <div className="size-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-[#f3f3f3] dark:bg-black-300">
                           <FileIcon className={cn("size-5", color)} />
                         </div>
                         <div className="flex flex-col justify-center min-w-0 flex-1">
-                          <span className="text-[14px] font-medium truncate" style={{ color: "#0a0a0a" }} title={file.fileName}>
+                          <span className="text-[14px] font-medium truncate text-[#0a0a0a] dark:text-white" title={file.fileName}>
                             {formatDisplayName(file.fileName)}
                           </span>
                           {file.totalBytes > 0 && (
-                            <span className="text-[12px]" style={{ color: "#b6b6b6" }}>
+                            <span className="text-[12px] text-grey-dark-500 dark:text-grey-dark-400">
                               {formatBytes(file.totalBytes)}
                             </span>
                           )}
                         </div>
                         <div className="flex-shrink-0">
                           {isDeleted ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#fef2f2] text-[#dc2626]">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#fef2f2] dark:bg-[#ff6d61]/10 text-[#dc2626] dark:text-[#ff6d61]">
                               <Trash2 className="size-3" /> Deleted
                             </span>
                           ) : isUpload ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#eef2ff] text-[#3067dd]">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#eef2ff] dark:bg-primary-50/10 text-[#3067dd] dark:text-primary-brand-dark">
                               <ArrowUpCircle className="size-3" /> Uploaded
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#f0fdf4] text-[#16a34a]">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#f0fdf4] dark:bg-success-50/10 text-[#16a34a] dark:text-success-40">
                               <ArrowDownCircle className="size-3" /> Downloaded
                             </span>
                           )}
@@ -276,25 +257,17 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
               </div>
             )}
 
-            {/* Action buttons — Figma: gap=24 */}
+            {/* Action buttons */}
             {shouldShowButton && (
               <div className="flex items-center gap-6 pt-2">
-                {/* Mark as read — Figma: fill=#fff, stroke=#eaeaea, radius=6, px=19, py=8 */}
                 <button
-                  className="px-[19px] py-2 rounded-md border text-[14px] font-medium transition-colors hover:bg-[#f5f5f5]"
-                  style={{
-                    backgroundColor: "#ffffff",
-                    borderColor: "#eaeaea",
-                    color: "#111111",
-                  }}
+                  className="px-[19px] py-2 rounded-md border border-[#eaeaea] dark:border-black-300 text-[14px] font-medium transition-colors bg-white dark:bg-black-400 text-[#111111] dark:text-white hover:bg-[#f5f5f5] dark:hover:bg-black-300"
                   onClick={handleReadStatusToggle}
                 >
                   {unread ? "Mark as read" : "Mark as unread"}
                 </button>
-                {/* Primary action — Figma: fill=#3067dd, radius=6, px=19, py=8 */}
                 <button
-                  className="px-[19px] py-2 rounded-md text-white text-[14px] font-medium transition-colors hover:opacity-90"
-                  style={{ backgroundColor: "#3067dd" }}
+                  className="px-[19px] py-2 rounded-md text-white text-[14px] font-medium transition-colors bg-primary-50 hover:opacity-90"
                   onClick={handleLinkClick}
                 >
                   {actionText}
@@ -305,12 +278,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
             {!shouldShowButton && id && (
               <div className="flex items-center gap-6 pt-2">
                 <button
-                  className="px-[19px] py-2 rounded-md border text-[14px] font-medium transition-colors hover:bg-[#f5f5f5]"
-                  style={{
-                    backgroundColor: "#ffffff",
-                    borderColor: "#eaeaea",
-                    color: "#111111",
-                  }}
+                  className="px-[19px] py-2 rounded-md border border-[#eaeaea] dark:border-black-300 text-[14px] font-medium transition-colors bg-white dark:bg-black-400 text-[#111111] dark:text-white hover:bg-[#f5f5f5] dark:hover:bg-black-300"
                   onClick={handleReadStatusToggle}
                 >
                   {unread ? "Mark as read" : "Mark as unread"}

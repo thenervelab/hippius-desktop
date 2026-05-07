@@ -22,8 +22,9 @@ import { iconMap } from "@/app/lib/helpers/notificationIcons";
 import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import ArchiveAllConfirmationDialog from "./ArchiveAllConfirmationDialog";
-import NotificationHubStats from "./NotificationHubStats";
 import { cn } from "@/app/lib/utils";
+import TabList from "@/components/ui/tabs/TabList";
+import PageHeader from "@/components/ui/page-header";
 
 const Notifications = () => {
   const [activeTab, setActiveTab] = useState("All");
@@ -150,156 +151,70 @@ const Notifications = () => {
 
   return (
     <DashboardTitleWrapper mainText="Notifications">
-      {/*
-        Figma outer card: Frame 2147237449
-        fill=#fbfbfb, radius=11, paddingTop/Bottom=12, gap=12
-      */}
-      <div className="mt-4 flex flex-col rounded-[11px] pb-3 gap-3" style={{ backgroundColor: "#fbfbfb" }}>
+      <div className="mt-3 mb-1 flex flex-1 flex-col rounded-[11px] pb-3 bg-[#fbfbfb] dark:bg-black-primary-bg">
 
-        {/* ── Header row ────────────────────────────────────────────────────
-            Figma: Frame 2147229289
-            border-b #e3e3e3, gap=14, paddingLeft/Right=12
-        */}
-        <div
-          className="flex items-center justify-between gap-3.5 border-b px-3 pt-3 pb-3 flex-wrap"
-          style={{ borderColor: "#e3e3e3" }}
-        >
-          <div className="flex flex-col gap-0.5">
-            {/* Figma: Geist w500 24px, lh=32px, #0a0a0a */}
-            <h1
-              className="text-[24px] font-medium leading-[32px]"
-              style={{ color: "#0a0a0a" }}
-            >
-              Notifications Hub
-            </h1>
-            {/* Figma: Geist w500 16px, lh=22px, ls=-0.32, #7d7d7d */}
-            <p
-              className="text-[16px] font-medium leading-[22px]"
-              style={{ color: "#7d7d7d", letterSpacing: "-0.32px" }}
-            >
-              Store. Compute. Own your infrastructure.
-            </p>
-          </div>
-          <NotificationHubStats />
-        </div>
+        <PageHeader
+          title="Notifications Hub"
+          subtitle="Store. Compute. Own your infrastructure."
+        />
 
-        {/* ── Content area ──────────────────────────────────────────────────
-            Figma: Frame 2147237607, paddingLeft/Right=12
-        */}
-        <div className="px-3">
-          {/*
-            Figma: "Line Chart" frame
-            fill=#f8f8f8, stroke=#e3e3e3, radius=8
-          */}
-          <div
-            className="border rounded-lg overflow-hidden flex flex-col"
-            style={{ backgroundColor: "#f8f8f8", borderColor: "#e3e3e3" }}
-          >
-            {/* ── Tabs row ──────────────────────────────────────────────────
-                Figma: Frame 2147237398
-                border-b #e3e3e3, gap=10, padding L/R=10 T/B=8
-            */}
-            <div
-              className="flex items-center justify-between border-b px-2.5 py-2 gap-2.5 flex-wrap"
-              style={{ borderColor: "#e3e3e3" }}
-            >
-              {/* Left: type filter pill tabs
-                  Figma: fill=#eaeaea, radius=6, padding=3, gap=4
-                  Each tab: fill=#f8f8f8, stroke=#e3e3e3, radius=3, px=6, py=3
-                  Font: Geist Mono w500 12px ls=-0.24
-              */}
+        <div className="px-3 flex-1 flex flex-col min-h-0">
+          <div className="border border-grey-dark-100 dark:border-black-300 rounded-lg overflow-hidden flex flex-col flex-1 bg-[#f8f8f8] dark:bg-black-400">
+
+            {/* Tabs + filter row */}
+            <div className="flex items-center justify-between border-b border-grey-dark-100 dark:border-black-300 px-2.5 py-2 gap-2.5 flex-wrap">
               {tabs.length > 0 && (
-                <div
-                  className="flex items-center gap-1 rounded-md p-[3px]"
-                  style={{ backgroundColor: "#eaeaea" }}
-                >
-                  {tabs.map((tab) => (
-                    <button
-                      key={tab.tabName}
-                      onClick={() => setActiveTab(tab.tabName)}
-                      className={cn(
-                        "px-1.5 py-0.5 rounded-[3px] text-[12px] font-mono font-medium transition-colors",
-                        activeTab === tab.tabName
-                          ? "bg-white border border-[#e3e3e3]"
-                          : "bg-transparent border border-transparent hover:bg-white/60"
-                      )}
-                      style={{ color: "#0a0a0a", letterSpacing: "-0.24px" }}
-                    >
-                      {tab.tabName}
-                    </button>
-                  ))}
-                </div>
+                <TabList
+                  tabs={tabs}
+                  activeTab={activeTab}
+                  onTabChange={setActiveTab}
+                  width="w-auto"
+                  height="h-[32px]"
+                />
               )}
 
-              {/* Right: All/Unread toggle + action buttons */}
               {tabs.length > 0 && (
                 <div className="flex items-center gap-3 flex-wrap">
-                  {/* All / Unread pill
-                      Figma: outer fill=#eaeaea, stroke=#e3e3e3, radius=6, padding=4
-                      Each button: fill=#f8f8f8, stroke=#e3e3e3, radius=3, px=12, py=5
-                      Font: Geist w500 13px ls=-0.26
-                  */}
-                  <div
-                    className="flex items-center border rounded-md p-1 gap-1"
-                    style={{ backgroundColor: "#eaeaea", borderColor: "#e3e3e3" }}
-                  >
+                  {/* All / Unread toggle */}
+                  <div className="flex items-center border border-grey-dark-100 dark:border-black-300 rounded-md p-1 gap-1 bg-[#eaeaea] dark:bg-black-300">
                     <button
                       onClick={() => setOnlyUnread(false)}
                       className={cn(
-                        "flex items-center gap-1.5 px-3 py-[5px] rounded-[3px] text-[13px] font-medium transition-colors",
+                        "flex items-center gap-1.5 px-3 py-[5px] rounded-[3px] text-[13px] font-medium tracking-[-0.26px] transition-colors text-[#000000] dark:text-white",
                         !onlyUnread
-                          ? "bg-[#f8f8f8] border border-[#e3e3e3]"
-                          : "bg-transparent border border-transparent hover:bg-white/60"
+                          ? "bg-[#f8f8f8] dark:bg-black-200 border border-grey-dark-100 dark:border-black-100"
+                          : "bg-transparent border border-transparent hover:bg-white/30 dark:hover:bg-black-200/50"
                       )}
-                      style={{ color: "#000000", letterSpacing: "-0.26px" }}
                     >
-                      <span className="size-2 rounded-full bg-[#3067dd] flex-shrink-0" />
+                      <span className="size-2 rounded-full bg-primary-50 flex-shrink-0" />
                       All
                     </button>
                     <button
                       onClick={() => setOnlyUnread(true)}
                       className={cn(
-                        "flex items-center gap-1.5 px-3 py-[5px] rounded-[3px] text-[13px] font-medium transition-colors",
+                        "flex items-center gap-1.5 px-3 py-[5px] rounded-[3px] text-[13px] font-medium tracking-[-0.26px] transition-colors text-[#1e1e1e] dark:text-white",
                         onlyUnread
-                          ? "bg-[#f8f8f8] border border-[#e3e3e3]"
-                          : "bg-transparent border border-transparent hover:bg-white/60"
+                          ? "bg-[#f8f8f8] dark:bg-black-200 border border-grey-dark-100 dark:border-black-100"
+                          : "bg-transparent border border-transparent hover:bg-white/30 dark:hover:bg-black-200/50"
                       )}
-                      style={{ color: "#1e1e1e", letterSpacing: "-0.26px" }}
                     >
-                      <span className="size-2 rounded-full bg-[#1e1e1e] flex-shrink-0" />
+                      <span className="size-2 rounded-full bg-[#1e1e1e] dark:bg-grey-dark-400 flex-shrink-0" />
                       Unread
                     </button>
                   </div>
 
-                  {/* Mark all as read
-                      Figma: fill=#fefefe, stroke=#e3e3e3, radius=6, px=12, py=8
-                      Font: Geist w500 14px ls=-0.28 #111111
-                  */}
+                  {/* Mark all as read */}
                   <button
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-md border text-[14px] font-medium transition-colors hover:bg-[#f5f5f5] disabled:opacity-40 disabled:cursor-not-allowed"
-                    style={{
-                      backgroundColor: "#fefefe",
-                      borderColor: "#e3e3e3",
-                      color: "#111111",
-                      letterSpacing: "-0.28px",
-                    }}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-md border border-grey-dark-100 dark:border-black-300 text-[14px] font-medium tracking-[-0.28px] transition-colors bg-[#fefefe] dark:bg-black-300 text-[#111111] dark:text-white hover:bg-[#f5f5f5] dark:hover:bg-black-200 disabled:opacity-40 disabled:cursor-not-allowed"
                     onClick={handleAllRead}
                     disabled={visible.length === 0}
                   >
                     Mark all as read
                   </button>
 
-                  {/* Notifications Settings
-                      Figma: same style as Mark all as read
-                  */}
+                  {/* Notifications Settings */}
                   <button
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-md border text-[14px] font-medium transition-colors hover:bg-[#f5f5f5]"
-                    style={{
-                      backgroundColor: "#fefefe",
-                      borderColor: "#e3e3e3",
-                      color: "#111111",
-                      letterSpacing: "-0.28px",
-                    }}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-md border border-grey-dark-100 dark:border-black-300 text-[14px] font-medium tracking-[-0.28px] transition-colors bg-[#fefefe] dark:bg-black-300 text-[#111111] dark:text-white hover:bg-[#f5f5f5] dark:hover:bg-black-200"
                     onClick={() => setIsSettingsOpen(true)}
                   >
                     <Settings className="size-4" />
@@ -309,15 +224,8 @@ const Notifications = () => {
               )}
             </div>
 
-            {/* ── Notification list + detail panel ───────────────────────────
-                Figma: Frame 2147229228
-                fill=#ffffff, stroke=#e3e3e3, radius=8
-                Left table (border-r) + Right table
-            */}
-            <div
-              className="flex bg-white rounded-b-lg overflow-hidden"
-              style={{ height: "calc(100vh - 16rem)" }}
-            >
+            {/* Notification list + detail panel */}
+            <div className="flex flex-1 bg-white dark:bg-black-500 rounded-b-lg overflow-hidden">
               {enabledTypes.length === 0 ? (
                 <div className="flex-1 flex items-center justify-center">
                   <NoNotificationsEnabled onOpenSettings={() => setIsSettingsOpen(true)} />
@@ -328,11 +236,7 @@ const Notifications = () => {
                 </div>
               ) : (
                 <>
-                  {/* Left: notification list — Figma: ~50% width, border-r #e3e3e3 */}
-                  <div
-                    className="w-[38%] flex-shrink-0 border-r overflow-hidden"
-                    style={{ borderColor: "#e3e3e3" }}
-                  >
+                  <div className="w-[38%] flex-shrink-0 border-r border-grey-dark-100 dark:border-black-300 overflow-hidden">
                     <NotificationList
                       notifications={visible}
                       selectedNotificationId={selectedId}
@@ -341,8 +245,6 @@ const Notifications = () => {
                       onRefresh={handleRefreshNotifications}
                     />
                   </div>
-
-                  {/* Right: detail view */}
                   <div className="flex-1 min-w-0 overflow-hidden">
                     <NotificationDetailView
                       selectedNotification={detail}
