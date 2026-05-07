@@ -13,7 +13,7 @@ import { cn, getFilePartsFromFileName, getFileTypeFromExtension } from "@/lib/ut
 import { getFileIcon, formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import type { SyncedFileDetail } from "@/lib/hooks/useFilesNotification";
-import { Button } from "@/components/ui/button/ButtonV2";
+import { Button } from "@/components/ui/button";
 
 export function parseFileDetails(type: string, releaseNotes: string): SyncedFileDetail[] {
   if (type !== "Files" || !releaseNotes) return [];
@@ -153,7 +153,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
               <Icon className={cn("text-white", type === "Hippius" ? "size-6" : "size-5")} />
             </div>
 
-            <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+            <div className="flex flex-col flex-1 min-w-0">
               <p className="text-[14px] font-medium truncate text-[#0a0a0a] dark:text-white">
                 {type}
               </p>
@@ -176,7 +176,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
 
           {/* Body */}
           <div className="px-6 py-[9px] flex flex-col gap-4 flex-1">
-            <p className="text-[16px] font-medium leading-[20.8px] break-words text-[#0a0a0a] dark:text-grey-light-100">
+            <p className="text-[14px] font-medium leading-[20px] break-words text-[#0a0a0a] dark:text-grey-light-100">
               {descriptionText}
             </p>
 
@@ -185,26 +185,26 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
               <div className="flex flex-col gap-3">
                 <div className="flex items-center gap-2 flex-wrap">
                   {fileSummary.uploaded.length > 0 && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#eef2ff] dark:bg-primary-50/10 border border-[#c7d7f8] dark:border-primary-50/20 rounded-full text-xs font-medium text-[#3067dd] dark:text-primary-brand-dark">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#eef2ff] dark:bg-[#0d1a3d] border border-[#c7d7f8] dark:border-[#1e3a6e] rounded-full text-xs font-medium text-[#3067dd] dark:text-[#7aaeff]">
                       <ArrowUpCircle className="size-3.5" />
                       {fileSummary.uploaded.length} uploaded
                     </span>
                   )}
                   {fileSummary.downloaded.length > 0 && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#f0fdf4] dark:bg-success-50/10 border border-[#bbf7d0] dark:border-success-50/20 rounded-full text-xs font-medium text-[#16a34a] dark:text-success-40">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#f0fdf4] dark:bg-[#0a2015] border border-[#bbf7d0] dark:border-[#155e32] rounded-full text-xs font-medium text-[#16a34a] dark:text-[#34d872]">
                       <ArrowDownCircle className="size-3.5" />
                       {fileSummary.downloaded.length} downloaded
                     </span>
                   )}
                   {fileSummary.deleted.length > 0 && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#fef2f2] dark:bg-[#ff6d61]/10 border border-[#fecaca] dark:border-[#ff6d61]/20 rounded-full text-xs font-medium text-[#dc2626] dark:text-[#ff6d61]">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#fef2f2] dark:bg-[#2b100d] border border-[#fecaca] dark:border-[#6b1c18] rounded-full text-xs font-medium text-[#dc2626] dark:text-[#ff7d7d]">
                       <Trash2 className="size-3.5" />
                       {fileSummary.deleted.length} deleted
                     </span>
                   )}
                 </div>
 
-                <div className="max-h-[17.5rem] overflow-y-auto rounded-lg border border-grey-dark-100 dark:border-black-300 divide-y divide-grey-dark-100 dark:divide-black-300">
+                <div className="max-h-[17.5rem] overflow-y-auto rounded-lg border border-grey-dark-100 dark:border-[#3a3a3a] divide-y divide-grey-dark-100 dark:divide-[#2e2e2e]">
                   {fileDetails.map((file, index) => {
                     const { fileFormat } = getFilePartsFromFileName(file.fileName);
                     const fileType = getFileTypeFromExtension(fileFormat || null);
@@ -214,9 +214,9 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
                     return (
                       <div
                         key={`${file.fileName}-${index}`}
-                        className="flex items-center gap-3 px-3 py-2.5 bg-white dark:bg-black-400 hover:bg-[#f8f8f8] dark:hover:bg-black-300 transition-colors"
+                        className="flex items-center gap-3 px-3 py-2.5 bg-white dark:bg-[#1e1e1e] hover:bg-[#f8f8f8] dark:hover:bg-[#252525] transition-colors"
                       >
-                        <div className="size-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-[#f3f3f3] dark:bg-black-300">
+                        <div className="size-8 flex-shrink-0 flex items-center justify-center rounded-lg bg-[#f3f3f3] dark:bg-[#2a2a2a] border border-transparent dark:border-[#3a3a3a]">
                           <FileIcon className={cn("size-5", color)} />
                         </div>
                         <div className="flex flex-col justify-center min-w-0 flex-1">
@@ -224,22 +224,22 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
                             {formatDisplayName(file.fileName)}
                           </span>
                           {file.totalBytes > 0 && (
-                            <span className="text-[12px] text-grey-dark-500 dark:text-grey-dark-400">
+                            <span className="text-[12px] text-grey-dark-500 dark:text-grey-dark-600">
                               {formatBytes(file.totalBytes)}
                             </span>
                           )}
                         </div>
                         <div className="flex-shrink-0">
                           {isDeleted ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#fef2f2] dark:bg-[#ff6d61]/10 text-[#dc2626] dark:text-[#ff6d61]">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#fef2f2] dark:bg-[#2b100d] text-[#dc2626] dark:text-[#ff7d7d]">
                               <Trash2 className="size-3" /> Deleted
                             </span>
                           ) : isUpload ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#eef2ff] dark:bg-primary-50/10 text-[#3067dd] dark:text-primary-brand-dark">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#eef2ff] dark:bg-[#0d1a3d] text-[#3067dd] dark:text-[#7aaeff]">
                               <ArrowUpCircle className="size-3" /> Uploaded
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#f0fdf4] dark:bg-success-50/10 text-[#16a34a] dark:text-success-40">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#f0fdf4] dark:bg-[#0a2015] text-[#16a34a] dark:text-[#34d872]">
                               <ArrowDownCircle className="size-3" /> Downloaded
                             </span>
                           )}
