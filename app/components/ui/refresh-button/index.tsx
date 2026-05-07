@@ -1,34 +1,31 @@
 import { cn } from "@/lib/utils";
-import Refresh from "@/components/ui/icons/Refresh";
-import { Loader } from "lucide-react";
+import { Loader, RefreshCcwDot } from "lucide-react";
 
 const RefreshButton: React.FC<{
     onClick: () => void;
     refetching?: boolean;
-}> = ({ onClick, refetching }) => (
+    ariaLabel?: string;
+    className?: string;
+}> = ({ onClick, refetching, ariaLabel, className }) => (
     <button
+        type="button"
         onClick={onClick}
         disabled={refetching}
+        aria-label={ariaLabel}
         className={cn(
-            "flex items-center cursor-pointer relative group justify-center min-w-8 size-8 border rounded duration-300 border-grey-80",
-            refetching && "opacity-30"
+            "flex h-8 w-[33px] items-center justify-center rounded-[7px] border",
+            "bg-grey-light-700 border-grey-dark-100",
+            "dark:bg-black-300 dark:border-black-300",
+            "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
+            "disabled:cursor-not-allowed",
+            className
         )}
     >
-        <Refresh
-            className={cn(
-                "size-4 text-grey-10 group-hover:-rotate-90 absolute duration-300",
-                refetching && "scale-0 opacity-0"
-            )}
-        />
-
-        <div
-            className={cn(
-                "text-grey-10 opacity-0 scale-0 absolute duration-300",
-                refetching && "scale-100 opacity-100 animate-spin"
-            )}
-        >
-            <Loader className="animate-spin size-4" />
-        </div>
+        {refetching ? (
+            <Loader className="size-[18px] text-black-700 dark:text-white animate-spin" />
+        ) : (
+            <RefreshCcwDot className="size-[18px] text-black-700 dark:text-white opacity-40" />
+        )}
     </button>
 );
 

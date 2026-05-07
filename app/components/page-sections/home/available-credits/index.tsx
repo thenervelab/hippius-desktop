@@ -2,9 +2,8 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { RefreshCcwDot } from "lucide-react";
 
-import { Select } from "@/components/ui";
+import { RefreshButton, Select } from "@/components/ui";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
 import { Account } from "@/app/lib/types/accounts";
@@ -158,26 +157,13 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
             </p>
           </div>
           <div className="flex items-center gap-2.5">
-            <button
-              type="button"
+            <RefreshButton
               onClick={handleRefresh}
-              disabled={isRefreshing || creditsFetching || marketplaceFetching}
-              aria-label="Refresh available credits"
-              className={cn(
-                "flex h-8 w-[33px] items-center justify-center rounded-[7px] border",
-                "bg-grey-light-700 border-grey-dark-100",
-                "dark:bg-black-300 dark:border-black-300",
-                "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
-                "disabled:cursor-not-allowed",
-              )}
-            >
-              <RefreshCcwDot
-                className={cn(
-                  "size-[18px] text-black-700 dark:text-white opacity-40",
-                  isRefreshing && "animate-spin opacity-100",
-                )}
-              />
-            </button>
+              refetching={
+                isRefreshing || creditsFetching || marketplaceFetching
+              }
+              ariaLabel="Refresh available credits"
+            />
             <Select
               options={timeRangeOptions}
               value={timeRange}

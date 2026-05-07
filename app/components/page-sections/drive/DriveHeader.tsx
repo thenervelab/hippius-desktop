@@ -2,7 +2,7 @@
 
 import { FC, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Icons, RefreshButton, SearchInput } from "@/components/ui";
+import { Button, Icons, RefreshButton, SearchInput } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import AddButton from "./AddFileButton";
 import StorageStateList from "./storage-stats";
@@ -23,6 +23,29 @@ import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 
+// Figma white pill style shared by Add Folder / View All Files / Shared Links.
+// Mirrors the trigger styling used across the home dashboard cards.
+const SECONDARY_PILL_CLASSES = cn(
+  "h-[30px] px-3 py-2 gap-[7px] rounded-[6px]",
+  "bg-white border border-grey-dark-100 text-black-600",
+  "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)]",
+  "font-geist text-[14px] font-medium tracking-[-0.28px] leading-[1.109]",
+  "hover:bg-grey-light-700",
+  "dark:bg-black-300 dark:border-black-300 dark:text-white",
+  "dark:shadow-[0px_5px_2.3px_0px_rgba(255,255,255,0.02),0px_1px_1.9px_0px_rgba(255,255,255,0.08),0px_0px_1px_0px_rgba(255,255,255,0.1)]",
+  "dark:hover:bg-black-300/70",
+);
+
+const VIEW_TOGGLE_BUTTON_BASE =
+  "flex items-center justify-center size-6 rounded-[3px] transition-opacity";
+
+const VIEW_TOGGLE_ACTIVE = cn(
+  "bg-grey-light-300 border border-grey-dark-100",
+  "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)]",
+  "dark:bg-black-300 dark:border-black-300",
+);
+
+const VIEW_TOGGLE_INACTIVE = "opacity-50 hover:opacity-75";
 
 interface DriveHeaderProps {
   isRecentFiles?: boolean;
@@ -91,7 +114,8 @@ const DriveHeader: FC<DriveHeaderProps> = ({
 }) => {
   const [isFolderUploadOpenLocal, setIsFolderUploadOpenLocal] = useState(false);
   const isFolderUploadOpen = isFolderUploadOpenProp ?? isFolderUploadOpenLocal;
-  const setIsFolderUploadOpen = onSetFolderUploadOpen ?? setIsFolderUploadOpenLocal;
+  const setIsFolderUploadOpen =
+    onSetFolderUploadOpen ?? setIsFolderUploadOpenLocal;
   const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const { checkEligibility } = useCreditCheck();
@@ -103,8 +127,6 @@ const DriveHeader: FC<DriveHeaderProps> = ({
     navigateToFilesView();
     push("/files");
   };
-
-
 
   return (
     <>
@@ -121,30 +143,30 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               onChange={handleSearchChange}
               placeholder="Search file"
             />
-            <div className="flex gap-2 border border-grey-80 p-1 rounded justify-end">
+            <div className="flex items-start gap-1 p-[3px] rounded-[6px] bg-grey-primary-bg dark:bg-black-700">
               <button
                 className={cn(
-                  "p-1 rounded",
+                  VIEW_TOGGLE_BUTTON_BASE,
                   viewMode === "list"
-                    ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
-                    : "bg-grey-100 text-grey-70"
+                    ? VIEW_TOGGLE_ACTIVE
+                    : VIEW_TOGGLE_INACTIVE,
                 )}
                 onClick={() => setViewMode("list")}
                 aria-label="List View"
               >
-                <List className="size-5" />
+                <List className="size-3 text-black-700 dark:text-white" />
               </button>
               <button
                 className={cn(
-                  "p-1 rounded",
+                  VIEW_TOGGLE_BUTTON_BASE,
                   viewMode === "card"
-                    ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
-                    : "bg-grey-100 text-grey-70"
+                    ? VIEW_TOGGLE_ACTIVE
+                    : VIEW_TOGGLE_INACTIVE,
                 )}
                 onClick={() => setViewMode("card")}
                 aria-label="Card View"
               >
-                <Icons.Category className="size-5" />
+                <Icons.Category className="size-3 text-black-700 dark:text-white" />
               </button>
             </div>
           </div>
@@ -168,98 +190,99 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           <RefreshButton
             refetching={isRefetching || isFetching}
             onClick={() => {
-              invoke("trigger_sync_now").catch((err: unknown) => console.warn("[DriveHeader] trigger_sync_now failed:", err));
+              invoke("trigger_sync_now").catch((err: unknown) =>
+                console.warn("[DriveHeader] trigger_sync_now failed:", err),
+              );
               refetchUserFiles();
             }}
           />
           {isRecentFiles && (
             <>
-              <div className="flex gap-2 border border-grey-80 p-1 rounded justify-end">
+              <div className="flex items-start gap-1 p-[3px] rounded-[6px] bg-grey-primary-bg dark:bg-black-700">
                 <button
                   className={cn(
-                    "p-1 rounded",
+                    VIEW_TOGGLE_BUTTON_BASE,
                     viewMode === "list"
-                      ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
-                      : "bg-grey-100 text-grey-70"
+                      ? VIEW_TOGGLE_ACTIVE
+                      : VIEW_TOGGLE_INACTIVE,
                   )}
                   onClick={() => setViewMode("list")}
                   aria-label="List View"
                 >
-                  <List className="size-5" />
+                  <List className="size-3 text-black-700 dark:text-white" />
                 </button>
                 <button
                   className={cn(
-                    "p-1 rounded",
+                    VIEW_TOGGLE_BUTTON_BASE,
                     viewMode === "card"
-                      ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
-                      : "bg-grey-100 text-grey-70"
+                      ? VIEW_TOGGLE_ACTIVE
+                      : VIEW_TOGGLE_INACTIVE,
                   )}
                   onClick={() => setViewMode("card")}
                   aria-label="Card View"
                 >
-                  <Icons.Category className="size-5" />
+                  <Icons.Category className="size-3 text-black-700 dark:text-white" />
                 </button>
               </div>
-              <button
+              <Button
+                variant="defaultStable"
+                size="auto"
                 onClick={handleViewAllFiles}
-                className="px-2 py-2 items-center flex bg-grey-90  border border-grey-80 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[0.875rem] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
+                className={SECONDARY_PILL_CLASSES}
               >
                 View All Files
-                <Icons.ArrowRight className="size-[0.875rem] ml-1" />
-              </button>
+                <Icons.ArrowRight className="size-[0.875rem]" />
+              </Button>
             </>
           )}
-
 
           <>
             {/* Folder Upload button - disabled for recent files with no sync paths or when sync is paused */}
             {(!isRecentFiles || !hasNoSyncPaths) && !isSyncPathEmpty && (
-              <button
+              <Button
+                variant="defaultStable"
+                size="auto"
                 onClick={async () => {
                   if (!(await checkEligibility("folder-upload"))) return;
                   if (!hasConfiguredDrives) {
-                    toast.warning("Set up a sync folder in Settings \u2192 Sync & Storage before uploading.");
+                    toast.warning(
+                      "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
+                    );
                     return;
                   }
                   setIsFolderUploadOpen(true);
                 }}
                 disabled={IS_SYNC_PAUSED}
-                className={cn(
-                  "flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50",
-                  IS_SYNC_PAUSED
-                    ? "opacity-50 cursor-not-allowed"
-                    : "hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white"
-                )}
+                className={SECONDARY_PILL_CLASSES}
               >
-                <Icons.FolderAdd className="size-4" />
-                <span className="ml-1">Add Folder</span>
-              </button>
+                + New Folder
+              </Button>
             )}
             {isRecentFiles && hasNoSyncPaths && (
-              <button
+              <Button
+                variant="defaultStable"
+                size="auto"
                 disabled
-                className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 opacity-50 cursor-not-allowed text-sm font-medium"
+                className={SECONDARY_PILL_CLASSES}
               >
-                <Icons.FolderAdd className="size-4" />
-                <span className="ml-1">Add Folder</span>
-              </button>
+                + New Folder
+              </Button>
             )}
-
 
             {/* Add File button - disabled for recent files with no sync paths or when sync is paused */}
             {isRecentFiles && hasNoSyncPaths ? (
-              <button
+              <Button
+                variant="primary"
+                size="auto"
                 disabled
-                className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 opacity-50 cursor-not-allowed text-sm font-medium"
+                className="h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px] font-geist text-[14px] tracking-[-0.28px] leading-[1.109]"
               >
-                <Icons.AddCircle className="size-4" />
-                <span className="ml-1">Add Files</span>
-              </button>
+                + Add Files
+              </Button>
             ) : (
               !isSyncPathEmpty && (
                 <AddButton
                   ref={addButtonRef}
-                  className="h-9"
                   disabled={IS_SYNC_PAUSED}
                   defaultFolderLabel={defaultFolderLabel}
                 />
@@ -270,21 +293,27 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             {(isSyncPathEmpty || (isRecentFiles && hasNoSyncPaths)) && (
               <StartSyncingButton
                 className="h-9"
-                onClick={isRecentFiles && hasNoSyncPaths ? onNavigateToSettings : onStartSyncing}
+                onClick={
+                  isRecentFiles && hasNoSyncPaths
+                    ? onNavigateToSettings
+                    : onStartSyncing
+                }
               />
             )}
 
-            {/* Shared Links navigation — secondary/ghost style so it does
+            {/* Shared Links navigation — secondary white pill style so it does
                 not compete with the primary "Upload File" CTA. Hidden when
                 the connected hcfs-server doesn't advertise `shares: true`. */}
             {shareEnabled && (
-              <button
+              <Button
+                variant="defaultStable"
+                size="auto"
                 onClick={() => push("/shares")}
-                className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 text-sm font-medium transition-colors hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white focus:outline-none focus:ring-2 focus:ring-primary-50"
+                className={SECONDARY_PILL_CLASSES}
               >
                 <Icons.Link className="size-4" />
-                <span className="ml-1">Shared Links</span>
-              </button>
+                Shared Links
+              </Button>
             )}
           </>
         </div>
@@ -306,7 +335,6 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         onRefresh={refetchUserFiles}
         defaultFolderLabel={defaultFolderLabel}
       />
-
     </>
   );
 };

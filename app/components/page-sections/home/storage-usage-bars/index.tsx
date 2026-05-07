@@ -1,9 +1,8 @@
 "use client";
 
 import React, { useCallback, useMemo, useState } from "react";
-import { RefreshCcwDot } from "lucide-react";
 
-import { Select } from "@/components/ui";
+import { RefreshButton, Select } from "@/components/ui";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { cn } from "@/app/lib/utils";
@@ -144,26 +143,11 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
             </p>
           </div>
           <div className="flex items-center gap-2.5">
-            <button
-              type="button"
+            <RefreshButton
               onClick={handleRefresh}
-              disabled={isRefreshing || isFetching}
-              aria-label="Refresh storage usage"
-              className={cn(
-                "flex h-8 w-[33px] items-center justify-center rounded-[7px] border",
-                "bg-grey-light-700 border-grey-dark-100",
-                "dark:bg-black-300 dark:border-black-300",
-                "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
-                "disabled:cursor-not-allowed",
-              )}
-            >
-              <RefreshCcwDot
-                className={cn(
-                  "size-[18px] text-black-700 dark:text-white opacity-40",
-                  isRefreshing && "animate-spin opacity-100",
-                )}
-              />
-            </button>
+              refetching={isRefreshing || isFetching}
+              ariaLabel="Refresh storage usage"
+            />
             <Select
               options={timeRangeOptions}
               value={timeRange}

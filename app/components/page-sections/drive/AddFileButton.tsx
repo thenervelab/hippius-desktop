@@ -1,8 +1,5 @@
-import { CardButton } from "@/components/ui";
-import {
-  PlusCircle,
-  Loader2
-} from "lucide-react";
+import { Button } from "@/components/ui";
+import { Loader2 } from "lucide-react";
 
 import {
   useState,
@@ -10,7 +7,7 @@ import {
   useMemo,
   forwardRef,
   useImperativeHandle,
-  useCallback
+  useCallback,
 } from "react";
 
 import * as Dialog from "@radix-ui/react-dialog";
@@ -22,7 +19,10 @@ import { useAtomValue } from "jotai";
 import PrivacyBadge from "@/components/ui/PrivacyBadge";
 
 import { cn } from "@/lib/utils";
-import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
+import {
+  SyncPausedAlert,
+  IS_SYNC_PAUSED,
+} from "@/components/ui/SyncPausedAlert";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
@@ -30,10 +30,6 @@ import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 // Custom event name for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
 const HIPPIUS_OPEN_MODAL_EVENT = "hippius:open-modal";
-
-
-
-
 
 type AddButtonProps = {
   className?: string;
@@ -61,7 +57,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     const [droppedPaths, setDroppedPaths] = useState<string[] | null>(null);
 
     const uploadingState = useAtomValue(
-      uploadToIpfsAndSubmitToBlockcahinRequestStateAtom
+      uploadToIpfsAndSubmitToBlockcahinRequestStateAtom,
     );
     const isLoading = uploadingState !== "idle";
     const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
@@ -74,7 +70,9 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         openWithFiles: async (files: FileList) => {
           if (!(await checkEligibility("file-upload"))) return;
           if (!hasConfiguredDrives) {
-            toast.warning("Set up a sync folder in Settings \u2192 Sync & Storage before uploading.");
+            toast.warning(
+              "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
+            );
             return;
           }
           setDroppedPaths(null);
@@ -84,16 +82,18 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         openWithPaths: async (paths: string[]) => {
           if (!(await checkEligibility("file-upload"))) return;
           if (!hasConfiguredDrives) {
-            toast.warning("Set up a sync folder in Settings \u2192 Sync & Storage before uploading.");
+            toast.warning(
+              "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
+            );
             return;
           }
           setDroppedFiles(null);
           setDroppedPaths(paths);
           setIsOpen(true);
         },
-        isDialogOpen: () => isOpen
+        isDialogOpen: () => isOpen,
       }),
-      [isOpen, hasConfiguredDrives, checkEligibility]
+      [isOpen, hasConfiguredDrives, checkEligibility],
     );
 
     // Memoize title to prevent recalculation
@@ -107,8 +107,6 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       setDroppedFiles(null);
       setDroppedPaths(null);
     }, []);
-
-
 
     // Handle external events
     useEffect(() => {
@@ -148,22 +146,25 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           defaultFolderLabel={defaultFolderLabel}
         />
       );
-    }, [
-      droppedFiles,
-      droppedPaths,
-      closeDialog,
-      defaultFolderLabel
-    ]);
+    }, [droppedFiles, droppedPaths, closeDialog, defaultFolderLabel]);
 
     return (
       <>
-        <CardButton
-          className={cn("h-10 w-fit p-1", externalDisabled && "opacity-50 cursor-not-allowed", className)}
+        <Button
+          variant="primary"
+          size="auto"
+          className={cn(
+            "h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px]",
+            "font-geist text-[14px] tracking-[-0.28px] leading-[1.109]",
+            className,
+          )}
           onClick={async () => {
             if (IS_SYNC_PAUSED) return;
             if (!(await checkEligibility("file-upload"))) return;
             if (!hasConfiguredDrives) {
-              toast.warning("Set up a sync folder in Settings → Sync & Storage before uploading.");
+              toast.warning(
+                "Set up a sync folder in Settings → Sync & Storage before uploading.",
+              );
               return;
             }
             setDroppedFiles(null);
@@ -172,19 +173,12 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           }}
           disabled={isLoading || externalDisabled}
         >
-          <div className="flex items-center gap-2 text-grey-100 text-base font-medium p-2">
-            <div>
-              <PlusCircle className="size-4" />
-            </div>
-            <span className="flex items-center">
-              {isLoading ? (
-                <Loader2 className="animate-spin size-4" />
-              ) : (
-                " Upload File"
-              )}
-            </span>
-          </div>
-        </CardButton>
+          {isLoading ? (
+            <Loader2 className="animate-spin size-4" />
+          ) : (
+            <>+ New File</>
+          )}
+        </Button>
 
         <Dialog.Root
           open={isOpen}
@@ -228,8 +222,13 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
                   {!IS_SYNC_PAUSED && renderStepContent}
                   {IS_SYNC_PAUSED && (
                     <div className="text-center py-8 text-grey-60">
-                      <p>File uploads are temporarily paused while we transition to our new sync engine.</p>
-                      <p className="mt-2 text-sm">This will be available again in the coming days.</p>
+                      <p>
+                        File uploads are temporarily paused while we transition
+                        to our new sync engine.
+                      </p>
+                      <p className="mt-2 text-sm">
+                        This will be available again in the coming days.
+                      </p>
                     </div>
                   )}
                 </div>
@@ -239,7 +238,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         </Dialog.Root>
       </>
     );
-  }
+  },
 );
 
 AddButton.displayName = "AddButton";
