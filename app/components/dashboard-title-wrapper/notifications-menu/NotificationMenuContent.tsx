@@ -117,7 +117,9 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
         )}
       </div>
 
-      <NotificationMenuFooter onClose={onClose} />
+      {filteredNotifications.length > 0 && (
+        <NotificationMenuFooter onClose={onClose} />
+      )}
     </>
   );
 };
