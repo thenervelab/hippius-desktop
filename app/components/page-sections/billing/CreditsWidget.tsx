@@ -8,7 +8,7 @@ import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import TimeAgo from "react-timeago";
 import { openLinkByKey } from "@/app/lib/utils/links";
 import Warning from "@/components/ui/icons/Warning";
-import { AddCircle } from "@/components/ui/icons";
+import { ArrowRight } from "@/components/ui/icons";
 
 interface CreditsWidgetProps {
   className?: string;
@@ -108,7 +108,7 @@ const CreditsWidget: FC<CreditsWidgetProps> = ({ className }) => {
           className="w-full mt-3 h-[36px] rounded-[8px] text-[13px] font-medium tracking-[-0.26px] gap-2"
           onClick={() => openLinkByKey("CREDITS")}
         >
-          <AddCircle className="size-4 shrink-0" />
+          <ArrowRight className="size-4 shrink-0 rotate-180" />
           Add Credits
         </Button>
       </div>
