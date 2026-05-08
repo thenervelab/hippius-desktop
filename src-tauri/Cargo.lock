@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Hippius"
-version = "0.1.97"
+version = "0.1.98"
 dependencies = [
  "aes",
  "alloy-signer",
