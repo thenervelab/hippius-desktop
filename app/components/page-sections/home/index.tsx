@@ -5,7 +5,7 @@ import {
   isViewingRecentFilesAtom,
 } from "@/app/components/sidebar/sideBarAtoms";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
-import HomepageHeader from "./HomepageHeader";
+import PageHeader from "./PageHeader";
 import AvailableCreditsCard from "./available-credits";
 import StorageUsageCard from "./storage-usage-bars";
 import Drive from "@/app/components/page-sections/drive/DriveContainer";
@@ -28,7 +28,7 @@ const Home: React.FC = () => {
     <>
       <DashboardTitleWrapper mainText="Overview">
         <div className="px-3">
-          <HomepageHeader />
+          <PageHeader />
           <div className="mt-3">
             {IS_SYNC_PAUSED && (
               <div className="mb-4">

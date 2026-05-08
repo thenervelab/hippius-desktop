@@ -1,6 +1,6 @@
 "use client";
 
-import { FC, useEffect, useMemo, useState } from "react";
+import { FC, ReactNode, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -31,7 +31,19 @@ const formatHipCompact = (value: string): string => {
   return num.toFixed(4).replace(/\.?0+$/, "");
 };
 
-const HomepageHeader: FC = () => {
+interface PageHeaderProps {
+  title?: string;
+  subtitle?: string;
+  infoButton?: ReactNode;
+  showTopUpCredits?: boolean;
+}
+
+const PageHeader: FC<PageHeaderProps> = ({
+  title = "Welcome to Hippius",
+  subtitle = "Store. Compute. Own your infrastructure.",
+  infoButton,
+  showTopUpCredits = true,
+}) => {
   const { stakingInfo } = useStaking();
   const { activeSubscription, isLoadingActive } = useSubscriptionData();
 
@@ -71,29 +83,30 @@ const HomepageHeader: FC = () => {
     : "";
 
   return (
-    <div
-      className={cn(
-        "grid grid-cols-1 @4xl:grid-cols-[1fr_1fr]  items-stretch gap-3 mt-3",
-      )}
-    >
+    <div className="grid grid-cols-1 @4xl:grid-cols-[1fr_1fr] items-stretch gap-3 mt-3">
       <div className="flex flex-col items-start justify-center gap-0.5 px-1">
-        <p className="text-[24px] font-medium leading-8 text-black-700 dark:text-white">
-          Welcome to Hippius
-        </p>
+        <div className="flex items-center gap-2">
+          <p className="text-[24px] font-medium leading-8 text-black-700 dark:text-white">
+            {title}
+          </p>
+          {infoButton}
+        </div>
         <p className="text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-dark-800">
-          Store. Compute. Own your infrastructure.
+          {subtitle}
         </p>
       </div>
 
       <div
         className={cn(
-          "flex items-stretch gap-3.5 rounded-[8px] px-3.5",
+          "flex items-stretch rounded-[8px]",
           "border border-grey-light-500 bg-grey-light-600",
           "dark:border-black-300 dark:bg-black-primary-bg",
+          showTopUpCredits ? "gap-3.5 px-3.5" : "px-0",
         )}
       >
         <div className="flex flex-1 min-w-0 items-stretch">
-          <div className="flex flex-1 min-w-0 items-center justify-between gap-3 border-r border-grey-dark-100 pr-5 py-[11px] dark:border-black-500">
+          {/* Wallet section */}
+          <div className="flex flex-1 min-w-0 items-center justify-between gap-3 border-r border-grey-dark-100 dark:border-black-500 pr-5 py-[11px] pl-3.5">
             <div className="flex flex-col items-start justify-center gap-[3px]">
               <div className="flex items-center gap-1">
                 <Icons.Wallet className="size-[18px] text-primary-40 dark:text-primary-brand-dark" />
@@ -128,7 +141,15 @@ const HomepageHeader: FC = () => {
             </Button>
           </div>
 
-          <div className="flex w-[200px] flex-col items-start justify-center gap-[3px] border-r border-grey-dark-100 px-5 py-[11px] dark:border-black-500">
+          {/* Active plan section — border-r only when top-up button is visible */}
+          <div
+            className={cn(
+              "flex w-[200px] flex-col items-start justify-center gap-[3px] py-[11px] dark:border-black-500",
+              showTopUpCredits
+                ? "border-r border-grey-dark-100 px-5"
+                : "pl-5 pr-3.5",
+            )}
+          >
             <div className="flex items-center gap-1">
               <span className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-primary-40/20">
                 <span className="size-[6.15px] rounded-full bg-primary-40" />
@@ -159,26 +180,28 @@ const HomepageHeader: FC = () => {
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center py-[11px]">
-          <Button
-            asLink
-            href="/billing/plans"
-            variant="defaultStable"
-            size="auto"
-            className={cn(
-              "h-[33px] rounded-[7px] px-[14px] text-[14px] font-medium tracking-[-0.28px]",
-              "border border-grey-dark-100 bg-white text-black-600",
-              "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16),0px_1px_0px_0px_white,0px_1px_0px_0px_white]",
-              "dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400",
-              "dark:shadow-[0px_0px_0px_1px_black]",
-            )}
-          >
-            + Top up Credits
-          </Button>
-        </div>
+        {showTopUpCredits && (
+          <div className="flex shrink-0 items-center py-[11px]">
+            <Button
+              asLink
+              href="/billing/plans"
+              variant="defaultStable"
+              size="auto"
+              className={cn(
+                "h-[33px] rounded-[7px] px-[14px] text-[14px] font-medium tracking-[-0.28px]",
+                "border border-grey-dark-100 bg-white text-black-600",
+                "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16),0px_1px_0px_0px_white,0px_1px_0px_0px_white]",
+                "dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400",
+                "dark:shadow-[0px_0px_0px_1px_black]",
+              )}
+            >
+              + Top up Credits
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
 };
 
-export default HomepageHeader;
+export default PageHeader;
