@@ -74,6 +74,7 @@ const columns = [
         title="Copy Billing ID"
         toastMessage="Billing ID Copied Successfully!"
         isTable={true}
+        textColor="text-grey-20 dark:text-grey-dark-200"
       />
     ),
   }),
@@ -149,11 +150,11 @@ const BillingHistoryTable: React.FC = () => {
   // Loading state
   if (isPending && !error) {
     return (
-      <TableWrapper>
+      <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
         <div className={`overflow-x-auto custom-scrollbar-thin`}>
           <Table className={MIN_W}>
             <THead>
-              <Tr className="bg-[#fefefe] dark:bg-black-primary-bg">
+              <Tr className="bg-[#fefefe] dark:bg-black-500">
                 {HEADERS.map((h) => (
                   <th
                     key={h}
@@ -189,7 +190,7 @@ const BillingHistoryTable: React.FC = () => {
     })();
 
     return (
-      <TableWrapper>
+      <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
         <div className="flex h-[21.875rem] w-full items-center justify-center p-6">
           <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
             <AbstractIconWrapper className="size-10 rounded-2xl bg-grey-40/20 mb-2">
@@ -222,7 +223,7 @@ const BillingHistoryTable: React.FC = () => {
         </div>
       )}
 
-      <TableWrapper>
+      <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
         <div className="overflow-x-auto custom-scrollbar-thin">
           <Table className={MIN_W}>
             <THead>
@@ -236,7 +237,7 @@ const BillingHistoryTable: React.FC = () => {
             </THead>
             <TBody>
               {table.getRowModel().rows.map((row) => (
-                <Tr key={row.id} className="bg-white dark:bg-black-600">
+                <Tr key={row.id} className="bg-white dark:bg-transparent">
                   {row.getVisibleCells().map((cell) => (
                     <Td key={cell.id} cell={cell} />
                   ))}

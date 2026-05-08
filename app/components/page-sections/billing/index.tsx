@@ -6,7 +6,6 @@ import CreditsWidget from "./CreditsWidget";
 import CreditGraph from "./CreditGraph";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import BillingnHistoryTable from "./BillingnHistoryTable";
-import { Icons } from "@/components/ui";
 import SubscriptionPlansSection from "./SubscriptionPlansSection";
 import TaoDepositWidget from "./TaoDepositWidget";
 import PageHeader from "@/components/page-sections/home/PageHeader";
@@ -49,12 +48,9 @@ export default function Billing() {
           {/* Billing History */}
           <div className="mt-6 flex flex-col items-center w-full rounded-[8px] border overflow-hidden bg-grey-light-300 border-grey-dark-100 dark:bg-black-primary-bg dark:border-black-300 shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]">
             <div className="flex h-[46px] w-full items-center pl-[14px] pr-[10px]">
-              <div className="flex items-center gap-1">
-                <Icons.BoxTime className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
-                <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
-                  Billing History
-                </p>
-              </div>
+              <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
+                Billing History
+              </p>
             </div>
             <div className="flex flex-col w-full flex-1 rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100 bg-white dark:bg-black-600 dark:border-black-300 p-3">
               <BillingnHistoryTable />
