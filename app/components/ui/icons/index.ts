@@ -148,6 +148,7 @@ export { default as FileFilter } from "./FileFilter";
 export { default as Send2 } from "./Send2";
 export { default as Send } from "./Send";
 export { default as ArrowRight2 } from "./ArrowRight2";
+export { default as ArrowRightFill } from "./ArrowRightFill";
 export { default as ArrowLeft2 } from "./ArrowLeft2";
 export { default as File2 } from "./File2";
 export { default as RecieveSquare } from "./RecieveSquare";
