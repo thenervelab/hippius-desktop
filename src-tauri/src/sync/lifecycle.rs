@@ -1125,12 +1125,30 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
 /// the worst case is a stale baseline survives, which is exactly the state we
 /// already had before this fix and which the next `remove_drive` call will
 /// re-attempt to clean.
+///
+/// `NotFound` errors are treated as success and not logged: a drive that was
+/// removed before its first sync, or a label that was paused-only, never
+/// produced a baseline file. Any other error (typically permission issues or
+/// a locked file on Windows) is surfaced via `warn!` because it leaves the
+/// stale baseline intact — which is the exact bug the surrounding code is
+/// supposed to prevent. Without the log we'd have no way to diagnose a re-add
+/// data-loss recurrence in production.
 fn clear_persisted_sync_state(account_id: &str, label: &str) {
     let Ok(folder_dir) = config_dir_for_folder(account_id, label) else {
         return;
     };
-    let _ = std::fs::remove_file(folder_dir.join("sync_state.json"));
-    let _ = std::fs::remove_file(folder_dir.join("sync_state.json.bak"));
+    for name in ["sync_state.json", "sync_state.json.bak"] {
+        let path = folder_dir.join(name);
+        if let Err(err) = std::fs::remove_file(&path)
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to clear sync baseline on remove_drive — stale state may survive",
+            );
+        }
+    }
 }
 
 /// Pause a sync folder: stop the drive in-memory and mark it as paused in the DB.
