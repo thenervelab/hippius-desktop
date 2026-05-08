@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React from "react";
 import {
   AbstractCity,
   Graphsheet,
@@ -8,18 +8,13 @@ import {
 import { InView } from "react-intersection-observer";
 import Link from "next/link";
 import AnimatedRings from "./AnimatedRings";
-import { UPDATE_CHECK_CONTENT, getPhaseContent } from "./SplashContent";
+import { UPDATE_CHECK_CONTENT, PHASE_CONTENT } from "./SplashContent";
 import AnimatedProgressIcon from "./AnimatedIcons";
 import { AnimatePresence, motion } from "framer-motion";
 import ProgressDisplay from "./ProgressDisplay";
 import ProgressBarDisplay from "./ProgressBarDisplay";
 import { useAtomValue } from "jotai";
-import {
-  stepAtom,
-  nebulaInstalledAtom,
-  isUpdateCheckPhaseAtom,
-  phaseAtom,
-} from "./atoms";
+import { stepAtom, isUpdateCheckPhaseAtom, phaseAtom } from "./atoms";
 import {
   updateDialogOpenAtom,
   updateStore,
@@ -32,17 +27,13 @@ const SplashScreen = () => {
   const updateDialogOpen = useAtomValue(updateDialogOpenAtom, {
     store: updateStore,
   });
-  const nebulaInstalled = useAtomValue(nebulaInstalledAtom);
 
-  const phaseContent = useMemo(() => {
-    return getPhaseContent();
-  }, []);
+  // Progress bar shows once we've left the update-check phase and a real
+  // phase is active. There is no installer probe to gate on, so this is
+  // simply `phase !== null`.
+  const showProgressBar = phase !== null;
 
-  // Show progress bar during setup phases (both fresh install and when already installed)
-  // Only hide progress bar when status is still unknown (null) or explicitly disabled
-  const showProgressBar = nebulaInstalled !== null && phase !== null;
-
-  const contentArr = Object.values(phaseContent);
+  const contentArr = Object.values(PHASE_CONTENT);
 
   // When update dialog is open, freeze everything and show no UI elements
   if (updateDialogOpen) {
@@ -166,7 +157,6 @@ const SplashScreen = () => {
         />
       )}
 
-      {/* Show percentage and status text only when nebula is not installed */}
       {showProgress && (
         <InView triggerOnce>
           {({ inView, ref }) => (
@@ -216,7 +206,7 @@ const SplashScreen = () => {
         </InView>
       )}
 
-      {/* Progress bar positioned absolutely at fixed bottom position - only when nebula not installed */}
+      {/* Progress bar pinned to the bottom rail. */}
       {showProgress && showProgressBar && (
         <InView triggerOnce>
           {({ inView, ref }) => (
