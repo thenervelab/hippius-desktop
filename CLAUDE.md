@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Hippius Desktop is a Tauri 2.0 application combining a Next.js 15 frontend with a Rust backend. It provides encrypted file sync, blockchain wallet management, VM provisioning, VPN (Nebula), and billing — all integrated with the Hippius/Bittensor network.
+Hippius Desktop is a Tauri 2.0 application combining a Next.js 15 frontend with a Rust backend. It provides encrypted file sync, blockchain wallet management, VM provisioning, and billing — all integrated with the Hippius/Bittensor network.
 
 ## Coding rules
 When writing code on this project we ALWAYS try to put the buisness logic in the RUST side of the project in /src-tauri and interface with the frontend /app instead of writting it to the frontend.
@@ -79,21 +79,20 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 
 - **`main.rs`** — Entry point. Registers all IPC commands, initializes plugins, sets up single-instance and deep-link handling. `lib.rs` re-exports all modules for integration tests.
 - **`error.rs`** — `AppError` enum with `thiserror` for structured error handling. Custom `Serialize` produces `{ "kind": "...", "message": "..." }` for frontend error matching. `NotReadyKind` enum gives machine-readable variants for auth/sync readiness errors.
-- **`app_state.rs`** — Centralized `AppState` struct with sub-states: `AuthInfo`, `BlockchainState`, `BlockSubscriptionState`, `OAuthState`, `NebulaState`, `MigrationState`, and `SyncRunner` (Arc). Also holds shared `reqwest::Client` for API calls and `tokio::sync::Notify` for drive-removal wakeups.
+- **`app_state.rs`** — Centralized `AppState` struct with sub-states: `AuthInfo`, `BlockchainState`, `BlockSubscriptionState`, `OAuthState`, `MigrationState`, and `SyncRunner` (Arc). Also holds shared `reqwest::Client` for API calls and `tokio::sync::Notify` for drive-removal wakeups.
 - **`auth/`** — Authentication and account management: `login.rs` (mnemonic login), `logout.rs`, `session_restore.rs` (boot-time session rehydration), `service.rs` (token refresh, key derivation), `accounts.rs` (sub-account CRUD, import/export with encryption), `oauth.rs` (OAuth flow), `ssh_keys.rs`, `billing_auth.rs` (billing API auth), `tokens.rs` (token helpers), `keychain.rs` (OS keychain), `contacts.rs`, `state.rs` (AuthInfo struct), `account_key.rs` (account key hashing), `auth_session_repo.rs` (SQLite session CRUD with inline tests).
 - **`sync/`** — Core sync engine (16 submodules): `lifecycle.rs` (init, auto-init, teardown, progress handler setup), `control.rs` (start/stop/pause drive commands), `files.rs` (file listing, recent files, user files with parallel folder listing), `folders.rs` (folder CRUD), `paths.rs` (sync path DB operations), `config.rs` (HCFS config loading), `progress.rs` (in-memory session/file progress tracking), `status.rs` (sync status queries), `events.rs` (event name constants and payload structs), `logic.rs` (pure I/O-free helpers: snapshot throttling), `migration.rs` (S3→HCFS migration: check, start, poll, complete_migration_transition), `mnemonic.rs` (mnemonic resolution for sync), `remote.rs` (remote folder operations), `selective.rs` (selective sync), `device.rs` (device name), `tauri_bridge.rs` (OnceLock-based event dispatch to Tauri).
 - **`blockchain/`** — Substrate/Polkadot integration: `client.rs` (RPC client with double-check lock pattern), `queries.rs` (balance, staking info with snapshot-consistent reads), `staking.rs` (stake/unstake commands), `transfers.rs` (balance transfers), `subscription.rs` (block subscription), `convert.rs` (unit conversion), `helpers.rs` (signer extraction), `state.rs`, `types.rs`, `runtime.rs`.
 - **`billing/`** — Billing and credits: `charts.rs` (chart data formatting), `credits.rs` (credit balance queries), `queries.rs` (billing API queries), `subscriptions.rs` (plan management).
 - **`api/`** — HTTP clients: `client.rs` (generic Hippius API client), `indexer.rs` (indexer API).
 - **`crypto/`** — Encryption at rest: `store.rs` (HKDF-SHA256 key derivation, ChaCha20-Poly1305 AEAD encrypt/decrypt, `migrate_if_needed` for transparent plaintext→encrypted migration of sub-account seed phrases).
-- **`nebula/`** — Nebula VPN management (download, install, start, certificate handling). **Permission escalation** (macOS osascript / Linux pkexec) for the Nebula binary is requested ONLY when the user enables the VPN via `toggle_vpn_status`, never during app startup or splash screen.
 - **`notifications/`** — Notification management commands.
 - **`infra/`** — VM provisioning and support ticket commands.
 - **`utils/`** — Schema management (`schema.rs` with `ensure_table_schema()`), bookmarks, preferences, platform info, tray menu, support helpers.
 
 ### Key Patterns
 
-**Global state in Rust** is centralized in `AppState` (`app_state.rs`), registered via `app.manage(AppState::new())` at startup. Sub-states: `AuthInfo`, `BlockchainState`, `BlockSubscriptionState`, `OAuthState`, `NebulaState`, `MigrationState`, and `SyncRunner` (Arc). Also holds a shared `reqwest::Client` for connection pooling and a `tokio::sync::Notify` for drive-removal wakeups. Command handlers access it via `tauri::State<'_, AppState>`, background tasks via `app.state::<AppState>()`. The DB pool uses `OnceLock` within AppState. No module-level `static` variables remain.
+**Global state in Rust** is centralized in `AppState` (`app_state.rs`), registered via `app.manage(AppState::new())` at startup. Sub-states: `AuthInfo`, `BlockchainState`, `BlockSubscriptionState`, `OAuthState`, `MigrationState`, and `SyncRunner` (Arc). Also holds a shared `reqwest::Client` for connection pooling and a `tokio::sync::Notify` for drive-removal wakeups. Command handlers access it via `tauri::State<'_, AppState>`, background tasks via `app.state::<AppState>()`. The DB pool uses `OnceLock` within AppState. No module-level `static` variables remain.
 
 **Multi-drive sync**: Drives are keyed by label string. The sync loop iterates all drives sequentially (round-robin). `SyncActivityItem` includes a `label` field; all Tauri events include `"label"` in JSON payload. DB constraint: `UNIQUE(owner, label)` in sync_paths table.
 

@@ -11,7 +11,6 @@
 use crate::auth::oauth::OAuthState;
 use crate::auth::state::AuthInfo;
 use crate::blockchain::state::{BlockSubscriptionState, BlockchainState};
-use crate::nebula::state::NebulaState;
 use crate::recovery::RecoveryGateState;
 use crate::sync::drive_status::DriveStatus;
 use crate::sync::migration::MigrationState;
@@ -20,10 +19,7 @@ use hcfs_client::engine::runner::SyncRunner;
 
 use sqlx::sqlite::SqlitePool;
 use std::collections::HashMap;
-use std::sync::{
-    Arc, Mutex, OnceLock,
-    atomic::{AtomicBool, AtomicU64},
-};
+use std::sync::{Arc, Mutex, OnceLock, atomic::AtomicU64};
 
 /// The single top-level state container for the entire Tauri backend.
 ///
@@ -41,7 +37,6 @@ pub struct AppState {
     pub blockchain: BlockchainState,
     pub block_sub: BlockSubscriptionState,
     pub oauth: OAuthState,
-    pub nebula: NebulaState,
     pub migration: MigrationState,
     /// Tracks the disk-copy + encryption window for user-initiated
     /// uploads. Drives the top-of-page processing banner. See
@@ -82,12 +77,6 @@ pub struct AppState {
     /// recovery flow has had a chance to install the unsealed one.
     /// See `docs/plans/2026-04-14-oauth-account-recovery.md`.
     recovery_gate: tokio::sync::watch::Sender<RecoveryGateState>,
-    /// Set to `true` after `stop_nebula` has run during shutdown. The
-    /// `RunEvent::ExitRequested` handler uses this to distinguish the
-    /// initial exit request (Cmd+Q, tray Quit, etc. — defer and stop
-    /// Nebula first) from the re-entrant one triggered by the post-
-    /// cleanup `app.exit(0)` (allow the exit to proceed).
-    pub nebula_stopped: AtomicBool,
     /// Per-account snapshot of the most recent `hcfs_list_shares`
     /// result. Used by `crate::shares::history::diff_active_lists` to
     /// detect tokens that have left the active set since the last
@@ -138,7 +127,6 @@ impl AppState {
             blockchain: BlockchainState::new(),
             block_sub: BlockSubscriptionState::new(),
             oauth: OAuthState::new(),
-            nebula: NebulaState::new(),
             migration: MigrationState::new(),
             upload_processing: std::sync::Arc::new(crate::sync::upload_processing::UploadProcessingState::new()),
             sync_session_epoch: AtomicU64::new(0),
@@ -162,7 +150,6 @@ impl AppState {
             // `complete_oauth_flow` flips this to `Pending` at its start so
             // the dialog gets a chance to run before any sync init races in.
             recovery_gate: tokio::sync::watch::channel(RecoveryGateState::Skipped).0,
-            nebula_stopped: AtomicBool::new(false),
             share_active_list_cache: Mutex::new(HashMap::new()),
         }
     }

@@ -5,7 +5,6 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import {
   phaseAtom,
   completedPhasesAtom,
-  nebulaInstalledAtom,
   currentPhaseIndexAtom,
   phaseCommandRunningAtom,
   isUpdateCheckPhaseAtom,
@@ -18,9 +17,8 @@ import {
   updateStore,
 } from "@/app/components/updater/updateStore";
 import { cn } from "@/app/lib/utils";
-import { invoke } from "@tauri-apps/api/core";
 import {
-  getPhaseContent,
+  PHASE_CONTENT,
   AppSetupPhaseContent,
   MIN_PHASE_DURATION,
   PHASE_PROGRESS_EVENT,
@@ -36,7 +34,6 @@ export default function SplashWrapper({
 }) {
   const [phase, setPhase] = useAtom(phaseAtom);
   const setCompletedPhases = useSetAtom(completedPhasesAtom);
-  const setNebulaInstalled = useSetAtom(nebulaInstalledAtom);
   const setCurrentPhaseIndex = useSetAtom(currentPhaseIndexAtom);
   const setPhaseCommandRunning = useSetAtom(phaseCommandRunningAtom);
   const setIsUpdateCheckPhase = useSetAtom(isUpdateCheckPhaseAtom);
@@ -107,7 +104,6 @@ export default function SplashWrapper({
     if (updateDialogOpen && phase) {
       setPhase(null);
       setCompletedPhases(new Set());
-      setNebulaInstalled(null);
       setCurrentPhaseIndex(0);
       setPhaseCommandRunning(false);
       setIsUpdateCheckPhase(true);
@@ -119,7 +115,6 @@ export default function SplashWrapper({
     phase,
     setPhase,
     setCompletedPhases,
-    setNebulaInstalled,
     setCurrentPhaseIndex,
     setPhaseCommandRunning,
     setIsUpdateCheckPhase,
@@ -153,18 +148,6 @@ export default function SplashWrapper({
     setupStartedRef.current = true;
 
     const runSetupPhases = async () => {
-      // Check if nebula is already installed (for UI display only)
-      let isAlreadyInstalled = false;
-      try {
-        isAlreadyInstalled = await invoke<boolean>(
-          "get_nebula_binary_installed_status"
-        );
-        setNebulaInstalled(isAlreadyInstalled);
-      } catch (error) {
-        console.error("Error checking nebula installation status:", error);
-        setNebulaInstalled(false);
-      }
-
       // ========== UPDATE CHECK PHASE (at 0% - before main phases) ==========
       setIsUpdateCheckPhase(true);
       setPhase("checking_updates");
@@ -183,11 +166,9 @@ export default function SplashWrapper({
         }, 10000);
       });
 
-      if (isAlreadyInstalled) {
-        await updateCheckPromise;
-      } else {
-        await runWithMinDuration(updateCheckPromise, MIN_PHASE_DURATION);
-      }
+      // Held to MIN_PHASE_DURATION so the splash never flickers off in <1.5s
+      // when the updater resolves immediately (cached / offline).
+      await runWithMinDuration(updateCheckPromise, MIN_PHASE_DURATION);
 
       if (updateDialogOpenRef.current) {
         return;
@@ -196,9 +177,7 @@ export default function SplashWrapper({
       setIsUpdateCheckPhase(false);
 
       // ========== MAIN PHASES (quick animation, no blocking) ==========
-      // Nebula download/install runs in the background — splash never blocks on it.
-      const dynamicPhaseContent = getPhaseContent();
-      const phaseNames = Object.keys(dynamicPhaseContent);
+      const phaseNames = Object.keys(PHASE_CONTENT);
 
       for (let i = 0; i < phaseNames.length; i++) {
         const phaseName = phaseNames[i];
@@ -210,7 +189,7 @@ export default function SplashWrapper({
         setPhaseCommandRunning(true);
 
         const phaseContent: AppSetupPhaseContent | undefined =
-          dynamicPhaseContent[phaseName];
+          PHASE_CONTENT[phaseName];
 
         if (!phaseContent) {
           console.warn(`Unknown phase: ${phaseName}`);
@@ -278,19 +257,12 @@ export default function SplashWrapper({
 
       setIsFullyComplete(true);
       setSplashComplete(true);
-
-      // Fire off Nebula setup in the background (download, install, verify)
-      // This runs after the splash is dismissed so the user is never blocked.
-      invoke("setup_nebula_background").catch((err: unknown) => {
-        console.error("Background Nebula setup failed to start:", err);
-      });
     };
 
     runSetupPhases();
   }, [
     setPhase,
     setCompletedPhases,
-    setNebulaInstalled,
     setCurrentPhaseIndex,
     setPhaseCommandRunning,
     setIsUpdateCheckPhase,
