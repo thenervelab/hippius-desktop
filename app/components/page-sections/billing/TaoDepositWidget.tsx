@@ -1,14 +1,36 @@
 "use client";
 
-import { FC } from "react";
+import { FC, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Icons } from "@/components/ui";
-import { TaoLogo } from "@/components/ui/icons";
+import { TaoLogo, Copy, CircularTickGrid } from "@/components/ui/icons";
 import useDepositAddress from "@/app/lib/hooks/useDepositAddress";
-import { CopyableCell } from "../../ui/alt-table";
+import { toast } from "sonner";
+
+const centerTruncate = (str: string, start = 12, end = 8): string => {
+  if (!str || str.length <= start + end + 4) return str;
+  return `${str.slice(0, start)}....${str.slice(-end)}`;
+};
 
 const TaoDepositWidget: FC<{ className?: string }> = ({ className }) => {
   const { data: depositAddress } = useDepositAddress();
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    if (!depositAddress) return;
+    try {
+      await navigator.clipboard.writeText(depositAddress);
+      toast.success("Wallet Address Copied Successfully!");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Failed to copy address");
+    }
+  };
+
+  const displayAddress = depositAddress
+    ? centerTruncate(depositAddress)
+    : "---";
 
   return (
     <div
@@ -30,7 +52,7 @@ const TaoDepositWidget: FC<{ className?: string }> = ({ className }) => {
         </div>
       </div>
 
-      {/* Inner white panel — rounded top only so bottom aligns flush with outer border */}
+      {/* Inner panel */}
       <div
         className={cn(
           "flex flex-col w-full flex-1 justify-between",
@@ -50,20 +72,39 @@ const TaoDepositWidget: FC<{ className?: string }> = ({ className }) => {
           </p>
         </div>
 
-        {/* Bottom: copyable address */}
-        <div className="flex w-full gap-2 items-center mt-3">
-          <div className="flex flex-1 min-w-0 bg-grey-light-300 dark:bg-black-primary-bg rounded-[8px] h-[36px] items-center">
-            <CopyableCell
-              title="Copy Wallet Address"
-              toastMessage="Wallet Address Copied Successfully!"
-              copyAbleText={depositAddress ?? "---"}
-              textColor="text-grey-50 dark:text-grey-dark-500 font-medium"
-              copyIconClassName="size-4 text-grey-50 dark:text-grey-dark-500"
-              checkIconClassName="size-4"
-              className="px-2 py-0 w-full"
-              isTable={true}
-            />
+        {/* Bottom: address text box + separate copy button */}
+        <div className="flex w-full gap-2 items-center">
+          {/* Address text field */}
+          <div
+            className={cn(
+              "flex flex-1 min-w-0 h-[36px] items-center px-2 overflow-hidden",
+              "rounded-[8px] border border-grey-dark-100",
+              "bg-grey-light-300 dark:bg-black-primary-bg dark:border-black-300",
+            )}
+          >
+            <span className="text-[12px] font-medium tracking-[-0.24px] text-grey-50 dark:text-white/40 whitespace-nowrap overflow-hidden text-ellipsis w-full">
+              {displayAddress}
+            </span>
           </div>
+
+          {/* Separate copy button */}
+          <button
+            type="button"
+            onClick={handleCopy}
+            aria-label="Copy wallet address"
+            className={cn(
+              "flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-[8px] border",
+              "bg-grey-light-300 border-grey-dark-100",
+              "dark:bg-black-primary-bg dark:border-black-300",
+              "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
+            )}
+          >
+            {copied ? (
+              <CircularTickGrid className="size-4 text-primary-50" />
+            ) : (
+              <Copy className="size-4 text-grey-50 dark:text-white/50" />
+            )}
+          </button>
         </div>
       </div>
     </div>
