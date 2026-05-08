@@ -179,17 +179,6 @@ vi.mock("@/components/updater/checkForUpdates", () => ({
   getAvailableUpdate: vi.fn(async () => null),
 }));
 
-// `useTraySync` pulls VPN + login-status helpers in at import time.
-// None of them matter for these tests — stub to no-ops / safe defaults.
-vi.mock("@/components/dashboard-title-wrapper/vpn-menu/nebula-utils", () => ({
-  getVpnStatus: vi.fn(async () => false),
-  toggleVpnStatus: vi.fn(async () => false),
-}));
-
-vi.mock("@/components/dashboard-title-wrapper/vpn-menu/vpnAtoms", () => ({
-  vpnConnectedAtom: { init: false, read: () => false, write: () => {} },
-}));
-
 vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),
@@ -524,8 +513,6 @@ describe("useTraySync — sync summary row race prevention", () => {
               credits: 100,
               substrateAddress: "addr",
             };
-          case "get_vpn_status":
-            return { is_enabled: false };
           default:
             return null;
         }
@@ -740,8 +727,6 @@ describe("useTraySync — stalled completion shows Sync Complete", () => {
             return { ...EMPTY_SNAPSHOT };
           case "get_tray_menu_data":
             return { loggedIn: true, credits: 100, substrateAddress: "addr" };
-          case "get_vpn_status":
-            return { is_enabled: false };
           default:
             return null;
         }

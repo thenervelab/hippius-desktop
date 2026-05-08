@@ -92,7 +92,6 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
                 flavor: instanceData.flavor.name,
                 image: instanceData.image,
                 public_ip: instanceData.public_ip,
-                nebula_ip: instanceData.nebula_ip,
                 created_at: instanceData.created_at,
               },
               instanceData.status
@@ -111,7 +110,6 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
               flavor: instanceData.flavor.name,
               image: instanceData.image,
               public_ip: instanceData.public_ip,
-              nebula_ip: instanceData.nebula_ip,
               created_at: instanceData.created_at,
             }),
         },
@@ -127,7 +125,6 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
               flavor: instanceData.flavor.name,
               image: instanceData.image,
               public_ip: instanceData.public_ip,
-              nebula_ip: instanceData.nebula_ip,
               created_at: instanceData.created_at,
             }),
           variant: "destructive",

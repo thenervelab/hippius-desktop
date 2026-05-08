@@ -255,6 +255,20 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
         return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
     }
 
+    // Reject self-/ancestor-source picks at the IPC boundary so the dialog
+    // can render a domain-specific message instead of letting `copy_dir_recursive`
+    // run 64 levels of self-similar copies before erroring. See the
+    // `add_folder_rejects_*` tests in hcfs-client for the bug that motivated
+    // this guard.
+    let canonical_source = tokio::fs::canonicalize(source)
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Invalid folder path: {e}")))?;
+    if canonical_dest.starts_with(&canonical_source) {
+        return Err(crate::error::AppError::Other(
+            "Cannot add the sync folder (or one of its ancestors) to itself".into(),
+        ));
+    }
+
     copy_dir_recursive(source, &canonical_dest, 0).await?;
 
     Ok(name)
@@ -313,6 +327,18 @@ async fn add_folder_internal(canonical_parent: &Path, folder_path: &str) -> Resu
     let canonical_dest = canonical_parent.join(&name);
     if !canonical_dest.starts_with(canonical_parent) {
         return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
+    }
+
+    // Same guard as `add_folder_with_app_inner` — see that function for the
+    // bug that motivated this check. `add_files` reaches this helper when
+    // the batch contains directories, so the protection has to live here too.
+    let canonical_source = tokio::fs::canonicalize(source)
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Invalid folder path: {e}")))?;
+    if canonical_dest.starts_with(&canonical_source) {
+        return Err(crate::error::AppError::Other(
+            "Cannot add the sync folder (or one of its ancestors) to itself".into(),
+        ));
     }
 
     copy_dir_recursive(source, &canonical_dest, 0).await?;
@@ -1976,6 +2002,73 @@ mod tests {
     #[test]
     fn handles_nested_subfolder() {
         assert_eq!(derive_relative_name("/sync", Some("/sync/a/b/c/deep.txt"), "x.txt"), "a/b/c/deep.txt",);
+    }
+
+    // --- add_folder overlap check ---
+    //
+    // Regression: `add_folder_with_app_inner` and `add_folder_internal` used
+    // to forward whatever the user picked in the OS folder dialog straight to
+    // `copy_dir_recursive`. Picking the sync root itself (or any ancestor)
+    // resulted in 64 levels of nested duplicate folders before
+    // `MAX_COPY_DEPTH` finally tripped. The IPC layer now rejects the call
+    // with an `AppError::Other` so the dialog can render a clear message.
+
+    #[tokio::test]
+    async fn add_folder_with_app_inner_rejects_sync_root_as_source() {
+        let sync_dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(sync_dir.path().join("sentinel.txt"), b"x").await.unwrap();
+
+        let sync_path = sync_dir.path().to_string_lossy().to_string();
+        let err = add_folder_with_app_inner(&sync_path, &sync_path, None)
+            .await
+            .expect_err("must reject sync root as source");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Cannot add the sync folder"),
+            "unexpected error message: {msg}"
+        );
+
+        let nested = sync_dir
+            .path()
+            .join(sync_dir.path().file_name().unwrap());
+        assert!(!nested.exists(), "no recursive child must be created");
+    }
+
+    #[tokio::test]
+    async fn add_folder_with_app_inner_rejects_ancestor_of_sync_root() {
+        let outer = tempfile::tempdir().unwrap();
+        let sync_dir = outer.path().join("sync");
+        tokio::fs::create_dir(&sync_dir).await.unwrap();
+        let sync_path = sync_dir.to_string_lossy().to_string();
+        let outer_path = outer.path().to_string_lossy().to_string();
+
+        let err = add_folder_with_app_inner(&sync_path, &outer_path, None)
+            .await
+            .expect_err("must reject ancestor as source");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Cannot add the sync folder"),
+            "unexpected error message: {msg}"
+        );
+
+        let outer_name = outer.path().file_name().unwrap();
+        assert!(!sync_dir.join(outer_name).exists());
+    }
+
+    #[tokio::test]
+    async fn add_folder_internal_rejects_sync_root_as_source() {
+        let sync_dir = tempfile::tempdir().unwrap();
+        let canonical_sync = tokio::fs::canonicalize(sync_dir.path()).await.unwrap();
+        let folder_path = sync_dir.path().to_string_lossy().to_string();
+
+        let err = add_folder_internal(&canonical_sync, &folder_path)
+            .await
+            .expect_err("must reject sync root as source");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Cannot add the sync folder"),
+            "unexpected error message: {msg}"
+        );
     }
 
     // --- filter_file_entries / apply_file_filters ---

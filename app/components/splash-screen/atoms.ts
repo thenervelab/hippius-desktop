@@ -8,9 +8,6 @@ export { splashCompleteAtom } from "@/lib/global-atoms/splashAtoms";
 // Track if we're in the update check phase (before main phases)
 export const isUpdateCheckPhaseAtom = atom<boolean>(true);
 
-// Track if nebula is already installed (skip progress bar if true)
-export const nebulaInstalledAtom = atom<boolean | null>(null);
-
 // Track completed phases (phase name -> completion status)
 export const completedPhasesAtom = atom<Set<string>>(new Set<string>());
 

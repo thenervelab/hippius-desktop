@@ -339,8 +339,12 @@ pub async fn restore_remote_folders(
 /// user's local state is exactly as they found it and they can retry. If the
 /// server call fails after a successful local teardown, the user's files are
 /// still safe on disk; they can re-add the folder pointing at the same path
-/// to resume syncing, and retry the remote deletion when the server is
-/// reachable.
+/// and the next sync will reconcile against whatever is left on the server,
+/// and they can retry the remote deletion once it's reachable. Note that
+/// `remove_drive` now also wipes the on-disk sync baseline, so the re-add
+/// runs a full reconciliation pass instead of resuming from the prior
+/// `synced` tree — see the `clear_persisted_sync_state` helper in
+/// `lifecycle.rs` for the data-loss bug that motivated that change.
 #[tauri::command]
 pub async fn delete_remote_folder(
     state: tauri::State<'_, crate::app_state::AppState>,

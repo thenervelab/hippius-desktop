@@ -25,9 +25,6 @@ pub enum AppError {
     #[error("HCFS client error: {0}")]
     Hcfs(String),
 
-    #[error("VPN error: {0}")]
-    Nebula(String),
-
     #[error("Cryptography error: {0}")]
     Crypto(String),
 
@@ -149,7 +146,6 @@ impl Serialize for AppError {
             Self::Json(_) => "Json",
             Self::Substrate(_) => "Substrate",
             Self::Hcfs(_) => "Hcfs",
-            Self::Nebula(_) => "Nebula",
             Self::Crypto(_) => "Crypto",
             Self::Api { .. } => "Api",
             Self::Validation(_) => "Validation",
@@ -411,12 +407,6 @@ mod tests {
     }
 
     #[test]
-    fn display_nebula_error() {
-        let err = AppError::Nebula("vpn down".into());
-        assert_eq!(err.to_string(), "VPN error: vpn down");
-    }
-
-    #[test]
     fn display_crypto_error() {
         let err = AppError::Crypto("bad key".into());
         assert_eq!(err.to_string(), "Cryptography error: bad key");
@@ -461,7 +451,6 @@ mod tests {
             AppError::Json(serde_json::from_str::<String>("bad").unwrap_err()),
             AppError::Substrate("rpc".into()),
             AppError::Hcfs("sync".into()),
-            AppError::Nebula("vpn".into()),
             AppError::Crypto("key".into()),
             AppError::Api {
                 status: 403,
@@ -479,7 +468,6 @@ mod tests {
             "Json",
             "Substrate",
             "Hcfs",
-            "Nebula",
             "Crypto",
             "Api",
             "Validation",

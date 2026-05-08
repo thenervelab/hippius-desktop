@@ -14,7 +14,6 @@ export interface VMInstanceResponse {
   flavor: string;
   image: string;
   public_ip: string | null;
-  nebula_ip: string | null;
   created_at: string;
 }
 
