@@ -10,7 +10,13 @@ import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { ArrowUpFromLine, ArrowDownToLine } from "lucide-react";
 
-type SyncStatusType = "synced" | "pending" | "uploading" | "downloading" | "unknown" | "excluded";
+type SyncStatusType =
+  | "synced"
+  | "pending"
+  | "uploading"
+  | "downloading"
+  | "unknown"
+  | "excluded";
 
 type NameCellProps = {
   rawName: string;
@@ -41,18 +47,20 @@ const SyncStatusIcon: FC<{ status?: SyncStatusType }> = ({ status }) => {
             <ArrowUpFromLine
               className={cn(
                 "ml-1.5 size-3.5 flex-shrink-0",
-                status === "uploading" ? "text-primary-50 animate-pulse" : "text-warning-40"
+                status === "uploading"
+                  ? "text-primary-50 animate-pulse"
+                  : "text-warning-40",
               )}
             />
           </Tooltip.Trigger>
           <Tooltip.Portal>
             <Tooltip.Content
               side="top"
-              className="z-50 bg-white border border-grey-80 rounded-[0.5rem] px-3 py-2 text-xs font-medium text-grey-40 shadow-lg"
+              className="z-50 bg-white dark:bg-black-500 border border-grey-80 dark:border-black-300 rounded-[0.5rem] px-3 py-2 text-xs font-medium text-grey-40 dark:text-grey-light-200 shadow-lg"
               sideOffset={4}
             >
               {label}
-              <Tooltip.Arrow className="fill-white" />
+              <Tooltip.Arrow className="fill-white dark:fill-black-500" />
             </Tooltip.Content>
           </Tooltip.Portal>
         </Tooltip.Root>
@@ -69,11 +77,11 @@ const SyncStatusIcon: FC<{ status?: SyncStatusType }> = ({ status }) => {
           <Tooltip.Portal>
             <Tooltip.Content
               side="top"
-              className="z-50 bg-white border border-grey-80 rounded-[0.5rem] px-3 py-2 text-xs font-medium text-grey-40 shadow-lg"
+              className="z-50 bg-white dark:bg-black-500 border border-grey-80 dark:border-black-300 rounded-[0.5rem] px-3 py-2 text-xs font-medium text-grey-40 dark:text-grey-light-200 shadow-lg"
               sideOffset={4}
             >
               Downloading
-              <Tooltip.Arrow className="fill-white" />
+              <Tooltip.Arrow className="fill-white dark:fill-black-500" />
             </Tooltip.Content>
           </Tooltip.Portal>
         </Tooltip.Root>
@@ -101,19 +109,24 @@ const NameCell: FC<NameCellProps> = ({
 
   const mainFolderHash = getParam("mainFolderCid", "");
   const folderActualName = isFolder ? actualName || "" : "";
-  const mainFolderActualName = getParam("mainFolderActualName", isFolder ? actualName || "" : "");
+  const mainFolderActualName = getParam(
+    "mainFolderActualName",
+    isFolder ? actualName || "" : "",
+  );
   const subFolderPath = getParam("subFolderPath", "");
 
   const effectiveMainFolderHash = mainFolderHash || arionHash;
 
   // Build the folder path for navigation
-  const { mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
+  const {
+    mainFolderActualName: newMainFolder,
+    subFolderPath: newSubFolderPath,
+  } = buildFolderPath(
     folderActualName,
     effectiveMainFolderHash,
     mainFolderActualName || folderActualName,
-    subFolderPath
+    subFolderPath,
   );
-
 
   const folderUrl = {
     pathname: "/files",
@@ -125,20 +138,24 @@ const NameCell: FC<NameCellProps> = ({
       mainFolderActualName: newMainFolder ?? "",
       subFolderPath: newSubFolderPath ?? "",
       folderSource: source || "",
-      mainReqHash: mainReqHash
+      mainReqHash: mainReqHash,
     },
   };
-
 
   return (
     <div className={cn("w-full min-w-0", className)} draggable={false}>
       {isFolder ? (
-        <Link href={folderUrl} prefetch={false} draggable={false} className="cursor-pointer">
+        <Link
+          href={folderUrl}
+          prefetch={false}
+          draggable={false}
+          className="cursor-pointer"
+        >
           <div className="flex items-center min-w-0">
             <Icon className={cn("size-5 mr-2 flex-shrink-0", color)} />
             <MiddleTruncatedName
               name={rawName}
-              className="text-grey-20 transition"
+              className="text-grey-20 dark:text-grey-light-100 transition"
               textClassName="hover:text-primary-40 hover:underline"
             />
           </div>
@@ -148,9 +165,10 @@ const NameCell: FC<NameCellProps> = ({
           <Icon className={cn("size-5 mr-2 flex-shrink-0", color)} />
           <MiddleTruncatedName
             name={rawName}
-            className="text-grey-20"
+            className="text-grey-20 dark:text-grey-light-100"
             textClassName={cn(
-              isPreviewable && "group-hover:text-primary-50 group-hover:underline cursor-pointer"
+              isPreviewable &&
+                "group-hover:text-primary-50 group-hover:underline cursor-pointer",
             )}
             suffix={
               <>

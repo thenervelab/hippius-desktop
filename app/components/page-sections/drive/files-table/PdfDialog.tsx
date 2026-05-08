@@ -21,11 +21,11 @@ export const PdfDialogTrigger: React.FC<{
   return (
     <button
       onClick={onClick}
-      className="px-2.5 py-3 relative group overflow-hidden flex items-center w-full"
+      className="px-2 py-[5px] relative group overflow-hidden flex items-center w-full"
     >
       <span className="flex-1 min-w-0">{children}</span>
       {/* Eye icon on hover */}
-      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100 to-white right-4 inset-y-0 flex items-center">
+      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100 to-white dark:to-black-300 right-4 inset-y-0 flex items-center">
         <Icons.Eye className="size-5 text-primary-60 [&>path]:stroke-[0.1875rem]" />
       </div>
     </button>

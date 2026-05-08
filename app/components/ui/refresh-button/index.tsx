@@ -6,7 +6,8 @@ const RefreshButton: React.FC<{
     refetching?: boolean;
     ariaLabel?: string;
     className?: string;
-}> = ({ onClick, refetching, ariaLabel, className }) => (
+    iconClassName?: string;
+}> = ({ onClick, refetching, ariaLabel, className, iconClassName }) => (
     <button
         type="button"
         onClick={onClick}
@@ -22,9 +23,19 @@ const RefreshButton: React.FC<{
         )}
     >
         {refetching ? (
-            <Loader className="size-[18px] text-black-700 dark:text-white animate-spin" />
+            <Loader
+                className={cn(
+                    "size-[18px] text-black-700 dark:text-white animate-spin",
+                    iconClassName
+                )}
+            />
         ) : (
-            <RefreshCcwDot className="size-[18px] text-black-700 dark:text-white opacity-40" />
+            <RefreshCcwDot
+                className={cn(
+                    "size-[18px] text-black-700 dark:text-white opacity-40",
+                    iconClassName
+                )}
+            />
         )}
     </button>
 );

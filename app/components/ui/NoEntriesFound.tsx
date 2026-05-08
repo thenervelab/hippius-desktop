@@ -68,7 +68,7 @@ const NoEntriesFound = ({
   disabled = false,
   disabledMessage = "Coming Soon",
   hideIllustration = false,
-  cardView = false,
+  cardView = true,
   className,
   fillHeight = false,
   containerClassName,
@@ -123,10 +123,11 @@ const NoEntriesFound = ({
   return (
     <div
       className={cn(
-        "w-full  flex justify-center transition-all duration-200 overflow-hidden bg-grey-light-600 dark:bg-black-primary-bg p-8 sm:p-14 2xl:p-20 rounded-lg border border-grey-dark-100",
+        "w-full  flex justify-center transition-all duration-200 overflow-hidden bg-grey-light-600 dark:bg-black-primary-bg p-8 sm:p-14 2xl:p-20 ",
         fillHeight ? "items-stretch" : "items-center",
         isDragging && "bg-gray-50/50 dark:bg-gray-900/50",
-        cardView && "border border-grey-dark-100 rounded-lg  ",
+        cardView &&
+          "border border-grey-dark-100 rounded-lg dark:border-black-300 ",
         className,
       )}
       onDrop={onFileDrop ? handleDrop : undefined}

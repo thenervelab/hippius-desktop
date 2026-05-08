@@ -936,7 +936,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
           <div
             className={cn(
               isRecentFiles &&
-                "bg-grey-light-300 border border-grey-dark-100 rounded-[8px] shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.04)]",
+                "bg-grey-light-300 border border-grey-dark-100 rounded-[8px] shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.04)] dark:bg-black-primary-bg dark:border-black-300 dark:shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.4)]",
             )}
           >
             <DriveHeader

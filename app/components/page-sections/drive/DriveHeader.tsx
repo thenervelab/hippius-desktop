@@ -31,9 +31,8 @@ const SECONDARY_PILL_CLASSES = cn(
   "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)]",
   "font-geist text-[14px] font-medium tracking-[-0.28px] leading-[1.109]",
   "hover:bg-grey-light-700",
-  "dark:bg-black-300 dark:border-black-300 dark:text-white",
-  "dark:shadow-[0px_5px_2.3px_0px_rgba(255,255,255,0.02),0px_1px_1.9px_0px_rgba(255,255,255,0.08),0px_0px_1px_0px_rgba(255,255,255,0.1)]",
-  "dark:hover:bg-black-300/70",
+  "dark:bg-black-primary-bg dark:border-black-300 dark:text-grey-light-200",
+  "dark:hover:bg-black-300",
 );
 
 const VIEW_TOGGLE_BUTTON_BASE =
@@ -42,7 +41,7 @@ const VIEW_TOGGLE_BUTTON_BASE =
 const VIEW_TOGGLE_ACTIVE = cn(
   "bg-grey-light-300 border border-grey-dark-100",
   "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)]",
-  "dark:bg-black-300 dark:border-black-300",
+  "dark:bg-black-primary-bg dark:border-black-300",
 );
 
 const VIEW_TOGGLE_INACTIVE = "opacity-50 hover:opacity-75";
@@ -143,7 +142,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               onChange={handleSearchChange}
               placeholder="Search file"
             />
-            <div className="flex items-start gap-1 p-[3px] rounded-[6px] bg-grey-primary-bg dark:bg-black-700">
+            <div className="flex items-start gap-1 p-[3px] rounded-[6px] bg-grey-primary-bg dark:bg-black-600">
               <button
                 className={cn(
                   VIEW_TOGGLE_BUTTON_BASE,
@@ -179,7 +178,9 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         )}
       >
         {isRecentFiles ? (
-          <h2 className="text-lg font-medium text-grey-10">Recent Files</h2>
+          <h2 className="text-lg font-medium text-grey-10 dark:text-grey-light-100">
+            Recent Files
+          </h2>
         ) : (
           <FilterPills
             selectedFileTypes={selectedFileTypes}
@@ -194,6 +195,8 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         <div className="flex items-center gap-3 flex-wrap">
           <RefreshButton
             refetching={isRefetching || isFetching}
+            className="size-7 rounded-[6px]"
+            iconClassName="size-4"
             onClick={() => {
               invoke("trigger_sync_now").catch((err: unknown) =>
                 console.warn("[DriveHeader] trigger_sync_now failed:", err),
@@ -203,7 +206,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           />
           {isRecentFiles && (
             <>
-              <div className="flex items-start gap-1 p-[3px] rounded-[6px] bg-grey-primary-bg dark:bg-black-700">
+              <div className="flex items-start gap-1 p-[3px] rounded-[6px] bg-grey-primary-bg dark:bg-black-600">
                 <button
                   className={cn(
                     VIEW_TOGGLE_BUTTON_BASE,

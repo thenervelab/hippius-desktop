@@ -241,18 +241,20 @@ const FileCard: React.FC<FileCardProps> = ({
     <div
       className={cn(
         "w-full relative border rounded-[5px] overflow-hidden h-[220px] flex flex-col transition-all duration-200",
-        // Folder containers use a subtle grey background; files stay white.
-        file.isFolder ? "bg-grey-light-300" : "bg-white",
+        // Folder containers use a subtle grey/dark background; files stay white/black-500.
+        file.isFolder
+          ? "bg-grey-light-300 dark:bg-black-primary-bg"
+          : "bg-white dark:bg-black-500",
         state === "pending" && "animate-pulse",
         state === "error" && "bg-red-200/20 border-red-300",
         // Selection mode styles
         isSelectionMode && file.isAssigned && "cursor-pointer hover:scale-[1.02]",
         isSelectionMode && file.isAssigned && isFileSelected(file) && "border-2 border-primary-50 bg-primary-90/10 shadow-lg",
-        isSelectionMode && file.isAssigned && !isFileSelected(file) && "border-grey-dark-100 hover:border-primary-50",
+        isSelectionMode && file.isAssigned && !isFileSelected(file) && "border-grey-dark-100 dark:border-black-300 hover:border-primary-50",
         // Disabled file styles
         isSelectionMode && !file.isAssigned && "opacity-50 cursor-not-allowed bg-grey-95 border-grey-90",
         // Normal mode styles
-        !isSelectionMode && "border-grey-dark-100 cursor-pointer"
+        !isSelectionMode && "border-grey-dark-100 dark:border-black-300 cursor-pointer"
       )}
       onClick={() => {
         if (isSelectionMode) {
@@ -286,7 +288,7 @@ const FileCard: React.FC<FileCardProps> = ({
             {isSelectionMode ? (
               <span
                 className={cn(
-                  "text-sm text-grey-20 hover:text-primary-40 transition truncate cursor-pointer"
+                  "text-sm text-grey-20 dark:text-grey-light-100 hover:text-primary-40 transition truncate cursor-pointer"
                 )}
               >
                 {displayName}
@@ -295,7 +297,7 @@ const FileCard: React.FC<FileCardProps> = ({
               <Link href={`/files?folderCid=${file.arionHash}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderHash)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}&folderSource=${file.source}&mainReqHash=${file.mainReqHash}`} draggable={false}>
                 <span
                   className={cn(
-                    "text-sm text-grey-20 hover:text-primary-40 transition truncate"
+                    "text-sm text-grey-20 dark:text-grey-light-100 hover:text-primary-40 transition truncate"
                   )}
                 >
                   {displayName}
@@ -319,7 +321,7 @@ const FileCard: React.FC<FileCardProps> = ({
               </Checkbox.Root>
             )}
             <Icon className={cn("size-5 mr-1 flex-shrink-0", color)} />
-            <span className="text-sm text-grey-20 truncate">{displayName}</span>
+            <span className="text-sm text-grey-20 dark:text-grey-light-100 truncate">{displayName}</span>
             <SharedLinkBadge
               label={file.label}
               actualName={file.actualFileName}
@@ -333,8 +335,10 @@ const FileCard: React.FC<FileCardProps> = ({
 
       <div
         className={cn(
-          "flex flex-1 min-h-0 items-center justify-center relative border-t border-grey-dark-100 cursor-pointer overflow-hidden",
-          file.isFolder ? "bg-grey-light-300" : "bg-white"
+          "flex flex-1 min-h-0 items-center justify-center relative border-t border-grey-dark-100 dark:border-black-300 cursor-pointer overflow-hidden",
+          file.isFolder
+            ? "bg-grey-light-300 dark:bg-black-primary-bg"
+            : "bg-white dark:bg-black-500"
         )}
       >
         {shouldLoadThumbnail && thumbnailUrl && !thumbnailError ? (
