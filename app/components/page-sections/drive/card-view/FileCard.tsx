@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { FileTypeIcon } from "@/components/ui";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 // import { Graphsheet } from "@/components/ui";
-import { Loader2, PlayCircle } from "lucide-react";
+import { Loader2, Play } from "lucide-react";
 import Link from "next/link";
 import {
   formatDisplayName,
@@ -240,17 +240,19 @@ const FileCard: React.FC<FileCardProps> = ({
   return (
     <div
       className={cn(
-        "w-full relative border rounded-lg overflow-hidden aspect-[4/3] transition-all duration-200",
+        "w-full relative border rounded-[5px] overflow-hidden h-[220px] flex flex-col transition-all duration-200",
+        // Folder containers use a subtle grey background; files stay white.
+        file.isFolder ? "bg-grey-light-300" : "bg-white",
         state === "pending" && "animate-pulse",
         state === "error" && "bg-red-200/20 border-red-300",
         // Selection mode styles
         isSelectionMode && file.isAssigned && "cursor-pointer hover:scale-[1.02]",
         isSelectionMode && file.isAssigned && isFileSelected(file) && "border-2 border-primary-50 bg-primary-90/10 shadow-lg",
-        isSelectionMode && file.isAssigned && !isFileSelected(file) && "border-grey-80 hover:border-primary-50",
+        isSelectionMode && file.isAssigned && !isFileSelected(file) && "border-grey-dark-100 hover:border-primary-50",
         // Disabled file styles
         isSelectionMode && !file.isAssigned && "opacity-50 cursor-not-allowed bg-grey-95 border-grey-90",
         // Normal mode styles
-        !isSelectionMode && "border-grey-80 cursor-pointer"
+        !isSelectionMode && "border-grey-dark-100 cursor-pointer"
       )}
       onClick={() => {
         if (isSelectionMode) {
@@ -264,16 +266,7 @@ const FileCard: React.FC<FileCardProps> = ({
         }
       }}
     >
-      {!file.isFolder && (
-        <Image
-          src="/assets/file-card-gridlines.png"
-          alt="File Card Gridlines"
-          fill
-          className="object-cover"
-        />
-      )}
-
-      <div className="p-2 flex items-center justify-between relative bg-white bg-opacity-80 border-b border-grey-80 h-10 w-full">
+      <div className="px-2 pt-2 pb-1 flex items-center justify-between relative gap-1 h-9 w-full shrink-0">
         {file.isFolder ? (
           <div className="flex items-center min-w-0 flex-1">
             {/* Selection checkbox - inline with filename */}
@@ -340,8 +333,8 @@ const FileCard: React.FC<FileCardProps> = ({
 
       <div
         className={cn(
-          "flex items-center justify-center relative h-[calc(100%-40px)]",
-          isSelectionMode ? "cursor-pointer" : "cursor-pointer"
+          "flex flex-1 min-h-0 items-center justify-center relative border-t border-grey-dark-100 cursor-pointer overflow-hidden",
+          file.isFolder ? "bg-grey-light-300" : "bg-white"
         )}
       >
         {shouldLoadThumbnail && thumbnailUrl && !thumbnailError ? (
@@ -354,8 +347,10 @@ const FileCard: React.FC<FileCardProps> = ({
               onError={() => setThumbnailError(true)}
             />
             {fileType === "video" && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-20 hover:bg-opacity-30 transition-all">
-                <PlayCircle className="size-12 text-white opacity-80 hover:opacity-100" />
+              <div className="absolute inset-0 flex items-center justify-center bg-black/50 hover:bg-black/60 transition-colors">
+                <div className="flex items-center justify-center rounded-full bg-black/50 p-2">
+                  <Play className="size-4 text-white fill-white" />
+                </div>
               </div>
             )}
           </div>
@@ -370,14 +365,6 @@ const FileCard: React.FC<FileCardProps> = ({
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center h-full w-full">
-                {file.isFolder && (
-                  <Image
-                    src="/assets/file-card-small-gridlines.png"
-                    alt="File Card Gridlines"
-                    fill
-                    className="object-center object-contain"
-                  />
-                )}
                 <div className="flex items-center sm:justify-center h-[3.5rem] w-[3.5rem] relative">
                   {file.isFolder ? (
                     <Folder2 className="size-10 text-primary-50" />
