@@ -5,12 +5,12 @@ import { Loader2, MoreVertical } from "lucide-react";
 import { toast } from "sonner";
 import {
   Building,
-  CircularTickGrid,
   CloseSquare,
   Star as StarIcon,
-  Tag2,
   TagRight,
   Ticket,
+  Coin,
+  ArrowRight,
 } from "@/components/ui/icons";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
@@ -104,22 +104,10 @@ export default function SubscriptionPlansSection() {
 
   const getPlanIcon = (index: number) => {
     const icons = [
-      <StarIcon
-        key="star"
-        className="absolute size-4 sm:size-5 text-primary-50"
-      />,
-      <TagRight
-        key="tag"
-        className="absolute size-4 sm:size-5 text-primary-50"
-      />,
-      <Ticket
-        key="ticket"
-        className="absolute size-4 sm:size-5 text-primary-50"
-      />,
-      <Building
-        key="building"
-        className="absolute size-4 sm:size-5 text-primary-50"
-      />,
+      <StarIcon key="star" className="absolute size-3.5 text-primary-50" />,
+      <TagRight key="tag" className="absolute size-3.5 text-primary-50" />,
+      <Ticket key="ticket" className="absolute size-3.5 text-primary-50" />,
+      <Building key="building" className="absolute size-3.5 text-primary-50" />,
     ];
     return index < icons.length ? icons[index] : icons[1];
   };
@@ -145,137 +133,170 @@ export default function SubscriptionPlansSection() {
   };
 
   return (
-    <div className="mt-6">
-      {/* Section header */}
-      <div className="flex items-center gap-2 mb-4">
-        <AbstractIconWrapper className="size-7 text-primary-40">
-          <Tag2 className="absolute size-3.5 text-primary-40" />
-        </AbstractIconWrapper>
-        <span className="font-mono text-[12px] font-medium uppercase tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark">
-          Subscription Plans
-        </span>
+    <div
+      className={cn(
+        "mt-6 flex flex-col items-center w-full rounded-[8px] border overflow-hidden",
+        "bg-grey-light-300 border-grey-dark-100",
+        "dark:bg-black-primary-bg dark:border-black-300",
+        "shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]",
+      )}
+    >
+      {/* Header row */}
+      <div className="flex h-[46px] w-full items-center pl-[14px] pr-[10px]">
+        <div className="flex items-center gap-1">
+          <Coin className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
+          <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
+            Subscription Plans
+          </p>
+        </div>
       </div>
 
-      {isLoadingPlans ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="size-6 text-primary-50 animate-spin" />
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 @md:grid-cols-2 @3xl:grid-cols-4 gap-4">
-          {plans.map((plan, index) => {
-            const isLoading = isSubscribing && selectedPlanId === plan.id;
-            const currentActivePlan = isActivePlan(plan.name);
+      {/* Inner panel */}
+      <div
+        className={cn(
+          "flex flex-col w-full flex-1",
+          "rounded-[8px] border border-grey-dark-100",
+          "bg-white dark:bg-black-600 dark:border-black-300",
+          "p-3",
+        )}
+      >
+        {isLoadingPlans ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="size-6 text-primary-50 animate-spin" />
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 @md:grid-cols-2 @3xl:grid-cols-4 gap-3">
+            {plans.map((plan, index) => {
+              const isLoading = isSubscribing && selectedPlanId === plan.id;
+              const currentActivePlan = isActivePlan(plan.name);
 
-            return (
-              <div
-                key={plan.id}
-                className={cn(
-                  "p-4 border rounded-lg flex flex-col relative border-grey-80",
-                  currentActivePlan && "border-primary-40",
-                )}
-              >
-                {/* Icon + dropdown */}
-                <div className="flex items-center justify-between text-primary-40">
-                  <AbstractIconWrapper className="size-8 sm:size-10">
-                    {getPlanIcon(index)}
-                  </AbstractIconWrapper>
-                  {currentActivePlan && (
-                    <DropdownMenu.Root
-                      open={openDropdownId === plan.id}
-                      onOpenChange={(open) =>
-                        handleDropdownOpenChange(open, plan.id)
-                      }
-                    >
-                      <DropdownMenu.Trigger asChild>
-                        <button
-                          className="flex items-center justify-center h-6 w-6 rounded border border-grey-80 bg-white hover:bg-grey-90 transition-colors"
-                          aria-label="More options"
-                        >
-                          <MoreVertical className="size-4 text-grey-50" />
-                        </button>
-                      </DropdownMenu.Trigger>
-                      <DropdownMenu.Portal>
-                        <DropdownMenu.Content
-                          className="min-w-[11.25rem] bg-white rounded shadow-lg p-1 border border-grey-80 z-20"
-                          sideOffset={5}
-                          align="end"
-                        >
-                          <DropdownMenu.Item
-                            className="flex items-center gap-2 px-3 py-1.5 text-error-80 hover:bg-grey-90 outline-none cursor-pointer rounded"
-                            onSelect={handleCancelSubscriptionClick}
-                          >
-                            <CloseSquare className="size-4" />
-                            <span className="text-base">
-                              Cancel Subscription
-                            </span>
-                          </DropdownMenu.Item>
-                        </DropdownMenu.Content>
-                      </DropdownMenu.Portal>
-                    </DropdownMenu.Root>
+              return (
+                <div
+                  key={plan.id}
+                  className={cn(
+                    "flex flex-col rounded-[8px] border overflow-hidden",
+                    "bg-grey-light-300 border-grey-dark-100",
+                    "dark:bg-black-primary-bg dark:border-black-300",
+                    currentActivePlan && "border-primary-40 dark:border-primary-40",
                   )}
-                </div>
-
-                {/* Plan name */}
-                <h3 className="text-[1.5rem] font-medium text-primary-40 mt-4">
-                  {plan.name}
-                </h3>
-
-                {/* Price */}
-                <p className="text-lg text-grey-60 mt-2">
-                  ${plan.amount}/{plan.interval}
-                </p>
-
-                {/* Description + storage */}
-                <div className="text-base font-medium text-grey-60 mt-2">
-                  <div>{plan.description}</div>
-                  <div className="text-sm text-primary-50 mt-1">
-                    {storageInfo[plan.id]?.storageDisplay || "Calculating..."}
-                  </div>
-                </div>
-
-                {/* Features */}
-                <div className="space-y-3 mt-4 grow">
-                  <h4 className="text-base font-medium text-grey-60 uppercase text-xs tracking-wide">
-                    Features
-                  </h4>
-                  <div className="flex items-center">
-                    <CircularTickGrid className="size-9 shrink-0" />
-                    <span className="text-grey-10 text-base font-medium ml-2">
-                      Automatic Reload
-                    </span>
-                  </div>
-                  {storageInfo[plan.id]?.usageDescription && (
-                    <div className="flex items-center">
-                      <CircularTickGrid className="size-9 shrink-0" />
-                      <span className="text-grey-10 text-base font-medium ml-2">
-                        {storageInfo[plan.id].usageDescription}
+                >
+                  {/* Plan card header */}
+                  <div className="flex items-center justify-between px-2 py-2">
+                    <div className="flex items-center gap-1.5">
+                      <AbstractIconWrapper className="size-7 text-primary-40">
+                        {getPlanIcon(index)}
+                      </AbstractIconWrapper>
+                      <span className="font-medium text-[14px] leading-[18px] tracking-[-0.28px] text-grey-10 dark:text-white">
+                        {plan.name}
                       </span>
                     </div>
-                  )}
-                </div>
+                    {currentActivePlan && (
+                      <DropdownMenu.Root
+                        open={openDropdownId === plan.id}
+                        onOpenChange={(open) =>
+                          handleDropdownOpenChange(open, plan.id)
+                        }
+                      >
+                        <DropdownMenu.Trigger asChild>
+                          <button
+                            className="flex items-center justify-center h-6 w-6 rounded border border-grey-80 bg-white hover:bg-grey-90 transition-colors dark:bg-black-600 dark:border-black-300"
+                            aria-label="More options"
+                          >
+                            <MoreVertical className="size-4 text-grey-50" />
+                          </button>
+                        </DropdownMenu.Trigger>
+                        <DropdownMenu.Portal>
+                          <DropdownMenu.Content
+                            className="min-w-[11.25rem] bg-white rounded shadow-lg p-1 border border-grey-80 z-20 dark:bg-black-600 dark:border-black-300"
+                            sideOffset={5}
+                            align="end"
+                          >
+                            <DropdownMenu.Item
+                              className="flex items-center gap-2 px-3 py-1.5 text-error-80 hover:bg-grey-90 outline-none cursor-pointer rounded dark:hover:bg-black-primary-bg"
+                              onSelect={handleCancelSubscriptionClick}
+                            >
+                              <CloseSquare className="size-4" />
+                              <span className="text-base">
+                                Cancel Subscription
+                              </span>
+                            </DropdownMenu.Item>
+                          </DropdownMenu.Content>
+                        </DropdownMenu.Portal>
+                      </DropdownMenu.Root>
+                    )}
+                  </div>
 
-                {/* Subscribe button */}
-                <div className="mt-4 pt-4 border-t border-grey-80">
-                  <Button
-                    variant={currentActivePlan ? "defaultStable" : "primary"}
-                    size="auto"
-                    className="w-full h-[40px] rounded-[8px] text-[14px] font-medium tracking-[-0.28px]"
-                    onClick={() => handleSubscribe(plan.id)}
-                    disabled={isSubscribing || !!currentActivePlan}
-                    loading={isLoading}
+                  {/* Plan card inner white panel */}
+                  <div
+                    className={cn(
+                      "flex flex-col flex-1",
+                      "rounded-tl-[8px] rounded-tr-[8px] border border-grey-dark-100",
+                      "bg-white dark:bg-black-600 dark:border-black-300",
+                      "p-3",
+                    )}
                   >
-                    {isLoading
-                      ? "Processing..."
-                      : currentActivePlan
-                        ? "Your Active Plan"
-                        : "Subscribe"}
-                  </Button>
+                    {/* Price */}
+                    <p className="text-[20px] font-medium leading-[26px] tracking-[-0.4px] text-grey-10 dark:text-white">
+                      ${plan.amount}
+                      <span className="text-[13px] font-medium text-grey-50 dark:text-grey-dark-500 ml-0.5">
+                        /{plan.interval}
+                      </span>
+                    </p>
+
+                    {/* Description + storage */}
+                    <div className="mt-1.5">
+                      <p className="text-[12px] font-medium text-grey-50 dark:text-grey-dark-500">
+                        {plan.description}
+                      </p>
+                      {storageInfo[plan.id]?.storageDisplay && (
+                        <p className="text-[12px] font-medium text-primary-50 mt-0.5">
+                          {storageInfo[plan.id].storageDisplay}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Features */}
+                    <div className="space-y-2 mt-3 grow">
+                      <div className="flex items-center gap-1.5">
+                        <ArrowRight className="size-3.5 shrink-0 text-primary-50" />
+                        <span className="text-[12px] font-medium text-grey-10 dark:text-white">
+                          Automatic Reload
+                        </span>
+                      </div>
+                      {storageInfo[plan.id]?.usageDescription && (
+                        <div className="flex items-center gap-1.5">
+                          <ArrowRight className="size-3.5 shrink-0 text-primary-50" />
+                          <span className="text-[12px] font-medium text-grey-10 dark:text-white">
+                            {storageInfo[plan.id].usageDescription}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Subscribe button */}
+                    <div className="mt-3 pt-3 border-t border-grey-dark-100 dark:border-black-300">
+                      <Button
+                        variant={currentActivePlan ? "defaultStable" : "primary"}
+                        size="auto"
+                        className="w-full h-[32px] rounded-[6px] text-[13px] font-medium tracking-[-0.26px]"
+                        onClick={() => handleSubscribe(plan.id)}
+                        disabled={isSubscribing || !!currentActivePlan}
+                        loading={isLoading}
+                      >
+                        {isLoading
+                          ? "Processing..."
+                          : currentActivePlan
+                            ? "Your Active Plan"
+                            : "Subscribe"}
+                      </Button>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       <CancelSubscriptionDialog
         plans={plans as unknown as Plan[]}
