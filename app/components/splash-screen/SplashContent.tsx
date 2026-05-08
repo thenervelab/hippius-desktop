@@ -67,7 +67,11 @@ export const PHASE_CONTENT_BASE: Record<string, AppSetupPhaseContent> = {
     icon: <Icons.SyncData className="h-[min(170px,24vh)] w-[min(194px,27vh)]" />,
     status: "Launching App 🚀",
     subStatus: "Preparing your decentralized experience...",
-    command: "finish_setup",
+    // Renamed from `finish_setup` (which was the Nebula auto-start hook) to
+    // `finish_splash` (the no-op terminal handshake in `src-tauri/src/splash.rs`).
+    // Avoids a `generate_handler!` name collision while the Nebula module is
+    // being removed across subsequent commits.
+    command: "finish_splash",
     weight: 20, // 80-100%
     commandTriggerPercent: 50, // Execute at 90% (50% through the 80-100% range)
   },

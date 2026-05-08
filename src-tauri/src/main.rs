@@ -23,6 +23,7 @@ pub mod nebula;
 pub mod notifications;
 pub mod recovery;
 pub mod shares;
+pub mod splash;
 pub mod sync;
 #[cfg(test)]
 mod test_helpers;
@@ -214,6 +215,9 @@ fn main() {
             crate::nebula::manager::download_nebula,
             crate::nebula::manager::install_nebula,
             crate::nebula::manager::verify_nebula,
+            // Splash terminal handshake — replaces the Nebula `finish_setup`
+            // for the splash UI. Both coexist briefly until Nebula is removed.
+            crate::splash::finish_splash,
             crate::nebula::manager::finish_setup,
             crate::nebula::manager::setup_nebula_background,
             // HCFS mnemonic management
