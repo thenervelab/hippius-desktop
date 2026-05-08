@@ -34,7 +34,7 @@ const TaoDepositWidget: FC<{ className?: string }> = ({ className }) => {
       <div
         className={cn(
           "flex flex-col w-full flex-1 justify-between",
-          "border-t border-grey-dark-100",
+          "rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100",
           "bg-white dark:bg-black-600 dark:border-black-300",
           "p-3",
         )}

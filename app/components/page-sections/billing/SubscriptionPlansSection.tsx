@@ -155,7 +155,7 @@ export default function SubscriptionPlansSection() {
       <div
         className={cn(
           "flex flex-col w-full flex-1",
-          "border-t border-grey-dark-100",
+          "rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100",
           "bg-white dark:bg-black-600 dark:border-black-300",
           "p-3",
         )}
@@ -230,7 +230,7 @@ export default function SubscriptionPlansSection() {
                   <div
                     className={cn(
                       "flex flex-col flex-1",
-                      "border-t border-grey-dark-100",
+                      "rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100",
                       "bg-white dark:bg-black-600 dark:border-black-300",
                       "p-3",
                     )}
