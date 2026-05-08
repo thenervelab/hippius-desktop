@@ -47,14 +47,16 @@ export default function Billing() {
           <SubscriptionPlansSection />
 
           {/* Billing History */}
-          <div className="mt-8">
-            <div className="flex items-center gap-2 mb-4">
-              <Icons.BoxTime className="size-4 text-primary-40" />
-              <span className="font-mono text-[12px] font-medium uppercase tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark">
-                Billing History
-              </span>
+          <div className="mt-6 flex flex-col items-center w-full rounded-[8px] border overflow-hidden bg-grey-light-300 border-grey-dark-100 dark:bg-black-primary-bg dark:border-black-300 shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]">
+            <div className="flex h-[46px] w-full items-center pl-[14px] pr-[10px]">
+              <div className="flex items-center gap-1">
+                <Icons.BoxTime className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
+                <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
+                  Billing History
+                </p>
+              </div>
             </div>
-            <div className="flex flex-col w-full shadow-menu rounded-lg bg-white dark:bg-black-primary-bg p-4 border border-grey-80 dark:border-black-300">
+            <div className="flex flex-col w-full flex-1 rounded-[8px] border border-grey-dark-100 bg-white dark:bg-black-600 dark:border-black-300 p-3">
               <BillingnHistoryTable />
             </div>
           </div>
