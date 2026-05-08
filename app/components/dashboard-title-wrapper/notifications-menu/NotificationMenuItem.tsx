@@ -144,7 +144,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
                   e.stopPropagation();
                   onClick?.();
                 }}
-                className="px-[9px] py-[5px] rounded-[21px] bg-white dark:bg-[#1e1e1e] border border-grey-dark-100 dark:border-[#333] text-[10px] font-medium text-[#111] dark:text-white tracking-[-0.2px] whitespace-nowrap shadow-[0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)] hover:opacity-80 transition-opacity"
+                className="px-[9px] py-[5px] rounded-[21px] bg-white dark:bg-[#222] border border-grey-dark-100 dark:border-[#313131] text-[10px] font-medium text-[#111] dark:text-white tracking-[-0.2px] whitespace-nowrap shadow-[0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)] dark:shadow-[0_0_0_1px_#000] hover:opacity-80 transition-opacity"
               >
                 View →
               </button>
