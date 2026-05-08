@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useSetAtom } from "jotai";
 import { isViewingRecentFilesAtom } from "@/components/sidebar/sideBarAtoms";
+import { Icons } from "@/components/ui";
 
 interface NotificationMenuFooterProps {
   onClose?: () => void;
@@ -27,9 +28,7 @@ const NotificationMenuFooter: React.FC<NotificationMenuFooterProps> = ({
       <span className="flex-1 min-w-0 font-medium text-[12px] leading-[18px] text-grey-dark-800 dark:text-grey-dark-600 tracking-[-0.24px] truncate">
         View More
       </span>
-      <span className="font-medium text-[12px] leading-[18px] text-grey-dark-800 dark:text-grey-dark-600 tracking-[-0.24px] shrink-0">
-        →
-      </span>
+      <Icons.ArrowRightFill className="size-[9px] text-grey-dark-800 dark:text-grey-dark-600 shrink-0" />
     </Link>
   );
 };

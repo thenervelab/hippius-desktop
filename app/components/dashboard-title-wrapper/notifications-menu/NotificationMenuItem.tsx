@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { cn } from "@/app/lib/utils";
+import { Icons } from "@/components/ui";
 import NotificationContextMenu from "@/components/page-sections/notifications/NotificationContextMenu";
 import { useSetAtom } from "jotai";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
@@ -146,7 +147,10 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
                 }}
                 className="px-[9px] py-[5px] rounded-[21px] bg-white dark:bg-[#222] border border-grey-dark-100 dark:border-[#313131] text-[10px] font-medium text-[#111] dark:text-white tracking-[-0.2px] whitespace-nowrap shadow-[0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)] dark:shadow-[0_0_0_1px_#000] hover:opacity-80 transition-opacity"
               >
-                View →
+                <span className="flex items-center gap-[3px]">
+                  View
+                  <Icons.ArrowRightFill className="size-[9px]" />
+                </span>
               </button>
             ) : null}
           </div>
