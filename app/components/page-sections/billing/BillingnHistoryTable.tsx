@@ -75,6 +75,7 @@ const columns = [
         toastMessage="Billing ID Copied Successfully!"
         isTable={true}
         textColor="text-grey-20 dark:text-grey-dark-200"
+        copyIconClassName="size-3.5 text-grey-60 dark:text-grey-dark-500"
       />
     ),
   }),
@@ -211,7 +212,7 @@ const BillingHistoryTable: React.FC = () => {
     <>
       {/* Mini pagination in header — only when multiple pages */}
       {totalCount > DEFAULT_PAGE_SIZE && (
-        <div className="flex justify-end mb-3">
+        <div className="flex justify-end px-3 pt-3 mb-3">
           <MiniPaginationControl
             currentPage={page}
             totalPages={totalPages}
@@ -249,7 +250,7 @@ const BillingHistoryTable: React.FC = () => {
       </TableWrapper>
 
       {totalCount > DEFAULT_PAGE_SIZE && (
-        <div className="mt-3">
+        <div className="px-3 pb-3 mt-3">
           <Pagination
             currentPage={page}
             totalPages={totalPages}
