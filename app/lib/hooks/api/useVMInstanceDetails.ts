@@ -19,7 +19,6 @@ export interface VMInstanceDetailsResponse {
   };
   image: string;
   public_ip: string | null;
-  nebula_ip: string | null;
   ssh_public_key: string;
   error_message: string | null;
   created_at: string;
