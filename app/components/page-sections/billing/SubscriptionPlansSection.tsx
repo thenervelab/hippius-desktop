@@ -12,7 +12,6 @@ import {
   Coin,
   ArrowRight,
 } from "@/components/ui/icons";
-import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import CancelSubscriptionDialog, { Plan } from "./CancelSubscriptionDialog";
 import useSubscriptionData from "@/app/lib/hooks/useSubscriptionData";
@@ -104,10 +103,10 @@ export default function SubscriptionPlansSection() {
 
   const getPlanIcon = (index: number) => {
     const icons = [
-      <StarIcon key="star" className="absolute size-3.5 text-primary-50" />,
-      <TagRight key="tag" className="absolute size-3.5 text-primary-50" />,
-      <Ticket key="ticket" className="absolute size-3.5 text-primary-50" />,
-      <Building key="building" className="absolute size-3.5 text-primary-50" />,
+      <StarIcon key="star" className="size-[18px] text-primary-50" />,
+      <TagRight key="tag" className="size-[18px] text-primary-50" />,
+      <Ticket key="ticket" className="size-[18px] text-primary-50" />,
+      <Building key="building" className="size-[18px] text-primary-50" />,
     ];
     return index < icons.length ? icons[index] : icons[1];
   };
@@ -182,10 +181,8 @@ export default function SubscriptionPlansSection() {
                 >
                   {/* Plan card header */}
                   <div className="flex items-center justify-between px-2 py-2">
-                    <div className="flex items-center gap-1.5">
-                      <AbstractIconWrapper className="size-7 text-primary-40">
-                        {getPlanIcon(index)}
-                      </AbstractIconWrapper>
+                    <div className="flex items-center gap-2">
+                      {getPlanIcon(index)}
                       <span className="font-medium text-[14px] leading-[18px] tracking-[-0.28px] text-grey-10 dark:text-white">
                         {plan.name}
                       </span>
@@ -236,37 +233,47 @@ export default function SubscriptionPlansSection() {
                     )}
                   >
                     {/* Price */}
-                    <p className="text-[20px] font-medium leading-[26px] tracking-[-0.4px] text-grey-10 dark:text-white">
-                      ${plan.amount}
-                      <span className="text-[13px] font-medium text-grey-50 dark:text-grey-dark-500 ml-0.5">
+                    <div className="flex items-baseline gap-1">
+                      <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white">
+                        ${plan.amount}
+                      </span>
+                      <span className="font-mono font-medium text-[12px] tracking-[-0.48px] text-grey-10 dark:text-white opacity-50">
                         /{plan.interval}
                       </span>
-                    </p>
+                    </div>
 
                     {/* Description + storage */}
-                    <div className="mt-1.5">
-                      <p className="text-[12px] font-medium text-grey-50 dark:text-grey-dark-500">
+                    <div className="mt-3 space-y-0.5">
+                      <p className="text-[12px] font-medium tracking-[-0.24px] text-grey-dark-600 dark:text-grey-dark-600">
                         {plan.description}
                       </p>
                       {storageInfo[plan.id]?.storageDisplay && (
-                        <p className="text-[12px] font-medium text-primary-50 mt-0.5">
-                          {storageInfo[plan.id].storageDisplay}
+                        <p className="text-[12px] tracking-[-0.36px] leading-[18px]">
+                          <span className="font-bold text-primary-50">
+                            {storageInfo[plan.id].storageDisplay}
+                          </span>
+                          <span className="font-medium text-grey-10 dark:text-white">
+                            {" "}storage on Hippius
+                          </span>
                         </p>
                       )}
                     </div>
 
                     {/* Features */}
-                    <div className="space-y-2 mt-3 grow">
-                      <div className="flex items-center gap-1.5">
-                        <ArrowRight className="size-3.5 shrink-0 text-primary-50" />
-                        <span className="text-[12px] font-medium text-grey-10 dark:text-white">
+                    <div className="mt-3 space-y-1 grow">
+                      <p className="font-mono font-medium text-[12px] tracking-[-0.24px] text-grey-dark-800 dark:text-grey-dark-700 uppercase mb-1.5">
+                        Features
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <ArrowRight className="size-3.5 shrink-0 text-grey-10 dark:text-white" />
+                        <span className="text-[12px] font-medium tracking-[-0.24px] text-grey-10 dark:text-white">
                           Automatic Reload
                         </span>
                       </div>
                       {storageInfo[plan.id]?.usageDescription && (
-                        <div className="flex items-center gap-1.5">
-                          <ArrowRight className="size-3.5 shrink-0 text-primary-50" />
-                          <span className="text-[12px] font-medium text-grey-10 dark:text-white">
+                        <div className="flex items-center gap-2">
+                          <ArrowRight className="size-3.5 shrink-0 text-grey-10 dark:text-white" />
+                          <span className="text-[12px] font-medium tracking-[-0.24px] text-grey-10 dark:text-white">
                             {storageInfo[plan.id].usageDescription}
                           </span>
                         </div>
@@ -274,11 +281,11 @@ export default function SubscriptionPlansSection() {
                     </div>
 
                     {/* Subscribe button */}
-                    <div className="mt-3 pt-3 border-t border-grey-dark-100 dark:border-black-300">
+                    <div className="mt-3">
                       <Button
                         variant={currentActivePlan ? "defaultStable" : "primary"}
                         size="auto"
-                        className="w-full h-[32px] rounded-[6px] text-[13px] font-medium tracking-[-0.26px]"
+                        className="w-full h-[30px] rounded-[6px] text-[14px] font-medium tracking-[-0.28px]"
                         onClick={() => handleSubscribe(plan.id)}
                         disabled={isSubscribing || !!currentActivePlan}
                         loading={isLoading}
