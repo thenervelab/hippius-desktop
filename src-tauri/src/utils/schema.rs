@@ -13,12 +13,8 @@ use tracing::{debug, info, warn};
 /// new table to [`ensure_table_schema`], append its name here.
 #[cfg(test)]
 const EXPECTED_TABLES: &[&str] = &[
-    // Declarative TABLE_SCHEMAS block (5 tables)
-    "vpn_status",
-    "nebula_binary_status",
+    // Declarative TABLE_SCHEMAS block (1 table)
     "sub_accounts",
-    "nebula_certificate",
-    "autoconnect_vpn_enabled",
     // Imperative CREATE TABLE statements (16 tables)
     "sync_paths",
     "wss_endpoint",
@@ -54,11 +50,32 @@ where
     Ok(rows.iter().map(|row| row.get::<String, _>("name")).collect())
 }
 
+/// One-shot cleanup of the four legacy Nebula VPN tables that earlier releases
+/// created in `ensure_table_schema`. Runs before the rest of schema bring-up so
+/// a fresh schema is never observed alongside the dead tables, even
+/// transiently. `DROP TABLE IF EXISTS` is idempotent — once an installed
+/// binary has run this on its DB the call is a no-op forever.
+///
+/// TODO: delete this helper (and its call site in `ensure_table_schema`) after
+/// a few releases ship without Nebula, when virtually no installed binaries
+/// still have these tables on disk.
+async fn drop_legacy_nebula_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    for table in ["vpn_status", "nebula_binary_status", "nebula_certificate", "autoconnect_vpn_enabled"] {
+        sqlx::query(&format!("DROP TABLE IF EXISTS {table}")).execute(pool).await?;
+    }
+    Ok(())
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "Large but straightforward schema initializer: declarative TABLE_SCHEMAS loop plus one complex sync_paths migration (label column, is_paused column, UNIQUE constraint recreation) that must stay co-located to be auditable in a single transaction. Coverage is provided by the `ensure_table_schema_creates_all_expected_tables` smoke test against EXPECTED_TABLES."
 )]
 pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    // Drop legacy Nebula tables first, outside the schema-init transaction, so
+    // the cleanup is durable even if a later schema step fails. Idempotent —
+    // see `drop_legacy_nebula_tables` for sunset criteria.
+    drop_legacy_nebula_tables(pool).await?;
+
     // Wrap the entire initializer in one transaction so all CREATE/ALTER/INSERT
     // statements share a single fsync at commit time instead of ~30 separate
     // ones. On SQLite (especially WAL mode) this drops cold-start schema-init
@@ -71,53 +88,16 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
 
     // Define the expected table schemas (only tables still needed)
-    const TABLE_SCHEMAS: &[(&str, &[(&str, &str)])] = &[
-        (
-            "vpn_status",
-            &[
-                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
-                ("is_enabled", "BOOLEAN NOT NULL DEFAULT FALSE"),
-                ("last_updated", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
-            ],
-        ),
-        (
-            "nebula_binary_status",
-            &[
-                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
-                ("is_nebula_binary_installed", "BOOLEAN NOT NULL DEFAULT FALSE"),
-                ("last_updated", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
-            ],
-        ),
-        (
-            "sub_accounts",
-            &[
-                ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
-                ("account_id", "TEXT NOT NULL"),
-                ("sub_account_seed_phrase", "TEXT NOT NULL"),
-                ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
-                ("encryption_version", "INTEGER NOT NULL DEFAULT 0"),
-            ],
-        ),
-        (
-            "nebula_certificate",
-            &[
-                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
-                ("certificate_id", "INTEGER"),
-                ("expires_at", "TEXT"),
-                ("is_active", "BOOLEAN"),
-                ("created_at", "TEXT"),
-                ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
-            ],
-        ),
-        (
-            "autoconnect_vpn_enabled",
-            &[
-                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
-                ("is_enabled", "BOOLEAN NOT NULL DEFAULT FALSE"),
-                ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
-            ],
-        ),
-    ];
+    const TABLE_SCHEMAS: &[(&str, &[(&str, &str)])] = &[(
+        "sub_accounts",
+        &[
+            ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+            ("account_id", "TEXT NOT NULL"),
+            ("sub_account_seed_phrase", "TEXT NOT NULL"),
+            ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ("encryption_version", "INTEGER NOT NULL DEFAULT 0"),
+        ],
+    )];
 
     for (table_name, columns) in TABLE_SCHEMAS {
         // Create table if it doesn't exist with basic structure
@@ -140,19 +120,6 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             }
         }
     }
-
-    // Seed singleton rows for tables created in the loop above
-    sqlx::query("INSERT OR IGNORE INTO vpn_status (id, is_enabled) VALUES (1, FALSE)")
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query("INSERT OR IGNORE INTO nebula_binary_status (id, is_nebula_binary_installed) VALUES (1, FALSE)")
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query("INSERT OR IGNORE INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)")
-        .execute(&mut *tx)
-        .await?;
 
     // sync_paths table (kept for path storage)
     sqlx::query(
