@@ -933,75 +933,82 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
             />
           </div>
 
-          <DriveHeader
-            isRecentFiles={isRecentFiles}
-            isRefetching={isRefetching}
-            isFetching={isFetching}
-            formattedStorageSize={formattedStorageSize}
-            allFilteredDataLength={displayedFileCount}
-            viewMode={viewMode}
-            setViewMode={handleViewModeChange}
-            searchTerm={searchTerm}
-            handleSearchChange={handleSearchChange}
-            activeFilters={activeFilters}
-            handleRemoveFilter={handleRemoveFilter}
-            refetchUserFiles={
-              isRecentFiles
-                ? refreshRecentFilesCallback
-                : refreshUserFilesCallback
-            }
-            addButtonRef={addButtonRef}
-            privateFileCount={privateFileCount}
-            isSyncPathEmpty={effectiveSyncPathEmpty}
-            onStartSyncing={handleStartSyncing}
-            hasNoSyncPaths={hasNoSyncPaths}
-            onNavigateToSettings={handleNavigateToSettings}
-            selectedFileTypes={filterState.fileTypes}
-            selectedDate={filterState.date}
-            selectedFileSizes={filterState.fileSizes}
-            onFileTypesChange={handleFileTypesChange}
-            onDateChange={handleDateChange}
-            onFileSizesChange={handleFileSizesChange}
-            defaultFolderLabel={selectedFolderTab}
-            isFolderUploadOpen={isFolderUploadOpen}
-            onSetFolderUploadOpen={setIsFolderUploadOpen}
-          />
-
-          {!isRecentFiles && (
-            <SyncFolderTabs
-              labels={syncFolderLabels}
-              displayNames={labelDisplayNames}
-              selectedTab={selectedFolderTab}
-              onTabChange={setSelectedFolderTab}
-              onBrowseContents={handleTabBrowseContents}
-              onPauseSync={handleTabPauseSync}
-              onOpenInFinder={handleTabOpenInFinder}
-              onRemoveFromSync={handleTabRemoveFromSync}
-              onDeleteFromServer={handleTabDeleteFromServer}
-              pausedLabels={pausedLabels}
+          <div
+            className={cn(
+              isRecentFiles &&
+                "bg-grey-light-300 border border-grey-dark-100 rounded-[8px] shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.04)]",
+            )}
+          >
+            <DriveHeader
+              isRecentFiles={isRecentFiles}
+              isRefetching={isRefetching}
+              isFetching={isFetching}
+              formattedStorageSize={formattedStorageSize}
+              allFilteredDataLength={displayedFileCount}
+              viewMode={viewMode}
+              setViewMode={handleViewModeChange}
+              searchTerm={searchTerm}
+              handleSearchChange={handleSearchChange}
+              activeFilters={activeFilters}
+              handleRemoveFilter={handleRemoveFilter}
+              refetchUserFiles={
+                isRecentFiles
+                  ? refreshRecentFilesCallback
+                  : refreshUserFilesCallback
+              }
+              addButtonRef={addButtonRef}
+              privateFileCount={privateFileCount}
+              isSyncPathEmpty={effectiveSyncPathEmpty}
+              onStartSyncing={handleStartSyncing}
+              hasNoSyncPaths={hasNoSyncPaths}
+              onNavigateToSettings={handleNavigateToSettings}
+              selectedFileTypes={filterState.fileTypes}
+              selectedDate={filterState.date}
+              selectedFileSizes={filterState.fileSizes}
+              onFileTypesChange={handleFileTypesChange}
+              onDateChange={handleDateChange}
+              onFileSizesChange={handleFileSizesChange}
+              defaultFolderLabel={selectedFolderTab}
+              isFolderUploadOpen={isFolderUploadOpen}
+              onSetFolderUploadOpen={setIsFolderUploadOpen}
             />
-          )}
 
-          <DriveContent
-            isRecentFiles={isRecentFiles}
-            isLoading={isLoading}
-            filteredData={filteredData}
-            displayedData={visibleData}
-            searchTerm={searchTerm}
-            activeFilters={activeFilters}
-            viewMode={viewMode}
-            error={error}
-            addButtonRef={addButtonRef}
-            hasMore={hasMore}
-            loadMore={loadMore}
-            isSyncPathEmpty={effectiveSyncPathEmpty}
-            onSyncPathConfigured={
-              isRecentFiles ? handleNavigateToSettings : handleStartSyncing
-            }
-            onUploadFile={handleContextUploadFile}
-            onAddFolder={handleContextAddFolder}
-            onAddSyncFolder={handleContextAddSyncFolder}
-          />
+            {!isRecentFiles && (
+              <SyncFolderTabs
+                labels={syncFolderLabels}
+                displayNames={labelDisplayNames}
+                selectedTab={selectedFolderTab}
+                onTabChange={setSelectedFolderTab}
+                onBrowseContents={handleTabBrowseContents}
+                onPauseSync={handleTabPauseSync}
+                onOpenInFinder={handleTabOpenInFinder}
+                onRemoveFromSync={handleTabRemoveFromSync}
+                onDeleteFromServer={handleTabDeleteFromServer}
+                pausedLabels={pausedLabels}
+              />
+            )}
+
+            <DriveContent
+              isRecentFiles={isRecentFiles}
+              isLoading={isLoading}
+              filteredData={filteredData}
+              displayedData={visibleData}
+              searchTerm={searchTerm}
+              activeFilters={activeFilters}
+              viewMode={viewMode}
+              error={error}
+              addButtonRef={addButtonRef}
+              hasMore={hasMore}
+              loadMore={loadMore}
+              isSyncPathEmpty={effectiveSyncPathEmpty}
+              onSyncPathConfigured={
+                isRecentFiles ? handleNavigateToSettings : handleStartSyncing
+              }
+              onUploadFile={handleContextUploadFile}
+              onAddFolder={handleContextAddFolder}
+              onAddSyncFolder={handleContextAddSyncFolder}
+            />
+          </div>
         </div>
       </FileSelectionProvider>
     );

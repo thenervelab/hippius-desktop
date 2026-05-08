@@ -172,7 +172,12 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           </div>
         </div>
       )}
-      <div className="flex justify-between items-center w-full gap-6 flex-wrap mt-4">
+      <div
+        className={cn(
+          "flex justify-between items-center w-full gap-6 flex-wrap ",
+          isRecentFiles ? "my-2 px-2.5" : "mt-4",
+        )}
+      >
         {isRecentFiles ? (
           <h2 className="text-lg font-medium text-grey-10">Recent Files</h2>
         ) : (

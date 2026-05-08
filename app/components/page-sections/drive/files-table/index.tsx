@@ -514,7 +514,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         return [
           ...selectionColumn,
           columnHelper.accessor("name", {
-            header: "NAME",
+            header: "Name",
             enableSorting: true,
             id: "name",
             minSize: 200,
@@ -528,7 +528,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   <>
                     {isSelectionMode ? (
                       <NameCell
-                        className="px-2.5 py-3"
+                        className="px-2 py-[5px]"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
                         label={info.row.original.label}
@@ -569,7 +569,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   <>
                     {isSelectionMode ? (
                       <NameCell
-                        className="px-2.5 py-3"
+                        className="px-2 py-[5px]"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
                         label={info.row.original.label}
@@ -609,7 +609,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   <>
                     {isSelectionMode ? (
                       <NameCell
-                        className="px-2.5 py-3"
+                        className="px-2 py-[5px]"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
                         label={info.row.original.label}
@@ -647,7 +647,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               }
               return (
                 <NameCell
-                  className="px-2.5 py-3"
+                  className="px-2 py-[5px]"
                   rawName={info.getValue()}
                   actualName={info.row.original.actualFileName}
                   label={info.row.original.label}
@@ -663,7 +663,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             },
           }),
           columnHelper.accessor("size", {
-            header: "SIZE",
+            header: "Size",
             enableSorting: true,
             id: "size",
             cell: (cell) => {
@@ -671,23 +671,26 @@ const FilesTable: FC<FilesTableProps> = memo(
               if (cell.row.original.tempData) return "...";
               if (value === undefined || value === 0) return "Unknown";
               return (
-                <div className="text-grey-20 text-sm font-medium truncate">
+                <div className="text-grey-dark-800 text-xs font-medium truncate tracking-[-0.24px]">
                   {formatBytesFromBigInt(BigInt(value))}
                 </div>
               );
             },
           }),
           columnHelper.accessor("createdAt", {
-            header: "DATE UPLOADED",
+            header: "Date Uploaded",
             enableSorting: true,
             id: "date_uploaded",
             cell: (cell) => {
               const createdAt = cell.row.original.createdAt;
               return createdAt === 0 ? (
-                <div className="truncate text-grey-50">—</div>
+                <div className="truncate text-grey-dark-800 text-xs">—</div>
               ) : (
                 <div className="truncate">
-                  <FormattedTimestamp timestamp={createdAt} className="text-grey-20 text-sm" />
+                  <FormattedTimestamp
+                    timestamp={createdAt}
+                    className="text-grey-dark-800 text-xs font-medium tracking-[-0.24px]"
+                  />
                 </div>
               );
             },
@@ -701,14 +704,14 @@ const FilesTable: FC<FilesTableProps> = memo(
                 : getFileTypeDisplayLabel(fileType);
             },
             {
-              header: "FILE TYPE",
+              header: "File Type",
               id: "type",
               enableSorting: true,
               cell: ({ getValue }) => {
                 const value = getValue();
                 return (
                   <div className="flex flex-col">
-                    <div className="text-grey-20 text-sm font-medium truncate">
+                    <div className="text-grey-dark-800 text-xs font-medium truncate tracking-[-0.24px]">
                       {value}
                     </div>
                   </div>
@@ -943,7 +946,11 @@ const FilesTable: FC<FilesTableProps> = memo(
     const headerRows = useMemo(
       () =>
         table.getHeaderGroups().map((headerGroup) => (
-          <TableModule.Tr key={headerGroup.id} draggable={false}>
+          <TableModule.Tr
+            key={headerGroup.id}
+            draggable={false}
+            className="border-b-grey-dark-100"
+          >
             {headerGroup.headers.map((header) => (
               <TableModule.Th
                 key={header.id}
@@ -952,6 +959,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                 columnWidth={columnWidths[header.id]}
                 onResizeStart={handleResizeStart}
                 preventSort={justResized}
+                disableUppercase
+                className="h-8 px-2 py-2 border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-600"
               />
             ))}
           </TableModule.Tr>
@@ -978,6 +987,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               key={`${row.id}-${rowState}`}
               transparent
               className={cn(
+                "border-b-0 odd:bg-grey-light-200 even:bg-grey-light-400",
                 rowState === "pending" && "animate-pulse",
                 rowState === "error" && "bg-red-200/20",
                 isSelectionMode && rowData.isAssigned && "cursor-pointer",
@@ -1019,7 +1029,8 @@ const FilesTable: FC<FilesTableProps> = memo(
               {row.getVisibleCells().map((cell) => (
                 <TableModule.Td
                   className={cn(
-                    cell.column.id === "actions" && "",
+                    "px-2 py-[5px] border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-800 text-xs",
+                    cell.column.id === "actions" && "p-0",
                     cell.column.id === "name" && "p-0 relative",
                     cell.column.id === "arionHash" && "p-0"
                   )}
@@ -1065,7 +1076,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         >
           <TableModule.TableWrapper
             className={cn(
-              "duration-300 delay-300"
+              "duration-300 delay-300 bg-white border-grey-dark-100 rounded-[8px]"
             )}
             key={`table-${files?.length}-${isSelectionMode}`}
           >

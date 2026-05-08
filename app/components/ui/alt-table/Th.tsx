@@ -17,6 +17,13 @@ export interface ThProps<TData, TValue>
    * narrow and resizing adds visual clutter without value).
    */
   disableResize?: boolean;
+  /**
+   * Skip the default `uppercase` text-transform on the header label.
+   * Tables that match a Figma design with title-case column headers
+   * (e.g. "Date Added") opt out via this prop so the rendered string
+   * isn't force-uppercased.
+   */
+  disableUppercase?: boolean;
 }
 
 export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
@@ -30,6 +37,7 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
     onResizeStart,
     preventSort,
     disableResize,
+    disableUppercase,
     ...rest
   } = props;
 
@@ -76,14 +84,16 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
           <button
             className={cn(
               "inline-flex items-center gap-1 whitespace-nowrap",
-              header.column.columnDef.header !== "hALPHA EARNED" && "uppercase",
+              !disableUppercase &&
+                header.column.columnDef.header !== "hALPHA EARNED" &&
+                "uppercase",
             )}
           >
             {flexRender(header.column.columnDef.header, header.getContext())}
             <SortIndicator sortOrder={sortOrder} />
           </button>
         ) : (
-          <span className="uppercase">
+          <span className={cn(!disableUppercase && "uppercase")}>
             {flexRender(header.column.columnDef.header, header.getContext())}
           </span>
         )}
