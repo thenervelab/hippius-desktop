@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { CardButton } from "@/components/ui";
+import { Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
 interface StartSyncingButtonProps {
@@ -10,16 +10,19 @@ interface StartSyncingButtonProps {
 }
 
 const StartSyncingButton: React.FC<StartSyncingButtonProps> = ({ className, onClick }) => {
-
     return (
-        <CardButton
-            className={cn("h-10 w-fit p-1", className)}
+        <Button
+            variant="primary"
+            size="auto"
             onClick={onClick}
+            className={cn(
+                "h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px]",
+                "font-geist text-[14px] tracking-[-0.28px] leading-[1.109]",
+                className,
+            )}
         >
-            <div className="flex items-center gap-2 text-grey-100 text-base font-medium p-2">
-                <span>Start Syncing</span>
-            </div>
-        </CardButton>
+            Start Syncing
+        </Button>
     );
 };
 

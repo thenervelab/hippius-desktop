@@ -13,7 +13,7 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { WaitAMoment } from "@/components/ui";
 import FilesTable from "./files-table";
 import CardView from "./card-view";
-import IPFSNoEntriesFound from "./files-table/NoEntriesFound";
+import IPFSNoEntriesFound from "./files-table/FilesNoEntriesFound";
 import UploadStatusWidget from "./UploadStatusWidget";
 import SidebarDialog from "@/app/components/ui/SidebarDialog";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
@@ -44,7 +44,11 @@ interface DriveContentProps {
   activeFilters: ActiveFilter[];
   viewMode: "list" | "card";
   error?: unknown;
-  addButtonRef?: React.RefObject<{ openWithFiles(files: FileList): void; openWithPaths(paths: string[]): void; isDialogOpen(): boolean } | null>;
+  addButtonRef?: React.RefObject<{
+    openWithFiles(files: FileList): void;
+    openWithPaths(paths: string[]): void;
+    isDialogOpen(): boolean;
+  } | null>;
   hasMore: boolean;
   loadMore: () => void;
   isSyncPathEmpty?: boolean;
@@ -75,7 +79,10 @@ const DriveContent: FC<DriveContentProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
   const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [bgContextMenu, setBgContextMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
   // Opens `ShareFileModal` (mounted at the layout level) for the
   // selected file. Setting the atom is the only handoff — the modal
   // owns its own lifecycle from there.
@@ -112,11 +119,13 @@ const DriveContent: FC<DriveContentProps> = ({
   // if it was opened before sync completed.
   const liveFileDetailsFile = useMemo(() => {
     if (!fileDetailsFile) return null;
-    return filteredData.find(
-      (f) =>
-        f.actualFileName === fileDetailsFile.actualFileName &&
-        f.label === fileDetailsFile.label
-    ) ?? fileDetailsFile;
+    return (
+      filteredData.find(
+        (f) =>
+          f.actualFileName === fileDetailsFile.actualFileName &&
+          f.label === fileDetailsFile.label,
+      ) ?? fileDetailsFile
+    );
   }, [fileDetailsFile, filteredData]);
 
   // Tauri native drag-and-drop via global event listeners
@@ -129,84 +138,85 @@ const DriveContent: FC<DriveContentProps> = ({
 
         console.log("[DragDrop] Registering global Tauri drag-drop listeners");
 
-        const unDragEnter = await listen<{ paths: string[]; position: { x: number; y: number } }>(
-          "tauri://drag-enter",
-          (event) => {
-            console.log("[DragDrop] drag-enter event received", event.payload);
-            if (isSyncPathEmpty && !isRecentFiles) return;
-            // Don't show background overlay if upload dialog is already open
-            if (addButtonRef?.current?.isDialogOpen()) return;
-            setIsDragging(true);
-            dragTimeoutRef.current = setTimeout(() => {
-              setAnimateCloud(true);
-            }, 200);
-          }
-        );
+        const unDragEnter = await listen<{
+          paths: string[];
+          position: { x: number; y: number };
+        }>("tauri://drag-enter", (event) => {
+          console.log("[DragDrop] drag-enter event received", event.payload);
+          if (isSyncPathEmpty && !isRecentFiles) return;
+          // Don't show background overlay if upload dialog is already open
+          if (addButtonRef?.current?.isDialogOpen()) return;
+          setIsDragging(true);
+          dragTimeoutRef.current = setTimeout(() => {
+            setAnimateCloud(true);
+          }, 200);
+        });
         unlisteners.push(unDragEnter);
 
         const unDragOver = await listen<{ position: { x: number; y: number } }>(
           "tauri://drag-over",
           () => {
             // Keep showing drag state
-          }
+          },
         );
         unlisteners.push(unDragOver);
 
-        const unDragDrop = await listen<{ paths: string[]; position: { x: number; y: number } }>(
-          "tauri://drag-drop",
-          async (event) => {
-            console.log("[DragDrop] drag-drop event received", event.payload);
-            setIsDragging(false);
-            setAnimateCloud(false);
-            if (dragTimeoutRef.current) {
-              clearTimeout(dragTimeoutRef.current);
-              dragTimeoutRef.current = null;
-            }
-
-            // If upload dialog is already open, don't handle here (FileDropzone handles it)
-            if (addButtonRef?.current?.isDialogOpen()) return;
-
-            if (isSyncPathEmpty && !isRecentFiles) {
-              toast.info("Please set up sync folder first to upload files.");
-              return;
-            }
-
-            const paths = event.payload.paths;
-            if (!paths || paths.length === 0 || !addButtonRef?.current) return;
-
-            // Filter out directories (shows toast if any dropped)
-            try {
-              const { filterDroppedPaths } = await import("@/lib/utils/filterDroppedPaths");
-              const filePaths = await filterDroppedPaths(paths);
-              if (filePaths.length > 0) {
-                addButtonRef.current.openWithPaths(filePaths);
-              }
-            } catch (err) {
-              console.error("[DragDrop] Error checking paths:", err);
-              // Fallback: pass all paths through
-              addButtonRef.current.openWithPaths(paths);
-            }
+        const unDragDrop = await listen<{
+          paths: string[];
+          position: { x: number; y: number };
+        }>("tauri://drag-drop", async (event) => {
+          console.log("[DragDrop] drag-drop event received", event.payload);
+          setIsDragging(false);
+          setAnimateCloud(false);
+          if (dragTimeoutRef.current) {
+            clearTimeout(dragTimeoutRef.current);
+            dragTimeoutRef.current = null;
           }
-        );
+
+          // If upload dialog is already open, don't handle here (FileDropzone handles it)
+          if (addButtonRef?.current?.isDialogOpen()) return;
+
+          if (isSyncPathEmpty && !isRecentFiles) {
+            toast.info("Please set up sync folder first to upload files.");
+            return;
+          }
+
+          const paths = event.payload.paths;
+          if (!paths || paths.length === 0 || !addButtonRef?.current) return;
+
+          // Filter out directories (shows toast if any dropped)
+          try {
+            const { filterDroppedPaths } =
+              await import("@/lib/utils/filterDroppedPaths");
+            const filePaths = await filterDroppedPaths(paths);
+            if (filePaths.length > 0) {
+              addButtonRef.current.openWithPaths(filePaths);
+            }
+          } catch (err) {
+            console.error("[DragDrop] Error checking paths:", err);
+            // Fallback: pass all paths through
+            addButtonRef.current.openWithPaths(paths);
+          }
+        });
         unlisteners.push(unDragDrop);
 
-        const unDragLeave = await listen(
-          "tauri://drag-leave",
-          () => {
-            console.log("[DragDrop] drag-leave event received");
-            setIsDragging(false);
-            setAnimateCloud(false);
-            if (dragTimeoutRef.current) {
-              clearTimeout(dragTimeoutRef.current);
-              dragTimeoutRef.current = null;
-            }
+        const unDragLeave = await listen("tauri://drag-leave", () => {
+          console.log("[DragDrop] drag-leave event received");
+          setIsDragging(false);
+          setAnimateCloud(false);
+          if (dragTimeoutRef.current) {
+            clearTimeout(dragTimeoutRef.current);
+            dragTimeoutRef.current = null;
           }
-        );
+        });
         unlisteners.push(unDragLeave);
 
         console.log("[DragDrop] All listeners registered successfully");
       } catch (err) {
-        console.error("[DragDrop] Failed to register drag-drop listeners:", err);
+        console.error(
+          "[DragDrop] Failed to register drag-drop listeners:",
+          err,
+        );
       }
     })();
 
@@ -221,21 +231,23 @@ const DriveContent: FC<DriveContentProps> = ({
 
   const handleFileDownload = (
     file: FormattedUserFile,
-    polkadotAddress: string
+    polkadotAddress: string,
   ) => {
     downloadFile(file, polkadotAddress);
   };
 
-  const handleHeaderContextMenu = useCallback((e: React.MouseEvent) => {
-    if (isSyncPathEmpty || isRecentFiles || !onUploadFile) return;
-    e.preventDefault();
-    e.stopPropagation();
-    window.getSelection()?.removeAllRanges();
-    setBgContextMenu({ x: e.clientX, y: e.clientY });
-  }, [isSyncPathEmpty, isRecentFiles, onUploadFile]);
+  const handleHeaderContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (isSyncPathEmpty || isRecentFiles || !onUploadFile) return;
+      e.preventDefault();
+      e.stopPropagation();
+      window.getSelection()?.removeAllRanges();
+      setBgContextMenu({ x: e.clientX, y: e.clientY });
+    },
+    [isSyncPathEmpty, isRecentFiles, onUploadFile],
+  );
 
   const renderContent = () => {
-
     // Only show full loading state on initial load (no data yet).
     // During background refetches (isFetching), keep showing existing data.
     if (isLoading) {
@@ -289,7 +301,6 @@ const DriveContent: FC<DriveContentProps> = ({
           sharedState={sharedState}
           hasMore={hasMore}
           loadMore={loadMore}
-
         />
       );
     }
@@ -306,7 +317,7 @@ const DriveContent: FC<DriveContentProps> = ({
         className={cn(
           "w-full mt-4 relative select-none",
           isDragging &&
-          "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
+            "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10",
         )}
       >
         {isDragging && (
@@ -314,7 +325,7 @@ const DriveContent: FC<DriveContentProps> = ({
             <div
               className={cn(
                 "relative transition-all duration-500 ease-in-out",
-                animateCloud ? "scale-110 transform -translate-y-2" : ""
+                animateCloud ? "scale-110 transform -translate-y-2" : "",
               )}
             >
               <div className="size-15 p-2 rounded-full flex items-center justify-center">
@@ -328,7 +339,7 @@ const DriveContent: FC<DriveContentProps> = ({
               </div>
               <div className="flex items-center justify-center">
                 <HardDrive className="size-6 text-white mr-2" />
-                <div className="text-white text-lg font-bold">Arion Storage</div>
+                <div className="text-white text-lg font-bold">Drive</div>
               </div>
             </div>
           </div>
@@ -361,17 +372,16 @@ const DriveContent: FC<DriveContentProps> = ({
           setTimeout(() => {
             deleteFile()
               .then(() => {
-                toast.success(
-                  `${truncatedName} deleted successfully.`,
-                  { id: toastId }
-                );
+                toast.success(`${truncatedName} deleted successfully.`, {
+                  id: toastId,
+                });
                 setFileToDelete(null);
               })
               .catch((error) => {
                 console.error("Delete error:", error);
                 toast.error(
                   error.message || `Failed to delete ${truncatedName}`,
-                  { id: toastId }
+                  { id: toastId },
                 );
               });
           }, 2000);
@@ -381,8 +391,9 @@ const DriveContent: FC<DriveContentProps> = ({
             ? "Deleting..."
             : `Delete ${fileToDelete?.isFolder ? "Folder" : "File"}`
         }
-        text={`Are you sure you want to delete\n${fileToDelete?.name ? "\n" + fileToDelete.name : ""
-          }`}
+        text={`Are you sure you want to delete\n${
+          fileToDelete?.name ? "\n" + fileToDelete.name : ""
+        }`}
         heading={`Delete ${fileToDelete?.isFolder ? "Folder" : "File"}`}
         disableButton={isDeleting}
       />
@@ -463,8 +474,6 @@ const DriveContent: FC<DriveContentProps> = ({
       >
         <SidebarDialogContent file={liveFileDetailsFile ?? undefined} />
       </SidebarDialog>
-
-
     </>
   );
 };

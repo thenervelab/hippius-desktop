@@ -292,7 +292,6 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             {/* Start Syncing button - show for empty sync paths or no sync paths */}
             {(isSyncPathEmpty || (isRecentFiles && hasNoSyncPaths)) && (
               <StartSyncingButton
-                className="h-9"
                 onClick={
                   isRecentFiles && hasNoSyncPaths
                     ? onNavigateToSettings

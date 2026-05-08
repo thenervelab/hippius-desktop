@@ -13,10 +13,7 @@ import useRecentFiles from "@/lib/hooks/use-recent-files";
 import { WaitAMoment } from "@/components/ui";
 import * as Typography from "@/components/ui/typography";
 import DriveOnboarding from "./DriveOnboarding";
-import {
-  getPrivateSyncPath,
-  removeSyncPath,
-} from "@/lib/utils/syncPathUtils";
+import { getPrivateSyncPath, removeSyncPath } from "@/lib/utils/syncPathUtils";
 import { deleteRemoteFolder } from "@/app/lib/utils/restoreUtils";
 import SyncFolderTabs from "./SyncFolderTabs";
 import { useRemoteStorageStats } from "@/app/lib/hooks/api/useRemoteStorageStats";
@@ -47,7 +44,10 @@ import {
   driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
-import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
+import {
+  SyncPausedAlert,
+  IS_SYNC_PAUSED,
+} from "@/components/ui/SyncPausedAlert";
 import { SyncConnectivityAlert } from "@/components/ui/SyncConnectivityAlert";
 import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
 import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
@@ -60,8 +60,11 @@ import {
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { cn } from "@/app/lib/utils";
 
-const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
+const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
+  isRecentFiles = false,
+}) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
 
   // Indexer-based stats (same source as Home page for consistency)
@@ -93,14 +96,18 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const isFetching = isRecentFiles
     ? isRecentFilesFetching
     : isRegularFilesFetching;
-  const addButtonRef = useRef<{ openWithFiles(files: FileList): Promise<void>; openWithPaths(paths: string[]): Promise<void>; isDialogOpen(): boolean }>(null);
+  const addButtonRef = useRef<{
+    openWithFiles(files: FileList): Promise<void>;
+    openWithPaths(paths: string[]): Promise<void>;
+    isDialogOpen(): boolean;
+  }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
 
   // Folder upload dialog state (lifted from DriveHeader so context menus can trigger it)
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
 
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState(
-    undefined as string | null | undefined
+    undefined as string | null | undefined,
   );
 
   // Loading states for sync paths
@@ -108,7 +115,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
 
   // Folder tab state (null = "All")
   const [selectedFolderTab, setSelectedFolderTab] = useState<string | null>(
-    null
+    null,
   );
 
   // Search state
@@ -185,8 +192,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   // Sync folder labels from the query data
   const syncFolderLabels = useMemo(() => {
     if (regularFilesData && "syncFolderLabels" in regularFilesData) {
-      return (regularFilesData as { syncFolderLabels?: string[] })
-        .syncFolderLabels ?? [];
+      return (
+        (regularFilesData as { syncFolderLabels?: string[] })
+          .syncFolderLabels ?? []
+      );
     }
     return [];
   }, [regularFilesData]);
@@ -209,7 +218,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       Array.from(driveStatuses.entries())
         .filter(([, entry]) => entry.status.kind !== "active")
         .map(([label]) => label),
-    [driveStatuses]
+    [driveStatuses],
   );
   const labelDisplayNames = useMemo(() => {
     const names: Record<string, string> = {};
@@ -236,7 +245,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   // picked, not a filter the chip UI exposes).
   const allFilteredData = useMemo(() => {
     if (isRecentFiles) return allData;
-    return allData.filter((file) => (file.type?.toLowerCase() || "") === "private");
+    return allData.filter(
+      (file) => (file.type?.toLowerCase() || "") === "private",
+    );
   }, [allData, isRecentFiles]);
 
   // Rust owns the filter chain — search, type, date, size, folder tab.
@@ -264,7 +275,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       // Always reset scroll position when filters change
       resetScroll();
     },
-    [resetScroll]
+    [resetScroll],
   );
 
   // Update active filters when filter settings change
@@ -273,7 +284,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       filterState.fileTypes,
       filterState.date,
       filterState.fileSize,
-      filterState.fileSizes
+      filterState.fileSizes,
     );
     setActiveFilters(newActiveFilters);
   }, [
@@ -305,7 +316,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       switch (filter.type) {
         case "fileType":
           updates.fileTypes = filterState.fileTypes.filter(
-            (type: FileTypes) => type !== filter.value
+            (type: FileTypes) => type !== filter.value,
           );
           break;
 
@@ -317,14 +328,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           // Remove specific file size from the array
           const sizeValue = parseInt(filter.value);
           updates.fileSizes = filterState.fileSizes.filter(
-            (size: number) => size !== sizeValue
+            (size: number) => size !== sizeValue,
           );
           break;
       }
 
       updateFilters(updates);
     },
-    [filterState.fileTypes, filterState.fileSizes, updateFilters]
+    [filterState.fileTypes, filterState.fileSizes, updateFilters],
   );
 
   // Header "Total Storage Used":
@@ -337,7 +348,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     if (isRecentFiles) return "";
 
     if (selectedFolderTab) {
-      const bytes = regularFilesData?.labelStats?.[selectedFolderTab]?.totalBytes ?? 0;
+      const bytes =
+        regularFilesData?.labelStats?.[selectedFolderTab]?.totalBytes ?? 0;
       return formatBytes(bytes, 2);
     }
 
@@ -346,7 +358,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     }
 
     return "0 B";
-  }, [isRecentFiles, selectedFolderTab, regularFilesData?.labelStats, remoteStorageStats]);
+  }, [
+    isRecentFiles,
+    selectedFolderTab,
+    regularFilesData?.labelStats,
+    remoteStorageStats,
+  ]);
 
   // Handle search input change
   const handleSearchChange = useCallback((value: string) => {
@@ -358,21 +375,21 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     (types: FileTypes[]) => {
       updateFilters({ fileTypes: types });
     },
-    [updateFilters]
+    [updateFilters],
   );
 
   const handleDateChange = useCallback(
     (date: string) => {
       updateFilters({ date });
     },
-    [updateFilters]
+    [updateFilters],
   );
 
   const handleFileSizesChange = useCallback(
     (sizes: number[]) => {
       updateFilters({ fileSizes: sizes });
     },
-    [updateFilters]
+    [updateFilters],
   );
 
   // Load private sync path (with stale-request cancellation)
@@ -382,9 +399,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     (async () => {
       try {
         setIsLoadingPrivatePath(true);
-        const result = await getPrivateSyncPath(
-          polkadotAddress || undefined
-        );
+        const result = await getPrivateSyncPath(polkadotAddress || undefined);
         if (!cancelled) {
           setSelectedPrivateFolderPath(result?.path ?? null);
         }
@@ -400,7 +415,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [polkadotAddress]);
 
   // Reload sync path when sync is configured from another component/page
@@ -428,7 +445,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSyncConfigured, polkadotAddress]);
 
@@ -450,14 +469,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
 
         const syncPath = selectedPrivateFolderPath;
 
-        setIsSyncPathConfigured(
-          syncPath !== null && syncPath !== undefined
-        );
+        setIsSyncPathConfigured(syncPath !== null && syncPath !== undefined);
       } catch (error) {
-        console.error(
-          `Failed to check private sync path:`,
-          error
-        );
+        console.error(`Failed to check private sync path:`, error);
         setIsSyncPathConfigured(false);
       } finally {
         setIsCheckingSyncPath(false);
@@ -465,11 +479,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     };
 
     checkSyncPath();
-  }, [
-    selectedPrivateFolderPath,
-    isRecentFiles,
-    isLoadingPrivatePath,
-  ]);
+  }, [selectedPrivateFolderPath, isRecentFiles, isLoadingPrivatePath]);
 
   const refreshUserFilesCallback = useCallback(() => {
     refetchUserFiles();
@@ -495,47 +505,56 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     refetchUserFiles();
   }, [polkadotAddress, triggerSyncPathRefresh, refetchUserFiles]);
 
-  const handleHcfsSetupComplete = useCallback(async (result: { serverUrl: string; password: string }) => {
-    if (!polkadotAddress) return;
+  const handleHcfsSetupComplete = useCallback(
+    async (result: { serverUrl: string; password: string }) => {
+      if (!polkadotAddress) return;
 
-    try {
-      const mnemonic = (await getMnemonic()) ?? undefined;
-      const initResult = await setupAndInitialize(
-        polkadotAddress,
-        "default",
-        result.serverUrl,
-        result.password,
-        mnemonic ?? undefined
-      );
+      try {
+        const mnemonic = (await getMnemonic()) ?? undefined;
+        const initResult = await setupAndInitialize(
+          polkadotAddress,
+          "default",
+          result.serverUrl,
+          result.password,
+          mnemonic ?? undefined,
+        );
 
-      setShowHcfsSetup(false);
+        setShowHcfsSetup(false);
 
-      if (initResult) {
-        toast.success("Sync folder set — syncing started!");
-        // Mark sync path as configured and hide selectors so files view shows
-        setIsSyncPathConfigured(true);
-        setShowPrivateStartSyncingSelector(false);
-        // Directly reload path so local state updates immediately
-        try {
-          const pathResult = await getPrivateSyncPath(polkadotAddress);
-          setSelectedPrivateFolderPath(pathResult?.path ?? null);
-        } catch {
-          // Will be retried by triggerSyncPathRefresh effect
+        if (initResult) {
+          toast.success("Sync folder set — syncing started!");
+          // Mark sync path as configured and hide selectors so files view shows
+          setIsSyncPathConfigured(true);
+          setShowPrivateStartSyncingSelector(false);
+          // Directly reload path so local state updates immediately
+          try {
+            const pathResult = await getPrivateSyncPath(polkadotAddress);
+            setSelectedPrivateFolderPath(pathResult?.path ?? null);
+          } catch {
+            // Will be retried by triggerSyncPathRefresh effect
+          }
+          // Refresh file list to show the synced files
+          refetchUserFiles();
+          // Signal other components about the change
+          triggerSyncPathRefresh((prev) => prev + 1);
+
+          if (initResult.mnemonic) {
+            setShowMnemonicBackup(true);
+          }
         }
-        // Refresh file list to show the synced files
-        refetchUserFiles();
-        // Signal other components about the change
-        triggerSyncPathRefresh((prev) => prev + 1);
-
-        if (initResult.mnemonic) {
-          setShowMnemonicBackup(true);
-        }
+      } catch (err) {
+        console.error("Failed to setup HCFS:", err);
+        toast.error("Sync setup failed. Please try again.");
       }
-    } catch (err) {
-      console.error("Failed to setup HCFS:", err);
-      toast.error("Sync setup failed. Please try again.");
-    }
-  }, [polkadotAddress, setupAndInitialize, getMnemonic, refetchUserFiles, triggerSyncPathRefresh]);
+    },
+    [
+      polkadotAddress,
+      setupAndInitialize,
+      getMnemonic,
+      refetchUserFiles,
+      triggerSyncPathRefresh,
+    ],
+  );
 
   const handleMnemonicBackupConfirm = useCallback(() => {
     setShowMnemonicBackup(false);
@@ -602,30 +621,33 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     setBrowseDialog({ open: true, label });
   }, []);
 
-  const handleTabPauseSync = useCallback((label: string) => {
-    const isPaused = pausedLabels.includes(label);
-    if (isPaused) {
-      // Resume directly (no confirmation needed, same as settings)
-      (async () => {
-        if (!polkadotAddress) return;
-        try {
-          const mnemonic = (await getMnemonic()) ?? undefined;
-          await invoke("resume_drive", { label, mnemonic });
-          // Per-drive Active status is emitted by Rust via the
-          // hcfs_drive_status_changed event and lands in
-          // driveStatusesAtom — pausedLabels is a memo over that
-          // atom, so the tab badge updates without any local state.
-          // hasConfiguredDrivesAtom recomputes from the same source.
-          toast.success(`Sync resumed for "${label}"`);
-        } catch (err) {
-          console.error("Failed to resume sync:", err);
-          toast.error("Failed to resume sync");
-        }
-      })();
-    } else {
-      setPauseDialog({ open: true, label });
-    }
-  }, [pausedLabels, polkadotAddress, getMnemonic]);
+  const handleTabPauseSync = useCallback(
+    (label: string) => {
+      const isPaused = pausedLabels.includes(label);
+      if (isPaused) {
+        // Resume directly (no confirmation needed, same as settings)
+        (async () => {
+          if (!polkadotAddress) return;
+          try {
+            const mnemonic = (await getMnemonic()) ?? undefined;
+            await invoke("resume_drive", { label, mnemonic });
+            // Per-drive Active status is emitted by Rust via the
+            // hcfs_drive_status_changed event and lands in
+            // driveStatusesAtom — pausedLabels is a memo over that
+            // atom, so the tab badge updates without any local state.
+            // hasConfiguredDrivesAtom recomputes from the same source.
+            toast.success(`Sync resumed for "${label}"`);
+          } catch (err) {
+            console.error("Failed to resume sync:", err);
+            toast.error("Failed to resume sync");
+          }
+        })();
+      } else {
+        setPauseDialog({ open: true, label });
+      }
+    },
+    [pausedLabels, polkadotAddress, getMnemonic],
+  );
 
   // Dialog confirmation handlers
   const handleConfirmPause = useCallback(async () => {
@@ -662,7 +684,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       setIsRemoving(false);
       setRemoveDialog({ open: false, label: null });
     }
-  }, [removeDialog.label, polkadotAddress, triggerSyncPathRefresh, refetchUserFiles]);
+  }, [
+    removeDialog.label,
+    polkadotAddress,
+    triggerSyncPathRefresh,
+    refetchUserFiles,
+  ]);
 
   const handleConfirmDeleteServer = useCallback(async () => {
     const label = deleteDialog.label;
@@ -672,7 +699,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       // delete_remote_folder also stops the drive and removes the sync path if local
       const result = await deleteRemoteFolder(polkadotAddress, label);
       toast.success(
-        `Folder deleted from server (${result.files_deleted} file${result.files_deleted !== 1 ? "s" : ""} removed)`
+        `Folder deleted from server (${result.files_deleted} file${result.files_deleted !== 1 ? "s" : ""} removed)`,
       );
       triggerSyncPathRefresh((prev) => prev + 1);
       refetchUserFiles();
@@ -684,7 +711,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       setDeleteDialog({ open: false, folderName: "", label: null });
       setDeleteConfirmInput("");
     }
-  }, [deleteDialog.label, polkadotAddress, triggerSyncPathRefresh, refetchUserFiles]);
+  }, [
+    deleteDialog.label,
+    polkadotAddress,
+    triggerSyncPathRefresh,
+    refetchUserFiles,
+  ]);
 
   // Load data on mount and set up interval refresh
   useEffect(() => {
@@ -745,7 +777,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       if (customEvent.detail?.files && addButtonRef.current) {
         console.log(
           "Handling files via global event",
-          customEvent.detail.files
+          customEvent.detail.files,
         );
         addButtonRef.current.openWithFiles(customEvent.detail.files);
       }
@@ -781,9 +813,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       (async () => {
         try {
           setIsLoadingPrivatePath(true);
-          const result = await getPrivateSyncPath(
-            polkadotAddress || undefined
-          );
+          const result = await getPrivateSyncPath(polkadotAddress || undefined);
           if (!cancelled) {
             setSelectedPrivateFolderPath(result?.path ?? null);
             // Refetch file list so it reads from the new sync folder
@@ -798,7 +828,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
         }
       })();
 
-      return () => { cancelled = true; };
+      return () => {
+        cancelled = true;
+      };
     }
   }, [syncPathRefreshTrigger, polkadotAddress, refetchUserFiles]);
 
@@ -863,18 +895,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       </div>
     );
   } else if (isSyncPathConfigured === false && !isRecentFiles) {
-    content = (
-      <DriveOnboarding
-        onSyncStarted={handleOnboardingSyncStarted}
-      />
-    );
+    content = <DriveOnboarding onSyncStarted={handleOnboardingSyncStarted} />;
   } else if (showCurrentStartSyncingSelector && !isRecentFiles) {
     // Show onboarding when Start Syncing is clicked
-    content = (
-      <DriveOnboarding
-        onSyncStarted={handleOnboardingSyncStarted}
-      />
-    );
+    content = <DriveOnboarding onSyncStarted={handleOnboardingSyncStarted} />;
   } else {
     // Compute whether sync path is effectively empty
     let effectiveSyncPathEmpty = false;
@@ -892,7 +916,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
 
     content = (
       <FileSelectionProvider>
-        <div className="w-full relative mt-4">
+        <div className={cn("w-full relative", !isRecentFiles && "px-3")}>
           {/* Sync Paused Alert */}
           {IS_SYNC_PAUSED && !isRecentFiles && (
             <div className="mb-4">
@@ -904,7 +928,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
               mounted globally in `ResponsiveContent` so it's visible
               on every authenticated route (not just /files). */}
           <div className="mb-4 space-y-2">
-            <SyncConnectivityAlert variant={isRecentFiles ? "compact" : "banner"} />
+            <SyncConnectivityAlert
+              variant={isRecentFiles ? "compact" : "banner"}
+            />
           </div>
 
           <DriveHeader
