@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import NotificationMenuHeader from "./NotificationMenuHeader";
 import NotificationMenuList from "./NotificationMenuList";
@@ -18,6 +18,10 @@ import {
   activeSettingsTabAtom,
 } from "@/app/components/sidebar/sideBarAtoms";
 
+const CATEGORY_DISPLAY: Record<string, string> = {
+  Files: "Storage",
+};
+
 interface Props {
   count: number;
   onClose?: () => void;
@@ -26,6 +30,7 @@ interface Props {
 const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
+  const [activeCategory, setActiveCategory] = useState("All");
   const router = useRouter();
   const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
@@ -39,6 +44,29 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
   useEffect(() => {
     refreshEnabledTypes();
   }, [refreshEnabledTypes]);
+
+  // Reset to "All" if the active category gets disabled
+  useEffect(() => {
+    if (activeCategory !== "All" && !enabledTypes.includes(activeCategory)) {
+      setActiveCategory("All");
+    }
+  }, [enabledTypes, activeCategory]);
+
+  const categoryOptions = useMemo(() => [
+    { value: "All", label: "All" },
+    ...enabledTypes.map((type) => ({
+      value: type,
+      label: CATEGORY_DISPLAY[type] ?? type,
+    })),
+  ], [enabledTypes]);
+
+  const filteredNotifications = useMemo(
+    () =>
+      activeCategory === "All"
+        ? notifications
+        : notifications.filter((n) => n.type === activeCategory),
+    [notifications, activeCategory],
+  );
 
   const handleSelect = async (id: number) => {
     onClose?.();
@@ -61,7 +89,13 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
 
   return (
     <>
-      <NotificationMenuHeader count={count} onClose={onClose} />
+      <NotificationMenuHeader
+        count={count}
+        onClose={onClose}
+        activeCategory={activeCategory}
+        onCategoryChange={setActiveCategory}
+        categoryOptions={categoryOptions}
+      />
 
       <div className="flex-1 min-h-0 overflow-y-auto">
         {enabledTypes.length === 0 ? (
@@ -71,11 +105,11 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
               onOpenSettings={handleOpenSettings}
             />
           </div>
-        ) : notifications.length === 0 ? (
+        ) : filteredNotifications.length === 0 ? (
           <NoNotificationsFound heightClassName="min-h-[15rem]" />
         ) : (
           <NotificationMenuList
-            notifications={notifications}
+            notifications={filteredNotifications}
             onSelectNotification={handleSelect}
             onReadStatusChange={handleReadToggle}
             onClose={onClose}
