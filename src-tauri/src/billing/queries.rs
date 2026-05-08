@@ -90,9 +90,14 @@ struct EventsResponse {
 }
 
 /// Row from the billing transactions endpoint (`/api/billing/transactions/`).
+///
+/// `id` is `Option<serde_json::Value>` rather than `Option<i64>` because the
+/// billing API returns UUID strings (e.g. "4b05fe16-2e49-4042-bc86-643e2504e132")
+/// in some environments. Using `Value` tolerates both integers and strings and
+/// avoids a JSON parse error that would silently drop the entire response.
 #[derive(Deserialize)]
 struct BillingTransactionRow {
-    id: Option<i64>,
+    id: Option<serde_json::Value>,
     payment_type: Option<String>,
     amount: Option<serde_json::Value>,
     created_at: Option<String>,
@@ -104,6 +109,67 @@ struct BillingTransactionRow {
 struct BillingTransactionsResponse {
     #[serde(default)]
     results: Vec<BillingTransactionRow>,
+}
+
+/// Row from the marketplace credits endpoint (`/marketplace/credit`).
+#[derive(Deserialize)]
+struct MarketplaceCreditRow {
+    block_number: Option<i64>,
+    event_index: Option<i64>,
+    account_id: Option<String>,
+    event_name: Option<String>,
+    /// Raw integer string in 10^-18 units — converted before returning to the FE.
+    credits_amount: Option<String>,
+    transaction_type: Option<String>,
+    processed_timestamp: Option<String>,
+}
+
+/// Wrapper for marketplace credits response which uses `events`.
+#[derive(Deserialize)]
+struct MarketplaceCreditsApiResponse {
+    #[serde(default)]
+    events: Vec<MarketplaceCreditRow>,
+}
+
+/// UI-ready marketplace credit event sent to the frontend.
+///
+/// `credits_amount` is already converted from raw 10^-18 units to a
+/// human-readable decimal string (e.g. "13.0115" instead of "13011545100000000000").
+#[derive(Serialize)]
+struct MarketplaceCreditEventObject {
+    block_number: i64,
+    event_index: i64,
+    account_id: String,
+    event_name: String,
+    credits_amount: String,
+    transaction_type: Option<String>,
+    processed_timestamp: String,
+}
+
+/// Wrapper matching the shape the frontend hook expects (`{ events: [...] }`).
+#[derive(Serialize)]
+pub struct MarketplaceCreditsResult {
+    events: Vec<MarketplaceCreditEventObject>,
+}
+
+/// Convert a raw credits_amount string (in 10^-18 units) to a 4-decimal display string.
+///
+/// Uses `u128` arithmetic to avoid floating-point rounding on large integers.
+/// Falls back to `f64` for non-integer strings (e.g. already-divided values).
+fn credits_raw_to_display(raw: &str) -> String {
+    let s = raw.trim();
+    if let Ok(val) = s.parse::<u128>() {
+        const DIVISOR: u128 = 1_000_000_000_000_000_000; // 10^18
+        let whole = val / DIVISOR;
+        let frac = val % DIVISOR;
+        // Keep 4 decimal places: drop the last 14 digits of the 18-digit fraction.
+        let frac_4 = frac / 100_000_000_000_000u128;
+        format!("{whole}.{frac_4:04}")
+    } else {
+        s.parse::<f64>()
+            .map(|v| format!("{:.4}", v / 1e18))
+            .unwrap_or_else(|_| "0.0000".to_string())
+    }
 }
 
 /// Fetch the on-chain deposit address for adding credits via Substrate transfer.
@@ -118,23 +184,37 @@ pub async fn get_deposit_address(state: tauri::State<'_, crate::app_state::AppSt
 // ---------------------------------------------------------------------------
 
 /// Fetch marketplace credit consumption events (`CreditsConsumed`) from the indexer.
+///
+/// `credits_amount` is converted from raw 10^-18 units to a human-readable
+/// decimal string before returning — the raw integer is too large for JS `Number`
+/// and would display as scientific notation or lose precision.
 #[tauri::command]
 pub async fn get_marketplace_credits(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     page: Option<i64>,
     limit: Option<i64>,
-) -> Result<serde_json::Value, AppError> {
+) -> Result<MarketplaceCreditsResult, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
-    let limit_str = limit.unwrap_or(10).to_string();
+    let limit_str = limit.unwrap_or(INDEXER_MAX_LIMIT).min(INDEXER_MAX_LIMIT).to_string();
     let params = vec![
         ("account_id", account_id.as_str()),
         ("event_name", "CreditsConsumed"),
         ("page", page_str.as_str()),
         ("limit", limit_str.as_str()),
     ];
-    Ok(indexer.get::<serde_json::Value>("/marketplace/credit", &params).await?)
+    let resp: MarketplaceCreditsApiResponse = indexer.get("/marketplace/credit", &params).await?;
+    let events = resp.events.into_iter().map(|e| MarketplaceCreditEventObject {
+        block_number: e.block_number.unwrap_or(0),
+        event_index: e.event_index.unwrap_or(0),
+        account_id: e.account_id.unwrap_or_default(),
+        event_name: e.event_name.unwrap_or_default(),
+        credits_amount: credits_raw_to_display(e.credits_amount.as_deref().unwrap_or("0")),
+        transaction_type: e.transaction_type,
+        processed_timestamp: e.processed_timestamp.unwrap_or_default(),
+    }).collect();
+    Ok(MarketplaceCreditsResult { events })
 }
 
 /// Fetch total file size stored by an account over a time window.
@@ -406,7 +486,7 @@ pub async fn get_balance_transfers(
 /// UI-ready billing transaction. Field names match existing frontend table columns.
 #[derive(Serialize)]
 pub struct BillingTransactionObject {
-    pub id: i64,
+    pub id: String,
     pub transaction_type: String,
     pub amount: f64,
     pub transaction_date: String,
@@ -442,8 +522,12 @@ pub async fn get_billing_transactions(
                 }
             });
 
+            // Coerce UUID strings or integer IDs to a String.
+            let id = t.id.as_ref().map_or_else(String::new, |v| {
+                v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.as_i64().map_or_else(String::new, |n| n.to_string()))
+            });
             BillingTransactionObject {
-                id: t.id.unwrap_or(0),
+                id,
                 transaction_type: tx_type.to_string(),
                 amount,
                 transaction_date: t.created_at.clone().unwrap_or_default(),

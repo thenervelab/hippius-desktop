@@ -2,22 +2,19 @@
 
 import { FC } from "react";
 import { cn } from "@/lib/utils";
-import { AddCircle, Refresh, WalletAdd } from "@/components/ui/icons";
-import * as Typography from "@/components/ui/typography";
-import { AbstractIconWrapper, CardButton } from "@/components/ui";
+import { Icons, RefreshButton } from "@/components/ui";
+import { Button } from "@/components/ui/button";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
-import Warning from "@/components/ui/icons/Warning";
 import TimeAgo from "react-timeago";
 import { openLinkByKey } from "@/app/lib/utils/links";
-
+import Warning from "@/components/ui/icons/Warning";
+import { AddCircle } from "@/components/ui/icons";
 
 interface CreditsWidgetProps {
   className?: string;
 }
 
-const CreditsWidget: FC<CreditsWidgetProps> = ({
-  className,
-}) => {
+const CreditsWidget: FC<CreditsWidgetProps> = ({ className }) => {
   const {
     data: credits,
     isLoading,
@@ -26,90 +23,94 @@ const CreditsWidget: FC<CreditsWidgetProps> = ({
     dataUpdatedAt,
   } = useUserCredits();
 
-  const handleOpenConsoleCreditsPage = () => openLinkByKey("CREDITS");
-
-
-
   return (
     <div
       className={cn(
-        "w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between relative",
-        className
+        "flex flex-col items-center w-full rounded-[8px] border overflow-hidden",
+        "bg-grey-light-300 border-grey-dark-100",
+        "dark:bg-black-primary-bg dark:border-black-300",
+        "shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]",
+        className,
       )}
     >
-      <div className="flex flex-col w-full items-start">
-        <div className="flex gap-4 items-center">
-          <AbstractIconWrapper className="size-8 @sm:size-10 text-primary-40">
-            <WalletAdd className="absolute text-primary-40 size-4 @sm:size-5" />
-          </AbstractIconWrapper>
-          <span className="text-base font-medium text-grey-60">
+      {/* Header row */}
+      <div className="flex h-[46px] w-full items-center pl-[14px] pr-[10px]">
+        <div className="flex items-center gap-1">
+          <Icons.WalletAdd className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
+          <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
             Total Credits
-          </span>
-        </div>
-        <div className="flex justify-between items-end mt-4 w-full">
-          <div className="flex flex-col">
-            <div className="text-2xl font-medium text-grey-10">
-              {credits !== undefined
-                ? credits.hip
-                : error
-                  ? "ERROR"
-                  : "- - - -"}
-              <span className="text-xs font-medium -translate-y-1 ml-1">
-                Credits
-              </span>
-            </div>
-            <div className="flex items-center gap-x-2 mt-2">
-              {isLoading ? (
-                <Typography.P size="xs">Loading...</Typography.P>
-              ) : error ? (
-                <>
-                  <Warning className="size-4" />
-                  <Typography.P size="xs" className="text-error-80">
-                    Credits not retrieved.
-                  </Typography.P>
-                  <button
-                    className="size-4"
-                    onClick={() => {
-                      refetch();
-                    }}
-                  >
-                    <Refresh />
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    className="size-4 hover:-rotate-45 duration-300 hover:text-primary-50"
-                    onClick={() => {
-                      refetch();
-                    }}
-                  >
-                    <Refresh />
-                  </button>
-                  <Typography.P
-                    style={{
-                      fontSize: "0.75rem",
-                    }}
-                    className="text-grey-60"
-                  >
-                    Last updated <TimeAgo date={dataUpdatedAt} />
-                  </Typography.P>
-                </>
-              )}
-            </div>
-          </div>
+          </p>
         </div>
       </div>
-      <div className="relative bg-grey-100 w-full border-grey-80 border-t">
-        <CardButton
-          className="w-full mt-4 h-[3.125rem]"
-          onClick={handleOpenConsoleCreditsPage}
-        >
-          <div className="flex items-center gap-2 text-lg font-medium">
-            <AddCircle className="size-4" />
-            Add Credits
+
+      {/* Inner white panel — rounded top only so bottom aligns flush with outer border */}
+      <div
+        className={cn(
+          "flex flex-col w-full flex-1 justify-between",
+          "rounded-tl-[8px] rounded-tr-[8px] border border-grey-dark-100",
+          "bg-white dark:bg-black-600 dark:border-black-300",
+          "p-3",
+        )}
+      >
+        {/* Top section: stat + refresh row */}
+        <div className="flex flex-col gap-2">
+          {/* Headline stat */}
+          <div className="flex items-end gap-1">
+            {isLoading ? (
+              <div className="h-[30px] w-[140px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
+            ) : error ? (
+              <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-error-80">
+                ERROR
+              </span>
+            ) : (
+              <>
+                <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white">
+                  {credits?.hip ?? "- - - -"}
+                </span>
+                <span className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 pb-[3px]">
+                  Credits
+                </span>
+              </>
+            )}
           </div>
-        </CardButton>
+
+          {/* Refresh row */}
+          <div className="flex items-center gap-2">
+            {isLoading ? (
+              <div className="h-4 w-36 rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
+            ) : error ? (
+              <>
+                <Warning className="size-4 text-error-80 shrink-0" />
+                <span className="text-[12px] text-error-80">Credits not retrieved.</span>
+                <RefreshButton
+                  onClick={() => refetch()}
+                  ariaLabel="Retry loading credits"
+                />
+              </>
+            ) : (
+              <>
+                <RefreshButton
+                  onClick={() => refetch()}
+                  ariaLabel="Refresh credits"
+                />
+                <span className="font-mono font-medium text-[12px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50">
+                  Last updated <TimeAgo date={dataUpdatedAt} />
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Add Credits button */}
+        <Button
+          variant="primary"
+          size="auto"
+          className="w-full mt-3 h-[36px] rounded-[8px] text-[13px] font-medium tracking-[-0.26px] gap-2"
+          onClick={() => openLinkByKey("CREDITS")}
+        >
+          <AddCircle className="size-4 shrink-0" />
+          Add Credits
+        </Button>
       </div>
     </div>
   );

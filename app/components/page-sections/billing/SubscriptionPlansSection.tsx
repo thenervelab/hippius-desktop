@@ -16,7 +16,7 @@ import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import CancelSubscriptionDialog, { Plan } from "./CancelSubscriptionDialog";
 import useSubscriptionData from "@/app/lib/hooks/useSubscriptionData";
-import { CardButton } from "@/components/ui";
+import { Button } from "@/components/ui/button";
 import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -256,11 +256,12 @@ export default function SubscriptionPlansSection() {
 
                 {/* Subscribe button */}
                 <div className="mt-4 pt-4 border-t border-grey-80">
-                  <CardButton
-                    className="w-full"
-                    variant={currentActivePlan ? "secondary" : "primary"}
+                  <Button
+                    variant={currentActivePlan ? "defaultStable" : "primary"}
+                    size="auto"
+                    className="w-full h-[40px] rounded-[8px] text-[14px] font-medium tracking-[-0.28px]"
                     onClick={() => handleSubscribe(plan.id)}
-                    disabled={isSubscribing || currentActivePlan}
+                    disabled={isSubscribing || !!currentActivePlan}
                     loading={isLoading}
                   >
                     {isLoading
@@ -268,7 +269,7 @@ export default function SubscriptionPlansSection() {
                       : currentActivePlan
                         ? "Your Active Plan"
                         : "Subscribe"}
-                  </CardButton>
+                  </Button>
                 </div>
               </div>
             );
