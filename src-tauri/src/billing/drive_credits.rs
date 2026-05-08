@@ -1,13 +1,14 @@
-//! Drive-scoped credit history feeding the home page's storage trend
-//! chart, credit trend chart, and Total Credit Used card.
+//! Drive-scoped credit history feeding the home page's credit trend
+//! chart and Total Credit Used card.
 //!
-//! All three commands hit a single indexer endpoint
+//! Both commands hit a single indexer endpoint
 //! (`/user-credits-by-storage-history?storage_type=drive`) and project
-//! a different view onto the same response. Anchoring on one source
-//! guarantees the card and the chart never disagree about scope —
-//! commit `61fee2ee` (2026-05-05) created exactly that split by
-//! pointing the header at a drive-only endpoint while the chart kept
-//! reading the wallet-wide series.
+//! a different view onto the same response. The Storage Usage chart
+//! used to share this endpoint too, but moved to the snapshot-driven
+//! `/user-extended-storage-metrics` on 2026-05-08 — see
+//! [`crate::billing::drive_storage`] — because the credits-history
+//! endpoint only updates on a `CreditsConsumed` block, leaving the
+//! chart hours behind reality after a deletion.
 //!
 //! The indexer emits each charge as a paired `(CreditsConsumed,
 //! PointTransactionRecorded)` event at the same block; filtering to
@@ -15,10 +16,7 @@
 //! consumer and avoids double-counting.
 
 use crate::api::indexer::IndexerClient;
-use crate::billing::charts::{
-    ChartPoint, date_to_iso, dd_mon_label, format_balance, format_bytes, get_all_dates_in_range,
-    normalize_date, parse_timestamp_to_date, range_start, weekday_name,
-};
+use crate::billing::charts::{ChartPoint, date_to_iso, dd_mon_label, format_balance, get_all_dates_in_range, normalize_date, parse_timestamp_to_date, range_start, weekday_name};
 use crate::error::AppError;
 use chrono::NaiveDate;
 use serde::Deserialize;
@@ -51,9 +49,9 @@ const CACHE_TTL: Duration = Duration::from_secs(30);
 
 /// One row of `/user-credits-by-storage-history`.
 ///
-/// `credits_amount` and `drive_files_size` are planck/byte values, but
-/// the indexer applies `total_credits_amount * storage_percentage`
-/// server-side and emits the result as a string that may be fractional
+/// `credits_amount` is a planck value, but the indexer applies
+/// `total_credits_amount * storage_percentage` server-side and emits
+/// the result as a string that may be fractional
 /// (`"93189525824488.31"`). That makes `String → f64` the only correct
 /// parse path — `u128::from_str` rejects the dot. f64 has ~16 digits
 /// of mantissa, well above the 6-decimal-credit floor the chart
@@ -62,12 +60,13 @@ const CACHE_TTL: Duration = Duration::from_secs(30);
 /// Every field defaults for resilience: a header tile shouldn't fail
 /// to render because of a missing field, and `event_name == ""` is
 /// dropped naturally by the `CreditsConsumed` predicate downstream.
+/// `drive_files_size` is also present on the wire but unused here —
+/// the storage chart now reads it from `/user-extended-storage-metrics`
+/// instead. Serde tolerates the extra field by default.
 #[derive(Deserialize, Default, Clone, Debug)]
 struct DriveCreditEvent {
     #[serde(default)]
     credits_amount: String,
-    #[serde(default)]
-    drive_files_size: String,
     #[serde(default)]
     event_name: String,
     #[serde(default)]
@@ -162,10 +161,6 @@ fn planck_str_to_credits(raw: &str) -> f64 {
     raw.parse::<f64>().unwrap_or(0.0) / 1e18
 }
 
-fn bytes_str_to_f64(raw: &str) -> f64 {
-    raw.parse::<f64>().unwrap_or(0.0)
-}
-
 /// Filter to `CreditsConsumed` rows, parse timestamps, sort ascending.
 /// Rows with malformed timestamps drop out — they can't contribute to
 /// a dated chart without a date.
@@ -177,39 +172,6 @@ fn consumed_events_by_date(events: &[DriveCreditEvent]) -> Vec<(NaiveDate, &Driv
         .collect();
     typed.sort_by_key(|(d, _)| *d);
     typed
-}
-
-/// Snapshot of `drive_files_size` per day, carry-forward across the
-/// requested range. Multiple events on the same day collapse to the
-/// latest reading — closest to an end-of-day snapshot.
-fn build_storage_chart(events: &[DriveCreditEvent], range: &str) -> Vec<ChartPoint> {
-    let consumed = consumed_events_by_date(events);
-    if consumed.is_empty() {
-        return Vec::new();
-    }
-
-    let mut by_day: BTreeMap<NaiveDate, f64> = BTreeMap::new();
-    for (date, event) in &consumed {
-        by_day.insert(*date, bytes_str_to_f64(&event.drive_files_size));
-    }
-
-    let today = chrono::Utc::now().date_naive();
-    let Some(start) = range_start(range, today) else {
-        return Vec::new();
-    };
-    let dates = get_all_dates_in_range(start, today);
-
-    // Seed carry-forward with the last snapshot strictly before the
-    // window. Otherwise a range that opens on a quiet day would show
-    // 0 bytes until the next event, which misrepresents storage that
-    // was already in place.
-    let pre_range_seed = consumed
-        .iter()
-        .take_while(|(d, _)| *d < start)
-        .last()
-        .map_or(0.0, |(_, e)| bytes_str_to_f64(&e.drive_files_size));
-
-    render_storage_points(&dates, &by_day, range, pre_range_seed)
 }
 
 /// Cumulative drive credit usage per day.
@@ -251,33 +213,6 @@ fn build_credits_chart(events: &[DriveCreditEvent], range: &str) -> Vec<ChartPoi
     render_credit_points(&dates, &cumulative, range, pre_range_total)
 }
 
-fn render_storage_points(dates: &[NaiveDate], by_day: &BTreeMap<NaiveDate, f64>, range: &str, seed: f64) -> Vec<ChartPoint> {
-    let is_last7 = range == "last7days";
-    let mut last_balance = seed;
-    dates
-        .iter()
-        .map(|&date| {
-            let entry = by_day.get(&date).copied();
-            let has_data = entry.is_some();
-            if let Some(v) = entry {
-                last_balance = v;
-            }
-            let day_label = if is_last7 { weekday_name(date).to_string() } else { dd_mon_label(date) };
-            let band_label = if is_last7 { Some(weekday_name(date).to_string()) } else { None };
-            ChartPoint {
-                x: date_to_iso(date),
-                balance: last_balance,
-                formatted_balance: format_bytes(last_balance),
-                timestamp: if has_data { normalize_date(date) } else { String::new() },
-                day_label,
-                band_label,
-                credit: None,
-                formatted_credit: None,
-            }
-        })
-        .collect()
-}
-
 fn render_credit_points(dates: &[NaiveDate], cumulative: &BTreeMap<NaiveDate, f64>, range: &str, seed: f64) -> Vec<ChartPoint> {
     let is_last7 = range == "last7days";
     dates
@@ -308,20 +243,6 @@ fn render_credit_points(dates: &[NaiveDate], cumulative: &BTreeMap<NaiveDate, f6
 }
 
 // --- Tauri commands -------------------------------------------------------
-
-/// Drive storage time series for the home page's storage trend chart.
-///
-/// # Errors
-/// Propagates [`AppError::Api`] from the underlying indexer request.
-#[tauri::command]
-pub async fn get_drive_storage_chart(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    range: String,
-) -> Result<Vec<ChartPoint>, AppError> {
-    let events = cached_drive_events(&state, &account_id).await?;
-    Ok(build_storage_chart(&events, &range))
-}
 
 /// Cumulative drive credit usage time series.
 ///
@@ -356,10 +277,9 @@ pub async fn get_drive_credits_total(state: tauri::State<'_, crate::app_state::A
 mod tests {
     use super::*;
 
-    fn evt(event_name: &str, credits: &str, drive_size: &str, ts: &str) -> DriveCreditEvent {
+    fn evt(event_name: &str, credits: &str, ts: &str) -> DriveCreditEvent {
         DriveCreditEvent {
             credits_amount: credits.to_string(),
-            drive_files_size: drive_size.to_string(),
             event_name: event_name.to_string(),
             processed_timestamp: ts.to_string(),
         }
@@ -395,8 +315,8 @@ mod tests {
         // once as `PointTransactionRecorded` at the same block. Without
         // the filter every total in the UI would double.
         let events = vec![
-            evt("CreditsConsumed", "100", "10", "2026-05-01T00:00:00Z"),
-            evt("PointTransactionRecorded", "100", "10", "2026-05-01T00:00:00Z"),
+            evt("CreditsConsumed", "100", "2026-05-01T00:00:00Z"),
+            evt("PointTransactionRecorded", "100", "2026-05-01T00:00:00Z"),
         ];
         let kept = consumed_events_by_date(&events);
         assert_eq!(kept.len(), 1);
@@ -406,8 +326,8 @@ mod tests {
     #[test]
     fn malformed_timestamp_drops_event() {
         let events = vec![
-            evt("CreditsConsumed", "100", "10", "not-a-date"),
-            evt("CreditsConsumed", "200", "20", "2026-05-01T00:00:00Z"),
+            evt("CreditsConsumed", "100", "not-a-date"),
+            evt("CreditsConsumed", "200", "2026-05-01T00:00:00Z"),
         ];
         let kept = consumed_events_by_date(&events);
         assert_eq!(kept.len(), 1);
@@ -419,9 +339,9 @@ mod tests {
         // Indexer returns newest-first; charts need oldest-first to
         // run carry-forward correctly.
         let events = vec![
-            evt("CreditsConsumed", "0", "30", "2026-05-03T00:00:00Z"),
-            evt("CreditsConsumed", "0", "10", "2026-05-01T00:00:00Z"),
-            evt("CreditsConsumed", "0", "20", "2026-05-02T00:00:00Z"),
+            evt("CreditsConsumed", "0", "2026-05-03T00:00:00Z"),
+            evt("CreditsConsumed", "0", "2026-05-01T00:00:00Z"),
+            evt("CreditsConsumed", "0", "2026-05-02T00:00:00Z"),
         ];
         let kept = consumed_events_by_date(&events);
         let dates: Vec<NaiveDate> = kept.iter().map(|(d, _)| *d).collect();
@@ -434,9 +354,9 @@ mod tests {
         // double-count guard is pinned even if the IPC plumbing
         // changes.
         let events = [
-            evt("CreditsConsumed", "1000000000000000000", "0", "2026-05-01T00:00:00Z"),
-            evt("PointTransactionRecorded", "1000000000000000000", "0", "2026-05-01T00:00:00Z"),
-            evt("CreditsConsumed", "2000000000000000000", "0", "2026-05-02T00:00:00Z"),
+            evt("CreditsConsumed", "1000000000000000000", "2026-05-01T00:00:00Z"),
+            evt("PointTransactionRecorded", "1000000000000000000", "2026-05-01T00:00:00Z"),
+            evt("CreditsConsumed", "2000000000000000000", "2026-05-02T00:00:00Z"),
         ];
         let total: f64 = events
             .iter()
@@ -460,7 +380,9 @@ mod tests {
     fn history_page_deserializes_real_indexer_shape() {
         // Trimmed-down copy of one row from the live response (account
         // 5Ft4…6Q on 2026-05-06). Pins both the field set and the
-        // fractional-planck handling end-to-end.
+        // fractional-planck handling end-to-end. `drive_files_size`
+        // remains in the wire payload — Serde silently ignores it
+        // since DriveCreditEvent stopped reading it.
         let json = r#"{
             "data":[{
                 "credits_amount":"93189525824488.31",

@@ -38,7 +38,8 @@ use crate::billing::charts::{
     calculate_storage_capacity, calculate_storage_cost, format_balance_chart, format_credits_chart, transform_marketplace_credits,
 };
 use crate::billing::credits::{check_sync_eligibility, get_user_credits};
-use crate::billing::drive_credits::{get_drive_credits_chart, get_drive_credits_total, get_drive_storage_chart};
+use crate::billing::drive_credits::{get_drive_credits_chart, get_drive_credits_total};
+use crate::billing::drive_storage::get_drive_storage_chart;
 use crate::billing::eligibility::check_action_eligibility;
 use crate::billing::queries::{
     get_add_credit_events, get_balance_transfers, get_billing_transactions, get_credits, get_deposit_address, get_drive_storage_stats,
