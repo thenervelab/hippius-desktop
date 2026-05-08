@@ -550,9 +550,11 @@ pub fn calculate_storage_capacity(credits_per_month: Vec<f64>) -> Vec<StorageCap
                 }
             }
 
+            // Return just the storage amount (e.g. "999 GB", "5 TB").
+            // The frontend appends " storage on Hippius" and highlights the amount in blue.
             let storage_display = if credits <= 3.0 {
                 let gb_str = add_commas_to_int(&max_gb.to_string());
-                format!("(≈{gb_str} GB/mo Storage on Hippius)")
+                format!("{gb_str} GB")
             } else {
                 let storage_tb = max_gb as f64 / 1000.0;
                 let tb_str = if storage_tb >= 10.0 {
@@ -560,7 +562,7 @@ pub fn calculate_storage_capacity(credits_per_month: Vec<f64>) -> Vec<StorageCap
                 } else {
                     format!("{storage_tb:.2}")
                 };
-                format!("(≈{tb_str} TB/mo Storage on Hippius)")
+                format!("{tb_str} TB")
             };
 
             let usage_description = if credits <= 3.0 {
@@ -866,12 +868,12 @@ mod tests {
         assert_eq!(info.len(), 1);
         let display = &info[0].storage_display;
         assert!(
-            display.contains(" GB/mo Storage on Hippius"),
+            display.ends_with(" GB"),
             "expected GB unit, got: {display}"
         );
         // Sanity: must NOT collapse to "0 GB" — the bug we are fixing.
         assert!(
-            !display.starts_with("(≈0 GB"),
+            !display.starts_with("0 GB"),
             "regressed to zero-GB display: {display}"
         );
         // Storage capacity itself should be in the hundreds-of-GB range.
@@ -882,7 +884,7 @@ mod tests {
     fn storage_display_zero_credits() {
         let info = calculate_storage_capacity(vec![0.0]);
         assert_eq!(info[0].storage_gb, 0);
-        assert_eq!(info[0].storage_display, "(≈0 GB/mo Storage on Hippius)");
+        assert_eq!(info[0].storage_display, "0 GB");
     }
 
     #[test]
@@ -892,7 +894,7 @@ mod tests {
         let info = calculate_storage_capacity(vec![10.0]);
         let display = &info[0].storage_display;
         assert!(
-            display.contains(" TB/mo Storage on Hippius"),
+            display.ends_with(" TB"),
             "expected TB unit, got: {display}"
         );
         assert!(
@@ -908,7 +910,7 @@ mod tests {
         let info = calculate_storage_capacity(vec![1000.0]);
         let display = &info[0].storage_display;
         assert!(
-            display.contains(" TB/mo Storage on Hippius"),
+            display.ends_with(" TB"),
             "expected TB unit, got: {display}"
         );
         assert!(
