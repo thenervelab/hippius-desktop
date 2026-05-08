@@ -180,11 +180,6 @@ const StorageBarChart: React.FC<StorageBarChartProps> = ({
     (i: number) => (numBars > 0 ? ((i + 0.5) / numBars) * chartWidth : 0),
     [numBars, chartWidth],
   );
-  const slotPct = useCallback(
-    (i: number) => (numBars > 0 ? ((i + 0.5) / numBars) * 100 : 50),
-    [numBars],
-  );
-
   // Y-axis labels and grid lines share the chart's vertical region exactly,
   // so we just use a straight (1 - v/yMax) percentage. tick=0 → 100% (bottom),
   // tick=yMax → 0% (top).

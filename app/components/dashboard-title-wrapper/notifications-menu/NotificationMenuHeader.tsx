@@ -7,12 +7,11 @@ import { isViewingRecentFilesAtom } from "@/components/sidebar/sideBarAtoms";
 import { useSetAtom } from "jotai";
 
 interface NotificationMenuHeaderProps {
-  count: number;
+  count?: number;
   onClose?: () => void;
 }
 
 const NotificationMenuHeader: React.FC<NotificationMenuHeaderProps> = ({
-  count: _count,
   onClose,
 }) => {
   const setIsViewingRecentFiles = useSetAtom(isViewingRecentFilesAtom);

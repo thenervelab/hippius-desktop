@@ -17,7 +17,6 @@ import {
   Eye,
   EyeOff,
   HippiusLogo,
-  InfoCircle,
   Key,
 } from "@/components/ui/icons";
 import { openUrl } from "@tauri-apps/plugin-opener";

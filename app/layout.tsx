@@ -51,6 +51,7 @@ export default function RootLayout({
           inter.variable,
           geistSans.variable,
           geistMono.variable,
+          digitalFonts.variable,
           geistSans.className,
           "bg-grey-100 text-grey-10 antialiased font-geist",
         )}

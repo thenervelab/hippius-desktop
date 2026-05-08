@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, type Transition } from "framer-motion";
 import { ONBOARDING_SCREENS } from "./onboardingData";
 import { setOnboardingDone } from "@/app/lib/helpers/onboardingDb";
 import AuthTitleBar from "@/components/auth/AuthTitleBar";
@@ -24,7 +24,7 @@ const slideVariants = {
   }),
 };
 
-const slideTransition = {
+const slideTransition: Transition = {
   duration: 0.28,
   ease: [0.4, 0, 0.2, 1],
 };
@@ -35,7 +35,7 @@ const fadeVariants = {
   exit: { opacity: 0 },
 };
 
-const fadeTransition = { duration: 0.3, ease: "easeInOut" };
+const fadeTransition: Transition = { duration: 0.3, ease: "easeInOut" };
 
 const Onboarding: React.FC<{
   setOnboardingCompleted: (completed: boolean) => void;
