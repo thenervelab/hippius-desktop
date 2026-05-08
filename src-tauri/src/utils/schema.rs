@@ -56,9 +56,10 @@ where
 /// transiently. `DROP TABLE IF EXISTS` is idempotent — once an installed
 /// binary has run this on its DB the call is a no-op forever.
 ///
-/// TODO: delete this helper (and its call site in `ensure_table_schema`) after
-/// a few releases ship without Nebula, when virtually no installed binaries
-/// still have these tables on disk.
+/// TODO: delete this helper (and its call site in `ensure_table_schema`)
+/// three minor releases after the Nebula removal ships, i.e. once the oldest
+/// supported desktop version no longer creates these tables on first boot.
+/// Behaviour covered by `tests::ensure_table_schema_drops_legacy_nebula_tables`.
 async fn drop_legacy_nebula_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     for table in ["vpn_status", "nebula_binary_status", "nebula_certificate", "autoconnect_vpn_enabled"] {
         sqlx::query(&format!("DROP TABLE IF EXISTS {table}")).execute(pool).await?;
@@ -689,6 +690,72 @@ mod tests {
             .await
             .expect("failed to count tables");
         assert_eq!(count as usize, EXPECTED_TABLES.len(), "table count changed across calls");
+    }
+
+    /// Names of the legacy Nebula tables earlier releases created in
+    /// `ensure_table_schema`. Kept in sync with the array in
+    /// [`drop_legacy_nebula_tables`] — if those names diverge, this test
+    /// stops exercising the helper.
+    const LEGACY_NEBULA_TABLES: &[&str] = &[
+        "vpn_status",
+        "nebula_binary_status",
+        "nebula_certificate",
+        "autoconnect_vpn_enabled",
+    ];
+
+    /// Regression guard for the one-shot Nebula drop. Without this test the
+    /// helper could silently become a no-op (empty array, renamed tables,
+    /// accidental short-circuit) and existing schema tests would still pass
+    /// because they start from an empty DB. Pre-populates the four legacy
+    /// tables, runs `ensure_table_schema`, and asserts the helper actually
+    /// removed them while leaving the canonical schema intact.
+    #[tokio::test]
+    async fn ensure_table_schema_drops_legacy_nebula_tables() {
+        let pool = temp_pool().await;
+
+        // Minimal stand-in schemas — the test only cares about the table
+        // *names* being dropped, not their original column shapes.
+        for table in LEGACY_NEBULA_TABLES {
+            sqlx::query(&format!("CREATE TABLE {table} (id INTEGER PRIMARY KEY)"))
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("failed to seed legacy table {table}: {e}"));
+        }
+
+        // Sanity: confirm the seed worked before relying on the post-condition.
+        let seeded = list_user_tables(&pool).await;
+        for table in LEGACY_NEBULA_TABLES {
+            assert!(
+                seeded.contains(*table),
+                "test setup bug: legacy table `{table}` not seeded; present: {seeded:?}"
+            );
+        }
+
+        ensure_table_schema(&pool).await.expect("ensure_table_schema failed");
+
+        let after = list_user_tables(&pool).await;
+        for table in LEGACY_NEBULA_TABLES {
+            assert!(
+                !after.contains(*table),
+                "legacy Nebula table `{table}` survived ensure_table_schema; present: {after:?}"
+            );
+        }
+
+        // Spot-check that ordinary bring-up still ran; an early-return bug in
+        // `ensure_table_schema` would silently drop the legacy tables *and*
+        // skip the rest of schema init.
+        assert!(after.contains("sub_accounts"), "canonical schema missing after drop+init: {after:?}");
+    }
+
+    /// Helper: collect user (non-`sqlite_%`) table names from `sqlite_master`.
+    async fn list_user_tables(pool: &SqlitePool) -> HashSet<String> {
+        sqlx::query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+            .fetch_all(pool)
+            .await
+            .expect("failed to list tables")
+            .iter()
+            .map(|r| r.get::<String, _>("name"))
+            .collect()
     }
 
     /// The `sync_paths` table must end up with the `label` and `is_paused`
