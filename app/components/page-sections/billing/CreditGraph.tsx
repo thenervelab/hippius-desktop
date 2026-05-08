@@ -93,7 +93,7 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
       {/* Inner panel — fully rounded with border; outer overflow-hidden clips the bottom corners flush */}
       <div className={cn(
         "flex flex-col w-full flex-1",
-        "rounded-[8px] border border-grey-dark-100",
+        "border-t border-grey-dark-100",
         "bg-white dark:bg-black-600 dark:border-black-300",
       )}>
         {/* Headline stat */}
