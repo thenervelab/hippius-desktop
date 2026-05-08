@@ -4,9 +4,13 @@ import ChartTrends, { ChartTrendsConfig } from "@/components/ui/chart-trends";
 import StorageUsedTooltip from "./StorageUsedTooltip";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 
-// Drive-scoped: the chart and the "Total Storage Used" tile in
-// DetailList both feed off /user-credits-by-storage-history?storage_type=drive,
-// so the panel and the card can never report different totals.
+// Drive-scoped: the chart and the "Total Storage Used" tile both
+// feed off /user-extended-storage-metrics?storage=drive — the same
+// snapshot endpoint, just bucketed by day with carry-forward in
+// `get_drive_storage_chart`. Before 2026-05-08 the chart pulled
+// from /user-credits-by-storage-history (event-driven) and could
+// disagree with the tile by hundreds of MB after a deletion until
+// the next billing event landed; the move closes that drift.
 const config: ChartTrendsConfig = {
   invokeCommand: "get_drive_storage_chart",
   selfFetch: true,
