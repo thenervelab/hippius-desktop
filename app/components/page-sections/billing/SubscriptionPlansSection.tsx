@@ -284,7 +284,7 @@ export default function SubscriptionPlansSection() {
                     <div className="mt-3">
                       {currentActivePlan ? (
                         <Button
-                          variant="default"
+                          variant="defaultStable"
                           size="auto"
                           className="w-full h-[30px] rounded-[6px] text-[14px] font-medium tracking-[-0.28px]"
                           onClick={() => setCancelDialogOpen(true)}
