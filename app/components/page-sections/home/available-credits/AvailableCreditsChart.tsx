@@ -16,9 +16,9 @@ const VB_H = 300;
 const CHART_PAD_TOP = 4;
 const CHART_PAD_BOTTOM = 0;
 const CHART_H = VB_H - CHART_PAD_TOP - CHART_PAD_BOTTOM;
-const Y_AXIS_GAP = 12;
+export const Y_AXIS_GAP = 12;
 
-function computeYAxisWidth(values: number[]): number {
+export function computeYAxisWidth(values: number[]): number {
   if (!values.length) return 36;
   const maxVal = Math.max(...values, 0.01);
   if (maxVal <= 0) return 36;
@@ -92,13 +92,19 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
   const [containerWidth, setContainerWidth] = useState(0);
 
   const [animKey, setAnimKey] = useState(0);
-  const prevDataLenRef = useRef(data.length);
+  // Use a content signature so switching between same-length ranges still animates.
+  const dataSignature = useMemo(
+    () =>
+      `${data.length}-${data[0]?.balance ?? ""}-${data[data.length - 1]?.balance ?? ""}`,
+    [data],
+  );
+  const prevSigRef = useRef(dataSignature);
   useEffect(() => {
-    if (data.length !== prevDataLenRef.current) {
-      prevDataLenRef.current = data.length;
+    if (dataSignature !== prevSigRef.current) {
+      prevSigRef.current = dataSignature;
       setAnimKey((k) => k + 1);
     }
-  }, [data]);
+  }, [dataSignature]);
 
   useEffect(() => {
     const el = containerRef.current;
