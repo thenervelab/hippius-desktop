@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 
 import CreditsWidget from "./CreditsWidget";
 import CreditGraph from "./CreditGraph";
@@ -9,10 +10,7 @@ import BillingnHistoryTable from "./BillingnHistoryTable";
 import SubscriptionPlansSection from "./SubscriptionPlansSection";
 import TaoDepositWidget from "./TaoDepositWidget";
 import PageHeader from "@/components/page-sections/home/PageHeader";
-import { HelpCircle } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
-
-const BILLING_DOCS_URL = "https://docs.hippius.com/use/desktop/billing";
+import { Info } from "lucide-react";
 
 export default function Billing() {
   return (
@@ -25,13 +23,32 @@ export default function Billing() {
             subtitle="All uploaded files are private and securely encrypted."
             showTopUpCredits={false}
             infoButton={
-              <button
-                onClick={() => openUrl(BILLING_DOCS_URL)}
-                aria-label="Billing documentation"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400"
-              >
-                <HelpCircle className="size-3.5" />
-              </button>
+              <TooltipPrimitive.Provider delayDuration={300}>
+                <TooltipPrimitive.Root>
+                  <TooltipPrimitive.Trigger asChild>
+                    <button
+                      type="button"
+                      aria-label="Billing information"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400"
+                    >
+                      <Info className="size-3.5" />
+                    </button>
+                  </TooltipPrimitive.Trigger>
+                  <TooltipPrimitive.Portal>
+                    <TooltipPrimitive.Content
+                      side="bottom"
+                      align="center"
+                      sideOffset={8}
+                      avoidCollisions
+                      collisionPadding={8}
+                      className="z-[9999] max-w-[260px] rounded-[8px] border border-grey-dark-100 bg-white px-3 py-[10px] text-[12px] font-medium leading-4 tracking-[-0.24px] text-[#52525c] shadow-[0px_4px_24px_0px_rgba(0,0,0,0.08)] dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-[#a3a3a3] dark:shadow-black/25"
+                    >
+                      Credits are consumed when you upload files, provision VMs, or use other Hippius services.
+                      <TooltipPrimitive.Arrow className="fill-white dark:fill-[#2c2c2c]" />
+                    </TooltipPrimitive.Content>
+                  </TooltipPrimitive.Portal>
+                </TooltipPrimitive.Root>
+              </TooltipPrimitive.Provider>
             }
           />
 
