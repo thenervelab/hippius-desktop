@@ -4,6 +4,7 @@ import { FC, useState } from "react";
 import { CloseCircle } from "@/components/ui/icons";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { Button } from "@/components/ui/button";
@@ -46,13 +47,13 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
         "get_customer_portal_url",
         {
           accountId: polkadotAddress,
-          returnUrl: `${window.location.origin}/dashboard/billing`,
+          returnUrl: "https://console.hippius.com/dashboard/billing",
         },
       );
 
       if (data.portal_url) {
         handleClose();
-        window.open(data.portal_url, "_blank");
+        await openUrl(data.portal_url);
       } else {
         throw new Error("No portal URL returned");
       }
