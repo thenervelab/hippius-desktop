@@ -3,7 +3,7 @@
 import { FC, useCallback, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
-import AvailableCreditsChart, { computeYAxisWidth, Y_AXIS_GAP } from "@/components/page-sections/home/available-credits/AvailableCreditsChart";
+import AvailableCreditsChart from "@/components/page-sections/home/available-credits/AvailableCreditsChart";
 import { formatCreditsForChart, totalCreditsUsed, CreditChartRange } from "@/lib/utils/formatCreditChart";
 import { Select, RefreshButton } from "@/components/ui";
 import { GripIcon } from "@/components/ui/icons";
@@ -46,14 +46,6 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
   );
 
   const usedTotal = useMemo(() => totalCreditsUsed(credits ?? []), [credits]);
-
-  // Match headline left-indent to chart plot area so "13.06" sits above the line.
-  // Chart container has px-4 (16px); plot area starts another Y_AXIS_W + Y_AXIS_GAP in.
-  const yAxisWidth = useMemo(
-    () => computeYAxisWidth(chartData.map((d) => d.balance || 0)),
-    [chartData],
-  );
-  const headlinePaddingLeft = 16 + yAxisWidth + Y_AXIS_GAP;
 
   const showSkeleton = isLoading || isFetching;
 
@@ -105,8 +97,8 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
         "rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100",
         "bg-white dark:bg-black-600 dark:border-black-300",
       )}>
-        {/* Headline stat — left-aligned with chart plot area */}
-        <div className="flex items-end gap-1 pt-3 pr-4" style={{ paddingLeft: `${headlinePaddingLeft}px` }}>
+        {/* Headline stat */}
+        <div className="flex items-end gap-1 pt-3 px-4">
           {showSkeleton ? (
             <div className="h-[30px] w-[140px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
           ) : (
