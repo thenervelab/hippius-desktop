@@ -35,6 +35,10 @@ export default function SubscriptionPlansSection() {
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const hasActiveSubscription = activeSubscription?.has_subscription || false;
 
+  // DEV TOOLS — remove before shipping
+  const [devMockEnabled, setDevMockEnabled] = useState(false);
+  const [devMockPlanName, setDevMockPlanName] = useState("");
+
   const [storageInfo, setStorageInfo] = useState<
     Record<string, StorageCapacityInfo>
   >({});
@@ -109,7 +113,9 @@ export default function SubscriptionPlansSection() {
   };
 
   const isActivePlan = (planName: string) =>
-    hasActiveSubscription && activeSubscription?.subscription?.plan_name === planName;
+    devMockEnabled
+      ? devMockPlanName === planName
+      : hasActiveSubscription && activeSubscription?.subscription?.plan_name === planName;
 
   const handleDialogOpenChange = (open: boolean) => {
     setCancelDialogOpen(open);
@@ -143,6 +149,37 @@ export default function SubscriptionPlansSection() {
           "p-3",
         )}
       >
+        {/* DEV TOOLS — remove before shipping */}
+        {process.env.NODE_ENV === "development" && (
+          <div className="mb-3 flex flex-wrap items-center gap-3 rounded-[6px] border border-dashed border-orange-400 bg-orange-50 dark:bg-orange-950/30 px-3 py-2">
+            <span className="font-mono text-[11px] font-bold uppercase text-orange-500">Dev Tools</span>
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={devMockEnabled}
+                onChange={(e) => {
+                  setDevMockEnabled(e.target.checked);
+                  if (!e.target.checked) setDevMockPlanName("");
+                }}
+                className="accent-orange-500"
+              />
+              <span className="font-mono text-[11px] text-orange-600 dark:text-orange-400">Mock active plan</span>
+            </label>
+            {devMockEnabled && (
+              <select
+                value={devMockPlanName}
+                onChange={(e) => setDevMockPlanName(e.target.value)}
+                className="font-mono text-[11px] rounded border border-orange-300 bg-white dark:bg-black-600 text-orange-600 dark:text-orange-400 px-1.5 py-0.5"
+              >
+                <option value="">— pick a plan —</option>
+                {plans.map((p) => (
+                  <option key={p.id} value={p.name}>{p.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
+
         {isLoadingPlans ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="size-6 text-primary-50 animate-spin" />
