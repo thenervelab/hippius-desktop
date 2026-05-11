@@ -265,14 +265,14 @@ export default function SubscriptionPlansSection() {
                         Features
                       </p>
                       <div className="flex items-center gap-2">
-                        <ArrowRight className="size-3.5 shrink-0 text-grey-10 dark:text-white" />
+                        <ArrowRight className="size-3.5 shrink-0 text-[#B7B7B7]" />
                         <span className="text-[12px] font-medium tracking-[-0.24px] text-grey-10 dark:text-white">
                           Automatic Reload
                         </span>
                       </div>
                       {storageInfo[plan.id]?.usageDescription && (
                         <div className="flex items-center gap-2">
-                          <ArrowRight className="size-3.5 shrink-0 text-grey-10 dark:text-white" />
+                          <ArrowRight className="size-3.5 shrink-0 text-[#B7B7B7]" />
                           <span className="text-[12px] font-medium tracking-[-0.24px] text-grey-10 dark:text-white">
                             {storageInfo[plan.id].usageDescription}
                           </span>
