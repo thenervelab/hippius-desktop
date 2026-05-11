@@ -200,20 +200,24 @@ export default function SubscriptionPlansSection() {
                   )}
                 >
                   {/* Plan card header */}
-                  <div className="flex items-center justify-between px-2 py-2">
-                    <div className="flex items-center gap-2">
+                  <div className="flex items-center justify-between gap-2 px-2 py-2">
+                    <div className="flex items-center gap-2 min-w-0">
                       {getPlanIcon(index)}
-                      <span className="font-medium text-[14px] leading-[18px] tracking-[-0.28px] text-grey-10 dark:text-white">
+                      <span className="font-medium text-[14px] leading-[18px] tracking-[-0.28px] text-grey-10 dark:text-white truncate">
                         {plan.name}
                       </span>
                     </div>
                     {currentActivePlan && (
-                      <span className="flex items-center gap-1">
+                      <span className="flex shrink-0 items-center gap-1">
                         <span className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-primary-40/20">
                           <span className="size-[6.15px] rounded-full bg-primary-40" />
                         </span>
-                        <span className="font-mono text-[12px] font-medium uppercase leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark">
-                          Active
+                        <span className="font-mono text-[12px] font-medium uppercase leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark whitespace-nowrap">
+                          {/* $3 & $15 always have room; $150 & $450 abbreviate at 4-column layout */}
+                          Active{index < 2
+                            ? " Plan"
+                            : <span className="@3xl:hidden"> Plan</span>
+                          }
                         </span>
                       </span>
                     )}
