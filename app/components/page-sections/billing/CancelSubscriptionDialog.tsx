@@ -75,7 +75,7 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
       borderClassName="bg-[#FC7D73]"
       maxWidth="max-w-[560px]"
     >
-      <p className="text-left text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#52525c] dark:text-[#a3a3a3] mb-6">
+      <p className="text-center text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#52525c] dark:text-[#a3a3a3] mb-6">
         You&apos;ll be redirected to the Stripe customer portal where you can
         manage or cancel your subscription. Are you sure you want to proceed?
       </p>
