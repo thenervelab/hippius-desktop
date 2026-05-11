@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import * as Menubar from "@radix-ui/react-menubar";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Icons } from "@/components/ui";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -142,17 +142,17 @@ const DateSelector: React.FC<DateSelectorProps> = ({
   const today = new Date();
 
   return (
-    <Menubar.Root>
-      <Menubar.Menu>
-        <Menubar.Trigger asChild>
-          <button className="flex justify-center group px-3 py-2 bg-grey-100 min-w-[7rem] rounded border border-grey-80 hover:bg-grey-80 transition-colors">
-            <div className="text-sm font-medium text-grey-10 leading-5">
-              {getDisplayText()}
-            </div>
-            <Icons.CalendarNew className="ml-2 mt-0.5 size-4 text-primary-10" />
-          </button>
-        </Menubar.Trigger>
-        <Menubar.Content className="mt-1 bg-white border border-grey-80 rounded-lg p-4 shadow-menu min-w-[20rem] max-w-[22.5rem] z-50" align="start" sideOffset={4}>
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button className="flex justify-center group px-3 py-2 bg-grey-100 min-w-[7rem] rounded border border-grey-80 hover:bg-grey-80 transition-colors">
+          <div className="text-sm font-medium text-grey-10 leading-5">
+            {getDisplayText()}
+          </div>
+          <Icons.CalendarNew className="ml-2 mt-0.5 size-4 text-primary-10" />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content className="mt-1 bg-white border border-grey-80 rounded-lg p-4 shadow-menu min-w-[20rem] max-w-[22.5rem] z-50" align="start" sideOffset={4}>
           {/* Calendar Header */}
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
@@ -292,9 +292,9 @@ const DateSelector: React.FC<DateSelectorProps> = ({
               </>
             )}
           </div>
-        </Menubar.Content>
-      </Menubar.Menu>
-    </Menubar.Root>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 };
 
