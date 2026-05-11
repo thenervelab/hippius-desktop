@@ -1262,6 +1262,68 @@ pub async fn list_sync_folder_grouped(
     list_sync_folder_grouped_inner(&state, account_id, sync_path, subfolder, label).await
 }
 
+/// Compare two file/folder names using macOS Finder ordering rules, which
+/// match `NSString.localizedStandardCompare`:
+///   1. Case-insensitive
+///   2. Natural number ordering ("9" < "10", "2025" < "2026")
+///   3. Primary category order: punctuation/symbols < digits < letters
+///
+/// This keeps `_backup` before `2025_rennsport` before `InstantUpload`,
+/// matching what the user sees in Finder when sorted by name.
+///
+/// Implementation: normalize each name so that every non-alphanumeric char
+/// becomes `'\x01'` (which sorts before all digits and letters), and
+/// lowercase all letters, then compare the resulting strings with natural
+/// number ordering (digit runs compared numerically, not lexicographically).
+fn macos_name_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    fn normalize_char(c: char) -> char {
+        if c.is_ascii_digit() {
+            c
+        } else if let Some(lower) = c.to_lowercase().next() {
+            if lower.is_alphabetic() { lower } else { '\x01' }
+        } else {
+            '\x01'
+        }
+    }
+
+    // Walk both normalized strings simultaneously, comparing digit runs
+    // numerically and all other characters by value.
+    let mut ai = a.chars().map(normalize_char).peekable();
+    let mut bi = b.chars().map(normalize_char).peekable();
+
+    loop {
+        match (ai.peek().copied(), bi.peek().copied()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(ac), Some(bc)) => {
+                if ac.is_ascii_digit() && bc.is_ascii_digit() {
+                    // Compare digit runs as integers (natural sort).
+                    let mut an: u64 = 0;
+                    let mut bn: u64 = 0;
+                    while ai.peek().map_or(false, |c| c.is_ascii_digit()) {
+                        an = an * 10 + ai.next().unwrap().to_digit(10).unwrap() as u64;
+                    }
+                    while bi.peek().map_or(false, |c| c.is_ascii_digit()) {
+                        bn = bn * 10 + bi.next().unwrap().to_digit(10).unwrap() as u64;
+                    }
+                    match an.cmp(&bn) {
+                        std::cmp::Ordering::Equal => continue,
+                        ord => return ord,
+                    }
+                } else {
+                    ai.next();
+                    bi.next();
+                    match ac.cmp(&bc) {
+                        std::cmp::Ordering::Equal => continue,
+                        ord => return ord,
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Pure helper for [`list_sync_folder_grouped`], exposed for integration tests
 /// so they can drive it against a hand-assembled [`AppState`] without going
 /// through the Tauri command layer.
@@ -1368,6 +1430,12 @@ pub async fn list_sync_folder_grouped_inner(
         });
     }
     files.extend(server_only_files);
+
+    // Sort both lists to match macOS Finder name ordering:
+    // punctuation/symbols first, then digits, then letters, with natural
+    // number ordering within digit runs.
+    folders.sort_by(|a, b| macos_name_cmp(&a.name, &b.name));
+    files.sort_by(|a, b| macos_name_cmp(&a.name, &b.name));
 
     // 5. Backfill flag. NULL on `relative_paths_backfilled_at` ⇒ pending.
     // Any DB error — missing row, pool not ready — surfaces as
@@ -1962,6 +2030,60 @@ async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- macos_name_cmp ---
+
+    /// Verifies that `macos_name_cmp` produces the same ordering as macOS
+    /// Finder when sorting by name: symbols/punctuation < digits < letters,
+    /// with natural (not lexicographic) number ordering.
+    #[test]
+    fn macos_name_cmp_matches_finder_order() {
+        let mut names = vec![
+            "wordpress",
+            "2025_rennsport",
+            "_notes",
+            "InstantUpload",
+            "_backup",
+            "Photos",
+            "2026_rennsport",
+            "__bittensor",
+            "mogmachine.memory",
+            "portugal",
+        ];
+        names.sort_by(|a, b| macos_name_cmp(a, b));
+
+        // Expected order matches macOS Finder:
+        // underscore-prefixed → digits → letters (case-insensitive)
+        assert_eq!(
+            names,
+            vec![
+                "__bittensor",
+                "_backup",
+                "_notes",
+                "2025_rennsport",
+                "2026_rennsport",
+                "InstantUpload",
+                "mogmachine.memory",
+                "Photos",
+                "portugal",
+                "wordpress",
+            ]
+        );
+    }
+
+    #[test]
+    fn macos_name_cmp_natural_number_ordering() {
+        let mut names = vec!["file10", "file2", "file1", "file20", "file9"];
+        names.sort_by(|a, b| macos_name_cmp(a, b));
+        assert_eq!(names, vec!["file1", "file2", "file9", "file10", "file20"]);
+    }
+
+    #[test]
+    fn macos_name_cmp_case_insensitive() {
+        let mut names = vec!["Zebra", "apple", "Mango", "banana"];
+        names.sort_by(|a, b| macos_name_cmp(a, b));
+        assert_eq!(names, vec!["apple", "banana", "Mango", "Zebra"]);
+    }
 
     // --- derive_relative_name ---
 
