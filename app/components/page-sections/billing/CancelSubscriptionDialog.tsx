@@ -71,7 +71,8 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
       onClose={handleClose}
       title="Cancel Subscription?"
       icon={<CloseCircle className="size-5 text-white" />}
-      iconBgClassName="bg-error-60"
+      iconBgClassName="bg-[#FC7D73]"
+      borderClassName="bg-[#FC7D73]"
       maxWidth="max-w-[560px]"
     >
       <p className="text-center text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#52525c] dark:text-[#a3a3a3] mb-6">
@@ -92,7 +93,7 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
         <Button
           variant="destructive"
           size="auto"
-          className="flex-1 h-[38px] rounded-[8px] text-[14px] font-medium tracking-[-0.28px] !bg-error-60 hover:!bg-error-50 !text-white"
+          className="flex-1 h-[38px] rounded-[8px] text-[14px] font-medium tracking-[-0.28px] !bg-[#FC7D73] hover:!bg-[#fb695e] !text-white"
           onClick={handleCancelSubscription}
           loading={isCancelling}
         >
