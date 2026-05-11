@@ -23,8 +23,8 @@ const AuthTitleBar = () => {
       )}
     >
       <div className="flex items-center gap-[8px] px-[4px] py-[5px] rounded-[9px] pointer-events-none">
-        <HippiusLogo className="size-[28px] rounded-[6px]" />
-        <span className="font-medium text-[18px] leading-none text-grey-10 dark:text-grey-light-100">
+        <HippiusLogo className="size-[28px] text-primary-50" />
+        <span className="font-[557] text-[18px] leading-[18px] text-primary-50 tracking-[0px]">
           Hippius
         </span>
       </div>

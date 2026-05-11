@@ -4,7 +4,7 @@ import { HippiusLogo } from "@/components/ui/icons";
 
 export default function PageLoader() {
   return (
-    <div className="flex items-center justify-center min-h-screen h-screen w-screen bg-grey-100">
+    <div className="flex items-center justify-center min-h-screen h-screen w-screen bg-grey-100 dark:bg-black-primary-bg">
       <div
         role="status"
         aria-live="polite"
@@ -39,9 +39,7 @@ export default function PageLoader() {
 
           {/* logo tile */}
           <div className="absolute inset-0 flex items-center justify-center z-10">
-            <div className="rounded-xl bg-white shadow-md ring-1 ring-primary-50/20 p-2">
-              <HippiusLogo className="size-9 bg-primary-50 rounded text-white" />
-            </div>
+            <HippiusLogo className="size-9 text-primary-50" />
           </div>
         </div>
       </div>

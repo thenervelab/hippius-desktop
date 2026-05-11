@@ -72,10 +72,10 @@ const TopBarLogoMenu = () => {
               "dark:hover:bg-white/10 dark:data-[state=open]:bg-white/10",
             )}
           >
-            <HippiusLogo className="size-[28px] rounded-[6px] shrink-0" />
+            <HippiusLogo className="size-[28px] shrink-0 text-primary-50" />
             <span
               className={cn(
-                "font-medium text-[18px] leading-none text-black-700 dark:text-grey-light-300",
+                "font-[557] text-[18px] leading-[18px] text-primary-50 tracking-[0px]",
                 "overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out",
                 collapsed
                   ? "max-w-0 opacity-0 -ml-[8px]"

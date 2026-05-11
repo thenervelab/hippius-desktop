@@ -20,7 +20,7 @@ const HippiusHeader = ({
         <div
           ref={ref}
           className={cn(
-            "text-[min(1.25rem,20px)] font-medium text-grey-10 flex gap-[min(0.5rem,8px)] items-center",
+            "text-[min(1.25rem,20px)] leading-[min(1.25rem,20px)] font-[557] text-primary-50 flex gap-[min(0.5rem,8px)] items-center",
             inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8",
             {
               "mb-[min(1.625rem,26px)]": isVerify,
@@ -29,7 +29,7 @@ const HippiusHeader = ({
             }
           )}
         >
-          <HippiusLogo className="size-[min(2.25rem,36px)] bg-primary-50 rounded text-white" />
+          <HippiusLogo className="size-[min(2.25rem,36px)] text-primary-50" />
           Hippius
         </div>
       )}
