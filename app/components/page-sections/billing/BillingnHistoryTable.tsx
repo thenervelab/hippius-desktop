@@ -24,9 +24,40 @@ import TransactionTypeBadge from "./TransactionTypeBadge";
 import useBillingTransactions, {
   TransactionObject,
 } from "@/app/lib/hooks/api/useBillingTransactions";
-import { CopyableCell } from "@/components/ui/alt-table";
 import { TaoLogo, Dollar } from "@/components/ui/icons";
+import { Icons } from "@/components/ui";
+import { toast } from "sonner";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
+
+function BillingIdCell({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    navigator.clipboard.writeText(id);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+    toast.success("Billing ID Copied Successfully!");
+  };
+  return (
+    <div className="flex items-center gap-1 w-full min-w-0">
+      <span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-medium text-grey-20 dark:text-grey-dark-200">
+        {id}
+      </span>
+      <button
+        onClick={handleCopy}
+        className="shrink-0 p-1 hover:text-gray-700 transition-colors"
+        title="Copy Billing ID"
+      >
+        {copied ? (
+          <Icons.Check className="size-3.5 text-green-500" />
+        ) : (
+          <Icons.Copy className="size-3.5 text-grey-60 dark:text-grey-dark-500" />
+        )}
+      </button>
+    </div>
+  );
+}
 
 const HEADERS = ["ID", "AMOUNT", "TRANSACTION TYPE", "STATUS", "DATE"];
 const SKEL_WIDTHS = ["120px", "80px", "120px", "90px", "150px"];
@@ -68,16 +99,7 @@ const col = createColumnHelper<TransactionObject>();
 const columns = [
   col.accessor("id", {
     header: "ID",
-    cell: (d) => (
-      <CopyableCell
-        copyAbleText={String(d.getValue())}
-        title="Copy Billing ID"
-        toastMessage="Billing ID Copied Successfully!"
-        isTable={true}
-        textColor="text-grey-20 dark:text-grey-dark-200"
-        copyIconClassName="size-3.5 text-grey-60 dark:text-grey-dark-500"
-      />
-    ),
+    cell: (d) => <BillingIdCell id={String(d.getValue())} />,
   }),
   col.accessor("amount", {
     header: "AMOUNT",
