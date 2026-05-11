@@ -1,18 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, MoreVertical } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   Building,
-  CloseSquare,
   Star as StarIcon,
   TagRight,
   Ticket,
   Coin,
   ArrowRight,
 } from "@/components/ui/icons";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import CancelSubscriptionDialog, { Plan } from "./CancelSubscriptionDialog";
 import useSubscriptionData from "@/app/lib/hooks/useSubscriptionData";
 import { Button } from "@/components/ui/button";
@@ -34,7 +32,6 @@ export default function SubscriptionPlansSection() {
 
   const [isSubscribing, setIsSubscribing] = useState(false);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
-  const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const hasActiveSubscription = activeSubscription?.has_subscription || false;
 
@@ -112,23 +109,10 @@ export default function SubscriptionPlansSection() {
   };
 
   const isActivePlan = (planName: string) =>
-    hasActiveSubscription &&
-    activeSubscription?.subscription?.plan_name === planName;
-
-  const handleDropdownOpenChange = (open: boolean, planId: string) => {
-    if (open) setOpenDropdownId(planId);
-    else if (openDropdownId === planId) setOpenDropdownId(null);
-  };
+    hasActiveSubscription && activeSubscription?.subscription?.plan_name === planName;
 
   const handleDialogOpenChange = (open: boolean) => {
     setCancelDialogOpen(open);
-    if (!open) setOpenDropdownId(null);
-  };
-
-  const handleCancelSubscriptionClick = (event: Event) => {
-    event.preventDefault();
-    setOpenDropdownId(null);
-    setCancelDialogOpen(true);
   };
 
   return (
@@ -176,7 +160,6 @@ export default function SubscriptionPlansSection() {
                     "flex flex-col rounded-[8px] border overflow-hidden",
                     "bg-grey-light-300 border-grey-dark-100",
                     "dark:bg-black-primary-bg dark:border-black-300",
-                    currentActivePlan && "border-primary-40 dark:border-primary-40",
                   )}
                 >
                   {/* Plan card header */}
@@ -188,38 +171,14 @@ export default function SubscriptionPlansSection() {
                       </span>
                     </div>
                     {currentActivePlan && (
-                      <DropdownMenu.Root
-                        open={openDropdownId === plan.id}
-                        onOpenChange={(open) =>
-                          handleDropdownOpenChange(open, plan.id)
-                        }
-                      >
-                        <DropdownMenu.Trigger asChild>
-                          <button
-                            className="flex items-center justify-center h-6 w-6 rounded border border-grey-80 bg-white hover:bg-grey-90 transition-colors dark:bg-black-600 dark:border-black-300"
-                            aria-label="More options"
-                          >
-                            <MoreVertical className="size-4 text-grey-50" />
-                          </button>
-                        </DropdownMenu.Trigger>
-                        <DropdownMenu.Portal>
-                          <DropdownMenu.Content
-                            className="min-w-[11.25rem] bg-white rounded shadow-lg p-1 border border-grey-80 z-20 dark:bg-black-600 dark:border-black-300"
-                            sideOffset={5}
-                            align="end"
-                          >
-                            <DropdownMenu.Item
-                              className="flex items-center gap-2 px-3 py-1.5 text-error-80 hover:bg-grey-90 outline-none cursor-pointer rounded dark:hover:bg-black-primary-bg"
-                              onSelect={handleCancelSubscriptionClick}
-                            >
-                              <CloseSquare className="size-4" />
-                              <span className="text-base">
-                                Cancel Subscription
-                              </span>
-                            </DropdownMenu.Item>
-                          </DropdownMenu.Content>
-                        </DropdownMenu.Portal>
-                      </DropdownMenu.Root>
+                      <span className="flex items-center gap-1">
+                        <span className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-primary-40/20">
+                          <span className="size-[6.15px] rounded-full bg-primary-40" />
+                        </span>
+                        <span className="font-mono text-[12px] font-medium uppercase leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark">
+                          Active
+                        </span>
+                      </span>
                     )}
                   </div>
 
@@ -280,22 +239,29 @@ export default function SubscriptionPlansSection() {
                       )}
                     </div>
 
-                    {/* Subscribe button */}
+                    {/* Subscribe / Cancel button */}
                     <div className="mt-3">
-                      <Button
-                        variant={currentActivePlan ? "defaultStable" : "primary"}
-                        size="auto"
-                        className="w-full h-[30px] rounded-[6px] text-[14px] font-medium tracking-[-0.28px]"
-                        onClick={() => handleSubscribe(plan.id)}
-                        disabled={isSubscribing || !!currentActivePlan}
-                        loading={isLoading}
-                      >
-                        {isLoading
-                          ? "Processing..."
-                          : currentActivePlan
-                            ? "Your Active Plan"
-                            : "Subscribe"}
-                      </Button>
+                      {currentActivePlan ? (
+                        <Button
+                          variant="default"
+                          size="auto"
+                          className="w-full h-[30px] rounded-[6px] text-[14px] font-medium tracking-[-0.28px]"
+                          onClick={() => setCancelDialogOpen(true)}
+                        >
+                          Cancel Subscription
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="primary"
+                          size="auto"
+                          className="w-full h-[30px] rounded-[6px] text-[14px] font-medium tracking-[-0.28px]"
+                          onClick={() => handleSubscribe(plan.id)}
+                          disabled={isSubscribing}
+                          loading={isLoading}
+                        >
+                          {isLoading ? "Processing..." : "Subscribe"}
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </div>
