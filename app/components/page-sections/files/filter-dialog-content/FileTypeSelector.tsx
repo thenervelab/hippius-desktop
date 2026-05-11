@@ -73,7 +73,7 @@ const FileTypeSelector: React.FC<FileTypeSelectorProps> = ({
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button className="flex justify-center group px-3 py-2 bg-grey-100 w-full rounded border border-grey-80 hover:bg-grey-80 min-w-[7rem] transition-colors">
+        <button className="flex justify-center group px-3 py-2 bg-grey-100 rounded border border-grey-80 hover:bg-grey-80 min-w-[7rem] transition-colors">
           <div className="text-sm font-medium text-grey-40 leading-5">
             {getDisplayText()}
           </div>
