@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useAtomValue, useSetAtom } from "jotai";
+import { useAtomValue } from "jotai";
+import { useRouter } from "next/navigation";
 import {
   HippiusLogo,
   ChevronDown,
@@ -15,11 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  settingsDialogOpenAtom,
-  activeSettingsTabAtom,
-  sidebarCollapsedAtom,
-} from "@/components/sidebar/sideBarAtoms";
+import { sidebarCollapsedAtom } from "@/components/sidebar/sideBarAtoms";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/app/lib/utils";
 import CheckForUpdateDialog from "@/components/updater/CheckForUpdateDialog";
@@ -32,14 +29,12 @@ const TopBarLogoMenu = () => {
     return platform.includes("mac") || ua.includes("mac os");
   });
   const collapsed = useAtomValue(sidebarCollapsedAtom);
-  const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
-  const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
+  const router = useRouter();
   const { logout } = useWalletAuth();
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
 
   const handleOpenSettings = () => {
-    setActiveSettingsTab("Sync & Storage");
-    setSettingsDialogOpen(true);
+    router.push("/settings?section=sync");
   };
 
   const handleOpenUpdate = () => {

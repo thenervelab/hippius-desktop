@@ -92,6 +92,8 @@ const Sidebar: React.FC = () => {
     [setSettingsDialogOpen, triggerSyncPathRefresh],
   );
 
+  if (pathname.startsWith("/settings")) return null;
+
   return (
     <>
       <SettingsWidthDialog
