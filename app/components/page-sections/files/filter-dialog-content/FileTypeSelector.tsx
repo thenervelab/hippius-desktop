@@ -1,5 +1,5 @@
 import React from "react";
-import * as Menubar from "@radix-ui/react-menubar";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { Icons } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -28,27 +28,22 @@ const fileTypes: Array<{
   icon: React.FC<Record<string, unknown>>;
   color: string;
 }> = [
-    { type: "folder", label: "Folder", icon: Folder2, color: "text-primary-40" },
-    { type: "image", label: "Image", icon: Image, color: "text-[#ea4335]" },
-    { type: "video", label: "Video", icon: Video, color: "text-[#ea4335]" },
-    { type: "audio", label: "Audio", icon: Note, color: "text-[#9b59b6]" },
-    { type: "PDF", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
-    { type: "doc", label: "Document", icon: Document, color: "text-[#4285F4]" },
-    { type: "XLS", label: "Spreadsheet", icon: Sheet, color: "text-[#34a853]" },
-    { type: "PPT", label: "Presentation", icon: Presentation, color: "text-[#fbbc04]" },
-    { type: "archive", label: "Archive", icon: Zip, color: "text-[#f39c12]" },
-    { type: "disk_image", label: "Disk Image", icon: File, color: "text-primary-70 fill-primary-60" },
-    { type: "code", label: "Code", icon: Terminal, color: "text-[#4285F4]" },
-    { type: "markdown", label: "Markdown", icon: DocumentText, color: "text-[#4285F4]" },
-    { type: "sql", label: "Database", icon: CentralizedDataBase, color: "text-[#4285F4]" },
-    { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
-    {
-      type: "document",
-      label: "Other",
-      icon: File,
-      color: "text-primary-70 fill-primary-60",
-    },
-  ];
+  { type: "folder", label: "Folder", icon: Folder2, color: "text-primary-40" },
+  { type: "image", label: "Image", icon: Image, color: "text-[#ea4335]" },
+  { type: "video", label: "Video", icon: Video, color: "text-[#ea4335]" },
+  { type: "audio", label: "Audio", icon: Note, color: "text-[#9b59b6]" },
+  { type: "PDF", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
+  { type: "doc", label: "Document", icon: Document, color: "text-[#4285F4]" },
+  { type: "XLS", label: "Spreadsheet", icon: Sheet, color: "text-[#34a853]" },
+  { type: "PPT", label: "Presentation", icon: Presentation, color: "text-[#fbbc04]" },
+  { type: "archive", label: "Archive", icon: Zip, color: "text-[#f39c12]" },
+  { type: "disk_image", label: "Disk Image", icon: File, color: "text-primary-70 fill-primary-60" },
+  { type: "code", label: "Code", icon: Terminal, color: "text-[#4285F4]" },
+  { type: "markdown", label: "Markdown", icon: DocumentText, color: "text-[#4285F4]" },
+  { type: "sql", label: "Database", icon: CentralizedDataBase, color: "text-[#4285F4]" },
+  { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
+  { type: "document", label: "Other", icon: File, color: "text-primary-70 fill-primary-60" },
+];
 
 interface FileTypeSelectorProps {
   selectedTypes?: FileTypes[];
@@ -76,19 +71,23 @@ const FileTypeSelector: React.FC<FileTypeSelectorProps> = ({
   };
 
   return (
-    <Menubar.Root>
-      <Menubar.Menu>
-        <Menubar.Trigger asChild>
-          <button className="flex justify-center group px-3 py-2 bg-grey-100 w-full rounded border border-grey-80 hover:bg-grey-80 min-w-[7rem] transition-colors">
-            <div className="text-sm font-medium text-grey-40 leading-5">
-              {getDisplayText()}
-            </div>
-            <Icons.ChevronDown className="ml-2 mt-0.5 size-4 text-grey-10 transition-transform duration-200 group-data-[state=open]:rotate-180" />
-          </button>
-        </Menubar.Trigger>
-        <Menubar.Content className="mt-1 bg-white border border-grey-80 rounded-lg px-2 py-1 shadow-menu min-w-[9.5625rem] z-50">
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button className="flex justify-center group px-3 py-2 bg-grey-100 w-full rounded border border-grey-80 hover:bg-grey-80 min-w-[7rem] transition-colors">
+          <div className="text-sm font-medium text-grey-40 leading-5">
+            {getDisplayText()}
+          </div>
+          <Icons.ChevronDown className="ml-2 mt-0.5 size-4 text-grey-10 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          sideOffset={4}
+          align="start"
+          className="mt-1 bg-white border border-grey-80 rounded-lg px-2 py-1 shadow-menu min-w-[9.5625rem] z-50"
+        >
           {fileTypes.map((fileType) => (
-            <Menubar.Item
+            <DropdownMenu.Item
               key={fileType.type}
               className="flex items-center gap-2 p-2 hover:bg-grey-80 cursor-pointer rounded text-grey-40 text-xs font-medium outline-none w-full"
               onSelect={(e) => {
@@ -113,11 +112,11 @@ const FileTypeSelector: React.FC<FileTypeSelectorProps> = ({
                   {fileType.label}
                 </span>
               </div>
-            </Menubar.Item>
+            </DropdownMenu.Item>
           ))}
-        </Menubar.Content>
-      </Menubar.Menu>
-    </Menubar.Root>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 };
 
