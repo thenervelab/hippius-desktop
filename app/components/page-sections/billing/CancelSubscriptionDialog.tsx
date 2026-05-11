@@ -81,7 +81,7 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
 
       <div className="flex flex-col gap-2 sm:flex-row">
         <Button
-          variant="primaryLight"
+          variant="primary"
           size="auto"
           className="flex-1 h-[38px] rounded-[8px] text-[14px] font-medium tracking-[-0.28px]"
           onClick={handleClose}
