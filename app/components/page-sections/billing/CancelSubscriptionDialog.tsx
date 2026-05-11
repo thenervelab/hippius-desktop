@@ -92,7 +92,7 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
         <Button
           variant="destructive"
           size="auto"
-          className="flex-1 h-[38px] rounded-[8px] text-[14px] font-medium tracking-[-0.28px] !bg-error-60 hover:!bg-error-50"
+          className="flex-1 h-[38px] rounded-[8px] text-[14px] font-medium tracking-[-0.28px] !bg-error-60 hover:!bg-error-50 !text-white"
           onClick={handleCancelSubscription}
           loading={isCancelling}
         >
