@@ -27,6 +27,7 @@ import useBillingTransactions, {
 import { TaoLogo, Dollar } from "@/components/ui/icons";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 
 function BillingIdCell({ id }: { id: string }) {
@@ -174,14 +175,14 @@ const BillingHistoryTable: React.FC = () => {
   if (isPending && !error) {
     return (
       <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
-        <div className={`overflow-x-auto custom-scrollbar-thin`}>
+        <div className="overflow-x-auto custom-scrollbar-thin">
           <Table className={MIN_W}>
             <THead>
-              <Tr className="bg-[#fefefe] dark:bg-black-500">
+              <Tr>
                 {HEADERS.map((h) => (
                   <th
                     key={h}
-                    className="h-[var(--table-row-height,36px)] border-b border-r border-grey-dark-100 px-[var(--table-cell-padding-x,10px)] py-0 text-left text-[length:var(--table-header-font-size,10px)] font-semibold uppercase text-grey-dark-600 last:border-r-0 dark:border-black-300 dark:text-grey-dark-700"
+                    className="h-[var(--table-row-height,36px)] border-b border-r border-[#E3E3E3] bg-white px-[var(--table-cell-padding-x,10px)] py-0 text-left text-[length:var(--table-header-font-size,10px)] font-semibold uppercase text-grey-dark-600 last:border-r-0 dark:border-[#313131] dark:!bg-[#111111] dark:text-grey-dark-700"
                   >
                     {h}
                   </th>
@@ -193,6 +194,8 @@ const BillingHistoryTable: React.FC = () => {
                 rows={DEFAULT_PAGE_SIZE}
                 columns={HEADERS.length}
                 columnWidths={SKEL_WIDTHS}
+                rowClassName="odd:bg-[#fbfbfb] even:bg-[#f5f5f5] dark:odd:bg-[#161616] dark:even:bg-[#1e1e1e]"
+                cellClassName="!border-[#E3E3E3] dark:!border-[#313131]"
               />
             </TBody>
           </Table>
@@ -251,18 +254,31 @@ const BillingHistoryTable: React.FC = () => {
           <Table className={MIN_W}>
             <THead>
               {table.getHeaderGroups().map((hg) => (
-                <Tr key={hg.id} className="bg-[#fefefe] dark:bg-black-primary-bg">
+                <Tr key={hg.id}>
                   {hg.headers.map((h) => (
-                    <Th key={h.id} header={h} />
+                    <Th
+                      key={h.id}
+                      header={h}
+                      className="bg-white dark:!bg-[#111111] !border-[#E3E3E3] dark:!border-[#313131]"
+                    />
                   ))}
                 </Tr>
               ))}
             </THead>
             <TBody>
               {table.getRowModel().rows.map((row) => (
-                <Tr key={row.id} className="bg-white dark:bg-transparent">
+                <Tr key={row.id}>
                   {row.getVisibleCells().map((cell) => (
-                    <Td key={cell.id} cell={cell} />
+                    <Td
+                      key={cell.id}
+                      cell={cell}
+                      className={cn(
+                        "!border-[#E3E3E3] dark:!border-[#313131]",
+                        row.index % 2 === 0
+                          ? "bg-[#fbfbfb] dark:bg-[#161616]"
+                          : "bg-[#f5f5f5] dark:bg-[#1e1e1e]",
+                      )}
+                    />
                   ))}
                 </Tr>
               ))}
