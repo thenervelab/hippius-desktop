@@ -1,15 +1,72 @@
 "use client";
 
-import { FC, useState } from "react";
+import { FC, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { WalletMinimalIcon } from "@/components/ui/icons";
 import { TaoLogo, Copy, CircularTickGrid } from "@/components/ui/icons";
 import useDepositAddress from "@/app/lib/hooks/useDepositAddress";
 import { toast } from "sonner";
 
+function useCenterTruncatedText(text: string) {
+  const containerRef = useRef<HTMLSpanElement>(null);
+  const [display, setDisplay] = useState(text);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !text) return;
+
+    const compute = () => {
+      const availWidth = el.offsetWidth;
+      if (availWidth <= 0) return;
+
+      const style = window.getComputedStyle(el);
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      ctx.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const letterSpacing = parseFloat(style.letterSpacing) || 0;
+
+      const measure = (str: string) =>
+        ctx.measureText(str).width + letterSpacing * Math.max(0, str.length - 1);
+
+      // Full text fits — show it as-is
+      if (measure(text) <= availWidth) {
+        setDisplay(text);
+        return;
+      }
+
+      const ellipsisWidth = measure("...");
+
+      // Binary search: largest n where slice(0,n) + "..." + slice(-n) fits
+      let lo = 0;
+      let hi = Math.floor(text.length / 2);
+      while (lo < hi - 1) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (measure(text.slice(0, mid) + text.slice(-mid)) + ellipsisWidth <= availWidth) {
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+
+      setDisplay(lo > 0 ? `${text.slice(0, lo)}...${text.slice(-lo)}` : "...");
+    };
+
+    const observer = new ResizeObserver(compute);
+    observer.observe(el);
+    compute();
+    return () => observer.disconnect();
+  }, [text]);
+
+  return { containerRef, display };
+}
+
 const TaoDepositWidget: FC<{ className?: string }> = ({ className }) => {
   const { data: depositAddress } = useDepositAddress();
   const [copied, setCopied] = useState(false);
+
+  const { containerRef, display } = useCenterTruncatedText(depositAddress ?? "");
 
   const handleCopy = async () => {
     if (!depositAddress) return;
@@ -22,8 +79,6 @@ const TaoDepositWidget: FC<{ className?: string }> = ({ className }) => {
       toast.error("Failed to copy address");
     }
   };
-
-  const displayAddress = depositAddress ?? "---";
 
   return (
     <div
@@ -75,8 +130,11 @@ const TaoDepositWidget: FC<{ className?: string }> = ({ className }) => {
               "bg-grey-light-300 dark:bg-black-primary-bg dark:border-black-300",
             )}
           >
-            <span className="text-[12px] font-medium tracking-[-0.24px] text-grey-50 dark:text-white/40 whitespace-nowrap overflow-hidden text-ellipsis w-full">
-              {displayAddress}
+            <span
+              ref={containerRef}
+              className="w-full text-[12px] font-medium tracking-[-0.24px] text-grey-50 dark:text-white/40 whitespace-nowrap"
+            >
+              {depositAddress ? display : "---"}
             </span>
           </div>
 
