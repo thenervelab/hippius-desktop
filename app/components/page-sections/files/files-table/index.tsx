@@ -56,6 +56,7 @@ import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
+import { macosNameCmp } from "@/lib/utils/fileSort";
 
 import { toast } from "sonner";
 
@@ -517,6 +518,11 @@ const FilesTable: FC<FilesTableProps> = memo(
             header: "NAME",
             enableSorting: true,
             id: "name",
+            sortingFn: (rowA, rowB, columnId) =>
+              macosNameCmp(
+                rowA.getValue<string>(columnId) ?? "",
+                rowB.getValue<string>(columnId) ?? "",
+              ),
             minSize: 200,
             maxSize: 1000,
             cell: (info) => {
