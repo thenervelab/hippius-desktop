@@ -2,15 +2,10 @@
 
 import { FC, useState } from "react";
 import { cn } from "@/lib/utils";
-import { Icons } from "@/components/ui";
+import { WalletMinimalIcon } from "@/components/ui/icons";
 import { TaoLogo, Copy, CircularTickGrid } from "@/components/ui/icons";
 import useDepositAddress from "@/app/lib/hooks/useDepositAddress";
 import { toast } from "sonner";
-
-const centerTruncate = (str: string, start = 12, end = 8): string => {
-  if (!str || str.length <= start + end + 4) return str;
-  return `${str.slice(0, start)}....${str.slice(-end)}`;
-};
 
 const TaoDepositWidget: FC<{ className?: string }> = ({ className }) => {
   const { data: depositAddress } = useDepositAddress();
@@ -28,9 +23,7 @@ const TaoDepositWidget: FC<{ className?: string }> = ({ className }) => {
     }
   };
 
-  const displayAddress = depositAddress
-    ? centerTruncate(depositAddress)
-    : "---";
+  const displayAddress = depositAddress ?? "---";
 
   return (
     <div
@@ -45,7 +38,7 @@ const TaoDepositWidget: FC<{ className?: string }> = ({ className }) => {
       {/* Header row */}
       <div className="flex h-[46px] w-full items-center pl-[14px] pr-[10px]">
         <div className="flex items-center gap-1">
-          <Icons.WalletAdd className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
+          <WalletMinimalIcon className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
           <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
             Tao Deposit Address
           </p>

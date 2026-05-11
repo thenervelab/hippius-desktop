@@ -5,7 +5,8 @@ import { cn } from "@/lib/utils";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
 import AvailableCreditsChart from "@/components/page-sections/home/available-credits/AvailableCreditsChart";
 import { formatCreditsForChart, totalCreditsUsed, CreditChartRange } from "@/lib/utils/formatCreditChart";
-import { Select, RefreshButton, Icons } from "@/components/ui";
+import { Select, RefreshButton } from "@/components/ui";
+import { GripIcon } from "@/components/ui/icons";
 
 const TIME_RANGE_OPTIONS = [
   { value: "last7days", label: "THIS WEEK" },
@@ -61,7 +62,7 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
       {/* Header row */}
       <div className="flex h-[46px] w-full items-center justify-between pl-[14px] pr-[10px]">
         <div className="flex items-center gap-1">
-          <Icons.WalletAdd className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
+          <GripIcon className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
           <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
             Credit Overview
           </p>
