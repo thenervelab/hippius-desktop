@@ -1087,10 +1087,24 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
     // Delete the DB row so the drive isn't resurrected on app restart.
     // Best-effort: if the account or pool isn't available, the in-memory
     // cleanup above still takes effect for this session.
-    if let (Ok(pool), Ok(acct)) = (app_state.pool(), app_state.current_account_id())
-        && let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, &acct, &label).await
+    let acct = app_state.current_account_id().ok();
+    if let (Ok(pool), Some(acct)) = (app_state.pool(), acct.as_deref())
+        && let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, acct, &label).await
     {
         warn!("Failed to remove sync path for '{}' from DB: {e}", label);
+    }
+
+    // Drop the on-disk sync baseline. Without this, a re-add (whether at the
+    // same path or a new one) would resurrect the old `synced` tree and the
+    // next sync cycle would compute deletes against it: when `delete_remote_folder`
+    // wipes the server but leaves local files intact, the empty remote ∖ stale
+    // synced becomes `local_deletes` and the user's files are nuked on the
+    // next cycle. `recover_drive` already does the same cleanup at line 632
+    // for unlock-failure recovery — same "destructive intent → start fresh"
+    // semantics. `pause_drive` deliberately preserves this state because pause
+    // is the reversible counterpart to remove.
+    if let Some(acct) = acct.as_deref() {
+        clear_persisted_sync_state(acct, &label);
     }
 
     if remaining == 0 {
@@ -1103,6 +1117,38 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
 
     info!("Removed drive '{}', {} drives remaining", label, remaining);
     Ok(())
+}
+
+/// Best-effort delete of `sync_state.json` and `sync_state.json.bak` for the
+/// given drive. Returns nothing — every failure mode here (account dir missing,
+/// label never persisted, file already gone, permission issue) is benign:
+/// the worst case is a stale baseline survives, which is exactly the state we
+/// already had before this fix and which the next `remove_drive` call will
+/// re-attempt to clean.
+///
+/// `NotFound` errors are treated as success and not logged: a drive that was
+/// removed before its first sync, or a label that was paused-only, never
+/// produced a baseline file. Any other error (typically permission issues or
+/// a locked file on Windows) is surfaced via `warn!` because it leaves the
+/// stale baseline intact — which is the exact bug the surrounding code is
+/// supposed to prevent. Without the log we'd have no way to diagnose a re-add
+/// data-loss recurrence in production.
+fn clear_persisted_sync_state(account_id: &str, label: &str) {
+    let Ok(folder_dir) = config_dir_for_folder(account_id, label) else {
+        return;
+    };
+    for name in ["sync_state.json", "sync_state.json.bak"] {
+        let path = folder_dir.join(name);
+        if let Err(err) = std::fs::remove_file(&path)
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to clear sync baseline on remove_drive — stale state may survive",
+            );
+        }
+    }
 }
 
 /// Pause a sync folder: stop the drive in-memory and mark it as paused in the DB.
@@ -2161,6 +2207,55 @@ mod tests {
 
         assert_eq!(remaining, 0, "empty map has zero remaining");
         assert!(removed_path.is_none(), "nonexistent label should yield None path");
+    }
+
+    // ── clear_persisted_sync_state: data-loss regression ──────────────
+    //
+    // Without this cleanup, the sequence
+    //   1. delete_remote_folder (wipes server, leaves local files)
+    //   2. add_local_sync_folder for the same path
+    // produces an empty `state.remote` paired with a stale `state.synced`,
+    // which `SyncPlan::build` interprets as "the server side deleted these
+    // files" → emits `local_deletes` → the user's local files are nuked
+    // on the next sync cycle. Clearing the on-disk baseline on remove
+    // forces a fresh start so the next sync uploads instead of deleting.
+
+    #[test]
+    fn clear_persisted_sync_state_removes_baseline_files() {
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+
+        let account = "5TestClearStateAccount";
+        let label = "to-be-removed";
+
+        let folder_dir = config_dir_for_folder(account, label).expect("folder_dir");
+        std::fs::create_dir_all(&folder_dir).unwrap();
+        let state_path = folder_dir.join("sync_state.json");
+        let backup_path = folder_dir.join("sync_state.json.bak");
+        std::fs::write(&state_path, br#"{"local":{},"remote":{},"synced":{}}"#).unwrap();
+        std::fs::write(&backup_path, br#"{"local":{},"remote":{},"synced":{}}"#).unwrap();
+
+        clear_persisted_sync_state(account, label);
+
+        assert!(!state_path.exists(), "sync_state.json must be removed");
+        assert!(!backup_path.exists(), "sync_state.json.bak must be removed");
+    }
+
+    #[test]
+    fn clear_persisted_sync_state_tolerates_missing_files() {
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+
+        // Documents the "best-effort" contract: removing a drive that never
+        // wrote any state (immediate cancel before first sync, or a label
+        // that was paused-only) must not panic or surface an error.
+        clear_persisted_sync_state("5NoSuchAccount", "label-that-never-synced");
     }
 
     // ── build_file_synced_callback timestamp plumbing ──────────────────

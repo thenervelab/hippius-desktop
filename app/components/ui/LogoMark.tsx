@@ -31,7 +31,7 @@ export function LogoMark({ className }: { className?: string }) {
             "radial-gradient(50% 70% at 50% 50%, rgba(22,22,22,0) 0%, #161616 100%)",
         }}
       />
-      <HippiusLogo className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 size-[min(2rem,32px)] rounded" />
+      <HippiusLogo className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 size-[min(2rem,32px)] rounded text-primary-50" />
     </div>
   );
 }

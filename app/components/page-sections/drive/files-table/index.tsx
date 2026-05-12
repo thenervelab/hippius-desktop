@@ -57,6 +57,7 @@ import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
+import { macosNameCmp } from "@/lib/utils/fileSort";
 
 import { toast } from "sonner";
 
@@ -530,9 +531,14 @@ const FilesTable: FC<FilesTableProps> = memo(
       return [
         ...selectionColumn,
         columnHelper.accessor("name", {
-          header: "Name",
+          header: "NAME",
           enableSorting: true,
           id: "name",
+          sortingFn: (rowA, rowB, columnId) =>
+            macosNameCmp(
+              rowA.getValue<string>(columnId) ?? "",
+              rowB.getValue<string>(columnId) ?? "",
+            ),
           minSize: 200,
           maxSize: 1000,
           cell: (info) => {
@@ -1107,7 +1113,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         <div
           className={cn(
             "w-full relative",
-            isRecentFiles ? "min-h-[21.875rem]" : "min-h-[43.75rem]",
+            !isRecentFiles && "min-h-[43.75rem]",
           )}
         >
           <TableModule.TableWrapper
@@ -1129,7 +1135,7 @@ const FilesTable: FC<FilesTableProps> = memo(
           {/* Sentinel element for infinite scroll */}
           <div
             ref={sentinelRef}
-            className={cn("h-1", isSelectionMode && "mb-20")}
+            className={cn("h-1 -mt-1", isSelectionMode && "mb-20")}
           />
         </div>
 

@@ -11,7 +11,7 @@ import {
   deleteRemoteFolder,
   restoreRemoteFolders,
 } from "@/app/lib/utils/restoreUtils";
-import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
+import { DRIVE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { GET_USER_IPFS_FILES_QUERY_KEY } from "@/app/lib/hooks/use-user-files";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -194,7 +194,7 @@ export default function MultiFolderSyncManager() {
     const refresh = () => {
       loadFolders();
       queryClient.invalidateQueries({
-        queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY],
+        queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY],
       });
       queryClient.invalidateQueries({
         queryKey: [GET_USER_IPFS_FILES_QUERY_KEY],

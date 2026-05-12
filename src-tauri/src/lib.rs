@@ -14,7 +14,6 @@ pub mod console_access;
 pub mod crypto;
 pub mod error;
 pub mod infra;
-pub mod nebula;
 pub mod notifications;
 pub mod recovery;
 pub mod shares;

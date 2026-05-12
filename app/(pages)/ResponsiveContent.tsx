@@ -30,7 +30,9 @@ export default function ResponsiveContent({
 
         {/* Scrollable content area — serves as container query context */}
         <div className="flex-1 overflow-y-auto @container flex flex-col">
-          <div className="w-full flex-1 flex flex-col">{children}</div>
+          <div className="w-full flex-1 flex flex-col font-geist">
+            {children}
+          </div>
         </div>
       </main>
     </div>

@@ -52,7 +52,7 @@ import { formatBytes } from "@/lib/utils/formatBytes";
 import { formatRelative } from "@/app/lib/utils/timeRelative";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/lib/utils";
-import { pickHistoryRowDisplay, pickShareRowDisplay } from "./shareRowDisplay";
+import { pickHistoryRowDisplay } from "./shareRowDisplay";
 
 const SHARES_QUERY_KEY = "shares-list";
 const HISTORY_QUERY_KEY = "shares-history-list";
@@ -376,12 +376,6 @@ function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare, resharingToken }
         id: "name",
         header: "NAME",
         enableSorting: true,
-        // Sort by the visible label so cross-device rows ("Created from
-        // the console") don't fall through to a confusing "<unknown>".
-        sortingFn: (a, b) =>
-          pickShareRowDisplay(a.original).text.localeCompare(
-            pickShareRowDisplay(b.original).text,
-          ),
         cell: (info) => <ActiveNameCell row={info.row.original} />,
       }),
       activeColumnHelper.display({
@@ -458,26 +452,27 @@ function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare, resharingToken }
 }
 
 function ActiveNameCell({ row }: { row: ShareSummary }) {
-  const display = pickShareRowDisplay(row);
   const expiresMs = Date.parse(row.expiresAt);
   const expired = !Number.isNaN(expiresMs) && expiresMs <= Date.now();
+  // The "minted on another device" signal is already conveyed by the
+  // empty link column ("Not available on this device") and the
+  // disabled Copy/Reshare items in the row menu — adding a name-cell
+  // badge for it just made the row noisy. The Expired badge stays;
+  // it's the only one carrying information neither column repeats.
+  const suffix = expired ? (
+    <span className="ml-1.5"><Badge tone="muted">Expired</Badge></span>
+  ) : undefined;
 
   return (
     <div className="flex items-center gap-3 min-w-0">
       <AbstractIconWrapper className="size-8 shrink-0">
         <Icons.Link className="absolute size-4 text-primary-50" />
       </AbstractIconWrapper>
-      {display.isPlaceholder ? (
-        <span className="text-sm italic text-grey-50 truncate" title={display.text}>
-          {display.text}
-        </span>
-      ) : (
-        <MiddleTruncatedName
-          name={display.text}
-          textClassName="text-sm font-medium text-grey-10"
-          suffix={expired ? <span className="ml-1.5"><Badge tone="muted">Expired</Badge></span> : undefined}
-        />
-      )}
+      <MiddleTruncatedName
+        name={row.filename}
+        textClassName="text-sm font-medium text-grey-10"
+        suffix={suffix}
+      />
     </div>
   );
 }

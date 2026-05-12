@@ -213,7 +213,9 @@ describe("File Count Source Selection", () => {
 
 describe("Home/Files consistency contract", () => {
   it("same indexer response → same file count on both pages", () => {
-    // Home page uses useFilesCount → returns remoteFileCount directly
+    // Both pages use useDriveStorageStats → expose driveStats.fileCount as
+    // remoteFileCount; the hook is the single source of truth so both
+    // surfaces always render the same number.
     const homePageCount = defaults.remoteFileCount;
 
     // Files page (All view) uses same hook

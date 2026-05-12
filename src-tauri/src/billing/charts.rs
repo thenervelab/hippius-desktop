@@ -10,8 +10,16 @@
 //! 2. Generate an inclusive date range for the requested period
 //! 3. Carry-forward fill: days without data inherit the last known balance
 //!
-//! Also includes [`transform_marketplace_credits`] (cumulative daily running
-//! totals) and [`calculate_storage_cost`] (pricing model computation).
+//! Also includes [`transform_marketplace_credits`] (cumulative daily
+//! running totals) and [`calculate_storage_cost`] (pricing model
+//! computation).
+//!
+//! Drive-scoped storage and credit chart formatters live in
+//! [`crate::billing::drive_credits`] — they fetch and format in one
+//! IPC instead of the FE-fetch + Rust-format split this module uses.
+//! The drive-scoped path is currently gated off in the FE; both
+//! formatters are kept registered so the next release can flip the
+//! gate without touching this side.
 
 use chrono::{Datelike, NaiveDate, Utc, Weekday};
 use serde::{Deserialize, Serialize};
@@ -50,7 +58,7 @@ const WEEKDAYS_FULL: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "T
 const MONTHS_SHORT: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /// Hippius creation date (March 11, 2025) — lower bound for "max" range.
-fn hippius_creation_date() -> NaiveDate {
+pub(super) fn hippius_creation_date() -> NaiveDate {
     NaiveDate::from_ymd_opt(2025, 3, 11).unwrap()
 }
 
@@ -72,7 +80,7 @@ fn hippius_creation_date() -> NaiveDate {
 /// f64 path silently coerced some of these formats to numeric values;
 /// the new path returns `"0"` consistently. All current callers build
 /// `raw` via `format!("{}", _ as u128)` so they always pass pure digits.
-fn format_balance(raw: &str, decimals: usize) -> String {
+pub(super) fn format_balance(raw: &str, decimals: usize) -> String {
     let value = crate::blockchain::convert::planck_to_hip_with_decimals(raw, decimals);
     if value == "0" {
         return "0".to_string();
@@ -81,7 +89,7 @@ fn format_balance(raw: &str, decimals: usize) -> String {
 }
 
 /// Format bytes using SI units (1000-based): B, KB, MB, GB, TB, PB.
-fn format_bytes(bytes: f64) -> String {
+pub(super) fn format_bytes(bytes: f64) -> String {
     if bytes == 0.0 {
         return "0 B".to_string();
     }
@@ -95,7 +103,7 @@ fn format_bytes(bytes: f64) -> String {
 }
 
 /// Generate an inclusive date range from `start` to `end`.
-fn get_all_dates_in_range(start: NaiveDate, end: NaiveDate) -> Vec<NaiveDate> {
+pub(super) fn get_all_dates_in_range(start: NaiveDate, end: NaiveDate) -> Vec<NaiveDate> {
     let mut dates = Vec::new();
     let mut cur = start;
     while cur <= end {
@@ -108,11 +116,11 @@ fn get_all_dates_in_range(start: NaiveDate, end: NaiveDate) -> Vec<NaiveDate> {
     dates
 }
 
-fn normalize_date(date: NaiveDate) -> String {
+pub(super) fn normalize_date(date: NaiveDate) -> String {
     date.format("%Y-%m-%d").to_string()
 }
 
-fn date_to_iso(date: NaiveDate) -> String {
+pub(super) fn date_to_iso(date: NaiveDate) -> String {
     format!("{}T00:00:00.000Z", normalize_date(date))
 }
 
@@ -156,7 +164,7 @@ fn add_commas_to_int(s: &str) -> String {
 }
 
 /// Parse an ISO timestamp string to a `NaiveDate`, trying multiple formats.
-fn parse_timestamp_to_date(ts: &str) -> Option<NaiveDate> {
+pub(super) fn parse_timestamp_to_date(ts: &str) -> Option<NaiveDate> {
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
         return Some(dt.date_naive());
     }
@@ -188,16 +196,16 @@ fn weekday_index(d: NaiveDate) -> usize {
     }
 }
 
-fn weekday_name(d: NaiveDate) -> &'static str {
+pub(super) fn weekday_name(d: NaiveDate) -> &'static str {
     WEEKDAYS_FULL[weekday_index(d)]
 }
 
-fn dd_mon_label(d: NaiveDate) -> String {
+pub(super) fn dd_mon_label(d: NaiveDate) -> String {
     format!("{} {}", d.day(), MONTHS_SHORT[d.month0() as usize])
 }
 
 /// Compute the start date for a given range keyword.
-fn range_start(range: &str, today: NaiveDate) -> Option<NaiveDate> {
+pub(super) fn range_start(range: &str, today: NaiveDate) -> Option<NaiveDate> {
     match range {
         "last7days" => today.checked_sub_signed(chrono::Duration::days(6)),
         "last30days" => today.checked_sub_signed(chrono::Duration::days(29)),
@@ -348,32 +356,28 @@ fn build_chart(accounts: &[AccountInput], range: &str, divide_by_1e18: bool, inc
 /// Format account data for a credits usage chart.
 ///
 /// Divides `total_balance` by 10^18 to get credit values.
-/// Uses carry-forward fill for missing days.
+/// Uses carry-forward fill for missing days. Wallet-wide scope (covers
+/// drive + S3 + every other storage product). The drive-only sibling
+/// is [`crate::billing::drive_credits::get_drive_credits_chart`]; the
+/// FE picks between them via the `DRIVE_SCOPED_CREDITS_ENABLED` gate.
 #[tauri::command]
 pub fn format_credits_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, crate::error::AppError> {
     Ok(build_chart(&accounts, &range, true, false))
 }
 
-/// Format account data for a storage usage chart.
-///
-/// `total_balance` represents raw bytes (no division).
-/// Uses carry-forward fill for missing days.
-#[tauri::command]
-pub fn format_storage_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, crate::error::AppError> {
-    Ok(build_chart(&accounts, &range, false, false))
-}
-
 /// Format account data for a balance chart (includes credit field).
 ///
 /// Divides both `total_balance` and `credit` by 10^18.
-/// Uses carry-forward fill for missing days.
+/// Uses carry-forward fill for missing days. Powers the wallet and
+/// billing-page balance trends; the home-page storage trend is
+/// drive-scoped via `billing::drive_credits` instead.
 #[tauri::command]
 pub fn format_balance_chart(accounts: Vec<AccountInput>, range: String) -> Result<Vec<ChartPoint>, crate::error::AppError> {
     Ok(build_chart(&accounts, &range, true, true))
 }
 
 // ---------------------------------------------------------------------------
-// Marketplace credits transformation
+// Marketplace credits transformation (wallet-wide credit chart input)
 // ---------------------------------------------------------------------------
 
 /// Raw marketplace credit event from the indexer.
@@ -403,9 +407,11 @@ pub struct MarketplaceCreditOutput {
 
 /// Transform marketplace credits into cumulative daily running totals.
 ///
-/// Groups credits by date, fills date gaps, and computes cumulative sums.
-/// Returns an `Account`-shaped vec so the result can be fed directly into
-/// the same chart components as balance data.
+/// Groups credits by date, fills date gaps, and computes cumulative
+/// sums. Returns an `Account`-shaped vec so the result can be fed
+/// directly into the same chart components as balance data. Wallet-
+/// wide: the input series is unscoped — every product (drive, S3, …)
+/// is summed together.
 #[tauri::command]
 pub fn transform_marketplace_credits(credits: Vec<MarketplaceCreditInput>) -> Result<Vec<MarketplaceCreditOutput>, crate::error::AppError> {
     if credits.is_empty() {
@@ -425,8 +431,11 @@ pub fn transform_marketplace_credits(credits: Vec<MarketplaceCreditInput>) -> Re
         return Ok(vec![]);
     }
 
-    let first_key = daily.keys().next().unwrap().clone();
-    let last_key = daily.keys().last().unwrap().clone();
+    // Both `next` / `last` are infallible here because the empty check
+    // above guarantees `daily` has at least one entry; `expect` records
+    // that invariant so a future refactor can't silently break it.
+    let first_key = daily.keys().next().expect("daily non-empty per check above").clone();
+    let last_key = daily.keys().last().expect("daily non-empty per check above").clone();
 
     let start_date =
         NaiveDate::parse_from_str(&first_key, "%Y-%m-%d").map_err(|e| crate::error::AppError::Validation(format!("Invalid start date: {e}")))?;

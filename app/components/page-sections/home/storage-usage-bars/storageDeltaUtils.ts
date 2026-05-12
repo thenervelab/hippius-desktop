@@ -1,27 +1,19 @@
-// Frontend-only data shaping for the per-day storage bar chart.
+// Per-day storage-additions bar chart shaping.
 //
-// The existing `format_storage_chart` Rust IPC carry-forwards the latest
-// cumulative reading into every "missing" day, which is wrong for the
-// "how much storage was added on this day?" question. Rather than touch
-// Rust, this module mirrors the console's TS logic: it takes raw
-// cumulative file events, computes per-day deltas with a proper pre-range
-// baseline, optionally aggregates to monthly bars for long ranges, and
-// smart-downsamples to a target bar count (preferring days where storage
-// actually changed).
+// Input is the cumulative series returned by `get_drive_storage_chart`
+// (Rust): one ChartPoint per day in the requested range, carry-forwarded
+// across quiet days, with the latest snapshot of each day collapsed in
+// the backend. We just diff consecutive days here to get "bytes added on
+// day N", then optionally aggregate to monthly bars for long ranges and
+// downsample to fit the requested bar count.
+//
+// Day-0 caveat: the backend bakes the pre-range baseline into day 0's
+// `balance`, so day-0's delta reads 0 — we can't tell "added today" from
+// "was already there before the window opened". All subsequent days are
+// faithful diffs.
 
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { ChartPoint } from "@/lib/types/chartTypes";
-import { FileChartData } from "@/app/lib/hooks/api/useFilesSize";
-
-const WEEKDAYS_FULL = [
-  "Sunday",
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-];
 
 const MONTHS = [
   "Jan",
@@ -45,9 +37,6 @@ export type StorageRange =
   | "year"
   | "max";
 
-// Mirrors hippius_creation_date() in src-tauri/src/billing/charts.rs.
-const HIPPIUS_CREATION = new Date(2025, 2, 11); // March 11, 2025
-
 function startOfDay(d: Date): Date {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
@@ -61,90 +50,17 @@ function normalizeKey(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-function getAllDatesInRange(start: Date, end: Date): Date[] {
-  const dates: Date[] = [];
-  const cur = startOfDay(start);
-  const last = startOfDay(end);
-  while (cur <= last) {
-    dates.push(new Date(cur));
-    cur.setDate(cur.getDate() + 1);
-  }
-  return dates;
-}
-
-interface RawCumulativePoint {
-  date: Date;
-  bytes: number;
-}
-
-function fileEventsToCumulativePoints(
-  fileData: FileChartData[],
-): RawCumulativePoint[] {
-  return fileData
-    .map<RawCumulativePoint | null>((f) => {
-      const ts = new Date(f.processed_timestamp);
-      if (Number.isNaN(ts.getTime())) return null;
-      // Use UTC components to match the console's getDateFromUTCTimestamp,
-      // so a timestamp that's already-tomorrow in UTC doesn't get attributed
-      // to today in local time.
-      const d = new Date(
-        ts.getUTCFullYear(),
-        ts.getUTCMonth(),
-        ts.getUTCDate(),
-      );
-      const bytes = Number(f.total_balance);
-      if (!Number.isFinite(bytes)) return null;
-      return { date: d, bytes };
-    })
-    .filter((p): p is RawCumulativePoint => p !== null)
-    .sort((a, b) => a.date.getTime() - b.date.getTime());
-}
-
-/** Per-day delta = max(0, current cumulative - previous cumulative). */
-function mapToRangeDeltas(
-  points: RawCumulativePoint[],
-  dateRange: Date[],
-  isLast7: boolean,
-): ChartPoint[] {
-  if (!dateRange.length) return [];
-
-  // Day → max cumulative reading (multiple snapshots on the same day collapse
-  // to the largest, mirroring the console).
-  const byDate = new Map<string, number>();
-  for (const p of points) {
-    const key = normalizeKey(p.date);
-    byDate.set(key, Math.max(byDate.get(key) ?? 0, p.bytes));
-  }
-
-  // Baseline: largest cumulative reading strictly before the range starts.
-  const firstKey = normalizeKey(dateRange[0]);
-  let previous = 0;
-  for (const p of points) {
-    if (normalizeKey(p.date) < firstKey) {
-      if (p.bytes > previous) previous = p.bytes;
-    }
-  }
-
-  return dateRange.map((date) => {
-    const key = normalizeKey(date);
-    const current = byDate.get(key);
-    let delta = 0;
-    let hasData = false;
-    if (current !== undefined) {
-      delta = Math.max(0, current - previous);
-      previous = current;
-      hasData = true;
-    }
-    const dayLabel = isLast7
-      ? WEEKDAYS_FULL[date.getDay()]
-      : `${date.getDate()} ${MONTHS[date.getMonth()]}`;
+/** Cumulative ChartPoints → per-day delta ChartPoints. */
+function cumulativeToDeltas(points: ChartPoint[]): ChartPoint[] {
+  if (!points.length) return [];
+  let prev = points[0].balance;
+  return points.map((p, i) => {
+    const delta = i === 0 ? 0 : Math.max(0, p.balance - prev);
+    prev = p.balance;
     return {
-      x: date.toISOString(),
+      ...p,
       balance: delta,
       formattedBalance: formatBytes(delta),
-      timestamp: hasData ? key : "",
-      dayLabel,
-      bandLabel: isLast7 ? WEEKDAYS_FULL[date.getDay()] : undefined,
     };
   });
 }
@@ -157,14 +73,21 @@ function aggregateToMonthly(daily: ChartPoint[]): ChartPoint[] {
   const curYear = today.getFullYear();
   const curMonth = today.getMonth();
 
-  // Insertion-ordered grouping by `${year}-${month}`.
-  const buckets = new Map<string, { sum: number; year: number; month: number }>();
+  const buckets = new Map<
+    string,
+    { sum: number; year: number; month: number }
+  >();
   for (const p of daily) {
     const d = new Date(p.x);
     const key = `${d.getFullYear()}-${String(d.getMonth()).padStart(2, "0")}`;
     const bucket = buckets.get(key);
     if (bucket) bucket.sum += p.balance;
-    else buckets.set(key, { sum: p.balance, year: d.getFullYear(), month: d.getMonth() });
+    else
+      buckets.set(key, {
+        sum: p.balance,
+        year: d.getFullYear(),
+        month: d.getMonth(),
+      });
   }
 
   const out: ChartPoint[] = [];
@@ -172,7 +95,7 @@ function aggregateToMonthly(daily: ChartPoint[]): ChartPoint[] {
     const endDate =
       year === curYear && month === curMonth
         ? today
-        : new Date(year, month + 1, 0); // day 0 of next month = last of this
+        : new Date(year, month + 1, 0);
     out.push({
       x: endDate.toISOString(),
       balance: sum,
@@ -265,50 +188,19 @@ export function smartDownsample(
     .map((i) => data[i]);
 }
 
-function rangeStart(range: StorageRange, today: Date): Date {
-  const t = startOfDay(today);
-  switch (range) {
-    case "last7days":
-      return new Date(t.getFullYear(), t.getMonth(), t.getDate() - 6);
-    case "last30days":
-      return new Date(t.getFullYear(), t.getMonth(), t.getDate() - 29);
-    case "last60days":
-      return new Date(t.getFullYear(), t.getMonth(), t.getDate() - 59);
-    case "year":
-      return new Date(t.getFullYear() - 1, t.getMonth(), t.getDate());
-    case "max":
-    default:
-      return HIPPIUS_CREATION;
-  }
-}
-
 /**
- * Top-level entry: raw cumulative file events → bar-chart-ready ChartPoints
- * for the given range, downsampled to `targetBars`.
+ * Top-level entry: cumulative ChartPoint series from
+ * `get_drive_storage_chart` → bar-chart-ready ChartPoints with per-day
+ * deltas, downsampled to `targetBars`.
  */
 export function buildStorageDeltaBars(
-  fileData: FileChartData[],
+  cumulative: ChartPoint[],
   range: StorageRange,
   targetBars: number,
 ): ChartPoint[] {
-  if (!fileData?.length || targetBars <= 0) return [];
+  if (!cumulative?.length || targetBars <= 0) return [];
 
-  const points = fileEventsToCumulativePoints(fileData);
-  if (!points.length) return [];
-
-  const today = startOfDay(new Date());
-  const start = rangeStart(range, today);
-
-  // For year/max, clamp the range to the first actual data point so we
-  // don't render months of empty bars before any storage existed.
-  let effectiveStart = start;
-  if (range === "year" || range === "max") {
-    const firstData = points[0].date;
-    if (firstData > start) effectiveStart = firstData;
-  }
-
-  const dateRange = getAllDatesInRange(effectiveStart, today);
-  const daily = mapToRangeDeltas(points, dateRange, range === "last7days");
+  const daily = cumulativeToDeltas(cumulative);
 
   let result = daily;
   if (range === "year" || range === "max") {

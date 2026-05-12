@@ -23,14 +23,13 @@ import {
 import {
   lastUpdatedPercentAtom,
 } from "@/app/lib/store/syncAtoms";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { useAtom, useAtomValue } from "jotai";
 import {
   driveStatusesAtom,
   type DriveEntry,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 import { toast } from "sonner";
-import { vpnConnectedAtom } from "@/components/dashboard-title-wrapper/vpn-menu/vpnAtoms";
 import type { SyncSnapshot } from "../types/syncSnapshot";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
@@ -40,7 +39,6 @@ const TRAY_ID = "hippius-tray";
 const QUIT_ID = "quit";
 const SYNC_ID = "sync";
 const INSTALL_UPDATE = "install-update";
-const VPN_TOGGLE_ID = "vpn-toggle";
 const OPEN_APP_ID = "open-app";
 const OPEN_FILES_ID = "open-files";
 const OPEN_VM_ID = "open-vm";
@@ -61,7 +59,6 @@ let trayIconState: "default" | "syncing" | "completed" = "default";
 /* ─ State kept across React reloads ───────────────────────────── */
 let menuPromise: Promise<Menu> | null = null;
 let syncItem: MenuItem | null = null;
-let vpnToggleItem: MenuItem | null = null;
 let openItemsSeparator: PredefinedMenuItem | null = null;
 let syncSectionSeparator: PredefinedMenuItem | null = null;
 let openFilesItem: MenuItem | null = null;
@@ -110,19 +107,13 @@ let latchedSnapshot: SyncSnapshot | null = null;
 
 /* ─ Backend payload types ─────────────────────────────────────── */
 
-interface VpnStatus {
-  is_enabled: boolean;
-}
-
-const MINIMUM_CREDITS = 10;
-
 // Tray data cache — refreshed via get_tray_menu_data Rust command
 let trayDataCache: { loggedIn: boolean; credits: number | null; substrateAddress: string | null; timestamp: number } | null = null;
 const TRAY_CACHE_DURATION = 5000; // 5 seconds
 
 /**
  * Immediately invalidate the tray data cache so the next check re-queries Rust.
- * Call this on logout so the VPN watcher picks up the change instantly.
+ * Call this on logout so the login-status watcher picks up the change instantly.
  */
 export function clearLoginStatusCache() {
   trayDataCache = null;
@@ -153,25 +144,6 @@ async function refreshLoginStatus(): Promise<boolean> {
   return data.loggedIn;
 }
 
-/** Check if user has sufficient credits. */
-async function checkUserCredits(): Promise<{
-  hasEnough: boolean;
-  isLoading: boolean;
-  error?: string;
-  notLoggedIn?: boolean;
-}> {
-  const data = await refreshTrayData();
-  if (!data.loggedIn) {
-    return { hasEnough: false, isLoading: false, notLoggedIn: true, error: "Login required" };
-  }
-  const credits = data.credits ?? 0;
-  return {
-    hasEnough: credits >= MINIMUM_CREDITS,
-    isLoading: false,
-    error: credits >= MINIMUM_CREDITS ? undefined : "Insufficient credits",
-  };
-}
-
 /* ─ Public: create tray once ──────────────────────────────────── */
 
 export function useTrayInit(isAuthenticated: boolean) {
@@ -179,7 +151,6 @@ export function useTrayInit(isAuthenticated: boolean) {
   const [lastUpdatedPercent, setLastUpdatedPercent] = useAtom(
     lastUpdatedPercentAtom,
   );
-  const setVpnConnected = useSetAtom(vpnConnectedAtom);
 
   // Effect to update tray when sync state changes — derived entirely from snapshot.
   // Icon and label management is handled exclusively by the startSyncActivityWatcher
@@ -204,7 +175,7 @@ export function useTrayInit(isAuthenticated: boolean) {
   useEffect(() => {
     if (menuPromise) return;
 
-    menuPromise = (async (setVpnState: (enabled: boolean) => void) => {
+    menuPromise = (async () => {
       // resolve all three icons once
       const [defPath, syncPath, completedPath] = await Promise.all([
         resolveResource(DEFAULT_TRAY_ICON),
@@ -272,34 +243,6 @@ export function useTrayInit(isAuthenticated: boolean) {
         item: "Separator",
       });
 
-      // VPN toggle item
-      const isVpnEnabled = await getVpnStatus();
-      const creditCheck = await checkUserCredits();
-      const shouldDisable =
-        !isVpnEnabled && (!creditCheck.hasEnough || creditCheck.isLoading);
-
-      let text = isVpnEnabled ? "VPN: Turn Off" : "VPN: Turn On";
-      if (shouldDisable && creditCheck.error) {
-        text = `VPN: ${creditCheck.error}`;
-      }
-
-      vpnToggleItem = await MenuItem.new({
-        id: VPN_TOGGLE_ID,
-        text,
-        enabled: !shouldDisable,
-        action: async () => {
-          try {
-            const newStatus = await toggleVpnStatus();
-            setVpnState(newStatus); // Update Jotai atom
-            // Immediately update with known status for fast response
-            await updateVpnMenuItem(newStatus);
-          } catch (error) {
-            console.error("[Tray] VPN toggle failed:", error);
-            await updateVpnMenuItem();
-          }
-        },
-      });
-
       // Quit item - create this early but add it last
       const quit = await MenuItem.new({
         id: QUIT_ID,
@@ -323,7 +266,6 @@ export function useTrayInit(isAuthenticated: boolean) {
           openFilesMenuItem,
           openVmMenuItem,
           ...(installUpdateMenuItem ? [installUpdateMenuItem] : []),
-          vpnToggleItem,
         ],
       });
 
@@ -346,7 +288,7 @@ export function useTrayInit(isAuthenticated: boolean) {
       void clearTrayFileEntries();
 
       // Start login status watcher (updates tray menu on login/logout)
-      startLoginStatusWatcher(setVpnState);
+      startLoginStatusWatcher();
 
       // Build the per-drive Sync Folders submenu. Initially shows
       // a placeholder "(no folders)" entry; the effect at the bottom
@@ -387,8 +329,8 @@ export function useTrayInit(isAuthenticated: boolean) {
       await menu.append(quit);
 
       return menu;
-    })(setVpnConnected);
-  }, [setVpnConnected]);
+    })();
+  }, []);
 
   // Subscribe to per-drive status changes and rebuild the Sync Folders
   // submenu whenever the map changes. Mounted in the same hook so the
@@ -680,122 +622,6 @@ async function updateOpenVmMenuItem() {
   }
 }
 
-/* ─ VPN Helper Functions ──────────────────────────────────────── */
-async function getVpnStatus(): Promise<boolean> {
-  try {
-    const status = await invoke<VpnStatus>("get_vpn_status");
-    return status.is_enabled;
-  } catch (error) {
-    console.error("[Tray] Failed to get VPN status:", error);
-    return false;
-  }
-}
-
-async function toggleVpnStatus(): Promise<boolean> {
-  try {
-    const status = await invoke<VpnStatus>("toggle_vpn_status");
-    logTrayAction("VPN toggled", { is_enabled: status.is_enabled });
-    return status.is_enabled;
-  } catch (error) {
-    console.error("[Tray] Failed to toggle VPN:", error);
-    throw error;
-  }
-}
-
-async function updateVpnMenuItem(knownStatus?: boolean) {
-  try {
-    const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
-    if (!menu) return;
-
-    // Use provided status or fetch from backend
-    const isEnabled =
-      knownStatus !== undefined ? knownStatus : await getVpnStatus();
-
-    let label: string;
-    let shouldEnable = true;
-
-    if (isEnabled) {
-      label = "VPN: Turn Off";
-      shouldEnable = true;
-    } else {
-      // Check credits when VPN is off (use cached value for fast updates)
-      const creditCheck = await checkUserCredits();
-      if (!creditCheck.hasEnough || creditCheck.isLoading) {
-        label = creditCheck.error
-          ? `VPN: ${creditCheck.error}`
-          : "VPN: Turn On";
-        shouldEnable = false;
-      } else {
-        label = "VPN: Turn On";
-        shouldEnable = true;
-      }
-    }
-
-    logTrayAction("Updating VPN menu item", {
-      isEnabled,
-      label,
-      shouldEnable,
-    });
-
-    // Remove old item if exists
-    if (vpnToggleItem) {
-      try {
-        await menu.remove(vpnToggleItem);
-        logTrayAction("Removed old VPN menu item");
-      } catch (error) {
-        logTrayAction("Failed to remove old VPN item", error);
-      }
-    }
-
-    // Recreate the menu item with new text and enabled state
-    const newVpnItem = await MenuItem.new({
-      id: VPN_TOGGLE_ID,
-      text: label,
-      enabled: shouldEnable,
-      action: async () => {
-        try {
-          const newStatus = await toggleVpnStatus();
-          if (vpnStateSetter) {
-            vpnStateSetter(newStatus);
-          }
-          // Immediately update with known status for fast response
-          await updateVpnMenuItem(newStatus);
-        } catch (error) {
-          console.error("[Tray] VPN toggle failed:", error);
-          await updateVpnMenuItem();
-        }
-      },
-    });
-
-    // Insert after Open and Update items (if present)
-    const items = await menu.items();
-    const updateItemIndex = items.findIndex((i) => i.id === INSTALL_UPDATE);
-    const openAppIndex = items.findIndex((i) => i.id === OPEN_APP_ID);
-    const openFilesIndex = items.findIndex((i) => i.id === OPEN_FILES_ID);
-    const openVmIndex = items.findIndex((i) => i.id === OPEN_VM_ID);
-    const syncIndex = items.findIndex((i) => i.id === SYNC_ID);
-    const anchorIndex = Math.max(
-      updateItemIndex,
-      openAppIndex,
-      openFilesIndex,
-      openVmIndex,
-      syncIndex,
-    );
-    const insertPosition = anchorIndex >= 0 ? anchorIndex + 1 : 0;
-
-    await menu.insert(newVpnItem, insertPosition);
-    vpnToggleItem = newVpnItem;
-
-    logTrayAction("VPN menu item recreated successfully", {
-      label,
-      position: insertPosition,
-      enabled: shouldEnable,
-    });
-  } catch (error) {
-    console.error("[Tray] Failed to update VPN menu item:", error);
-  }
-}
-
 // helper to toggle tray icon
 // Replace setTrayIconSyncing with a more robust implementation
 async function setTrayIconSyncing(
@@ -1008,14 +834,15 @@ async function clearTrayFileEntries() {
 
 
 /* ─ Login status watcher (updates tray menu on login/logout) ──── */
-let vpnStateSetter: ((enabled: boolean) => void) | null = null;
+//
+// Polls Rust for login status and resets login-gated tray rows when
+// the user signs out. The interval handle is parked on `window` so
+// React Fast Refresh can clear the previous instance before the new
+// module run starts a fresh one — without that, HMR would leave a
+// stack of intervals running.
 let lastLoginStatus: boolean | null = null;
 
-function startLoginStatusWatcher(setVpnState?: (enabled: boolean) => void) {
-  if (setVpnState) {
-    vpnStateSetter = setVpnState;
-  }
-
+function startLoginStatusWatcher() {
   const INTERVAL_MS = 2000;
 
   const tick = async () => {
@@ -1024,14 +851,10 @@ function startLoginStatusWatcher(setVpnState?: (enabled: boolean) => void) {
     if (lastLoginStatus !== currentLoginStatus) {
       const wasLoggedIn = lastLoginStatus;
       lastLoginStatus = currentLoginStatus;
-      await updateVpnMenuItem();
       await updateOpenFilesMenuItem();
       await updateOpenVmMenuItem();
 
       if (!currentLoginStatus && wasLoggedIn) {
-        if (vpnStateSetter) {
-          vpnStateSetter(false);
-        }
         void setTrayIconSyncing(false, false);
         void updateTraySyncLabel(null);
       }
@@ -1042,9 +865,9 @@ function startLoginStatusWatcher(setVpnState?: (enabled: boolean) => void) {
   const h = setInterval(tick, INTERVAL_MS);
   if (typeof window !== "undefined") {
     // @ts-expect-error custom watcher handle
-    if (window.__hippiusVpnWatcher) clearInterval(window.__hippiusVpnWatcher);
+    if (window.__hippiusLoginWatcher) clearInterval(window.__hippiusLoginWatcher);
     // @ts-expect-error custom watcher handle
-    window.__hippiusVpnWatcher = h;
+    window.__hippiusLoginWatcher = h;
   }
 }
 

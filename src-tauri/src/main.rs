@@ -5,7 +5,7 @@
 //!
 //! This binary is the sole entry point for the desktop app. It initializes
 //! the Tauri runtime, registers all IPC commands, sets up the SQLite database,
-//! and starts platform-specific services (Nebula VPN, deep links).
+//! and starts platform-specific services (deep links).
 //!
 //! **Note**: `lib.rs` in this crate is a vestigial template file — this `main.rs`
 //! is the actual application entry point.
@@ -19,10 +19,10 @@ pub mod console_access;
 pub mod crypto;
 pub mod error;
 pub mod infra;
-pub mod nebula;
 pub mod notifications;
 pub mod recovery;
 pub mod shares;
+pub mod splash;
 pub mod sync;
 #[cfg(test)]
 mod test_helpers;
@@ -35,13 +35,14 @@ use crate::auth::oauth::{complete_oauth_flow, parse_oauth_deep_link, start_oauth
 use crate::auth::session_restore::{is_token_valid, restore_session};
 use crate::auth::ssh_keys::{create_ssh_key, delete_ssh_key, list_ssh_keys};
 use crate::billing::charts::{
-    calculate_storage_capacity, calculate_storage_cost, format_balance_chart, format_credits_chart, format_storage_chart,
-    transform_marketplace_credits,
+    calculate_storage_capacity, calculate_storage_cost, format_balance_chart, format_credits_chart, transform_marketplace_credits,
 };
 use crate::billing::credits::{check_sync_eligibility, get_user_credits};
+use crate::billing::drive_credits::{get_drive_credits_chart, get_drive_credits_total};
+use crate::billing::drive_storage::get_drive_storage_chart;
 use crate::billing::eligibility::check_action_eligibility;
 use crate::billing::queries::{
-    get_add_credit_events, get_balance_transfers, get_billing_transactions, get_credits, get_deposit_address, get_files_count, get_files_size,
+    get_add_credit_events, get_balance_transfers, get_billing_transactions, get_credits, get_deposit_address, get_drive_storage_stats,
     get_marketplace_credits, get_system_balance,
 };
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
@@ -94,8 +95,6 @@ use crate::utils::support::{
     create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message, update_support_ticket, upload_ticket_attachment,
 };
 use crate::utils::tray_menu::get_tray_menu_data;
-use futures_util::FutureExt;
-use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 use tauri::{Builder, Emitter, Manager, Wry, path::BaseDirectory};
 #[cfg(target_os = "linux")]
@@ -201,21 +200,9 @@ fn main() {
             get_wss_endpoint,
             update_wss_endpoint_command,
             test_rpc_endpoint_command,
-            // VPN / Nebula
-            crate::nebula::manager::get_nebula_ip,
-            crate::nebula::manager::get_nebula_stats,
-            crate::nebula::manager::get_nebula_status,
-            crate::nebula::manager::get_nebula_binary_installed_status,
-            crate::nebula::vpn::get_vpn_status,
-            crate::nebula::vpn::toggle_vpn_status,
-            crate::nebula::vpn::get_autoconnect_status,
-            crate::nebula::vpn::toggle_autoconnect_status,
-            crate::nebula::manager::check_nebula_requirements,
-            crate::nebula::manager::download_nebula,
-            crate::nebula::manager::install_nebula,
-            crate::nebula::manager::verify_nebula,
-            crate::nebula::manager::finish_setup,
-            crate::nebula::manager::setup_nebula_background,
+            // Splash terminal handshake — no-op the splash UI awaits
+            // before dismissing itself.
+            crate::splash::finish_splash,
             // HCFS mnemonic management
             get_drive_mnemonic,
             ensure_sync_mnemonic,
@@ -322,8 +309,10 @@ fn main() {
             get_system_balance,
             get_balance_transfers,
             get_add_credit_events,
-            get_files_size,
-            get_files_count,
+            get_drive_storage_stats,
+            get_drive_storage_chart,
+            get_drive_credits_chart,
+            get_drive_credits_total,
             get_deposit_address,
             // Notifications
             get_notification_settings,
@@ -389,7 +378,6 @@ fn main() {
             sp_dismiss_sync_widget,
             // Chart data formatting
             format_credits_chart,
-            format_storage_chart,
             format_balance_chart,
             transform_marketplace_credits,
             calculate_storage_cost,
@@ -404,49 +392,6 @@ fn main() {
 
     app.run(|app_handle, event| {
         match event {
-            // Single gate for every app-exit path (Cmd+Q, app menu Quit,
-            // tray Quit, `app.exit(n)`). On the first pass we defer the
-            // exit, stop Nebula, and re-request exit; the second pass
-            // sees `nebula_stopped=true` and lets Tauri proceed.
-            tauri::RunEvent::ExitRequested { api, .. } => {
-                let state = app_handle.state::<crate::app_state::AppState>();
-                let already_stopped = state.nebula_stopped.load(std::sync::atomic::Ordering::SeqCst);
-
-                if already_stopped {
-                    // Second pass — allow the exit.
-                    info!("Exit requested; Nebula already stopped, exiting");
-                    return;
-                }
-
-                info!("Exit requested; stopping Nebula before exit");
-                api.prevent_exit();
-
-                // A rapid second Cmd+Q before this task finishes spawns a second cleanup
-                // task. That's fine: `stop_nebula` is idempotent (pkill / taskkill are
-                // no-ops on the second call) and Tauri ignores `exit(0)` after the event
-                // loop has shut down. No extra guard needed.
-                let handle_clone = app_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    let app_state = handle_clone.state::<crate::app_state::AppState>();
-                    // If stop_nebula panics we still want to flip the flag and re-request
-                    // exit — a hung app with a hidden window is worse than an unclean
-                    // Nebula shutdown. AssertUnwindSafe is fine here: NebulaState is self-
-                    // contained behind its own mutexes, so a partial stop can't corrupt
-                    // any shared state we read later.
-                    let result = std::panic::AssertUnwindSafe(crate::nebula::manager::stop_nebula(&app_state.nebula))
-                        .catch_unwind()
-                        .await;
-                    match result {
-                        Ok(Ok(())) => {}
-                        Ok(Err(e)) => warn!("Failed to stop Nebula during shutdown: {e}"),
-                        Err(_) => error!("stop_nebula panicked during shutdown — exiting anyway"),
-                    }
-                    app_state.nebula_stopped.store(true, std::sync::atomic::Ordering::SeqCst);
-                    info!("Nebula stopped; re-requesting exit");
-                    handle_clone.exit(0);
-                });
-            }
-
             // macOS dock icon click with no visible windows. Mirrors the
             // tray's "Open Hippius" action.
             #[cfg(target_os = "macos")]
@@ -480,12 +425,10 @@ fn main() {
 ///
 /// On macOS, closing the main window (red-X / Cmd+W) hides the window so
 /// the app keeps running in the tray. All genuine quit paths on macOS —
-/// Cmd+Q, the app menu's Quit Hippius, the tray's Quit Hippius — fire
-/// `RunEvent::ExitRequested` instead, where Nebula cleanup happens.
+/// Cmd+Q, the app menu's Quit Hippius, the tray's Quit Hippius — let
+/// Tauri exit directly without app-level cleanup.
 ///
-/// On Windows/Linux, closing the window exits the app (current behavior).
-/// We call `app.exit(0)` rather than letting Tauri's default close fire
-/// so that `RunEvent::ExitRequested` runs and Nebula is stopped there.
+/// On Windows/Linux, closing the window exits the app via `app.exit(0)`.
 pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     builder.on_window_event(|window, event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -590,7 +533,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }))?;
             win.show()?;
         }
-        // Spawn async task for database initialization and Nebula setup
+        // Spawn async task for database initialization.
         tauri::async_runtime::spawn(async move {
             debug!("Async block started in setup.rs");
 
@@ -657,35 +600,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 warn!("Welcome notification cleanup failed (non-fatal): {}", e);
             }
 
-            // Check if autoconnect is enabled
-            let autoconnect_enabled: bool = sqlx::query("SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1")
-                .fetch_optional(&pool)
-                .await
-                .unwrap_or(None)
-                .is_some_and(|row| row.get("is_enabled"));
-
-            if autoconnect_enabled {
-                debug!("Autoconnect enabled, skipping VPN status reset");
-            } else {
-                debug!("Resetting VPN status to FALSE on startup...");
-                if let Err(e) = sqlx::query("UPDATE vpn_status SET is_enabled = FALSE WHERE id = 1").execute(&pool).await {
-                    error!("Failed to reset VPN status: {}", e);
-                }
-
-                debug!("Ensuring Nebula is stopped on startup...");
-                let nebula_st = &app_handle.state::<crate::app_state::AppState>().nebula;
-                if let Err(e) = crate::nebula::manager::stop_nebula(nebula_st).await {
-                    warn!("Failed to stop Nebula: {}", e);
-                }
-            }
-
             info!("Database initialized successfully");
-
-            // Verify Nebula setup and certificates
-            debug!("Verifying Nebula setup...");
-            if let Err(e) = crate::nebula::manager::verify_nebula_setup(app_handle).await {
-                warn!("{}", e);
-            }
         });
         Ok(())
     })

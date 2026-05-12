@@ -62,10 +62,11 @@ pub struct ShareLink {
 ///    could surface here.
 /// 3. `share_url` re-derived from `(share_token, share_key)` so the
 ///    "My Shares" page can offer a Copy button without a second IPC
-///    round-trip per row. `None` when the keystore has lost the key
-///    (different device, wiped DB) — same condition under which
-///    `filename` is `<unknown>`. The two are correlated because
-///    hcfs-client also looks up the key to decrypt the filename.
+///    round-trip per row. `None` when the keystore on this device
+///    has lost the key (different device, wiped DB). `filename` is
+///    independent: the server now returns plaintext filenames, so
+///    a row can have a real `filename` and `share_url = None` when
+///    the share was minted on another device.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareSummary {
@@ -341,10 +342,12 @@ pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String
 }
 
 /// List all of this caller's currently-active shares, newest first.
-/// Filenames are decrypted client-side via the share keystore — a
-/// row whose key has been forgotten (different device, wiped DB)
-/// surfaces with `filename = "<unknown>"` so the UI can still render
-/// the row and offer Revoke.
+/// The server returns plaintext filenames, so every row has a real
+/// `filename` regardless of whether this device knows the share key.
+/// Only `share_url` is keystore-dependent — a row whose key has been
+/// forgotten (different device, wiped DB) surfaces with
+/// `share_url = None` and the UI hides the Copy button while still
+/// offering Revoke.
 #[tauri::command]
 pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<ShareSummary>> {
     use hcfs_client::client::share::build_share_url;
@@ -354,7 +357,7 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
     let client = build_account_client(pool, &account_id).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
     let summaries = client
-        .list_shares(&keystore)
+        .list_shares()
         .await
         .map_err(|e| AppError::Hcfs(format!("list_shares: {e}")))?;
 
@@ -363,13 +366,12 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
     // per-row `keystore.get` loop because every per-row lookup goes
     // through `block_in_place` on a small fixed-size sqlx connection
     // pool — a 50-share page would otherwise issue 50 sequential
-    // round-trips on top of hcfs-client's own per-row keystore lookup
-    // for filename decryption (which we can't avoid without an
-    // upstream trait change). See `SqliteShareKeystore::get_many`.
+    // round-trips. See `SqliteShareKeystore::get_many`.
     //
     // A keystore miss for a token leaves `share_url = None`; the FE
-    // renders such rows as "key forgotten on this device" and still
-    // offers Revoke.
+    // renders such rows as "key forgotten on this device" (the row
+    // still has a real plaintext `filename` from the server) and
+    // still offers Revoke.
     let tokens: Vec<&str> = summaries.iter().map(|s| s.share_token.as_str()).collect();
     let key_map = keystore.get_many(&tokens).map_err(|e| AppError::Hcfs(format!("keystore lookup: {e}")))?;
     // Same batched-IN trick as the keystore: one round-trip for the

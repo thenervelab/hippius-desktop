@@ -1,12 +1,15 @@
-import React, { FC, useState, useEffect, useCallback, memo, useMemo, useRef } from "react";
+import React, {
+  FC,
+  useState,
+  useEffect,
+  useCallback,
+  memo,
+  useMemo,
+  useRef,
+} from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Button } from "@/components/ui/button";
-import {
-  MoreVertical,
-  Download,
-  FolderOpen,
-  Link2,
-} from "lucide-react";
+import { MoreVertical, Download, FolderOpen, Link2 } from "lucide-react";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   shareFeatureEnabledAtom,
@@ -44,7 +47,7 @@ interface CardViewProps {
   sharedState?: FileViewSharedState;
   handleFileDownload: (
     file: FormattedUserFile,
-    polkadotAddress: string
+    polkadotAddress: string,
   ) => void;
   hasMore: boolean;
   loadMore: () => void;
@@ -73,7 +76,7 @@ const CardView: FC<CardViewProps> = ({
           loadMore();
         }
       },
-      { rootMargin: "200px" }
+      { rootMargin: "200px" },
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
@@ -87,7 +90,8 @@ const CardView: FC<CardViewProps> = ({
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const setShareModalFile = useSetAtom(shareModalFileAtom);
   const { getParam } = useUrlParams();
-  const { isSelectionMode, enterSelectionModeAndSelectFile, } = useFileSelection();
+  const { isSelectionMode, enterSelectionModeAndSelectFile } =
+    useFileSelection();
 
   // State for captured files to delete (to handle timing issue with clearSelection)
   const [filesToDelete, setFilesToDelete] = useState<FormattedUserFile[]>([]);
@@ -107,37 +111,39 @@ const CardView: FC<CardViewProps> = ({
   // before sync completed.
   const liveLocalFileDetailsFile = useMemo(() => {
     if (!localFileDetailsFile) return null;
-    return files.find(
-      (f) =>
-        f.actualFileName === localFileDetailsFile.actualFileName &&
-        f.label === localFileDetailsFile.label
-    ) ?? localFileDetailsFile;
+    return (
+      files.find(
+        (f) =>
+          f.actualFileName === localFileDetailsFile.actualFileName &&
+          f.label === localFileDetailsFile.label,
+      ) ?? localFileDetailsFile
+    );
   }, [localFileDetailsFile, files]);
 
-  const {
-    setSelectedFile,
-    handleShowFileDetails,
-    handleContextMenu
-  } = sharedState || {};
+  const { setSelectedFile, handleShowFileDetails, handleContextMenu } =
+    sharedState || {};
 
   // Handle file deletion with captured files from confirmation dialog
-  const handleDeleteSelectedFiles = useCallback((capturedFiles: FormattedUserFile[]) => {
-    if (capturedFiles.length === 0) return;
+  const handleDeleteSelectedFiles = useCallback(
+    (capturedFiles: FormattedUserFile[]) => {
+      if (capturedFiles.length === 0) return;
 
-    setFilesToDelete(capturedFiles);
+      setFilesToDelete(capturedFiles);
 
-    // Use setTimeout to ensure the delete hook reinitializes with new files
-    setTimeout(() => {
-      deleteFiles(undefined, {
-        onSuccess: () => {
-          setFilesToDelete([]);
-        },
-        onError: () => {
-          setFilesToDelete([]);
-        }
-      });
-    }, 100);
-  }, [deleteFiles]);
+      // Use setTimeout to ensure the delete hook reinitializes with new files
+      setTimeout(() => {
+        deleteFiles(undefined, {
+          onSuccess: () => {
+            setFilesToDelete([]);
+          },
+          onError: () => {
+            setFilesToDelete([]);
+          },
+        });
+      }, 100);
+    },
+    [deleteFiles],
+  );
 
   const localHandleShowFileDetails = useCallback(
     (file: FormattedUserFile) => {
@@ -148,7 +154,7 @@ const CardView: FC<CardViewProps> = ({
         handleShowFileDetails(file);
       }
     },
-    [handleShowFileDetails]
+    [handleShowFileDetails],
   );
 
   const localHandleContextMenu = useCallback(
@@ -157,19 +163,17 @@ const CardView: FC<CardViewProps> = ({
         handleContextMenu(e, file);
       }
     },
-    [handleContextMenu]
+    [handleContextMenu],
   );
 
   // Ensure files is always an array to prevent undefined errors
 
-
   return (
     <div className="flex flex-col gap-y-8 relative">
-
       <div
         className={cn(
           "w-full relative",
-          isRecentFiles ? "min-h-[12.5rem]" : "min-h-[43.75rem]"
+          isRecentFiles ? "min-h-[12.5rem]" : "min-h-[43.75rem]",
         )}
       >
         <div className="duration-300 delay-300">
@@ -196,14 +200,13 @@ const CardView: FC<CardViewProps> = ({
 
               return (
                 <div
-                  key={`${file.arionHash || file.actualFileName || file.name}-${file.label || ''}-${index}`}
+                  key={`${file.arionHash || file.actualFileName || file.name}-${file.label || ""}-${index}`}
                   className="card-container relative"
                   onContextMenu={(e) => localHandleContextMenu(e, file)}
                 >
                   <FileCard
                     file={file}
                     state={cardState}
-
                     onClick={() => {
                       // Don't handle card clicks if dropdown menu is open
                       if (openMenuIndex === index) {
@@ -228,19 +231,21 @@ const CardView: FC<CardViewProps> = ({
                         dropdownTitle=""
                         dropDownMenuTriggerClass="size-5 text-grey-60 flex items-center"
                         open={openMenuIndex === index}
-                        onOpenChange={(open) => setOpenMenuIndex(open ? index : null)}
+                        onOpenChange={(open) =>
+                          setOpenMenuIndex(open ? index : null)
+                        }
                         items={[
                           ...(file.isFolder && folderUrl
                             ? [
-                              {
-                                icon: <Folder className="size-4" />,
-                                itemTitle: "Open",
-                                onItemClick: () => {
-                                  setOpenMenuIndex(null);
-                                  router.push(folderUrl);
-                                }
-                              }
-                            ]
+                                {
+                                  icon: <Folder className="size-4" />,
+                                  itemTitle: "Open",
+                                  onItemClick: () => {
+                                    setOpenMenuIndex(null);
+                                    router.push(folderUrl);
+                                  },
+                                },
+                              ]
                             : []),
                           {
                             icon: <Download className="size-4" />,
@@ -253,17 +258,21 @@ const CardView: FC<CardViewProps> = ({
                               }
                               setOpenMenuIndex(null);
                               handleFileDownload(file, polkadotAddress ?? "");
-                            }
+                            },
                           },
-                          ...((fileType === "video" || fileType === "image" || fileType === "PDF")
-                            ? [{
-                              icon: <Icons.Eye className="size-4" />,
-                              itemTitle: "View",
-                              onItemClick: () => {
-                                setOpenMenuIndex(null);
-                                setSelectedFile?.(file);
-                              },
-                            }]
+                          ...(fileType === "video" ||
+                          fileType === "image" ||
+                          fileType === "PDF"
+                            ? [
+                                {
+                                  icon: <Icons.Eye className="size-4" />,
+                                  itemTitle: "View",
+                                  onItemClick: () => {
+                                    setOpenMenuIndex(null);
+                                    setSelectedFile?.(file);
+                                  },
+                                },
+                              ]
                             : []),
 
                           {
@@ -283,8 +292,13 @@ const CardView: FC<CardViewProps> = ({
                                   fileName: file.actualFileName || file.name,
                                 });
                               } catch (error) {
-                                console.error("Failed to reveal file in Finder:", error);
-                                toast.error("File is not available locally. It may only exist on another device.");
+                                console.error(
+                                  "Failed to reveal file in Finder:",
+                                  error,
+                                );
+                                toast.error(
+                                  "File is not available locally. It may only exist on another device.",
+                                );
                               }
                             },
                           },
@@ -299,55 +313,72 @@ const CardView: FC<CardViewProps> = ({
                               }
                               setOpenMenuIndex(null);
                               localHandleShowFileDetails(file);
-                            }
+                            },
                           },
-                          ...(!file.isFolder && arionHash && arionHash !== "pending"
+                          ...(!file.isFolder &&
+                          arionHash &&
+                          arionHash !== "pending"
                             ? [
-                              {
-                                icon: <Icons.SendSquare2 className="size-4" />,
-                                itemTitle: "View on Explorer",
-                                onItemClick: async (e?: React.MouseEvent) => {
-                                  if (e) {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                  }
-                                  setOpenMenuIndex(null);
-                                  try {
-                                    await openUrl(`https://hipstats.com/file-tracker/${arionHash}`);
-                                  } catch (error) {
-                                    console.error("Failed to open Explorer:", error);
-                                  }
+                                {
+                                  icon: (
+                                    <Icons.SendSquare2 className="size-4" />
+                                  ),
+                                  itemTitle: "View on Explorer",
+                                  onItemClick: async (e?: React.MouseEvent) => {
+                                    if (e) {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                    }
+                                    setOpenMenuIndex(null);
+                                    try {
+                                      await openUrl(
+                                        `https://hipstats.com/file-tracker/${arionHash}`,
+                                      );
+                                    } catch (error) {
+                                      console.error(
+                                        "Failed to open Explorer:",
+                                        error,
+                                      );
+                                    }
+                                  },
                                 },
-                              },
-                            ]
+                              ]
                             : []),
                           // Share via link — same gating as the right-click
                           // context menu and the table-view 3-dots menu:
                           // hidden for folders, mid-flight files, and old
                           // hcfs-servers without the `shares` capability.
-                          ...(!file.isFolder && file.syncStatus === "synced" && shareEnabled
+                          ...(!file.isFolder &&
+                          file.syncStatus === "synced" &&
+                          shareEnabled
                             ? [
-                              {
-                                icon: <Link2 className="size-4" />,
-                                itemTitle: "Share via link",
-                                onItemClick: (e?: React.MouseEvent) => {
-                                  if (e) {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                  }
-                                  setOpenMenuIndex(null);
-                                  setShareModalFile(file);
+                                {
+                                  icon: <Link2 className="size-4" />,
+                                  itemTitle: "Share via link",
+                                  onItemClick: (e?: React.MouseEvent) => {
+                                    if (e) {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                    }
+                                    setOpenMenuIndex(null);
+                                    setShareModalFile(file);
+                                  },
                                 },
-                              },
-                            ]
+                              ]
                             : []),
                           // Always show delete option, but disabled for unpinned files
                           {
                             icon: <Icons.Trash className="size-4" />,
-                            itemTitle: !file.isAssigned ? "Delete (Syncing in progress...)" : "Delete",
+                            itemTitle: !file.isAssigned
+                              ? "Delete (Syncing in progress...)"
+                              : "Delete",
                             disabled: !file.isAssigned,
-                            className: !file.isAssigned ? "cursor-not-allowed opacity-60" : "",
-                            tooltip: !file.isAssigned ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete." : undefined,
+                            className: !file.isAssigned
+                              ? "cursor-not-allowed opacity-60"
+                              : "",
+                            tooltip: !file.isAssigned
+                              ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete."
+                              : undefined,
                             onItemClick: (e?: React.MouseEvent) => {
                               // Always prevent event bubbling to avoid triggering card's onClick
                               if (e) {
@@ -367,8 +398,8 @@ const CardView: FC<CardViewProps> = ({
                               // Enter selection mode and select file
                               enterSelectionModeAndSelectFile(file);
                             },
-                            variant: "destructive" as const
-                          }
+                            variant: "destructive" as const,
+                          },
                         ]}
                       >
                         <Button
@@ -387,15 +418,16 @@ const CardView: FC<CardViewProps> = ({
           </div>
         </div>
         {/* Sentinel element for infinite scroll */}
-        <div ref={sentinelRef} className="h-1" />
+        <div ref={sentinelRef} className="h-1 -mt-1" />
       </div>
 
       {/* Selection action bar positioned above pagination */}
-      {isSelectionMode && <SelectionActionBar
-        onDelete={handleDeleteSelectedFiles}
-        isDeleting={isDeleting}
-      />
-      }
+      {isSelectionMode && (
+        <SelectionActionBar
+          onDelete={handleDeleteSelectedFiles}
+          isDeleting={isDeleting}
+        />
+      )}
 
       {!sharedState && localIsFileDetailsOpen && (
         <SidebarDialog
@@ -403,7 +435,9 @@ const CardView: FC<CardViewProps> = ({
           open={localIsFileDetailsOpen}
           onOpenChange={setLocalIsFileDetailsOpen}
         >
-          <FileDetailsDialogContent file={liveLocalFileDetailsFile ?? undefined} />
+          <FileDetailsDialogContent
+            file={liveLocalFileDetailsFile ?? undefined}
+          />
         </SidebarDialog>
       )}
     </div>

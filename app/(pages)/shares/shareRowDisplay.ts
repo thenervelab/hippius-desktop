@@ -1,21 +1,17 @@
-// Returns what to render in a share row's filename slot, plus whether
-// it's a placeholder (so the caller can apply italic styling).
+// History-row display helper for the /shares page.
 //
-// Shares minted via the console (the web app's "Share with link"
-// flow) surface from Rust with `shareUrl: null` because the local
-// keystore doesn't have the `#k=<key>` fragment for them — the
-// console keeps its own key copy. hcfs-client's filename decryption
-// uses the same keystore lookup, so the filename also collapses to
-// the marker `<unknown>`. The user can still revoke from this
-// device; the placeholder explains why Copy and Reshare aren't
-// available here.
+// The active-list table reads `ShareSummary.filename` directly — the
+// server returns plaintext filenames for every share (post hcfs PR
+// #174 / 874585e), and the "this share was minted on another device"
+// signal lives in `shareUrl === null`, surfaced as a badge next to
+// the filename. No active-list helper is needed.
 //
-// Project decision (2026-05-01): all "from elsewhere" shares are
-// labelled as console-originated. We don't currently track origin
-// server-side, so the assumption is workflow-driven — revisit if
-// multi-desktop minting becomes a real use case.
-
-import type { ShareSummary } from "@/app/lib/tauri/shares";
+// History rows are different: they're snapshots stored in the local
+// `shared_link_history` SQLite table, captured at the moment a share
+// transitioned to revoked/expired. Pre-#174 captures on a device
+// without the keystore entry stored `filename: null`. Those legacy
+// rows still need a placeholder so the table renders something.
+// Captures taken after this change always have a real filename.
 
 const CONSOLE_ORIGIN_LABEL = "Created from the console";
 
@@ -24,21 +20,12 @@ export interface ShareRowDisplay {
   isPlaceholder: boolean;
 }
 
-export function pickShareRowDisplay(row: ShareSummary): ShareRowDisplay {
-  if (row.shareUrl === null) {
-    return { text: CONSOLE_ORIGIN_LABEL, isPlaceholder: true };
-  }
-  return { text: row.filename, isPlaceholder: false };
-}
-
 /**
- * History-row sibling of `pickShareRowDisplay`. The active-list helper
- * keys on `shareUrl`, but history rows have no URL — by the time a row
- * lands in history the share is already revoked or expired, so the URL
- * is moot. The "is this from elsewhere?" signal collapses to whether
- * the filename was ever known on this device: a history row captured
- * by the diff path on a device that never had the keystore entry
- * stores `filename: null` (Rust `Option::None`).
+ * History-row filename → display tuple. The active table reads
+ * `row.filename` directly (always real after hcfs 874585e); only
+ * legacy history snapshots can carry `filename: null`, which renders
+ * as the same console-origin placeholder the active list used to
+ * show before the wire-format upgrade.
  */
 export function pickHistoryRowDisplay(filename: string | null): ShareRowDisplay {
   if (filename === null) {

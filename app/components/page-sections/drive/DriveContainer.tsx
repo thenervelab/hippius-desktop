@@ -16,8 +16,7 @@ import DriveOnboarding from "./DriveOnboarding";
 import { getPrivateSyncPath, removeSyncPath } from "@/lib/utils/syncPathUtils";
 import { deleteRemoteFolder } from "@/app/lib/utils/restoreUtils";
 import SyncFolderTabs from "./SyncFolderTabs";
-import { useRemoteStorageStats } from "@/app/lib/hooks/api/useRemoteStorageStats";
-import useFilesCount from "@/app/lib/hooks/api/useFilesCount";
+import { useDriveStorageStats } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { FileTypes } from "@/lib/types/fileTypes";
 import {
@@ -67,9 +66,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
 
-  // Indexer-based stats (same source as Home page for consistency)
-  const { data: remoteStorageStats } = useRemoteStorageStats();
-  const { data: remoteFileCount } = useFilesCount();
+  // Indexer-based drive stats (same source as Home page for consistency).
+  // Single round-trip returns size + count from the same snapshot.
+  const { data: driveStats } = useDriveStorageStats();
+  const remoteStorageStats = driveStats;
+  const remoteFileCount = driveStats?.fileCount;
 
   // Regular files hook
   const {

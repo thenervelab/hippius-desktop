@@ -2,8 +2,11 @@
 
 import React, { useCallback, useMemo, useState } from "react";
 
+import { toast } from "sonner";
+
 import { RefreshButton, Select } from "@/components/ui";
-import useFiles from "@/app/lib/hooks/api/useFilesSize";
+import { useDriveStorageChart } from "@/app/lib/hooks/api/useDriveStorageChart";
+import { useDriveStorageStats } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { cn } from "@/app/lib/utils";
 
@@ -75,54 +78,72 @@ function useIsNarrow(threshold = 640) {
 
 const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
   const [timeRange, setTimeRange] = useState<StorageRange>("last7days");
-  const { data: fileData, isLoading, isFetching, refetch } = useFiles();
+  const {
+    data: chartData,
+    isLoading: chartLoading,
+    isFetching: chartFetching,
+    refetch: refetchChart,
+  } = useDriveStorageChart(timeRange);
+  const {
+    data: storageStats,
+    isLoading: statsLoading,
+    isFetching: statsFetching,
+    refetch: refetchStats,
+  } = useDriveStorageStats();
   const isNarrow = useIsNarrow();
 
   // Show the skeleton on every fetch (initial AND refetches) so the chart
   // and headline stay in sync with what the API is doing — same UX pattern
   // as the console dashboard.
-  const showSkeleton = isLoading || isFetching;
+  const isLoading = chartLoading || statsLoading;
+  const isFetchingAny = chartFetching || statsFetching;
+  const showSkeleton = isLoading || isFetchingAny;
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const handleRefresh = useCallback(async () => {
-    if (isRefreshing || isFetching) return;
+    if (isRefreshing || chartFetching || statsFetching) return;
     setIsRefreshing(true);
     try {
-      await refetch();
+      await Promise.all([refetchChart(), refetchStats()]);
+      toast.success("Storage usage refreshed successfully!");
+    } catch (error) {
+      console.error("Failed to refresh storage usage:", error);
+      toast.error("Failed to refresh storage usage");
     } finally {
       setIsRefreshing(false);
     }
-  }, [isRefreshing, isFetching, refetch]);
+  }, [
+    isRefreshing,
+    chartFetching,
+    statsFetching,
+    refetchChart,
+    refetchStats,
+  ]);
 
   const barData = useMemo(() => {
-    if (!fileData?.length) return [];
+    if (!chartData?.length) return [];
     return buildStorageDeltaBars(
-      fileData,
+      chartData,
       timeRange,
       getBarCount(timeRange, isNarrow),
     );
-  }, [fileData, timeRange, isNarrow]);
+  }, [chartData, timeRange, isNarrow]);
 
-  // Headline + dollar estimate: derived from the latest cumulative reading.
-  // Cost model mirrors the console (`totalGB * 0.003` per month) so the two
-  // dashboards stay numerically consistent.
+  // Headline + dollar estimate: sourced from `useDriveStorageStats` (the
+  // dedicated tile IPC `get_drive_storage_stats`) instead of the chart's
+  // last point, so the headline reflects the freshest snapshot
+  // independent of the chart range. Cost model mirrors the console
+  // (`totalGB * 0.003` per month).
   const { totalDisplay, dollarEstimate } = useMemo(() => {
-    if (!fileData?.length)
-      return { totalDisplay: "0 B", dollarEstimate: "0.00" };
-    const sorted = [...fileData].sort(
-      (a, b) =>
-        new Date(a.processed_timestamp).getTime() -
-        new Date(b.processed_timestamp).getTime(),
-    );
-    const last = sorted[sorted.length - 1];
-    const bytes = Number(last?.total_balance) || 0;
+    const bytes = storageStats?.totalBytes ?? 0;
+    if (!bytes) return { totalDisplay: "0 B", dollarEstimate: "0.00" };
     const totalGB = bytes / (1000 * 1000 * 1000);
     const monthlyCost = totalGB * 0.003;
     return {
       totalDisplay: formatBytes(bytes),
       dollarEstimate: monthlyCost.toFixed(2),
     };
-  }, [fileData]);
+  }, [storageStats]);
 
   return (
     <div
@@ -145,7 +166,7 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
           <div className="flex items-center gap-2.5">
             <RefreshButton
               onClick={handleRefresh}
-              refetching={isRefreshing || isFetching}
+              refetching={isRefreshing || isFetchingAny}
               ariaLabel="Refresh storage usage"
             />
             <Select

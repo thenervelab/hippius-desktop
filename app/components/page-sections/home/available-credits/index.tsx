@@ -2,12 +2,14 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 
 import { RefreshButton, Select } from "@/components/ui";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
-import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
-import { Account } from "@/app/lib/types/accounts";
-import { ChartPoint } from "@/lib/types/chartTypes";
+import {
+  useDriveCreditsChart,
+  CreditsChartRange,
+} from "@/app/lib/hooks/api/useDriveCreditsChart";
 import { cn } from "@/app/lib/utils";
 
 import AvailableCreditsChart from "./AvailableCreditsChart";
@@ -43,7 +45,7 @@ const GripIcon: React.FC<{ className?: string }> = ({ className }) => (
 const AvailableCreditsCard: React.FC<{ className?: string }> = ({
   className,
 }) => {
-  const [timeRange, setTimeRange] = useState<string>("last7days");
+  const [timeRange, setTimeRange] = useState<CreditsChartRange>("last7days");
 
   const {
     data: credits,
@@ -52,61 +54,39 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
     refetch: refetchCredits,
   } = useUserCredits();
   const {
-    data: marketplaceCredits,
+    data: chartData,
     isLoading: chartLoading,
-    isFetching: marketplaceFetching,
-    refetch: refetchMarketplace,
-  } = useMarketplaceCredits();
+    isFetching: chartFetching,
+    refetch: refetchChart,
+  } = useDriveCreditsChart(timeRange);
 
   // Show the skeleton on every fetch (initial AND refetches), matching the
   // console dashboard. The chart/headline always reflect what the API is
   // currently doing.
-  const isFetchingAny = creditsFetching || marketplaceFetching;
+  const isFetchingAny = creditsFetching || chartFetching;
 
-  // Manual refresh spins the icon and re-fires both queries in parallel.
+  // Manual refresh spins the icon, re-fires both queries in parallel, and
+  // surfaces toast feedback so refresh always confirms.
   const [isRefreshing, setIsRefreshing] = useState(false);
   const handleRefresh = useCallback(async () => {
-    if (isRefreshing || creditsFetching || marketplaceFetching) return;
+    if (isRefreshing || creditsFetching || chartFetching) return;
     setIsRefreshing(true);
     try {
-      await Promise.all([refetchCredits(), refetchMarketplace()]);
+      await Promise.all([refetchCredits(), refetchChart()]);
+      toast.success("Credits refreshed successfully!");
+    } catch (error) {
+      console.error("Failed to refresh credits:", error);
+      toast.error("Failed to refresh credits");
     } finally {
       setIsRefreshing(false);
     }
   }, [
     isRefreshing,
     creditsFetching,
-    marketplaceFetching,
+    chartFetching,
     refetchCredits,
-    refetchMarketplace,
+    refetchChart,
   ]);
-
-  const [transformedData, setTransformedData] = useState<Account[]>([]);
-  useEffect(() => {
-    if (!marketplaceCredits?.length) {
-      setTransformedData([]);
-      return;
-    }
-    invoke<Account[]>("transform_marketplace_credits", {
-      credits: marketplaceCredits,
-    })
-      .then(setTransformedData)
-      .catch(() => setTransformedData([]));
-  }, [marketplaceCredits]);
-
-  const [chartData, setChartData] = useState<ChartPoint[]>([]);
-  useEffect(() => {
-    if (!transformedData.length) {
-      setChartData([]);
-      return;
-    }
-    invoke<ChartPoint[]>("format_credits_chart", {
-      accounts: transformedData,
-      range: timeRange,
-    })
-      .then(setChartData)
-      .catch(() => setChartData([]));
-  }, [transformedData, timeRange]);
 
   const isLoading = creditsLoading || chartLoading;
   const showSkeleton = isLoading || isFetchingAny;
@@ -159,15 +139,13 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
           <div className="flex items-center gap-2.5">
             <RefreshButton
               onClick={handleRefresh}
-              refetching={
-                isRefreshing || creditsFetching || marketplaceFetching
-              }
+              refetching={isRefreshing || creditsFetching || chartFetching}
               ariaLabel="Refresh available credits"
             />
             <Select
               options={timeRangeOptions}
               value={timeRange}
-              onValueChange={setTimeRange}
+              onValueChange={(v) => setTimeRange(v as CreditsChartRange)}
               triggerClassName={cn(
                 "h-auto min-h-0 px-2 py-1.5 rounded-[7px]",
                 "font-mono font-medium text-[12px] leading-5 tracking-[-0.24px] uppercase",
@@ -231,7 +209,7 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
 
         <div className="relative w-full h-[220px] px-5 py-4">
           <AvailableCreditsChart
-            data={chartData}
+            data={chartData ?? []}
             color="#3167DD"
             height="100%"
             isLoading={showSkeleton}

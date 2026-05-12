@@ -5,7 +5,7 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useSetAtom, useAtomValue } from "jotai";
 import { uploadProgressAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import { queryClientAtom } from "jotai-tanstack-query";
-import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
+import { DRIVE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { toast } from "sonner";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { basename } from "@tauri-apps/api/path";
@@ -139,7 +139,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       // which fires when the sync cycle actually starts.
 
       refetchUserFiles();
-      queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
+      queryClient.invalidateQueries({ queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY] });
 
       // finish up
       setRequestState("idle");
