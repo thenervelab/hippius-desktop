@@ -69,8 +69,11 @@ function SquareCheck({
       checked={checked}
       onCheckedChange={(v) => onCheckedChange(v === true)}
       disabled={disabled}
-      className="flex-shrink-0 outline-none cursor-pointer transition-colors"
-      style={{ width: 18, height: 18, borderRadius: 5, background: checked ? "#3167DD" : "#F0F0F0" }}
+      className={cn(
+        "flex-shrink-0 outline-none cursor-pointer transition-colors",
+        checked ? "bg-[#3167DD]" : "bg-[#F0F0F0] dark:bg-white/10"
+      )}
+      style={{ width: 18, height: 18, borderRadius: 5 }}
     />
   );
 }
@@ -90,7 +93,12 @@ function EmailToggle({
       role="switch"
       aria-checked={checked}
       onClick={() => onCheckedChange(!checked)}
-      className="flex-shrink-0 outline-none cursor-pointer"
+      className={cn(
+        "flex-shrink-0 outline-none cursor-pointer border-[1.2px] transition-all duration-150",
+        checked
+          ? "border-[#1F51BE] opacity-100"
+          : "border-black dark:border-white opacity-30"
+      )}
       style={{
         display: "flex",
         width: 22,
@@ -98,21 +106,20 @@ function EmailToggle({
         flexDirection: "column",
         alignItems: checked ? "flex-end" : "flex-start",
         borderRadius: 4,
-        border: `1.2px solid ${checked ? "#1F51BE" : "#000"}`,
-        opacity: checked ? 1 : 0.3,
         background: "transparent",
         boxSizing: "border-box",
-        transition: "border-color 0.15s, opacity 0.15s",
       }}
     >
       <div
+        className={cn(
+          "transition-colors",
+          checked ? "bg-[#1F51BE]" : "bg-black dark:bg-white"
+        )}
         style={{
           width: 8.571,
           height: 12.857,
           borderRadius: 2,
-          background: checked ? "#1F51BE" : "#000",
           flexShrink: 0,
-          transition: "background 0.15s",
         }}
       />
     </button>
@@ -133,33 +140,33 @@ function ToggleRow({
   id?: string;
 }) {
   return (
-    <div className="flex items-start gap-3 px-4 py-3">
-      <SquareCheck id={id} checked={checked} onCheckedChange={onCheckedChange} />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <label htmlFor={id} className="text-sm font-medium text-grey-10 dark:text-white cursor-pointer">
-            {label}
-          </label>
-          {checked ? (
-            <span className="flex items-center gap-[5px] px-[8.8px] py-[5px] rounded-full bg-[rgba(4,200,112,0.2)] flex-shrink-0">
-              <svg width="12" height="12" viewBox="0 0 9.5 9.5" fill="none" className="flex-shrink-0">
-                <circle cx="4.75" cy="4.75" r="4.75" fill="#04C870" fillOpacity="0.2" />
-                <circle cx="4.75" cy="4.75" r="2.375" fill="#04C870" />
-              </svg>
-              <span className="text-[10px] font-semibold leading-none tracking-[-0.2px]" style={{ color: "#04c870" }}>On</span>
-            </span>
-          ) : (
-            <span className="flex items-center gap-[5px] px-[8.8px] py-[5px] rounded-full bg-[#f0f0f0] flex-shrink-0">
-              <svg width="12" height="12" viewBox="0 0 9.5 9.5" fill="none" className="flex-shrink-0">
-                <circle cx="4.75" cy="4.75" r="4.75" fill="#b6b6b6" fillOpacity="0.2" />
-                <circle cx="4.75" cy="4.75" r="2.375" fill="#b6b6b6" />
-              </svg>
-              <span className="text-[10px] font-semibold leading-none tracking-[-0.2px]" style={{ color: "#b6b6b6" }}>Off</span>
-            </span>
-          )}
-        </div>
-        <p className="text-sm text-grey-60 dark:text-grey-70 mt-1">{description}</p>
+    <div className="px-4 py-3">
+      {/* Top row: checkbox + label + badge all vertically centered together */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <SquareCheck id={id} checked={checked} onCheckedChange={onCheckedChange} />
+        <label htmlFor={id} className="text-sm font-medium text-grey-10 dark:text-white cursor-pointer">
+          {label}
+        </label>
+        {checked ? (
+          <span className="flex items-center gap-[5px] px-[8.8px] py-[5px] rounded-full bg-[rgba(4,200,112,0.2)] flex-shrink-0">
+            <svg width="12" height="12" viewBox="0 0 9.5 9.5" fill="none" className="flex-shrink-0">
+              <circle cx="4.75" cy="4.75" r="4.75" fill="#04C870" fillOpacity="0.2" />
+              <circle cx="4.75" cy="4.75" r="2.375" fill="#04C870" />
+            </svg>
+            <span className="text-[10px] font-semibold leading-none tracking-[-0.2px]" style={{ color: "#04c870" }}>On</span>
+          </span>
+        ) : (
+          <span className="flex items-center gap-[5px] px-[8.8px] py-[5px] rounded-full bg-[#f0f0f0] dark:bg-white/10 flex-shrink-0 text-[#b6b6b6] dark:text-grey-dark-500">
+            <svg width="12" height="12" viewBox="0 0 9.5 9.5" fill="none" className="flex-shrink-0">
+              <circle cx="4.75" cy="4.75" r="4.75" fill="currentColor" fillOpacity="0.2" />
+              <circle cx="4.75" cy="4.75" r="2.375" fill="currentColor" />
+            </svg>
+            <span className="text-[10px] font-semibold leading-none tracking-[-0.2px]">Off</span>
+          </span>
+        )}
       </div>
+      {/* Description sits below, indented to align with the label (18px checkbox + 12px gap) */}
+      <p className="text-sm text-grey-60 dark:text-grey-70 mt-1 pl-[30px]">{description}</p>
     </div>
   );
 }
@@ -291,7 +298,7 @@ export default function NotificationSection() {
                 {/* Sub-items aligned with text column above (no extra left padding needed) */}
                 <div
                   className={cn(
-                    "mt-3 flex flex-col gap-3",
+                    "mt-3 flex flex-col gap-4",
                     !localEmail.email_enabled && "opacity-40 pointer-events-none"
                   )}
                 >
