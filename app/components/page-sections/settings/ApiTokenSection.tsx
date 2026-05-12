@@ -5,8 +5,11 @@ import { Copy, Check, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import { InView } from "react-intersection-observer";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { Key } from "@/components/ui/icons";
 import { SettingsCard } from "./SettingsCard";
 import { cn } from "@/lib/utils";
+
+const KeyIcon = <Key className="size-[14px]" />;
 
 export const API_TOKEN_DOCS_URL =
   "https://docs.hippius.com/use/desktop/settings#api-token";
@@ -92,7 +95,7 @@ export const ApiTokenCard: React.FC = () => {
 
   if (!token) {
     return (
-      <SettingsCard label="API Token">
+      <SettingsCard label="API Token" icon={KeyIcon}>
         <p className="px-4 py-4 text-sm text-grey-60 dark:text-grey-dark-500">
           No authentication token available. Please log in to view your API token.
         </p>
@@ -101,7 +104,7 @@ export const ApiTokenCard: React.FC = () => {
   }
 
   return (
-    <SettingsCard label="API Token">
+    <SettingsCard label="API Token" icon={KeyIcon}>
       <TokenRow
         text={show ? token : maskToken(token)}
         show={show}
@@ -141,7 +144,7 @@ export const ApiTokenUsageCard: React.FC = () => {
 
   return (
     <div>
-      <SettingsCard label="API Token Usage Example">
+      <SettingsCard label="API Token Usage Example" icon={KeyIcon}>
         <TokenRow
           text={`Authorization: Token ${show ? token : maskToken(token)}`}
           show={show}
