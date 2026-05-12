@@ -7,6 +7,7 @@ import { InView } from "react-intersection-observer";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { Key } from "@/components/ui/icons";
 import { SettingsCard } from "./SettingsCard";
+import { SettingsWarningNotice } from "./SettingsWarningNotice";
 import { cn } from "@/lib/utils";
 
 const KeyIcon = <Key className="size-[14px]" />;
@@ -161,21 +162,6 @@ export const ApiTokenUsageCard: React.FC = () => {
   );
 };
 
-// Yellow warning callout — content-hugging width, no corner dots (matches Figma).
-function ApiTokenSecurityNotice() {
-  return (
-    <div className="w-fit rounded-[6px] border border-[#feb101] bg-[rgba(254,177,1,0.16)] dark:bg-[rgba(254,177,1,0.10)] p-[8px] flex flex-col gap-[8px]">
-      <p className="font-geist text-[14px] leading-[1.109] tracking-[-0.28px] font-medium text-black dark:text-white">
-        Keep your API key secure
-      </p>
-      <p className="font-geist text-[14px] leading-[1.109] tracking-[-0.28px] font-medium text-[#7d7d7d] dark:text-grey-dark-600">
-        Never share your API token with anyone. It provides full access to your
-        account and should be treated like a password.
-      </p>
-    </div>
-  );
-}
-
 /**
  * Default export: both cards + security notice with shared entry animation,
  * used by the settings page when section === "api-key".
@@ -207,7 +193,10 @@ const ApiTokenSection: React.FC = () => {
               inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
             )}
           >
-            <ApiTokenSecurityNotice />
+            <SettingsWarningNotice
+              title="Keep your API key secure"
+              description="Never share your API token with anyone. It provides full access to your account and should be treated like a password."
+            />
           </div>
         </div>
       )}
