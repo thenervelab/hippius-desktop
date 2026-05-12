@@ -2,7 +2,9 @@
 
 import React, { useState, useEffect } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
+import { InView } from "react-intersection-observer";
 import { Button } from "@/components/ui/button";
+import { SettingsCard } from "./SettingsCard";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useNotificationPreferences } from "@/app/lib/hooks/useNotificationPreferences";
@@ -29,27 +31,6 @@ const EMPTY_EMAIL: EmailSettings = {
   file_status_updates: false,
   marketing_emails: false,
 };
-
-function CardShell({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-[8px] border overflow-hidden bg-grey-light-300 border-grey-dark-100 dark:bg-black-primary-bg dark:border-black-300 shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]">
-      <div className="flex h-[46px] w-full items-center pl-[14px] pr-[10px]">
-        <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
-          {label}
-        </p>
-      </div>
-      <div className="rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100 bg-white dark:bg-black-600 dark:border-black-300">
-        {children}
-      </div>
-    </div>
-  );
-}
 
 // Square checkbox — solid fill, no checkmark
 function SquareCheck({
@@ -243,9 +224,17 @@ export default function NotificationSection() {
   const busy = isSaving || isUpdating;
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Notification Preferences card — no separators between rows */}
-      <CardShell label="Notification Preferences">
+    <InView triggerOnce>
+      {({ inView, ref }) => (
+        <div ref={ref} className="flex flex-col gap-4">
+          {/* Notification Preferences card — no separators between rows */}
+          <div
+            className={cn(
+              "transition-all duration-500 ease-out",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+            )}
+          >
+            <SettingsCard label="Notification Preferences">
         {preferences.length === 0 ? (
           <div className="px-4 py-6 flex flex-col gap-3">
             {[1, 2, 3].map((i) => (
@@ -269,10 +258,17 @@ export default function NotificationSection() {
             />
           ))
         )}
-      </CardShell>
+            </SettingsCard>
+          </div>
 
-      {/* Email Notification card */}
-      <CardShell label="Email Notification">
+          {/* Email Notification card */}
+          <div
+            className={cn(
+              "transition-all duration-500 ease-out delay-150",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+            )}
+          >
+            <SettingsCard label="Email Notification">
         {requiresOAuthLogin ? (
           <p className="px-4 py-4 text-sm text-grey-60 dark:text-grey-70">
             Sign in with Google, GitHub, or Email to manage email notifications.
@@ -328,10 +324,16 @@ export default function NotificationSection() {
             </div>
           </>
         )}
-      </CardShell>
+            </SettingsCard>
+          </div>
 
-      {/* Action buttons */}
-      <div className="flex items-center gap-3">
+          {/* Action buttons */}
+          <div
+            className={cn(
+              "flex items-center gap-3 transition-all duration-500 ease-out delay-300",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+            )}
+          >
         <Button
           variant="defaultStable"
           size="auto"
@@ -360,9 +362,11 @@ export default function NotificationSection() {
             "dark:border-[#3167DD] dark:bg-[#3167DD] dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
           )}
         >
-          {busy ? "Saving..." : "Save Changes"}
-        </Button>
-      </div>
-    </div>
+              {busy ? "Saving..." : "Save Changes"}
+            </Button>
+          </div>
+        </div>
+      )}
+    </InView>
   );
 }
