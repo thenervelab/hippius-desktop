@@ -44,7 +44,7 @@
 //! hygiene axiom).
 
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 /// Set of drive labels currently in the "preparing" window between
 /// `SyncStarted` and the first ProgressSnapshot that has files.
@@ -74,6 +74,18 @@ impl PreparingState {
         }
     }
 
+    /// Acquire the inner mutex with a single poison-message helper.
+    ///
+    /// Centralises the `expect` panic message so a future addition to
+    /// the API can't introduce a new wording variant. The returned
+    /// guard's lifetime is tied to `&self`; each public method should
+    /// hold it for the smallest possible scope (no `.await` in this
+    /// module, but the project axiom forbidding sync-mutex-across-await
+    /// applies if a future caller adds async code here).
+    fn lock(&self) -> MutexGuard<'_, HashSet<String>> {
+        self.inner.lock().expect("preparing mutex poisoned")
+    }
+
     /// Insert `label` into the preparing set.
     ///
     /// Returns `true` if the label was newly added; `false` if it was
@@ -82,9 +94,20 @@ impl PreparingState {
     /// `SyncStarted`, without re-emitting on every duplicate
     /// `SyncStarted` from rapid file-watcher re-triggers within the
     /// same preparing window.
+    ///
+    /// The `MutexGuard` is dropped at the function boundary (the
+    /// return value is `bool`, not the guard). This non-extending-the-
+    /// guard contract is load-bearing for the
+    /// [`crate::sync::tauri_bridge::TauriSyncBridge::on_event`]
+    /// `SyncStarted` arm: that arm calls this method and then invokes
+    /// `emit_snapshot`, which synchronously re-enters `on_event` with
+    /// `ProgressSnapshot` — and that re-entry reacquires this same
+    /// mutex via `clear` / `is_any_preparing`. Since `std::sync::Mutex`
+    /// is non-reentrant, holding the guard across `emit_snapshot`
+    /// would deadlock. The `mark_then_read_does_not_deadlock_in_sequence`
+    /// test below pins this invariant.
     pub fn mark_preparing(&self, label: &str) -> bool {
-        let mut g = self.inner.lock().expect("preparing mutex poisoned");
-        g.insert(label.to_string())
+        self.lock().insert(label.to_string())
     }
 
     /// Remove `label` from the preparing set.
@@ -92,8 +115,7 @@ impl PreparingState {
     /// Returns `true` if the label was present (caller can use this
     /// to skip a redundant `emit_snapshot` when nothing changed).
     pub fn clear(&self, label: &str) -> bool {
-        let mut g = self.inner.lock().expect("preparing mutex poisoned");
-        g.remove(label)
+        self.lock().remove(label)
     }
 
     /// Remove every label from the preparing set.
@@ -103,7 +125,7 @@ impl PreparingState {
     /// teardown), which must guarantee no preparing override leaks
     /// across an account switch.
     pub fn clear_all(&self) -> bool {
-        let mut g = self.inner.lock().expect("preparing mutex poisoned");
+        let mut g = self.lock();
         let had_entries = !g.is_empty();
         g.clear();
         had_entries
@@ -113,15 +135,14 @@ impl PreparingState {
     /// set. Read by the snapshot pipeline to decide whether to apply
     /// the preparing override.
     pub fn is_any_preparing(&self) -> bool {
-        !self.inner.lock().expect("preparing mutex poisoned").is_empty()
+        !self.lock().is_empty()
     }
 
     /// Sorted snapshot of the current set, for tests and diagnostics.
     /// Not on the hot path — produces a fresh `Vec` per call.
     #[doc(hidden)]
     pub fn snapshot_labels(&self) -> Vec<String> {
-        let g = self.inner.lock().expect("preparing mutex poisoned");
-        let mut labels: Vec<String> = g.iter().cloned().collect();
+        let mut labels: Vec<String> = self.lock().iter().cloned().collect();
         labels.sort();
         labels
     }
@@ -195,5 +216,35 @@ mod tests {
             state.snapshot_labels(),
             vec!["drive-a".to_string(), "drive-m".to_string(), "drive-z".to_string()],
         );
+    }
+
+    /// Re-entrancy guardrail. `PreparingState::mark_preparing` MUST
+    /// release the inner mutex before returning so the
+    /// `TauriSyncBridge::on_event` `SyncStarted` arm can call it and
+    /// then invoke `emit_snapshot`, which synchronously re-enters
+    /// `on_event` and reacquires the same mutex via `clear` /
+    /// `is_any_preparing`. `std::sync::Mutex` is non-reentrant, so a
+    /// refactor that extended the guard's lifetime (e.g. returning
+    /// the guard alongside the bool, or inlining the lock acquisition
+    /// into the bridge handler) would deadlock at runtime — but every
+    /// existing unit test calls the operations on separate lines, so
+    /// it wouldn't trip them.
+    ///
+    /// This test calls `mark_preparing` and the read operations in a
+    /// tight sequence on the same thread. A regression that broke the
+    /// lock release would surface as the second call blocking
+    /// indefinitely; the test harness's per-test timeout would catch
+    /// it.
+    #[test]
+    fn mark_then_read_does_not_deadlock_in_sequence() {
+        let state = PreparingState::new();
+        assert!(state.mark_preparing("drive-a"));
+        // Each of the following reacquires the inner mutex. If
+        // `mark_preparing` had returned with the guard still live,
+        // every line below would deadlock on the same thread.
+        assert!(state.is_any_preparing());
+        assert_eq!(state.snapshot_labels(), vec!["drive-a".to_string()]);
+        assert!(state.clear("drive-a"));
+        assert!(!state.is_any_preparing());
     }
 }
