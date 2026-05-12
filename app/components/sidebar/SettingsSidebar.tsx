@@ -40,7 +40,7 @@ const settingsNavItems = [
   {
     label: "Customize RPC",
     section: "customize-rpc",
-    icon: <Icons.Box className={ICON_CLASS} />,
+    icon: <Icons.SquareDashedKanban className={ICON_CLASS} />,
   },
 ];
 
