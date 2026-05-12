@@ -33,7 +33,7 @@ const settingsNavItems = [
     icon: <Icons.Key className={ICON_CLASS} />,
   },
   {
-    label: "VPN",
+    label: "VPN Settings",
     section: "vpn",
     icon: <Icons.ShieldSecurity className={ICON_CLASS} />,
   },
