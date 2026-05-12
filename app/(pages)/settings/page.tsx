@@ -51,8 +51,11 @@ const SECTION_META: Record<
     showDescription: true,
   },
   "customize-rpc": {
-    title: "Customize RPC",
-    description: "Set a custom RPC endpoint for blockchain queries.",
+    title: "RPC Setting",
+    description:
+      "Customize your connection by updating the blockchain RPC endpoint.",
+    tooltip:
+      "The WebSocket URL your client uses to talk to the blockchain. Only change the default if you're running your own node or pointing at a trusted provider — the app restarts after every change.",
     showDescription: true,
   },
 };
@@ -109,11 +112,7 @@ function SettingsContent() {
           </div>
         )}
 
-        {section === "customize-rpc" && (
-          <div className="shadow-menu rounded-lg bg-white dark:bg-[#1A1A1A] p-4">
-            <CustomizeRPC />
-          </div>
-        )}
+        {section === "customize-rpc" && <CustomizeRPC />}
       </div>
     </div>
   );
