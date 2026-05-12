@@ -5,6 +5,7 @@ import * as Checkbox from "@radix-ui/react-checkbox";
 import { InView } from "react-intersection-observer";
 import { Button } from "@/components/ui/button";
 import { SettingsCard } from "./SettingsCard";
+import { SettingsToggle } from "./SettingsToggle";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useNotificationPreferences } from "@/app/lib/hooks/useNotificationPreferences";
@@ -56,54 +57,6 @@ function SquareCheck({
       )}
       style={{ width: 18, height: 18, borderRadius: 5 }}
     />
-  );
-}
-
-// Horizontal mini-toggle: pill slides left ↔ right via alignItems on a column flex container
-// Outer: 22px wide × auto height (~17px). alignItems flex-start = pill left, flex-end = pill right.
-function EmailToggle({
-  checked,
-  onCheckedChange,
-}: {
-  checked: boolean;
-  onCheckedChange: (v: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onCheckedChange(!checked)}
-      className={cn(
-        "flex-shrink-0 outline-none cursor-pointer border-[1.2px] transition-all duration-150",
-        checked
-          ? "border-[#1F51BE] opacity-100"
-          : "border-black dark:border-white opacity-30"
-      )}
-      style={{
-        display: "flex",
-        width: 22,
-        padding: 2,
-        flexDirection: "column",
-        alignItems: checked ? "flex-end" : "flex-start",
-        borderRadius: 4,
-        background: "transparent",
-        boxSizing: "border-box",
-      }}
-    >
-      <div
-        className={cn(
-          "transition-colors",
-          checked ? "bg-[#1F51BE]" : "bg-black dark:bg-white"
-        )}
-        style={{
-          width: 8.571,
-          height: 12.857,
-          borderRadius: 2,
-          flexShrink: 0,
-        }}
-      />
-    </button>
   );
 }
 
@@ -277,7 +230,7 @@ export default function NotificationSection() {
           <>
             {/* Master toggle row */}
             <div className="flex items-start gap-3 px-4 py-3">
-              <EmailToggle
+              <SettingsToggle
                 checked={localEmail.email_enabled}
                 onCheckedChange={(checked) =>
                   setLocalEmail((prev) => ({ ...prev, email_enabled: checked }))
