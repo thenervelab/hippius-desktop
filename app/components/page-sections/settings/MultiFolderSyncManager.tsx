@@ -469,42 +469,38 @@ export default function MultiFolderSyncManager() {
   return (
     <>
       <div className="flex flex-col gap-4 w-full">
-        <div className="shadow-menu rounded-lg bg-white p-4 w-full">
-          <LocalFoldersSection
-            syncFolders={syncFolders}
-            isLoading={isLoading}
-            onAddFolder={() => setShowAddDialog(true)}
-            onPauseFolder={(folder) => setPauseDialog({ open: true, folder })}
-            onResumeFolder={handleResumeSync}
-            onRemoveFolder={(folder) =>
-              setRemoveDialog({
-                open: true,
-                folderId: folder.id,
-                folderName: folder.folderName,
-              })
-            }
-            onDeleteFromServer={openDeleteServerDialog}
-            onBrowseFolder={(folder) => handleBrowseFolder({
+        <LocalFoldersSection
+          syncFolders={syncFolders}
+          isLoading={isLoading}
+          onAddFolder={() => setShowAddDialog(true)}
+          onPauseFolder={(folder) => setPauseDialog({ open: true, folder })}
+          onResumeFolder={handleResumeSync}
+          onRemoveFolder={(folder) =>
+            setRemoveDialog({
+              open: true,
+              folderId: folder.id,
               folderName: folder.folderName,
-              deviceName: folder.deviceName ?? "This Device",
-              lastModified: folder.lastModified ?? 0,
-              fileCount: folder.fileCount ?? 0,
-              totalBytes: folder.totalBytes ?? 0,
-            }, true)}
-          />
-        </div>
+            })
+          }
+          onDeleteFromServer={openDeleteServerDialog}
+          onBrowseFolder={(folder) => handleBrowseFolder({
+            folderName: folder.folderName,
+            deviceName: folder.deviceName ?? "This Device",
+            lastModified: folder.lastModified ?? 0,
+            fileCount: folder.fileCount ?? 0,
+            totalBytes: folder.totalBytes ?? 0,
+          }, true)}
+        />
 
-        <div className="shadow-menu rounded-lg bg-white p-4 w-full mb-4">
-          <RemoteFoldersSection
-            remoteFolders={remoteFolders}
-            isLoading={isLoading}
-            onSyncFolder={handleSyncRemoteFolder}
-            onDeleteFromServer={(folderName) =>
-              openDeleteServerDialog(folderName)
-            }
-            onBrowseFolder={handleBrowseFolder}
-          />
-        </div>
+        <RemoteFoldersSection
+          remoteFolders={remoteFolders}
+          isLoading={isLoading}
+          onSyncFolder={handleSyncRemoteFolder}
+          onDeleteFromServer={(folderName) =>
+            openDeleteServerDialog(folderName)
+          }
+          onBrowseFolder={handleBrowseFolder}
+        />
       </div>
 
       {/* Dialogs */}

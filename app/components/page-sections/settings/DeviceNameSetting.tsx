@@ -2,19 +2,8 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  RevealTextLine,
-  Input,
-  CardButton,
-  IconButton,
-} from "@/components/ui";
 import { toast } from "sonner";
 import { Monitor } from "lucide-react";
-import SectionHeader from "./SectionHeader";
-import { Label } from "@/components/ui/label";
-import { InView } from "react-intersection-observer";
-import { Edit } from "@/components/ui/icons";
-import { cn } from "@/lib/utils";
 
 export default function DeviceNameSetting() {
   const [deviceName, setDeviceName] = useState("");
@@ -38,7 +27,6 @@ export default function DeviceNameSetting() {
 
   const handleSave = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-
     const trimmed = editValue.trim();
     if (!trimmed) {
       toast.error("Device name cannot be empty");
@@ -48,7 +36,6 @@ export default function DeviceNameSetting() {
       setIsEditing(false);
       return;
     }
-
     setIsSaving(true);
     try {
       await invoke("set_device_name", { name: trimmed });
@@ -63,110 +50,65 @@ export default function DeviceNameSetting() {
     }
   };
 
-  const toggleEditMode = () => {
-    setIsEditing(!isEditing);
-    if (isEditing) {
-      setEditValue(deviceName);
-    }
+  const handleCancel = () => {
+    setEditValue(deviceName);
+    setIsEditing(false);
   };
 
-  const hasChanged = editValue.trim() !== deviceName && editValue.trim() !== "";
-
   return (
-    <InView triggerOnce>
-      {({ inView, ref }) => (
-        <div
-          ref={ref}
-          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
-        >
-          <div className="w-full flex flex-col">
-            <div className="w-full">
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                parentClassName="w-full"
-                className="delay-300 w-full"
-              >
-                <div className="w-full flex flex-wrap justify-between gap-4 items-start">
-                  <SectionHeader
-                    Icon={Monitor}
-                    title="Device Name"
-                    subtitle="A friendly name for this device, shown to your other devices when browsing remote sync folders."
-                  />
-                  {!isEditing && (
-                    <IconButton
-                      className="shrink-0 h-[2.625rem]"
-                      icon={Edit}
-                      text="Edit Name"
-                      onClick={toggleEditMode}
-                    />
-                  )}
-                </div>
-              </RevealTextLine>
-            </div>
-            <form className="w-full flex flex-col" onSubmit={handleSave}>
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                parentClassName="w-full"
-                className="delay-300 w-full mt-4"
-              >
-                <div className="space-y-1 text-grey-10 w-full flex flex-col">
-                  <Label
-                    htmlFor="device-name"
-                    className="text-sm font-medium text-grey-70"
-                  >
-                    Device Name
-                  </Label>
-                  <div className="relative flex items-start w-full">
-                    <Monitor className="size-6 absolute left-3 top-[1.75rem] transform -translate-y-1/2 text-grey-60" />
-                    <Input
-                      id="device-name"
-                      placeholder="e.g. Work MacBook, Home PC"
-                      value={editValue}
-                      onChange={(e) => setEditValue(e.target.value)}
-                      disabled={!isEditing}
-                      maxLength={64}
-                      className="px-11 border-grey-80 h-14 text-grey-30 w-full
-                        bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none
-                        hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus bg-white"
-                    />
-                  </div>
-                </div>
-              </RevealTextLine>
+    <div className="border border-grey-80 rounded-lg bg-white dark:bg-[#1A1A1A] overflow-hidden">
+      {/* Section header */}
+      <div className="flex items-center gap-1.5 px-4 py-3">
+        <Monitor className="size-4 text-primary-50" />
+        <span className="text-xs font-semibold tracking-[0.5px] uppercase text-primary-50">
+          Device Name
+        </span>
+      </div>
+      <div className="border-t border-grey-80" />
 
-              <div
-                className={cn(
-                  "overflow-hidden transition-all duration-300 ease-in-out",
-                  isEditing
-                    ? "max-h-96 opacity-100 mt-6"
-                    : "max-h-0 opacity-0"
-                )}
-              >
-                <RevealTextLine
-                  rotate
-                  reveal={inView && isEditing}
-                  className="delay-300 w-full"
-                >
-                  <CardButton
-                    type="submit"
-                    className="max-w-[10rem] h-[3rem]"
-                    variant="dialog"
-                    disabled={isSaving || !hasChanged}
-                    onClick={handleSave}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="flex items-center text-lg leading-6 font-medium">
-                        {isSaving ? "Saving..." : "Save"}
-                      </span>
-                    </div>
-                  </CardButton>
-                </RevealTextLine>
-              </div>
-            </form>
+      {/* Content */}
+      {isEditing ? (
+        <form onSubmit={handleSave} className="px-4 py-4">
+          <input
+            type="text"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            autoFocus
+            maxLength={64}
+            placeholder="e.g. Work MacBook, Home PC"
+            className="w-full border border-grey-80 dark:border-white/10 rounded-lg px-3 py-2.5 text-sm text-grey-10 dark:text-white bg-white dark:bg-[#2A2A2A] outline-none focus:ring-2 focus:ring-primary-50/20 focus:border-primary-50 transition-colors"
+          />
+          <div className="flex items-center justify-end gap-2 mt-3">
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="px-4 py-2 text-sm font-medium text-grey-40 dark:text-grey-60 border border-grey-80 dark:border-white/10 rounded-lg hover:bg-grey-98 dark:hover:bg-white/5 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSaving || !editValue.trim() || editValue.trim() === deviceName}
+              className="px-4 py-2 text-sm font-medium text-white bg-primary-50 rounded-lg hover:bg-primary-40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSaving ? "Saving..." : "Save"}
+            </button>
           </div>
+        </form>
+      ) : (
+        <div className="flex items-center justify-between px-4 py-4">
+          <span className="text-sm font-medium text-grey-10 dark:text-white">
+            {deviceName}
+          </span>
+          <button
+            type="button"
+            onClick={() => setIsEditing(true)}
+            className="px-3 py-1.5 text-sm font-medium text-white bg-primary-50 rounded-lg hover:bg-primary-40 transition-colors"
+          >
+            Edit Name
+          </button>
         </div>
       )}
-    </InView>
+    </div>
   );
 }
