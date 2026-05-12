@@ -80,7 +80,7 @@ export function FramedDialog({
             fillClassName="fill-[#f9f9f9] dark:fill-[#202020]"
             strokeClassName="stroke-[#b3b3b3] dark:stroke-[#6c6c6c]"
             borderClassName={borderClassName}
-            contentClassName="sm:px-[60px] sm:py-[51px] flex justify-center"
+            contentClassName="flex justify-center"
             shellClassName={cn("w-full min-w-0", maxWidth)}
             cardClassName={cn("w-full min-w-0 max-w-full gap-0 p-0", cardClassName)}
             stopClickPropagation
@@ -109,7 +109,7 @@ export function FramedDialog({
             {/* Scrollable inner area */}
             <div
               className={cn(
-                "mx-auto w-full max-h-[85vh] overflow-y-auto px-4 pb-5 pt-12",
+                "mx-auto w-full max-h-[85vh] overflow-y-auto px-4 pb-5 pt-4",
                 "sm:max-h-[calc(100vh-200px)] sm:px-5",
                 contentClassName,
               )}
@@ -154,7 +154,7 @@ export function FramedDialog({
               {/* Title */}
               <Dialog.Title
                 className={cn(
-                  "mb-4 text-center text-[22px] font-semibold leading-tight text-[#0a0a0a] dark:text-white",
+                  "mb-2 text-center text-[22px] font-semibold leading-tight text-[#0a0a0a] dark:text-white",
                   "sm:text-[28px] sm:leading-9",
                   titleClassName,
                 )}
