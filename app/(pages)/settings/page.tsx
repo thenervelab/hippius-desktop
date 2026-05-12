@@ -5,10 +5,7 @@ import { useSearchParams } from "next/navigation";
 import MultiFolderSyncManager from "@/components/page-sections/settings/MultiFolderSyncManager";
 import DeviceNameSetting from "@/components/page-sections/settings/DeviceNameSetting";
 import RecoveryPhraseSettings from "@/components/page-sections/settings/RecoveryPhraseSettings";
-import {
-  ApiTokenCard,
-  ApiTokenUsageCard,
-} from "@/components/page-sections/settings/OAuthTokenSection";
+import OAuthTokenSection from "@/components/page-sections/settings/OAuthTokenSection";
 import VPNSettings from "@/components/page-sections/settings/VPNSettings";
 import CustomizeRPC from "@/components/page-sections/settings/CustomizeRPC";
 import InfoTooltip from "@/components/page-sections/settings/InfoTooltip";
@@ -42,8 +39,12 @@ const SECTION_META: Record<
     showDescription: true,
   },
   "api-keys": {
-    title: "API Keys",
-    description: "Manage your API tokens and access credentials.",
+    title: "API Token",
+    description:
+      "Manage your API token for secure file operations and delegated access.",
+    tooltip:
+      "Your API token allows you to authenticate requests to the Hippius platform. Keep it secure and never share it with anyone.",
+    learnMoreUrl: "https://docs.hippius.com/use/desktop/settings#api-token",
     showDescription: true,
   },
   vpn: {
@@ -101,16 +102,7 @@ function SettingsContent() {
 
         {section === "notifications" && <NotificationSection />}
 
-        {section === "api-keys" && (
-          <>
-            <div className="shadow-menu rounded-lg bg-white dark:bg-[#1A1A1A] p-4">
-              <ApiTokenCard />
-            </div>
-            <div className="shadow-menu rounded-lg bg-white dark:bg-[#1A1A1A] p-4">
-              <ApiTokenUsageCard />
-            </div>
-          </>
-        )}
+        {section === "api-keys" && <OAuthTokenSection />}
 
         {section === "vpn" && <VPNSettings />}
 

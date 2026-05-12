@@ -28,7 +28,7 @@ const settingsNavItems = [
     icon: <Icons.Notification className={ICON_CLASS} />,
   },
   {
-    label: "API Keys",
+    label: "API Token",
     section: "api-keys",
     icon: <Icons.Key className={ICON_CLASS} />,
   },

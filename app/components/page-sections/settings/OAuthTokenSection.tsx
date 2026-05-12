@@ -3,15 +3,12 @@
 import React, { useState } from "react";
 import { Copy, Check, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
-import { Key } from "@/components/ui/icons";
-import { RevealTextLine } from "@/components/ui";
 import { InView } from "react-intersection-observer";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import SectionHeader from "./SectionHeader";
-import { Code } from "lucide-react";
+import { SettingsCard } from "./SettingsCard";
+import { cn } from "@/lib/utils";
 
-const API_TOKEN_DOCS_URL =
+export const API_TOKEN_DOCS_URL =
   "https://docs.hippius.com/use/desktop/settings#api-token";
 
 function useMaskToken() {
@@ -24,6 +21,52 @@ function useMaskToken() {
   };
 }
 
+// Shared row layout: token text on the left + eye / copy icons on the right.
+function TokenRow({
+  text,
+  show,
+  onToggleShow,
+  copied,
+  onCopy,
+}: {
+  text: string;
+  show: boolean;
+  onToggleShow: () => void;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 px-4 py-3">
+      <div className="font-mono text-sm font-medium text-grey-10 dark:text-white break-all min-w-0 flex-1">
+        {text}
+      </div>
+      <div className="flex items-center gap-3 flex-shrink-0">
+        <button
+          type="button"
+          onClick={onToggleShow}
+          aria-label={show ? "Hide token" : "Show token"}
+          className="text-grey-60 hover:text-grey-40 dark:text-grey-dark-500 dark:hover:text-white transition-colors"
+        >
+          {show ? <EyeOff className="size-[18px]" /> : <Eye className="size-[18px]" />}
+        </button>
+        <button
+          type="button"
+          onClick={onCopy}
+          aria-label="Copy to clipboard"
+          className={cn(
+            "transition-colors",
+            copied
+              ? "text-success-50"
+              : "text-grey-60 hover:text-grey-40 dark:text-grey-dark-500 dark:hover:text-white"
+          )}
+        >
+          {copied ? <Check className="size-[18px]" /> : <Copy className="size-[18px]" />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Card 1: API Token display with copy/reveal.
  */
@@ -31,15 +74,15 @@ export const ApiTokenCard: React.FC = () => {
   const { oauthSession } = useWalletAuth();
   const token = oauthSession?.token || "";
 
-  const [copiedToken, setCopiedToken] = useState(false);
-  const [showToken, setShowToken] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [show, setShow] = useState(false);
   const maskToken = useMaskToken();
 
-  const copyTokenToClipboard = async () => {
+  const copyToClipboard = async () => {
     try {
       await navigator.clipboard.writeText(token);
-      setCopiedToken(true);
-      setTimeout(() => setCopiedToken(false), 2000);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
       toast.success("Token copied to clipboard!");
     } catch (err) {
       console.error("Failed to copy:", err);
@@ -49,66 +92,24 @@ export const ApiTokenCard: React.FC = () => {
 
   if (!token) {
     return (
-      <SectionHeader
-        Icon={Key}
-        title="API Token"
-        subtitle="No authentication token available. Please log in to view your API token."
-      />
+      <SettingsCard label="API Token">
+        <p className="px-4 py-4 text-sm text-grey-60 dark:text-grey-dark-500">
+          No authentication token available. Please log in to view your API token.
+        </p>
+      </SettingsCard>
     );
   }
 
   return (
-    <InView triggerOnce>
-      {({ inView, ref }) => (
-        <div
-          ref={ref}
-          className="flex flex-col w-full border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
-        >
-          <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
-            <SectionHeader
-              Icon={Key}
-              title="API Token"
-              subtitle="Your authentication token for API access"
-              info="Your API token allows you to authenticate requests to the Hippius platform. Keep it secure and never share it with anyone."
-              learnMoreUrl={API_TOKEN_DOCS_URL}
-            />
-          </RevealTextLine>
-
-          {/* Token Display */}
-          <RevealTextLine rotate reveal={inView} className="delay-500 w-full">
-            <div className="space-y-1 w-full mt-4">
-              <h3 className="text-sm font-medium text-grey-70">Token</h3>
-              <div className="border border-grey-80 rounded-lg p-3 sm:p-4 font-mono text-xs sm:text-base bg-white">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-grey-60 font-medium break-all flex-1">
-                    {showToken ? token : maskToken(token)}
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <button
-                      onClick={() => setShowToken(!showToken)}
-                      className="rounded transition text-grey-60 hover:text-grey-70"
-                      title={showToken ? "Hide token" : "Show token"}
-                    >
-                      {showToken ? <EyeOff className="size-6" /> : <Eye className="size-6" />}
-                    </button>
-                    <button
-                      onClick={copyTokenToClipboard}
-                      className={cn(
-                        "rounded transition",
-                        copiedToken ? "text-success-50" : "text-grey-60 hover:text-grey-70"
-                      )}
-                      title="Copy token"
-                    >
-                      {copiedToken ? <Check className="size-5" /> : <Copy className="size-5" />}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </RevealTextLine>
-        </div>
-      )}
-    </InView>
+    <SettingsCard label="API Token">
+      <TokenRow
+        text={show ? token : maskToken(token)}
+        show={show}
+        onToggleShow={() => setShow(!show)}
+        copied={copied}
+        onCopy={copyToClipboard}
+      />
+    </SettingsCard>
   );
 };
 
@@ -119,16 +120,16 @@ export const ApiTokenUsageCard: React.FC = () => {
   const { oauthSession } = useWalletAuth();
   const token = oauthSession?.token || "";
 
-  const [copiedHeader, setCopiedHeader] = useState(false);
-  const [showHeaderToken, setShowHeaderToken] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [show, setShow] = useState(false);
   const maskToken = useMaskToken();
 
-  const copyHeaderToClipboard = async () => {
+  const copyToClipboard = async () => {
     try {
       const headerText = `Authorization: Token ${token}`;
       await navigator.clipboard.writeText(headerText);
-      setCopiedHeader(true);
-      setTimeout(() => setCopiedHeader(false), 2000);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
       toast.success("Authorization header copied to clipboard!");
     } catch (err) {
       console.error("Failed to copy:", err);
@@ -139,90 +140,53 @@ export const ApiTokenUsageCard: React.FC = () => {
   if (!token) return null;
 
   return (
+    <div>
+      <SettingsCard label="API Token Usage Example">
+        <TokenRow
+          text={`Authorization: Token ${show ? token : maskToken(token)}`}
+          show={show}
+          onToggleShow={() => setShow(!show)}
+          copied={copied}
+          onCopy={copyToClipboard}
+        />
+      </SettingsCard>
+      <p className="mt-2 text-sm text-grey-60 dark:text-grey-dark-500">
+        Include this header in your API requests to access storage control, file
+        upload, and other authenticated endpoints.
+      </p>
+    </div>
+  );
+};
+
+/**
+ * Default export: both cards with shared entry animation, used by the
+ * settings page when section === "api-keys".
+ */
+const OAuthTokenSection: React.FC = () => {
+  return (
     <InView triggerOnce>
       {({ inView, ref }) => (
-        <div
-          ref={ref}
-          className="flex flex-col w-full border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
-        >
-          <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
-            <SectionHeader
-              Icon={Code}
-              title="API Token Usage Example"
-              subtitle="Use this token to authenticate API requests to the Hippius platform"
-            />
-          </RevealTextLine>
-
-          {/* Authorization Header */}
-          <RevealTextLine rotate reveal={inView} className="delay-500 w-full">
-            <div className="space-y-1 w-full mt-4">
-              <h3 className="text-sm font-medium text-grey-70">Authorization Header</h3>
-              <div className="border border-grey-80 rounded-lg p-3 sm:p-4 font-mono text-xs sm:text-base bg-white">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-base text-grey-60 font-medium break-all flex-1">
-                    Authorization: Token {showHeaderToken ? token : maskToken(token)}
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <button
-                      onClick={() => setShowHeaderToken(!showHeaderToken)}
-                      className="rounded transition text-grey-60 hover:text-grey-70"
-                      title={showHeaderToken ? "Hide token" : "Show token"}
-                    >
-                      {showHeaderToken ? <EyeOff className="size-6" /> : <Eye className="size-6" />}
-                    </button>
-                    <button
-                      onClick={copyHeaderToClipboard}
-                      className={cn(
-                        "rounded transition",
-                        copiedHeader ? "text-success-50" : "text-grey-60 hover:text-grey-70"
-                      )}
-                      title="Copy authorization header"
-                    >
-                      {copiedHeader ? <Check className="size-5" /> : <Copy className="size-5" />}
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <p className="text-xs text-grey-60">
-                Include this header in your API requests to access storage control,
-                file upload, and other authenticated endpoints.
-              </p>
-            </div>
-          </RevealTextLine>
-
-          {/* Security Warning */}
-          <RevealTextLine rotate reveal={inView} className="delay-700 w-full">
-            <div className="bg-warning-90/20 border border-warning-80 rounded-lg p-3 mt-4">
-              <div className="flex gap-2">
-                <div className="mt-0.5">
-                  <div className="size-5 rounded-full bg-warning-50/20 flex items-center justify-center">
-                    <span className="text-warning-50 text-sm font-bold">!</span>
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm font-medium text-warning-10">
-                    Keep your API token secure
-                  </p>
-                  <p className="text-sm text-warning-30">
-                    Never share your API token with anyone. It provides full
-                    access to your account and should be treated like a password.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </RevealTextLine>
+        <div ref={ref} className="flex flex-col gap-4">
+          <div
+            className={cn(
+              "transition-all duration-500 ease-out",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+            )}
+          >
+            <ApiTokenCard />
+          </div>
+          <div
+            className={cn(
+              "transition-all duration-500 ease-out delay-150",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+            )}
+          >
+            <ApiTokenUsageCard />
+          </div>
         </div>
       )}
     </InView>
   );
 };
-
-// Keep default export for backward compatibility
-const OAuthTokenSection: React.FC = () => (
-  <div className="flex flex-col gap-6 w-full">
-    <ApiTokenCard />
-    <ApiTokenUsageCard />
-  </div>
-);
 
 export default OAuthTokenSection;
