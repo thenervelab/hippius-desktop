@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { Icons, RevealTextLine, CardButton, IconButton } from "@/components/ui";
 import { toast } from "sonner";
-import SectionHeader from "./SectionHeader";
 import { InView } from "react-intersection-observer";
 import { invoke } from "@tauri-apps/api/core";
-import { Edit } from "@/components/ui/icons";
+import { Button } from "@/components/ui/button";
+import { SettingsToggle } from "./SettingsToggle";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { cn } from "@/lib/utils";
-import * as Checkbox from "@radix-ui/react-checkbox";
-import { Check } from "lucide-react";
 
 interface AutoconnectStatus {
   is_enabled: boolean;
@@ -18,11 +16,9 @@ const VPNSettings: React.FC = () => {
   const [originalState, setOriginalState] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [editMode, setEditMode] = useState(false);
 
   useEffect(() => {
-    // Load the current autoconnect status
-    const loadStatus = async () => {
+    const load = async () => {
       try {
         const status = await invoke<AutoconnectStatus>(
           "get_autoconnect_status"
@@ -36,181 +32,111 @@ const VPNSettings: React.FC = () => {
         setLoading(false);
       }
     };
-
-    loadStatus();
+    load();
   }, []);
 
-  const handleSave = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-
-    // No need to proceed if the setting is unchanged
-    if (autoconnectEnabled === originalState) {
-      toast.info("No changes detected");
-      setEditMode(false);
-      return;
-    }
-
+  const handleSave = async () => {
+    if (autoconnectEnabled === originalState) return;
     setSaving(true);
     try {
       const newStatus = await invoke<AutoconnectStatus>(
         "toggle_autoconnect_status"
       );
-
       setAutoconnectEnabled(newStatus.is_enabled);
       setOriginalState(newStatus.is_enabled);
-      setEditMode(false);
-
       toast.success(
         newStatus.is_enabled
           ? "VPN will now connect automatically on app start"
           : "VPN autoconnect disabled"
       );
-    } catch (error) {
-      toast.error("Failed to update autoconnect setting");
-      console.error("Update failed:", error);
-      // Revert to original state on error
+    } catch (err) {
+      toast.error(errorMessage(err) || "Failed to update autoconnect setting");
       setAutoconnectEnabled(originalState);
     } finally {
       setSaving(false);
     }
   };
 
-  // Toggle edit mode
-  const toggleEditMode = () => {
-    setEditMode(!editMode);
-
-    // If exiting edit mode, reset to original state
-    if (editMode) {
-      setAutoconnectEnabled(originalState);
-    }
+  const handleCancel = () => {
+    setAutoconnectEnabled(originalState);
   };
 
-  // Check if the setting has been modified
-  const hasSettingChanged = autoconnectEnabled !== originalState;
+  const hasChanged = autoconnectEnabled !== originalState;
+  const busy = saving;
 
   if (loading) {
     return (
-      <div className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover">
-        <div className="flex items-center justify-center h-32">
-          <span className="text-grey-60">Loading...</span>
-        </div>
-      </div>
+      <div className="h-12 w-full max-w-md rounded-lg bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
     );
   }
 
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
-        <div
-          ref={ref}
-          className={
-            "flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
-          }
-        >
-          <div className="w-full flex flex-col ">
-            <div className="w-full">
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                parentClassName="w-full"
-                className="delay-300 w-full"
-              >
-                <div className="w-full flex justify-between gap-4">
-                  <SectionHeader
-                    Icon={Icons.ShieldSecurity}
-                    title="VPN Settings"
-                    subtitle="Configure VPN behavior when the application starts."
-                    info="When autoconnect is enabled, the VPN will automatically connect when you start the application. This ensures your connection is always protected. When disabled, you'll need to manually turn on the VPN each time you start the app."
-                    learnMoreUrl="https://docs.hippius.com/use/desktop/settings#vpn-settings"
-                  />
-                  {!editMode && (
-                    <IconButton
-                      icon={Edit}
-                      text={"Update"}
-                      onClick={toggleEditMode}
-                    />
-                  )}
-                </div>
-              </RevealTextLine>
-            </div>
-            <form className="w-full flex flex-col" onSubmit={handleSave}>
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                parentClassName="w-full"
-                className="delay-300 w-full mt-4"
-              >
-                <div className="space-y-4 text-grey-10 w-full flex flex-col">
-                  {/* Autoconnect Checkbox */}
-                  <div className="flex items-center justify-between p-4 bg-white border border-grey-80 rounded-lg">
-                    <div className="flex flex-col">
-                      <span className="text-base font-medium text-grey-10">
-                        Autoconnect on Startup
-                      </span>
-                      <span className="text-sm text-grey-60 mt-1">
-                        Automatically connect to VPN when the app starts
-                      </span>
-                    </div>
-                    <Checkbox.Root
-                      checked={autoconnectEnabled}
-                      onCheckedChange={(checked) => {
-                        if (editMode) {
-                          setAutoconnectEnabled(checked === true);
-                        }
-                      }}
-                      disabled={!editMode}
-                      className={cn(
-                        "w-11 h-6 rounded-full transition-all duration-200 relative flex items-center",
-                        autoconnectEnabled ? "bg-primary-50" : "bg-grey-80",
-                        !editMode && "opacity-50 cursor-not-allowed",
-                        editMode && "cursor-pointer hover:shadow-md"
-                      )}
-                    >
-                      <div
-                        className={cn(
-                          "flex justify-center items-center w-5 h-5 bg-white rounded-full transition-transform duration-200 shadow-sm",
-                          autoconnectEnabled
-                            ? "translate-x-[1.375rem]"
-                            : "translate-x-[0.125rem]"
-                        )}
-                      >
-                        {autoconnectEnabled && (
-                          <Check className="w-3 h-3 text-primary-50" />
-                        )}
-                      </div>
-                    </Checkbox.Root>
-                  </div>
-                </div>
-              </RevealTextLine>
-
-              {/* Form with Save Button - Only visible in edit mode */}
-              <div
-                className={cn(
-                  "overflow-hidden transition-all duration-300 ease-in-out",
-                  editMode ? "max-h-96 opacity-100 mt-6" : "max-h-0 opacity-0"
-                )}
-              >
-                <RevealTextLine
-                  rotate
-                  reveal={inView && editMode}
-                  className="delay-300 w-full"
-                >
-                  <CardButton
-                    type="submit"
-                    className="max-w-[10rem] h-[3rem]"
-                    variant="dialog"
-                    disabled={saving || !hasSettingChanged}
-                    onClick={handleSave}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="flex items-center text-lg leading-6 font-medium">
-                        {saving ? "Saving..." : "Save Changes"}
-                      </span>
-                    </div>
-                  </CardButton>
-                </RevealTextLine>
+        <div ref={ref} className="flex flex-col gap-6">
+          {/* Autoconnect toggle row (no card wrapper) */}
+          <div
+            className={cn(
+              "transition-all duration-500 ease-out",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+            )}
+          >
+            <div>
+              {/* Top row: toggle + label vertically centered together */}
+              <div className="flex items-center gap-3">
+                <SettingsToggle
+                  checked={autoconnectEnabled}
+                  onCheckedChange={setAutoconnectEnabled}
+                  disabled={busy}
+                />
+                <p className="text-sm font-medium text-grey-10 dark:text-white">
+                  Autoconnect on startup
+                </p>
               </div>
-            </form>
+              {/* Description on its own row, indented to align with the label (22px toggle + 12px gap) */}
+              <p className="text-sm text-grey-60 dark:text-grey-70 mt-1 pl-[34px]">
+                Automatically connect to VPN when the app starts
+              </p>
+            </div>
+          </div>
+
+          {/* Action buttons */}
+          <div
+            className={cn(
+              "flex items-center gap-3 transition-all duration-500 ease-out delay-150",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+            )}
+          >
+            <Button
+              variant="defaultStable"
+              size="auto"
+              onClick={handleCancel}
+              disabled={busy || !hasChanged}
+              className={cn(
+                "h-[30px] px-3 py-2 gap-[7px] rounded-[6px] border text-sm font-medium",
+                "border-grey-dark-100 bg-[#FEFEFE] text-[#4F4F4F]",
+                "shadow-[0_5px_2.3px_rgba(0,0,0,0.03),0_1px_1.9px_rgba(0,0,0,0.14),0_0_1px_rgba(0,0,0,0.16),inset_0_1px_0_#FFF]",
+                "hover:bg-[#F5F5F5] hover:rounded-[6px]",
+                "dark:border-black-300 dark:bg-black-600 dark:text-grey-dark-700 dark:shadow-[0_1px_2px_rgba(0,0,0,0.4)] dark:hover:bg-black-500"
+              )}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="auto"
+              onClick={handleSave}
+              disabled={busy || !hasChanged}
+              loading={busy}
+              className={cn(
+                "h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px] border text-sm font-medium",
+                "border-[#3167DD] bg-[#3167DD] text-white",
+                "hover:bg-[#2454c4] hover:border-[#2454c4]",
+                "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
+              )}
+            >
+              {busy ? "Saving..." : "Save Changes"}
+            </Button>
           </div>
         </div>
       )}

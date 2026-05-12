@@ -10,7 +10,7 @@ import { useSetAtom } from "jotai";
 import { refreshEnabledTypesAtom } from "@/components/page-sections/notifications/notificationStore";
 import CustomizeRPC from "./CustomizeRPC";
 
-import { ApiTokenCard, ApiTokenUsageCard } from "./OAuthTokenSection";
+import { ApiTokenCard, ApiTokenUsageCard } from "./ApiTokenSection";
 import EmailNotificationSection from "./EmailNotificationSection";
 import RecoveryPhraseSettings from "./RecoveryPhraseSettings";
 import DeviceNameSetting from "./DeviceNameSetting";

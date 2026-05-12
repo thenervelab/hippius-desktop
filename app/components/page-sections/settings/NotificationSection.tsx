@@ -1,9 +1,11 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import * as Switch from "@radix-ui/react-switch";
 import * as Checkbox from "@radix-ui/react-checkbox";
-import { Check, Bell, Mail } from "lucide-react";
+import { InView } from "react-intersection-observer";
+import { Button } from "@/components/ui/button";
+import { SettingsCard } from "./SettingsCard";
+import { SettingsToggle } from "./SettingsToggle";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useNotificationPreferences } from "@/app/lib/hooks/useNotificationPreferences";
@@ -31,29 +33,30 @@ const EMPTY_EMAIL: EmailSettings = {
   marketing_emails: false,
 };
 
-function CardShell({
-  icon,
-  label,
-  children,
+// Square checkbox — solid fill, no checkmark
+function SquareCheck({
+  id,
+  checked,
+  onCheckedChange,
+  disabled,
 }: {
-  icon: React.ReactNode;
-  label: string;
-  children: React.ReactNode;
+  id?: string;
+  checked: boolean;
+  onCheckedChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
-    <div className="rounded-[8px] border overflow-hidden bg-grey-light-300 border-grey-dark-100 dark:bg-black-primary-bg dark:border-black-300 shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]">
-      <div className="flex h-[46px] w-full items-center pl-[14px] pr-[10px]">
-        <div className="flex items-center gap-1">
-          {icon}
-          <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
-            {label}
-          </p>
-        </div>
-      </div>
-      <div className="rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100 bg-white dark:bg-black-600 dark:border-black-300">
-        {children}
-      </div>
-    </div>
+    <Checkbox.Root
+      id={id}
+      checked={checked}
+      onCheckedChange={(v) => onCheckedChange(v === true)}
+      disabled={disabled}
+      className={cn(
+        "flex-shrink-0 outline-none cursor-pointer transition-colors",
+        checked ? "bg-[#3167DD]" : "bg-[#F0F0F0] dark:bg-white/10"
+      )}
+      style={{ width: 18, height: 18, borderRadius: 5 }}
+    />
   );
 }
 
@@ -62,45 +65,42 @@ function ToggleRow({
   onCheckedChange,
   label,
   description,
-  statusBadge = true,
+  id,
 }: {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
   label: string;
   description: string;
-  statusBadge?: boolean;
+  id?: string;
 }) {
   return (
-    <div className="flex items-start gap-3 px-4 py-4">
-      <Switch.Root
-        checked={checked}
-        onCheckedChange={onCheckedChange}
-        className="w-[2.5rem] h-[1.5rem] bg-grey-80 rounded-full relative data-[state=checked]:bg-primary-50 outline-none cursor-pointer border border-grey-80 data-[state=checked]:border-primary-50 transition-colors flex-shrink-0 mt-0.5"
-      >
-        <Switch.Thumb className="block w-[1.25rem] h-[1.25rem] bg-white rounded-full transition-transform duration-100 translate-x-0.5 will-change-transform data-[state=checked]:translate-x-[1.125rem]" />
-      </Switch.Root>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-medium text-grey-10 dark:text-white">
-            {label}
+    <div className="px-4 py-3">
+      {/* Top row: checkbox + label + badge all vertically centered together */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <SquareCheck id={id} checked={checked} onCheckedChange={onCheckedChange} />
+        <label htmlFor={id} className="text-sm font-medium text-grey-10 dark:text-white cursor-pointer">
+          {label}
+        </label>
+        {checked ? (
+          <span className="flex items-center gap-[5px] px-[8.8px] py-[5px] rounded-full bg-[rgba(4,200,112,0.2)] flex-shrink-0">
+            <svg width="12" height="12" viewBox="0 0 9.5 9.5" fill="none" className="flex-shrink-0">
+              <circle cx="4.75" cy="4.75" r="4.75" fill="#04C870" fillOpacity="0.2" />
+              <circle cx="4.75" cy="4.75" r="2.375" fill="#04C870" />
+            </svg>
+            <span className="text-[10px] font-semibold leading-none tracking-[-0.2px]" style={{ color: "#04c870" }}>On</span>
           </span>
-          {statusBadge && (
-            <span
-              className={cn(
-                "text-xs font-medium px-1.5 py-0.5 rounded border flex-shrink-0",
-                checked
-                  ? "bg-success-95 text-success-50 border-success-80"
-                  : "bg-grey-95 text-grey-50 border-grey-80"
-              )}
-            >
-              {checked ? "● On" : "● Off"}
-            </span>
-          )}
-        </div>
-        <p className="text-sm text-grey-60 dark:text-grey-70 mt-1">
-          {description}
-        </p>
+        ) : (
+          <span className="flex items-center gap-[5px] px-[8.8px] py-[5px] rounded-full bg-[#f0f0f0] dark:bg-white/10 flex-shrink-0 text-[#b6b6b6] dark:text-grey-dark-500">
+            <svg width="12" height="12" viewBox="0 0 9.5 9.5" fill="none" className="flex-shrink-0">
+              <circle cx="4.75" cy="4.75" r="4.75" fill="currentColor" fillOpacity="0.2" />
+              <circle cx="4.75" cy="4.75" r="2.375" fill="currentColor" />
+            </svg>
+            <span className="text-[10px] font-semibold leading-none tracking-[-0.2px]">Off</span>
+          </span>
+        )}
       </div>
+      {/* Description sits below, indented to align with the label (18px checkbox + 12px gap) */}
+      <p className="text-sm text-grey-60 dark:text-grey-70 mt-1 pl-[30px]">{description}</p>
     </div>
   );
 }
@@ -177,14 +177,17 @@ export default function NotificationSection() {
   const busy = isSaving || isUpdating;
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Notification Preferences card */}
-      <CardShell
-        icon={
-          <Bell className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
-        }
-        label="Notification Preferences"
-      >
+    <InView triggerOnce>
+      {({ inView, ref }) => (
+        <div ref={ref} className="flex flex-col gap-4">
+          {/* Notification Preferences card — no separators between rows */}
+          <div
+            className={cn(
+              "transition-all duration-500 ease-out",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+            )}
+          >
+            <SettingsCard label="Notification Preferences">
         {preferences.length === 0 ? (
           <div className="px-4 py-6 flex flex-col gap-3">
             {[1, 2, 3].map((i) => (
@@ -195,109 +198,128 @@ export default function NotificationSection() {
             ))}
           </div>
         ) : (
-          preferences.map((item, idx) => (
-            <React.Fragment key={item.id}>
-              {idx > 0 && (
-                <div className="h-px bg-grey-80 dark:bg-white/10 mx-4" />
-              )}
-              <ToggleRow
-                checked={localPrefs[item.id] ?? false}
-                onCheckedChange={(checked) =>
-                  setLocalPrefs((prev) => ({ ...prev, [item.id]: checked }))
-                }
-                label={item.label}
-                description={item.description}
-              />
-            </React.Fragment>
+          preferences.map((item) => (
+            <ToggleRow
+              key={item.id}
+              id={`pref-${item.id}`}
+              checked={localPrefs[item.id] ?? false}
+              onCheckedChange={(checked) =>
+                setLocalPrefs((prev) => ({ ...prev, [item.id]: checked }))
+              }
+              label={item.label}
+              description={item.description}
+            />
           ))
         )}
-      </CardShell>
+            </SettingsCard>
+          </div>
 
-      {/* Email Notification card */}
-      <CardShell
-        icon={
-          <Mail className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
-        }
-        label="Email Notification"
-      >
+          {/* Email Notification card */}
+          <div
+            className={cn(
+              "transition-all duration-500 ease-out delay-150",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+            )}
+          >
+            <SettingsCard label="Email Notification">
         {requiresOAuthLogin ? (
           <p className="px-4 py-4 text-sm text-grey-60 dark:text-grey-70">
             Sign in with Google, GitHub, or Email to manage email notifications.
           </p>
         ) : (
           <>
-            <ToggleRow
-              checked={localEmail.email_enabled}
-              onCheckedChange={(checked) =>
-                setLocalEmail((prev) => ({ ...prev, email_enabled: checked }))
-              }
-              label="Receive Email Notifications"
-              description="Get emails on everything from us"
-              statusBadge={false}
-            />
-            <div className="h-px bg-grey-80 dark:bg-white/10 mx-4" />
-            <div className="px-4 py-3 flex flex-col gap-3">
-              {EMAIL_ITEMS.map(({ key, label }) => (
+            {/* Master toggle row */}
+            <div className="flex items-start gap-3 px-4 py-3">
+              <SettingsToggle
+                checked={localEmail.email_enabled}
+                onCheckedChange={(checked) =>
+                  setLocalEmail((prev) => ({ ...prev, email_enabled: checked }))
+                }
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-grey-10 dark:text-white">
+                  Receive Email Notifications
+                </p>
+                <p className="text-sm text-grey-60 dark:text-grey-70 mt-1">
+                  Get emails on everything from us
+                </p>
+
+                {/* Sub-items aligned with text column above (no extra left padding needed) */}
                 <div
-                  key={key}
                   className={cn(
-                    "flex items-center gap-2",
+                    "mt-3 flex flex-col gap-4",
                     !localEmail.email_enabled && "opacity-40 pointer-events-none"
                   )}
                 >
-                  <Checkbox.Root
-                    id={key}
-                    checked={localEmail[key] as boolean}
-                    onCheckedChange={(checked) =>
-                      setLocalEmail((prev) => ({
-                        ...prev,
-                        [key]: checked === true,
-                      }))
-                    }
-                    disabled={!localEmail.email_enabled}
-                    className="flex h-4 w-4 items-center justify-center rounded bg-white border border-grey-80 outline-none data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors"
-                  >
-                    <Checkbox.Indicator>
-                      <Check className="h-3 w-3 text-white" />
-                    </Checkbox.Indicator>
-                  </Checkbox.Root>
-                  <label
-                    htmlFor={key}
-                    className={cn(
-                      "text-sm font-medium text-grey-50 dark:text-grey-60 select-none",
-                      localEmail.email_enabled
-                        ? "cursor-pointer"
-                        : "cursor-not-allowed"
-                    )}
-                  >
-                    {label}
-                  </label>
+                  {EMAIL_ITEMS.map(({ key, label }) => (
+                    <div key={key} className="flex items-center gap-2">
+                      <SquareCheck
+                        id={key}
+                        checked={localEmail[key] as boolean}
+                        onCheckedChange={(checked) =>
+                          setLocalEmail((prev) => ({ ...prev, [key]: checked }))
+                        }
+                        disabled={!localEmail.email_enabled}
+                      />
+                      <label
+                        htmlFor={key}
+                        className={cn(
+                          "text-sm font-medium text-grey-50 dark:text-grey-60 select-none",
+                          localEmail.email_enabled ? "cursor-pointer" : "cursor-not-allowed"
+                        )}
+                      >
+                        {label}
+                      </label>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
             </div>
           </>
         )}
-      </CardShell>
+            </SettingsCard>
+          </div>
 
-      {/* Action buttons */}
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
+          {/* Action buttons */}
+          <div
+            className={cn(
+              "flex items-center gap-3 transition-all duration-500 ease-out delay-300",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+            )}
+          >
+        <Button
+          variant="defaultStable"
+          size="auto"
           onClick={handleCancel}
           disabled={busy || !hasChanged}
-          className="px-4 py-2 text-sm font-medium text-grey-40 dark:text-grey-60 border border-grey-80 dark:border-white/10 rounded-lg hover:bg-grey-98 dark:hover:bg-white/5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          className={cn(
+            "h-[30px] px-3 py-2 gap-[7px] rounded-[6px] border text-sm font-medium",
+            "border-grey-dark-100 bg-[#FEFEFE] text-[#4F4F4F]",
+            "shadow-[0_5px_2.3px_rgba(0,0,0,0.03),0_1px_1.9px_rgba(0,0,0,0.14),0_0_1px_rgba(0,0,0,0.16),inset_0_1px_0_#FFF]",
+            "hover:bg-[#F5F5F5] hover:rounded-[6px]",
+            "dark:border-black-300 dark:bg-black-600 dark:text-grey-dark-700 dark:shadow-[0_1px_2px_rgba(0,0,0,0.4)] dark:hover:bg-black-500"
+          )}
         >
           Cancel
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="primary"
+          size="auto"
           onClick={handleSave}
           disabled={busy || !hasChanged}
-          className="px-4 py-2 text-sm font-medium text-white bg-primary-50 rounded-lg hover:bg-primary-40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          loading={busy}
+          className={cn(
+            "h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px] border text-sm font-medium",
+            "border-[#3167DD] bg-[#3167DD] text-white",
+            "hover:bg-[#2454c4] hover:border-[#2454c4]",
+            "dark:border-[#3167DD] dark:bg-[#3167DD] dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
+          )}
         >
-          {busy ? "Saving..." : "Save Changes"}
-        </button>
-      </div>
-    </div>
+              {busy ? "Saving..." : "Save Changes"}
+            </Button>
+          </div>
+        </div>
+      )}
+    </InView>
   );
 }

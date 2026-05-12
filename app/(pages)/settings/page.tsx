@@ -5,10 +5,7 @@ import { useSearchParams } from "next/navigation";
 import MultiFolderSyncManager from "@/components/page-sections/settings/MultiFolderSyncManager";
 import DeviceNameSetting from "@/components/page-sections/settings/DeviceNameSetting";
 import RecoveryPhraseSettings from "@/components/page-sections/settings/RecoveryPhraseSettings";
-import {
-  ApiTokenCard,
-  ApiTokenUsageCard,
-} from "@/components/page-sections/settings/OAuthTokenSection";
+import ApiTokenSection from "@/components/page-sections/settings/ApiTokenSection";
 import VPNSettings from "@/components/page-sections/settings/VPNSettings";
 import CustomizeRPC from "@/components/page-sections/settings/CustomizeRPC";
 import InfoTooltip from "@/components/page-sections/settings/InfoTooltip";
@@ -16,7 +13,13 @@ import NotificationSection from "@/components/page-sections/settings/Notificatio
 
 const SECTION_META: Record<
   string,
-  { title: string; description: string; showDescription?: boolean }
+  {
+    title: string;
+    description: string;
+    tooltip?: string;
+    learnMoreUrl?: string;
+    showDescription?: boolean;
+  }
 > = {
   sync: {
     title: "Sync & Storage",
@@ -31,21 +34,33 @@ const SECTION_META: Record<
     title: "Notification",
     description:
       "Choose which updates you'd like to receive in your inbox. You're in control—check only the notifications that matter to you.",
+    tooltip:
+      "Two independent channels: in app notifications appear inside Hippius for activity like file syncs and account credits, while email notifications are sent to the inbox of your linked email account for things like low-balance alerts and marketing updates. Toggle each one separately.",
     showDescription: true,
   },
-  "api-keys": {
-    title: "API Keys",
-    description: "Manage your API tokens and access credentials.",
+  "api-key": {
+    title: "API Token",
+    description:
+      "Manage your API token for secure file operations and delegated access.",
+    tooltip:
+      "Your API token allows you to authenticate requests to the Hippius platform. Keep it secure and never share it with anyone.",
+    learnMoreUrl: "https://docs.hippius.com/use/desktop/settings#api-token",
     showDescription: true,
   },
   vpn: {
-    title: "VPN Settings",
-    description: "Configure your Nebula VPN settings.",
+    title: "VPN",
+    description: "Configure VPN behavior when the application starts.",
+    tooltip:
+      "When autoconnect is enabled, the VPN will automatically connect when you start the application. This ensures your connection is always protected. When disabled, you'll need to manually turn on the VPN each time you start the app.",
+    learnMoreUrl: "https://docs.hippius.com/use/desktop/settings#vpn-settings",
     showDescription: true,
   },
   "customize-rpc": {
-    title: "Customize RPC",
-    description: "Set a custom RPC endpoint for blockchain queries.",
+    title: "RPC Setting",
+    description:
+      "Customize your connection by updating the blockchain RPC endpoint.",
+    tooltip:
+      "The WebSocket URL your client uses to talk to the blockchain. Only change the default if you're running your own node or pointing at a trusted provider — the app restarts after every change.",
     showDescription: true,
   },
 };
@@ -56,17 +71,19 @@ function SettingsContent() {
   const meta = SECTION_META[section] ?? SECTION_META["sync"];
 
   return (
-    <div className="px-8 pt-3 pb-8">
+    <div className="px-4 py-3">
       {/* Page heading */}
-      <div className="mb-6">
+      <div className="mb-3">
         <div className="flex items-center gap-2 mb-1">
-          <h1 className="text-2xl font-medium text-grey-10 dark:text-white">
+          <h1 className="font-geist text-[24px] leading-[32px] font-medium text-[#0A0A0A] dark:text-white">
             {meta.title}
           </h1>
-          <InfoTooltip>{meta.description}</InfoTooltip>
+          <InfoTooltip learnMoreUrl={meta.learnMoreUrl}>
+            {meta.tooltip ?? meta.description}
+          </InfoTooltip>
         </div>
         {meta.showDescription && (
-          <p className="text-sm text-[#606060] dark:text-grey-dark-600">
+          <p className="self-stretch font-geist text-[16px] leading-[22px] font-medium tracking-[-0.32px] text-[#4F4F4F] dark:text-grey-dark-600">
             {meta.description}
           </p>
         )}
@@ -85,28 +102,11 @@ function SettingsContent() {
 
         {section === "notifications" && <NotificationSection />}
 
-        {section === "api-keys" && (
-          <>
-            <div className="shadow-menu rounded-lg bg-white dark:bg-[#1A1A1A] p-4">
-              <ApiTokenCard />
-            </div>
-            <div className="shadow-menu rounded-lg bg-white dark:bg-[#1A1A1A] p-4">
-              <ApiTokenUsageCard />
-            </div>
-          </>
-        )}
+        {section === "api-key" && <ApiTokenSection />}
 
-        {section === "vpn" && (
-          <div className="shadow-menu rounded-lg bg-white dark:bg-[#1A1A1A] p-4">
-            <VPNSettings />
-          </div>
-        )}
+        {section === "vpn" && <VPNSettings />}
 
-        {section === "customize-rpc" && (
-          <div className="shadow-menu rounded-lg bg-white dark:bg-[#1A1A1A] p-4">
-            <CustomizeRPC />
-          </div>
-        )}
+        {section === "customize-rpc" && <CustomizeRPC />}
       </div>
     </div>
   );

@@ -28,8 +28,8 @@ const settingsNavItems = [
     icon: <Icons.Notification className={ICON_CLASS} />,
   },
   {
-    label: "API Keys",
-    section: "api-keys",
+    label: "API Token",
+    section: "api-key",
     icon: <Icons.Key className={ICON_CLASS} />,
   },
   {
@@ -40,7 +40,7 @@ const settingsNavItems = [
   {
     label: "Customize RPC",
     section: "customize-rpc",
-    icon: <Icons.Box className={ICON_CLASS} />,
+    icon: <Icons.SquareDashedKanban className={ICON_CLASS} />,
   },
 ];
 

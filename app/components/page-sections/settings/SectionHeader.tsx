@@ -36,7 +36,7 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
           </div>
           {info && (
             <div className="size-4  flex items-center justify-center">
-              <InfoTooltip iconColor="text-grey-60" learnMoreUrl={learnMoreUrl}>
+              <InfoTooltip learnMoreUrl={learnMoreUrl}>
                 {info}
               </InfoTooltip>
             </div>
