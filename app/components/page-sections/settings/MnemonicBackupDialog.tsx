@@ -4,22 +4,20 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import {
   AlertTriangle,
-  Camera,
+  ArrowRight,
   Check,
   Copy,
   Download,
   Eye,
   EyeOff,
-  Lock,
-  MapPin,
   OctagonAlert,
-  PenLine,
-  Users,
+  X,
 } from "lucide-react";
 
 import { FramedDialog } from "@/components/ui/FramedDialog";
-import { Button, Icons } from "@/components/ui";
+import { Button, Icons, Input } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import type { IconComponent } from "@/app/lib/types";
 
 interface MnemonicBackupDialogProps {
   open: boolean;
@@ -30,12 +28,12 @@ interface MnemonicBackupDialogProps {
 
 const MIN_PASSWORD_LENGTH = 8;
 
-const SECURITY_TIPS = [
-  { icon: PenLine, text: "Write it on paper — never take a digital photo" },
-  { icon: Lock, text: "Store in a fireproof and waterproof safe" },
-  { icon: Users, text: "Never share it with anyone, including support staff" },
-  { icon: MapPin, text: "Keep copies in multiple secure locations" },
-  { icon: Camera, text: "Never store in email, cloud storage, or screenshots" },
+const SECURITY_TIPS: { icon: IconComponent; text: string }[] = [
+  { icon: Icons.Pencil, text: "Write it on paper — never take a digital photo" },
+  { icon: Icons.LockClosed, text: "Store in a fireproof and waterproof safe" },
+  { icon: Icons.EyeOutline, text: "Never share it with anyone, including support staff" },
+  { icon: Icons.Files, text: "Keep copies in multiple secure locations" },
+  { icon: Icons.TriangleAlert, text: "Never store in email, cloud storage, or screenshots" },
 ];
 
 type Step = 1 | 2;
@@ -240,7 +238,7 @@ function Step1Warning({
 }) {
   return (
     <>
-      <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+      <p className="mb-5 text-center text-sm text-[#4F4F4F] dark:text-grey-dark-300">
         Your mnemonic seed is the only way to restore access to your account
         and encrypted files.
       </p>
@@ -252,8 +250,8 @@ function Step1Warning({
               key={i}
               className="flex items-center gap-3 rounded-[8px] border border-grey-80 bg-[#fafafa] p-3 dark:border-[#3a3a3a] dark:bg-[#2a2a2a]"
             >
-              <Icon className="size-4 flex-shrink-0 text-grey-30 dark:text-grey-dark-300" />
-              <span className="text-sm text-grey-20 dark:text-white">
+              <Icon className="size-4 flex-shrink-0 text-[#4F4F4F] dark:text-grey-dark-300" />
+              <span className="text-sm font-medium text-[#4F4F4F] dark:text-grey-dark-300">
                 {text}
               </span>
             </div>
@@ -267,10 +265,14 @@ function Step1Warning({
               Important
             </p>
           </div>
-          <p className="font-geist text-[14px] leading-[1.4] tracking-[-0.28px] text-[#7d7d7d] dark:text-grey-dark-600">
-            Make sure no one is watching your screen before proceeding. Anyone
-            with these words gains full access to your account and files.
-          </p>
+          <div className="flex items-start gap-2">
+            <ArrowRight className="mt-0.5 size-4 flex-shrink-0 text-[#E3E3E3] dark:text-[#3a3a3a]" />
+            <p className="font-geist text-[14px] leading-[1.4] tracking-[-0.28px] text-[#4F4F4F] dark:text-grey-dark-600">
+              Make sure no one is watching your screen before proceeding.
+              Anyone with these words gains full access to your account and
+              files.
+            </p>
+          </div>
         </div>
 
         <Button
@@ -278,7 +280,7 @@ function Step1Warning({
           size="auto"
           onClick={onNext}
           className={cn(
-            "h-[42px] w-full rounded-[6px] border text-sm font-medium",
+            "h-[52px] w-full rounded-[6px] border text-lg",
             "border-[#3167DD] bg-[#3167DD] text-white",
             "hover:bg-[#2454c4] hover:border-[#2454c4]",
             "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
@@ -420,8 +422,15 @@ function Step2Reveal({
               onClick={onToggleEncryptForm}
               className="h-[36px] rounded-md px-3 text-sm font-medium"
             >
-              <Download className="mr-2 size-4" />
-              {showEncryptForm ? "Cancel" : "Download Encrypted Backup"}
+              {showEncryptForm ? (
+                <>
+                  <X className="mr-2 size-4" /> Close Download
+                </>
+              ) : (
+                <>
+                  <Download className="mr-2 size-4" /> Download Encrypted Backup
+                </>
+              )}
             </Button>
           )}
           {backupCreated && (
@@ -431,27 +440,26 @@ function Step2Reveal({
           )}
         </div>
 
-        {/* Inline encrypt form */}
+        {/* Inline encrypt form — inline (no card wrapper) per Figma */}
         {showEncryptForm && (
-          <div className="flex flex-col gap-3 rounded-[8px] border border-grey-80 bg-[#fafafa] p-4 dark:border-[#3a3a3a] dark:bg-[#2a2a2a]">
-            <p className="text-xs text-grey-40 dark:text-grey-dark-600">
-              Encrypt your mnemonic seed with a password and save it as a file.
+          <div className="flex flex-col gap-3">
+            <p className="text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+              Encrypt your recovery phrase with a password and save it as a
+              file.
             </p>
-            <input
+            <Input
               type="password"
               autoComplete="new-password"
-              placeholder={`Password (min ${MIN_PASSWORD_LENGTH} characters)`}
+              placeholder="Create Password"
               value={encryptPassword}
               onChange={(e) => onEncryptPasswordChange(e.target.value)}
-              className="w-full rounded-md border border-grey-80 bg-white px-3 py-2 text-sm text-grey-10 transition-colors focus:border-primary-50 focus:outline-none dark:border-[#3a3a3a] dark:bg-[#1a1a1a] dark:text-white"
             />
-            <input
+            <Input
               type="password"
               autoComplete="new-password"
-              placeholder="Confirm password"
+              placeholder="Confirm Password"
               value={encryptConfirm}
               onChange={(e) => onEncryptConfirmChange(e.target.value)}
-              className="w-full rounded-md border border-grey-80 bg-white px-3 py-2 text-sm text-grey-10 transition-colors focus:border-primary-50 focus:outline-none dark:border-[#3a3a3a] dark:bg-[#1a1a1a] dark:text-white"
             />
             {passwordsMismatch && (
               <p className="text-xs text-error-50">Passwords do not match</p>
@@ -463,7 +471,7 @@ function Step2Reveal({
               disabled={!passwordsValid || isCreatingBackup}
               loading={isCreatingBackup}
               className={cn(
-                "h-[36px] w-full rounded-md border text-sm font-medium",
+                "h-[40px] self-start rounded-[6px] border px-4 text-sm font-medium",
                 "border-[#3167DD] bg-[#3167DD] text-white",
                 "hover:bg-[#2454c4] hover:border-[#2454c4]",
                 "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
@@ -471,10 +479,6 @@ function Step2Reveal({
             >
               {isCreatingBackup ? "Encrypting..." : "Encrypt & Save"}
             </Button>
-            <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-              Saves a password-protected zip file. Use 7-Zip or a compatible
-              app to open it.
-            </p>
           </div>
         )}
 
@@ -492,7 +496,7 @@ function Step2Reveal({
           size="auto"
           onClick={onConfirm}
           className={cn(
-            "h-[42px] w-full rounded-[6px] border text-sm font-medium",
+            "h-[52px] w-full rounded-[6px] border text-sm font-medium",
             "border-[#3167DD] bg-[#3167DD] text-white",
             "hover:bg-[#2454c4] hover:border-[#2454c4]",
             "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
