@@ -20,6 +20,7 @@ const SECTION_META: Record<
     title: string;
     description: string;
     tooltip?: string;
+    learnMoreUrl?: string;
     showDescription?: boolean;
   }
 > = {
@@ -46,8 +47,11 @@ const SECTION_META: Record<
     showDescription: true,
   },
   vpn: {
-    title: "VPN Settings",
-    description: "Configure your Nebula VPN settings.",
+    title: "VPN",
+    description: "Configure VPN behavior when the application starts.",
+    tooltip:
+      "When autoconnect is enabled, the VPN will automatically connect when you start the application. This ensures your connection is always protected. When disabled, you'll need to manually turn on the VPN each time you start the app.",
+    learnMoreUrl: "https://docs.hippius.com/use/desktop/settings#vpn-settings",
     showDescription: true,
   },
   "customize-rpc": {
@@ -73,7 +77,9 @@ function SettingsContent() {
           <h1 className="font-geist text-[24px] leading-[32px] font-medium text-[#0A0A0A] dark:text-white">
             {meta.title}
           </h1>
-          <InfoTooltip>{meta.tooltip ?? meta.description}</InfoTooltip>
+          <InfoTooltip learnMoreUrl={meta.learnMoreUrl}>
+            {meta.tooltip ?? meta.description}
+          </InfoTooltip>
         </div>
         {meta.showDescription && (
           <p className="self-stretch font-geist text-[16px] leading-[22px] font-medium tracking-[-0.32px] text-[#4F4F4F] dark:text-grey-dark-600">
@@ -106,11 +112,7 @@ function SettingsContent() {
           </>
         )}
 
-        {section === "vpn" && (
-          <div className="shadow-menu rounded-lg bg-white dark:bg-[#1A1A1A] p-4">
-            <VPNSettings />
-          </div>
-        )}
+        {section === "vpn" && <VPNSettings />}
 
         {section === "customize-rpc" && <CustomizeRPC />}
       </div>
