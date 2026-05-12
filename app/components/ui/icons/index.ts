@@ -200,3 +200,8 @@ export { default as CoinsIcon } from "./CoinsIcon";
 export { default as WalletMinimalIcon } from "./WalletMinimalIcon";
 export { default as GripIcon } from "./GripIcon";
 export { default as AddCreditsArrow } from "./AddCreditsArrow";
+export { default as Pencil } from "./Pencil";
+export { default as LockClosed } from "./LockClosed";
+export { default as EyeOutline } from "./EyeOutline";
+export { default as Files } from "./Files";
+export { default as TriangleAlert } from "./TriangleAlert";
