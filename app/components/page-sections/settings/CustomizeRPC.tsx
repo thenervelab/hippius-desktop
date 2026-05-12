@@ -122,33 +122,30 @@ const CustomizeRPC: React.FC = () => {
             )}
           >
             <SettingsCard label="RPC Endpoint">
-              <div className="px-4 py-3">
-                <input
-                  id="rpc-endpoint"
-                  type="text"
-                  value={rpcEndpoint}
-                  onChange={(e) => {
-                    setRpcEndpoint(e.target.value);
-                    setError(null);
-                  }}
-                  placeholder="wss://rpc.hippius.network"
-                  disabled={busy}
-                  className={cn(
-                    "w-full px-3 py-2 rounded-[6px] border text-sm font-medium outline-none transition-colors",
-                    "bg-white border-grey-dark-100 text-grey-10 placeholder:text-grey-60",
-                    "focus:border-primary-50 focus:ring-2 focus:ring-primary-50/20",
-                    "dark:bg-black-700 dark:border-black-300 dark:text-white dark:placeholder:text-grey-dark-500 dark:focus:border-primary-brand-dark dark:focus:ring-primary-brand-dark/20",
-                    "disabled:opacity-60 disabled:cursor-not-allowed"
-                  )}
-                />
-                {error && (
-                  <div className="flex items-center gap-2 mt-2 text-sm font-medium text-error-70 dark:text-error-50">
-                    <AlertCircle className="size-4 flex-shrink-0" />
-                    <span>{error}</span>
-                  </div>
+              <input
+                id="rpc-endpoint"
+                type="text"
+                value={rpcEndpoint}
+                onChange={(e) => {
+                  setRpcEndpoint(e.target.value);
+                  setError(null);
+                }}
+                placeholder="wss://rpc.hippius.network"
+                disabled={busy}
+                className={cn(
+                  "block w-full bg-transparent border-0 outline-none px-4 py-3",
+                  "text-sm font-medium text-grey-10 dark:text-white",
+                  "placeholder:text-grey-60 dark:placeholder:text-grey-dark-500",
+                  "disabled:opacity-60 disabled:cursor-not-allowed"
                 )}
-              </div>
+              />
             </SettingsCard>
+            {error && (
+              <div className="flex items-center gap-2 mt-2 text-sm font-medium text-error-70 dark:text-error-50">
+                <AlertCircle className="size-4 flex-shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
           </div>
 
           {/* Action buttons */}
