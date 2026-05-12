@@ -334,18 +334,31 @@ export default function NotificationSection() {
       <div className="flex items-center gap-3">
         <Button
           variant="defaultStable"
-          size="sm"
+          size="auto"
           onClick={handleCancel}
           disabled={busy || !hasChanged}
+          className={cn(
+            "h-[30px] px-3 py-2 gap-[7px] rounded-[6px] border text-sm font-medium",
+            "border-grey-dark-100 bg-[#FEFEFE] text-[#4F4F4F]",
+            "shadow-[0_5px_2.3px_rgba(0,0,0,0.03),0_1px_1.9px_rgba(0,0,0,0.14),0_0_1px_rgba(0,0,0,0.16),inset_0_1px_0_#FFF]",
+            "hover:bg-[#F5F5F5] hover:rounded-[6px]",
+            "dark:border-black-300 dark:bg-black-600 dark:text-grey-dark-700 dark:shadow-[0_1px_2px_rgba(0,0,0,0.4)] dark:hover:bg-black-500"
+          )}
         >
           Cancel
         </Button>
         <Button
           variant="primary"
-          size="sm"
+          size="auto"
           onClick={handleSave}
           disabled={busy || !hasChanged}
           loading={busy}
+          className={cn(
+            "h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px] border text-sm font-medium",
+            "border-[#3167DD] bg-[#3167DD] text-white",
+            "hover:bg-[#2454c4] hover:border-[#2454c4]",
+            "dark:border-[#3167DD] dark:bg-[#3167DD] dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
+          )}
         >
           {busy ? "Saving..." : "Save Changes"}
         </Button>
