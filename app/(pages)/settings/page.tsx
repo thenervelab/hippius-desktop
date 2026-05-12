@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import MultiFolderSyncManager from "@/components/page-sections/settings/MultiFolderSyncManager";
 import DeviceNameSetting from "@/components/page-sections/settings/DeviceNameSetting";
 import RecoveryPhraseSettings from "@/components/page-sections/settings/RecoveryPhraseSettings";
-import OAuthTokenSection from "@/components/page-sections/settings/OAuthTokenSection";
+import ApiTokenSection from "@/components/page-sections/settings/ApiTokenSection";
 import VPNSettings from "@/components/page-sections/settings/VPNSettings";
 import CustomizeRPC from "@/components/page-sections/settings/CustomizeRPC";
 import InfoTooltip from "@/components/page-sections/settings/InfoTooltip";
@@ -102,7 +102,7 @@ function SettingsContent() {
 
         {section === "notifications" && <NotificationSection />}
 
-        {section === "api-keys" && <OAuthTokenSection />}
+        {section === "api-keys" && <ApiTokenSection />}
 
         {section === "vpn" && <VPNSettings />}
 

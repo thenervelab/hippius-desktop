@@ -162,7 +162,7 @@ export const ApiTokenUsageCard: React.FC = () => {
  * Default export: both cards with shared entry animation, used by the
  * settings page when section === "api-keys".
  */
-const OAuthTokenSection: React.FC = () => {
+const ApiTokenSection: React.FC = () => {
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
@@ -189,4 +189,4 @@ const OAuthTokenSection: React.FC = () => {
   );
 };
 
-export default OAuthTokenSection;
+export default ApiTokenSection;
