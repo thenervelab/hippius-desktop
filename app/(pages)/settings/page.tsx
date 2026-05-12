@@ -16,7 +16,12 @@ import NotificationSection from "@/components/page-sections/settings/Notificatio
 
 const SECTION_META: Record<
   string,
-  { title: string; description: string; showDescription?: boolean }
+  {
+    title: string;
+    description: string;
+    tooltip?: string;
+    showDescription?: boolean;
+  }
 > = {
   sync: {
     title: "Sync & Storage",
@@ -31,6 +36,8 @@ const SECTION_META: Record<
     title: "Notification",
     description:
       "Choose which updates you'd like to receive in your inbox. You're in control—check only the notifications that matter to you.",
+    tooltip:
+      "Two independent channels: in app notifications appear inside Hippius for activity like file syncs and account credits, while email notifications are sent to the inbox of your linked email account for things like low-balance alerts and marketing updates. Toggle each one separately.",
     showDescription: true,
   },
   "api-keys": {
@@ -60,13 +67,13 @@ function SettingsContent() {
       {/* Page heading */}
       <div className="mb-6">
         <div className="flex items-center gap-2 mb-1">
-          <h1 className="text-2xl font-medium text-grey-10 dark:text-white">
+          <h1 className="font-geist text-[24px] leading-[32px] font-medium text-[#0A0A0A] dark:text-white">
             {meta.title}
           </h1>
-          <InfoTooltip>{meta.description}</InfoTooltip>
+          <InfoTooltip>{meta.tooltip ?? meta.description}</InfoTooltip>
         </div>
         {meta.showDescription && (
-          <p className="text-sm text-[#606060] dark:text-grey-dark-600">
+          <p className="self-stretch font-geist text-[16px] leading-[22px] font-medium tracking-[-0.32px] text-[#4F4F4F] dark:text-grey-dark-600">
             {meta.description}
           </p>
         )}
