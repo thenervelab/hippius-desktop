@@ -1,27 +1,25 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
-import DialogContainer from "../../ui/DialogContainer";
-import { Button } from "../../ui/button";
 import { toast } from "sonner";
-import { Graphsheet } from "@/components/ui";
 import {
+  AlertTriangle,
+  Camera,
+  Check,
+  Copy,
+  Download,
   Eye,
   EyeOff,
-  Copy,
-  Check,
-  Shield,
-  PenLine,
   Lock,
   MapPin,
+  OctagonAlert,
+  PenLine,
   Users,
-  Camera,
-  AlertTriangle,
-  Download,
-  ArrowLeft,
-  X,
 } from "lucide-react";
+
+import { FramedDialog } from "@/components/ui/FramedDialog";
+import { Button, Icons } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
 interface MnemonicBackupDialogProps {
   open: boolean;
@@ -32,17 +30,57 @@ interface MnemonicBackupDialogProps {
 
 const MIN_PASSWORD_LENGTH = 8;
 
+const SECURITY_TIPS = [
+  { icon: PenLine, text: "Write it on paper — never take a digital photo" },
+  { icon: Lock, text: "Store in a fireproof and waterproof safe" },
+  { icon: Users, text: "Never share it with anyone, including support staff" },
+  { icon: MapPin, text: "Keep copies in multiple secure locations" },
+  { icon: Camera, text: "Never store in email, cloud storage, or screenshots" },
+];
+
+type Step = 1 | 2;
+
+function StepIndicator({
+  current,
+  onSelect,
+}: {
+  current: Step;
+  onSelect: (step: Step) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      {([1, 2] as const).map((s) => {
+        const active = s === current;
+        return (
+          <button
+            key={s}
+            type="button"
+            aria-label={`Go to step ${s}`}
+            aria-current={active ? "step" : undefined}
+            onClick={() => onSelect(s)}
+            className={cn(
+              "h-1 w-8 rounded-full transition-colors",
+              active
+                ? "bg-[#3167dd]"
+                : "bg-grey-80 hover:bg-grey-70 dark:bg-[#3a3a3a] dark:hover:bg-[#4a4a4a]"
+            )}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 export function MnemonicBackupDialog({
   open,
   mnemonic,
   onConfirm,
   onClose,
 }: MnemonicBackupDialogProps) {
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState<Step>(1);
   const [showMnemonic, setShowMnemonic] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  // Encrypted backup state
   const [showEncryptForm, setShowEncryptForm] = useState(false);
   const [encryptPassword, setEncryptPassword] = useState("");
   const [encryptConfirm, setEncryptConfirm] = useState("");
@@ -94,7 +132,10 @@ export function MnemonicBackupDialog({
       if (clipboardTimerRef.current) clearTimeout(clipboardTimerRef.current);
       clipboardTimerRef.current = setTimeout(() => {
         navigator.clipboard.writeText("").catch((err: unknown) =>
-          console.warn("[MnemonicBackupDialog] Failed to clear clipboard:", err)
+          console.warn(
+            "[MnemonicBackupDialog] Failed to clear clipboard:",
+            err
+          )
         );
         clipboardTimerRef.current = null;
       }, 30000);
@@ -118,7 +159,9 @@ export function MnemonicBackupDialog({
       } catch {
         // Fall back to filename only
       }
-      const fileName = `hippius-recovery-backup-${new Date().toISOString().slice(0, 10)}.zip`;
+      const fileName = `hippius-recovery-backup-${new Date()
+        .toISOString()
+        .slice(0, 10)}.zip`;
       const filePath = await save({
         filters: [{ name: "Zip Archive", extensions: ["zip"] }],
         defaultPath: saveDir ? `${saveDir}/${fileName}` : fileName,
@@ -153,257 +196,311 @@ export function MnemonicBackupDialog({
 
   if (!mnemonic) return null;
 
-  const handleOpenChange = (isOpen: boolean) => {
-    if (!isOpen && canClose) {
-      handleClose();
-    }
-  };
+  return (
+    <FramedDialog
+      open={open}
+      onClose={handleClose}
+      title={step === 1 ? "Secure Your Mnemonic Seed" : "Your Mnemonic Seed"}
+      icon={<Icons.ShieldTick className="size-5 text-white" />}
+      maxWidth="max-w-[680px]"
+      stepIndicator={<StepIndicator current={step} onSelect={setStep} />}
+    >
+      {step === 1 ? (
+        <Step1Warning tips={SECURITY_TIPS} onNext={() => setStep(2)} />
+      ) : (
+        <Step2Reveal
+          words={words}
+          showMnemonic={showMnemonic}
+          onToggleShow={() => setShowMnemonic((v) => !v)}
+          copied={copied}
+          onCopy={handleCopy}
+          showEncryptForm={showEncryptForm}
+          onToggleEncryptForm={() => setShowEncryptForm((v) => !v)}
+          encryptPassword={encryptPassword}
+          onEncryptPasswordChange={setEncryptPassword}
+          encryptConfirm={encryptConfirm}
+          onEncryptConfirmChange={setEncryptConfirm}
+          passwordsValid={passwordsValid}
+          isCreatingBackup={isCreatingBackup}
+          backupCreated={backupCreated}
+          onEncryptedBackup={handleEncryptedBackup}
+          onConfirm={onConfirm}
+        />
+      )}
+    </FramedDialog>
+  );
+}
 
-  const stepIcon =
-    step === 1 ? (
-      <Shield className="size-5 text-grey-100" />
-    ) : (
-      <Eye className="size-5 text-grey-100" />
-    );
+function Step1Warning({
+  tips,
+  onNext,
+}: {
+  tips: typeof SECURITY_TIPS;
+  onNext: () => void;
+}) {
+  return (
+    <>
+      <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+        Your mnemonic seed is the only way to restore access to your account
+        and encrypted files.
+      </p>
+
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2">
+          {tips.map(({ icon: Icon, text }, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-3 rounded-[8px] border border-grey-80 bg-[#fafafa] p-3 dark:border-[#3a3a3a] dark:bg-[#2a2a2a]"
+            >
+              <Icon className="size-4 flex-shrink-0 text-grey-30 dark:text-grey-dark-300" />
+              <span className="text-sm text-grey-20 dark:text-white">
+                {text}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-1.5">
+            <OctagonAlert className="size-4 text-[#feb101]" />
+            <p className="font-geist text-[14px] leading-[1.109] tracking-[-0.28px] font-medium text-black dark:text-white">
+              Important
+            </p>
+          </div>
+          <p className="font-geist text-[14px] leading-[1.4] tracking-[-0.28px] text-[#7d7d7d] dark:text-grey-dark-600">
+            Make sure no one is watching your screen before proceeding. Anyone
+            with these words gains full access to your account and files.
+          </p>
+        </div>
+
+        <Button
+          variant="primary"
+          size="auto"
+          onClick={onNext}
+          className={cn(
+            "h-[42px] w-full rounded-[6px] border text-sm font-medium",
+            "border-[#3167DD] bg-[#3167DD] text-white",
+            "hover:bg-[#2454c4] hover:border-[#2454c4]",
+            "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
+          )}
+        >
+          I Understand, Show My Mnemonic Seed
+        </Button>
+      </div>
+    </>
+  );
+}
+
+interface Step2Props {
+  words: string[];
+  showMnemonic: boolean;
+  onToggleShow: () => void;
+  copied: boolean;
+  onCopy: () => void;
+  showEncryptForm: boolean;
+  onToggleEncryptForm: () => void;
+  encryptPassword: string;
+  onEncryptPasswordChange: (v: string) => void;
+  encryptConfirm: string;
+  onEncryptConfirmChange: (v: string) => void;
+  passwordsValid: boolean;
+  isCreatingBackup: boolean;
+  backupCreated: boolean;
+  onEncryptedBackup: () => void;
+  onConfirm: () => void;
+}
+
+function Step2Reveal({
+  words,
+  showMnemonic,
+  onToggleShow,
+  copied,
+  onCopy,
+  showEncryptForm,
+  onToggleEncryptForm,
+  encryptPassword,
+  onEncryptPasswordChange,
+  encryptConfirm,
+  onEncryptConfirmChange,
+  passwordsValid,
+  isCreatingBackup,
+  backupCreated,
+  onEncryptedBackup,
+  onConfirm,
+}: Step2Props) {
+  const passwordsMismatch =
+    encryptPassword.length > 0 &&
+    encryptConfirm.length > 0 &&
+    encryptPassword !== encryptConfirm;
 
   return (
-    <Dialog.Root open={open} onOpenChange={handleOpenChange}>
-      <DialogContainer
-        className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[35rem] h-fit"
-        preventClose={!canClose}
-      >
-        <Dialog.Title className="sr-only">
-          {step === 1 ? "Secure Your Mnemonic Seed" : "Your Mnemonic Seed"}
-        </Dialog.Title>
+    <>
+      <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+        Write down each word in order and store it somewhere safe.
+      </p>
 
-        <div className="px-5 py-5 flex flex-col gap-4">
-          {/* Header: Back + Close */}
-          <div className="flex items-center justify-between">
-            <div className="w-8">
-              {step === 2 && (
-                <button
-                  type="button"
-                  onClick={() => setStep(1)}
-                  className="flex items-center gap-1 text-sm text-grey-40 hover:text-grey-20 transition-colors"
-                >
-                  <ArrowLeft className="w-4 h-4" />
-                </button>
-              )}
-            </div>
+      <div className="flex flex-col gap-4">
+        {/* Word grid */}
+        <div className="relative rounded-[8px] border border-grey-80 bg-[#fafafa] p-4 dark:border-[#3a3a3a] dark:bg-[#2a2a2a]">
+          <div
+            className={cn(
+              "grid grid-cols-3 gap-2 transition-all duration-200",
+              !showMnemonic && "blur-md select-none"
+            )}
+          >
+            {words.map((word, index) => (
+              <div
+                key={index}
+                className="flex items-center gap-2 rounded-md border border-grey-80 bg-white px-3 py-2 dark:border-[#3a3a3a] dark:bg-[#1a1a1a]"
+              >
+                <span className="w-5 text-right font-mono text-xs text-grey-40 dark:text-grey-dark-600">
+                  {index + 1}.
+                </span>
+                <span className="text-sm font-medium text-grey-10 dark:text-white">
+                  {word}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {!showMnemonic && (
             <button
               type="button"
-              onClick={handleClose}
-              disabled={!canClose}
-              className="text-grey-50 hover:text-grey-20 transition-colors disabled:opacity-30"
+              onClick={onToggleShow}
+              className="absolute inset-0 flex items-center justify-center rounded-[8px] bg-[#fafafa]/60 dark:bg-[#2a2a2a]/60"
             >
-              <X className="size-5" />
+              <div className="flex items-center gap-2 rounded-md border border-grey-80 bg-white px-4 py-2 dark:border-[#3a3a3a] dark:bg-[#1a1a1a]">
+                <EyeOff className="size-4 text-grey-30 dark:text-grey-dark-300" />
+                <span className="text-sm font-medium text-grey-20 dark:text-white">
+                  Hidden
+                </span>
+              </div>
             </button>
-          </div>
-
-          {/* Icon header */}
-          <div className="flex flex-col items-center text-center gap-3">
-            <div className="size-14 flex justify-center items-center relative">
-              <Graphsheet
-                majorCell={{
-                  lineColor: [31, 80, 189, 1.0],
-                  lineWidth: 2,
-                  cellDim: 200,
-                }}
-                minorCell={{
-                  lineColor: [49, 103, 211, 1.0],
-                  lineWidth: 1,
-                  cellDim: 20,
-                }}
-                className="absolute w-full h-full duration-500 opacity-30 z-0"
-              />
-              <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
-              <div className="h-8 w-8 bg-primary-50 rounded-lg flex items-center justify-center z-20">
-                {stepIcon}
-              </div>
-            </div>
-          </div>
-
-          {/* Step 1: Security best practices */}
-          {step === 1 && (
-            <div className="animate-fade-in-from-b-0.3 flex flex-col gap-4">
-              <div className="text-center">
-                <h2 className="text-xl font-semibold text-grey-10">
-                  Secure Your Mnemonic Seed
-                </h2>
-                <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
-                  Your mnemonic seed is the only way to restore access to your
-                  account and encrypted files.
-                </Dialog.Description>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                {[
-                  { icon: PenLine, text: "Write it on paper — never take a digital photo" },
-                  { icon: Lock, text: "Store in a fireproof and waterproof safe" },
-                  { icon: Users, text: "Never share it with anyone, including support staff" },
-                  { icon: MapPin, text: "Keep copies in multiple secure locations" },
-                  { icon: Camera, text: "Never store in email, cloud storage, or screenshots" },
-                ].map(({ icon: Icon, text }, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-3 p-3 rounded-lg bg-grey-90/50 border border-grey-80"
-                  >
-                    <Icon className="w-4 h-4 text-grey-30 flex-shrink-0" />
-                    <span className="text-sm text-grey-20">{text}</span>
-                  </div>
-                ))}
-              </div>
-
-              <div className="bg-warning-50/10 border border-warning-50/30 rounded-lg p-3 flex items-start gap-3">
-                <AlertTriangle className="w-5 h-5 text-warning-50 flex-shrink-0 mt-0.5" />
-                <p className="text-sm text-warning-50">
-                  Make sure no one is watching your screen before proceeding.
-                </p>
-              </div>
-
-              <Button onClick={() => setStep(2)} className="w-full">
-                I Understand, Show My Mnemonic Seed
-              </Button>
-            </div>
           )}
+        </div>
 
-          {/* Step 2: View mnemonic + optional encrypted backup */}
-          {step === 2 && (
-            <div className="animate-fade-in-from-b-0.3 flex flex-col gap-4">
-              <div className="text-center">
-                <h2 className="text-xl font-semibold text-grey-10">
-                  Your Mnemonic Seed
-                </h2>
-                <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
-                  Write down each word in order and store it somewhere safe.
-                </Dialog.Description>
-              </div>
-
-              {/* Word grid */}
-              <div className="bg-grey-90 rounded-lg p-4 relative">
-                <div
-                  className={`grid grid-cols-3 gap-2 transition-all duration-200 ${
-                    !showMnemonic ? "blur-md select-none" : ""
-                  }`}
-                >
-                  {words.map((word, index) => (
-                    <div
-                      key={index}
-                      className="flex items-center gap-2 bg-grey-100 rounded-md px-3 py-2 border border-grey-80"
-                    >
-                      <span className="text-grey-40 text-xs font-mono w-5 text-right">
-                        {index + 1}.
-                      </span>
-                      <span className="text-sm font-medium">{word}</span>
-                    </div>
-                  ))}
-                </div>
-
-                {!showMnemonic && (
-                  <button
-                    type="button"
-                    onClick={() => setShowMnemonic(true)}
-                    className="absolute inset-0 flex items-center justify-center bg-grey-90/60 rounded-lg cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2 text-grey-20 bg-grey-80 px-4 py-2 rounded-md">
-                      <Eye className="w-4 h-4" />
-                      <span className="text-sm font-medium">Click to reveal</span>
-                    </div>
-                  </button>
-                )}
-              </div>
-
-              {/* Action buttons */}
-              <div className="flex gap-2 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => setShowMnemonic(!showMnemonic)}
-                  className="flex items-center gap-2 px-3 py-2 text-sm text-grey-20 bg-grey-90 hover:bg-grey-80 rounded-md transition-colors border border-grey-80"
-                >
-                  {showMnemonic ? (
-                    <><EyeOff className="w-4 h-4" /> Hide</>
-                  ) : (
-                    <><Eye className="w-4 h-4" /> Show</>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCopy}
-                  className="flex items-center gap-2 px-3 py-2 text-sm text-grey-20 bg-grey-90 hover:bg-grey-80 rounded-md transition-colors border border-grey-80"
-                >
-                  {copied ? (
-                    <><Check className="w-4 h-4 text-success-50" /> Copied</>
-                  ) : (
-                    <><Copy className="w-4 h-4" /> Copy</>
-                  )}
-                </button>
-                {!backupCreated && (
-                  <button
-                    type="button"
-                    onClick={() => setShowEncryptForm(!showEncryptForm)}
-                    className="flex items-center gap-2 px-3 py-2 text-sm text-grey-20 bg-grey-90 hover:bg-grey-80 rounded-md transition-colors border border-grey-80"
-                  >
-                    <Download className="w-4 h-4" />
-                    {showEncryptForm ? "Cancel" : "Download Encrypted Backup"}
-                  </button>
-                )}
-                {backupCreated && (
-                  <div className="flex items-center gap-2 px-3 py-2 text-sm text-success-50">
-                    <Check className="w-4 h-4" /> Encrypted backup saved
-                  </div>
-                )}
-              </div>
-
-              {/* Encrypt form */}
-              {showEncryptForm && (
-                <div className="animate-slideDown bg-grey-90 rounded-lg p-4 border border-grey-80 flex flex-col gap-3">
-                  <p className="text-xs text-grey-40">
-                    Encrypt your mnemonic seed with a password and save it as a file.
-                  </p>
-                  <div className="flex flex-col gap-2">
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      placeholder={`Password (min ${MIN_PASSWORD_LENGTH} characters)`}
-                      value={encryptPassword}
-                      onChange={(e) => setEncryptPassword(e.target.value)}
-                      className="w-full px-3 py-2 text-sm bg-grey-100 border border-grey-80 rounded-md focus:outline-none focus:border-primary-50 transition-colors"
-                    />
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      placeholder="Confirm password"
-                      value={encryptConfirm}
-                      onChange={(e) => setEncryptConfirm(e.target.value)}
-                      className="w-full px-3 py-2 text-sm bg-grey-100 border border-grey-80 rounded-md focus:outline-none focus:border-primary-50 transition-colors"
-                    />
-                    {encryptPassword.length > 0 &&
-                      encryptConfirm.length > 0 &&
-                      encryptPassword !== encryptConfirm && (
-                        <p className="text-xs text-error-50">Passwords do not match</p>
-                      )}
-                  </div>
-                  <Button
-                    onClick={handleEncryptedBackup}
-                    disabled={!passwordsValid || isCreatingBackup}
-                    className="w-full"
-                    size="sm"
-                  >
-                    {isCreatingBackup ? "Encrypting..." : "Encrypt & Save"}
-                  </Button>
-                  <p className="text-xs text-grey-50">
-                    Saves a password-protected zip file. Use 7-Zip or a compatible app to open it.
-                  </p>
-                </div>
-              )}
-
-              <div className="flex justify-end mt-1">
-                <Button onClick={onConfirm}>Done</Button>
-              </div>
+        {/* Action row */}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="defaultStable"
+            size="auto"
+            onClick={onToggleShow}
+            className="h-[36px] rounded-md px-3 text-sm font-medium"
+          >
+            {showMnemonic ? (
+              <>
+                <EyeOff className="mr-2 size-4" /> Hide
+              </>
+            ) : (
+              <>
+                <Eye className="mr-2 size-4" /> Show
+              </>
+            )}
+          </Button>
+          <Button
+            variant="defaultStable"
+            size="auto"
+            onClick={onCopy}
+            className="h-[36px] rounded-md px-3 text-sm font-medium"
+          >
+            {copied ? (
+              <>
+                <Check className="mr-2 size-4 text-success-50" /> Copied
+              </>
+            ) : (
+              <>
+                <Copy className="mr-2 size-4" /> Copy
+              </>
+            )}
+          </Button>
+          {!backupCreated && (
+            <Button
+              variant="defaultStable"
+              size="auto"
+              onClick={onToggleEncryptForm}
+              className="h-[36px] rounded-md px-3 text-sm font-medium"
+            >
+              <Download className="mr-2 size-4" />
+              {showEncryptForm ? "Cancel" : "Download Encrypted Backup"}
+            </Button>
+          )}
+          {backupCreated && (
+            <div className="flex items-center gap-2 px-3 py-2 text-sm text-success-50">
+              <Check className="size-4" /> Encrypted backup saved
             </div>
           )}
         </div>
-      </DialogContainer>
-    </Dialog.Root>
+
+        {/* Inline encrypt form */}
+        {showEncryptForm && (
+          <div className="flex flex-col gap-3 rounded-[8px] border border-grey-80 bg-[#fafafa] p-4 dark:border-[#3a3a3a] dark:bg-[#2a2a2a]">
+            <p className="text-xs text-grey-40 dark:text-grey-dark-600">
+              Encrypt your mnemonic seed with a password and save it as a file.
+            </p>
+            <input
+              type="password"
+              autoComplete="new-password"
+              placeholder={`Password (min ${MIN_PASSWORD_LENGTH} characters)`}
+              value={encryptPassword}
+              onChange={(e) => onEncryptPasswordChange(e.target.value)}
+              className="w-full rounded-md border border-grey-80 bg-white px-3 py-2 text-sm text-grey-10 transition-colors focus:border-primary-50 focus:outline-none dark:border-[#3a3a3a] dark:bg-[#1a1a1a] dark:text-white"
+            />
+            <input
+              type="password"
+              autoComplete="new-password"
+              placeholder="Confirm password"
+              value={encryptConfirm}
+              onChange={(e) => onEncryptConfirmChange(e.target.value)}
+              className="w-full rounded-md border border-grey-80 bg-white px-3 py-2 text-sm text-grey-10 transition-colors focus:border-primary-50 focus:outline-none dark:border-[#3a3a3a] dark:bg-[#1a1a1a] dark:text-white"
+            />
+            {passwordsMismatch && (
+              <p className="text-xs text-error-50">Passwords do not match</p>
+            )}
+            <Button
+              variant="primary"
+              size="auto"
+              onClick={onEncryptedBackup}
+              disabled={!passwordsValid || isCreatingBackup}
+              loading={isCreatingBackup}
+              className={cn(
+                "h-[36px] w-full rounded-md border text-sm font-medium",
+                "border-[#3167DD] bg-[#3167DD] text-white",
+                "hover:bg-[#2454c4] hover:border-[#2454c4]",
+                "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
+              )}
+            >
+              {isCreatingBackup ? "Encrypting..." : "Encrypt & Save"}
+            </Button>
+            <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+              Saves a password-protected zip file. Use 7-Zip or a compatible
+              app to open it.
+            </p>
+          </div>
+        )}
+
+        {/* Watching-screen reminder retained from the previous design */}
+        <div className="flex items-start gap-2 rounded-[8px] border border-warning-50/30 bg-warning-50/10 p-3 dark:bg-warning-50/[0.08]">
+          <AlertTriangle className="mt-0.5 size-4 flex-shrink-0 text-warning-50" />
+          <p className="text-xs text-warning-50">
+            Anyone with these words can take over your account. Hide the screen
+            once you&apos;re done.
+          </p>
+        </div>
+
+        <Button
+          variant="primary"
+          size="auto"
+          onClick={onConfirm}
+          className={cn(
+            "h-[42px] w-full rounded-[6px] border text-sm font-medium",
+            "border-[#3167DD] bg-[#3167DD] text-white",
+            "hover:bg-[#2454c4] hover:border-[#2454c4]",
+            "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
+          )}
+        >
+          I Have Written It Down
+        </Button>
+      </div>
+    </>
   );
 }
