@@ -75,8 +75,22 @@ export function MnemonicBackupDialog({
   onClose,
 }: MnemonicBackupDialogProps) {
   const [step, setStep] = useState<Step>(1);
+  const [direction, setDirection] = useState<"forward" | "backward">("forward");
   const [showMnemonic, setShowMnemonic] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // Direction-aware step navigation. Setting direction in the same React
+  // render as the step swap means the keyed wrapper below re-mounts with
+  // the correct enter animation (slide-in from right for forward,
+  // slide-in from left for backward).
+  const goToStep = useCallback(
+    (next: Step) => {
+      if (next === step) return;
+      setDirection(next > step ? "forward" : "backward");
+      setStep(next);
+    },
+    [step]
+  );
 
   const [showEncryptForm, setShowEncryptForm] = useState(false);
   const [encryptPassword, setEncryptPassword] = useState("");
@@ -200,10 +214,18 @@ export function MnemonicBackupDialog({
       title={step === 1 ? "Secure Your Mnemonic Seed" : "Your Mnemonic Seed"}
       icon={<Icons.ShieldTick className="size-5 text-white" />}
       maxWidth="max-w-[680px]"
-      stepIndicator={<StepIndicator current={step} onSelect={setStep} />}
+      stepIndicator={<StepIndicator current={step} onSelect={goToStep} />}
     >
+      <div
+        key={step}
+        className={cn(
+          direction === "forward"
+            ? "animate-tooltip-reveal-right"
+            : "animate-tooltip-reveal-left"
+        )}
+      >
       {step === 1 ? (
-        <Step1Warning tips={SECURITY_TIPS} onNext={() => setStep(2)} />
+        <Step1Warning tips={SECURITY_TIPS} onNext={() => goToStep(2)} />
       ) : (
         <Step2Reveal
           words={words}
@@ -224,6 +246,7 @@ export function MnemonicBackupDialog({
           onConfirm={onConfirm}
         />
       )}
+      </div>
     </FramedDialog>
   );
 }
