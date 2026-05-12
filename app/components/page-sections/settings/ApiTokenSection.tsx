@@ -40,7 +40,7 @@ function TokenRow({
 }) {
   return (
     <div className="flex items-center justify-between gap-3 px-4 py-3">
-      <div className="font-mono text-sm font-medium text-grey-10 dark:text-white break-all min-w-0 flex-1">
+      <div className="font-mono text-sm font-medium text-[#7D7D7D] dark:text-grey-dark-500 break-all min-w-0 flex-1">
         {text}
       </div>
       <div className="flex items-center gap-3 flex-shrink-0">
@@ -153,7 +153,7 @@ export const ApiTokenUsageCard: React.FC = () => {
           onCopy={copyToClipboard}
         />
       </SettingsCard>
-      <p className="mt-2 text-sm text-grey-60 dark:text-grey-dark-500">
+      <p className="mt-2 text-sm text-[#0A0A0A]/40 dark:text-white/40">
         Include this header in your API requests to access storage control, file
         upload, and other authenticated endpoints.
       </p>
@@ -161,10 +161,10 @@ export const ApiTokenUsageCard: React.FC = () => {
   );
 };
 
-// Yellow warning callout (Figma 4045:136039) — corner dots + tinted bg.
+// Yellow warning callout — content-hugging width, no corner dots (matches Figma).
 function ApiTokenSecurityNotice() {
   return (
-    <div className="relative rounded-[6px] border border-[#feb101] bg-[rgba(254,177,1,0.16)] dark:bg-[rgba(254,177,1,0.10)] p-2 flex flex-col gap-2 overflow-visible">
+    <div className="w-fit rounded-[6px] border border-[#feb101] bg-[rgba(254,177,1,0.16)] dark:bg-[rgba(254,177,1,0.10)] p-[8px] flex flex-col gap-[8px]">
       <p className="font-geist text-[14px] leading-[1.109] tracking-[-0.28px] font-medium text-black dark:text-white">
         Keep your API key secure
       </p>
@@ -172,11 +172,6 @@ function ApiTokenSecurityNotice() {
         Never share your API token with anyone. It provides full access to your
         account and should be treated like a password.
       </p>
-      {/* 4×4 corner dots */}
-      <span className="absolute -top-[2.5px] -left-[2.5px] size-1 rounded-[1px] border border-[#feb101] bg-white dark:bg-black-primary-bg" />
-      <span className="absolute -top-[2.5px] -right-[2.5px] size-1 rounded-[1px] border border-[#feb101] bg-white dark:bg-black-primary-bg" />
-      <span className="absolute -bottom-[2.5px] -left-[2.5px] size-1 rounded-[1px] border border-[#feb101] bg-white dark:bg-black-primary-bg" />
-      <span className="absolute -bottom-[2.5px] -right-[2.5px] size-1 rounded-[1px] border border-[#feb101] bg-white dark:bg-black-primary-bg" />
     </div>
   );
 }
