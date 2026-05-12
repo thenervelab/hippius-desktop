@@ -2,31 +2,31 @@ import { IconComponent } from "@/app/lib/types";
 
 export const Key: IconComponent = (props) => (
   <svg
-    viewBox="0 0 24 24"
+    viewBox="0 0 18 18"
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
     {...props}
   >
     <path
-      d="M19.79 14.9303C17.73 16.9803 14.78 17.6103 12.19 16.8003L7.47999 21.5003C7.13999 21.8503 6.46999 22.0603 5.98999 21.9903L3.80999 21.6903C3.08999 21.5903 2.41999 20.9103 2.30999 20.1903L2.00999 18.0103C1.93999 17.5303 2.16999 16.8603 2.49999 16.5203L7.19999 11.8203C6.39999 9.22031 7.01999 6.27031 9.07999 4.22031C12.03 1.27031 16.82 1.27031 19.78 4.22031C22.74 7.17031 22.74 11.9803 19.79 14.9303Z"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeMiterlimit="10"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M6.89001 17.4902L9.19001 19.7902"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeMiterlimit="10"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M14.5 11C15.3284 11 16 10.3284 16 9.5C16 8.67157 15.3284 8 14.5 8C13.6716 8 13 8.67157 13 9.5C13 10.3284 13.6716 11 14.5 11Z"
+      d="M14.8425 11.1977C13.2975 12.7352 11.085 13.2077 9.14249 12.6002L5.60999 16.1252C5.35499 16.3877 4.85249 16.5452 4.49249 16.4927L2.85749 16.2677C2.31749 16.1927 1.81499 15.6827 1.73249 15.1427L1.50749 13.5077C1.45499 13.1477 1.62749 12.6452 1.87499 12.3902L5.39999 8.86523C4.79999 6.91523 5.26499 4.70273 6.80999 3.16523C9.02249 0.952734 12.615 0.952734 14.835 3.16523C17.055 5.37773 17.055 8.98523 14.8425 11.1977Z"
       stroke="currentColor"
       strokeWidth="1.5"
+      strokeMiterlimit="10"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M5.16748 13.1172L6.89248 14.8422"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeMiterlimit="10"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M10.875 8.25C11.4963 8.25 12 7.74632 12 7.125C12 6.50368 11.4963 6 10.875 6C10.2537 6 9.75 6.50368 9.75 7.125C9.75 7.74632 10.2537 8.25 10.875 8.25Z"
+      stroke="currentColor"
+      strokeWidth="1.125"
       strokeLinecap="round"
       strokeLinejoin="round"
     />
