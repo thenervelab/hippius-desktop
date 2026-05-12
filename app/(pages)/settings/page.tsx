@@ -56,7 +56,7 @@ function SettingsContent() {
   const meta = SECTION_META[section] ?? SECTION_META["sync"];
 
   return (
-    <div className="px-8 pt-3 pb-8">
+    <div className="px-4 py-3">
       {/* Page heading */}
       <div className="mb-6">
         <div className="flex items-center gap-2 mb-1">
