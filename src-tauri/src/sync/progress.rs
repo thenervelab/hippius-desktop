@@ -347,7 +347,7 @@ pub fn collect_cycle_files_for_label(sync: &SyncRunner, label: &str, max_files: 
 }
 
 /// Get a full snapshot with retry state injected.
-pub fn get_snapshot(sync: &SyncRunner) -> Result<SyncSnapshot> {
+pub fn get_snapshot(sync: &SyncRunner, preparing: &crate::sync::preparing::PreparingState) -> Result<SyncSnapshot> {
     let mut snapshot = sync.progress.build_snapshot();
     let retry_at = sync.retry_at.load(std::sync::atomic::Ordering::Relaxed);
     if retry_at > 0 {
@@ -358,7 +358,7 @@ pub fn get_snapshot(sync: &SyncRunner) -> Result<SyncSnapshot> {
         snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
     }
     snapshot.last_error = sync.last_error.lock().ok().and_then(|g| g.clone());
-    prepare_snapshot_for_emit(&mut snapshot);
+    prepare_snapshot_for_emit(&mut snapshot, preparing);
     Ok(snapshot)
 }
 
@@ -368,9 +368,48 @@ pub fn get_snapshot(sync: &SyncRunner) -> Result<SyncSnapshot> {
 /// (every live update). Keeping a single funnel guarantees the two paths
 /// can't drift — a stalled-completion snapshot seen at mount must look
 /// identical to one observed mid-session.
-pub(crate) fn prepare_snapshot_for_emit(snapshot: &mut SyncSnapshot) {
+///
+/// Order of operations matters. `fixup_stalled_completion` may flip
+/// the snapshot into a visible "completed" state; we run it first so
+/// the preparing override does not paper over a real completion.
+/// `apply_preparing_override` runs second and only takes effect when
+/// the snapshot is still invisible (no real session yet). `cap_snapshot_files`
+/// runs last to truncate the file list — order-independent relative
+/// to the previous two.
+pub(crate) fn prepare_snapshot_for_emit(snapshot: &mut SyncSnapshot, preparing: &crate::sync::preparing::PreparingState) {
     fixup_stalled_completion(snapshot);
+    apply_preparing_override(snapshot, preparing);
     cap_snapshot_files(snapshot);
+}
+
+/// Surface a "preparing" widget state when any drive is between
+/// `SyncStarted` and its first session-populated snapshot.
+///
+/// Only takes effect when the snapshot is otherwise invisible — never
+/// demotes an already-visible widget. Sets `widget_state` to
+/// `"preparing"` — a fourth variant added on top of the
+/// `"active" | "completed" | "idle"` set that hcfs-client's
+/// `build_snapshot` produces (see `hcfs-client/src/engine/progress/snapshot.rs`).
+/// The frontend widget and tray treat the new value as the
+/// preparing-state branch in their badge/title/icon switches without
+/// having to inspect the preparing set directly.
+///
+/// We deliberately leave `effective_in_progress` / `total_files` /
+/// `overall_percent` at their original (zero/false) values: the
+/// dialog's badge logic already has a "Preparing sync…" fallback
+/// branch for the (not-error, not-completed, not-in-progress) case
+/// (see `app/(pages)/SyncStatusDialog.tsx`), and flipping
+/// `effective_in_progress=true` here would force it into the
+/// `"0 of 0 files synced"` branch instead.
+fn apply_preparing_override(snapshot: &mut SyncSnapshot, preparing: &crate::sync::preparing::PreparingState) {
+    if snapshot.widget_visible {
+        return;
+    }
+    if !preparing.is_any_preparing() {
+        return;
+    }
+    snapshot.widget_visible = true;
+    snapshot.widget_state = "preparing".to_string();
 }
 
 /// Detect and correct a stalled completion state.
@@ -433,7 +472,7 @@ pub fn sp_clear_all_data(state: tauri::State<'_, crate::app_state::AppState>) ->
 
 #[tauri::command]
 pub fn sp_get_snapshot(state: tauri::State<'_, crate::app_state::AppState>) -> Result<SyncSnapshot> {
-    get_snapshot(&state.sync)
+    get_snapshot(&state.sync, &state.preparing)
 }
 
 /// Dismiss the sync status widget for the current session.
@@ -572,7 +611,8 @@ mod tests {
         snap.widget_state = "active".to_string();
         snap.status_variant = "progress".to_string();
 
-        prepare_snapshot_for_emit(&mut snap);
+        let preparing = crate::sync::preparing::PreparingState::new();
+        prepare_snapshot_for_emit(&mut snap, &preparing);
 
         assert!(!snap.effective_in_progress, "stall should flip effective_in_progress to false");
         assert!(snap.effective_completed, "stall should flip effective_completed to true");
@@ -604,9 +644,73 @@ mod tests {
             })
             .collect();
 
-        prepare_snapshot_for_emit(&mut snap);
+        let preparing = crate::sync::preparing::PreparingState::new();
+        prepare_snapshot_for_emit(&mut snap, &preparing);
 
         assert_eq!(snap.files.len(), MAX_EVENT_FILES);
+    }
+
+    /// When a drive is marked preparing AND the snapshot would otherwise
+    /// be invisible (no active session yet), the override sets
+    /// `widget_visible=true` and `widget_state="preparing"` so the
+    /// bottom-right widget and tray show feedback during the
+    /// SyncStarted → first-snapshot gap.
+    #[test]
+    fn preparing_override_makes_invisible_snapshot_visible() {
+        let mut snap = base_snapshot();
+        // Empty snapshot, widget would otherwise be hidden.
+        assert!(!snap.widget_visible);
+
+        let preparing = crate::sync::preparing::PreparingState::new();
+        preparing.mark_preparing("drive-a");
+
+        prepare_snapshot_for_emit(&mut snap, &preparing);
+
+        assert!(snap.widget_visible, "preparing should force widget_visible=true");
+        assert_eq!(snap.widget_state, "preparing");
+        // `effective_in_progress` deliberately stays false so the
+        // dialog's "Preparing sync…" fallback branch renders instead
+        // of "0 of 0 files synced". See `apply_preparing_override`'s
+        // doc comment for the rationale.
+        assert!(!snap.effective_in_progress);
+        assert_eq!(snap.total_files, 0);
+    }
+
+    /// Override is a no-op when no drive is preparing. Snapshots whose
+    /// session is genuinely empty (e.g. between sync cycles, with no
+    /// pending work) must stay hidden.
+    #[test]
+    fn preparing_override_is_noop_when_set_empty() {
+        let mut snap = base_snapshot();
+        let preparing = crate::sync::preparing::PreparingState::new();
+
+        prepare_snapshot_for_emit(&mut snap, &preparing);
+
+        assert!(!snap.widget_visible);
+        assert_eq!(snap.widget_state, "idle");
+    }
+
+    /// The override must never demote an already-visible widget. An
+    /// active sync mid-cycle has `widget_visible=true` from
+    /// `build_snapshot`; the preparing helper should leave it alone
+    /// (otherwise it would clobber the real `widget_state="active"`
+    /// label with `"preparing"` in the gap between a SyncStarted for
+    /// drive B and B's plan_ready, while drive A is still uploading).
+    #[test]
+    fn preparing_override_does_not_demote_visible_snapshot() {
+        let mut snap = base_snapshot();
+        snap.widget_visible = true;
+        snap.widget_state = "active".to_string();
+        snap.is_active = true;
+        snap.total_files = 5;
+
+        let preparing = crate::sync::preparing::PreparingState::new();
+        preparing.mark_preparing("drive-b");
+
+        prepare_snapshot_for_emit(&mut snap, &preparing);
+
+        assert!(snap.widget_visible);
+        assert_eq!(snap.widget_state, "active");
     }
 
     #[test]

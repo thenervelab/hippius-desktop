@@ -239,6 +239,13 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   const isSingleFile = totalFiles === 1;
   const effectiveInProgress = snapshot.effectiveInProgress;
   const effectiveCompleted = snapshot.effectiveCompleted;
+  // Rust marks `widgetState="preparing"` between SyncStarted and the
+  // first session-populated snapshot for file-watcher-initiated
+  // cycles. The title, tooltip, collapsed-header status and badge all
+  // branch on this flag — without it the three surfaces would
+  // disagree (collapsed: "Syncing 0%", title: "File Sync", badge:
+  // "Preparing sync...") because each has its own derived condition.
+  const isPreparing = snapshot.widgetState === "preparing";
 
   // ── Smoothed progress ──────────────────────────────────────────
   // Interpolate between snapshot.overallPercent values so the bar
@@ -523,7 +530,9 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                       ? "Sync Failed"
                       : effectiveCompleted
                         ? "Sync Complete"
-                        : "File Sync"}
+                        : isPreparing
+                          ? "Preparing Sync"
+                          : "File Sync"}
               </span>
               <InfoTooltip className="ml-2">
                 {isRetrying
@@ -532,7 +541,9 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     ? "Some files failed to sync. Please try again."
                     : effectiveCompleted
                       ? "All files have been successfully synced to the network."
-                      : "Your files are being synced to the Hippius network. This process may take a few minutes."}
+                      : isPreparing
+                        ? "Scanning your sync folder for changes. The transfer will start shortly."
+                        : "Your files are being synced to the Hippius network. This process may take a few minutes."}
               </InfoTooltip>
             </h2>
           </div>
@@ -554,9 +565,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                       ? "Failed"
                       : effectiveCompleted || isCompleted
                         ? "Complete"
-                        : percentage !== null && percentage < 100
-                          ? `Syncing ${percentage}%`
-                          : "Syncing..."
+                        : isPreparing
+                          ? "Preparing..."
+                          : percentage !== null && percentage < 100
+                            ? `Syncing ${percentage}%`
+                            : "Syncing..."
                 }
               </span>
             )}
@@ -630,7 +643,15 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                 const { syncedCount, deletedCount, actualTotal, failedFiles, syncDirection, effectiveCompleted, effectiveInProgress } = snapshot;
                 const completedTotal = syncedCount + deletedCount;
                 let badgeText: string;
-                if (snapshot.statusVariant === "error") {
+                // Short-circuit on the preparing flag computed above. The
+                // trailing else of this chain ALSO writes "Preparing sync..."
+                // (a generic empty-state fallback) — both code paths
+                // converge on the same copy so the badge stays consistent
+                // with the title/tooltip/collapsed-status branches that
+                // gate on `isPreparing` only.
+                if (isPreparing) {
+                  badgeText = "Preparing sync...";
+                } else if (snapshot.statusVariant === "error") {
                   const verb = syncDirection === "download" ? "download" : syncDirection === "upload" ? "upload" : "sync";
                   badgeText = `${failedFiles} of ${actualTotal} files failed to ${verb}`;
                 } else if (effectiveCompleted) {

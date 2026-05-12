@@ -174,10 +174,42 @@ impl SyncEventHandler for TauriSyncBridge {
                 // UploadProcessingState clear gate knows a new cycle
                 // has started. See `crate::sync::upload_processing`
                 // for the full rationale.
+                //
+                // Then decide whether this is a file-watcher-triggered
+                // cycle that needs the "preparing" widget override —
+                // skip when the upload-processing banner is already
+                // raised (IPC-initiated uploads cover the gap with
+                // the banner instead, and showing both would be
+                // double-signalling).
                 {
                     use tauri::Manager;
                     let app_state = app.state::<crate::app_state::AppState>();
                     app_state.sync_session_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+                    let (banner_active, _) = app_state.upload_processing.snapshot();
+                    if !banner_active && app_state.preparing.mark_preparing(&label) {
+                        // Newly inserted — push a snapshot so the
+                        // widget reflects preparing within one tick
+                        // of `SyncStarted`. Subsequent SyncStarted
+                        // for the same label inside the same window
+                        // (rapid file-watcher re-triggers) return
+                        // false from `mark_preparing` and skip this
+                        // re-emit.
+                        //
+                        // `emit_snapshot` synchronously re-enters this
+                        // same `on_event` with `ProgressSnapshot`;
+                        // that path will reacquire the preparing
+                        // mutex. Safe because `PreparingState::mark_preparing`
+                        // drops its `MutexGuard` at its function
+                        // boundary (the return value is a `bool`, not
+                        // a guard), so the lock is released before
+                        // we get here. A future refactor that inlines
+                        // `mark_preparing` and accidentally extends
+                        // the guard's scope would deadlock on the
+                        // non-reentrant `std::sync::Mutex` — keep
+                        // the boundary.
+                        app_state.sync.emit_snapshot(true);
+                    }
                 }
                 cap_file_list(&mut upload_files);
                 cap_file_list(&mut download_files);
@@ -219,6 +251,11 @@ impl SyncEventHandler for TauriSyncBridge {
                 // miss the conflict-pending transition. Idempotent if the
                 // upstream emit already fired this cycle.
                 let app_state = app.state::<crate::app_state::AppState>();
+                // Clear the preparing override for this label BEFORE
+                // the snapshot emit so a cycle that completes with an
+                // empty plan (no merge_into_session) doesn't leak a
+                // stuck "Preparing sync…" widget after the cycle ends.
+                app_state.preparing.clear(&label);
                 app_state.sync.emit_snapshot(true);
 
                 // Defensive clear: if the cycle finished without ever
@@ -277,6 +314,17 @@ impl SyncEventHandler for TauriSyncBridge {
                 // at the bridge so the `hcfs_sync_error` channel only
                 // carries real failures (network, auth, rate limit, etc.).
                 if error == events::CANCELLED_MARKER {
+                    // Cancels still need to clear the preparing widget
+                    // for this label — otherwise a paused/removed drive
+                    // would leak a stuck "Preparing sync…" badge until
+                    // the next sync cycle (which may never come for a
+                    // paused drive). Banner clear is intentionally
+                    // skipped for cancels (handled by `stop_sync`).
+                    use tauri::Manager;
+                    let app_state = app.state::<crate::app_state::AppState>();
+                    if app_state.preparing.clear(&label) {
+                        app_state.sync.emit_snapshot(true);
+                    }
                     tracing::debug!(label = %label, "Silenced sync cancel (not emitted as error)");
                     return;
                 }
@@ -287,11 +335,16 @@ impl SyncEventHandler for TauriSyncBridge {
                 // `stop_sync`'s reset path. Epoch-gated so an error
                 // emitted by an in-flight cycle that started BEFORE
                 // a fresh `begin` cannot clear that begin's banner.
+                //
+                // Preparing override also cleared here: an error
+                // before plan_ready leaves nothing in the session, so
+                // the override would stay raised otherwise.
                 {
                     use tauri::Manager;
                     let app_state = app.state::<crate::app_state::AppState>();
                     let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
                     app_state.upload_processing.clear_if_session_advanced(&app, epoch);
+                    app_state.preparing.clear(&label);
                 }
                 let _ = app.emit(
                     events::SYNC_ERROR,
@@ -304,9 +357,19 @@ impl SyncEventHandler for TauriSyncBridge {
                 );
             }
             SyncEvent::SyncStopped { label } => {
+                use tauri::Manager;
+                let app_state = app.state::<crate::app_state::AppState>();
+                if app_state.preparing.clear(&label) {
+                    app_state.sync.emit_snapshot(true);
+                }
                 let _ = app.emit(events::SYNC_STOPPED, events::LabelPayload { label });
             }
             SyncEvent::SyncReset { account_id, message } => {
+                use tauri::Manager;
+                let app_state = app.state::<crate::app_state::AppState>();
+                if app_state.preparing.clear_all() {
+                    app_state.sync.emit_snapshot(true);
+                }
                 let _ = app.emit(events::SYNC_RESET, events::SyncResetPayload { account_id, message });
             }
             SyncEvent::PlanReady {
@@ -373,17 +436,45 @@ impl SyncEventHandler for TauriSyncBridge {
                 let _ = app.emit(events::AUTH_RELOGIN_REQUIRED, events::AuthRequiredPayload { error });
             }
             SyncEvent::ProgressSnapshot { mut snapshot } => {
-                // `prepare_snapshot_for_emit` applies BOTH the stalled-completion
-                // fixup and the file-cap. Without the fixup, hcfs-client's own
-                // file-watcher-driven `changes_pending=true` leaves `is_active`
-                // stuck at `true` indefinitely after all files are synced, so
+                use tauri::Manager;
+                let app_state = app.state::<crate::app_state::AppState>();
+
+                // Once a label has real files in the session, its
+                // "preparing" override has served its purpose — the
+                // regular per-file widget takes over. Clearing here
+                // (before the fingerprint check below) keeps the
+                // preparing set tight and prevents a stuck override
+                // surviving past the first plan_ready of a cycle.
+                //
+                // Gated on `is_any_preparing` so the common case (no
+                // drive in preparing — every snapshot after the first
+                // few seconds of a sync cycle) avoids both the
+                // `HashSet` allocation and the per-label `clear` calls.
+                // This path fires at up to 4 Hz during transfers, so
+                // skipping the alloc when there's nothing to clear is
+                // worth a one-line short-circuit.
+                if app_state.preparing.is_any_preparing() {
+                    let labels_with_files: std::collections::HashSet<&str> = snapshot.files.iter().map(|f| f.label.as_ref()).collect();
+                    for label in &labels_with_files {
+                        app_state.preparing.clear(label);
+                    }
+                }
+
+                // `prepare_snapshot_for_emit` applies the stalled-completion
+                // fixup, the preparing override (when no real session is yet
+                // visible and any label is preparing), and the file-cap.
+                // Without the stall fixup, hcfs-client's own file-watcher-
+                // driven `changes_pending=true` leaves `is_active` stuck at
+                // `true` indefinitely after all files are synced, so
                 // `widget_state`, `effective_in_progress`, `effective_completed`,
                 // and `status_variant` all still say "syncing" despite 100%
-                // progress. Only the bootstrap `sp_get_snapshot` path used to
-                // apply the fixup, which meant a session that stalled after the
-                // widget/tray had already mounted would display "Syncing: 100%"
-                // forever. See `progress::fixup_stalled_completion`.
-                prepare_snapshot_for_emit(&mut snapshot);
+                // progress. Without the preparing override, file-watcher-
+                // initiated cycles leave the widget hidden through the
+                // scan + remote-state-fetch window even though the system
+                // is actively working. See
+                // `progress::fixup_stalled_completion` and
+                // `progress::apply_preparing_override`.
+                prepare_snapshot_for_emit(&mut snapshot, &app_state.preparing);
 
                 // Skip the IPC if this snapshot is structurally identical to
                 // the last one we emitted. The throttle in

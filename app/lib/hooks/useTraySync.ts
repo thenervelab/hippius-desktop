@@ -985,7 +985,16 @@ function startSyncActivityWatcher() {
       // uses `effectiveInProgress` / `effectiveCompleted` for the same
       // reason — see `SyncStatusDialog.test.tsx:215` and the design
       // note in `CLAUDE.md` ("Stalled completion fixup").
-      const isActive = progress.effectiveInProgress ||
+      //
+      // `isPreparing` covers the file-watcher-triggered window between
+      // `SyncStarted` and the first session-populated snapshot. Rust
+      // sets `widgetState="preparing"` in `progress.rs::apply_preparing_override`;
+      // including it in `isActive` here makes the tray icon switch to
+      // syncing immediately when the user drops a folder via Finder,
+      // not only after `on_sync_plan_ready` fires several seconds later.
+      const isPreparing = progress.widgetState === "preparing";
+      const isActive = isPreparing ||
+        progress.effectiveInProgress ||
         inProgressCount > 0 ||
         (progress.totalFiles > 0 && progress.completedFiles < progress.totalFiles && progress.failedFiles === 0);
       const hasFailed = progress.failedFiles > 0;
@@ -1003,11 +1012,18 @@ function startSyncActivityWatcher() {
         latchedComplete = true;
         latchedSnapshot = progress;
       }
-      // Unlatch when a NEW session becomes active AND has real files.
-      // The sync loop creates empty sessions (totalFiles=0) between real
-      // sync cycles — unlatching for those would flash the tray state
-      // before the next no-op cycle completes with 0 files.
-      if (isActive && latchedComplete && progress.startedAt !== null && progress.startedAt !== latchedSnapshot?.startedAt && progress.totalFiles > 0) {
+      // Unlatch when a NEW session becomes active AND has real files,
+      // OR when we enter preparing (file-watcher-initiated cycles flip
+      // straight from completed-latched to preparing with no
+      // intermediate files-present state; without this branch the tray
+      // would stay on "Sync Complete" until plan_ready fires several
+      // seconds later instead of immediately switching to
+      // "Preparing sync…"). For preparing the startedAt check is
+      // skipped — the snapshot's session may not have any startedAt
+      // yet at the moment of the preparing flip, so requiring a
+      // distinct value would block the unlatch.
+      if (isActive && latchedComplete && (isPreparing
+        || (progress.startedAt !== null && progress.startedAt !== latchedSnapshot?.startedAt && progress.totalFiles > 0))) {
         latchedComplete = false;
         latchedSnapshot = null;
       }
@@ -1016,9 +1032,11 @@ function startSyncActivityWatcher() {
       // Don't switch away from latched snapshot for empty active sessions
       // (totalFiles=0, before on_sync_plan_ready) — they'd cause a brief
       // flicker in the tray between "Sync Complete" and an empty state.
+      // Preparing is the one empty-session shape we DO want to surface
+      // (the user just dropped a folder; they need feedback now).
       const isNewSessionWithFiles = isActive && progress.startedAt !== null
         && progress.startedAt !== latchedSnapshot?.startedAt && progress.totalFiles > 0;
-      const effectiveCompleted = isCompleted || (latchedComplete && !isNewSessionWithFiles);
+      const effectiveCompleted = isCompleted || (latchedComplete && !isPreparing && !isNewSessionWithFiles);
       const effectiveSnapshot = effectiveCompleted && !isCompleted && latchedSnapshot
         ? latchedSnapshot
         : progress;

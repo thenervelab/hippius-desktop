@@ -1053,6 +1053,13 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     sync.discard_all_pending_activity();
     sync.clear_label_roots();
 
+    // Clear the per-label preparing overrides so a logout / account
+    // switch cannot leak a "Preparing sync…" widget into the next
+    // session. Mirrors the unconditional `upload_processing.reset`
+    // pattern — both are transient UI-affordance state that must
+    // not survive across accounts.
+    app_state.preparing.clear_all();
+
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
     let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
 
@@ -1079,6 +1086,22 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
     let sync = &app_state.sync;
 
     let (remaining, _removed_path) = remove_drive_inmemory(sync, &label).await;
+
+    // Drop the preparing override for this label so a remove during
+    // the SyncStarted → plan_ready window cannot leave a stuck
+    // "Preparing sync…" badge tied to a drive that no longer exists.
+    //
+    // Belt-and-suspenders with the `SyncError::Cancelled` arm in
+    // `tauri_bridge.rs` — that arm also clears preparing for the
+    // cancelled label, but the cancel SyncEvent is dispatched
+    // asynchronously relative to this synchronous IPC and may not
+    // have landed yet. Calling `clear` here is idempotent (second
+    // call returns `false` and skips the `emit_snapshot`), so the
+    // dual-path is cheap and covers the race where the IPC returns
+    // before the bridge has seen the cancel.
+    if app_state.preparing.clear(&label) {
+        sync.emit_snapshot(true);
+    }
 
     // Wake any waiters in remove_drive_and_wait so they can re-check without
     // sleeping through the full polling interval.

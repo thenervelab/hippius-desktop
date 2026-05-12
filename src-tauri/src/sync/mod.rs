@@ -17,6 +17,7 @@ pub mod logic;
 pub mod migration;
 pub mod mnemonic;
 pub mod paths;
+pub mod preparing;
 pub mod progress;
 pub mod region;
 pub mod relative_path_backfill;
