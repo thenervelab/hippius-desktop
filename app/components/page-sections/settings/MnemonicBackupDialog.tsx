@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import {
-  AlertTriangle,
   ArrowRight,
   Check,
   Copy,
@@ -238,7 +237,7 @@ function Step1Warning({
 }) {
   return (
     <>
-      <p className="mb-5 text-center text-sm text-[#4F4F4F] dark:text-grey-dark-300">
+      <p className="mb-5 text-center text-sm font-medium text-[#4F4F4F] dark:text-grey-dark-300">
         Your mnemonic seed is the only way to restore access to your account
         and encrypted files.
       </p>
@@ -280,7 +279,7 @@ function Step1Warning({
           size="auto"
           onClick={onNext}
           className={cn(
-            "h-[52px] w-full rounded-[6px] border text-lg",
+            "h-[52px] w-full rounded-[6px] border text-base",
             "border-[#3167DD] bg-[#3167DD] text-white",
             "hover:bg-[#2454c4] hover:border-[#2454c4]",
             "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
@@ -482,13 +481,20 @@ function Step2Reveal({
           </div>
         )}
 
-        {/* Watching-screen reminder retained from the previous design */}
-        <div className="flex items-start gap-2 rounded-[8px] border border-warning-50/30 bg-warning-50/10 p-3 dark:bg-warning-50/[0.08]">
-          <AlertTriangle className="mt-0.5 size-4 flex-shrink-0 text-warning-50" />
-          <p className="text-xs text-warning-50">
-            Anyone with these words can take over your account. Hide the screen
-            once you&apos;re done.
-          </p>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-1.5">
+            <OctagonAlert className="size-4 text-[#feb101]" />
+            <p className="font-geist text-[14px] leading-[1.109] tracking-[-0.28px] font-medium text-black dark:text-white">
+              Important
+            </p>
+          </div>
+          <div className="flex items-start gap-2">
+            <ArrowRight className="mt-0.5 size-4 flex-shrink-0 text-[#E3E3E3] dark:text-[#3a3a3a]" />
+            <p className="font-geist text-[14px] leading-[1.4] tracking-[-0.28px] text-[#4F4F4F] dark:text-grey-dark-600">
+              Anyone with these words can take over your account. Hide the
+              screen once you&apos;re done.
+            </p>
+          </div>
         </div>
 
         <Button
@@ -496,7 +502,7 @@ function Step2Reveal({
           size="auto"
           onClick={onConfirm}
           className={cn(
-            "h-[52px] w-full rounded-[6px] border text-sm font-medium",
+            "h-[52px] w-full rounded-[6px] border text-base",
             "border-[#3167DD] bg-[#3167DD] text-white",
             "hover:bg-[#2454c4] hover:border-[#2454c4]",
             "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
