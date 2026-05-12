@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Icons } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { SettingsCard } from "./SettingsCard";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { cn } from "@/lib/utils";
 
 // User-facing rewrite of low-level transport errors from the Rust side.
@@ -64,8 +65,7 @@ const CustomizeRPC: React.FC = () => {
       return true;
     } catch (err) {
       setTesting(false);
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setError(formatErrorMessage(errorMessage));
+      setError(formatErrorMessage(errorMessage(err)));
       return false;
     }
   };
