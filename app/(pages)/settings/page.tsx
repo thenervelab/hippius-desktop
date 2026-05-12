@@ -27,7 +27,10 @@ const SECTION_META: Record<
   },
   security: {
     title: "Security",
-    description: "Manage your recovery phrase and security settings.",
+    description:
+      "Backup your mnemonic seed and set an unlock password to access your encrypted files on other devices.",
+    tooltip:
+      "Two separate keys protect your account: the mnemonic seed restores wallet access and decrypts files on a new device, while the unlock password gates previewing and downloading files in the Hippius Console. Lose the seed and the files are unrecoverable, so back it up before anything else.",
     showDescription: true,
   },
   notifications: {

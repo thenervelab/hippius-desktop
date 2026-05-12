@@ -1,16 +1,68 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
-import SectionHeader from "./SectionHeader";
-import { CardButton, Icons, RevealTextLine } from "@/components/ui";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { MnemonicBackupDialog } from "./MnemonicBackupDialog";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { InView } from "react-intersection-observer";
+import { Key, Lock } from "@/components/ui/icons";
+import { Button } from "@/components/ui/button";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { MnemonicBackupDialog } from "./MnemonicBackupDialog";
+import { SettingsWarningNotice } from "./SettingsWarningNotice";
 import ChangeRecoveryPasswordDialog from "@/components/recovery/ChangeRecoveryPasswordDialog";
 import SetRecoveryPasswordDialog from "@/components/recovery/SetRecoveryPasswordDialog";
 import { checkRecoveryState } from "@/app/lib/utils/recovery";
+import { cn } from "@/lib/utils";
+
+interface SecurityRowProps {
+  Icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
+  title: string;
+  description: string;
+  actionLabel: string;
+  onAction: () => void;
+}
+
+/**
+ * Flat horizontal row used in the Security section (mnemonic seed,
+ * unlock password). Icon + title/description on the left, primary
+ * action button on the right.
+ */
+function SecurityRow({
+  Icon,
+  title,
+  description,
+  actionLabel,
+  onAction,
+}: SecurityRowProps) {
+  return (
+    <div className="flex items-center justify-between gap-4 px-4 py-3 rounded-[8px] border border-grey-dark-100 bg-white dark:bg-black-600 dark:border-black-300">
+      <div className="flex items-start gap-3 min-w-0">
+        <Icon className="size-[18px] text-primary-50 dark:text-primary-brand-dark flex-shrink-0 mt-0.5" />
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-grey-10 dark:text-white">
+            {title}
+          </p>
+          <p className="text-sm text-[#7D7D7D] dark:text-grey-dark-600 mt-1">
+            {description}
+          </p>
+        </div>
+      </div>
+      <Button
+        variant="primary"
+        size="auto"
+        onClick={onAction}
+        className={cn(
+          "h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px] border text-sm font-medium flex-shrink-0",
+          "border-[#3167DD] bg-[#3167DD] text-white",
+          "hover:bg-[#2454c4] hover:border-[#2454c4]",
+          "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
+        )}
+      >
+        {actionLabel}
+      </Button>
+    </div>
+  );
+}
 
 const RecoveryPhraseSettings: React.FC = () => {
   const { getMnemonic, polkadotAddress } = useWalletAuth();
@@ -25,7 +77,7 @@ const RecoveryPhraseSettings: React.FC = () => {
       const check = await checkRecoveryState();
       setHasServerBlob(check.hasServerBlob);
     } catch {
-      // Network hiccup: hide the button rather than show a broken one.
+      // Network hiccup — leave previous state intact.
     }
   }, []);
 
@@ -41,14 +93,14 @@ const RecoveryPhraseSettings: React.FC = () => {
   }, []);
 
   const handleBackup = async () => {
-    // Try to get mnemonic from the HCFS Drive first (works for both mnemonic and OAuth users),
-    // then fall back to session store.
     let result: string | null = null;
     if (polkadotAddress) {
       try {
-        result = await invoke<string>("get_drive_mnemonic", { accountId: polkadotAddress });
+        result = await invoke<string>("get_drive_mnemonic", {
+          accountId: polkadotAddress,
+        });
       } catch {
-        // Drive not initialized or not available — fall back to session store
+        // Drive not initialized — fall back to session store.
       }
     }
     if (!result) {
@@ -69,140 +121,63 @@ const RecoveryPhraseSettings: React.FC = () => {
 
   return (
     <>
-      {/* Card 1: Mnemonic Seed Backup */}
       <InView triggerOnce>
         {({ inView, ref }) => (
-          <div
-            ref={ref}
-            className="flex flex-col w-full border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
-          >
-            <RevealTextLine
-              rotate
-              reveal={inView}
-              parentClassName="w-full"
-              className="delay-300 w-full"
+          <div ref={ref} className="flex flex-col gap-4">
+            {/* Row 1: Mnemonic Seed backup */}
+            <div
+              className={cn(
+                "transition-all duration-500 ease-out",
+                inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+              )}
             >
-              <SectionHeader
-                Icon={Icons.Key}
+              <SecurityRow
+                Icon={Key}
                 title="Mnemonic Seed"
-                subtitle="Your mnemonic seed is the only way to restore access to your account and encrypted files."
+                description="Your mnemonic seed is the only way to restore access to your wallet and encrypted files."
+                actionLabel="Backup Mnemonic Seed"
+                onAction={handleBackup}
               />
-            </RevealTextLine>
-            <RevealTextLine
-              rotate
-              reveal={inView}
-              parentClassName="w-full"
-              className="delay-500 w-full"
-            >
-              <div className="flex justify-between items-center p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full">
-                <p className="text-sm text-grey-60">
-                  Back up your mnemonic seed and store it somewhere safe. Never share it with anyone.
-                </p>
-                <CardButton
-                  className="max-w-[13.75rem] h-10 ml-4 shrink-0"
-                  variant="primary"
-                  onClick={handleBackup}
-                >
-                  <span className="text-base leading-4 font-medium">
-                    Backup Mnemonic Seed
-                  </span>
-                </CardButton>
-              </div>
-            </RevealTextLine>
+            </div>
 
-            {/* Security Warning */}
-            <RevealTextLine
-              rotate
-              reveal={inView}
-              parentClassName="w-full"
-              className="delay-700 w-full"
+            {/* Warning notice */}
+            <div
+              className={cn(
+                "transition-all duration-500 ease-out delay-150",
+                inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+              )}
             >
-              <div className="bg-warning-90/20 border border-warning-80 rounded-lg p-3 mt-4">
-                <div className="flex gap-2">
-                  <div className="mt-0.5">
-                    <div className="size-5 rounded-full bg-warning-50/20 flex items-center justify-center">
-                      <span className="text-warning-50 text-sm font-bold">!</span>
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium text-warning-10">
-                      Keep your mnemonic seed safe
-                    </p>
-                    <p className="text-sm text-warning-30">
-                      If you lose your mnemonic seed, you will permanently lose access to your encrypted files. There is no way to recover it.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </RevealTextLine>
-          </div>
-        )}
-      </InView>
+              <SettingsWarningNotice
+                title="Keep your Mnemonic key secure"
+                description="If you lose your mnemonic seed, you will permanently lose access to your encrypted files. There is no way to recover it."
+              />
+            </div>
 
-      {/* Card 2: Unlock Password */}
-      <InView triggerOnce>
-        {({ inView, ref }) => (
-          <div
-            ref={ref}
-            className="flex flex-col w-full border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
-          >
-            <RevealTextLine
-              rotate
-              reveal={inView}
-              parentClassName="w-full"
-              className="delay-300 w-full"
+            {/* Row 2: Unlock password */}
+            <div
+              className={cn(
+                "transition-all duration-500 ease-out delay-300",
+                inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+              )}
             >
-              <SectionHeader
-                Icon={Icons.ShieldSecurity}
+              <SecurityRow
+                Icon={Lock}
                 title="Unlock Password"
-                subtitle="Access your encrypted files on other devices and Hippius Console."
+                description={
+                  hasServerBlob
+                    ? "Your unlock password is set. You can change it at any time."
+                    : "You haven't set unlock password yet. Without it you won't be able to preview or download files on Hippius Console."
+                }
+                actionLabel={
+                  hasServerBlob ? "Change Unlock Password" : "Set Unlock Password"
+                }
+                onAction={() =>
+                  hasServerBlob
+                    ? setShowChangePassword(true)
+                    : setShowSetPassword(true)
+                }
               />
-            </RevealTextLine>
-            {hasServerBlob ? (
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                parentClassName="w-full"
-                className="delay-500 w-full"
-              >
-                <div className="flex justify-between items-center p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full">
-                  <p className="text-sm text-grey-60">
-                    Your unlock password is set. You can change it at any time.
-                  </p>
-                  <CardButton
-                    className="max-w-[13.75rem] h-10 ml-4 shrink-0"
-                    variant="primary"
-                    onClick={() => setShowChangePassword(true)}
-                  >
-                    <span className="text-base leading-4 font-medium">
-                      Change Unlock Password
-                    </span>
-                  </CardButton>
-                </div>
-              </RevealTextLine>
-            ) : (
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                parentClassName="w-full"
-                className="delay-500 w-full"
-              >
-                <div className="flex justify-between items-center p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full">
-                  <p className="text-sm text-grey-60">
-                    You haven&apos;t set an unlock password yet. Without it, you won&apos;t be able to access your files on other devices or Hippius Console.
-                  </p>
-                  <CardButton
-                    className="max-w-[13.75rem] h-10 ml-4 shrink-0"
-                    variant="primary"
-                    onClick={() => setShowSetPassword(true)}
-                  >
-                    <span className="text-base leading-4 font-medium">
-                      Set Unlock Password
-                    </span>
-                  </CardButton>
-                </div>
-              </RevealTextLine>
-            )}
+            </div>
           </div>
         )}
       </InView>
