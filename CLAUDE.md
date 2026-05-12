@@ -74,6 +74,7 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 - **`app/lib/utils/`** — Utility functions including `hcfsConfigUtils.ts` (sync config), `syncPathUtils.ts` (path CRUD)
 - **`app/components/tray/`** — System tray UI components
 - **`app/components/sidebar/SidebarSearch.tsx`** — Sidebar search uses a custom input; keep styling aligned with Figma, preserve click-to-focus, support Ctrl/Cmd+F focus, and swap the Command+F hint for a clear icon when text is present.
+- **`app/components/ui/search-input/index.tsx`** — Shared search input uses the Figma light/dark pill styling and shows a clear icon when text is present; keep hover/focus treatments aligned with SidebarSearch.
 
 **Path aliases** (tsconfig.json): `@/components/*` → `app/components/*`, `@/lib/*` → `app/lib/*`, `@/services/*` → `app/lib/services/*`
 

@@ -1,5 +1,5 @@
 import { FC } from "react";
-import { Icons } from "@/components/ui";
+import { Database, Folders } from "lucide-react";
 import StorageStateItem from "./StorageStateItem";
 
 interface StorageStateListProps {
@@ -12,18 +12,20 @@ const StorageStateList: FC<StorageStateListProps> = ({
   numberOfFiles,
 }) => {
   return (
-    <div className="flex items-center flex-wrap gap-2">
+    <div className="flex items-center gap-[5.5px] flex-wrap">
       <StorageStateItem
-        icon={<Icons.FolderCloud className="size-4" />}
+        icon={<Database className="size-[14px]" strokeWidth={1.5} />}
         value={storageUsed}
-        className="border-r border-grey-80 pr-2"
-        label="Total Storage Used:"
+        label="Total Storage:"
+      />
+      <span
+        aria-hidden
+        className="size-[2.5px] rounded-full bg-primary-50 shrink-0"
       />
       <StorageStateItem
-        icon={<Icons.FolderOpen className="size-4" />}
+        icon={<Folders className="size-[14px]" strokeWidth={1.5} />}
         value={numberOfFiles}
-        className="pr-2"
-        label="Number of Files:"
+        label="File No:"
       />
     </div>
   );

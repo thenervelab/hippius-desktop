@@ -15,12 +15,19 @@ const StorageStateItem: FC<StorageStateItemProps> = ({
   className,
 }) => {
   return (
-    <div className={cn("flex items-center gap-x-2", className)}>
-      <div className="text-primary-50">{icon}</div>
-      <div className="flex items-center gap-x-1">
-        <span className="text-sm font-medium text-grey-70">{label}</span>
-        <span className="text-sm font-medium text-grey-10">{value}</span>
-      </div>
+    <div
+      className={cn(
+        "flex items-center gap-[2.354px] shrink-0",
+        className,
+      )}
+    >
+      <div className="text-primary-50 flex items-center">{icon}</div>
+      <span className="font-sans text-[10px] font-medium leading-none tracking-[-0.2px] text-grey-50">
+        {label}
+      </span>
+      <span className="font-sans text-[10px] font-medium leading-none tracking-[-0.2px] text-black-900 dark:text-grey-light-100">
+        {value}
+      </span>
     </div>
   );
 };

@@ -50,7 +50,7 @@ export function generateActiveFilters(
         activeFilters.push({
             type: 'fileType',
             value: type,
-            label: 'Type:',
+            label: 'Type',
             displayValue: type.charAt(0).toUpperCase() + type.slice(1)
         });
     });
@@ -83,7 +83,7 @@ export function generateActiveFilters(
         activeFilters.push({
             type: 'date',
             value: dateFilter,
-            label: 'Date:',
+            label: 'Date',
             displayValue
         });
     }
@@ -100,7 +100,7 @@ export function generateActiveFilters(
             activeFilters.push({
                 type: 'fileSize',
                 value: String(size),
-                label: 'Size:',
+                label: 'Size',
                 displayValue: sizeLabels[size] || `≥ ${formatBytesFromBigInt(BigInt(size))}`
             });
         });
@@ -108,7 +108,7 @@ export function generateActiveFilters(
         activeFilters.push({
             type: 'fileSize',
             value: String(fileSize),
-            label: 'File size:',
+            label: 'File size',
             displayValue: `≥ ${formatBytesFromBigInt(BigInt(fileSize))}`
         });
     }

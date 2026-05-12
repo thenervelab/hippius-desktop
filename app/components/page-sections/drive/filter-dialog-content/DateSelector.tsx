@@ -4,6 +4,17 @@ import { Icons } from "@/components/ui";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+const FILTER_PILL_TRIGGER_CLASSES = cn(
+  "group inline-flex h-8 items-center gap-2 whitespace-nowrap",
+  "rounded-[7px] border px-[8px] pr-[10px]",
+  "bg-[#fefefe] border-[#e0e0e0]",
+  "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)]",
+  "text-[12px] font-medium font-mono uppercase tracking-[-0.24px] leading-[20px]",
+  "text-black-700 transition-colors hover:bg-grey-light-700",
+  "dark:bg-[rgba(255,255,255,0.02)] dark:border-black-300 dark:text-grey-light-100",
+  "dark:shadow-[0px_0px_0px_1px_rgba(0,0,0,1)] dark:hover:bg-black-500",
+);
+
 interface DateSelectorProps {
   selectedDate?: string;
   onDateSelect?: (date: string) => void;
@@ -144,11 +155,11 @@ const DateSelector: React.FC<DateSelectorProps> = ({
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button className="flex justify-center group px-3 py-2 bg-grey-100 min-w-[7rem] rounded border border-grey-80 hover:bg-grey-80 transition-colors">
-          <div className="text-sm font-medium text-grey-10 leading-5">
+        <button className={FILTER_PILL_TRIGGER_CLASSES}>
+          <div className="text-black-700 dark:text-grey-light-100">
             {getDisplayText()}
           </div>
-          <Icons.CalendarNew className="ml-2 mt-0.5 size-4 text-primary-10" />
+          <Icons.CalendarNew className="size-4 text-black-700 dark:text-grey-light-100" />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>

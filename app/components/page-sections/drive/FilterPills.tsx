@@ -8,46 +8,42 @@ import EnhancedFileSizeSelector from "./filter-dialog-content/EnhancedFileSizeSe
 import { cn } from "@/app/lib/utils";
 
 interface FilterPillsProps {
-    selectedFileTypes: FileTypes[];
-    selectedDate: string;
-    selectedFileSizes: number[];
-    onFileTypesChange: (types: FileTypes[]) => void;
-    onDateChange: (date: string) => void;
-    onFileSizesChange: (sizes: number[]) => void;
-    className?: string;
+  selectedFileTypes: FileTypes[];
+  selectedDate: string;
+  selectedFileSizes: number[];
+  onFileTypesChange: (types: FileTypes[]) => void;
+  onDateChange: (date: string) => void;
+  onFileSizesChange: (sizes: number[]) => void;
+  className?: string;
 }
 
 const FilterPills: React.FC<FilterPillsProps> = ({
-    selectedFileTypes,
-    selectedDate,
-    selectedFileSizes,
-    onFileTypesChange,
-    onDateChange,
-    onFileSizesChange,
-    className = "",
+  selectedFileTypes,
+  selectedDate,
+  selectedFileSizes,
+  onFileTypesChange,
+  onDateChange,
+  onFileSizesChange,
+  className = "",
 }) => {
-    return (
-        <div className={cn("flex items-center gap-2 flex-wrap", className)}>
-            {/* File Type Filter Pill */}
-            <FileTypeSelector
-                selectedTypes={selectedFileTypes}
-                onTypesSelect={onFileTypesChange}
-            />
+  return (
+    <div className={cn("flex items-center gap-2 flex-wrap h-8", className)}>
+      {/* File Type Filter Pill */}
+      <FileTypeSelector
+        selectedTypes={selectedFileTypes}
+        onTypesSelect={onFileTypesChange}
+      />
 
-            {/* File Size Filter Pill */}
-            <EnhancedFileSizeSelector
-                selectedSizes={selectedFileSizes}
-                onSizesSelect={onFileSizesChange}
-            />
+      {/* File Size Filter Pill */}
+      <EnhancedFileSizeSelector
+        selectedSizes={selectedFileSizes}
+        onSizesSelect={onFileSizesChange}
+      />
 
-            {/* Date Filter Pill */}
-            <DateSelector
-                selectedDate={selectedDate}
-                onDateSelect={onDateChange}
-            />
-
-        </div>
-    );
+      {/* Date Filter Pill */}
+      <DateSelector selectedDate={selectedDate} onDateSelect={onDateChange} />
+    </div>
+  );
 };
 
 export default FilterPills;

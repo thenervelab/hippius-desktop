@@ -137,7 +137,6 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           />
           <div className="flex items-center gap-2 shrink-0">
             <SearchInput
-              className="h-9"
               value={searchTerm}
               onChange={handleSearchChange}
               placeholder="Search file"

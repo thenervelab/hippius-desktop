@@ -96,12 +96,12 @@ export const SyncConnectivityAlert: React.FC<SyncConnectivityAlertProps> = ({
     return (
       <div
         className={cn(
-          "flex items-center gap-2 px-3 py-2 rounded-lg",
+          "flex items-center gap-2 px-3 py-2 rounded-lg mb-4 space-y-2",
           config.bannerBg,
           config.bannerBorder,
           "border",
           config.titleColor,
-          className
+          className,
         )}
       >
         <Icon className="size-4 flex-shrink-0" />
@@ -113,11 +113,11 @@ export const SyncConnectivityAlert: React.FC<SyncConnectivityAlertProps> = ({
   return (
     <div
       className={cn(
-        "flex items-start gap-3 p-3 rounded-lg",
+        "flex items-start gap-3 p-3 rounded-lg mb-4 space-y-2",
         config.bannerBg,
         config.bannerBorder,
         "border",
-        className
+        className,
       )}
     >
       <div className="flex-shrink-0 mt-0.5">

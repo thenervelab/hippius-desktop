@@ -928,11 +928,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
           {/* Sync connectivity alert. `SyncReauthRequiredAlert` is
               mounted globally in `ResponsiveContent` so it's visible
               on every authenticated route (not just /files). */}
-          <div className="mb-4 space-y-2">
-            <SyncConnectivityAlert
-              variant={isRecentFiles ? "compact" : "banner"}
-            />
-          </div>
+          <SyncConnectivityAlert
+            variant={isRecentFiles ? "compact" : "banner"}
+          />
 
           <div
             className={cn(
