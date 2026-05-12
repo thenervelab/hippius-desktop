@@ -7,7 +7,6 @@ import { FC } from "react";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import PageHeader from "@/components/ui/page-header";
 
-import { HelpCircle } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { InfoCircle } from "@/app/components/ui/icons";
 

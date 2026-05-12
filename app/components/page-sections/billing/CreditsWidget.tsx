@@ -8,7 +8,7 @@ import TimeAgo from "react-timeago";
 import { openLinkByKey } from "@/app/lib/utils/links";
 import Warning from "@/components/ui/icons/Warning";
 import { CoinsIcon, AddCreditsArrow } from "@/components/ui/icons";
-import { RefreshCcwDot, Loader } from "lucide-react";
+import { RefreshCcwDot } from "lucide-react";
 
 interface CreditsWidgetProps {
   className?: string;
@@ -79,7 +79,9 @@ const CreditsWidget: FC<CreditsWidgetProps> = ({ className }) => {
           ) : error ? (
             <>
               <Warning className="size-4 text-error-80 shrink-0" />
-              <span className="text-[12px] text-error-80">Credits not retrieved.</span>
+              <span className="text-[12px] text-error-80">
+                Credits not retrieved.
+              </span>
               <button
                 type="button"
                 onClick={() => refetch()}

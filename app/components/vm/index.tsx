@@ -364,7 +364,7 @@ const VirtualMachines: FC = () => {
                   ))}
                 </div>
               ) : templates.length === 0 ? (
-                <NoEntriesFound text="No templates available" />
+                <NoEntriesFound title="No templates available" />
               ) : (
                 <>
                   <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
