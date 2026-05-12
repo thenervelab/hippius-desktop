@@ -83,7 +83,7 @@ function SettingsContent() {
           </InfoTooltip>
         </div>
         {meta.showDescription && (
-          <p className="self-stretch font-geist text-[16px] leading-[22px] font-medium tracking-[-0.32px] text-[#4F4F4F] dark:text-grey-dark-600">
+          <p className="self-stretch font-geist text-[16px] leading-[22px] font-medium tracking-[-0.32px] text-[#7D7D7D] dark:text-grey-dark-600">
             {meta.description}
           </p>
         )}
