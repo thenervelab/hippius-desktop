@@ -29,7 +29,7 @@ const settingsNavItems = [
   },
   {
     label: "API Token",
-    section: "api-keys",
+    section: "api-key",
     icon: <Icons.Key className={ICON_CLASS} />,
   },
   {

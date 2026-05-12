@@ -38,7 +38,7 @@ const SECTION_META: Record<
       "Two independent channels: in app notifications appear inside Hippius for activity like file syncs and account credits, while email notifications are sent to the inbox of your linked email account for things like low-balance alerts and marketing updates. Toggle each one separately.",
     showDescription: true,
   },
-  "api-keys": {
+  "api-key": {
     title: "API Token",
     description:
       "Manage your API token for secure file operations and delegated access.",
@@ -102,7 +102,7 @@ function SettingsContent() {
 
         {section === "notifications" && <NotificationSection />}
 
-        {section === "api-keys" && <ApiTokenSection />}
+        {section === "api-key" && <ApiTokenSection />}
 
         {section === "vpn" && <VPNSettings />}
 
