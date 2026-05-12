@@ -46,14 +46,39 @@ const fileTypes: Array<{
   { type: "PDF", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
   { type: "doc", label: "Document", icon: Document, color: "text-[#4285F4]" },
   { type: "XLS", label: "Spreadsheet", icon: Sheet, color: "text-[#34a853]" },
-  { type: "PPT", label: "Presentation", icon: Presentation, color: "text-[#fbbc04]" },
+  {
+    type: "PPT",
+    label: "Presentation",
+    icon: Presentation,
+    color: "text-[#fbbc04]",
+  },
   { type: "archive", label: "Archive", icon: Zip, color: "text-[#f39c12]" },
-  { type: "disk_image", label: "Disk Image", icon: File, color: "text-primary-70 fill-primary-60" },
+  {
+    type: "disk_image",
+    label: "Disk Image",
+    icon: File,
+    color: "text-primary-70 fill-primary-60",
+  },
   { type: "code", label: "Code", icon: Terminal, color: "text-[#4285F4]" },
-  { type: "markdown", label: "Markdown", icon: DocumentText, color: "text-[#4285F4]" },
-  { type: "sql", label: "Database", icon: CentralizedDataBase, color: "text-[#4285F4]" },
+  {
+    type: "markdown",
+    label: "Markdown",
+    icon: DocumentText,
+    color: "text-[#4285F4]",
+  },
+  {
+    type: "sql",
+    label: "Database",
+    icon: CentralizedDataBase,
+    color: "text-[#4285F4]",
+  },
   { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
-  { type: "document", label: "Other", icon: File, color: "text-primary-70 fill-primary-60" },
+  {
+    type: "document",
+    label: "Other",
+    icon: File,
+    color: "text-primary-70 fill-primary-60",
+  },
 ];
 
 interface FileTypeSelectorProps {

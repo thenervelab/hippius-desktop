@@ -23,8 +23,18 @@ interface DateSelectorProps {
 // Helper function to format date
 const formatDate = (date: Date): string => {
   const months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
   ];
   return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
 };
@@ -32,8 +42,18 @@ const formatDate = (date: Date): string => {
 // Helper function to format month year
 const formatMonthYear = (date: Date): string => {
   const months = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
   ];
   return `${months[date.getMonth()]} ${date.getFullYear()}`;
 };
@@ -47,7 +67,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
   const [selectedDateObj, setSelectedDateObj] = useState<Date | null>(() => {
     if (!selectedDate || selectedDate === "") return null;
     // Parse YYYY-MM-DD format properly to avoid timezone issues
-    const parts = selectedDate.split('-');
+    const parts = selectedDate.split("-");
     if (parts.length === 3) {
       const year = parseInt(parts[0], 10);
       const month = parseInt(parts[1], 10) - 1; // Month is 0-based
@@ -61,7 +81,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
     if (!selectedDate || selectedDate === "") return "Date";
     try {
       // Parse YYYY-MM-DD format properly to avoid timezone issues
-      const parts = selectedDate.split('-');
+      const parts = selectedDate.split("-");
       if (parts.length === 3) {
         const year = parseInt(parts[0], 10);
         const month = parseInt(parts[1], 10) - 1; // Month is 0-based
@@ -80,8 +100,8 @@ const DateSelector: React.FC<DateSelectorProps> = ({
     setSelectedDateObj(date);
     // Create YYYY-MM-DD format using local timezone (not UTC)
     const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
     const dateString = `${year}-${month}-${day}`;
     onDateSelect?.(dateString);
   };
@@ -92,7 +112,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
   };
 
   const navigateToPreviousMonth = () => {
-    setViewDate(prev => {
+    setViewDate((prev) => {
       const newDate = new Date(prev);
       newDate.setMonth(newDate.getMonth() - 1);
       return newDate;
@@ -100,7 +120,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
   };
 
   const navigateToNextMonth = () => {
-    setViewDate(prev => {
+    setViewDate((prev) => {
       const newDate = new Date(prev);
       newDate.setMonth(newDate.getMonth() + 1);
       return newDate;
@@ -124,12 +144,14 @@ const DateSelector: React.FC<DateSelectorProps> = ({
       const weekDays = [];
       for (let day = 0; day < 7; day++) {
         const currentDate = new Date(startDate);
-        currentDate.setDate(startDate.getDate() + (week * 7) + day);
+        currentDate.setDate(startDate.getDate() + week * 7 + day);
 
         const isCurrentMonth = currentDate.getMonth() === currentMonth;
         const isToday = currentDate.getTime() === today.getTime();
-        const isSelected = selectedDateObj &&
-          currentDate.getTime() === new Date(selectedDateObj.toDateString()).getTime();
+        const isSelected =
+          selectedDateObj &&
+          currentDate.getTime() ===
+            new Date(selectedDateObj.toDateString()).getTime();
         const isFuture = currentDate > today;
 
         weekDays.push({
@@ -163,7 +185,11 @@ const DateSelector: React.FC<DateSelectorProps> = ({
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content className="mt-1 bg-white border border-grey-80 rounded-lg p-4 shadow-menu min-w-[20rem] max-w-[22.5rem] z-50" align="start" sideOffset={4}>
+        <DropdownMenu.Content
+          className="mt-1 bg-white border border-grey-80 rounded-lg p-4 shadow-menu min-w-[20rem] max-w-[22.5rem] z-50"
+          align="start"
+          sideOffset={4}
+        >
           {/* Calendar Header */}
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
@@ -180,12 +206,17 @@ const DateSelector: React.FC<DateSelectorProps> = ({
                 onClick={() => setShowYearPicker(!showYearPicker)}
                 className="text-sm font-medium text-grey-10 min-w-[7.5rem] text-center hover:text-primary-50 transition-colors"
               >
-                {showYearPicker ? `${viewDate.getFullYear()}` : formatMonthYear(viewDate)}
+                {showYearPicker
+                  ? `${viewDate.getFullYear()}`
+                  : formatMonthYear(viewDate)}
               </button>
               {!showYearPicker && (
                 <button
                   onClick={navigateToNextMonth}
-                  disabled={viewDate.getMonth() === today.getMonth() && viewDate.getFullYear() === today.getFullYear()}
+                  disabled={
+                    viewDate.getMonth() === today.getMonth() &&
+                    viewDate.getFullYear() === today.getFullYear()
+                  }
                   className="p-1 hover:bg-grey-90 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   aria-label="Next month"
                 >
@@ -216,7 +247,9 @@ const DateSelector: React.FC<DateSelectorProps> = ({
             {showYearPicker ? (
               /* Year Picker */
               <div className="space-y-2">
-                <div className="text-center text-sm text-grey-50 mb-3">Select Year</div>
+                <div className="text-center text-sm text-grey-50 mb-3">
+                  Select Year
+                </div>
                 <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto">
                   {Array.from({ length: 30 }, (_, i) => {
                     const year = new Date().getFullYear() - i;
@@ -232,9 +265,14 @@ const DateSelector: React.FC<DateSelectorProps> = ({
                         }}
                         className={cn(
                           "p-2 text-sm rounded transition-colors",
-                          isSelectedYear && "bg-primary-50 text-white font-medium",
-                          !isSelectedYear && isCurrentYear && "bg-primary-100 text-primary-40 font-medium hover:bg-primary-50 hover:text-white",
-                          !isSelectedYear && !isCurrentYear && "text-grey-30 hover:bg-grey-90"
+                          isSelectedYear &&
+                            "bg-primary-50 text-white font-medium",
+                          !isSelectedYear &&
+                            isCurrentYear &&
+                            "bg-primary-100 text-primary-40 font-medium hover:bg-primary-50 hover:text-white",
+                          !isSelectedYear &&
+                            !isCurrentYear &&
+                            "text-grey-30 hover:bg-grey-90",
                         )}
                       >
                         {year}
@@ -256,8 +294,11 @@ const DateSelector: React.FC<DateSelectorProps> = ({
               <>
                 {/* Week day headers */}
                 <div className="grid grid-cols-7 gap-1 mb-2">
-                  {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((day) => (
-                    <div key={day} className="text-center text-xs text-grey-50 py-1 font-medium">
+                  {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => (
+                    <div
+                      key={day}
+                      className="text-center text-xs text-grey-50 py-1 font-medium"
+                    >
                       {day}
                     </div>
                   ))}
@@ -274,12 +315,31 @@ const DateSelector: React.FC<DateSelectorProps> = ({
 
                           // If clicking on a date from prev/next month, navigate there first
                           if (!dayObj.isCurrentMonth) {
-                            if (dayObj.date < new Date(viewDate.getFullYear(), viewDate.getMonth(), 1)) {
+                            if (
+                              dayObj.date <
+                              new Date(
+                                viewDate.getFullYear(),
+                                viewDate.getMonth(),
+                                1,
+                              )
+                            ) {
                               // Previous month date
-                              setViewDate(new Date(dayObj.date.getFullYear(), dayObj.date.getMonth(), 1));
+                              setViewDate(
+                                new Date(
+                                  dayObj.date.getFullYear(),
+                                  dayObj.date.getMonth(),
+                                  1,
+                                ),
+                              );
                             } else {
-                              // Next month date  
-                              setViewDate(new Date(dayObj.date.getFullYear(), dayObj.date.getMonth(), 1));
+                              // Next month date
+                              setViewDate(
+                                new Date(
+                                  dayObj.date.getFullYear(),
+                                  dayObj.date.getMonth(),
+                                  1,
+                                ),
+                              );
                             }
                           }
 
@@ -288,11 +348,18 @@ const DateSelector: React.FC<DateSelectorProps> = ({
                         disabled={dayObj.isFuture}
                         className={cn(
                           "text-xs py-2 px-1 rounded transition-colors min-h-[1.75rem]",
-                          !dayObj.isCurrentMonth && "text-grey-80 hover:bg-grey-90 cursor-pointer",
-                          dayObj.isCurrentMonth && dayObj.isFuture && "text-grey-80 cursor-not-allowed",
-                          dayObj.isCurrentMonth && !dayObj.isFuture && "text-grey-30 hover:bg-grey-90 cursor-pointer",
-                          dayObj.isToday && "bg-primary-100 text-primary-40 font-medium",
-                          dayObj.isSelected && "bg-primary-50 text-white font-medium hover:bg-primary-50 hover:text-white"
+                          !dayObj.isCurrentMonth &&
+                            "text-grey-80 hover:bg-grey-90 cursor-pointer",
+                          dayObj.isCurrentMonth &&
+                            dayObj.isFuture &&
+                            "text-grey-80 cursor-not-allowed",
+                          dayObj.isCurrentMonth &&
+                            !dayObj.isFuture &&
+                            "text-grey-30 hover:bg-grey-90 cursor-pointer",
+                          dayObj.isToday &&
+                            "bg-primary-100 text-primary-40 font-medium",
+                          dayObj.isSelected &&
+                            "bg-primary-50 text-white font-medium hover:bg-primary-50 hover:text-white",
                         )}
                       >
                         {dayObj.date.getDate()}
