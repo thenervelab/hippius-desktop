@@ -73,7 +73,7 @@ function SettingsContent() {
   return (
     <div className="px-4 py-3">
       {/* Page heading */}
-      <div className="mb-6">
+      <div className="mb-3">
         <div className="flex items-center gap-2 mb-1">
           <h1 className="font-geist text-[24px] leading-[32px] font-medium text-[#0A0A0A] dark:text-white">
             {meta.title}
