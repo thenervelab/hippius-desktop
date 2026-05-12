@@ -19,6 +19,12 @@ export interface FramedDialogProps {
   maxWidth?: string;
   borderClassName?: string;
   iconBgClassName?: string;
+  /**
+   * Optional content rendered above the icon (e.g. a multi-step
+   * indicator). Sits inside the scrollable area, below the close
+   * button row.
+   */
+  stepIndicator?: ReactNode;
 }
 
 export function FramedDialog({
@@ -33,6 +39,7 @@ export function FramedDialog({
   maxWidth = "max-w-[560px]",
   borderClassName,
   iconBgClassName = "bg-[#3167dd]",
+  stepIndicator,
 }: FramedDialogProps) {
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -82,6 +89,13 @@ export function FramedDialog({
           >
             {/* Card wrapper — relative so close button anchors to the card corner */}
             <div className="relative w-full">
+              {/* Optional step indicator — anchored to card top-left */}
+              {stepIndicator && (
+                <div className="absolute left-4 top-4 z-20 sm:left-5">
+                  {stepIndicator}
+                </div>
+              )}
+
               {/* Close button — anchored to card top-right, outside scroll area */}
               <Dialog.Close asChild>
                 <button
