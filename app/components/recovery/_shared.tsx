@@ -33,7 +33,7 @@ export const PasswordField: React.FC<{
   const [visible, setVisible] = useState(false);
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-xs text-grey-40">{label}</span>
+      <span className="text-xs text-grey-40 dark:text-grey-dark-600">{label}</span>
       <div className="relative">
         <Input
           type={visible ? "text" : "password"}
