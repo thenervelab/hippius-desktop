@@ -1,14 +1,13 @@
 "use client";
 
 import React from "react";
-import { CardButton } from "@/components/ui";
-import DialogContainer from "@/components/ui/DialogContainer";
+import { CloudDownload, Folder, Monitor } from "lucide-react";
+
+import { Button } from "@/components/ui";
+import { FramedDialog } from "@/components/ui/FramedDialog";
 import { formatBytes } from "@/lib/utils/formatBytes";
-import { Folder, CloudDownload, Monitor } from "lucide-react";
-import * as Dialog from "@radix-ui/react-dialog";
-import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import type { RemoteFolder } from "@/app/lib/types/sync-folder";
-import { DialogIconHeader } from "./DialogIconHeader";
 
 interface SyncDestinationDialogProps {
   open: boolean;
@@ -29,129 +28,124 @@ export function SyncDestinationDialog({
   onSelectDestination,
   onStartSync,
 }: SyncDestinationDialogProps) {
+  const handleClose = () => {
+    if (isSyncing) return;
+    onClose();
+  };
+
   return (
-    <Dialog.Root
+    <FramedDialog
       open={open}
-      onOpenChange={(isOpen) => {
-        if (!isOpen && !isSyncing) onClose();
-      }}
+      onClose={handleClose}
+      title="Choose Destination"
+      icon={<CloudDownload className="size-5 text-white" />}
+      maxWidth="max-w-[680px]"
     >
-      <DialogContainer
-        className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit"
-        preventClose={isSyncing}
-      >
-        <Dialog.Title className="sr-only">Choose Destination</Dialog.Title>
+      <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+        Select where to sync &quot;{folder?.folderName}&quot;
+      </p>
 
-        <div className="px-4 py-6 flex flex-col gap-5">
-          {/* Centered icon header */}
-          <div className="flex flex-col items-center text-center gap-3">
-            <DialogIconHeader
-              icon={<CloudDownload className="size-5 text-grey-100" />}
-              bgColor="bg-primary-50"
-            />
-            <h2 className="text-xl font-semibold text-grey-10">
-              Choose Destination
-            </h2>
-            <p className="text-sm text-grey-50 max-w-sm">
-              Select where to sync &quot;{folder?.folderName}&quot;
-            </p>
+      <div className="flex flex-col gap-4">
+        {/* Folder info card */}
+        <div className="rounded-[8px] border border-grey-80 bg-[#fafafa] p-3 dark:border-[#3a3a3a] dark:bg-[#2a2a2a]">
+          <div className="mb-1 flex items-center gap-2">
+            <Folder className="size-4 text-primary-50" />
+            <span className="text-sm font-medium text-grey-10 dark:text-white">
+              {folder?.folderName}
+            </span>
           </div>
-
-          {/* Folder info */}
-          <div className="p-3 bg-grey-98 border border-grey-80 rounded-lg">
-            <div className="flex items-center gap-2 mb-1">
-              <Folder className="size-4 text-primary-50" />
-              <span className="font-medium text-sm text-grey-10">
-                {folder?.folderName}
+          <div className="flex flex-wrap items-center gap-3 text-xs text-grey-60 dark:text-grey-dark-600">
+            {folder?.deviceName && (
+              <span className="flex items-center gap-1">
+                <Monitor className="size-3" />
+                {folder.deviceName}
               </span>
-            </div>
-            <div className="flex items-center gap-3 text-xs text-grey-60">
-              {folder?.deviceName && (
-                <span className="flex items-center gap-1">
-                  <Monitor className="size-3" />
-                  {folder.deviceName}
-                </span>
-              )}
-              {(folder?.fileCount ?? 0) > 0 && (
-                <span>
-                  {folder?.fileCount}{" "}
-                  {folder?.fileCount === 1 ? "file" : "files"}
-                </span>
-              )}
-              {(folder?.totalBytes ?? 0) > 0 && (
-                <span>{formatBytes(folder?.totalBytes ?? 0)}</span>
-              )}
-            </div>
-          </div>
-
-          {/* Destination selection */}
-          <div className="space-y-2">
-            <Label className="text-sm font-medium text-grey-30">
-              Local Destination
-            </Label>
-            {syncLocalPath ? (
-              <div className="p-3 border border-grey-80 rounded-lg bg-grey-98">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs text-grey-60 break-all font-mono bg-white px-2 py-1.5 rounded border border-grey-90">
-                      {syncLocalPath}/{folder?.folderName}
-                    </p>
-                  </div>
-                  <button
-                    className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-primary-50 bg-white border border-primary-50 rounded hover:bg-primary-50 hover:text-white transition-colors"
-                    onClick={onSelectDestination}
-                    disabled={isSyncing}
-                  >
-                    Change
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <CardButton
-                variant="secondary"
-                className="w-full justify-center"
-                icon={<Folder className="size-4" />}
-                appendToStart
-                onClick={onSelectDestination}
-                disabled={isSyncing}
-              >
-                Choose Destination Folder
-              </CardButton>
+            )}
+            {(folder?.fileCount ?? 0) > 0 && (
+              <span>
+                {folder?.fileCount}{" "}
+                {folder?.fileCount === 1 ? "file" : "files"}
+              </span>
+            )}
+            {(folder?.totalBytes ?? 0) > 0 && (
+              <span>{formatBytes(folder?.totalBytes ?? 0)}</span>
             )}
           </div>
-
-          {/* Info box */}
-          {syncLocalPath && (
-            <div className="p-3 bg-primary-95 border border-primary-80 rounded-lg animate-in fade-in duration-200">
-              <p className="text-xs text-primary-40">
-                Files will be downloaded and kept in sync with your other
-                devices. Any local changes will sync back automatically.
-              </p>
-            </div>
-          )}
-
-          {/* Buttons */}
-          <div className="flex gap-3">
-            <CardButton
-              className="w-full"
-              variant="secondary"
-              onClick={onClose}
-              disabled={isSyncing}
-            >
-              Cancel
-            </CardButton>
-            <CardButton
-              className="w-full"
-              variant="primary"
-              onClick={onStartSync}
-              disabled={!syncLocalPath || isSyncing}
-              loading={isSyncing}
-            >
-              {isSyncing ? "Starting Sync..." : "Start Syncing"}
-            </CardButton>
-          </div>
         </div>
-      </DialogContainer>
-    </Dialog.Root>
+
+        {/* Destination selection */}
+        <div className="flex flex-col gap-1.5">
+          <span className="text-xs text-grey-40 dark:text-grey-dark-600">
+            Local Destination
+          </span>
+          {syncLocalPath ? (
+            <div className="rounded-[8px] border border-grey-80 bg-[#fafafa] p-3 dark:border-[#3a3a3a] dark:bg-[#2a2a2a]">
+              <div className="flex items-start justify-between gap-3">
+                <p className="flex-1 min-w-0 break-all rounded border border-grey-90 bg-white px-2 py-1.5 font-mono text-xs text-grey-60 dark:border-[#3a3a3a] dark:bg-[#1a1a1a] dark:text-grey-dark-600">
+                  {syncLocalPath}/{folder?.folderName}
+                </p>
+                <Button
+                  variant="primaryLight"
+                  size="auto"
+                  onClick={onSelectDestination}
+                  disabled={isSyncing}
+                  className="h-[34px] flex-shrink-0 px-4 text-xs font-medium"
+                >
+                  Change
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={onSelectDestination}
+              disabled={isSyncing}
+              className="flex h-[48px] w-full items-center justify-center gap-2 rounded-[6px] border border-grey-80 bg-white text-sm font-medium text-grey-10 transition-colors hover:bg-[#f5f5f5] disabled:opacity-50 dark:border-[#3a3a3a] dark:bg-[#2a2a2a] dark:text-white dark:hover:bg-[#323232]"
+            >
+              <Folder className="size-4" />
+              Choose Destination Folder
+            </button>
+          )}
+        </div>
+
+        {/* Info box — only when a path has been chosen */}
+        {syncLocalPath && (
+          <div className="animate-in fade-in rounded-[8px] border border-primary-80 bg-primary-100/40 p-3 duration-200 dark:border-primary-50/40 dark:bg-primary-50/[0.12]">
+            <p className="text-xs text-primary-40 dark:text-primary-brand-dark">
+              Files will be downloaded and kept in sync with your other devices.
+              Any local changes will sync back automatically.
+            </p>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-3">
+          <Button
+            variant="defaultStable"
+            size="auto"
+            onClick={onClose}
+            disabled={isSyncing}
+            className="h-[42px] w-full rounded-[6px] text-sm font-medium"
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            size="auto"
+            onClick={onStartSync}
+            disabled={!syncLocalPath || isSyncing}
+            loading={isSyncing}
+            className={cn(
+              "h-[42px] w-full rounded-[6px] border text-sm font-medium",
+              "border-[#3167DD] bg-[#3167DD] text-white",
+              "hover:bg-[#2454c4] hover:border-[#2454c4]",
+              "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
+            )}
+          >
+            {isSyncing ? "Starting Sync..." : "Start Syncing"}
+          </Button>
+        </div>
+      </div>
+    </FramedDialog>
   );
 }
