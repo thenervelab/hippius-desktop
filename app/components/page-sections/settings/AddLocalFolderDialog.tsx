@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { Button, Icons } from "@/components/ui";
+import GraphSheetContainer from "@/components/ui/graphsheet";
 import { cn } from "@/lib/utils";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import {
@@ -243,42 +244,81 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
               Upload Folder
             </span>
 
-            <button
-              type="button"
-              onClick={handleSelectFolder}
-              disabled={isAdding}
+            <div
               className={cn(
-                "flex w-full flex-col items-center justify-center gap-3 rounded-[8px] border-2 border-dashed px-6 py-8 transition-colors",
-                "border-grey-80 bg-white hover:bg-[#fafafa]",
-                "dark:border-[#3a3a3a] dark:bg-[#1f1f1f] dark:hover:bg-[#252525]",
+                // Mirrors inputFieldShellClassName from `@/components/ui/input`
+                // (the same shell used in Protect Your Account inputs), with
+                // p-2 instead of p-4 so the inner dashed area sits 8px in.
+                "rounded-[8px] border bg-white p-2 transition-[border-color,box-shadow] duration-200",
+                "border-grey-80 shadow-[0px_0px_0px_4px_rgba(10,10,10,0.05)]",
+                "dark:border-[#494949] dark:bg-[#1f1f1f] dark:shadow-[0px_0px_0px_4px_rgba(255,255,255,0.03)]",
                 isDragging &&
-                  "border-primary-50 bg-primary-50/5 dark:border-primary-50 dark:bg-primary-50/10",
-                isAdding && "opacity-60 cursor-not-allowed"
+                  "border-primary-50 shadow-[0px_0px_0px_4px_rgba(49,103,221,0.12)] dark:border-primary-65 dark:shadow-[0px_0px_0px_4px_rgba(97,140,232,0.15)]"
               )}
             >
-              {selectedPath ? (
-                <div className="flex w-full items-center justify-center gap-3">
-                  <Folder className="size-5 text-primary-50 flex-shrink-0" />
-                  <p className="font-mono text-xs text-grey-40 dark:text-grey-dark-300 break-all text-left">
-                    {selectedPath}
-                  </p>
-                </div>
-              ) : (
-                <>
-                  <div className="flex size-10 items-center justify-center rounded-[6px] bg-[#3167dd]">
-                    <Icons.FolderPlus className="size-5 text-white" />
-                  </div>
-                  <div className="flex flex-col items-center gap-1">
-                    <p className="font-geist text-[16px] font-medium leading-[20px] tracking-[-0.32px] text-grey-10 dark:text-white">
-                      Select Folder
+              <button
+                type="button"
+                onClick={handleSelectFolder}
+                disabled={isAdding}
+                className={cn(
+                  "flex w-full flex-col items-center justify-center gap-4 rounded-[8px] border-[1.5px] border-dashed px-4 py-[22px] transition-colors",
+                  "border-grey-70 bg-white hover:bg-[#fafafa]",
+                  "dark:border-grey-dark-700 dark:bg-[#1f1f1f] dark:hover:bg-[#252525]",
+                  isDragging &&
+                    "border-primary-50 bg-primary-50/5 dark:border-primary-50 dark:bg-primary-50/10",
+                  isAdding && "opacity-60 cursor-not-allowed"
+                )}
+              >
+                {selectedPath ? (
+                  <div className="flex w-full items-center justify-center gap-3">
+                    <Folder className="size-5 text-primary-50 flex-shrink-0" />
+                    <p className="font-mono text-xs text-grey-40 dark:text-grey-dark-300 break-all text-left">
+                      {selectedPath}
                     </p>
-                    <p className="font-geist text-[14px] font-normal leading-[18px] tracking-[-0.28px] text-[#7D7D7D] dark:text-grey-dark-600 text-center">
-                      Drag and drop or click to add folder here to upload
-                    </p>
                   </div>
-                </>
-              )}
-            </button>
+                ) : (
+                  <>
+                    {/* Decorative grid + blue badge — mirrors the FramedDialog icon at 40px */}
+                    <div className="relative flex size-10 items-center justify-center overflow-hidden rounded-[4px] dark:rounded-full">
+                      {/* Light mode: WebGL canvas grid */}
+                      <GraphSheetContainer
+                        majorCell={{ lineColor: [31, 80, 189, 1.0], lineWidth: 2, cellDim: 200 }}
+                        minorCell={{ lineColor: [49, 103, 211, 1.0], lineWidth: 1, cellDim: 20 }}
+                        className="absolute inset-0 size-full opacity-70 dark:hidden"
+                      />
+                      {/* Dark mode: CSS grid with radial fade mask */}
+                      <div
+                        className="absolute inset-0 size-full hidden dark:block"
+                        style={{
+                          backgroundImage:
+                            "linear-gradient(to right, rgba(31,80,189,0.85) 1px, transparent 1px), linear-gradient(to bottom, rgba(31,80,189,0.85) 1px, transparent 1px)",
+                          backgroundSize: "12px 12px",
+                          maskImage:
+                            "radial-gradient(55% 70% at 50% 50%, black 0%, transparent 100%)",
+                          WebkitMaskImage:
+                            "radial-gradient(55% 70% at 50% 50%, black 0%, transparent 100%)",
+                        }}
+                      />
+                      {/* Light mode gradient wash */}
+                      <div className="bg-gradient-to-b from-white/80 via-white/40 to-transparent absolute inset-0 dark:hidden" />
+                      {/* Blue icon badge */}
+                      <div className="relative flex size-[22.857px] items-center justify-center rounded-[5.714px] bg-[#3167dd]">
+                        <Icons.FolderPlus className="size-3 text-white" />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col items-center gap-0.5">
+                      <p className="font-geist text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-10 dark:text-white">
+                        Select Folder
+                      </p>
+                      <p className="font-geist w-[262px] max-w-full text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#7D7D7D] dark:text-grey-dark-600 text-center">
+                        Drag and drop or click to add folder here to upload
+                      </p>
+                    </div>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
           {/* Important callout */}
