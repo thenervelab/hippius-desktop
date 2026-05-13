@@ -81,7 +81,7 @@ export function RemoteFoldersSection({
             <p className="font-geist text-[14px] font-medium leading-[20px] tracking-[-0.28px] text-black dark:text-white">
               No Remote Folder Found
             </p>
-            <p className="font-geist text-[14px] font-medium leading-[17px] tracking-[-0.28px] text-[#7D7D7D] dark:text-grey-dark-600">
+            <p className="font-geist w-[262px] max-w-full text-[14px] font-medium leading-[17px] tracking-[-0.28px] text-[#7D7D7D] dark:text-grey-dark-600">
               Folder synced from your devices will appear here
             </p>
           </div>
