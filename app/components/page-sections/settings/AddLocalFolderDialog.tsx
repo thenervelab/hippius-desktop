@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { OctagonAlert, ArrowRight, Folder } from "lucide-react";
+import { OctagonAlert, ArrowRight, Folder, X } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -46,6 +46,11 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   const [isAdding, setIsAdding] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
+
+  const handleClearSelection = useCallback(() => {
+    setSelectedPath("");
+    setFolderName("");
+  }, []);
 
   const handleSelectFolder = useCallback(async () => {
     try {
@@ -256,35 +261,58 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
                   "border-primary-50 shadow-[0px_0px_0px_4px_rgba(49,103,221,0.12)] dark:border-primary-65 dark:shadow-[0px_0px_0px_4px_rgba(97,140,232,0.15)]"
               )}
             >
-              <button
-                type="button"
-                onClick={handleSelectFolder}
-                disabled={isAdding}
+              <div
                 className={cn(
-                  "flex w-full flex-col items-center justify-center gap-4 rounded-[8px] border-[1.5px] border-dashed px-4 py-[22px] transition-colors",
-                  "border-grey-70 bg-white hover:bg-[#fafafa]",
-                  "dark:border-grey-dark-700 dark:bg-[#1f1f1f] dark:hover:bg-[#252525]",
+                  "rounded-[8px] border-[1.5px] border-dashed bg-white transition-colors",
+                  "border-grey-70 dark:border-grey-dark-700 dark:bg-[#1f1f1f]",
                   isDragging &&
                     "border-primary-50 bg-primary-50/5 dark:border-primary-50 dark:bg-primary-50/10",
-                  isAdding && "opacity-60 cursor-not-allowed"
+                  isAdding && "opacity-60"
                 )}
               >
                 {selectedPath ? (
-                  <div className="flex w-full items-center justify-center gap-3">
-                    <Folder className="size-5 text-primary-50 flex-shrink-0" />
-                    <p className="font-mono text-xs text-grey-40 dark:text-grey-dark-300 break-all text-left">
-                      {selectedPath}
-                    </p>
+                  <div className="flex w-full items-center gap-2 px-3 py-3">
+                    <button
+                      type="button"
+                      onClick={handleSelectFolder}
+                      disabled={isAdding}
+                      title="Click to change folder"
+                      className="flex flex-1 min-w-0 items-center gap-3 rounded-md px-2 py-1.5 -mx-2 -my-1.5 text-left transition-colors hover:bg-grey-light-400 dark:hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <Folder className="size-5 text-primary-50 flex-shrink-0" />
+                      <p className="font-mono text-xs text-grey-40 dark:text-grey-dark-300 break-all">
+                        {selectedPath}
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleClearSelection}
+                      disabled={isAdding}
+                      aria-label="Clear selected folder"
+                      title="Clear selection"
+                      className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md text-grey-60 hover:text-grey-30 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:text-white dark:hover:bg-white/10 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <X className="size-4" />
+                    </button>
                   </div>
                 ) : (
-                  <>
+                  <button
+                    type="button"
+                    onClick={handleSelectFolder}
+                    disabled={isAdding}
+                    className={cn(
+                      "flex w-full flex-col items-center justify-center gap-4 rounded-[8px] px-4 py-[22px] transition-colors",
+                      "hover:bg-[#fafafa] dark:hover:bg-[#252525]",
+                      isAdding && "cursor-not-allowed"
+                    )}
+                  >
                     {/* Decorative grid + blue badge — mirrors the FramedDialog icon at 40px */}
                     <div className="relative flex size-10 items-center justify-center overflow-hidden rounded-[4px] dark:rounded-full">
-                      {/* Light mode: WebGL canvas grid */}
+                      {/* Light mode: WebGL canvas grid — matches FramedDialog header opacity */}
                       <GraphSheetContainer
                         majorCell={{ lineColor: [31, 80, 189, 1.0], lineWidth: 2, cellDim: 200 }}
                         minorCell={{ lineColor: [49, 103, 211, 1.0], lineWidth: 1, cellDim: 20 }}
-                        className="absolute inset-0 size-full opacity-70 dark:hidden"
+                        className="absolute inset-0 size-full opacity-30 dark:hidden"
                       />
                       {/* Dark mode: CSS grid with radial fade mask */}
                       <div
@@ -292,7 +320,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
                         style={{
                           backgroundImage:
                             "linear-gradient(to right, rgba(31,80,189,0.85) 1px, transparent 1px), linear-gradient(to bottom, rgba(31,80,189,0.85) 1px, transparent 1px)",
-                          backgroundSize: "12px 12px",
+                          backgroundSize: "17px 17px",
                           maskImage:
                             "radial-gradient(55% 70% at 50% 50%, black 0%, transparent 100%)",
                           WebkitMaskImage:
@@ -315,9 +343,9 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
                         Drag and drop or click to add folder here to upload
                       </p>
                     </div>
-                  </>
+                  </button>
                 )}
-              </button>
+              </div>
             </div>
           </div>
 
