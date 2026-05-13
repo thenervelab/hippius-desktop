@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import TableActionMenu, { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import { Button } from "@/components/ui/button";
+import { SettingsCard } from "../SettingsCard";
 import type { RemoteFolder } from "@/app/lib/types/sync-folder";
 import { Pagination } from "@/components/ui/alt-table";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
@@ -66,28 +67,21 @@ export function RemoteFoldersSection({
 
   return (
     <>
-      <div className="border border-grey-80 rounded-lg bg-white dark:bg-[#1A1A1A] overflow-hidden">
-        {/* Section header */}
-        <div className="flex items-center gap-1.5 px-4 py-3">
-          <CloudDownload className="size-4 text-primary-50" />
-          <span className="text-xs font-semibold tracking-[0.5px] uppercase text-primary-50">
-            Sync from Other Devices
-          </span>
-        </div>
-        <div className="border-t border-grey-80" />
-
+      <SettingsCard
+        label="Sync from Other Devices"
+        icon={<Icons.HardDriveUpload className="size-4" />}
+      >
         {/* Content */}
         {isLoading ? (
           <div className="flex justify-center py-10">
             <Icons.Loader className="size-6 animate-spin text-primary-50" />
           </div>
         ) : remoteFolders.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-10 px-4 text-center">
-            <CloudDownload className="size-10 mb-3 text-grey-80" />
-            <p className="text-sm font-medium text-grey-40 dark:text-grey-60 mb-1">
+          <div className="flex min-h-[112px] flex-col items-center justify-center gap-[5px] px-4 py-6 text-center">
+            <p className="font-geist text-[14px] font-medium leading-[20px] tracking-[-0.28px] text-black dark:text-white">
               No Remote Folder Found
             </p>
-            <p className="text-xs text-grey-60 dark:text-grey-70">
+            <p className="font-geist text-[14px] font-medium leading-[17px] tracking-[-0.28px] text-[#7D7D7D] dark:text-grey-dark-600">
               Folder synced from your devices will appear here
             </p>
           </div>
@@ -206,7 +200,7 @@ export function RemoteFoldersSection({
         )}
 
         {remoteFolders.length > FOLDERS_PER_PAGE && (
-          <div className="px-4 py-3 border-t border-grey-80">
+          <div className="px-4 py-3 border-t border-grey-dark-100 dark:border-black-300">
             <Pagination
               currentPage={Math.min(currentPage, totalPages)}
               totalPages={totalPages}
@@ -214,7 +208,7 @@ export function RemoteFoldersSection({
             />
           </div>
         )}
-      </div>
+      </SettingsCard>
 
       {cardContextMenu && (
         <FolderCardContextMenu

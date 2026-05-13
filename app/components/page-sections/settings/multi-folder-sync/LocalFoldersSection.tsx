@@ -9,7 +9,6 @@ import {
   Folder,
   FolderOpen,
   FolderSearch,
-  Plus,
   MoreVertical,
   Trash2,
   PauseCircle,
@@ -20,6 +19,7 @@ import {
 } from "lucide-react";
 import TableActionMenu, { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import { Button } from "@/components/ui/button";
+import { SettingsCard } from "../SettingsCard";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import type { SyncFolder } from "@/app/lib/types/sync-folder";
 import { Pagination } from "@/components/ui/alt-table";
@@ -122,38 +122,37 @@ export function LocalFoldersSection({
 
   return (
     <>
-      <div className="border border-grey-80 rounded-lg bg-white dark:bg-[#1A1A1A] overflow-hidden">
-        {/* Section header */}
-        <div className="flex items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-1.5">
-            <Folder className="size-4 text-primary-50" />
-            <span className="text-xs font-semibold tracking-[0.5px] uppercase text-primary-50">
-              Local Sync Folders
-            </span>
-          </div>
-          <button
-            type="button"
+      <SettingsCard
+        label="Local Sync Folders"
+        icon={<Folder className="size-4" />}
+        headerAction={
+          <Button
+            variant="defaultStable"
+            size="auto"
             onClick={onAddFolder}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-primary-50 rounded-lg hover:bg-primary-40 transition-colors"
+            className={cn(
+              "h-[30px] gap-[7px] rounded-[6px] border px-3 text-[14px] font-normal leading-[1.109] tracking-[-0.28px]",
+              "border-grey-dark-100 bg-[#FEFEFE] text-[#111]",
+              "shadow-[0_5px_2.3px_rgba(0,0,0,0.03),0_1px_1.9px_rgba(0,0,0,0.14),0_0_1px_rgba(0,0,0,0.16),inset_0_1px_0_#FFF]",
+              "hover:bg-[#F5F5F5]",
+              "dark:border-black-300 dark:bg-black-600 dark:text-grey-dark-300 dark:shadow-[0_1px_2px_rgba(0,0,0,0.4)] dark:hover:bg-black-500"
+            )}
           >
-            <Plus className="size-3.5" />
-            Add Folder
-          </button>
-        </div>
-        <div className="border-t border-grey-80" />
-
+            + Add Folder
+          </Button>
+        }
+      >
         {/* Content */}
         {isLoading ? (
           <div className="flex justify-center py-10">
             <Icons.Loader className="size-6 animate-spin text-primary-50" />
           </div>
         ) : syncFolders.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-10 px-4 text-center">
-            <Folder className="size-10 mb-3 text-grey-80" />
-            <p className="text-sm font-medium text-grey-40 dark:text-grey-60 mb-1">
+          <div className="flex min-h-[112px] flex-col items-center justify-center gap-[5px] px-4 py-6 text-center">
+            <p className="font-geist text-[14px] font-medium leading-[20px] tracking-[-0.28px] text-black dark:text-white">
               No Folder Syncing Yet
             </p>
-            <p className="text-xs text-grey-60 dark:text-grey-70">
+            <p className="font-geist text-[14px] font-medium leading-[17px] tracking-[-0.28px] text-[#7D7D7D] dark:text-grey-dark-600">
               Add a folder to get started with encrypted sync
             </p>
           </div>
@@ -305,7 +304,7 @@ export function LocalFoldersSection({
         )}
 
         {syncFolders.length > FOLDERS_PER_PAGE && (
-          <div className="px-4 py-3 border-t border-grey-80">
+          <div className="px-4 py-3 border-t border-grey-dark-100 dark:border-black-300">
             <Pagination
               currentPage={Math.min(currentPage, totalPages)}
               totalPages={totalPages}
@@ -313,7 +312,7 @@ export function LocalFoldersSection({
             />
           </div>
         )}
-      </div>
+      </SettingsCard>
 
       {cardContextMenu && (
         <FolderCardContextMenu
