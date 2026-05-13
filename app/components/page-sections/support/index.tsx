@@ -241,26 +241,34 @@ const Support: React.FC = () => {
     <div className="w-full">
       {/* Access Key Login Overlay */}
       {isAccessKeyLogin ? (
-        <div className="flex items-center justify-center min-h-[37.5rem]">
-          <div className="max-w-md w-full px-4 py-6 bg-white rounded-lg shadow-lg border border-grey-80">
-            <div className="text-center mb-4 max-w-[20.625rem] w-full mx-auto">
+        <div className="flex items-center justify-center min-h-[37.5rem] w-full">
+          <div
+            className="w-full max-w-[495px] bg-grey-light-100 dark:bg-black-500 rounded-[8px] p-[min(1rem,16px)] flex flex-col gap-[min(0.75rem,12px)] items-center overflow-hidden"
+            style={{
+              boxShadow:
+                "0px 14px 31px 0px rgba(0,0,0,0.06), 0px 56px 56px 0px rgba(0,0,0,0.05), 0px 126px 76px 0px rgba(0,0,0,0.03), 0px 224px 90px 0px rgba(0,0,0,0.01)",
+            }}
+          >
+            <div className="text-center max-w-[20.625rem] w-full mx-auto">
               <AbstractIconWrapper className="size-12 mx-auto mb-4 flex items-center justify-center">
                 <Lock className="size-7 relative text-primary-50" />
               </AbstractIconWrapper>
-              <h3 className="text-2xl font-medium text-grey-10 mb-2">
+              <h3 className="text-2xl font-medium text-grey-10 dark:text-grey-light-100 mb-2">
                 Login Required
               </h3>
-              <p className="text-base text-grey-50">
+              <p className="text-base text-grey-50 dark:text-grey-60">
                 Support tickets are not available with Access Key login. Please
                 sign in with one of the following providers to access this
                 feature.
               </p>
             </div>
 
-            <OAuthButtonsGroup
-              onAccessKeyClick={() => {}}
-              hideAccessKey={true}
-            />
+            <div className="flex flex-col gap-[min(1rem,16px)] items-center w-full">
+              <OAuthButtonsGroup
+                onAccessKeyClick={() => {}}
+                hideAccessKey={true}
+              />
+            </div>
           </div>
         </div>
       ) : (
