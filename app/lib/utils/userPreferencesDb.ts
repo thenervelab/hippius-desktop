@@ -57,6 +57,21 @@ export async function saveUserPreference<T = unknown>(key: string, value: T): Pr
   }
 }
 
+// ── Active sync folder breadcrumb selection ────────────────────────────────────
+// Persists which sync folder the drive page should land on across sessions.
+// The "Local" cards view (DriveOnboarding) is intentionally NOT persisted —
+// only the in-folder selection is saved. See DriveContainer for the read flow.
+
+const ACTIVE_SYNC_FOLDER_KEY = "active_sync_folder_label";
+
+export async function getActiveSyncFolderLabel(): Promise<string | null> {
+  return (await getUserPreference<string>(ACTIVE_SYNC_FOLDER_KEY)) ?? null;
+}
+
+export async function saveActiveSyncFolderLabel(label: string): Promise<void> {
+  await saveUserPreference(ACTIVE_SYNC_FOLDER_KEY, label);
+}
+
 // ── Last browse directory ──────────────────────────────────────────────────────
 // Remembers the last directory the user browsed to in file/folder pickers,
 // similar to how Chrome remembers the last download/upload location.

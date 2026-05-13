@@ -37,6 +37,10 @@ interface LocalFoldersSectionProps {
   onRemoveFolder: (folder: SyncFolder) => void;
   onDeleteFromServer: (folderName: string, folderId: string) => void;
   onBrowseFolder: (folder: SyncFolder) => void;
+  // When provided, the folder row becomes clickable — used by the drive
+  // "Local" view (see SyncFolderBreadcrumb) to switch the active folder.
+  // The action menu and its children continue to handle their own clicks.
+  onSelectFolder?: (folder: SyncFolder) => void;
 }
 
 function getStatusStyle(status: SyncFolder["status"]) {
@@ -99,6 +103,7 @@ export function LocalFoldersSection({
   onRemoveFolder,
   onDeleteFromServer,
   onBrowseFolder,
+  onSelectFolder,
 }: LocalFoldersSectionProps) {
   const [currentPage, setCurrentPage] = useState(1);
   const [cardContextMenu, setCardContextMenu] = useState<{
@@ -161,7 +166,38 @@ export function LocalFoldersSection({
             {paginatedFolders.map((folder) => (
               <div
                 key={folder.id}
-                className="flex items-start justify-between px-4 py-3 hover:bg-grey-98 dark:hover:bg-white/5 transition-colors"
+                role={onSelectFolder ? "button" : undefined}
+                tabIndex={onSelectFolder ? 0 : undefined}
+                className={cn(
+                  "flex items-start justify-between px-4 py-3 transition-colors",
+                  // When the row is clickable (drive's Local cards view),
+                  // use a more pronounced hover treatment + pointer
+                  // cursor so it reads as "navigate into this folder".
+                  // `[&_*]:cursor-pointer` propagates the pointer to the
+                  // tooltip-wrapped name/path spans that otherwise carry
+                  // `cursor-default` and locally win the cascade.
+                  // Settings reuses this same component with no
+                  // onSelectFolder and keeps the subtler hover.
+                  onSelectFolder
+                    ? "cursor-pointer [&_*]:cursor-pointer hover:bg-primary-100 dark:hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50"
+                    : "hover:bg-grey-98 dark:hover:bg-white/5",
+                )}
+                onClick={(e) => {
+                  if (!onSelectFolder) return;
+                  // Ignore clicks that originated inside the action menu / its
+                  // popover so menu interactions don't double as selections.
+                  const target = e.target as HTMLElement;
+                  if (target.closest(".action-menu-area")) return;
+                  if (target.closest("[role='menu']")) return;
+                  onSelectFolder(folder);
+                }}
+                onKeyDown={(e) => {
+                  if (!onSelectFolder) return;
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onSelectFolder(folder);
+                  }
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setCardContextMenu({ x: e.clientX, y: e.clientY, folder });

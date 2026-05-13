@@ -572,7 +572,10 @@ export default function MultiFolderSyncManager() {
       <AddLocalFolderDialog
         open={showAddDialog}
         onClose={() => setShowAddDialog(false)}
-        onSuccess={refreshFoldersAndStats}
+        // Settings doesn't track an "active" folder, so we discard the
+        // returned label and run the standard refresh — the drive page
+        // uses the label to navigate to the new folder via its breadcrumb.
+        onSuccess={() => refreshFoldersAndStats()}
       />
 
       <RemoveFolderDialog

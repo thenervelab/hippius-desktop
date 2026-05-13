@@ -20,7 +20,10 @@ import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 interface AddLocalFolderDialogProps {
   open: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  // The optional `newLabel` is the unique label that Rust assigned to the
+  // newly added folder (returned by `add_local_sync_folder`). Callers like
+  // DriveContainer use it to auto-select the new folder in the breadcrumb.
+  onSuccess: (newLabel?: string) => void;
 }
 
 /**
@@ -144,7 +147,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
     try {
       const mnemonic = (await getMnemonic()) ?? undefined;
 
-      await invoke<string>("add_local_sync_folder", {
+      const newLabel = await invoke<string>("add_local_sync_folder", {
         accountId: polkadotAddress,
         path: selectedPath,
         folderName,
@@ -154,7 +157,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
       toast.success("Folder added to sync");
       setSelectedPath("");
       setFolderName("");
-      onSuccess();
+      onSuccess(newLabel);
       onClose();
     } catch (error) {
       console.error("Failed to add folder:", error);

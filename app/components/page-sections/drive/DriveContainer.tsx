@@ -13,9 +13,8 @@ import useRecentFiles from "@/lib/hooks/use-recent-files";
 import { WaitAMoment } from "@/components/ui";
 import * as Typography from "@/components/ui/typography";
 import DriveOnboarding from "./DriveOnboarding";
-import { getPrivateSyncPath, removeSyncPath } from "@/lib/utils/syncPathUtils";
-import { deleteRemoteFolder } from "@/app/lib/utils/restoreUtils";
-import SyncFolderTabs from "./SyncFolderTabs";
+import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
+import SyncFolderBreadcrumb from "./SyncFolderBreadcrumb";
 import { useDriveStorageStats } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { FileTypes } from "@/lib/types/fileTypes";
@@ -34,6 +33,8 @@ import {
 import {
   getViewModePreference,
   saveViewModePreference,
+  getActiveSyncFolderLabel,
+  saveActiveSyncFolderLabel,
 } from "@/lib/utils/userPreferencesDb";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -50,14 +51,7 @@ import {
 import { SyncConnectivityAlert } from "@/components/ui/SyncConnectivityAlert";
 import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
 import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
-import {
-  PauseSyncDialog,
-  RemoveFolderDialog,
-  DeleteServerDialog,
-  RemoteFolderBrowser,
-} from "../settings/multi-folder-sync";
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
-import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { cn } from "@/app/lib/utils";
 
@@ -114,10 +108,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Loading states for sync paths
   const [isLoadingPrivatePath, setIsLoadingPrivatePath] = useState(true);
 
-  // Folder tab state (null = "All")
-  const [selectedFolderTab, setSelectedFolderTab] = useState<string | null>(
-    null,
-  );
+  // Active sync folder for the breadcrumb-based drive view. Replaces the
+  // legacy "All / per-folder tabs" flow with a single-folder-at-a-time
+  // model where the user navigates back to a "Local" cards view via the
+  // breadcrumb (see SyncFolderBreadcrumb / DriveOnboarding).
+  //
+  // - `activeSyncFolderLabel`: persisted in user prefs. `null` means we
+  //   haven't picked a folder yet (first launch or saved label removed);
+  //   the bootstrap effect below resolves it to the first available label.
+  // - `isOnLocalView`: ephemeral UI flag set to true only when the user
+  //   clicks the "Local" breadcrumb segment. NOT persisted — next session
+  //   resumes at the last active folder, never on the Local cards view.
+  const [activeSyncFolderLabel, setActiveSyncFolderLabel] = useState<
+    string | null
+  >(null);
+  const [isOnLocalView, setIsOnLocalView] = useState(false);
+  // Tracks whether the saved label has been hydrated, so the bootstrap
+  // / fallback effects don't fight each other on first mount.
+  const [activeFolderHydrated, setActiveFolderHydrated] = useState(false);
 
   // Search state
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -163,33 +171,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
   const [showMnemonicBackup, setShowMnemonicBackup] = useState(false);
 
-  // Tab context menu dialog states
-  const [pauseDialog, setPauseDialog] = useState<{
-    open: boolean;
-    label: string | null;
-  }>({ open: false, label: null });
-  const [isPausing, setIsPausing] = useState(false);
-
-  const [removeDialog, setRemoveDialog] = useState<{
-    open: boolean;
-    label: string | null;
-  }>({ open: false, label: null });
-  const [isRemoving, setIsRemoving] = useState(false);
-
-  const [deleteDialog, setDeleteDialog] = useState<{
-    open: boolean;
-    folderName: string;
-    label: string | null;
-  }>({ open: false, folderName: "", label: null });
-  const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
-  const [isDeletingServer, setIsDeletingServer] = useState(false);
-
-  // Browse contents dialog state
-  const [browseDialog, setBrowseDialog] = useState<{
-    open: boolean;
-    label: string | null;
-  }>({ open: false, label: null });
-
   // Sync folder labels from the query data
   const syncFolderLabels = useMemo(() => {
     if (regularFilesData && "syncFolderLabels" in regularFilesData) {
@@ -201,26 +182,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     return [];
   }, [regularFilesData]);
 
-  // Paused labels and label → display name are derived from
-  // driveStatusesAtom (the per-drive source of truth, mirrored from
-  // Rust by useDriveStatuses). The previous local state + manual
-  // get_all_sync_paths fetch was a stale mirror that lied whenever
-  // the user paused / resumed from another surface (settings,
-  // tray submenu, DriveOnboarding). Reading from the atom keeps
-  // every per-drive UI in sync without round-trips.
+  // Label → display name is derived from driveStatusesAtom (the
+  // per-drive source of truth, mirrored from Rust by useDriveStatuses).
+  // Used by the SyncFolderBreadcrumb to render the folder name segment.
   const driveStatuses = useAtomValue(driveStatusesAtom);
-  // `pausedLabels` is "labels not currently active" — includes both
-  // `paused` (user intent) and the new `error` variant (emitted on
-  // per-drive init failure). Click handlers below treat both as
-  // "needs resume", which re-triggers `initialize_sync_inner` in Rust
-  // and is the correct retry action for an errored drive.
-  const pausedLabels = useMemo(
-    () =>
-      Array.from(driveStatuses.entries())
-        .filter(([, entry]) => entry.status.kind !== "active")
-        .map(([label]) => label),
-    [driveStatuses],
-  );
   const labelDisplayNames = useMemo(() => {
     const names: Record<string, string> = {};
     for (const [label, entry] of driveStatuses.entries()) {
@@ -258,7 +223,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     fileTypes: filterState.fileTypes,
     dateFilter: filterState.date,
     fileSizes: filterState.fileSizes,
-    folderTab: isRecentFiles ? null : selectedFolderTab,
+    folderTab: isRecentFiles ? null : activeSyncFolderLabel,
   });
 
   // Infinite scroll state for list and card views
@@ -306,7 +271,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     filterState.fileSize,
     filterState.fileSizes,
     filterState.lastUpdated,
-    selectedFolderTab,
+    activeSyncFolderLabel,
     resetScroll,
   ]);
 
@@ -340,17 +305,18 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   );
 
   // Header "Total Storage Used":
-  //   - per-folder-tab: raw per-drive bytes from the Rust aggregator.
-  //     Raw (not CID-deduplicated) is intentional — it matches what the
-  //     user sees in the tab's rows. See 2026-04-17-folder-tab-stats-fix.md.
-  //   - "All" tab: keep indexer value so it stays consistent with the
-  //     Home page / Available Credits numbers.
+  //   - active folder: raw per-drive bytes from the Rust aggregator. Raw
+  //     (not CID-deduplicated) is intentional — it matches what the user
+  //     sees in the folder's rows. See 2026-04-17-folder-tab-stats-fix.md.
+  //   - fallback (no active folder, e.g. mid-bootstrap): keep the indexer
+  //     value so it stays consistent with the Home page / Available
+  //     Credits numbers.
   const formattedStorageSize = useMemo(() => {
     if (isRecentFiles) return "";
 
-    if (selectedFolderTab) {
+    if (activeSyncFolderLabel) {
       const bytes =
-        regularFilesData?.labelStats?.[selectedFolderTab]?.totalBytes ?? 0;
+        regularFilesData?.labelStats?.[activeSyncFolderLabel]?.totalBytes ?? 0;
       return formatBytes(bytes, 2);
     }
 
@@ -361,7 +327,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     return "0 B";
   }, [
     isRecentFiles,
-    selectedFolderTab,
+    activeSyncFolderLabel,
     regularFilesData?.labelStats,
     remoteStorageStats,
   ]);
@@ -490,21 +456,32 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     refetchRecentFiles();
   }, [refetchRecentFiles]);
 
-  // Handle sync started from onboarding (folder added or remote folder synced)
-  const handleOnboardingSyncStarted = useCallback(async () => {
-    if (!polkadotAddress) return;
-    // Reload sync paths so we pick up the newly added folder
-    try {
-      const result = await getPrivateSyncPath(polkadotAddress);
-      setSelectedPrivateFolderPath(result?.path ?? null);
-    } catch {
-      // Ignore — we still want to mark as configured
-    }
-    setIsSyncPathConfigured(true);
-    setShowPrivateStartSyncingSelector(false);
-    triggerSyncPathRefresh((prev) => prev + 1);
-    refetchUserFiles();
-  }, [polkadotAddress, triggerSyncPathRefresh, refetchUserFiles]);
+  // Handle sync started from onboarding (folder added or remote folder
+  // synced). `newLabel` lets us auto-land in the freshly added folder
+  // instead of leaving the user on the Local cards view — the breadcrumb
+  // model has no "All" placeholder so we need a concrete active folder.
+  const handleOnboardingSyncStarted = useCallback(
+    async (newLabel?: string) => {
+      if (!polkadotAddress) return;
+      // Reload sync paths so we pick up the newly added folder
+      try {
+        const result = await getPrivateSyncPath(polkadotAddress);
+        setSelectedPrivateFolderPath(result?.path ?? null);
+      } catch {
+        // Ignore — we still want to mark as configured
+      }
+      setIsSyncPathConfigured(true);
+      setShowPrivateStartSyncingSelector(false);
+      if (newLabel) {
+        setActiveSyncFolderLabel(newLabel);
+        setIsOnLocalView(false);
+        void saveActiveSyncFolderLabel(newLabel);
+      }
+      triggerSyncPathRefresh((prev) => prev + 1);
+      refetchUserFiles();
+    },
+    [polkadotAddress, triggerSyncPathRefresh, refetchUserFiles],
+  );
 
   const handleHcfsSetupComplete = useCallback(
     async (result: { serverUrl: string; password: string }) => {
@@ -594,130 +571,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setSettingsDialogOpen(true);
   }, [setActiveSettingsTab, setSettingsDialogOpen]);
 
-  // Tab context menu handlers (operate on folder label strings).
+  // Breadcrumb / Local-view navigation handlers.
   //
-  // Path resolution + reveal-in-file-manager happens entirely in Rust
-  // (`reveal_drive_in_finder`), so the FE never reads the `sync_paths`
-  // table or imports the opener plugin just to figure out which on-disk
-  // folder backs a label.
-  const handleTabOpenInFinder = useCallback(async (label: string) => {
-    try {
-      await invoke("reveal_drive_in_finder", { label });
-    } catch (err) {
-      console.error("Failed to open folder:", err);
-      toast.error("Failed to open folder");
-    }
+  // The drive's "Local" cards view (DriveOnboarding) is the new home for
+  // per-folder actions (pause / resume / remove / delete-from-server /
+  // browse contents) — the old tab right-click menu is gone. Those flows
+  // are still wired inside DriveOnboarding via LocalFoldersSection's
+  // action menu, so removing them from here does not lose functionality.
+  const handleNavigateToLocalView = useCallback(() => {
+    setIsOnLocalView(true);
   }, []);
 
-  // Tab context menu: open dialogs instead of executing directly
-  const handleTabRemoveFromSync = useCallback((label: string) => {
-    setRemoveDialog({ open: true, label });
+  // Switch the active sync folder from a click on a LocalFoldersSection
+  // card. Persisted so the next session resumes here.
+  const handleSelectFolderFromCards = useCallback((label: string) => {
+    setActiveSyncFolderLabel(label);
+    setIsOnLocalView(false);
+    void saveActiveSyncFolderLabel(label);
   }, []);
-
-  const handleTabDeleteFromServer = useCallback((label: string) => {
-    setDeleteDialog({ open: true, folderName: label, label });
-  }, []);
-
-  const handleTabBrowseContents = useCallback((label: string) => {
-    setBrowseDialog({ open: true, label });
-  }, []);
-
-  const handleTabPauseSync = useCallback(
-    (label: string) => {
-      const isPaused = pausedLabels.includes(label);
-      if (isPaused) {
-        // Resume directly (no confirmation needed, same as settings)
-        (async () => {
-          if (!polkadotAddress) return;
-          try {
-            const mnemonic = (await getMnemonic()) ?? undefined;
-            await invoke("resume_drive", { label, mnemonic });
-            // Per-drive Active status is emitted by Rust via the
-            // hcfs_drive_status_changed event and lands in
-            // driveStatusesAtom — pausedLabels is a memo over that
-            // atom, so the tab badge updates without any local state.
-            // hasConfiguredDrivesAtom recomputes from the same source.
-            toast.success(`Sync resumed for "${label}"`);
-          } catch (err) {
-            console.error("Failed to resume sync:", err);
-            toast.error("Failed to resume sync");
-          }
-        })();
-      } else {
-        setPauseDialog({ open: true, label });
-      }
-    },
-    [pausedLabels, polkadotAddress, getMnemonic],
-  );
-
-  // Dialog confirmation handlers
-  const handleConfirmPause = useCallback(async () => {
-    const label = pauseDialog.label;
-    if (!label || !polkadotAddress) return;
-    setIsPausing(true);
-    try {
-      await invoke("pause_drive", { label });
-      toast.success(`Sync paused for "${label}"`);
-      // Atom updates via the hcfs_drive_status_changed event from
-      // Rust — pausedLabels is a memo over driveStatusesAtom.
-    } catch (err) {
-      console.error("Failed to pause sync:", err);
-      toast.error("Failed to pause sync");
-    } finally {
-      setIsPausing(false);
-      setPauseDialog({ open: false, label: null });
-    }
-  }, [pauseDialog.label, polkadotAddress]);
-
-  const handleConfirmRemove = useCallback(async () => {
-    const label = removeDialog.label;
-    if (!label || !polkadotAddress) return;
-    setIsRemoving(true);
-    try {
-      await removeSyncPath(polkadotAddress, label);
-      toast.success(`Folder "${label}" removed from sync`);
-      triggerSyncPathRefresh((prev) => prev + 1);
-      refetchUserFiles();
-    } catch (err) {
-      console.error("Failed to remove sync path:", err);
-      toast.error("Failed to remove folder from sync");
-    } finally {
-      setIsRemoving(false);
-      setRemoveDialog({ open: false, label: null });
-    }
-  }, [
-    removeDialog.label,
-    polkadotAddress,
-    triggerSyncPathRefresh,
-    refetchUserFiles,
-  ]);
-
-  const handleConfirmDeleteServer = useCallback(async () => {
-    const label = deleteDialog.label;
-    if (!label || !polkadotAddress) return;
-    setIsDeletingServer(true);
-    try {
-      // delete_remote_folder also stops the drive and removes the sync path if local
-      const result = await deleteRemoteFolder(polkadotAddress, label);
-      toast.success(
-        `Folder deleted from server (${result.files_deleted} file${result.files_deleted !== 1 ? "s" : ""} removed)`,
-      );
-      triggerSyncPathRefresh((prev) => prev + 1);
-      refetchUserFiles();
-    } catch (err) {
-      console.error("Failed to delete from server:", err);
-      toast.error("Failed to delete folder from server");
-    } finally {
-      setIsDeletingServer(false);
-      setDeleteDialog({ open: false, folderName: "", label: null });
-      setDeleteConfirmInput("");
-    }
-  }, [
-    deleteDialog.label,
-    polkadotAddress,
-    triggerSyncPathRefresh,
-    refetchUserFiles,
-  ]);
 
   // Load data on mount and set up interval refresh
   useEffect(() => {
@@ -753,8 +624,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       }, 0);
     }
 
-    if (selectedFolderTab) {
-      return regularFilesData?.labelStats?.[selectedFolderTab]?.fileCount ?? 0;
+    if (activeSyncFolderLabel) {
+      return (
+        regularFilesData?.labelStats?.[activeSyncFolderLabel]?.fileCount ?? 0
+      );
     }
 
     if (remoteFileCount !== undefined) {
@@ -766,7 +639,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     filteredData,
     searchTerm,
     activeFilters.length,
-    selectedFolderTab,
+    activeSyncFolderLabel,
     remoteFileCount,
     regularFilesData?.labelStats,
   ]);
@@ -804,6 +677,57 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setViewMode(mode);
     saveViewModePreference(mode);
   }, []);
+
+  // Hydrate active sync folder from user preferences on mount. This is the
+  // breadcrumb's "remember me here" — picks up where the user left off in
+  // a previous session. Runs once and toggles `activeFolderHydrated` so
+  // the fallback effect below knows when it's safe to fill in a default.
+  useEffect(() => {
+    if (isRecentFiles) {
+      setActiveFolderHydrated(true);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const saved = await getActiveSyncFolderLabel();
+        if (!cancelled && saved) {
+          setActiveSyncFolderLabel(saved);
+        }
+      } finally {
+        if (!cancelled) setActiveFolderHydrated(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isRecentFiles]);
+
+  // Auto-fill / reconcile the active folder against the live label list.
+  //   - On first hydration with no saved label: pick the first available.
+  //   - When the active label is removed (e.g. via settings or another
+  //     device): fall back to the first available, or null if none left
+  //     (the parent then shows DriveOnboarding via isSyncPathConfigured).
+  // The chosen fallback IS persisted so it stays stable across sessions.
+  useEffect(() => {
+    if (isRecentFiles) return;
+    if (!activeFolderHydrated) return;
+    if (syncFolderLabels.length === 0) return;
+    if (
+      activeSyncFolderLabel &&
+      syncFolderLabels.includes(activeSyncFolderLabel)
+    ) {
+      return;
+    }
+    const fallback = syncFolderLabels[0];
+    setActiveSyncFolderLabel(fallback);
+    void saveActiveSyncFolderLabel(fallback);
+  }, [
+    isRecentFiles,
+    activeFolderHydrated,
+    syncFolderLabels,
+    activeSyncFolderLabel,
+  ]);
 
   // Reload sync paths when settings are updated
   useEffect(() => {
@@ -900,6 +824,18 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   } else if (showCurrentStartSyncingSelector && !isRecentFiles) {
     // Show onboarding when Start Syncing is clicked
     content = <DriveOnboarding onSyncStarted={handleOnboardingSyncStarted} />;
+  } else if (isOnLocalView && !isRecentFiles) {
+    // User clicked the "Local" breadcrumb segment. Reuses DriveOnboarding
+    // for the cards view, but here we also pass `onSelectFolder` so a
+    // card click switches the active folder instead of just opening the
+    // action menu. NOT persisted — next session resumes at the last
+    // active folder via the bootstrap effect.
+    content = (
+      <DriveOnboarding
+        onSyncStarted={handleOnboardingSyncStarted}
+        onSelectFolder={handleSelectFolderFromCards}
+      />
+    );
   } else {
     // Compute whether sync path is effectively empty
     let effectiveSyncPathEmpty = false;
@@ -967,23 +903,20 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
               onFileTypesChange={handleFileTypesChange}
               onDateChange={handleDateChange}
               onFileSizesChange={handleFileSizesChange}
-              defaultFolderLabel={selectedFolderTab}
+              defaultFolderLabel={activeSyncFolderLabel}
               isFolderUploadOpen={isFolderUploadOpen}
               onSetFolderUploadOpen={setIsFolderUploadOpen}
             />
 
             {!isRecentFiles && (
-              <SyncFolderTabs
-                labels={syncFolderLabels}
-                displayNames={labelDisplayNames}
-                selectedTab={selectedFolderTab}
-                onTabChange={setSelectedFolderTab}
-                onBrowseContents={handleTabBrowseContents}
-                onPauseSync={handleTabPauseSync}
-                onOpenInFinder={handleTabOpenInFinder}
-                onRemoveFromSync={handleTabRemoveFromSync}
-                onDeleteFromServer={handleTabDeleteFromServer}
-                pausedLabels={pausedLabels}
+              <SyncFolderBreadcrumb
+                folderDisplayName={
+                  activeSyncFolderLabel
+                    ? (labelDisplayNames[activeSyncFolderLabel] ??
+                      activeSyncFolderLabel)
+                    : null
+                }
+                onLocalClick={handleNavigateToLocalView}
               />
             )}
 
@@ -1030,52 +963,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onConfirm={handleMnemonicBackupConfirm}
         onClose={handleMnemonicBackupConfirm}
       />
-
-      <PauseSyncDialog
-        open={pauseDialog.open}
-        folderName={pauseDialog.label ?? undefined}
-        isPausing={isPausing}
-        onClose={() => setPauseDialog({ open: false, label: null })}
-        onConfirm={handleConfirmPause}
-      />
-
-      <RemoveFolderDialog
-        open={removeDialog.open}
-        folderName={removeDialog.label}
-        isRemoving={isRemoving}
-        onClose={() => setRemoveDialog({ open: false, label: null })}
-        onConfirm={handleConfirmRemove}
-      />
-
-      <DeleteServerDialog
-        open={deleteDialog.open}
-        folderName={deleteDialog.folderName}
-        confirmInput={deleteConfirmInput}
-        isDeletingServer={isDeletingServer}
-        onConfirmInputChange={setDeleteConfirmInput}
-        onClose={() => {
-          setDeleteDialog({ open: false, folderName: "", label: null });
-          setDeleteConfirmInput("");
-        }}
-        onConfirm={handleConfirmDeleteServer}
-      />
-
-      {browseDialog.label && (
-        <RemoteFolderBrowser
-          open={browseDialog.open}
-          onClose={() => setBrowseDialog({ open: false, label: null })}
-          folder={{
-            folderName: browseDialog.label,
-            deviceName: "This Device",
-            lastModified: 0,
-            fileCount: 0,
-            totalBytes: 0,
-          }}
-          accountId={polkadotAddress ?? ""}
-          onSyncSelected={() => setBrowseDialog({ open: false, label: null })}
-          isLocal
-        />
-      )}
     </>
   );
 };

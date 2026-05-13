@@ -34,11 +34,19 @@ import {
 import { useAtomValue } from "jotai";
 
 interface DriveOnboardingProps {
-  onSyncStarted: () => void;
+  // Fired when a folder is added or a remote folder is synced. `newLabel`
+  // is the unique label of the newly added/synced folder; the parent uses
+  // it to auto-select that folder in the breadcrumb.
+  onSyncStarted: (newLabel?: string) => void;
+  // When provided, clicking an existing local folder card switches the
+  // drive's active folder to that label instead of just showing actions.
+  // Used by the Local view inside DriveContainer.
+  onSelectFolder?: (label: string) => void;
 }
 
 const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   onSyncStarted,
+  onSelectFolder,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
@@ -176,11 +184,16 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
     }
   }, [syncPathRefreshTrigger, loadFolders]);
 
-  // After a successful add, refresh folders + signal parent
-  const handleAddSuccess = useCallback(() => {
-    loadFolders();
-    onSyncStarted();
-  }, [loadFolders, onSyncStarted]);
+  // After a successful add, refresh folders + signal parent. Forwarding
+  // the new label lets DriveContainer auto-select the freshly added
+  // folder in its breadcrumb.
+  const handleAddSuccess = useCallback(
+    (newLabel?: string) => {
+      loadFolders();
+      onSyncStarted(newLabel);
+    },
+    [loadFolders, onSyncStarted],
+  );
 
   // ── Local folder actions ──────────────────────────────────────────────
 
@@ -342,7 +355,8 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
       setSyncDialog({ open: false, folder: null });
       setSyncLocalPath("");
       loadFolders();
-      onSyncStarted();
+      // Remote folders use folderName as their label on this device.
+      onSyncStarted(folder.folderName);
     } catch (error) {
       console.error("Failed to sync remote folder:", error);
       toast.error(
@@ -435,7 +449,13 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
 
   return (
     <>
-      <div className="w-full flex flex-col gap-6 mt-6">
+      {/* `px-3` mirrors the 12px gutter the drive page applies to the
+          files view (see DriveContainer), so the Local cards line up
+          with the files table when switching between the breadcrumb's
+          "Local" and folder views. Settings reuses LocalFoldersSection /
+          RemoteFoldersSection directly without this wrapper, so its
+          gutter is unaffected. */}
+      <div className="w-full flex flex-col gap-6 mt-6 px-3">
         {/* ──────── Local Sync Folders (shared component) ──────── */}
         <LocalFoldersSection
           syncFolders={syncFolders}
@@ -458,6 +478,11 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             fileCount: folder.fileCount ?? 0,
             totalBytes: folder.totalBytes ?? 0,
           }, true)}
+          onSelectFolder={
+            onSelectFolder
+              ? (folder) => onSelectFolder(folder.id)
+              : undefined
+          }
         />
 
         {/* ──────── Sync from Other Devices (shared component) ──────── */}
