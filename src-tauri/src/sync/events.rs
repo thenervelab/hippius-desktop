@@ -55,6 +55,17 @@ pub const DRIVE_STATUS_CHANGED: &str = "hcfs_drive_status_changed";
 pub const DRIVE_REMOVED: &str = "hcfs_drive_removed";
 /// Emitted when files have repeatedly failed to sync (threshold reached).
 pub const FILES_FAILED_REPEATEDLY: &str = "hcfs_files_failed_repeatedly";
+/// Emitted the moment hcfs-client classifies a per-file upload or download
+/// as failed (e.g. server returned 402 InsufficientBalance, 5xx, network
+/// error). Carries a typed [`FileFailureKindPayload`] so the FE can switch
+/// on the failure category without parsing display strings.
+///
+/// Per-file failures are NOT cycle failures — the existing
+/// `hcfs_sync_error` channel is reserved for cycle-level errors (cancel,
+/// auth, etc.). A single 402'd file inside an otherwise-healthy cycle
+/// surfaces here and through the snapshot's `FileProgressStatus::Error`
+/// row; cycle-level `SyncCompleted` still fires with the survivors.
+pub const FILE_FAILED: &str = "hcfs_file_failed";
 /// Emitted when a user-initiated upload (`add_file` / `add_files` /
 /// `add_folder`) is in its disk-copy + encryption window before any
 /// byte of network transfer fires. The frontend renders a top-of-page
@@ -291,4 +302,91 @@ pub struct AuthRequiredPayload {
 #[serde(rename_all = "camelCase")]
 pub struct FilesFailedRepeatedlyPayload {
     pub files: Vec<crate::sync::failure_tracking::FailedFileInfo>,
+}
+
+/// Desktop-side serializable mirror of [`hcfs_client::engine::events::FileFailureKind`].
+///
+/// The upstream enum does NOT derive `Serialize` (verified at
+/// `hcfs-client/src/engine/events.rs:33`), so we cannot forward it as-is
+/// through Tauri's JSON IPC. Translating to a local enum is the right
+/// boundary: it (a) gives us a `Serialize` impl without forking
+/// hcfs-client, (b) pins the wire format the FE consumes independently of
+/// upstream variant additions (the upstream type is `#[non_exhaustive]`),
+/// and (c) keeps the FE's `kind` discriminant stable in `camelCase` per
+/// existing convention. The `#[non_exhaustive]` annotation matches the
+/// upstream's stability contract — future upstream variants will be
+/// surfaced as `Other` until we extend the translation map.
+///
+/// Wire shape (tagged union, internally discriminated by `kind`):
+/// ```json
+/// {"kind":"insufficientBalance","balanceCents":12,"requiredCents":100}
+/// {"kind":"serverError","status":500}
+/// {"kind":"network"}
+/// {"kind":"other","message":"unrecognised upload failure"}
+/// ```
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum FileFailureKindPayload {
+    /// Server returned HTTP 402 — account credit balance is below the
+    /// storage cost. Mirrors `FileFailureKind::InsufficientBalance`.
+    #[serde(rename_all = "camelCase")]
+    InsufficientBalance { balance_cents: i64, required_cents: i64 },
+    /// Server returned a non-402 HTTP error code (5xx, 416, 429, …).
+    /// `status` is the wire status the FE may dispatch on.
+    ServerError { status: u16 },
+    /// Transport-layer failure — connection refused, DNS, TLS, timeout.
+    /// No HTTP status because no response was received.
+    Network,
+    /// Fallback for failures we have not categorised. `message` is for
+    /// display only — the FE MUST NOT parse it as a stable contract.
+    Other { message: String },
+}
+
+impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayload {
+    fn from(kind: &hcfs_client::engine::events::FileFailureKind) -> Self {
+        use hcfs_client::engine::events::FileFailureKind as K;
+        match kind {
+            K::InsufficientBalance {
+                balance_cents,
+                required_cents,
+            } => Self::InsufficientBalance {
+                balance_cents: *balance_cents,
+                required_cents: *required_cents,
+            },
+            K::ServerError { status } => Self::ServerError { status: *status },
+            K::Network => Self::Network,
+            // Upstream `Other(String)` carries display text. Clone-on-translate is
+            // unavoidable (we own the wire payload); the alternative would be borrowing
+            // and the bridge needs an owned struct for `app.emit`.
+            K::Other(msg) => Self::Other { message: msg.clone() },
+            // `#[non_exhaustive]` upstream: future variants render as `Other` with
+            // their debug form. The translation map should be extended when a new
+            // upstream variant ships — until then, the FE's `other` branch
+            // keeps the wire contract intact.
+            other => Self::Other {
+                message: format!("{other:?}"),
+            },
+        }
+    }
+}
+
+/// Payload for [`FILE_FAILED`] — emitted once per per-file failure inside
+/// a sync cycle (in addition to, not in place of, the per-cycle
+/// `SyncCompleted.files_failed` counter and the per-file snapshot row).
+///
+/// `path` is the **plan-time** snapshot from
+/// `hcfs_client::engine::events::SyncEvent::FileFailed::path`, not the
+/// live filesystem path. If the local file was renamed between plan and
+/// failure, this is the pre-rename path — the FE may need to reconcile
+/// against the live filesystem (see upstream doc comment on
+/// `SyncEvent::FileFailed::path`).
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FileFailedPayload {
+    pub label: String,
+    pub path: String,
+    pub file_id: String,
+    pub kind: FileFailureKindPayload,
+    pub http_status: Option<u16>,
 }

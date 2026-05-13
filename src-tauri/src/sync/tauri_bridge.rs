@@ -238,7 +238,22 @@ impl SyncEventHandler for TauriSyncBridge {
                 files_deleted_remotely,
                 conflicts_resolved,
                 conflicts_skipped,
+                files_failed,
             } => {
+                // Cycle-level failure counter is observable here only for
+                // logging — the per-file detail already flowed through
+                // `SyncEvent::FileFailed` (one event per failing file) and
+                // the snapshot's `failed_files` aggregate. Surfacing it
+                // again as a Tauri event would duplicate signals the FE
+                // already consumes; a warn-level log preserves the
+                // operability signal for backend operators.
+                if files_failed > 0 {
+                    tracing::warn!(
+                        label = %label,
+                        files_failed = files_failed,
+                        "sync cycle completed with per-file failures"
+                    );
+                }
                 use tauri::Manager;
 
                 // Belt-and-suspenders snapshot emit. As of hcfs >= a26f4296,
@@ -419,6 +434,50 @@ impl SyncEventHandler for TauriSyncBridge {
             }
             SyncEvent::FileTransferComplete { label } => {
                 let _ = app.emit(events::FILE_TRANSFER_COMPLETE, events::LabelPayload { label });
+            }
+            SyncEvent::FileFailed {
+                label,
+                path,
+                file_id,
+                kind,
+                http_status,
+            } => {
+                // Per-file failure handling has two responsibilities:
+                //   (1) Surface the typed failure to the FE via a dedicated
+                //       Tauri event so the FE can drive category-specific UX
+                //       (e.g. "out of credits" banner for InsufficientBalance).
+                //       The translation to `FileFailureKindPayload` is needed
+                //       because the upstream `FileFailureKind` is NOT
+                //       `Serialize`-able (verified at
+                //       `hcfs-client/src/engine/events.rs:33`).
+                //   (2) Emit a Tauri event AND do nothing else here. The
+                //       in-memory progress mutation (file row → Error) was
+                //       already performed by `build_file_failed_callback`
+                //       (lifecycle.rs) which fired synchronously from the
+                //       same hcfs-client error site BEFORE this event arrived
+                //       at the bridge. Splitting the responsibilities — Tauri
+                //       emit here, progress mutation in the lifecycle callback
+                //       — matches the symmetric `on_file_synced` design and
+                //       keeps the bridge a pure forwarder.
+                //
+                // Deliberately NOT performed:
+                //   - `hcfs_sync_error` emit: per-file failure ≠ cycle
+                //     failure; the cycle-level channel is reserved for
+                //     auth/cancel/transport-level errors.
+                //   - Activity-item enqueue: Phase 1 Task 1.1 established
+                //     that activity rows only land on server-confirmed
+                //     success. Failures are visible via the snapshot's
+                //     Error status and the FILES_FAILED_REPEATEDLY event.
+                let _ = app.emit(
+                    events::FILE_FAILED,
+                    events::FileFailedPayload {
+                        label,
+                        path,
+                        file_id,
+                        kind: events::FileFailureKindPayload::from(&kind),
+                        http_status,
+                    },
+                );
             }
             SyncEvent::HealthChanged { health } => {
                 let _ = app.emit(events::CONNECTIVITY_CHANGED, &health);

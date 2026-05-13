@@ -257,6 +257,64 @@ pub fn mark_file_synced(sync: &SyncRunner, path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Mark a single file as failed (per-file upload or download error) and
+/// emit a snapshot.
+///
+/// Called from `build_file_failed_callback` in `lifecycle.rs`, which fires
+/// from hcfs-client's per-file `on_file_failed` callback the moment the
+/// per-file task returns `Err`. This is the synchronous counterpart to
+/// [`mark_file_synced`] for the failure path: the file's progress row
+/// flips to terminal `FileStatus::Error` immediately instead of waiting
+/// for end-of-cycle `mark_pending_files_as_failed`.
+///
+/// Why this exists: cycle-level `mark_pending_files_as_failed` only sees
+/// the shortfall (`expected_uploads - actual_uploads`), so a partial
+/// failure scenario (some files 402, some succeed inside the same cycle)
+/// arrives at the FE only after the whole cycle finalises — the failure
+/// banner UX needs the signal at the failure site, not 30 seconds later.
+///
+/// Field semantics mirror hcfs-client's [`hcfs_client::engine::progress::tracker::ProgressTracker::mark_file_error`]:
+///
+/// - `file.status = FileStatus::Error` — terminal for this cycle.
+/// - `file.error = Some(error.into())` — display text for the FE row tooltip.
+/// - `file.bytes_transferred = 0`, `file.progress = 0` — reset so the
+///   progress bar doesn't show "99% then Error" (the upstream tracker
+///   resets too, see `engine/progress/tracker.rs:491-492`).
+/// - `file.completed_at = Some(now)` — terminal timestamp, sorts the row
+///   to the recent-activity tail.
+///
+/// No-op if there's no current session, no file at the given path
+/// (rename races), or the file is already in `Error` state (re-entry from
+/// a retry that also failed — keep the first error message).
+pub fn mark_file_failed(sync: &SyncRunner, path: &str, error: &str) -> Result<()> {
+    use hcfs_client::engine::progress::state::FileStatus;
+    use std::sync::Arc;
+
+    {
+        let mut state = sync.progress.lock_state();
+        let Some(session) = state.current_session.as_mut() else {
+            return Ok(());
+        };
+        let Some(file) = session.files.get_mut(path) else {
+            return Ok(());
+        };
+        if file.status == FileStatus::Error {
+            // Already terminal — preserve the first error to avoid the
+            // hcfs-client retry loop clobbering the 402 message with a
+            // subsequent generic network error.
+            return Ok(());
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        file.status = FileStatus::Error;
+        file.error = Some(Arc::from(error));
+        file.completed_at = Some(now);
+        file.bytes_transferred = 0;
+        file.progress = 0;
+    }
+    sync.emit_snapshot(true);
+    Ok(())
+}
+
 /// Compute overall progress.
 pub fn get_overall_progress(sync: &SyncRunner) -> Result<OverallProgress> {
     sync.progress.get_overall_progress().map_err(AppError::Progress)

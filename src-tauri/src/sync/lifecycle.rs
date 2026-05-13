@@ -2057,6 +2057,57 @@ pub fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcf
     })
 }
 
+/// Build the `on_file_failed` callback that flips the file's progress
+/// status to terminal `FileStatus::Error` synchronously at the failure
+/// site (does NOT emit any Tauri event — the bridge handles that via
+/// [`hcfs_client::engine::events::SyncEvent::FileFailed`]).
+///
+/// Visibility is intentionally module-private (`pub(super)` would also
+/// suffice, but neither is needed by integration tests because tests
+/// reach the same outcome through `mark_file_failed` directly — the
+/// callback is purely glue between hcfs-client's `FileFailedFn` shape and
+/// our progress tracker).
+///
+/// The split-of-responsibilities mirrors `build_file_synced_callback` and
+/// the existing bridge: bridge → Tauri event emit; this callback →
+/// progress-tracker mutation. hcfs-client guarantees both fire for the
+/// same per-file error, so we don't lose either signal.
+fn build_file_failed_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_client::sync::FileFailedFn {
+    Arc::new(move |rel_path, file_id_hex, kind, http_status| {
+        // Mirror `on_file_synced` shape: empty rel_path means the planner
+        // never recorded a path for this file (shouldn't happen, but the
+        // upstream doc on `FileFailedFn` allows it). No-op rather than
+        // mark a phantom entry.
+        if rel_path.is_empty() {
+            return;
+        }
+        debug!(
+            label = %label,
+            path = %rel_path,
+            file_id = %file_id_hex,
+            ?kind,
+            http_status = ?http_status,
+            "per-file sync failure reported by hcfs-client"
+        );
+
+        // Best-effort display string for the snapshot row's `error` field.
+        // The frontend already discriminates failure CATEGORY via the
+        // separate `hcfs_file_failed` Tauri event (typed
+        // `FileFailureKindPayload`); this string is only used as a
+        // tooltip/details fallback in the file list, so a `Debug` render
+        // is acceptable.
+        let error_msg = format!("{kind:?}");
+        if let Err(e) = crate::sync::progress::mark_file_failed(&sync, rel_path, &error_msg) {
+            warn!(
+                label = %label,
+                path = %rel_path,
+                error = %e,
+                "failed to mark file failed in progress tracker"
+            );
+        }
+    })
+}
+
 /// Wire up the hcfs-client progress callbacks for a drive.
 ///
 /// Connects the `SyncProgress` callback struct (upload/download/encrypt/decrypt
@@ -2102,6 +2153,11 @@ pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManage
         on_scan_progress: Some(build_scan_callback(sync.clone(), app.clone(), Arc::clone(&label))),
         on_fetch_state_progress: Some(build_fetch_callback(sync.clone(), app.clone(), Arc::clone(&label))),
         on_file_synced: Some(build_file_synced_callback(sync.clone(), Arc::clone(&label))),
+        // Phase 2 / Task 2.7: per-file failure callback fired synchronously
+        // by hcfs-client at the error site. We mutate the in-memory
+        // progress tracker here; the bridge's `SyncEvent::FileFailed` arm
+        // is the user-visible side (Tauri event emit).
+        on_file_failed: Some(build_file_failed_callback(sync.clone(), Arc::clone(&label))),
     });
 }
 
