@@ -39,7 +39,7 @@ export function DeleteServerDialog({
       onClose={handleClose}
       title="Delete Folder from Server"
       icon={<Trash2 className="size-5 text-white" />}
-      maxWidth="max-w-[480px]"
+      maxWidth="max-w-[680px]"
       iconBgClassName="bg-[#fc7d73]"
     >
       <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
