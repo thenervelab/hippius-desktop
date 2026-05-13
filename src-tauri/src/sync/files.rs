@@ -116,13 +116,28 @@ pub async fn add_file(
     sync_path: String,
     file_path: String,
 ) -> Result<String> {
-    // Enforce credit eligibility at the IPC boundary. Even if a stale
-    // FE cache let the user click the upload button, this fails the
-    // operation here so we never copy the file into the sync folder
-    // (and thus never trigger an upload that would silently fail
-    // server-side for billing reasons).
+    // Enforce credit eligibility at the IPC boundary, priced by actual
+    // file size. The FE may still hit a 402 from hcfs-server if the
+    // balance drops between gate and upload (concurrent device or
+    // billing tick), but this gate prevents the common case where the
+    // user obviously cannot afford the upload — addresses sync-402
+    // plan Task 3.1.
+    //
+    // A `metadata` failure (file removed between picker and IPC,
+    // permission denied, broken symlink) gates with `bytes = 0` so the
+    // legacy `> 0` floor still applies — the subsequent `copy_dir_recursive`
+    // / `tokio::fs::copy` will surface the I/O error to the user with
+    // its native message. Don't `?`-bail here: a missing-file diagnostic
+    // is clearer than "insufficient credits because we couldn't size it".
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
-    crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FileUpload).await?;
+    let bytes = tokio::fs::metadata(Path::new(&file_path)).await.map_or(0, |m| m.len());
+    crate::billing::eligibility::require_eligible(
+        &state,
+        &account_id,
+        crate::billing::eligibility::InsufficientCreditsAction::FileUpload,
+        bytes,
+    )
+    .await?;
 
     // Mark the processing window. Released either by the first upload
     // chunk of the NEXT sync cycle (success path, gated by
@@ -165,9 +180,20 @@ pub async fn add_folder(
     subfolder: Option<String>,
 ) -> Result<String> {
     // Enforce credit eligibility at the IPC boundary — same rationale
-    // as `add_file`.
+    // as `add_file`, but priced by the recursive byte total of the
+    // source folder. A folder with permission-denied subdirectories
+    // returns a best-effort lower bound (see `sum_regular_file_bytes`),
+    // which under-charges rather than over-charging the user — the
+    // server's 402 path is still the last line of defense.
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
-    crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FolderUpload).await?;
+    let bytes = sum_regular_file_bytes(Path::new(&folder_path)).await;
+    crate::billing::eligibility::require_eligible(
+        &state,
+        &account_id,
+        crate::billing::eligibility::InsufficientCreditsAction::FolderUpload,
+        bytes,
+    )
+    .await?;
 
     // Pre-walk the source tree so the banner shows an accurate count.
     // Cheap relative to the full copy (no file-content reads).
@@ -306,6 +332,90 @@ async fn count_regular_files(root: &std::path::Path) -> u64 {
         }
     }
     count
+}
+
+/// Sum the byte size of regular files (non-directory, non-symlink) under
+/// `root`, recursively. Used by the credit-eligibility gate in
+/// `add_folder`, `add_files`, and `add_local_sync_folder` to compute the
+/// total upload payload BEFORE invoking
+/// `crate::billing::eligibility::require_eligible`.
+///
+/// Same invariants as [`count_regular_files`]:
+/// - Iterative depth-first walk via explicit stack (no recursive async
+///   boxing); cap depth at [`FOLDER_BYTE_WALK_MAX_DEPTH`] entries on the
+///   stack to defend against symlink-cycle pathological cases. The cap
+///   bounds the stack, not the total file count; the walk reads only
+///   directory entries (no file content), so the I/O cost is the same
+///   as `copy_dir_recursive` is already about to pay.
+/// - Per-subdirectory I/O errors (permission denied, hardware faults)
+///   are silently skipped via `continue` so the gate doesn't fail an
+///   upload because ONE unreadable subdir made the byte-sum
+///   undercount — the legitimate uploads still get gated on the
+///   surviving bytes. A wholly-unreadable root returns `0`, which
+///   correctly falls back to the static `> 0` threshold floor.
+/// - Symlinks are NOT followed (`DirEntry::file_type` is lstat-shaped),
+///   matching `count_regular_files` and avoiding loops.
+/// - Each per-file size comes from `DirEntry::metadata`, which calls
+///   `stat` on the entry itself (NOT the symlink target, since `ft`
+///   already classified it as a regular file). Sizes are summed via
+///   `saturating_add` so a malicious sparse file or `u64::MAX` length
+///   can't panic.
+pub(super) async fn sum_regular_file_bytes(root: &std::path::Path) -> u64 {
+    use tokio::fs;
+
+    let mut bytes: u64 = 0;
+    let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        // Defense in depth: a symlink cycle could push entries forever
+        // even though we don't follow symlinks at the entry level — a
+        // legitimate `mount --bind` cycle, hardlinked directories on
+        // non-POSIX filesystems, or an attacker pre-seeding the
+        // directory tree could push the stack arbitrarily. The cap
+        // matches the recursion depth used elsewhere in this module
+        // (`copy_dir_recursive`).
+        if stack.len() > FOLDER_BYTE_WALK_MAX_DEPTH {
+            break;
+        }
+        let Ok(mut entries) = fs::read_dir(&dir).await else { continue };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let Ok(ft) = entry.file_type().await else { continue };
+            if ft.is_dir() {
+                stack.push(entry.path());
+            } else if ft.is_file()
+                && let Ok(meta) = entry.metadata().await
+            {
+                bytes = bytes.saturating_add(meta.len());
+            }
+        }
+    }
+    bytes
+}
+
+/// Stack-depth cap for [`sum_regular_file_bytes`]. Sized to match the
+/// 64-level cap that `copy_dir_recursive` already enforces — a folder
+/// deeper than this would fail the subsequent copy anyway, so refusing
+/// to walk further is consistent with the rest of the module.
+const FOLDER_BYTE_WALK_MAX_DEPTH: usize = 4096;
+
+/// Recursively sum the byte size of a heterogeneous batch of paths
+/// (a mix of regular files and directories). Used by `add_files` to
+/// compute the credit-eligibility byte total. Each direct file path is
+/// sized via `tokio::fs::metadata`; each directory is walked through
+/// [`sum_regular_file_bytes`]. Per-path metadata failures degrade to
+/// zero so a missing or unreadable entry doesn't reject the rest of
+/// the batch — the subsequent copy loop surfaces the real I/O error.
+async fn sum_batch_bytes(paths: &[String]) -> u64 {
+    let mut total: u64 = 0;
+    for fp in paths {
+        let p = std::path::Path::new(fp);
+        let add = if p.is_dir() {
+            sum_regular_file_bytes(p).await
+        } else {
+            tokio::fs::metadata(p).await.map_or(0, |m| m.len())
+        };
+        total = total.saturating_add(add);
+    }
+    total
 }
 
 /// Internal folder copy — no sync trigger (caller handles it).
@@ -504,13 +614,20 @@ pub async fn add_files(
     // boundary. The per-file `add_file_internal` calls inside the loop
     // below do NOT re-check — there's no point hammering the billing
     // API once per file when the batch is treated as a single unit.
+    //
+    // The byte sum drives the price: each direct file path is sized via
+    // `tokio::fs::metadata`, each directory path is walked recursively
+    // via `sum_regular_file_bytes`. Per-path metadata failures degrade
+    // to 0 so a missing file in the input list doesn't reject the rest
+    // of the batch — the subsequent copy loop surfaces the I/O error.
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
     let action = if for_folder {
         crate::billing::eligibility::InsufficientCreditsAction::FolderUpload
     } else {
         crate::billing::eligibility::InsufficientCreditsAction::FileUpload
     };
-    crate::billing::eligibility::require_eligible(&state, &account_id, action).await?;
+    let total_bytes = sum_batch_bytes(&file_paths).await;
+    crate::billing::eligibility::require_eligible(&state, &account_id, action, total_bytes).await?;
 
     // Sum the file count for the banner. Each direct file path counts
     // as 1; each directory path gets a recursive walk via

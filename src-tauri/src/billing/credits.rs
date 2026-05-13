@@ -95,7 +95,11 @@ pub struct SyncEligibility {
 pub async fn check_sync_eligibility(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<SyncEligibility, AppError> {
     use crate::billing::eligibility::{InsufficientCreditsAction, check_action_eligibility_inner};
 
-    let result = check_action_eligibility_inner(&state, &account_id, InsufficientCreditsAction::FolderSync).await?;
+    // Legacy alias preserves the pre-Task-3.1 semantic: `> 0` floor, no
+    // bytes-priced layer. Callers that need price-aware gating should
+    // call `check_action_eligibility` directly with an explicit byte
+    // count (see `useCreditCheck` migration plan).
+    let result = check_action_eligibility_inner(&state, &account_id, InsufficientCreditsAction::FolderSync, 0).await?;
     if result.eligible {
         return Ok(SyncEligibility {
             eligible: true,

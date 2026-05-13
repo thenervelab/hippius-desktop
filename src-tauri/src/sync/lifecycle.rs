@@ -123,10 +123,22 @@ pub async fn add_local_sync_folder(
     let state = app.state::<crate::app_state::AppState>();
     let pool = state.pool()?;
 
-    // Enforce credit eligibility at the IPC boundary. Refuses to add a
-    // new sync folder if the user has zero marketplace credits — see
-    // `crate::billing::eligibility::thresholds::FOLDER_SYNC`.
-    crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FolderSync).await?;
+    // Enforce credit eligibility at the IPC boundary, priced by the
+    // recursive byte sum of the folder's CURRENT contents — those bytes
+    // are about to be uploaded by the sync engine on first init.
+    // A user setting up sync on a 100 GB folder with $0.10 of credits
+    // would silently 402 every file otherwise. The byte-sum walk
+    // ignores permission-denied subdirs so the gate under-charges
+    // rather than rejecting a legitimate "I have access to most of
+    // this" setup. See `crate::billing::eligibility::thresholds`.
+    let bytes = crate::sync::files::sum_regular_file_bytes(std::path::Path::new(&path)).await;
+    crate::billing::eligibility::require_eligible(
+        &state,
+        &account_id,
+        crate::billing::eligibility::InsufficientCreditsAction::FolderSync,
+        bytes,
+    )
+    .await?;
 
     // 1. Generate unique label — single source of truth in
     // `crate::sync::paths::generate_unique_label_internal`.
