@@ -14,7 +14,6 @@ import { WaitAMoment } from "@/components/ui";
 import * as Typography from "@/components/ui/typography";
 import DriveOnboarding from "./DriveOnboarding";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
-import SyncFolderBreadcrumb from "./SyncFolderBreadcrumb";
 import { useDriveStorageStats } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { FileTypes } from "@/lib/types/fileTypes";
@@ -868,79 +867,95 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
             variant={isRecentFiles ? "compact" : "banner"}
           />
 
-          <div
-            className={cn(
-              isRecentFiles &&
-                "bg-grey-light-300 border border-grey-dark-100 rounded-[8px] shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.04)] dark:bg-black-primary-bg dark:border-black-300 dark:shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.4)]",
-            )}
-          >
-            <DriveHeader
-              isRecentFiles={isRecentFiles}
-              isRefetching={isRefetching}
-              isFetching={isFetching}
-              formattedStorageSize={formattedStorageSize}
-              allFilteredDataLength={displayedFileCount}
-              viewMode={viewMode}
-              setViewMode={handleViewModeChange}
-              searchTerm={searchTerm}
-              handleSearchChange={handleSearchChange}
-              activeFilters={activeFilters}
-              handleRemoveFilter={handleRemoveFilter}
-              refetchUserFiles={
-                isRecentFiles
-                  ? refreshRecentFilesCallback
-                  : refreshUserFilesCallback
-              }
-              addButtonRef={addButtonRef}
-              privateFileCount={privateFileCount}
-              isSyncPathEmpty={effectiveSyncPathEmpty}
-              onStartSyncing={handleStartSyncing}
-              hasNoSyncPaths={hasNoSyncPaths}
-              onNavigateToSettings={handleNavigateToSettings}
-              selectedFileTypes={filterState.fileTypes}
-              selectedDate={filterState.date}
-              selectedFileSizes={filterState.fileSizes}
-              onFileTypesChange={handleFileTypesChange}
-              onDateChange={handleDateChange}
-              onFileSizesChange={handleFileSizesChange}
-              defaultFolderLabel={activeSyncFolderLabel}
-              isFolderUploadOpen={isFolderUploadOpen}
-              onSetFolderUploadOpen={setIsFolderUploadOpen}
-            />
+          {(() => {
+            // Drive content node — used both as a sibling (recent files) and
+            // as children of DriveHeader (drive view, so it lives inside the
+            // inner white card per Figma).
+            const driveContent = (
+              <DriveContent
+                isRecentFiles={isRecentFiles}
+                isLoading={isLoading}
+                filteredData={filteredData}
+                displayedData={visibleData}
+                searchTerm={searchTerm}
+                activeFilters={activeFilters}
+                viewMode={viewMode}
+                error={error}
+                addButtonRef={addButtonRef}
+                hasMore={hasMore}
+                loadMore={loadMore}
+                isSyncPathEmpty={effectiveSyncPathEmpty}
+                onSyncPathConfigured={
+                  isRecentFiles
+                    ? handleNavigateToSettings
+                    : handleStartSyncing
+                }
+                onUploadFile={handleContextUploadFile}
+                onAddFolder={handleContextAddFolder}
+                onAddSyncFolder={handleContextAddSyncFolder}
+              />
+            );
 
-            {!isRecentFiles && (
-              <SyncFolderBreadcrumb
+            const driveHeader = (
+              <DriveHeader
+                isRecentFiles={isRecentFiles}
+                isRefetching={isRefetching}
+                isFetching={isFetching}
+                formattedStorageSize={formattedStorageSize}
+                allFilteredDataLength={displayedFileCount}
+                viewMode={viewMode}
+                setViewMode={handleViewModeChange}
+                searchTerm={searchTerm}
+                handleSearchChange={handleSearchChange}
+                activeFilters={activeFilters}
+                handleRemoveFilter={handleRemoveFilter}
+                refetchUserFiles={
+                  isRecentFiles
+                    ? refreshRecentFilesCallback
+                    : refreshUserFilesCallback
+                }
+                addButtonRef={addButtonRef}
+                privateFileCount={privateFileCount}
+                isSyncPathEmpty={effectiveSyncPathEmpty}
+                onStartSyncing={handleStartSyncing}
+                hasNoSyncPaths={hasNoSyncPaths}
+                onNavigateToSettings={handleNavigateToSettings}
+                selectedFileTypes={filterState.fileTypes}
+                selectedDate={filterState.date}
+                selectedFileSizes={filterState.fileSizes}
+                onFileTypesChange={handleFileTypesChange}
+                onDateChange={handleDateChange}
+                onFileSizesChange={handleFileSizesChange}
+                defaultFolderLabel={activeSyncFolderLabel}
+                isFolderUploadOpen={isFolderUploadOpen}
+                onSetFolderUploadOpen={setIsFolderUploadOpen}
                 folderDisplayName={
                   activeSyncFolderLabel
                     ? (labelDisplayNames[activeSyncFolderLabel] ??
                       activeSyncFolderLabel)
                     : null
                 }
-                onLocalClick={handleNavigateToLocalView}
-              />
-            )}
+                onBreadcrumbLocalClick={handleNavigateToLocalView}
+              >
+                {!isRecentFiles && driveContent}
+              </DriveHeader>
+            );
 
-            <DriveContent
-              isRecentFiles={isRecentFiles}
-              isLoading={isLoading}
-              filteredData={filteredData}
-              displayedData={visibleData}
-              searchTerm={searchTerm}
-              activeFilters={activeFilters}
-              viewMode={viewMode}
-              error={error}
-              addButtonRef={addButtonRef}
-              hasMore={hasMore}
-              loadMore={loadMore}
-              isSyncPathEmpty={effectiveSyncPathEmpty}
-              onSyncPathConfigured={
-                isRecentFiles ? handleNavigateToSettings : handleStartSyncing
-              }
-              onUploadFile={handleContextUploadFile}
-              onAddFolder={handleContextAddFolder}
-              onAddSyncFolder={handleContextAddSyncFolder}
-            />
-          </div>
+            if (isRecentFiles) {
+              // Recent Files card — unchanged. DriveContent sits as a sibling
+              // of DriveHeader inside the outer card.
+              return (
+                <div className="bg-grey-light-300 border border-grey-dark-100 rounded-[8px] shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.04)] dark:bg-black-primary-bg dark:border-black-300 dark:shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.4)]">
+                  {driveHeader}
+                  {driveContent}
+                </div>
+              );
+            }
+
+            // Drive view — DriveHeader owns the nested card structure and
+            // hosts DriveContent as its children.
+            return driveHeader;
+          })()}
         </div>
       </FileSelectionProvider>
     );

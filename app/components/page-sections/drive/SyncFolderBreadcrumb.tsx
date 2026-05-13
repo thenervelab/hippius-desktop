@@ -9,6 +9,8 @@ interface SyncFolderBreadcrumbProps {
   folderDisplayName: string | null;
   /** Click handler for the "Local" segment — switches drive to the cards view. */
   onLocalClick: () => void;
+  /** Optional overrides for the outer nav — used when embedding inline with action buttons. */
+  className?: string;
 }
 
 const SEGMENT_BASE = cn(
@@ -28,13 +30,17 @@ const SEGMENT_ACTIVE = "text-black-700 dark:text-grey-light-200";
 const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
   folderDisplayName,
   onLocalClick,
+  className,
 }) => {
   const isOnFolder = folderDisplayName !== null && folderDisplayName !== "";
 
   return (
     <nav
       aria-label="Sync folder breadcrumb"
-      className="flex items-center gap-1 mt-6 mb-5 select-none"
+      className={cn(
+        "flex items-center gap-1 mt-6 mb-5 select-none",
+        className,
+      )}
     >
       <button
         type="button"

@@ -12,7 +12,7 @@ const StorageStateList: FC<StorageStateListProps> = ({
   numberOfFiles,
 }) => {
   return (
-    <div className="flex items-center gap-[5.5px] flex-wrap">
+    <div className="flex items-center gap-[5.5px] whitespace-nowrap">
       <StorageStateItem
         icon={<Database className="size-[14px]" strokeWidth={1.5} />}
         value={storageUsed}
