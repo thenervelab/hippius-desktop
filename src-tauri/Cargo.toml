@@ -172,6 +172,7 @@ tokio = { version = "1", features = [
     "rt-multi-thread",
     "time",
     "process",
+    "test-util",
 ] }
 anyhow = "1"
 aes = "0.8"

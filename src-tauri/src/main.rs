@@ -506,7 +506,13 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // Single AppState holds all mutable state — zero statics.
         let app_state = crate::app_state::AppState::new();
         app_state.sync_bridge.set_app_handle(app_handle.clone());
+        // Downgrade BEFORE `manage` consumes the AppState. The
+        // watchdog holds a `Weak<UploadProcessingState>` so app
+        // shutdown can drop the state without keeping it alive via
+        // a long-lived background task. See `spawn_watchdog`.
+        let upload_processing_weak = std::sync::Arc::downgrade(&app_state.upload_processing);
         app_handle.manage(app_state);
+        crate::sync::upload_processing::spawn_watchdog(upload_processing_weak, app_handle.clone());
         let win = app.get_webview_window("main").expect("main window not found");
 
         // Open devtools on startup when `HIPPIUS_DEVTOOLS=1` is set in the

@@ -75,15 +75,44 @@
 //! the load-bearing re-entrancy invariant from the bridge handler
 //! that calls a write method and then re-enters this module via
 //! `emit_snapshot` → `ProgressSnapshot` → reads.
+//!
+//! ## Watchdog (Task 4.2)
+//!
+//! [`spawn_watchdog`] starts a background tokio task that periodically
+//! scans the map and clears entries whose `last_set_at` is older than
+//! [`BANNER_WATCHDOG_TIMEOUT`]. This is the time-based safety net for
+//! the case where a sync cycle never starts (e.g., the drive is
+//! queued behind another drive's per-drive mutex) — without it, the
+//! banner sat forever until app restart (original Bug 1 symptom: the
+//! "2-minute stuck toast" report). The watchdog complements, never
+//! replaces, the epoch-gated `clear_if_session_advanced` and the
+//! explicit `reset` / `reset_all` paths.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard};
-use std::time::Instant;
+use std::sync::{Mutex, MutexGuard, Weak};
+use std::time::{Duration, Instant};
 
-/// Per-label state held inside the `HashMap`. Layout is unchanged from
-/// the pre-per-label design — only the surrounding ownership shape
-/// moved from one direct field to a map entry.
-#[derive(Default)]
+/// How long an entry may sit without a progress signal before the
+/// background watchdog clears it.
+///
+/// **Why 60s:** Long enough to absorb normal queueing (a drive can sit
+/// behind another drive's per-drive sync mutex for tens of seconds on
+/// a slow upload), short enough that a truly stuck banner does not
+/// burn minutes of user attention. The pre-watchdog behavior was
+/// "wait for app restart" — any finite timeout is a strict
+/// improvement, and 60s is the plan's recommended value.
+pub const BANNER_WATCHDOG_TIMEOUT: Duration = Duration::from_mins(1);
+
+/// How often the watchdog scans the map.
+///
+/// **Why 10s:** Lower would burn CPU walking an almost-always-empty
+/// `HashMap`; higher would let a stuck banner linger past the 60s
+/// timeout by up to the scan interval. 10s caps observable lateness
+/// at ~70s (timeout + one scan period), which is well within the
+/// "noticeable but not painful" range.
+pub const BANNER_WATCHDOG_SCAN_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Per-label state held inside the `HashMap`.
 struct UploadProcessingInner {
     pending_files: u64,
     started_at: Option<Instant>,
@@ -93,6 +122,33 @@ struct UploadProcessingInner {
     /// wall-clock timestamp comparison. `None` exactly when
     /// `started_at` is `None`; the two fields move together.
     stamped_epoch: Option<u64>,
+    /// Refreshed on `begin` and on every `clear_if_session_advanced`
+    /// call (whether or not it cleared — every event counts as a
+    /// progress signal). Read by [`UploadProcessingState::drain_expired`]
+    /// to gate the watchdog's auto-clear against the
+    /// [`BANNER_WATCHDOG_TIMEOUT`] window.
+    ///
+    /// Stored unconditionally (no `Option`) because every code path
+    /// that creates an entry initializes this field — the type encodes
+    /// that invariant rather than relying on documentation.
+    last_set_at: Instant,
+}
+
+impl UploadProcessingInner {
+    /// Construct a fresh entry with `last_set_at` stamped to `now`.
+    ///
+    /// Centralises the construction so a future field addition
+    /// can't introduce a half-initialised entry through
+    /// `HashMap::entry().or_default()` (which is exactly why this
+    /// struct intentionally does NOT derive `Default`).
+    fn new(now: Instant) -> Self {
+        Self {
+            pending_files: 0,
+            started_at: None,
+            stamped_epoch: None,
+            last_set_at: now,
+        }
+    }
 }
 
 /// Map of drive label → "processing window" state.
@@ -168,13 +224,21 @@ impl UploadProcessingState {
     /// in this window."
     pub fn begin(&self, app: &tauri::AppHandle, label: &str, count: u64, current_epoch: u64) {
         let pending = {
+            let now = Instant::now();
             let mut g = self.lock();
-            let entry = g.entry(label.to_string()).or_default();
+            let entry = g.entry(label.to_string()).or_insert_with(|| UploadProcessingInner::new(now));
             entry.pending_files = entry.pending_files.saturating_add(count);
+            // First begin in a window stamps started_at + epoch.
+            // Subsequent begins inside an already-active window must
+            // not restamp those (epoch-gating depends on the first
+            // begin's epoch surviving). last_set_at IS refreshed on
+            // every begin so the watchdog's "no progress for 60s"
+            // timer resets when the user clicks Upload again.
             if entry.started_at.is_none() {
-                entry.started_at = Some(Instant::now());
+                entry.started_at = Some(now);
                 entry.stamped_epoch = Some(current_epoch);
             }
+            entry.last_set_at = now;
             entry.pending_files
         };
         emit(app, label, true, pending);
@@ -183,20 +247,27 @@ impl UploadProcessingState {
     /// Clear `label`'s entry if `event_epoch > stamped_epoch`. No-op
     /// when the label has no entry or when the event is from a cycle
     /// that was already running at `begin` time. Idempotent.
+    ///
+    /// Side-effect: every call refreshes `last_set_at` on the
+    /// surviving entry. This is what makes the call site (per upload
+    /// chunk, `SyncCompleted`, `SyncError`) act as a "progress signal"
+    /// from the watchdog's perspective — events from the same cycle
+    /// extend the window even though the epoch gate keeps the banner
+    /// up. Without this, an in-flight cycle whose chunks keep firing
+    /// at the original epoch would have its banner cleared by the
+    /// watchdog despite progress being visible.
     pub fn clear_if_session_advanced(&self, app: &tauri::AppHandle, label: &str, event_epoch: u64) {
         let did_clear = {
+            let now = Instant::now();
             let mut g = self.lock();
-            // Inspect the entry without holding `&mut` on the map past
-            // the decision: when the gate fires we want to `remove`
-            // (not just zero the fields) so the membership invariant
-            // is preserved. `Entry::occupied` borrows the map mutably
-            // for the lifetime of the entry; we drop the borrow before
-            // calling `remove`.
             let should_remove = matches!(g.get(label).and_then(|i| i.stamped_epoch), Some(stamped) if event_epoch > stamped);
             if should_remove {
                 g.remove(label);
                 true
             } else {
+                if let Some(entry) = g.get_mut(label) {
+                    entry.last_set_at = now;
+                }
                 false
             }
         };
@@ -212,6 +283,41 @@ impl UploadProcessingState {
         if did_clear {
             emit(app, label, false, 0);
         }
+    }
+
+    /// Remove every entry whose `last_set_at` is more than
+    /// [`BANNER_WATCHDOG_TIMEOUT`] before `now`. Returns the sorted
+    /// list of cleared labels so the caller can emit one
+    /// `{ active: false, pending_files: 0 }` event per cleared banner
+    /// outside the lock.
+    ///
+    /// Pure with respect to `now` — the caller injects the timestamp
+    /// rather than reading the wall clock here. That keeps the
+    /// watchdog tests timestamp-precise without requiring
+    /// `tokio::time::pause` to also affect [`std::time::Instant::now`]
+    /// (which it does not on stable tokio).
+    ///
+    /// The `std::sync::MutexGuard` is dropped before this function
+    /// returns; callers may freely `.await` on the returned `Vec`
+    /// without holding the lock across the await point (axiom
+    /// `Async Lock Hygiene`).
+    fn drain_expired(&self, now: Instant) -> Vec<String> {
+        let mut g = self.lock();
+        let stale: Vec<String> = g
+            .iter()
+            .filter_map(|(label, entry)| {
+                now.checked_duration_since(entry.last_set_at)
+                    .filter(|elapsed| *elapsed >= BANNER_WATCHDOG_TIMEOUT)
+                    .map(|_| label.clone())
+            })
+            .collect();
+        for label in &stale {
+            g.remove(label);
+        }
+        drop(g);
+        let mut stale = stale;
+        stale.sort();
+        stale
     }
 
     /// Unconditional clear of every label. Used by logout /
@@ -251,12 +357,43 @@ impl UploadProcessingState {
     /// emitting a Tauri event.
     #[cfg(test)]
     fn begin_for_test(&self, label: &str, count: u64, current_epoch: u64) {
+        self.begin_for_test_at(Instant::now(), label, count, current_epoch);
+    }
+
+    /// Test-only entry point that mirrors [`Self::begin`] but with an
+    /// injectable `Instant` for the `last_set_at` field. Exposes the
+    /// timestamp axis to watchdog tests that must construct
+    /// known-old entries.
+    ///
+    /// Exposed as `pub` + `#[doc(hidden)]` (mirroring `snapshot_for`)
+    /// so the integration test crate in `tests/` can drive it without
+    /// needing `pub(crate)` visibility leaks. The `#[doc(hidden)]`
+    /// keeps it out of rustdoc; the name + path keep it discoverable
+    /// only to tests that already know the watchdog internals.
+    #[doc(hidden)]
+    pub fn begin_for_test_at(&self, now: Instant, label: &str, count: u64, current_epoch: u64) {
         let mut g = self.lock();
-        let entry = g.entry(label.to_string()).or_default();
+        let entry = g.entry(label.to_string()).or_insert_with(|| UploadProcessingInner::new(now));
         entry.pending_files = entry.pending_files.saturating_add(count);
         if entry.started_at.is_none() {
-            entry.started_at = Some(Instant::now());
+            entry.started_at = Some(now);
             entry.stamped_epoch = Some(current_epoch);
+        }
+        entry.last_set_at = now;
+    }
+
+    /// Test-only entry point that mirrors [`Self::clear_if_session_advanced`]
+    /// without emitting a Tauri event. Allows the watchdog tests to
+    /// drive the "progress signal refreshes last_set_at" path with a
+    /// known `Instant`.
+    #[doc(hidden)]
+    pub fn clear_if_session_advanced_for_test_at(&self, now: Instant, label: &str, event_epoch: u64) {
+        let mut g = self.lock();
+        let should_remove = matches!(g.get(label).and_then(|i| i.stamped_epoch), Some(stamped) if event_epoch > stamped);
+        if should_remove {
+            g.remove(label);
+        } else if let Some(entry) = g.get_mut(label) {
+            entry.last_set_at = now;
         }
     }
 
@@ -264,11 +401,15 @@ impl UploadProcessingState {
     /// without emitting a Tauri event.
     #[cfg(test)]
     fn clear_if_session_advanced_for_test(&self, label: &str, event_epoch: u64) {
-        let mut g = self.lock();
-        let should_remove = matches!(g.get(label).and_then(|i| i.stamped_epoch), Some(stamped) if event_epoch > stamped);
-        if should_remove {
-            g.remove(label);
-        }
+        self.clear_if_session_advanced_for_test_at(Instant::now(), label, event_epoch);
+    }
+
+    /// Test-only entry point that exposes [`Self::drain_expired`] to
+    /// the integration test crate. Same `pub` + `#[doc(hidden)]` shape
+    /// as the other watchdog helpers.
+    #[doc(hidden)]
+    pub fn drain_expired_for_test(&self, now: Instant) -> Vec<String> {
+        self.drain_expired(now)
     }
 
     /// Test-only entry point that mirrors [`Self::reset`] without
@@ -309,6 +450,46 @@ fn emit(app: &tauri::AppHandle, label: &str, active: bool, pending_files: u64) {
             pending_files,
         },
     );
+}
+
+/// Spawn the per-process upload-processing watchdog.
+///
+/// Called once at app setup (after `AppState` is constructed). The
+/// task wakes every [`BANNER_WATCHDOG_SCAN_INTERVAL`] and clears any
+/// entry whose `last_set_at` is older than [`BANNER_WATCHDOG_TIMEOUT`].
+///
+/// **Ownership:** the task holds a `Weak<UploadProcessingState>` so it
+/// does NOT keep the state alive past app shutdown. If the upgrade
+/// fails (the `Arc` was dropped), the loop exits cleanly. The
+/// `AppHandle` is `Clone` and cheap; one clone per spawn is fine.
+///
+/// **Concurrency:** the loop awaits a `tokio::time::sleep` between
+/// scans. The `std::sync::Mutex` inside `UploadProcessingState` is
+/// locked only by [`UploadProcessingState::drain_expired`], which
+/// drops its guard before returning a `Vec<String>`. The emit loop
+/// runs on the owned `Vec`, so no `MutexGuard` exists during the
+/// `.await` (axiom `Async Lock Hygiene`).
+pub fn spawn_watchdog(state: Weak<UploadProcessingState>, app: tauri::AppHandle) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(BANNER_WATCHDOG_SCAN_INTERVAL).await;
+            let Some(state) = state.upgrade() else {
+                // AppState has been dropped; nothing left to watch.
+                tracing::debug!("upload_processing watchdog: state dropped, exiting");
+                break;
+            };
+            let cleared = state.drain_expired(Instant::now());
+            for label in cleared {
+                tracing::warn!(
+                    target: "hippius_desktop::sync::upload_processing",
+                    label = %label,
+                    timeout_secs = BANNER_WATCHDOG_TIMEOUT.as_secs(),
+                    "auto-clearing stale upload-processing banner",
+                );
+                emit(&app, &label, false, 0);
+            }
+        }
+    });
 }
 
 #[cfg(test)]
