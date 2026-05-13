@@ -50,6 +50,9 @@ export function useFilteredFiles<T extends FormattedUserFile>(
 
     useEffect(() => {
         if (isNoopCriteria) {
+            // Keep `result` in sync with `files` for the next render, but
+            // the return value already short-circuits to `files` directly
+            // below — so there's no one-frame lag when files changes.
             setResult(files);
             return;
         }
@@ -90,5 +93,13 @@ export function useFilteredFiles<T extends FormattedUserFile>(
         isNoopCriteria,
     ]);
 
-    return result;
+    // When there are no filters at all, skip the result-state roundtrip and
+    // return `files` directly. The effect-driven path lags by one render
+    // (the effect's `setResult` only commits AFTER the current render
+    // returns), which caused the nested-folder "No entries" flash —
+    // `nestedListing.data` flipped from [] → [file1,file2] in render N,
+    // but `useFilteredFiles` still returned the previous `[]` until
+    // render N+1, so DriveContent briefly saw an empty list with
+    // isLoading=false and rendered the empty-state UI.
+    return isNoopCriteria ? files : result;
 }

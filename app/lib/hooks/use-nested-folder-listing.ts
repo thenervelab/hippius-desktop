@@ -67,7 +67,6 @@ export function useNestedFolderListing({
   enabled,
 }: UseNestedFolderListingOptions): UseNestedFolderListingResult {
   const [data, setData] = useState<FormattedUserFile[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [manualRefreshKey, setManualRefreshKey] = useState(0);
@@ -75,15 +74,45 @@ export function useNestedFolderListing({
   // it disagrees with the requested tuple, we surface the initial loader
   // instead of stale rows from a previous folder.
   const lastLoadedKeyRef = useRef<string | null>(null);
+  // Bumped after every settled (success or error) fetch so the render-time
+  // `isLoading` derivation re-evaluates against the new `lastLoadedKeyRef`.
+  // A bare ref mutation wouldn't trigger a re-render on its own.
+  const [, forceRender] = useState(0);
 
   const refresh = useCallback(() => {
     setManualRefreshKey((prev) => prev + 1);
   }, []);
 
+  // Composite request key — null when the hook is disabled or the
+  // underlying inputs aren't ready yet. Compared against
+  // `lastLoadedKeyRef` to decide whether the data we hold matches the
+  // currently-requested folder.
+  const requestKey =
+    enabled && accountId && syncPath
+      ? `${syncPath}::${subfolder ?? ""}`
+      : null;
+
+  // Synchronous loading flag — true the moment we know we're "supposed to
+  // be loading" but haven't successfully loaded the current request yet.
+  // This covers three transitional states that all otherwise render the
+  // "no entries" empty state by mistake while the URL is mid-flip:
+  //
+  //   1. `enabled` just flipped true but `syncPath` / `accountId` are still
+  //      null because the parent useMemo / atom read hasn't settled yet
+  //      (requestKey === null while enabled is true).
+  //   2. requestKey is populated but doesn't match `lastLoadedKeyRef` —
+  //      i.e. a different folder is requested than the one we last loaded.
+  //   3. The effect hasn't run yet on the first render after enable.
+  //
+  // Deriving (rather than `useState`-ing) sidesteps the
+  // "useState(false) → first render → effect sets true → re-render" race
+  // that caused the brief empty-state flash on navigation.
+  const isLoading =
+    enabled && (requestKey === null || lastLoadedKeyRef.current !== requestKey);
+
   useEffect(() => {
     if (!enabled || !accountId || !syncPath) {
       setData([]);
-      setIsLoading(false);
       setIsRefreshing(false);
       setError(null);
       lastLoadedKeyRef.current = null;
@@ -91,11 +120,11 @@ export function useNestedFolderListing({
     }
 
     let cancelled = false;
-    const requestKey = `${syncPath}::${subfolder ?? ""}`;
-    const isInitialLoad = lastLoadedKeyRef.current !== requestKey;
-    if (isInitialLoad) {
-      setIsLoading(true);
-    } else {
+    const effectRequestKey = `${syncPath}::${subfolder ?? ""}`;
+    const isInitialLoad = lastLoadedKeyRef.current !== effectRequestKey;
+    if (!isInitialLoad) {
+      // Same folder, triggered by `refreshKey` or `manualRefreshKey` —
+      // keep current rows visible and just flag the spinner.
       setIsRefreshing(true);
     }
 
@@ -150,16 +179,22 @@ export function useNestedFolderListing({
         });
 
         setData(formatted);
-        lastLoadedKeyRef.current = requestKey;
+        lastLoadedKeyRef.current = effectRequestKey;
         setError(null);
       } catch (err) {
         if (cancelled) return;
         console.error("[useNestedFolderListing] fetch failed:", err);
         setError(err);
+        // Mark the key as "we tried" so the derived `isLoading` flips back
+        // to false even on failure — otherwise the spinner would hang
+        // forever and the user would never see the empty / error state.
+        lastLoadedKeyRef.current = effectRequestKey;
       } finally {
         if (!cancelled) {
-          setIsLoading(false);
           setIsRefreshing(false);
+          // Trigger a re-render so the render-time `isLoading` derivation
+          // re-reads the updated `lastLoadedKeyRef`.
+          forceRender((tick) => tick + 1);
         }
       }
     })();
