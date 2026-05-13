@@ -291,7 +291,9 @@ export function LocalFoldersSection({
                     )}
                     {folder.fileCount !== undefined && folder.fileCount > 0 && (
                       <>
-                        <span aria-hidden="true" className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+                        {folder.totalBytes !== undefined && folder.totalBytes > 0 && (
+                          <span aria-hidden="true" className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+                        )}
                         <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
                           <Icons.Folders className="size-3.5 text-[#1F50BD]" />
                           {folder.fileCount}{" "}
@@ -301,7 +303,10 @@ export function LocalFoldersSection({
                     )}
                     {folder.lastModified !== undefined && folder.lastModified > 0 && (
                       <>
-                        <span aria-hidden="true" className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+                        {((folder.totalBytes !== undefined && folder.totalBytes > 0) ||
+                          (folder.fileCount !== undefined && folder.fileCount > 0)) && (
+                          <span aria-hidden="true" className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+                        )}
                         <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
                           <Icons.Clock8 className="size-3.5 text-[#1F50BD]" />
                           {formatRowDate(folder.lastModified)}
