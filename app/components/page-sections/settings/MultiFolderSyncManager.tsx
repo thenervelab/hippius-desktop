@@ -35,12 +35,59 @@ import {
   DeleteServerDialog,
   RemoteFolderBrowser,
 } from "./multi-folder-sync";
+import DevSyncStateToggle, {
+  useDevSyncOverride,
+} from "./_DevSyncStateToggle";
+
+// Mock fixtures used by the dev override so the "Loaded" preview shows
+// realistic rows without touching real sync state. Safe to delete with
+// _DevSyncStateToggle once the redesign work is done.
+const MOCK_LOCAL: SyncFolder[] = [
+  {
+    id: "mock-local-1",
+    folderName: "Work Documents",
+    localPath: "/Users/you/Documents/Work",
+    isLocal: true,
+    status: "syncing",
+    fileCount: 124,
+    totalBytes: 5_280_000_000,
+    lastModified: Date.now() - 1000 * 60 * 32,
+  },
+  {
+    id: "mock-local-2",
+    folderName: "Photos 2026",
+    localPath: "/Users/you/Pictures/2026",
+    isLocal: true,
+    status: "paused",
+    fileCount: 412,
+    totalBytes: 18_240_000_000,
+    lastModified: Date.now() - 1000 * 60 * 60 * 18,
+  },
+];
+
+const MOCK_REMOTE: RemoteFolder[] = [
+  {
+    folderName: "Phone Backup",
+    deviceName: "iPhone 17",
+    fileCount: 87,
+    totalBytes: 3_100_000_000,
+    lastModified: Date.now() - 1000 * 60 * 60 * 5,
+  },
+  {
+    folderName: "Old MacBook Archive",
+    deviceName: "MacBook Pro (M2)",
+    fileCount: 1_245,
+    totalBytes: 64_500_000_000,
+    lastModified: Date.now() - 1000 * 60 * 60 * 24 * 3,
+  },
+];
 
 export default function MultiFolderSyncManager() {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const queryClient = useQueryClient();
   const driveStatuses = useAtomValue(driveStatusesAtom);
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
+  const { override: devOverride, setOverride: setDevOverride } = useDevSyncOverride();
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
   // change. The pause/resume buttons in this manager and in sibling
@@ -466,12 +513,29 @@ export default function MultiFolderSyncManager() {
 
   // ── Render ────────────────────────────────────────────────────────────
 
+  // Dev-only override: force the sections into a known empty / loaded
+  // state so we can preview those branches without touching real sync
+  // state. Real data flows through whenever override === "real".
+  const displaySyncFolders =
+    devOverride === "empty"
+      ? []
+      : devOverride === "loaded"
+        ? MOCK_LOCAL
+        : syncFolders;
+  const displayRemoteFolders =
+    devOverride === "empty"
+      ? []
+      : devOverride === "loaded"
+        ? MOCK_REMOTE
+        : remoteFolders;
+  const displayIsLoading = devOverride === "real" ? isLoading : false;
+
   return (
     <>
       <div className="flex flex-col gap-4 w-full">
         <LocalFoldersSection
-          syncFolders={syncFolders}
-          isLoading={isLoading}
+          syncFolders={displaySyncFolders}
+          isLoading={displayIsLoading}
           onAddFolder={() => setShowAddDialog(true)}
           onPauseFolder={(folder) => setPauseDialog({ open: true, folder })}
           onResumeFolder={handleResumeSync}
@@ -493,8 +557,8 @@ export default function MultiFolderSyncManager() {
         />
 
         <RemoteFoldersSection
-          remoteFolders={remoteFolders}
-          isLoading={isLoading}
+          remoteFolders={displayRemoteFolders}
+          isLoading={displayIsLoading}
           onSyncFolder={handleSyncRemoteFolder}
           onDeleteFromServer={(folderName) =>
             openDeleteServerDialog(folderName)
@@ -575,6 +639,8 @@ export default function MultiFolderSyncManager() {
           isLocal={browseDialog.isLocal}
         />
       )}
+
+      <DevSyncStateToggle value={devOverride} onChange={setDevOverride} />
     </>
   );
 }
