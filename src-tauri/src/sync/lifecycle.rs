@@ -1740,10 +1740,16 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
         }
 
         if crate::sync::logic::is_file_completion_tick(bytes, total) {
-            let action = match ctx.direction {
-                TransferDirection::Upload => SyncActivityAction::Uploaded,
-                TransferDirection::Download => SyncActivityAction::Downloaded,
-            };
+            // Byte-progress completion is "the request body finished
+            // leaving our socket" — the HTTP response status (200 / 402
+            // / 5xx) has not been parsed yet. We log + emit the
+            // transfer-complete UI event here because both are
+            // best-effort progress signals, but we deliberately do NOT
+            // enqueue a `SyncActivityItem` from this point: that would
+            // record a server-rejected upload as a successful one.
+            // The enqueue lives in `build_file_synced_callback`, which
+            // hcfs-client fires only on per-file `Ok` (server-confirmed
+            // 2xx). See docs/plans/2026-05-13-sync-402-data-integrity.md.
             info!("{} complete [{}]: {} ({} bytes)", dir_name, ctx.label, file_name, total);
             let _ = ctx.app.emit(
                 crate::sync::events::FILE_TRANSFER_COMPLETE,
@@ -1751,13 +1757,6 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
                     label: ctx.label.to_string(),
                 },
             );
-            ctx.sync.add_pending_activity(SyncActivityItem {
-                file_name: std::sync::Arc::from(path_str),
-                action,
-                timestamp: chrono::Utc::now().timestamp(),
-                size_bytes: total,
-                label: Arc::clone(&ctx.label),
-            });
         }
     }
     debug!("{} [{}]: {}/{} bytes, path: {:?}", dir_name, ctx.label, bytes, total, path);
@@ -1925,7 +1924,7 @@ fn build_fetch_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) 
 /// soon as its individual AEAD verification has succeeded — instead of
 /// waiting for the entire sync cycle to finish. See
 /// [`crate::sync::progress::mark_file_synced`] for the full reasoning.
-fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_client::sync::FileSyncedFn {
+pub fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_client::sync::FileSyncedFn {
     Arc::new(move |rel_path, path_hash_hex, arion_cid, action, timestamps| {
         debug!("File synced [{label}]: {rel_path} ({action}) cid={arion_cid}");
         if rel_path.is_empty() {
@@ -1943,6 +1942,81 @@ fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_cl
         // also finishes.
         if let Err(e) = crate::sync::progress::mark_file_synced(&sync, rel_path) {
             warn!(label = %label, path = %rel_path, error = %e, "Failed to mark file synced in progress tracker");
+        }
+
+        // Activity items must reflect SERVER-CONFIRMED success, not just
+        // "the request body finished sending". hcfs-client's per-file
+        // upload/download tasks invoke this callback only after the
+        // task returns `Ok` (2xx response parsed for uploads, full
+        // chunked download + AEAD verification for downloads), so this
+        // is the earliest point a "Uploaded" / "Downloaded" row is true.
+        //
+        // The enqueue ran inside the byte-progress completion-tick
+        // before fix `2026-05-13-sync-402-data-integrity`. That site
+        // fires when the local TCP socket has drained, so a 402 /
+        // 5xx-rejected upload would still appear as "Uploaded" in the
+        // activity log. See docs/plans/2026-05-13-sync-402-data-integrity.md.
+        //
+        // Action mapping: hcfs-client passes `action` as one of
+        // `"uploaded"` / `"downloaded"` / `"deleted"` / `"conflict"`
+        // (mirroring `SyncActivityAction::as_str()`). Unknown values
+        // produce `None`, which skips the activity enqueue entirely —
+        // recording nothing is the truthful choice when we don't know
+        // how to categorize the event. Fabricating an `Uploaded` row
+        // for a future hcfs-client variant (e.g. Phase 2's `"failed"`)
+        // is the exact category of lie this task exists to eliminate.
+        //
+        // `size_bytes` is set to `0` because `FileSyncedFn`'s current
+        // signature (`Fn(&str, &str, &str, &str, Option<&FileTimestamps>)`)
+        // does not carry the byte count — only the byte-progress
+        // callback (which we no longer trust for activity rows) had it.
+        // Consequences accepted as Phase 1 deficits:
+        //
+        //   - `SyncActivityRow.size` (populated from this field at
+        //     `src-tauri/src/sync/status.rs:74`) reports `0` for items
+        //     enqueued here. The FE hook `app/lib/hooks/useSyncActivity.ts`
+        //     exposes the value as `size: number`, but no current FE
+        //     component consumes it (verified 2026-05-13). The latent
+        //     field still ships zero-valued.
+        //
+        //   - `ActivityDedupKey = (file_name, action, label, size_bytes)`
+        //     (`hcfs_client::engine::runner::ActivityDedupKey`) loses
+        //     entropy on its last component. Path + action + label
+        //     collisions are still possible without size, but no
+        //     production caller legitimately enqueues two `Uploaded`
+        //     rows for the same `(path, label)` within a single cycle
+        //     (hcfs-client serializes per-file work).
+        //
+        // Phase 2 Task 2.3 broadens `FileSyncedFn` into a richer event
+        // variant; that task threads `size_bytes` back through here.
+        let activity_action: Option<SyncActivityAction> = match action {
+            "uploaded" => Some(SyncActivityAction::Uploaded),
+            "downloaded" => Some(SyncActivityAction::Downloaded),
+            "deleted" => Some(SyncActivityAction::Deleted),
+            "conflict" => Some(SyncActivityAction::Conflict),
+            other => {
+                warn!(
+                    label = %label,
+                    path = %rel_path,
+                    action = other,
+                    "unknown FileSyncedFn action; skipping activity-item enqueue to preserve activity-log truth"
+                );
+                None
+            }
+        };
+        // Skip ONLY the activity enqueue on unknown actions —
+        // `upsert_synced_path` below still runs because the file did
+        // sync successfully (hcfs-client only fires this callback on
+        // per-file `Ok`); we just decline to categorize the event for
+        // the activity log.
+        if let Some(activity_action) = activity_action {
+            sync.add_pending_activity(SyncActivityItem {
+                file_name: Arc::from(rel_path),
+                action: activity_action,
+                timestamp: chrono::Utc::now().timestamp(),
+                size_bytes: 0,
+                label: Arc::clone(&label),
+            });
         }
 
         // hcfs's `FileSyncedFn` callback passes `path_hash_hex` as a hex
