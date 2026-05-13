@@ -205,3 +205,5 @@ export { default as LockClosed } from "./LockClosed";
 export { default as EyeOutline } from "./EyeOutline";
 export { default as Files } from "./Files";
 export { default as TriangleAlert } from "./TriangleAlert";
+export { default as HardDriveUpload } from "./HardDriveUpload";
+export { default as FolderPlus } from "./FolderPlus";
