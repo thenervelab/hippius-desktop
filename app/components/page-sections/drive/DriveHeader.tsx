@@ -321,7 +321,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           {/* Inner white card — wraps the filter row, chips, and file content. */}
           <div
             className={cn(
-              "w-full flex flex-col gap-2 pb-2.5",
+              "w-full flex flex-col pb-2.5",
               "bg-white border border-grey-dark-100 rounded-[8px]",
               "dark:bg-black-primary-bg dark:border-black-300",
             )}
@@ -366,8 +366,10 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             </div>
 
             {/* File content (DriveContent) — sits inside the inner white card so
-                the card border wraps the list/grid along with the filter row. */}
-            {children && <div className="px-2.5">{children}</div>}
+                the card border wraps the list/grid along with the filter row.
+                Rendered flush (no horizontal padding) so the table reaches the
+                inner card's edges, matching Figma node 4045:131491. */}
+            {children}
           </div>
         </div>
       )}

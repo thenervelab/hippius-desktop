@@ -315,7 +315,7 @@ const DriveContent: FC<DriveContentProps> = ({
           setBgContextMenu({ x: e.clientX, y: e.clientY });
         }}
         className={cn(
-          "w-full mt-2 relative select-none",
+          "w-full relative select-none",
           isRecentFiles &&
             viewMode === "card" &&
             filteredData.length > 0 &&

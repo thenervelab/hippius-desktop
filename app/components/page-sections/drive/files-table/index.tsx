@@ -531,7 +531,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       return [
         ...selectionColumn,
         columnHelper.accessor("name", {
-          header: "NAME",
+          header: "Name",
           enableSorting: true,
           id: "name",
           sortingFn: (rowA, rowB, columnId) =>
@@ -1119,6 +1119,11 @@ const FilesTable: FC<FilesTableProps> = memo(
           <TableModule.TableWrapper
             className={cn(
               "duration-300 delay-300 bg-white border-grey-dark-100 rounded-[8px] dark:bg-black-600 dark:border-black-300",
+              // Drive (non-recent) view: table sits flush inside the inner
+              // white card from DriveHeader, so its own rounded corners and
+              // outer border would compete visually with the card. Strip both.
+              // Recent Files keeps the standalone card look.
+              !isRecentFiles && "rounded-none border-0 bg-transparent",
             )}
             key={`table-${files?.length}-${isSelectionMode}`}
           >
@@ -1126,7 +1131,10 @@ const FilesTable: FC<FilesTableProps> = memo(
               className="w-full table-fixed"
               key={`table-${isSelectionMode}`}
             >
-              <TableModule.THead onContextMenu={onHeaderContextMenu}>
+              <TableModule.THead
+                onContextMenu={onHeaderContextMenu}
+                className={cn(!isRecentFiles ? "!bg-transparent" : "")}
+              >
                 {headerRows}
               </TableModule.THead>
               <TableModule.TBody>{tableBody}</TableModule.TBody>
