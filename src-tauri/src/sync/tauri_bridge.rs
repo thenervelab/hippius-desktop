@@ -186,6 +186,17 @@ impl SyncEventHandler for TauriSyncBridge {
                     let app_state = app.state::<crate::app_state::AppState>();
                     app_state.sync_session_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
+                    // Fresh cycle for this label — reset the running
+                    // 402 counter so the next `InsufficientBalance`
+                    // failure starts at `file_count = 1` and the FE
+                    // banner reflects only the new cycle's failures.
+                    // Clearing here (not on SyncCompleted) is correct
+                    // because the user-visible state is "this cycle's
+                    // failures, banner sticks until next cycle";
+                    // clearing on completion would erase the banner
+                    // before the user sees it.
+                    app_state.credits_exhausted.clear(&label);
+
                     let (banner_active, _) = app_state.upload_processing.snapshot();
                     if !banner_active && app_state.preparing.mark_preparing(&label) {
                         // Newly inserted — push a snapshot so the
@@ -360,6 +371,13 @@ impl SyncEventHandler for TauriSyncBridge {
                     let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
                     app_state.upload_processing.clear_if_session_advanced(&app, epoch);
                     app_state.preparing.clear(&label);
+                    // The cycle ended in a real error; the next
+                    // cycle should reset the 402 counter so its
+                    // banner shows only the new cycle's failures.
+                    // Cancels do NOT clear here — they early-return
+                    // above. A pause/resume/remove flow goes through
+                    // `SyncStopped`, which has its own clear.
+                    app_state.credits_exhausted.clear(&label);
                 }
                 let _ = app.emit(
                     events::SYNC_ERROR,
@@ -377,6 +395,11 @@ impl SyncEventHandler for TauriSyncBridge {
                 if app_state.preparing.clear(&label) {
                     app_state.sync.emit_snapshot(true);
                 }
+                // The drive's cycle ended (pause / remove / logout
+                // teardown). The 402 banner's running count is a
+                // per-cycle aggregate; clear it so a future resume /
+                // re-add starts at zero. Idempotent.
+                app_state.credits_exhausted.clear(&label);
                 let _ = app.emit(events::SYNC_STOPPED, events::LabelPayload { label });
             }
             SyncEvent::SyncReset { account_id, message } => {
@@ -385,6 +408,11 @@ impl SyncEventHandler for TauriSyncBridge {
                 if app_state.preparing.clear_all() {
                     app_state.sync.emit_snapshot(true);
                 }
+                // Account switch / logout / reset. Every per-drive
+                // 402 counter must be wiped before different account
+                // data could touch it — a stale `file_count` would
+                // pollute the banner for an unrelated user.
+                app_state.credits_exhausted.clear_all();
                 let _ = app.emit(events::SYNC_RESET, events::SyncResetPayload { account_id, message });
             }
             SyncEvent::PlanReady {
@@ -463,11 +491,48 @@ impl SyncEventHandler for TauriSyncBridge {
                 // Deliberately NOT performed:
                 //   - `hcfs_sync_error` emit: per-file failure ≠ cycle
                 //     failure; the cycle-level channel is reserved for
-                //     auth/cancel/transport-level errors.
+                //     auth/cancel/transport-level errors. This is also why
+                //     no generic "Sync Failed" notification row is created
+                //     for an InsufficientBalance failure: the FE notification
+                //     handler (`useFilesNotification.ts`) only creates
+                //     "Sync Failed" rows on `hcfs_sync_error`, which per-file
+                //     failures never trigger. Suppression is architectural,
+                //     not gated on a flag.
                 //   - Activity-item enqueue: Phase 1 Task 1.1 established
                 //     that activity rows only land on server-confirmed
                 //     success. Failures are visible via the snapshot's
                 //     Error status and the FILES_FAILED_REPEATEDLY event.
+
+                // InsufficientBalance failures additionally raise the
+                // "Out of credits" banner. The branch reads the typed
+                // variant BEFORE the `kind` value is moved into the
+                // FileFailed payload below — copying `balance_cents` /
+                // `required_cents` here avoids a clone of the whole
+                // upstream enum. The counter mutation happens here
+                // (not in the lifecycle callback) because (a) the
+                // counter is a UI-level aggregate, not a progress-row
+                // mutation, and (b) the bridge is the single emit
+                // site for the banner event — keeping the counter
+                // adjacent to its only reader avoids a split-brain
+                // risk where the count and the event disagree.
+                let credits_payload = if let hcfs_client::engine::events::FileFailureKind::InsufficientBalance {
+                    balance_cents,
+                    required_cents,
+                } = &kind
+                {
+                    use tauri::Manager;
+                    let app_state = app.state::<crate::app_state::AppState>();
+                    let file_count = app_state.credits_exhausted.record_failure(&label);
+                    Some(events::CreditsExhaustedPayload {
+                        label: label.clone(),
+                        balance_cents: *balance_cents,
+                        required_cents: *required_cents,
+                        file_count,
+                    })
+                } else {
+                    None
+                };
+
                 let _ = app.emit(
                     events::FILE_FAILED,
                     events::FileFailedPayload {
@@ -478,6 +543,14 @@ impl SyncEventHandler for TauriSyncBridge {
                         http_status,
                     },
                 );
+
+                // Emit the banner event after the per-file detail so
+                // listeners that subscribe to BOTH (e.g. a future
+                // diagnostics overlay) see them in causal order:
+                // file-row updates first, then the aggregate banner.
+                if let Some(payload) = credits_payload {
+                    let _ = app.emit(events::CREDITS_EXHAUSTED, payload);
+                }
             }
             SyncEvent::HealthChanged { health } => {
                 let _ = app.emit(events::CONNECTIVITY_CHANGED, &health);

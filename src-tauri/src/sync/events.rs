@@ -72,6 +72,16 @@ pub const FILE_FAILED: &str = "hcfs_file_failed";
 /// banner while `active = true`. State is owned by
 /// `crate::sync::upload_processing::UploadProcessingState`.
 pub const UPLOAD_PROCESSING: &str = "hcfs_upload_processing";
+/// Emitted when an `InsufficientBalance` (HTTP 402) per-file failure
+/// arrives at the bridge. Carries the latest `balance_cents` /
+/// `required_cents` from the server response plus a running
+/// `file_count` of 402'd files in the current cycle. The FE renders a
+/// dedicated "Out of credits" banner — distinct from the generic
+/// `hcfs_file_failed` per-file detail event so the banner can show a
+/// "Top up" CTA and survive across multiple 402'd files without
+/// flickering. State is owned by
+/// `crate::sync::credits_exhausted::CreditsExhaustedState`.
+pub const CREDITS_EXHAUSTED: &str = "hcfs_credits_exhausted";
 
 /// Exact stringification of [`hcfs_client::sync::SyncError::Cancelled`].
 ///
@@ -389,4 +399,31 @@ pub struct FileFailedPayload {
     pub file_id: String,
     pub kind: FileFailureKindPayload,
     pub http_status: Option<u16>,
+}
+
+/// Payload for [`CREDITS_EXHAUSTED`] — emitted alongside (not in place of)
+/// `FILE_FAILED` whenever a per-file failure carries the
+/// `InsufficientBalance` kind.
+///
+/// `balance_cents` / `required_cents` reflect the **latest** server
+/// response — concurrent failures inside the same cycle may report
+/// different values if the user partially tops up mid-cycle; the FE
+/// banner shows the most recent values, matching server truth at the
+/// last observed failure. `file_count` is the running total of 402'd
+/// files for `label` in the current sync cycle, sourced from
+/// [`crate::sync::credits_exhausted::CreditsExhaustedState::record_failure`].
+/// It resets to zero on the next `SyncStarted` for that label.
+///
+/// Note: this event is NOT a substitute for `FILE_FAILED`. The bridge
+/// emits both — the FE row icon listens to `FILE_FAILED`, the banner
+/// listens to this. Routing them through one event would force the
+/// banner to filter by kind and would make Task 2.7's per-file-row
+/// invariant fragile.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CreditsExhaustedPayload {
+    pub label: String,
+    pub balance_cents: i64,
+    pub required_cents: i64,
+    pub file_count: u32,
 }

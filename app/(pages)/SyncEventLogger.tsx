@@ -5,6 +5,7 @@ import { useSyncSnapshotListener } from "@/lib/hooks/useSyncSnapshot";
 import { useDriveStatuses } from "@/lib/hooks/useDriveStatuses";
 import { useServerCapabilities } from "@/lib/hooks/useServerCapabilities";
 import { useUploadProcessing } from "@/lib/hooks/useUploadProcessing";
+import { useCreditsExhausted } from "@/lib/hooks/useCreditsExhausted";
 
 /**
  * Invisible component that mounts the cross-cutting sync hooks:
@@ -13,6 +14,8 @@ import { useUploadProcessing } from "@/lib/hooks/useUploadProcessing";
  * - `useDriveStatuses()` — single producer for `driveStatusesAtom`,
  *   subscribed to the per-drive Rust events. Replaces the old global
  *   per-drive status hook (replaces the deleted global engine-status hook).
+ * - `useCreditsExhausted()` — writes the credits-exhausted atom on
+ *   `hcfs_credits_exhausted` events; the banner reads it.
  *
  * Must be rendered within an authenticated layout.
  */
@@ -21,6 +24,7 @@ export default function SyncEventLogger() {
   useUploadProcessing();
   useSyncSnapshotListener();
   useDriveStatuses();
+  useCreditsExhausted();
   // Caches `serverCapabilitiesAtom` once per session so share UI surfaces
   // can gate themselves on `shares: true` without each surface fetching
   // separately. Cleared automatically on logout.

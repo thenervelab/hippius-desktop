@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod control;
+pub mod credits_exhausted;
 pub mod device;
 pub mod drive_status;
 pub mod events;
