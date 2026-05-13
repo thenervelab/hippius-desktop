@@ -1017,11 +1017,12 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
         cache.clear();
     }
 
-    // 0c. Reset the upload-processing banner state so a logout / account
-    //     switch doesn't leave a stale "Processing N files…" banner up
-    //     for the next user. The reset is unconditional (clears even if
-    //     no upload was active) to make this path idempotent.
-    app_state.upload_processing.reset(&app);
+    // 0c. Reset the upload-processing banner state for EVERY label so a
+    //     logout / account switch doesn't leave a stale "Processing N files…"
+    //     banner up for the next user. `reset_all` is unconditional (clears
+    //     even if no upload was active) and emits one cleared payload per
+    //     previously-active label so the FE per-drive banners all clear.
+    app_state.upload_processing.reset_all(&app);
 
     // 1. Cancel every drive's cancellation token FIRST so the sync loop
     //    sees a clean shutdown signal and can persist state before exiting.
@@ -1748,7 +1749,7 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
             use tauri::Manager;
             let app_state = ctx.app.state::<crate::app_state::AppState>();
             let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-            app_state.upload_processing.clear_if_session_advanced(&ctx.app, epoch);
+            app_state.upload_processing.clear_if_session_advanced(&ctx.app, &ctx.label, epoch);
         }
 
         if crate::sync::logic::is_file_completion_tick(bytes, total) {

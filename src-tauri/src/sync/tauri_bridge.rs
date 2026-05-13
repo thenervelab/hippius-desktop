@@ -197,8 +197,15 @@ impl SyncEventHandler for TauriSyncBridge {
                     // before the user sees it.
                     app_state.credits_exhausted.clear(&label);
 
-                    let (banner_active, _) = app_state.upload_processing.snapshot();
-                    if !banner_active && app_state.preparing.mark_preparing(&label) {
+                    // Per-label check (Task 4.1): an IPC-initiated
+                    // upload banner is only an "already signalling"
+                    // affordance for ITS OWN drive. A banner active
+                    // on drive A must not suppress the preparing
+                    // widget for drive B — the pre-Task-4.1 global
+                    // `snapshot()` did exactly that and was Bug 4
+                    // in the original 402 diagnosis.
+                    let banner_active_for_label = app_state.upload_processing.is_active_for(&label);
+                    if !banner_active_for_label && app_state.preparing.mark_preparing(&label) {
                         // Newly inserted — push a snapshot so the
                         // widget reflects preparing within one tick
                         // of `SyncStarted`. Subsequent SyncStarted
@@ -288,15 +295,17 @@ impl SyncEventHandler for TauriSyncBridge {
                 // emitting a non-zero upload tick (empty plan,
                 // already-synced batch, downloads/deletes only), the
                 // first-chunk path in `handle_transfer_progress` never
-                // ran and the banner would otherwise stay raised.
-                // `clear_if_session_advanced` is idempotent and gated
-                // on the per-cycle epoch, so the common case (real
-                // upload already cleared it) is a no-op and an
+                // ran and the banner would otherwise stay raised for
+                // this label. `clear_if_session_advanced` is idempotent
+                // and gated on the per-cycle epoch, so the common case
+                // (real upload already cleared it) is a no-op and an
                 // overlapping in-flight cycle's completion cannot
-                // prematurely clear a NEW upload's banner.
+                // prematurely clear a NEW upload's banner. Scoped to
+                // THIS label (Task 4.1) — completion on drive A must
+                // not touch drive B's banner state.
                 {
                     let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-                    app_state.upload_processing.clear_if_session_advanced(&app, epoch);
+                    app_state.upload_processing.clear_if_session_advanced(&app, &label, epoch);
                 }
 
                 // Update per-file failure counters from the finalized session.
@@ -369,7 +378,10 @@ impl SyncEventHandler for TauriSyncBridge {
                     use tauri::Manager;
                     let app_state = app.state::<crate::app_state::AppState>();
                     let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-                    app_state.upload_processing.clear_if_session_advanced(&app, epoch);
+                    // Scoped to THIS label (Task 4.1) — an error on
+                    // drive A must not silently clear drive B's
+                    // pending upload banner.
+                    app_state.upload_processing.clear_if_session_advanced(&app, &label, epoch);
                     app_state.preparing.clear(&label);
                     // The cycle ended in a real error; the next
                     // cycle should reset the 402 counter so its

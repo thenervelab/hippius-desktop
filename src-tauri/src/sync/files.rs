@@ -139,13 +139,26 @@ pub async fn add_file(
     )
     .await?;
 
+    // Resolve the local sync-root path to its drive label. The
+    // banner state is per-label (Task 4.1) so an active banner on
+    // drive A no longer suppresses drive B's preparing widget. If
+    // the row is gone (race with a drive removal) `label_opt` is
+    // `None` and every banner write becomes a no-op for this IPC.
+    let pool = state.pool()?;
+    let label_opt = crate::sync::paths::label_for_sync_path(pool, &account_id, &sync_path)
+        .await
+        .ok()
+        .flatten();
+
     // Mark the processing window. Released either by the first upload
     // chunk of the NEXT sync cycle (success path, gated by
     // `sync_session_epoch` in `handle_transfer_progress`) or by the
     // error guard below (failure path — IPC failed before any cycle
     // ran, so unconditional `reset` is correct).
     let epoch = state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-    state.upload_processing.begin(&app, 1, epoch);
+    if let Some(label) = label_opt.as_deref() {
+        state.upload_processing.begin(&app, label, 1, epoch);
+    }
 
     // Canonicalize the sync path once and pass it to the internal helper
     // so the helper can be cheap when called per-file from the batch path.
@@ -157,14 +170,18 @@ pub async fn add_file(
     let canonical_parent = match tokio::fs::canonicalize(Path::new(&sync_path)).await {
         Ok(p) => p,
         Err(e) => {
-            state.upload_processing.reset(&app);
+            if let Some(label) = label_opt.as_deref() {
+                state.upload_processing.reset(&app, label);
+            }
             return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
         }
     };
     match add_file_internal(&canonical_parent, &file_path).await {
         Ok(name) => Ok(name),
         Err(e) => {
-            state.upload_processing.reset(&app);
+            if let Some(label) = label_opt.as_deref() {
+                state.upload_processing.reset(&app, label);
+            }
             Err(e)
         }
     }
@@ -195,6 +212,15 @@ pub async fn add_folder(
     )
     .await?;
 
+    // Resolve `sync_path` → drive label so the banner state can be
+    // scoped per-label (Task 4.1). Banner writes degrade to no-op
+    // when the row is absent (drive removed mid-IPC race).
+    let pool = state.pool()?;
+    let label_opt = crate::sync::paths::label_for_sync_path(pool, &account_id, &sync_path)
+        .await
+        .ok()
+        .flatten();
+
     // Pre-walk the source tree so the banner shows an accurate count.
     // Cheap relative to the full copy (no file-content reads).
     //
@@ -206,9 +232,11 @@ pub async fn add_folder(
     // can complete without firing `SyncCompleted` in some hcfs-client
     // configurations).
     let count = count_regular_files(Path::new(&folder_path)).await;
-    if count > 0 {
+    if count > 0
+        && let Some(label) = label_opt.as_deref()
+    {
         let epoch = state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-        state.upload_processing.begin(&app, count, epoch);
+        state.upload_processing.begin(&app, label, count, epoch);
     }
 
     let result = add_folder_with_app_inner(&sync_path, &folder_path, subfolder.as_deref()).await;
@@ -222,8 +250,11 @@ pub async fn add_folder(
         }
         Err(e) => {
             // IPC failed before any sync cycle ran — unconditional
-            // reset is correct (no cycle epoch to gate on).
-            state.upload_processing.reset(&app);
+            // reset is correct (no cycle epoch to gate on). No-op
+            // when no label resolved or when `begin` was skipped.
+            if let Some(label) = label_opt.as_deref() {
+                state.upload_processing.reset(&app, label);
+            }
             Err(e)
         }
     }
@@ -602,6 +633,10 @@ pub struct AddFilesResult {
 /// would silently use the wrong threshold if the FE classified
 /// incorrectly.
 #[tauri::command]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Linear early-return flow with per-step banner reset (Task 4.1); splitting into helpers would either re-route the banner reset through trait/closure plumbing or fragment the canonicalize-then-validate sequence."
+)]
 pub async fn add_files(
     app: AppHandle,
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -650,49 +685,67 @@ pub async fn add_files(
             total_count = total_count.saturating_add(1);
         }
     }
-    if total_count > 0 {
+    // Resolve `sync_path` → drive label once before any banner write
+    // so the per-label state (Task 4.1) can route every `begin`/`reset`
+    // for this IPC to the right drive. Banner writes degrade to no-op
+    // when the row is absent.
+    let pool = state.pool()?;
+    let label_opt = crate::sync::paths::label_for_sync_path(pool, &account_id, &sync_path)
+        .await
+        .ok()
+        .flatten();
+
+    if total_count > 0
+        && let Some(label) = label_opt.as_deref()
+    {
         let epoch = state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-        state.upload_processing.begin(&app, total_count, epoch);
+        state.upload_processing.begin(&app, label, total_count, epoch);
     }
+
+    // Reset helper: scoped to the resolved label, no-op when none.
+    // Each fallible early-return path below calls this before
+    // returning so the banner doesn't sit until the watchdog timeout.
+    // Unconditional reset is correct here because the IPC failed
+    // before any sync cycle could run.
+    let reset_banner = |app: &AppHandle, state: &crate::app_state::AppState| {
+        if let Some(label) = label_opt.as_deref() {
+            state.upload_processing.reset(app, label);
+        }
+    };
 
     // When a subfolder is specified, resolve the effective target directory.
     // This replaces the path-join logic that was previously in TypeScript.
     // Async canonicalize so a slow filesystem doesn't block the tokio worker.
-    //
-    // After `begin` above, every fallible early-return path here MUST call
-    // `reset` first — otherwise the banner sits there until the watchdog
-    // timeout while the IPC has already failed. Unconditional `reset` is
-    // correct because the IPC failed before any sync cycle could run.
     let target_path = if let Some(ref sub) = subfolder {
         // Reject traversal components
         if sub.contains("..") {
-            state.upload_processing.reset(&app);
+            reset_banner(&app, &state);
             return Err(crate::error::AppError::Other("Subfolder path contains traversal component".into()));
         }
         let target = Path::new(&sync_path).join(sub);
         if !target.exists()
             && let Err(e) = std::fs::create_dir_all(&target)
         {
-            state.upload_processing.reset(&app);
+            reset_banner(&app, &state);
             return Err(crate::error::AppError::Other(format!("Failed to create subfolder: {e}")));
         }
         // Verify resolved path stays within sync root.
         let canonical_root = match tokio::fs::canonicalize(Path::new(&sync_path)).await {
             Ok(p) => p,
             Err(e) => {
-                state.upload_processing.reset(&app);
+                reset_banner(&app, &state);
                 return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
             }
         };
         let canonical_target = match tokio::fs::canonicalize(&target).await {
             Ok(p) => p,
             Err(e) => {
-                state.upload_processing.reset(&app);
+                reset_banner(&app, &state);
                 return Err(crate::error::AppError::Other(format!("Invalid subfolder path: {e}")));
             }
         };
         if !canonical_target.starts_with(&canonical_root) {
-            state.upload_processing.reset(&app);
+            reset_banner(&app, &state);
             return Err(crate::error::AppError::Other("Subfolder escapes sync folder".into()));
         }
         target.to_string_lossy().to_string()
@@ -706,7 +759,7 @@ pub async fn add_files(
     let canonical_target = match tokio::fs::canonicalize(Path::new(&target_path)).await {
         Ok(p) => p,
         Err(e) => {
-            state.upload_processing.reset(&app);
+            reset_banner(&app, &state);
             return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
         }
     };
@@ -754,10 +807,10 @@ pub async fn add_files(
     // Unconditional `reset` is correct: the batch never produced any
     // upload work, so there is no future cycle whose epoch we need
     // to gate against. `reset` is safe even if `begin` was never
-    // called (e.g. `total_count` was 0 above): it short-circuits when
-    // state is already inactive.
+    // called (e.g. `total_count` was 0 above): the per-label `remove`
+    // short-circuits when no entry exists.
     if added.is_empty() {
-        state.upload_processing.reset(&app);
+        reset_banner(&app, &state);
     }
 
     // Always trigger sync so successfully added files get uploaded
@@ -2262,14 +2315,9 @@ mod tests {
             .await
             .expect_err("must reject sync root as source");
         let msg = err.to_string();
-        assert!(
-            msg.contains("Cannot add the sync folder"),
-            "unexpected error message: {msg}"
-        );
+        assert!(msg.contains("Cannot add the sync folder"), "unexpected error message: {msg}");
 
-        let nested = sync_dir
-            .path()
-            .join(sync_dir.path().file_name().unwrap());
+        let nested = sync_dir.path().join(sync_dir.path().file_name().unwrap());
         assert!(!nested.exists(), "no recursive child must be created");
     }
 
@@ -2285,10 +2333,7 @@ mod tests {
             .await
             .expect_err("must reject ancestor as source");
         let msg = err.to_string();
-        assert!(
-            msg.contains("Cannot add the sync folder"),
-            "unexpected error message: {msg}"
-        );
+        assert!(msg.contains("Cannot add the sync folder"), "unexpected error message: {msg}");
 
         let outer_name = outer.path().file_name().unwrap();
         assert!(!sync_dir.join(outer_name).exists());
@@ -2304,10 +2349,7 @@ mod tests {
             .await
             .expect_err("must reject sync root as source");
         let msg = err.to_string();
-        assert!(
-            msg.contains("Cannot add the sync folder"),
-            "unexpected error message: {msg}"
-        );
+        assert!(msg.contains("Cannot add the sync folder"), "unexpected error message: {msg}");
     }
 
     // --- filter_file_entries / apply_file_filters ---
