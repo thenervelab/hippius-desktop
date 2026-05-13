@@ -58,36 +58,38 @@ const TableActionMenu = memo(function TableActionMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        className="bg-white border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)]
-         rounded-lg overflow-hidden p-0 min-w-[9.375rem]"
+        className="rounded-lg overflow-hidden p-1.5 min-w-[12.5rem]
+         bg-white dark:bg-[#1f1f1f]
+         border border-grey-80 dark:border-[#3a3a3a]
+         shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] dark:shadow-[0px_12px_32px_8px_rgba(0,0,0,0.4)]"
       >
         {/* Dropdown title */}
         {dropdownTitle && (
-          <div className="text-xs font-medium !text-grey-40 p-2 border-b border-grey-80 uppercase tracking-wide">
+          <div className="text-xs font-medium !text-grey-40 dark:!text-grey-dark-600 px-2 pt-1 pb-2 uppercase tracking-wide">
             {dropdownTitle}
           </div>
         )}
 
         {/* Menu items */}
         {filteredItems.map((item, index) => {
-          const isLast = index === filteredItems.length - 1;
           const defaultClassName = cn(
-            "flex items-center gap-2 p-2 text-xs font-medium",
-            !isLast && "border-b border-grey-80",
+            "flex items-center gap-2.5 px-1.5 py-1.5 rounded-md",
             item.disabled
               ? "opacity-60 cursor-not-allowed pointer-events-none"
               : cn(
                 "cursor-pointer",
                 item.variant === "destructive"
-                  ? "hover:!text-error-70 !text-error-60"
-                  : "hover:!text-grey-40 !text-grey-30"
+                  ? "!text-error-60 hover:!text-error-70 hover:bg-error-100/40 dark:!text-[#fc7d73] dark:hover:bg-[#fc7d73]/10"
+                  : "!text-[#52525C] hover:!text-grey-10 hover:bg-grey-90 dark:!text-grey-dark-300 dark:hover:!text-white dark:hover:bg-white/5"
               )
           );
 
           const itemContent = (
             <>
               {item.icon}
-              <span>{item.itemTitle}</span>
+              <span className="font-geist text-[14px] font-medium leading-4 tracking-[-0.4px] line-clamp-1 flex-[1_0_0] overflow-hidden text-ellipsis">
+                {item.itemTitle}
+              </span>
             </>
           );
 
