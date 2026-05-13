@@ -207,3 +207,7 @@ export { default as Files } from "./Files";
 export { default as TriangleAlert } from "./TriangleAlert";
 export { default as HardDriveUpload } from "./HardDriveUpload";
 export { default as FolderPlus } from "./FolderPlus";
+export { default as Clock8 } from "./Clock8";
+export { default as Database } from "./Database";
+export { default as Folders } from "./Folders";
+export { default as EllipsisVertical } from "./EllipsisVertical";
