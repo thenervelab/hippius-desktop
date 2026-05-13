@@ -229,7 +229,7 @@ export function LocalFoldersSection({
                   // onSelectFolder and keeps the subtler hover.
                   onSelectFolder
                     ? "cursor-pointer [&_*]:cursor-pointer hover:bg-primary-100 dark:hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50"
-                    : "hover:bg-grey-98 dark:hover:bg-white/5",
+                    : "hover:bg-grey-light-400 dark:hover:bg-white/5",
                 )}
                 onClick={(e) => {
                   if (!onSelectFolder) return;
@@ -291,7 +291,7 @@ export function LocalFoldersSection({
                     )}
                     {folder.fileCount !== undefined && folder.fileCount > 0 && (
                       <>
-                        <span aria-hidden="true" className="w-[2.354px] h-[2.354px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+                        <span aria-hidden="true" className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
                         <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
                           <Icons.Folders className="size-3.5 text-[#1F50BD]" />
                           {folder.fileCount}{" "}
@@ -301,7 +301,7 @@ export function LocalFoldersSection({
                     )}
                     {folder.lastModified !== undefined && folder.lastModified > 0 && (
                       <>
-                        <span aria-hidden="true" className="w-[2.354px] h-[2.354px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+                        <span aria-hidden="true" className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
                         <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
                           <Icons.Clock8 className="size-3.5 text-[#1F50BD]" />
                           {formatRowDate(folder.lastModified)}
