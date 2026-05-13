@@ -153,7 +153,7 @@ export function LocalFoldersSection({
             <Icons.Loader className="size-6 animate-spin text-primary-50" />
           </div>
         ) : syncFolders.length === 0 ? (
-          <div className="flex min-h-[112px] flex-col items-center justify-center gap-[5px] px-4 py-6 text-center">
+          <div className="flex min-h-[139px] flex-col items-center justify-center gap-[5px] px-4 py-6 text-center">
             <p className="font-geist text-[14px] font-medium leading-[20px] tracking-[-0.28px] text-black dark:text-white">
               No Folder Syncing Yet
             </p>
