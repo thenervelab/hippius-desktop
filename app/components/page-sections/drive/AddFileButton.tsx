@@ -35,6 +35,19 @@ type AddButtonProps = {
   className?: string;
   disabled?: boolean; // Optional external disabled state
   defaultFolderLabel?: string | null;
+  // When set, the dialog opens UploadFilesFlow in `mode="folder"` so files
+  // are uploaded into a specific nested subfolder instead of the root of
+  // the active sync folder. Used by the nested drive view (breadcrumb-based
+  // folder browsing inside DriveContainer).
+  nestedUpload?: {
+    folderName: string;
+    /** Path relative to the sync root, e.g. "Photos/2024". */
+    subfolder?: string;
+    /** Resolved sync-root absolute path for the active drive. */
+    syncBasePath?: string;
+    /** Fired after a successful upload so the parent can refresh listings. */
+    onSuccess?: () => void;
+  };
 };
 
 // Add ref interface for parent components to trigger the dialog.
@@ -49,7 +62,10 @@ export interface AddButtonRef {
 }
 
 const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
-  ({ className, disabled: externalDisabled, defaultFolderLabel }, ref) => {
+  (
+    { className, disabled: externalDisabled, defaultFolderLabel, nestedUpload },
+    ref,
+  ) => {
     // Keep state simple and isolated
     const [isOpen, setIsOpen] = useState(false);
 
@@ -136,7 +152,27 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
 
     // Render current step content - memoized to prevent unnecessary re-renders
     const renderStepContent = useMemo(() => {
-      // Always show upload-file flow for both private and public
+      // In nested mode, hand off to UploadFilesFlow's folder branch so the
+      // upload targets `<syncBasePath>/<subfolder>` instead of the root of
+      // the active sync drive.
+      if (nestedUpload) {
+        return (
+          <UploadFilesFlow
+            key="upload-file-nested"
+            mode="folder"
+            folderName={nestedUpload.folderName}
+            subfolder={nestedUpload.subfolder}
+            syncBasePath={nestedUpload.syncBasePath}
+            initialFiles={droppedFiles}
+            initialPaths={droppedPaths}
+            onSuccess={() => {
+              nestedUpload.onSuccess?.();
+              closeDialog();
+            }}
+            onCancel={closeDialog}
+          />
+        );
+      }
       return (
         <UploadFilesFlow
           key="upload-file"
@@ -146,7 +182,13 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           defaultFolderLabel={defaultFolderLabel}
         />
       );
-    }, [droppedFiles, droppedPaths, closeDialog, defaultFolderLabel]);
+    }, [
+      droppedFiles,
+      droppedPaths,
+      closeDialog,
+      defaultFolderLabel,
+      nestedUpload,
+    ]);
 
     return (
       <>

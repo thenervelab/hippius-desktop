@@ -316,10 +316,11 @@ const DriveContent: FC<DriveContentProps> = ({
         }}
         className={cn(
           "w-full relative select-none",
-          isRecentFiles &&
-            viewMode === "card" &&
+          viewMode === "card" && filteredData.length > 0 && "px-2.5",
+          viewMode === "card" &&
             filteredData.length > 0 &&
-            "px-2.5",
+            !isRecentFiles &&
+            "mt-[11px]",
           isDragging &&
             "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10",
         )}

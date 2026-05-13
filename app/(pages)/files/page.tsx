@@ -1,38 +1,20 @@
 "use client";
 
-import DashboardTitleWrapper from "@/app/components/dashboard-title-wrapper";
-import FolderView from "@/app/components/page-sections/files-folder";
 import { Drive } from "@/components/page-sections";
 import { FC } from "react";
-import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import PageHeader from "@/components/ui/page-header";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { InfoCircle } from "@/app/components/ui/icons";
 
 const DRIVE_DOCS_URL = "https://docs.hippius.com/use/desktop/file-system";
+
 const FilesPage: FC = () => {
-  const { getParam } = useUrlParams();
-
-  const folderCid = getParam("folderCid");
-  const folderName = getParam("folderName", "");
-  const folderActualName = getParam("folderActualName", "");
-  const mainFolderActualName = getParam("mainFolderActualName", "");
-  const subFolderPath = getParam("subFolderPath");
-
-  if (folderName) {
-    return (
-      <DashboardTitleWrapper mainText={`My Drive - ${folderName}`}>
-        <FolderView
-          folderCid={folderCid}
-          folderName={folderName}
-          folderActualName={folderActualName}
-          mainFolderActualName={mainFolderActualName}
-          subFolderPath={subFolderPath}
-        />
-      </DashboardTitleWrapper>
-    );
-  }
+  // Nested folder browsing used to live on a separate route (FolderView).
+  // It now folds back into DriveContainer, which reads the URL params
+  // (folderName, subFolderPath, folderSource…) itself and renders the
+  // breadcrumb-based view in-place. The page wrapper stays the same in
+  // both the root and nested cases.
   return (
     <>
       <PageHeader

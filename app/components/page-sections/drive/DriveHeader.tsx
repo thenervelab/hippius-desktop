@@ -9,7 +9,10 @@ import StorageStateList from "./storage-stats";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import FilterChips from "./filter-chips";
 import FolderUploadDialog from "./FolderUploadDialog";
-import SyncFolderBreadcrumb from "./SyncFolderBreadcrumb";
+import FolderToFolderUploadDialog from "./FolderToFolderUploadDialog";
+import SyncFolderBreadcrumb, {
+  BreadcrumbSegment,
+} from "./SyncFolderBreadcrumb";
 import { useFilesNavigation } from "@/lib/hooks/useFilesNavigation";
 
 import useNavigationLoader from "@/app/lib/hooks/useNavigationLoader";
@@ -84,8 +87,28 @@ interface DriveHeaderProps {
   // Breadcrumb props — rendered as the first line of the drive (non-recent) header.
   // The breadcrumb lives inside DriveHeader so line 1 (breadcrumb + action buttons)
   // and line 2 (filter pills + stats/search/view-mode) can share one flex column.
-  folderDisplayName?: string | null;
+  breadcrumbSegments?: BreadcrumbSegment[];
   onBreadcrumbLocalClick?: () => void;
+  // Nested folder browsing mode. When `isNested` is true:
+  //  - the "+ Add Files" upload and the "+ New Folder" creation target
+  //    `nestedSubfolderPath` instead of the active sync drive's root,
+  //  - per-folder stats (StorageStateList) are hidden,
+  //  - a "Download Folder" pill is shown next to "+ New Folder".
+  isNested?: boolean;
+  /** Display name of the folder the user is currently inside. Used as the upload dialog title. */
+  nestedFolderName?: string | null;
+  /** Sync-root-relative path of the current folder (e.g. "Photos/2024"). */
+  nestedSubfolderPath?: string | null;
+  /** Absolute filesystem path of the active sync drive's root. */
+  nestedSyncBasePath?: string | null;
+  /** "mainFolderActualName" portion expected by FolderToFolderUploadDialog. */
+  nestedMainFolderActualName?: string | null;
+  /** Fires when a nested upload (file or folder) completes successfully. */
+  onNestedUploadSuccess?: () => void;
+  /** Click handler for the "Download Folder" pill, shown only when nested. */
+  onDownloadFolder?: () => void;
+  /** Disable the download button while a download is in flight. */
+  isDownloadingFolder?: boolean;
   // File content (DriveContent). For the drive (non-recent) layout this is
   // rendered INSIDE the inner white card so the card border wraps both the
   // filter row and the file list — matches Figma node 4045:116493.
@@ -120,8 +143,16 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   defaultFolderLabel,
   isFolderUploadOpen: isFolderUploadOpenProp,
   onSetFolderUploadOpen,
-  folderDisplayName = null,
+  breadcrumbSegments = [],
   onBreadcrumbLocalClick,
+  isNested = false,
+  nestedFolderName = null,
+  nestedSubfolderPath = null,
+  nestedSyncBasePath = null,
+  nestedMainFolderActualName = null,
+  onNestedUploadSuccess,
+  onDownloadFolder,
+  isDownloadingFolder = false,
   children,
 }) => {
   const [isFolderUploadOpenLocal, setIsFolderUploadOpenLocal] = useState(false);
@@ -177,6 +208,26 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         </Button>
       )}
 
+      {/* Download Folder — only when browsing inside a nested folder.
+          Same secondary pill style as "+ New Folder" so it doesn't compete
+          with the primary "+ New File" CTA. */}
+      {isNested && onDownloadFolder && (
+        <Button
+          variant="defaultStable"
+          size="auto"
+          onClick={onDownloadFolder}
+          disabled={isDownloadingFolder}
+          className={SECONDARY_PILL_CLASSES}
+        >
+          {isDownloadingFolder ? (
+            <Icons.Loader className="size-4 animate-spin" />
+          ) : (
+            <Icons.DocumentDownload className="size-4" />
+          )}
+          Download Folder
+        </Button>
+      )}
+
       {/* Add File button - disabled for recent files with no sync paths or when sync is paused */}
       {isRecentFiles && hasNoSyncPaths ? (
         <Button
@@ -193,6 +244,16 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             ref={addButtonRef}
             disabled={IS_SYNC_PAUSED}
             defaultFolderLabel={defaultFolderLabel}
+            nestedUpload={
+              isNested && nestedFolderName
+                ? {
+                    folderName: nestedFolderName,
+                    subfolder: nestedSubfolderPath ?? undefined,
+                    syncBasePath: nestedSyncBasePath ?? undefined,
+                    onSuccess: onNestedUploadSuccess,
+                  }
+                : undefined
+            }
           />
         )
       )}
@@ -308,7 +369,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               row stays compact and vertically aligned with the buttons. */}
           <div className="flex items-center justify-between gap-4 flex-wrap min-w-0 w-full px-2.5 py-2">
             <SyncFolderBreadcrumb
-              folderDisplayName={folderDisplayName}
+              segments={breadcrumbSegments}
               onLocalClick={onBreadcrumbLocalClick ?? (() => {})}
               className="mt-0 mb-0"
             />
@@ -342,10 +403,15 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                   onFileSizesChange={onFileSizesChange}
                 />
                 <div className="flex items-center gap-3 shrink-0">
-                  <StorageStateList
-                    storageUsed={formattedStorageSize}
-                    numberOfFiles={allFilteredDataLength || 0}
-                  />
+                  {/* Stats are hidden inside a nested folder — the totals
+                      relate to the active sync drive as a whole, which is
+                      a confusing reference once the user has dived in. */}
+                  {!isNested && (
+                    <StorageStateList
+                      storageUsed={formattedStorageSize}
+                      numberOfFiles={allFilteredDataLength || 0}
+                    />
+                  )}
                   <SearchInput
                     value={searchTerm}
                     onChange={handleSearchChange}
@@ -374,13 +440,31 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         </div>
       )}
 
-      {/* Folder Upload Dialog */}
-      <FolderUploadDialog
-        open={isFolderUploadOpen}
-        onClose={() => setIsFolderUploadOpen(false)}
-        onRefresh={refetchUserFiles}
-        defaultFolderLabel={defaultFolderLabel}
-      />
+      {/* Folder Upload Dialog. In nested mode the "+ New Folder" button
+          uploads a directory INTO the current nested location, so we use
+          the to-folder variant. In root mode it uploads into the sync
+          drive's root and we use the existing FolderUploadDialog. */}
+      {isNested && nestedFolderName ? (
+        <FolderToFolderUploadDialog
+          open={isFolderUploadOpen}
+          onClose={() => setIsFolderUploadOpen(false)}
+          onRefresh={() => {
+            onNestedUploadSuccess?.();
+            refetchUserFiles();
+          }}
+          parentFolderName={nestedFolderName}
+          mainFolderActualName={nestedMainFolderActualName ?? undefined}
+          subFolderPath={nestedSubfolderPath ?? undefined}
+          syncBasePath={nestedSyncBasePath ?? undefined}
+        />
+      ) : (
+        <FolderUploadDialog
+          open={isFolderUploadOpen}
+          onClose={() => setIsFolderUploadOpen(false)}
+          onRefresh={refetchUserFiles}
+          defaultFolderLabel={defaultFolderLabel}
+        />
+      )}
     </>
   );
 };

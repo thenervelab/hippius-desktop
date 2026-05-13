@@ -8,7 +8,11 @@ import React, {
   useCallback,
   useRef,
 } from "react";
-import useUserFiles from "@/app/lib/hooks/use-user-files";
+import { useRouter } from "next/navigation";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import useUserFiles, {
+  FormattedUserFile,
+} from "@/app/lib/hooks/use-user-files";
 import useRecentFiles from "@/lib/hooks/use-recent-files";
 import { WaitAMoment } from "@/components/ui";
 import * as Typography from "@/components/ui/typography";
@@ -24,6 +28,10 @@ import {
 import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import DriveHeader from "./DriveHeader";
 import DriveContent from "./DriveContent";
+import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
+import { useNestedFolderListing } from "@/app/lib/hooks/use-nested-folder-listing";
+import { downloadFolder } from "@/app/lib/utils/downloadFolder";
+import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   settingsDialogOpenAtom,
@@ -83,13 +91,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     refetch: refetchRecentFiles,
   } = useRecentFiles();
 
-  // Set loading and fetching based on current view
-  const isLoading = isRecentFiles
-    ? isRecentFilesLoading
-    : isRegularFilesLoading;
-  const isFetching = isRecentFiles
-    ? isRecentFilesFetching
-    : isRegularFilesFetching;
+  // Loading + fetching flags are computed AFTER nested-mode resolution
+  // below (so they can branch on `isNested`). See `isLoading` / `isFetching`
+  // declarations following the `useNestedFolderListing` call.
+
   const addButtonRef = useRef<{
     openWithFiles(files: FileList): Promise<void>;
     openWithPaths(paths: string[]): Promise<void>;
@@ -193,36 +198,131 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     return names;
   }, [driveStatuses]);
 
+  // ── Nested folder browsing (URL-param driven) ──────────────────────────────
+  //
+  // When the user clicks a folder row in DriveContent, NameCell builds a
+  // `/files?folderName=…&subFolderPath=…&folderSource=…` URL via <Link>.
+  // The legacy FolderView page used to handle that URL on a separate route;
+  // it's now collapsed into DriveContainer so the breadcrumb + filters keep
+  // working consistently with the root drive view. Persistence rules
+  // (only the top-level sync folder label is saved to user prefs) are
+  // preserved — nested navigation never calls `saveActiveSyncFolderLabel`.
+  const router = useRouter();
+  const { getParam } = useUrlParams();
+  const urlFolderName = getParam("folderName");
+  const urlMainFolderActualName = getParam("mainFolderActualName");
+  const urlSubFolderPath = getParam("subFolderPath");
+  const urlFolderSource = getParam("folderSource");
+  const urlMainReqHash = getParam("mainReqHash");
+  const isNested = !isRecentFiles && Boolean(urlFolderName && urlSubFolderPath);
+
+  // Resolve which sync drive the nested URL points at. `folderSource` is the
+  // local FS path the user navigated from, so we match it against
+  // driveStatuses (Map<label, entry>) to back out the (label, syncPath) pair
+  // — same logic the old FolderView used (synchronous, no IPC).
+  const nestedDrive = useMemo(() => {
+    if (!isNested) return null;
+    if (urlFolderSource) {
+      for (const [label, entry] of driveStatuses) {
+        if (entry.path && urlFolderSource.startsWith(entry.path)) {
+          return { label, syncPath: entry.path };
+        }
+      }
+    }
+    // Fallback: use the active sync folder label's entry if folderSource
+    // is missing or doesn't match (e.g. cold deep-link from elsewhere).
+    if (activeSyncFolderLabel) {
+      const entry = driveStatuses.get(activeSyncFolderLabel);
+      if (entry?.path) {
+        return { label: activeSyncFolderLabel, syncPath: entry.path };
+      }
+    }
+    return null;
+  }, [isNested, urlFolderSource, driveStatuses, activeSyncFolderLabel]);
+
+  // Bumping this re-fetches the nested listing. Used by the Refresh button,
+  // by upload-success callbacks, and by sync-completed window events so the
+  // nested view stays in step with the rest of the app.
+  const [nestedRefreshKey, setNestedRefreshKey] = useState(0);
+  useEffect(() => {
+    if (!isNested) return;
+    const handler = () => setNestedRefreshKey((prev) => prev + 1);
+    window.addEventListener("sync_files_completed_changed", handler);
+    return () =>
+      window.removeEventListener("sync_files_completed_changed", handler);
+  }, [isNested]);
+
+  const nestedListing = useNestedFolderListing({
+    accountId: polkadotAddress,
+    syncPath: nestedDrive?.syncPath ?? null,
+    subfolder: urlSubFolderPath || null,
+    label: nestedDrive?.label ?? null,
+    refreshKey: nestedRefreshKey,
+    enabled: isNested,
+  });
+
+  const refreshNestedListing = useCallback(() => {
+    setNestedRefreshKey((prev) => prev + 1);
+  }, []);
+
+  // Loading + fetching flags branched across the three view modes:
+  //   - recent files (read-only): use the recent-files query flags
+  //   - nested folder browsing: use the nested-listing hook's flags
+  //   - root drive view: use the regular useUserFiles flags
+  const isLoading = isRecentFiles
+    ? isRecentFilesLoading
+    : isNested
+      ? nestedListing.isLoading
+      : isRegularFilesLoading;
+  const isFetching = isRecentFiles
+    ? isRecentFilesFetching
+    : isNested
+      ? nestedListing.isRefreshing
+      : isRegularFilesFetching;
+
   // Get the appropriate data based on view mode
   const allData = useMemo(() => {
     if (isRecentFiles) {
       return recentFilesData || [];
-    } else if (regularFilesData?.files) {
+    }
+    if (isNested) {
+      return nestedListing.data;
+    }
+    if (regularFilesData?.files) {
       return regularFilesData.files.filter((file) => !file.deleted);
     }
     return [];
-  }, [isRecentFiles, recentFilesData, regularFilesData?.files]);
+  }, [
+    isRecentFiles,
+    isNested,
+    nestedListing.data,
+    recentFilesData,
+    regularFilesData?.files,
+  ]);
 
   // Prune the list down to the private-files universe the files page
   // displays. The folder-tab cut is delegated to Rust's filter along with
   // every other filter — keeping the type cut here keeps recents vs.
   // private as a TS-owned concern (it's part of *which view* the user
-  // picked, not a filter the chip UI exposes).
+  // picked, not a filter the chip UI exposes). Nested listings are already
+  // pre-scoped to one private sync drive so the type cut would be a no-op.
   const allFilteredData = useMemo(() => {
-    if (isRecentFiles) return allData;
+    if (isRecentFiles || isNested) return allData;
     return allData.filter(
       (file) => (file.type?.toLowerCase() || "") === "private",
     );
-  }, [allData, isRecentFiles]);
+  }, [allData, isRecentFiles, isNested]);
 
   // Rust owns the filter chain — search, type, date, size, folder tab.
   // `useFilteredFiles` debounces fast typing so we don't IPC per keystroke.
+  // In nested mode the listing is already scoped to one folder, so
+  // `folderTab` is null (no second-pass label filter needed).
   const filteredData = useFilteredFiles(allFilteredData, {
     searchTerm,
     fileTypes: filterState.fileTypes,
     dateFilter: filterState.date,
     fileSizes: filterState.fileSizes,
-    folderTab: isRecentFiles ? null : activeSyncFolderLabel,
+    folderTab: isRecentFiles || isNested ? null : activeSyncFolderLabel,
   });
 
   // Infinite scroll state for list and card views
@@ -577,9 +677,48 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // browse contents) — the old tab right-click menu is gone. Those flows
   // are still wired inside DriveOnboarding via LocalFoldersSection's
   // action menu, so removing them from here does not lose functionality.
+  //
+  // When the user clicks "Local" while inside a nested URL, we also have to
+  // drop the nested query string — otherwise the page would re-mount into
+  // nested mode immediately. Same for the sync-folder breadcrumb segment
+  // and the deeper nested-segment jumps below.
   const handleNavigateToLocalView = useCallback(() => {
     setIsOnLocalView(true);
-  }, []);
+    if (isNested) {
+      router.push("/files");
+    }
+  }, [isNested, router]);
+
+  // Click on the top-level sync folder segment (e.g. "MyDrive" in
+  // Local > MyDrive > Photos > 2024). Pops the user back to that drive's
+  // root listing and persists it as the active folder.
+  const handleNavigateToSyncFolderRoot = useCallback(
+    (label: string) => {
+      setActiveSyncFolderLabel(label);
+      setIsOnLocalView(false);
+      void saveActiveSyncFolderLabel(label);
+      router.push("/files");
+    },
+    [router],
+  );
+
+  // Click on an intermediate nested segment. Rebuilds the URL so we
+  // navigate to that exact sub-path inside the same sync drive.
+  const handleNavigateToBreadcrumbSegment = useCallback(
+    (segmentName: string, subPathTo: string) => {
+      const params = new URLSearchParams();
+      const parts = subPathTo.split("/").filter(Boolean);
+      const mainFolder = parts[0] ?? segmentName;
+      params.set("folderName", segmentName);
+      params.set("folderActualName", segmentName);
+      params.set("mainFolderActualName", mainFolder);
+      params.set("subFolderPath", subPathTo);
+      if (urlFolderSource) params.set("folderSource", urlFolderSource);
+      if (urlMainReqHash) params.set("mainReqHash", urlMainReqHash);
+      router.push(`/files?${params.toString()}`);
+    },
+    [router, urlFolderSource, urlMainReqHash],
+  );
 
   // Switch the active sync folder from a click on a LocalFoldersSection
   // card. Persisted so the next session resumes here.
@@ -588,6 +727,136 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setIsOnLocalView(false);
     void saveActiveSyncFolderLabel(label);
   }, []);
+
+  // Build the breadcrumb path that lives in the drive header. Empty when
+  // the user is on the Local cards view (DriveOnboarding); otherwise the
+  // first segment is the active sync folder display name, followed by one
+  // segment per nested directory the user has dived into.
+  const breadcrumbSegments = useMemo<BreadcrumbSegment[]>(() => {
+    if (isRecentFiles || isOnLocalView) return [];
+    const segments: BreadcrumbSegment[] = [];
+
+    const topLabel = isNested ? nestedDrive?.label : activeSyncFolderLabel;
+    if (topLabel) {
+      const topDisplayName = labelDisplayNames[topLabel] ?? topLabel;
+      segments.push({
+        label: topDisplayName,
+        title: topDisplayName,
+        // Only clickable when the user is below this level (nested view).
+        // In the root view the segment IS the current location.
+        onClick: isNested
+          ? () => handleNavigateToSyncFolderRoot(topLabel)
+          : undefined,
+      });
+    }
+
+    // `urlSubFolderPath` is rooted at `mainFolderActualName` (e.g.
+    // "Photos/2024"). Split it into parts and emit one segment per
+    // intermediate level, with the final part rendered as the active
+    // (non-clickable) segment.
+    if (isNested && urlSubFolderPath) {
+      const mainName = urlMainFolderActualName || "";
+      const allParts: string[] = [];
+      if (mainName) allParts.push(mainName);
+      let trailing = urlSubFolderPath;
+      if (mainName && trailing.startsWith(`${mainName}/`)) {
+        trailing = trailing.substring(mainName.length + 1);
+      } else if (trailing === mainName) {
+        trailing = "";
+      }
+      if (trailing) {
+        trailing
+          .split("/")
+          .filter(Boolean)
+          .forEach((part) => allParts.push(part));
+      }
+
+      allParts.forEach((part, idx) => {
+        const isLast = idx === allParts.length - 1;
+        if (isLast) {
+          segments.push({ label: part, title: part });
+        } else {
+          const subPathTo = allParts.slice(0, idx + 1).join("/");
+          segments.push({
+            label: part,
+            title: part,
+            onClick: () => handleNavigateToBreadcrumbSegment(part, subPathTo),
+          });
+        }
+      });
+    }
+
+    return segments;
+  }, [
+    isRecentFiles,
+    isOnLocalView,
+    isNested,
+    nestedDrive,
+    activeSyncFolderLabel,
+    labelDisplayNames,
+    urlSubFolderPath,
+    urlMainFolderActualName,
+    handleNavigateToSyncFolderRoot,
+    handleNavigateToBreadcrumbSegment,
+  ]);
+
+  // Download Folder — only relevant inside a nested folder. Mirrors the
+  // old FolderView's `initiateDownloadFolder` flow: pick an output dir,
+  // then hand off to `downloadFolder` with the nested rel-path as
+  // `actualFileName` (the util resolves the sync path via the label).
+  const [isDownloadingFolder, setIsDownloadingFolder] = useState(false);
+  const handleDownloadNestedFolder = useCallback(async () => {
+    if (!isNested || !polkadotAddress) return;
+    try {
+      const { downloadDir } = await import("@tauri-apps/api/path");
+      let defaultPath: string | undefined;
+      try {
+        defaultPath = await downloadDir();
+      } catch {
+        // Fall back to no directory hint
+      }
+      const outputDir = (await openDialog({
+        directory: true,
+        multiple: false,
+        defaultPath,
+      })) as string | null;
+      if (!outputDir) return;
+
+      const folderName = urlFolderName || urlMainFolderActualName || "Folder";
+      const actualFolderPath = urlSubFolderPath || folderName;
+      setIsDownloadingFolder(true);
+      const result = await downloadFolder({
+        folderName,
+        polkadotAddress,
+        outputDir,
+        file: {
+          actualFileName: actualFolderPath,
+          label: nestedDrive?.label,
+          source: urlFolderSource || undefined,
+        } as FormattedUserFile,
+      });
+      if (result && !result.success) {
+        toast.error(
+          `Failed to download folder: ${result.message || "Unknown error"}`,
+        );
+      }
+    } catch (err) {
+      console.error("Error downloading folder:", err);
+      toast.error(
+        `Failed to download folder: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setIsDownloadingFolder(false);
+    }
+  }, [
+    isNested,
+    polkadotAddress,
+    urlFolderName,
+    urlMainFolderActualName,
+    urlSubFolderPath,
+    nestedDrive,
+    urlFolderSource,
+  ]);
 
   // Load data on mount and set up interval refresh
   useEffect(() => {
@@ -790,12 +1059,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Determine what content to render
   let content;
 
-  // Show loading while checking sync path or while loading sync paths
-  const shouldShowLoading = isCheckingSyncPath || isLoadingPrivatePath;
+  // Show loading while checking sync path or while loading sync paths.
+  // Nested mode skips this check — by the time we have a `?subFolderPath`
+  // URL, sync was already configured, and the nested listing hook owns
+  // its own loading state surfaced through DriveContent.
+  const shouldShowLoading =
+    !isNested && (isCheckingSyncPath || isLoadingPrivatePath);
 
   if (shouldShowLoading) {
     content = <WaitAMoment />;
-  } else if (error && !isRecentFiles) {
+  } else if (error && !isRecentFiles && !isNested) {
     // `useUserFiles` exposes a terminal error (after TanStack Query's
     // retry budget is exhausted or the 15 s wall-clock cap in the
     // query fires). Without an explicit branch here the page stayed
@@ -818,12 +1091,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         </button>
       </div>
     );
-  } else if (isSyncPathConfigured === false && !isRecentFiles) {
+  } else if (isSyncPathConfigured === false && !isRecentFiles && !isNested) {
     content = <DriveOnboarding onSyncStarted={handleOnboardingSyncStarted} />;
-  } else if (showCurrentStartSyncingSelector && !isRecentFiles) {
+  } else if (showCurrentStartSyncingSelector && !isRecentFiles && !isNested) {
     // Show onboarding when Start Syncing is clicked
     content = <DriveOnboarding onSyncStarted={handleOnboardingSyncStarted} />;
-  } else if (isOnLocalView && !isRecentFiles) {
+  } else if (isOnLocalView && !isRecentFiles && !isNested) {
     // User clicked the "Local" breadcrumb segment. Reuses DriveOnboarding
     // for the cards view, but here we also pass `onSelectFolder` so a
     // card click switches the active folder instead of just opening the
@@ -896,6 +1169,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
               />
             );
 
+            const refreshForCurrentView = isRecentFiles
+              ? refreshRecentFilesCallback
+              : isNested
+                ? refreshNestedListing
+                : refreshUserFilesCallback;
+
             const driveHeader = (
               <DriveHeader
                 isRecentFiles={isRecentFiles}
@@ -909,11 +1188,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 handleSearchChange={handleSearchChange}
                 activeFilters={activeFilters}
                 handleRemoveFilter={handleRemoveFilter}
-                refetchUserFiles={
-                  isRecentFiles
-                    ? refreshRecentFilesCallback
-                    : refreshUserFilesCallback
-                }
+                refetchUserFiles={refreshForCurrentView}
                 addButtonRef={addButtonRef}
                 privateFileCount={privateFileCount}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
@@ -929,13 +1204,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 defaultFolderLabel={activeSyncFolderLabel}
                 isFolderUploadOpen={isFolderUploadOpen}
                 onSetFolderUploadOpen={setIsFolderUploadOpen}
-                folderDisplayName={
-                  activeSyncFolderLabel
-                    ? (labelDisplayNames[activeSyncFolderLabel] ??
-                      activeSyncFolderLabel)
-                    : null
-                }
+                breadcrumbSegments={breadcrumbSegments}
                 onBreadcrumbLocalClick={handleNavigateToLocalView}
+                isNested={isNested}
+                nestedFolderName={isNested ? urlFolderName : null}
+                nestedSubfolderPath={isNested ? urlSubFolderPath : null}
+                nestedSyncBasePath={
+                  isNested ? (nestedDrive?.syncPath ?? null) : null
+                }
+                nestedMainFolderActualName={
+                  isNested ? urlMainFolderActualName : null
+                }
+                onNestedUploadSuccess={
+                  isNested ? refreshNestedListing : undefined
+                }
+                onDownloadFolder={
+                  isNested ? handleDownloadNestedFolder : undefined
+                }
+                isDownloadingFolder={isDownloadingFolder}
               >
                 {!isRecentFiles && driveContent}
               </DriveHeader>
