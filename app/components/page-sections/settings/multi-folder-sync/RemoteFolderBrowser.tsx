@@ -590,16 +590,23 @@ export function RemoteFolderBrowser({
                   "shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]"
                 )}
               >
-                {/* Header strip — breadcrumb LEFT (wraps), buttons RIGHT (sticky) */}
+                {/* Header strip — fixed 46px so a deeply nested breadcrumb
+                    doesn't grow the dialog. Breadcrumb segments truncate
+                    individually; the whole nav line itself is allowed to
+                    scroll horizontally as a last resort if every segment
+                    is at its max-w and still overflows. */}
                 <div
                   className={cn(
-                    "grid items-center gap-3 px-[12px] py-2 min-h-[38px]",
+                    "grid items-center gap-3 px-[12px] h-[46px]",
                     "grid-cols-[minmax(0,1fr)_auto]"
                   )}
                 >
                   <nav
                     aria-label="Folder path"
-                    className="flex flex-wrap items-center gap-x-1 gap-y-1 min-w-0 select-none"
+                    className={cn(
+                      "flex items-center gap-x-1 min-w-0 select-none",
+                      "overflow-x-auto overflow-y-hidden no-scrollbar"
+                    )}
                   >
                     <button
                       type="button"
@@ -673,15 +680,22 @@ export function RemoteFolderBrowser({
 
                 {/* Body — rounded-top + border-top divide it from the
                     header strip, matching the SettingsCard pattern used
-                    across all settings sections. */}
+                    across all settings sections. Body height is locked
+                    (search row 56px + table area 336px = 392px) so the
+                    dialog never reflows with row count, filter results,
+                    or folder navigation. */}
                 <div
+                  style={{ height: 392 }}
                   className={cn(
                     "rounded-tl-[8px] rounded-tr-[8px] border-t bg-white",
                     "border-grey-dark-100 dark:bg-black-600 dark:border-black-300"
                   )}
                 >
-                  {/* Search row: right-aligned 207px */}
-                  <div className="px-3 pt-3 pb-3 flex justify-end">
+                  {/* Search row: right-aligned 207px, fixed 56px height */}
+                  <div
+                    style={{ height: 56 }}
+                    className="px-3 flex items-center justify-end"
+                  >
                     <div className="w-[207px]">
                       <SearchInput
                         value={filter}
@@ -697,8 +711,9 @@ export function RemoteFolderBrowser({
                       room from the card edges. */}
                   {isLoading ? (
                     <div
+                      style={{ height: 336 }}
                       className={cn(
-                        "h-[336px] overflow-hidden",
+                        "overflow-hidden",
                         "[&::-webkit-scrollbar-corner]:bg-transparent"
                       )}
                     >
@@ -769,7 +784,10 @@ export function RemoteFolderBrowser({
                       </table>
                     </div>
                   ) : error ? (
-                    <div className="h-[336px] flex flex-col items-center justify-center px-6 text-center gap-2">
+                    <div
+                      style={{ height: 336 }}
+                      className="flex flex-col items-center justify-center px-6 text-center gap-2"
+                    >
                       <p className="text-sm text-error-50">{error}</p>
                       <button
                         type="button"
@@ -780,7 +798,10 @@ export function RemoteFolderBrowser({
                       </button>
                     </div>
                   ) : visibleEntries.length === 0 ? (
-                    <div className="h-[336px] flex flex-col items-center justify-center px-6 text-center">
+                    <div
+                      style={{ height: 336 }}
+                      className="flex flex-col items-center justify-center px-6 text-center"
+                    >
                       {/* Graphsheet badge — mirrors the drive page's
                           NoMatchingResults empty state. */}
                       <div className="flex items-center justify-center h-[56px] w-[56px] relative mb-4">
@@ -815,8 +836,9 @@ export function RemoteFolderBrowser({
                     </div>
                   ) : (
                     <div
+                      style={{ height: 336 }}
                       className={cn(
-                        "h-[336px] overflow-x-auto overflow-y-auto custom-scrollbar-thin",
+                        "overflow-x-auto overflow-y-auto custom-scrollbar-thin",
                         // Hide the dark scrollbar-corner artifact that the
                         // global custom-scrollbar-thin class paints at the
                         // intersection of horizontal + vertical scrollbars.
