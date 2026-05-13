@@ -162,7 +162,7 @@ function TriStateCheckbox({
           ? "bg-primary-50 border-primary-50"
           : state === "indeterminate"
             ? "bg-primary-50 border-primary-50"
-            : "border-grey-60 hover:border-primary-50",
+            : "border-grey-60 hover:border-primary-50 dark:border-grey-dark-700 dark:hover:border-primary-50",
         disabled && "opacity-50 cursor-not-allowed"
       )}
     >
@@ -223,7 +223,7 @@ function TreeRow({
   return (
     <>
       <div
-        className="flex items-center gap-1.5 py-1 px-2 hover:bg-grey-98 rounded group transition-colors"
+        className="flex items-center gap-1.5 py-1.5 px-2 rounded-md group transition-colors hover:bg-grey-light-400 dark:hover:bg-white/5"
         style={{ paddingLeft: `${(depth * 20 + 8) / 16}rem` }}
       >
         {/* Expand/collapse toggle for folders */}
@@ -231,7 +231,7 @@ function TreeRow({
           <button
             type="button"
             onClick={() => onExpand(node.path)}
-            className="p-0.5 text-grey-50 hover:text-grey-30 flex-shrink-0"
+            className="p-0.5 text-grey-50 hover:text-grey-30 dark:text-grey-dark-600 dark:hover:text-white flex-shrink-0 transition-colors"
           >
             {isExpanded ? (
               <ChevronDown className="size-3.5" />
@@ -251,13 +251,13 @@ function TreeRow({
         {node.isFolder ? (
           <Folder className="size-4 text-primary-50 flex-shrink-0" />
         ) : (
-          <File className="size-4 text-grey-50 flex-shrink-0" />
+          <File className="size-4 text-grey-50 dark:text-grey-dark-600 flex-shrink-0" />
         )}
 
         <Tooltip.Provider delayDuration={200}>
           <Tooltip.Root>
             <Tooltip.Trigger asChild>
-              <span className="text-sm text-grey-20 truncate flex-1 min-w-0 cursor-default">
+              <span className="text-sm text-grey-10 dark:text-white truncate flex-1 min-w-0 cursor-default">
                 {node.name}
                 {node.isFolder && "/"}
               </span>
@@ -265,17 +265,17 @@ function TreeRow({
             <Tooltip.Portal>
               <Tooltip.Content
                 side="bottom"
-                className="z-[9999] max-w-[25rem] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+                className="z-[9999] max-w-[25rem] bg-white dark:bg-[#1f1f1f] border border-grey-80 dark:border-[#3a3a3a] rounded-lg px-3 py-2 text-xs font-medium text-grey-40 dark:text-grey-dark-300 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
                 sideOffset={4}
               >
                 {node.name}
-                <Tooltip.Arrow className="fill-white" width={12} height={6} />
+                <Tooltip.Arrow className="fill-white dark:fill-[#1f1f1f]" width={12} height={6} />
               </Tooltip.Content>
             </Tooltip.Portal>
           </Tooltip.Root>
         </Tooltip.Provider>
 
-        <span className="text-xs text-grey-60 flex-shrink-0 tabular-nums">
+        <span className="text-xs text-[#7D7D7D] dark:text-grey-dark-600 flex-shrink-0 tabular-nums">
           {node.isFolder
             ? `${childCount} ${childCount === 1 ? "file" : "files"}`
             : formatBytes(node.size_bytes)}
@@ -290,7 +290,7 @@ function TreeRow({
             <Button
               variant="ghost"
               size="auto"
-              className="h-6 w-6 p-0 text-grey-60 opacity-0 group-hover:opacity-100 transition-opacity action-menu-area"
+              className="h-6 w-6 p-0 text-grey-60 hover:text-grey-30 dark:text-grey-dark-600 dark:hover:text-white opacity-0 group-hover:opacity-100 transition-opacity action-menu-area"
             >
               <MoreVertical className="size-3.5" />
             </Button>
