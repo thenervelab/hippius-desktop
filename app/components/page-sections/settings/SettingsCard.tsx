@@ -20,7 +20,7 @@ export function SettingsCard({
 }: SettingsCardProps) {
   return (
     <div className="rounded-[8px] border overflow-hidden bg-grey-light-300 border-grey-dark-100 dark:bg-black-primary-bg dark:border-black-300 shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]">
-      <div className="flex h-[38px] w-full items-center justify-between gap-2 pl-[14px] pr-[10px]">
+      <div className="flex h-[38px] w-full items-center justify-between gap-2 px-[12px]">
         <div className="flex items-center gap-2 min-w-0">
           {icon && (
             <span className="text-primary-40 dark:text-primary-brand-dark flex-shrink-0 inline-flex">
