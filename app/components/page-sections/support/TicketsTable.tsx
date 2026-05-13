@@ -81,14 +81,16 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
-      month: "2-digit",
-      day: "2-digit",
-      year: "2-digit",
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
+    const d = new Date(dateString);
+    if (isNaN(d.getTime())) return "Invalid Date";
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = String(d.getFullYear());
+    let hours = d.getHours();
+    const minutes = String(d.getMinutes()).padStart(2, "0");
+    const ampm = hours >= 12 ? "pm" : "am";
+    hours = hours % 12 || 12;
+    return `${dd}/${mm}/${yyyy} ${hours}:${minutes} ${ampm}`;
   };
 
   const columns = useMemo(

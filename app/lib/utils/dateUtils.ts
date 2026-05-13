@@ -21,14 +21,14 @@ export const normalizeIsoToMillis = (iso?: string): number | null => {
 };
 
 /**
- * Formats a date to compact format: MM/DD/YY H:MM am/pm
+ * Formats a date to compact format: DD/MM/YYYY H:MM am/pm
  * @param date - Date object to format
- * @returns Formatted date string like "09/22/25 4:59 pm"
+ * @returns Formatted date string like "22/09/2025 4:59 pm"
  */
 export function formatCompactDate(date: Date): string {
-  const month = (date.getMonth() + 1).toString().padStart(2, "0"); // MM
   const day = date.getDate().toString().padStart(2, "0"); // DD
-  const year = date.getFullYear().toString().slice(-2); // YY (last 2 digits)
+  const month = (date.getMonth() + 1).toString().padStart(2, "0"); // MM
+  const year = date.getFullYear().toString(); // YYYY
 
   let hours = date.getHours(); // Get hours in 24-hour format
   const minutes = date.getMinutes().toString().padStart(2, "0"); // MM
@@ -37,12 +37,12 @@ export function formatCompactDate(date: Date): string {
   hours = hours % 12;
   hours = hours ? hours : 12; // Convert hour '0' (midnight) to '12'
 
-  return `${month}/${day}/${year} ${hours}:${minutes} ${ampm}`;
+  return `${day}/${month}/${year} ${hours}:${minutes} ${ampm}`;
 }
 
 export function formatUploadDate(dateString: string | number): string {
   const date = new Date(dateString);
-  const day = date.getDate(); // D
+  const day = date.getDate().toString().padStart(2, "0"); // DD
   const month = (date.getMonth() + 1).toString().padStart(2, "0"); // MM
   const year = date.getFullYear(); // YYYY
 
@@ -53,7 +53,7 @@ export function formatUploadDate(dateString: string | number): string {
   hours = hours % 12;
   hours = hours ? hours : 12; // Convert hour '0' (midnight) to '12' for H format (1-12)
 
-  return `${day}-${month}-${year} at ${hours}:${minutes} ${ampm}`;
+  return `${day}/${month}/${year} at ${hours}:${minutes} ${ampm}`;
 }
 
 /**
