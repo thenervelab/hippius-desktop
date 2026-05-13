@@ -1,27 +1,24 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState } from "react";
+import { InView } from "react-intersection-observer";
 import { Icons } from "@/components/ui";
+import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { middleTruncate } from "@/lib/utils/middleTruncate";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   Folder,
   CloudDownload,
-  MoreVertical,
   ServerCrash,
-  Clock,
-  HardDrive,
   FolderSearch,
 } from "lucide-react";
 import TableActionMenu, { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import { Button } from "@/components/ui/button";
 import { SettingsCard } from "../SettingsCard";
+import FolderRowSkeleton from "./FolderRowSkeleton";
 import type { RemoteFolder } from "@/app/lib/types/sync-folder";
-import { Pagination } from "@/components/ui/alt-table";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
-
-const FOLDERS_PER_PAGE = 10;
 
 interface RemoteFoldersSectionProps {
   remoteFolders: RemoteFolder[];
@@ -32,13 +29,15 @@ interface RemoteFoldersSectionProps {
 }
 
 function formatDate(timestamp: number) {
-  return new Date(timestamp).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const d = new Date(timestamp);
+  const month = d.toLocaleString("en-US", { month: "short" });
+  const day = d.getDate();
+  const year = d.getFullYear();
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const ampm = hours >= 12 ? "pm" : "am";
+  hours = hours % 12 || 12;
+  return `${month} ${day}, ${year} at ${hours}:${minutes} ${ampm}`;
 }
 
 export function RemoteFoldersSection({
@@ -48,33 +47,33 @@ export function RemoteFoldersSection({
   onDeleteFromServer,
   onBrowseFolder,
 }: RemoteFoldersSectionProps) {
-  const [currentPage, setCurrentPage] = useState(1);
   const [cardContextMenu, setCardContextMenu] = useState<{
     x: number;
     y: number;
     folder: RemoteFolder;
   } | null>(null);
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(remoteFolders.length / FOLDERS_PER_PAGE)
-  );
-  const paginatedFolders = useMemo(() => {
-    const validPage = Math.min(currentPage, totalPages);
-    const start = (validPage - 1) * FOLDERS_PER_PAGE;
-    return remoteFolders.slice(start, start + FOLDERS_PER_PAGE);
-  }, [remoteFolders, currentPage, totalPages]);
-
   return (
-    <>
-      <SettingsCard
-        label="Sync from Other Devices"
-        icon={<Icons.HardDriveUpload className="size-4" />}
+    <InView triggerOnce>
+      {({ inView, ref }) => (
+        <>
+          <div
+            ref={ref}
+            className={cn(
+              "transition-all duration-500 ease-out delay-150",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+            )}
+          >
+            <SettingsCard
+              label="Sync from Other Devices"
+              icon={<Icons.HardDriveUpload className="size-4" />}
       >
         {/* Content */}
         {isLoading ? (
-          <div className="flex justify-center py-10">
-            <Icons.Loader className="size-6 animate-spin text-primary-50" />
+          <div>
+            <FolderRowSkeleton />
+            <FolderRowSkeleton />
+            <FolderRowSkeleton />
           </div>
         ) : remoteFolders.length === 0 ? (
           <div className="flex min-h-[139px] flex-col items-center justify-center gap-[5px] px-4 py-6 text-center">
@@ -86,18 +85,18 @@ export function RemoteFoldersSection({
             </p>
           </div>
         ) : (
-          <div className="divide-y divide-grey-80">
-            {paginatedFolders.map((folder) => (
+          <div className="max-h-[420px] overflow-y-auto">
+            {remoteFolders.map((folder) => (
               <div
                 key={folder.folderName}
-                className="flex items-start justify-between px-4 py-3 hover:bg-grey-98 dark:hover:bg-white/5 transition-colors"
+                className="flex items-start justify-between p-3 hover:bg-grey-98 dark:hover:bg-white/5 transition-colors"
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setCardContextMenu({ x: e.clientX, y: e.clientY, folder });
                 }}
               >
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-[7px] flex-wrap">
                     <Folder className="size-4 text-primary-50 flex-shrink-0" />
                     <Tooltip.Provider delayDuration={200}>
                       <Tooltip.Root>
@@ -126,26 +125,23 @@ export function RemoteFoldersSection({
                       </Tooltip.Root>
                     </Tooltip.Provider>
 
-                    {folder.deviceName && (
-                      <span className="text-xs font-medium px-1.5 py-0.5 rounded border bg-grey-95 text-grey-50 border-grey-80 flex-shrink-0 whitespace-nowrap">
-                        {folder.deviceName}
-                      </span>
+                    {(folder.totalBytes > 0 ||
+                      folder.fileCount > 0 ||
+                      folder.lastModified > 0) && (
+                      <span className="h-4 w-px bg-grey-80 dark:bg-[#3a3a3a] flex-shrink-0" />
                     )}
 
                     {folder.totalBytes > 0 && (
-                      <>
-                        <span className="text-grey-80 text-xs select-none">·</span>
-                        <span className="flex items-center gap-1 text-xs text-grey-60 whitespace-nowrap">
-                          <HardDrive className="size-3" />
-                          {formatBytes(folder.totalBytes)}
-                        </span>
-                      </>
+                      <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+                        <Icons.Database className="size-3.5 text-[#1F50BD]" />
+                        {formatBytes(folder.totalBytes)}
+                      </span>
                     )}
                     {folder.fileCount > 0 && (
                       <>
-                        <span className="text-grey-80 text-xs select-none">·</span>
-                        <span className="flex items-center gap-1 text-xs text-grey-60 whitespace-nowrap">
-                          <Icons.File2 className="size-3" />
+                        <span aria-hidden="true" className="w-[2.354px] h-[2.354px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+                        <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+                          <Icons.Folders className="size-3.5 text-[#1F50BD]" />
                           {folder.fileCount}{" "}
                           {folder.fileCount === 1 ? "file" : "files"}
                         </span>
@@ -153,14 +149,19 @@ export function RemoteFoldersSection({
                     )}
                     {folder.lastModified > 0 && (
                       <>
-                        <span className="text-grey-80 text-xs select-none">·</span>
-                        <span className="flex items-center gap-1 text-xs text-grey-60 whitespace-nowrap">
-                          <Clock className="size-3" />
+                        <span aria-hidden="true" className="w-[2.354px] h-[2.354px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+                        <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+                          <Icons.Clock8 className="size-3.5 text-[#1F50BD]" />
                           {formatDate(folder.lastModified)}
                         </span>
                       </>
                     )}
                   </div>
+                  {folder.deviceName && (
+                    <p className="font-geist text-[14px] font-medium leading-normal text-[#0A0A0A]/40 dark:text-white/40 mt-2 ml-6 cursor-default">
+                      {folder.deviceName}
+                    </p>
+                  )}
                 </div>
 
                 <TableActionMenu
@@ -189,9 +190,9 @@ export function RemoteFoldersSection({
                   <Button
                     variant="ghost"
                     size="auto"
-                    className="h-8 w-8 p-0 text-grey-70 action-menu-area mt-0.5 flex-shrink-0"
+                    className="h-8 w-8 p-0 action-menu-area mt-0.5 flex-shrink-0 rounded-md text-grey-70 hover:text-grey-30 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:text-white dark:hover:bg-white/10 transition-colors"
                   >
-                    <MoreVertical className="size-4" />
+                    <Icons.EllipsisVertical className="size-[18px]" />
                   </Button>
                 </TableActionMenu>
               </div>
@@ -199,16 +200,8 @@ export function RemoteFoldersSection({
           </div>
         )}
 
-        {remoteFolders.length > FOLDERS_PER_PAGE && (
-          <div className="px-4 py-3 border-t border-grey-dark-100 dark:border-black-300">
-            <Pagination
-              currentPage={Math.min(currentPage, totalPages)}
-              totalPages={totalPages}
-              setPage={setCurrentPage}
-            />
+            </SettingsCard>
           </div>
-        )}
-      </SettingsCard>
 
       {cardContextMenu && (
         <FolderCardContextMenu
@@ -235,6 +228,8 @@ export function RemoteFoldersSection({
           ]}
         />
       )}
-    </>
+        </>
+      )}
+    </InView>
   );
 }

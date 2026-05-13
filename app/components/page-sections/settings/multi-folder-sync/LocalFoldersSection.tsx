@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useCallback } from "react";
+import { InView } from "react-intersection-observer";
 import { Icons } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
@@ -9,24 +10,19 @@ import {
   Folder,
   FolderOpen,
   FolderSearch,
-  MoreVertical,
   Trash2,
   PauseCircle,
   PlayCircle,
   ServerCrash,
-  Clock,
-  HardDrive,
 } from "lucide-react";
 import TableActionMenu, { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import { Button } from "@/components/ui/button";
 import { SettingsCard } from "../SettingsCard";
+import FolderRowSkeleton from "./FolderRowSkeleton";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import type { SyncFolder } from "@/app/lib/types/sync-folder";
-import { Pagination } from "@/components/ui/alt-table";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
-
-const FOLDERS_PER_PAGE = 10;
 
 interface LocalFoldersSectionProps {
   syncFolders: SyncFolder[];
@@ -43,23 +39,73 @@ interface LocalFoldersSectionProps {
   onSelectFolder?: (folder: SyncFolder) => void;
 }
 
-function getStatusStyle(status: SyncFolder["status"]) {
-  switch (status) {
-    case "syncing":
-      return "bg-success-95 text-success-50 border-success-80";
-    case "paused":
-      return "bg-grey-95 text-grey-50 border-grey-80";
-    case "error":
-      return "bg-error-100 text-error-50 border-error-80";
-  }
+/**
+ * Status badge matching the On/Off pill in NotificationSection:
+ *   - Syncing → "On" treatment (green pill, green concentric-circle dot)
+ *   - Paused  → "Off" treatment (neutral grey pill / muted dot)
+ *   - Error   → red variant of the same shape
+ */
+function StatusBadge({ status }: { status: SyncFolder["status"] }) {
+  const styles: Record<
+    SyncFolder["status"],
+    { wrap: string; tone: string; label: string }
+  > = {
+    syncing: {
+      wrap: "bg-[rgba(4,200,112,0.2)]",
+      tone: "text-[#04c870]",
+      label: "Syncing",
+    },
+    paused: {
+      wrap: "bg-[#f0f0f0] dark:bg-white/10",
+      tone: "text-[#b6b6b6] dark:text-grey-dark-500",
+      label: "Paused",
+    },
+    error: {
+      wrap: "bg-error-50/20",
+      tone: "text-error-50",
+      label: "Error",
+    },
+  };
+  const s = styles[status];
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-[5px] px-[8.8px] py-[5px] rounded-full flex-shrink-0",
+        s.wrap
+      )}
+    >
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 9.5 9.5"
+        fill="none"
+        className={cn("flex-shrink-0", s.tone)}
+      >
+        <circle cx="4.75" cy="4.75" r="4.75" fill="currentColor" fillOpacity="0.2" />
+        <circle cx="4.75" cy="4.75" r="2.375" fill="currentColor" />
+      </svg>
+      <span
+        className={cn(
+          "text-[10px] font-semibold leading-none tracking-[-0.2px]",
+          s.tone
+        )}
+      >
+        {s.label}
+      </span>
+    </span>
+  );
 }
 
-function getStatusLabel(status: SyncFolder["status"]) {
-  switch (status) {
-    case "syncing": return "● Syncing";
-    case "paused": return "Paused";
-    case "error": return "Error";
-  }
+function formatRowDate(timestamp: number) {
+  const d = new Date(timestamp);
+  const month = d.toLocaleString("en-US", { month: "short" });
+  const day = d.getDate();
+  const year = d.getFullYear();
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const ampm = hours >= 12 ? "pm" : "am";
+  hours = hours % 12 || 12;
+  return `${month} ${day}, ${year} at ${hours}:${minutes} ${ampm}`;
 }
 
 function PathTooltip({ path }: { path: string }) {
@@ -67,7 +113,7 @@ function PathTooltip({ path }: { path: string }) {
   const truncated = display !== path;
 
   const text = (
-    <p className="text-xs text-grey-60 dark:text-grey-70 mt-0.5 ml-6 cursor-default">
+    <p className="font-geist text-[14px] font-medium leading-normal text-[#0A0A0A]/40 dark:text-white/40 mt-2 ml-6 cursor-default">
       {display}
     </p>
   );
@@ -105,7 +151,6 @@ export function LocalFoldersSection({
   onBrowseFolder,
   onSelectFolder,
 }: LocalFoldersSectionProps) {
-  const [currentPage, setCurrentPage] = useState(1);
   const [cardContextMenu, setCardContextMenu] = useState<{
     x: number;
     y: number;
@@ -118,18 +163,20 @@ export function LocalFoldersSection({
     return "Finder";
   }, []);
 
-  const totalPages = Math.max(1, Math.ceil(syncFolders.length / FOLDERS_PER_PAGE));
-  const paginatedFolders = useMemo(() => {
-    const validPage = Math.min(currentPage, totalPages);
-    const start = (validPage - 1) * FOLDERS_PER_PAGE;
-    return syncFolders.slice(start, start + FOLDERS_PER_PAGE);
-  }, [syncFolders, currentPage, totalPages]);
-
   return (
-    <>
-      <SettingsCard
-        label="Local Sync Folders"
-        icon={<Folder className="size-4" />}
+    <InView triggerOnce>
+      {({ inView, ref }) => (
+        <>
+          <div
+            ref={ref}
+            className={cn(
+              "transition-all duration-500 ease-out",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+            )}
+          >
+            <SettingsCard
+              label="Local Sync Folders"
+              icon={<Folder className="size-4" />}
         headerAction={
           <Button
             variant="defaultStable"
@@ -149,8 +196,10 @@ export function LocalFoldersSection({
       >
         {/* Content */}
         {isLoading ? (
-          <div className="flex justify-center py-10">
-            <Icons.Loader className="size-6 animate-spin text-primary-50" />
+          <div>
+            <FolderRowSkeleton hasStatusBadge />
+            <FolderRowSkeleton hasStatusBadge />
+            <FolderRowSkeleton />
           </div>
         ) : syncFolders.length === 0 ? (
           <div className="flex min-h-[139px] flex-col items-center justify-center gap-[5px] px-4 py-6 text-center">
@@ -162,14 +211,14 @@ export function LocalFoldersSection({
             </p>
           </div>
         ) : (
-          <div className="divide-y divide-grey-80">
-            {paginatedFolders.map((folder) => (
+          <div className="max-h-[420px] overflow-y-auto">
+            {syncFolders.map((folder) => (
               <div
                 key={folder.id}
                 role={onSelectFolder ? "button" : undefined}
                 tabIndex={onSelectFolder ? 0 : undefined}
                 className={cn(
-                  "flex items-start justify-between px-4 py-3 transition-colors",
+                  "flex items-start justify-between p-3 transition-colors",
                   // When the row is clickable (drive's Local cards view),
                   // use a more pronounced hover treatment + pointer
                   // cursor so it reads as "navigate into this folder".
@@ -204,7 +253,7 @@ export function LocalFoldersSection({
                 }}
               >
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-[7px] flex-wrap">
                     <Folder className="size-4 text-primary-50 flex-shrink-0" />
                     <Tooltip.Provider delayDuration={200}>
                       <Tooltip.Root>
@@ -228,29 +277,23 @@ export function LocalFoldersSection({
                       </Tooltip.Root>
                     </Tooltip.Provider>
 
-                    <span
-                      className={cn(
-                        "text-xs font-medium px-1.5 py-0.5 rounded border flex-shrink-0",
-                        getStatusStyle(folder.status)
-                      )}
-                    >
-                      {getStatusLabel(folder.status)}
-                    </span>
+                    <StatusBadge status={folder.status} />
+
+                    {(folder.totalBytes || folder.fileCount || folder.lastModified) ? (
+                      <span className="h-4 w-px bg-grey-80 dark:bg-[#3a3a3a] flex-shrink-0" />
+                    ) : null}
 
                     {folder.totalBytes !== undefined && folder.totalBytes > 0 && (
-                      <>
-                        <span className="text-grey-80 text-xs select-none">·</span>
-                        <span className="flex items-center gap-1 text-xs text-grey-60 whitespace-nowrap">
-                          <HardDrive className="size-3" />
-                          {formatBytes(folder.totalBytes)}
-                        </span>
-                      </>
+                      <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+                        <Icons.Database className="size-3.5 text-[#1F50BD]" />
+                        {formatBytes(folder.totalBytes)}
+                      </span>
                     )}
                     {folder.fileCount !== undefined && folder.fileCount > 0 && (
                       <>
-                        <span className="text-grey-80 text-xs select-none">·</span>
-                        <span className="flex items-center gap-1 text-xs text-grey-60 whitespace-nowrap">
-                          <Icons.File2 className="size-3" />
+                        <span aria-hidden="true" className="w-[2.354px] h-[2.354px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+                        <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+                          <Icons.Folders className="size-3.5 text-[#1F50BD]" />
                           {folder.fileCount}{" "}
                           {folder.fileCount === 1 ? "file" : "files"}
                         </span>
@@ -258,16 +301,10 @@ export function LocalFoldersSection({
                     )}
                     {folder.lastModified !== undefined && folder.lastModified > 0 && (
                       <>
-                        <span className="text-grey-80 text-xs select-none">·</span>
-                        <span className="flex items-center gap-1 text-xs text-grey-60 whitespace-nowrap">
-                          <Clock className="size-3" />
-                          {new Date(folder.lastModified).toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            year: "numeric",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
+                        <span aria-hidden="true" className="w-[2.354px] h-[2.354px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+                        <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+                          <Icons.Clock8 className="size-3.5 text-[#1F50BD]" />
+                          {formatRowDate(folder.lastModified)}
                         </span>
                       </>
                     )}
@@ -329,9 +366,9 @@ export function LocalFoldersSection({
                   <Button
                     variant="ghost"
                     size="auto"
-                    className="h-8 w-8 p-0 text-grey-70 action-menu-area mt-0.5 flex-shrink-0"
+                    className="h-8 w-8 p-0 action-menu-area mt-0.5 flex-shrink-0 rounded-md text-grey-70 hover:text-grey-30 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:text-white dark:hover:bg-white/10 transition-colors"
                   >
-                    <MoreVertical className="size-4" />
+                    <Icons.EllipsisVertical className="size-[18px]" />
                   </Button>
                 </TableActionMenu>
               </div>
@@ -339,16 +376,8 @@ export function LocalFoldersSection({
           </div>
         )}
 
-        {syncFolders.length > FOLDERS_PER_PAGE && (
-          <div className="px-4 py-3 border-t border-grey-dark-100 dark:border-black-300">
-            <Pagination
-              currentPage={Math.min(currentPage, totalPages)}
-              totalPages={totalPages}
-              setPage={setCurrentPage}
-            />
+            </SettingsCard>
           </div>
-        )}
-      </SettingsCard>
 
       {cardContextMenu && (
         <FolderCardContextMenu
@@ -406,6 +435,8 @@ export function LocalFoldersSection({
           ]}
         />
       )}
-    </>
+        </>
+      )}
+    </InView>
   );
 }
