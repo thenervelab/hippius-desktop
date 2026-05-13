@@ -838,11 +838,16 @@ export function RemoteFolderBrowser({
                     <div
                       style={{ height: 336 }}
                       className={cn(
+                        // Horizontal scroll is silent: cut-off columns
+                        // are the affordance, users scroll via trackpad
+                        // swipe or shift+wheel. The native horizontal
+                        // scrollbar is suppressed by the no-scrollbar-x
+                        // arbitrary variant below. Vertical stays thin
+                        // and visible when content overflows.
                         "overflow-x-auto overflow-y-auto custom-scrollbar-thin",
-                        // Hide the dark scrollbar-corner artifact that the
-                        // global custom-scrollbar-thin class paints at the
-                        // intersection of horizontal + vertical scrollbars.
-                        "[&::-webkit-scrollbar-corner]:bg-transparent"
+                        "[&::-webkit-scrollbar-corner]:bg-transparent",
+                        "[&::-webkit-scrollbar:horizontal]:hidden",
+                        "[scrollbar-width:thin]"
                       )}
                     >
                       <table className="w-full table-fixed border-collapse">
