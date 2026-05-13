@@ -341,7 +341,7 @@ pub enum FileFailureKindPayload {
     /// Server returned HTTP 402 — account credit balance is below the
     /// storage cost. Mirrors `FileFailureKind::InsufficientBalance`.
     #[serde(rename_all = "camelCase")]
-    InsufficientBalance { balance_cents: i64, required_cents: i64 },
+    InsufficientBalance { balance_cents: u64, required_cents: u64 },
     /// Server returned a non-402 HTTP error code (5xx, 416, 429, …).
     /// `status` is the wire status the FE may dispatch on.
     ServerError { status: u16 },
@@ -423,7 +423,7 @@ pub struct FileFailedPayload {
 #[serde(rename_all = "camelCase")]
 pub struct CreditsExhaustedPayload {
     pub label: String,
-    pub balance_cents: i64,
-    pub required_cents: i64,
+    pub balance_cents: u64,
+    pub required_cents: u64,
     pub file_count: u32,
 }

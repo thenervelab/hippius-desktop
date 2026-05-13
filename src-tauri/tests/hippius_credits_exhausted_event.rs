@@ -43,7 +43,7 @@ use tauri_project_lib::sync::events::CreditsExhaustedPayload;
 /// would. This is the unit under test — the bridge code itself is one
 /// `if let` plus an `app.emit`, both trivially correct given a correct
 /// state and payload.
-fn record_and_build(state: &CreditsExhaustedState, label: &str, balance_cents: i64, required_cents: i64) -> CreditsExhaustedPayload {
+fn record_and_build(state: &CreditsExhaustedState, label: &str, balance_cents: u64, required_cents: u64) -> CreditsExhaustedPayload {
     let file_count = state.record_failure(label);
     CreditsExhaustedPayload {
         label: label.to_string(),
