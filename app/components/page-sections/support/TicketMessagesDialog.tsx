@@ -4,6 +4,8 @@ import React, { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   CheckCircle2,
+  CircleDot,
+  Clock,
   Loader2,
   MinusCircle,
   X,
@@ -64,11 +66,20 @@ const getInlineStatus = (status: string): InlineStatusConfig => {
         iconClassName: "text-success-60",
         textClassName: "text-black-700 dark:text-grey-dark-500",
       };
+    case "pending":
+      return {
+        label: "Pending",
+        Icon: Clock,
+        iconClassName: "text-warning-50",
+        textClassName: "text-black-700 dark:text-grey-dark-500",
+      };
+    // Legacy mid-conversation state — kept for tickets created before
+    // the Open/Pending split shipped.
     case "in_progress":
       return {
         label: "In Progress",
         Icon: Loader2,
-        iconClassName: "text-primary-50",
+        iconClassName: "text-warning-50",
         textClassName: "text-black-700 dark:text-grey-dark-500",
       };
     case "closed":
@@ -79,9 +90,17 @@ const getInlineStatus = (status: string): InlineStatusConfig => {
         textClassName: "text-black-700 dark:text-grey-dark-500",
       };
     case "open":
+      return {
+        label: "Open",
+        Icon: CircleDot,
+        iconClassName: "text-primary-50",
+        textClassName: "text-black-700 dark:text-grey-dark-500",
+      };
     default:
       return {
-        label: "Pending",
+        label: status
+          ? status.charAt(0).toUpperCase() + status.slice(1).toLowerCase()
+          : "—",
         Icon: MinusCircle,
         iconClassName: "text-grey-60",
         textClassName: "text-black-700 dark:text-grey-dark-500",

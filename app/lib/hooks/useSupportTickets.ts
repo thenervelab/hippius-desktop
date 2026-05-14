@@ -29,7 +29,10 @@ export interface TicketMessage {
 export interface SupportTicket {
   id: number;
   subject: string;
-  status: "open" | "closed" | "in_progress" | "resolved";
+  // "in_progress" is the legacy mid-conversation state from before the
+  // Open/Pending split; keep it in the response union so old rows still
+  // type-check and render via the StatusBadge legacy mapping.
+  status: "open" | "pending" | "resolved" | "closed" | "in_progress";
   // "medium" is retained for tickets created before the Low/Normal/High/Urgent
   // taxonomy shipped — the badge and inline color map both still render it.
   priority: "low" | "medium" | "normal" | "high" | "urgent";

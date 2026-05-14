@@ -94,11 +94,16 @@ const Support: React.FC = () => {
   const sortedTickets = useMemo(() => {
     if (!data?.results) return [];
 
+    // Bubble the most actionable tickets to the top: Open (needs first
+    // staff response) → Pending (in flight) → Resolved (done well) →
+    // Closed (archived). in_progress is kept at the Pending slot so any
+    // legacy rows interleave sensibly.
     const statusOrder: { [key: string]: number } = {
       open: 0,
+      pending: 1,
       in_progress: 1,
-      closed: 2,
-      resolved: 3,
+      resolved: 2,
+      closed: 3,
     };
 
     return [...data.results].sort((a, b) => {

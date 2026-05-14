@@ -44,9 +44,10 @@ const MIN_W = "min-w-[640px] sm:min-w-[820px]";
 
 const statusOrder: { [key: string]: number } = {
   open: 0,
+  pending: 1,
   in_progress: 1,
-  closed: 2,
-  resolved: 3,
+  resolved: 2,
+  closed: 3,
 };
 
 const formatDate = (dateString: string): string => {
