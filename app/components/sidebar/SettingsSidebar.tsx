@@ -7,6 +7,7 @@ import cn from "@/app/lib/utils/cn";
 import { Icons } from "@/components/ui";
 import { ChevronLeft } from "lucide-react";
 import SidebarFooter from "./SidebarFooter";
+import SidebarSearch from "./SidebarSearch";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
 
 const ICON_CLASS = "size-[18px]";
@@ -58,8 +59,13 @@ const SettingsSidebar: React.FC = () => {
       )}
     >
       <div className="flex flex-col flex-1 min-h-0 overflow-y-auto px-3 pt-0 pb-2 overflow-x-hidden">
+        {/* Sidebar search — mirrors the main sidebar so the Cmd/Ctrl+F
+            shortcut keeps working when the user is on the settings
+            surface. */}
+        <SidebarSearch collapsed={collapsed} />
+
         {/* Go Back */}
-        <div className="flex flex-col w-full">
+        <div className="flex flex-col w-full mt-[10px]">
           <CustomTooltip2
             tooltipContent="Go Back"
             side="right"
