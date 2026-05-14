@@ -158,11 +158,9 @@ pnpm test                       # Vitest
 Test files in `src-tauri/tests/`: `auth_commands.rs`, `auth_tokens.rs`, `blockchain_commands.rs`, `crypto_migration.rs`, `file_commands.rs`, `local_db_commands.rs`, `migration_server_mock.rs`.
 
 <!-- illu:start -->
-<<<<<<< HEAD
 
-=======
 <CRITICAL_INSTRUCTION_OVERRIDE>
->>>>>>> sync-engine
+
 ## Code Intelligence (illu)
 
 ### Tool priority (MANDATORY)
@@ -202,11 +200,7 @@ Before you write, modify, or meaningfully recommend Rust code, you MUST do the f
 
 When spawning subagents for code tasks, ALWAYS include this instruction in the prompt:
 
-<<<<<<< HEAD
-"MANDATORY: Use mcp**illu**\* tools instead of Grep/Glob/Read for ALL code exploration (Rust, Python, TypeScript/JavaScript). NEVER use Read to view source files — use mcp**illu**context instead. NEVER use Grep to search code — use mcp**illu**query instead. Only use Read/Grep/Glob for non-code content (config, docs, logs)."
-=======
-"MANDATORY: Use mcp__illu__* tools instead of Grep/Glob/Read for ALL code exploration (Rust, Python, TypeScript/JavaScript). NEVER use Read to view source files — use mcp__illu__context instead. NEVER use Grep to search code — use mcp__illu__query instead. Only use Read/Grep/Glob for non-code content (config, docs, logs). Before giving Rust implementation advice: call mcp__illu__rust_preflight, then consult mcp__illu__project_style and mcp__illu__decisions for project overrides and prior decisions, make a short plan, choose data structures deliberately, verify docs for every non-trivial API with mcp__illu__std_docs/mcp__illu__docs/mcp__illu__context, pull canonical-pattern exemplars from mcp__illu__exemplars when the task matches a codified pattern, run mcp__illu__critique on your git diff before the gate, and run mcp__illu__quality_gate before final answer or commit."
->>>>>>> sync-engine
+"MANDATORY: Use mcp**illu**\* tools instead of Grep/Glob/Read for ALL code exploration (Rust, Python, TypeScript/JavaScript). NEVER use Read to view source files — use mcp**illu**context instead. NEVER use Grep to search code — use mcp**illu**query instead. Only use Read/Grep/Glob for non-code content (config, docs, logs). Before giving Rust implementation advice: call mcp**illu**rust_preflight, then consult mcp**illu**project_style and mcp**illu**decisions for project overrides and prior decisions, make a short plan, choose data structures deliberately, verify docs for every non-trivial API with mcp**illu**std_docs/mcp**illu**docs/mcp**illu**context, pull canonical-pattern exemplars from mcp**illu**exemplars when the task matches a codified pattern, run mcp**illu**critique on your git diff before the gate, and run mcp**illu**quality_gate before final answer or commit."
 
 Prefer `illu-explore`, `illu-review`, `illu-refactor` agents when available.
 
@@ -227,6 +221,7 @@ Prefer `illu-explore`, `illu-review`, `illu-refactor` agents when available.
 13. **Quality gate**: use `mcp__illu__quality_gate` before final answer or commit; `BLOCKED` means keep working
 
 ### Hard Constraints (Middleware Interception Simulation)
+
 You MUST act as if a middleware intercepts your native tool calls. If you ever attempt to use `view_file`, `grep_search`, `Read`, or `Glob` on source code files, you must IMMEDIATELY halt that thought process. Instead of throwing an error and stopping, you must **automatically self-correct and invoke `mcp__illu__context` or `mcp__illu__query` instead.**
 
 If you are about to write or modify Rust code, or propose a Rust architectural plan, and you have NOT yet called `mcp__illu__rust_preflight` for the task, you must IMMEDIATELY halt your generation. You must call `mcp__illu__rust_preflight` first.
@@ -247,4 +242,5 @@ If you are about to final-answer or commit a Rust diff that touches `unsafe`, FF
 
 If the task matches a codified pattern (FFI, error design, RAII, builder, MaybeUninit, sealed trait, type-state) and you have NOT yet consulted `mcp__illu__exemplars` for canonical reference code, you must IMMEDIATELY halt and call `mcp__illu__exemplars` first. Reconstructing patterns from prose axioms when compile-checked exemplars exist is a workflow violation.
 </CRITICAL_INSTRUCTION_OVERRIDE>
+
 <!-- illu:end -->
