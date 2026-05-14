@@ -25,7 +25,7 @@ export default function ResponsiveContent({
         <div className="sticky top-0 z-30 px-4">
           <ConflictsBanner />
           <MigrationBanner />
-          <SyncReauthRequiredAlert className="mt-2" />
+          {/* <SyncReauthRequiredAlert className="mt-2" /> */}
         </div>
 
         {/* Scrollable content area — serves as container query context */}
