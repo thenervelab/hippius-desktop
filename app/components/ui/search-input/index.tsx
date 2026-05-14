@@ -35,7 +35,7 @@ export const SearchInput: React.FC<SearchInputProps> = ({
     >
       <div
         className={cn(
-          "flex items-center w-full h-full rounded-full",
+          "flex items-center w-full h-full rounded-[40px]",
           "bg-grey-light-700 dark:bg-black-400",
           "border-[0.951px] border-grey-dark-100 dark:border-black-300",
           "shadow-[inset_0px_0.773px_0px_0px_rgba(255,255,255,0.06)]",
