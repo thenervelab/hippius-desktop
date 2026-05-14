@@ -179,3 +179,74 @@ async fn record_plan_with_empty_uploads_compacts_pending_rows() {
         .get("n");
     assert_eq!(after, 0, "empty plan should have compacted all pending rows");
 }
+
+/// Pins the contract that `tauri_bridge::build_intent_overlay` depends on:
+/// a single account-scoped aggregate query that sums totals across every
+/// drive the user has. The snapshot overlay shows ONE pair of "X of Y"
+/// numbers (global per account), not per-drive, so the bridge needs an
+/// aggregate primitive — issuing N `totals_for_drive` calls per emit would
+/// be N round-trips against SQLite on a hot path that fires at up to 4 Hz.
+///
+/// What this test fixes in place:
+///   - The cross-drive SUM/COUNT semantics (totals across drives roll up).
+///   - The account scoping (one account's rows never see another's).
+///   - The completed vs. total split is preserved per the same COALESCE
+///     pattern as `totals_for_drive`.
+#[tokio::test]
+async fn totals_for_account_sums_across_drives() {
+    let pool = fresh_pool().await;
+    let repo = IntentRepo::new(pool);
+
+    repo.record_plan(
+        "acct",
+        "drive_a",
+        &[("a.txt".into(), 100), ("b.txt".into(), 200)],
+    )
+    .await
+    .expect("record_plan drive_a");
+    repo.record_plan("acct", "drive_b", &[("c.txt".into(), 300)])
+        .await
+        .expect("record_plan drive_b");
+    // Mark only a.txt complete; drive_a still has b.txt pending and
+    // drive_b's c.txt is pending. Totals across the account should be
+    // 3 files / 600 bytes total, 1 file / 100 bytes completed.
+    repo.mark_completed("acct", "drive_a", "a.txt", 1_000)
+        .await
+        .expect("mark_completed a.txt");
+    // A different account shares the SQLite file. Its rows must NEVER
+    // bleed into "acct"'s totals.
+    repo.record_plan("other_acct", "drive_a", &[("d.txt".into(), 999)])
+        .await
+        .expect("record_plan other_acct");
+
+    let totals = repo
+        .totals_for_account("acct")
+        .await
+        .expect("totals_for_account acct");
+    assert_eq!(totals.total_files, 3, "a + b + c across drive_a + drive_b");
+    assert_eq!(totals.total_bytes, 600, "100 + 200 + 300");
+    assert_eq!(totals.completed_files, 1, "only a.txt is completed");
+    assert_eq!(totals.completed_bytes, 100, "a.txt's size only");
+
+    let other = repo
+        .totals_for_account("other_acct")
+        .await
+        .expect("totals_for_account other_acct");
+    assert_eq!(other.total_files, 1, "other account is isolated");
+    assert_eq!(other.total_bytes, 999);
+
+    let absent = repo
+        .totals_for_account("missing_acct")
+        .await
+        .expect("totals_for_account missing_acct");
+    assert_eq!(
+        absent,
+        tauri_project_lib::sync::intent::IntentTotals {
+            total_files: 0,
+            total_bytes: 0,
+            completed_files: 0,
+            completed_bytes: 0,
+        },
+        "unknown account returns zeros (COALESCE handles SQLite SUM-of-empty NULL)"
+    );
+}

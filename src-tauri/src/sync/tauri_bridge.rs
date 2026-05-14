@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter};
 
 use super::events;
+use crate::sync::intent::IntentRepo;
 use crate::sync::progress::{SyncSnapshot, cap_file_list, prepare_snapshot_for_emit};
 
 /// Process-wide cursor holding the last-emitted snapshot fingerprint.
@@ -620,19 +621,48 @@ impl SyncEventHandler for TauriSyncBridge {
                 // `progress::apply_preparing_override`.
                 prepare_snapshot_for_emit(&mut snapshot, &app_state.preparing);
 
-                // Skip the IPC if this snapshot is structurally identical to
-                // the last one we emitted. The throttle in
-                // `progress::update_file_progress` already gates by time;
-                // this fingerprint gate covers the case where two emits land
-                // back-to-back with the same content (e.g. an
-                // `emit_snapshot(true)` after a no-op state mutation, or a
-                // state-transition emit that races with a chunk-tick emit
-                // both seeing the same headline data). Avoiding `app.emit`
-                // skips the JSON serialization + IPC tunnel.
-                let fp = snapshot_fingerprint(&snapshot);
-                if try_claim_snapshot_fingerprint(&LAST_EMITTED_FINGERPRINT, fp) {
-                    let _ = app.emit(events::PROGRESS_SNAPSHOT, &snapshot);
-                }
+                // The intent overlay needs an async SQLite SUM/COUNT query,
+                // but `on_event` is the sync half of `SyncEventHandler`. We
+                // spawn the overlay-build + fingerprint-claim + emit
+                // together so the whole IPC tail runs off this synchronous
+                // arm.
+                //
+                // Ordering concern: with `tokio::spawn`, two close-spaced
+                // snapshots can complete their DB read in either order.
+                // The fingerprint atomic uses `swap` (not CAS), so each
+                // spawn's `try_claim` compares its own fp against whatever
+                // got written last; differing fingerprints both emit
+                // (which is the safe outcome — the FE renders the most
+                // recent message and reorder of by-fingerprint-identical
+                // emits is a harmless duplicate IPC). The previous
+                // synchronous claim-then-emit path could collapse two
+                // identical snapshots to one IPC; the spawn path collapses
+                // each snapshot's own duplicate but not a cross-snapshot
+                // race — that's acceptable because the FE re-renders
+                // either way.
+                //
+                // Why not `block_in_place + Handle::current().block_on`:
+                // that pattern (used by `shares::keystore`) panics on a
+                // single-threaded runtime and risks deadlock if any caller
+                // ever invokes `on_event` from inside an existing
+                // `block_on` frame. Spawning is unconditionally safe and
+                // the ordering trade-off is bounded.
+                let app_for_spawn = app.clone();
+                tokio::spawn(async move {
+                    let overlay = build_intent_overlay(&app_for_spawn).await;
+                    let fp = snapshot_fingerprint(&snapshot, overlay);
+                    if try_claim_snapshot_fingerprint(&LAST_EMITTED_FINGERPRINT, fp) {
+                        let wire = SyncSnapshotWire {
+                            inner: &snapshot,
+                            intent_total_files: overlay.total_files,
+                            intent_total_bytes: overlay.total_bytes,
+                            intent_completed_files: overlay.completed_files,
+                            intent_completed_bytes: overlay.completed_bytes,
+                            intent_active: overlay.active,
+                        };
+                        let _ = app_for_spawn.emit(events::PROGRESS_SNAPSHOT, &wire);
+                    }
+                });
             }
         }
     }
@@ -693,14 +723,126 @@ impl SyncCallbacks for TauriSyncBridge {
     }
 }
 
-/// Compute a small content fingerprint for a `SyncSnapshot`.
+/// Desktop-side intent-manifest overlay piggybacked onto the snapshot wire.
+///
+/// All fields are `Option` so the wire wrapper can render `null` for an
+/// emit that happens before a user is logged in (or before the DB pool is
+/// installed) — the FE treats absent fields as "no overlay", which is the
+/// correct render for "we don't know yet". An all-`None` overlay is the
+/// `Default` and never participates in `intent_active`'s "X of Y" gate.
+///
+/// `Copy` so the fingerprint helper can take it by value without forcing
+/// the spawn body to manage a reference's lifetime alongside the
+/// `&snapshot` borrow it already owns. The struct is six pointer-sized
+/// `Option`s plus one `Option<bool>` — passing by value is ~40 bytes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SyncIntentOverlay {
+    total_files: Option<u64>,
+    total_bytes: Option<u64>,
+    completed_files: Option<u64>,
+    completed_bytes: Option<u64>,
+    /// `Some(true)` iff `total_files > completed_files`. The FE gates the
+    /// "Syncing X GB of Y" line on this — `None` AND `Some(false)` both
+    /// hide the line, matching the "no work pending" UX.
+    active: Option<bool>,
+}
+
+/// Snapshot payload sent on the `sync_progress_snapshot` Tauri channel.
+///
+/// Wraps `hcfs_client::sync::SyncSnapshot` via `#[serde(flatten)]` and
+/// appends five desktop-side overlay fields representing the intent
+/// manifest's "X of Y" totals — what the user dragged in vs what's
+/// uploaded so far, which is the only progress signal that survives an
+/// app restart.
+///
+/// The borrowed `inner: &'a SyncSnapshot` keeps the wire shape allocation-
+/// free; the wrapper is consumed synchronously by `serde_json` inside
+/// `app.emit`, so the borrow never escapes the emit call.
+///
+/// All five overlay fields are `Option`: a snapshot emit that races
+/// AppState wiring (or fires before the user logs in) carries `None` for
+/// every overlay field. The FE contract is "treat None as no overlay";
+/// never coerce to zero (which would falsely render a "0 of 0" widget).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncSnapshotWire<'a> {
+    #[serde(flatten)]
+    inner: &'a SyncSnapshot,
+    intent_total_files: Option<u64>,
+    intent_total_bytes: Option<u64>,
+    intent_completed_files: Option<u64>,
+    intent_completed_bytes: Option<u64>,
+    intent_active: Option<bool>,
+}
+
+/// Build the intent-overlay numbers for the current account, summed
+/// across every drive the user has.
+///
+/// Returns `SyncIntentOverlay::default()` (all-`None`) when there's no
+/// active account or the DB read fails — the wire wrapper renders that as
+/// missing JSON fields and the FE treats absent fields as "no overlay".
+/// We deliberately do NOT propagate `IntentError::Db` to the IPC channel:
+/// a transient DB hiccup must not drop the snapshot emit itself, because
+/// the FE depends on the hcfs progress fields for the per-file widget
+/// regardless of whether the overlay is known.
+///
+/// Why a single `totals_for_account` query (not N `totals_for_drive`):
+/// the emit fires at up to 4 Hz during transfers and the user may have
+/// multiple drives configured. One aggregate-summing query keeps the
+/// per-emit cost to a single indexed SQLite scan. Source: see
+/// `IntentRepo::totals_for_account`'s `# Why account-scoped` block.
+async fn build_intent_overlay(app: &AppHandle) -> SyncIntentOverlay {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+
+    // Not-logged-in is a load-bearing case — the auto_init flow emits
+    // snapshots before AuthInfo is populated. Treat as "no overlay".
+    let Ok(account_id) = app_state.current_account_id() else {
+        return SyncIntentOverlay::default();
+    };
+    let pool = match app_state.pool() {
+        Ok(p) => p.clone(),
+        Err(e) => {
+            tracing::debug!(error = %e, "intent overlay: pool unavailable, emitting without overlay");
+            return SyncIntentOverlay::default();
+        }
+    };
+
+    let repo = IntentRepo::new(pool);
+    match repo.totals_for_account(&account_id).await {
+        Ok(totals) => SyncIntentOverlay {
+            total_files: Some(totals.total_files),
+            total_bytes: Some(totals.total_bytes),
+            completed_files: Some(totals.completed_files),
+            completed_bytes: Some(totals.completed_bytes),
+            // `active` flips false when the manifest is fully drained
+            // OR genuinely empty (no rows). The "fully drained" branch
+            // lets the FE hide the line as soon as totals == completed,
+            // without a separate widget-state field. An empty manifest
+            // (total = 0) maps to `false` rather than `None` because
+            // we DO know there's no overlay work — `None` is reserved
+            // for "we couldn't read the DB".
+            active: Some(totals.total_files > totals.completed_files),
+        },
+        Err(e) => {
+            tracing::warn!(error = %e, "intent overlay: totals_for_account failed");
+            SyncIntentOverlay::default()
+        }
+    }
+}
+
+/// Compute a small content fingerprint for a `SyncSnapshot` + its
+/// intent-overlay tail.
 ///
 /// Hashes every scalar field the FE renders plus a per-file
 /// (path, action, status, bytes_transferred, bytes_encrypted, total_bytes,
 /// error) tuple so any user-visible change in per-file progress flips the
-/// fingerprint. Pure ordering changes in the `files` vec also flip it by
-/// design — the FE renders rows in the order Rust sent them, so a reorder
-/// IS a visible change. `0` is reserved for the never-emitted sentinel
+/// fingerprint. The overlay's five `Option<u64>` / `Option<bool>` fields
+/// are folded in after the per-file loop so an overlay-only change (rare
+/// but possible — e.g. a `mark_completed` write while no transfer is in
+/// flight) still triggers an emit. Pure ordering changes in the `files`
+/// vec also flip the fingerprint by design — the FE renders rows in the
+/// order Rust sent them. `0` is reserved for the never-emitted sentinel
 /// and is remapped to `1` to keep it distinct from the gate's baseline.
 ///
 /// **Collision contract**: the gate uses `DefaultHasher` (SipHash-1-3,
@@ -711,11 +853,15 @@ impl SyncCallbacks for TauriSyncBridge {
 /// re-emit within ~250 ms anyway, so even a freak collision corrects
 /// itself within one frame.
 ///
-/// **Single-emitter contract**: pairs with `try_claim_snapshot_fingerprint`'s
-/// `swap` (not `compare_exchange`). Safe because `TauriSyncBridge::on_event`
-/// is dispatched serially per sync runner; concurrent callers would need
-/// CAS to be correct, but we don't have any.
-fn snapshot_fingerprint(s: &SyncSnapshot) -> u64 {
+/// **Concurrent-claim contract**: pairs with `try_claim_snapshot_fingerprint`'s
+/// `swap` (not `compare_exchange`). The emit path now runs from a
+/// `tokio::spawn` (so multiple emits can race), but `swap` returns the
+/// previous value to each racer — two racers with different fingerprints
+/// both see `prev != fp` and both emit. Two racers with identical
+/// fingerprints might both emit (one duplicate IPC, harmless) or might
+/// dedupe to one (the winning racer's `swap` matches the loser's later
+/// `prev`); both outcomes are acceptable.
+fn snapshot_fingerprint(s: &SyncSnapshot, overlay: SyncIntentOverlay) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     s.is_active.hash(&mut h);
     s.progress_bytes.hash(&mut h);
@@ -760,6 +906,14 @@ fn snapshot_fingerprint(s: &SyncSnapshot) -> u64 {
         f.total_bytes.hash(&mut h);
         f.error.as_ref().map(AsRef::as_ref).hash(&mut h);
     }
+    // Overlay tail. `Option<T>: Hash` when `T: Hash` (verified at
+    // doc.rust-lang.org/std/option/enum.Option.html#impl-Hash-for-Option<T>),
+    // so each field hashes its presence + payload in one call.
+    overlay.total_files.hash(&mut h);
+    overlay.total_bytes.hash(&mut h);
+    overlay.completed_files.hash(&mut h);
+    overlay.completed_bytes.hash(&mut h);
+    overlay.active.hash(&mut h);
     let h = h.finish();
     if h == 0 { 1 } else { h }
 }
@@ -849,11 +1003,12 @@ mod tests {
         let mut a = fixture_snapshot();
         let mut b = fixture_snapshot();
         b.progress_bytes = 1500;
-        assert_ne!(snapshot_fingerprint(&a), snapshot_fingerprint(&b));
+        let empty = SyncIntentOverlay::default();
+        assert_ne!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&b, empty));
         // And while we're here, verify identical snapshots produce
         // identical fingerprints (the gate's whole reason for existing).
         a.progress_bytes = 1500;
-        assert_eq!(snapshot_fingerprint(&a), snapshot_fingerprint(&b));
+        assert_eq!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&b, empty));
     }
 
     /// Regression for the review-flagged `started_at` gap: a session
@@ -864,8 +1019,98 @@ mod tests {
         let mut a = fixture_snapshot();
         let mut b = fixture_snapshot();
         b.started_at = Some(1_700_000_001_000);
-        assert_ne!(snapshot_fingerprint(&a), snapshot_fingerprint(&b));
+        let empty = SyncIntentOverlay::default();
+        assert_ne!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&b, empty));
         a.started_at = b.started_at;
-        assert_eq!(snapshot_fingerprint(&a), snapshot_fingerprint(&b));
+        assert_eq!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&b, empty));
+    }
+
+    /// Regression for Task 7: an overlay-only change MUST flip the
+    /// fingerprint so an emit fires even if every hcfs-side field is
+    /// byte-identical. Without this, `mark_completed` advancing the
+    /// intent totals while no transfer is in flight (e.g. the closing
+    /// per-file callback fires right after the FE-visible snapshot
+    /// already settled) would not re-emit, and the FE's "X of Y" line
+    /// would stay frozen until the next unrelated snapshot tick.
+    #[test]
+    fn fingerprint_changes_when_overlay_changes() {
+        let a = fixture_snapshot();
+        let empty = SyncIntentOverlay::default();
+        let with_totals = SyncIntentOverlay {
+            total_files: Some(10),
+            total_bytes: Some(1_000),
+            completed_files: Some(5),
+            completed_bytes: Some(500),
+            active: Some(true),
+        };
+        assert_ne!(
+            snapshot_fingerprint(&a, empty),
+            snapshot_fingerprint(&a, with_totals),
+        );
+        // Sanity: identical overlays produce identical fingerprints.
+        assert_eq!(
+            snapshot_fingerprint(&a, with_totals),
+            snapshot_fingerprint(&a, with_totals),
+        );
+    }
+
+    /// Wire-format contract: serializing `SyncSnapshotWire` must
+    /// (a) inline the inner snapshot's camelCase fields at the top
+    ///     level (verifies `#[serde(flatten)]` did its job),
+    /// (b) include the five overlay fields in camelCase, and
+    /// (c) round-trip `Some` overlay values as the underlying scalar.
+    /// The FE depends on the exact field names — break this test and
+    /// the widget renders nothing.
+    #[test]
+    fn snapshot_wire_serializes_inner_flat_with_intent_camelcase() {
+        let inner = fixture_snapshot();
+        let wire = SyncSnapshotWire {
+            inner: &inner,
+            intent_total_files: Some(10),
+            intent_total_bytes: Some(1_000),
+            intent_completed_files: Some(5),
+            intent_completed_bytes: Some(500),
+            intent_active: Some(true),
+        };
+        let json = serde_json::to_value(&wire).expect("serialize wire");
+
+        // Overlay fields (camelCase).
+        assert_eq!(json["intentTotalFiles"], 10);
+        assert_eq!(json["intentTotalBytes"], 1_000);
+        assert_eq!(json["intentCompletedFiles"], 5);
+        assert_eq!(json["intentCompletedBytes"], 500);
+        assert_eq!(json["intentActive"], true);
+
+        // No `inner` nesting — flatten promoted the inner fields up.
+        assert!(json.get("inner").is_none(), "flatten must inline `inner`");
+
+        // Spot-check one inner snapshot field at the top level. The
+        // fixture sets `widget_state = "active"`, which serializes as
+        // camelCase `widgetState`.
+        assert_eq!(json["widgetState"], "active");
+        assert_eq!(json["isActive"], true);
+    }
+
+    /// `None` overlay fields render as JSON `null` (default serde
+    /// behavior). The FE checks for absent / `null` to mean "no
+    /// overlay" — treating `null` as zero would falsely render a
+    /// "0 of 0" widget for users who haven't been logged in yet.
+    #[test]
+    fn snapshot_wire_serializes_none_overlay_as_null() {
+        let inner = fixture_snapshot();
+        let wire = SyncSnapshotWire {
+            inner: &inner,
+            intent_total_files: None,
+            intent_total_bytes: None,
+            intent_completed_files: None,
+            intent_completed_bytes: None,
+            intent_active: None,
+        };
+        let json = serde_json::to_value(&wire).expect("serialize wire");
+        assert!(json["intentTotalFiles"].is_null());
+        assert!(json["intentTotalBytes"].is_null());
+        assert!(json["intentCompletedFiles"].is_null());
+        assert!(json["intentCompletedBytes"].is_null());
+        assert!(json["intentActive"].is_null());
     }
 }

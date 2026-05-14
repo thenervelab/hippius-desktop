@@ -399,6 +399,62 @@ impl IntentRepo {
         Ok(result.rows_affected())
     }
 
+    /// Aggregate counts and byte sums across EVERY drive for one account.
+    ///
+    /// Mirrors [`totals_for_drive`](Self::totals_for_drive) minus the
+    /// `AND drive_label = ?` predicate — one indexed SUM/COUNT pass instead
+    /// of N per-drive round-trips. The desktop's snapshot-overlay path
+    /// fires on every progress emit (~4 Hz during transfers); summing in
+    /// the DB layer keeps the hot path to a single sqlx call regardless of
+    /// how many drives the user has configured.
+    ///
+    /// **SQLite `SUM` edge case.** Same as `totals_for_drive`: `SUM` over
+    /// zero matching rows returns SQL NULL, so the byte sums are wrapped
+    /// in `COALESCE(..., 0)`. An unknown / not-yet-used `account_id`
+    /// therefore returns `IntentTotals { 0, 0, 0, 0 }` rather than an
+    /// error. Source: https://www.sqlite.org/lang_aggfunc.html#sumunc.
+    ///
+    /// # Why account-scoped, not unconditional
+    ///
+    /// Same rationale as [`clear_account`](Self::clear_account): multiple
+    /// accounts share the desktop's SQLite file (sub-accounts, account
+    /// switching). A predicate-less aggregate would silently mix another
+    /// user's totals into the active widget overlay.
+    ///
+    /// # Errors
+    /// Returns [`IntentError::Db`] on SQLite I/O failure.
+    pub async fn totals_for_account(
+        &self,
+        account_id: &str,
+    ) -> Result<IntentTotals, IntentError> {
+        // One index scan over (account_id, completed_at_ms) — same covering
+        // index used by `totals_for_drive`. The `WHERE` filters by
+        // account_id only; the drive_label column is left unrestricted so
+        // SQLite walks every (account_id, *) entry.
+        let row: (i64, i64, i64, i64) = sqlx::query_as(
+            "SELECT
+                COUNT(*)                                                                AS total_files,
+                COALESCE(SUM(size_bytes), 0)                                            AS total_bytes,
+                COUNT(CASE WHEN completed_at_ms IS NOT NULL THEN 1 END)                 AS completed_files,
+                COALESCE(SUM(CASE WHEN completed_at_ms IS NOT NULL THEN size_bytes END), 0) AS completed_bytes
+             FROM sync_intent
+             WHERE account_id = ?",
+        )
+        .bind(account_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        // Same i64 -> u64 cast safety argument as `totals_for_drive`:
+        // COUNT(*) is non-negative; SUM of u64-sourced values is
+        // non-negative; COALESCE forces NULL -> 0 before binding.
+        Ok(IntentTotals {
+            total_files: row.0 as u64,
+            total_bytes: row.1 as u64,
+            completed_files: row.2 as u64,
+            completed_bytes: row.3 as u64,
+        })
+    }
+
     /// Aggregate counts and byte sums for one `(account_id, drive_label)`
     /// pair. Returns zeros for a drive with no rows.
     ///
