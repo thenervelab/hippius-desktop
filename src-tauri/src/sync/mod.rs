@@ -13,6 +13,7 @@ pub mod failure_commands;
 pub mod failure_tracking;
 pub mod files;
 pub mod folders;
+pub mod intent;
 pub mod lifecycle;
 pub mod logic;
 pub mod migration;
