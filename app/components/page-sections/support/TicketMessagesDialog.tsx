@@ -29,14 +29,6 @@ interface TicketMessagesDialogProps {
   onClose: () => void;
   ticket: SupportTicket | null;
   onCloseTicket?: (ticket: SupportTicket) => void;
-  /**
-   * Dev override. When provided, the dialog skips fetching from
-   * `useSupportTicketMessages` and renders these messages instead. Lets
-   * the support index render a fully loaded preview without backend.
-   */
-  mockMessages?: TicketMessage[];
-  /** Dev override paired with `mockMessages` to fake a loading state. */
-  mockIsLoading?: boolean;
 }
 
 const PRIORITY_COLOR: Record<string, string> = {
@@ -101,8 +93,6 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
   open,
   onClose,
   ticket,
-  mockMessages,
-  mockIsLoading,
 }) => {
   const [messageText, setMessageText] = useState("");
   const [attachments, setAttachments] = useState<
@@ -113,11 +103,9 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
   const messagesContainerRef = React.useRef<HTMLDivElement>(null);
   const page = 1;
 
-  const isMocked = mockMessages !== undefined;
-
   const {
     data: messagesData,
-    isLoading: hookIsLoading,
+    isLoading,
     isFetching,
     refetch,
   } = useSupportTicketMessages(
@@ -127,7 +115,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
       limit: 500,
     },
     {
-      enabled: !!ticket?.id && open && !isMocked,
+      enabled: !!ticket?.id && open,
     }
   );
 
@@ -136,11 +124,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
 
   const { mutateAsync: uploadAttachment } = useUploadTicketAttachment();
 
-  const messages: TicketMessage[] = isMocked
-    ? (mockMessages ?? [])
-    : (messagesData?.results ?? []);
-
-  const isLoading = isMocked ? Boolean(mockIsLoading) : hookIsLoading;
+  const messages: TicketMessage[] = messagesData?.results ?? [];
 
   // Track previous ticket ID to detect ticket changes
   const prevTicketIdRef = React.useRef<number | null>(null);
@@ -190,7 +174,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
   }, [open]);
 
   const handleSendMessage = async () => {
-    if (!messageText.trim() || !ticket || isMocked) return;
+    if (!messageText.trim() || !ticket) return;
 
     const currentText = messageText.trim();
     const currentAttachments = [...attachments];
@@ -265,7 +249,6 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
   };
 
   const handleRefresh = async () => {
-    if (isMocked) return;
     await refetch();
     setTimeout(() => {
       scrollToBottom();
@@ -273,12 +256,9 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
   };
 
   const inputDisabled =
-    isMocked ||
-    isPosting ||
-    isUploadingAttachments ||
-    ticket?.status === "closed";
-  const showInitialLoader = isLoading || (!isMocked && isTicketChanged);
-  const isRefreshing = !isMocked && isFetching && !showInitialLoader;
+    isPosting || isUploadingAttachments || ticket?.status === "closed";
+  const showInitialLoader = isLoading || isTicketChanged;
+  const isRefreshing = isFetching && !showInitialLoader;
 
   return (
     <Dialog.Root open={open} onOpenChange={onClose}>
@@ -403,7 +383,7 @@ const TicketMessagesDialog: React.FC<TicketMessagesDialogProps> = ({
             <button
               type="button"
               onClick={handleRefresh}
-              disabled={isRefreshing || isMocked}
+              disabled={isRefreshing}
               className="flex h-8 w-full items-center justify-between border-t border-grey-dark-100 bg-grey-light-400 px-4 text-[12px] font-medium leading-[18px] tracking-[-0.24px] text-grey-dark-800 shadow-[inset_0px_2px_0px_0px_white] transition-colors hover:text-grey-20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-black-900 dark:bg-black-primary-bg dark:text-grey-dark-800 dark:shadow-[inset_0px_2px_0px_0px_rgba(255,255,255,0.06)] dark:hover:text-grey-dark-200"
             >
               <span>Refresh</span>
