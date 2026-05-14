@@ -320,3 +320,71 @@ async fn clear_drive_via_repo_drops_intent_rows_for_target_drive_only() {
     assert_eq!(other.total_files, 1, "other_acct's drive_a is isolated");
     assert_eq!(other.total_bytes, 999);
 }
+
+/// Pins the `IntentRepo::clear_account` contract that `logout_full` in
+/// `src-tauri/src/auth/logout.rs` wires into as its step 4. The widget's
+/// "X of Y" overlay is the only consumer of intent rows, so on full
+/// logout we must drop every row for the account across ALL drives —
+/// otherwise the next user logging in on the same machine inherits the
+/// previous account's totals. Three invariants matter:
+///
+///   1. Every drive for the target account is wiped (both pending AND
+///      completed halves) — verified by asserting `total_files == 0` for
+///      two different drive labels on the same account.
+///   2. Other accounts sharing the SQLite file are untouched — account
+///      scoping is enforced by the SQL WHERE clause in `clear_account`,
+///      not by the caller.
+///   3. Mixed pending/completed state is fully cleared — a stale
+///      completed row would otherwise inflate next-session totals.
+///
+/// The full `logout_full` flow can't be exercised from cargo-test (it
+/// needs the Tauri runtime + managed AppState); the end-to-end check
+/// is the manual smoke test in task 11. What this test guards against
+/// is a refactor of `clear_account` that drops the account scope (e.g.
+/// switches to unconditional `DELETE FROM sync_intent`) — the wiring
+/// at the logout site still compiles but silently corrupts other
+/// accounts' widget state.
+#[tokio::test]
+async fn clear_account_via_repo_drops_all_intent_for_account_preserving_others() {
+    let pool = fresh_pool().await;
+    let repo = IntentRepo::new(pool);
+
+    repo.record_plan("victim_acct", "drive_a", &[("a.txt".into(), 100), ("b.txt".into(), 200)])
+        .await
+        .expect("record_plan victim_acct/drive_a");
+    repo.record_plan("victim_acct", "drive_b", &[("c.txt".into(), 300)])
+        .await
+        .expect("record_plan victim_acct/drive_b");
+    // Mix completed + pending state so the assertion also pins that
+    // clear_account drops BOTH halves, not just pending rows.
+    repo.mark_completed("victim_acct", "drive_a", "a.txt", 1_000)
+        .await
+        .expect("mark_completed victim_acct/drive_a/a.txt");
+    repo.record_plan("other_acct", "drive_a", &[("z.txt".into(), 999)])
+        .await
+        .expect("record_plan other_acct/drive_a");
+
+    repo.clear_account("victim_acct").await.expect("clear_account victim_acct");
+
+    // Invariant 1: every drive for victim_acct is empty (drive_a had
+    // both a completed and a pending row; drive_b had a pending row).
+    let ta = repo
+        .totals_for_drive("victim_acct", "drive_a")
+        .await
+        .expect("totals victim_acct/drive_a");
+    let tb = repo
+        .totals_for_drive("victim_acct", "drive_b")
+        .await
+        .expect("totals victim_acct/drive_b");
+    assert_eq!(ta.total_files, 0, "drive_a wiped across pending + completed");
+    assert_eq!(tb.total_files, 0, "drive_b wiped");
+
+    // Invariant 2: other_acct's rows are untouched — account scoping
+    // holds even when the two accounts share a drive label.
+    let other = repo
+        .totals_for_drive("other_acct", "drive_a")
+        .await
+        .expect("totals other_acct/drive_a");
+    assert_eq!(other.total_files, 1, "other_acct survives victim_acct clear");
+    assert_eq!(other.total_bytes, 999, "other_acct bytes preserved");
+}
