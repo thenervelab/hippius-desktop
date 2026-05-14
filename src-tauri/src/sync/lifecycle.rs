@@ -1953,9 +1953,22 @@ pub fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcf
         // `complete_pending_files`. Without this, a small decrypted file
         // gets stuck on "Decrypting" until the largest in-flight file
         // also finishes.
-        if let Err(e) = crate::sync::progress::mark_file_synced(&sync, rel_path) {
-            warn!(label = %label, path = %rel_path, error = %e, "Failed to mark file synced in progress tracker");
-        }
+        //
+        // `mark_file_synced` also returns the file's `total_bytes` from
+        // the in-memory progress tracker — that's the byte count we
+        // thread into the activity row below. `FileSyncedFn`'s upstream
+        // signature still doesn't carry the size, but the progress
+        // tracker holds it from per-chunk telemetry and the transition
+        // here reads it BEFORE flipping the row to `Completed`. The
+        // fallback (no session / no file entry / already-Completed) is
+        // `0`, matching the prior hardcoded value for those edge cases.
+        let size_bytes = match crate::sync::progress::mark_file_synced(&sync, rel_path) {
+            Ok(n) => n,
+            Err(e) => {
+                warn!(label = %label, path = %rel_path, error = %e, "Failed to mark file synced in progress tracker");
+                0
+            }
+        };
 
         // Activity items must reflect SERVER-CONFIRMED success, not just
         // "the request body finished sending". hcfs-client's per-file
@@ -1979,29 +1992,23 @@ pub fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcf
         // for a future hcfs-client variant (e.g. Phase 2's `"failed"`)
         // is the exact category of lie this task exists to eliminate.
         //
-        // `size_bytes` is set to `0` because `FileSyncedFn`'s current
-        // signature (`Fn(&str, &str, &str, &str, Option<&FileTimestamps>)`)
-        // does not carry the byte count — only the byte-progress
-        // callback (which we no longer trust for activity rows) had it.
-        // Consequences accepted as Phase 1 deficits:
+        // `size_bytes` comes from `mark_file_synced`'s return value —
+        // the in-memory progress tracker's `file.total_bytes` read
+        // before the row transitions to Completed. The Recent-Files
+        // view (`get_recent_files` in `sync/files.rs`) reads
+        // `item.size_bytes` directly, so without this thread-through
+        // every newly-synced file would render with size 0 / "unknown".
+        // The byte-progress callback used to supply the size; we no
+        // longer trust it for activity rows (see the 402 plan), so the
+        // progress tracker is the authoritative source. The 0 fallback
+        // covers the documented edge cases of `mark_file_synced` —
+        // no session, no file entry, or the file was already Completed
+        // — where the size isn't observable from this call.
         //
-        //   - `SyncActivityRow.size` (populated from this field at
-        //     `src-tauri/src/sync/status.rs:74`) reports `0` for items
-        //     enqueued here. The FE hook `app/lib/hooks/useSyncActivity.ts`
-        //     exposes the value as `size: number`, but no current FE
-        //     component consumes it (verified 2026-05-13). The latent
-        //     field still ships zero-valued.
-        //
-        //   - `ActivityDedupKey = (file_name, action, label, size_bytes)`
-        //     (`hcfs_client::engine::runner::ActivityDedupKey`) loses
-        //     entropy on its last component. Path + action + label
-        //     collisions are still possible without size, but no
-        //     production caller legitimately enqueues two `Uploaded`
-        //     rows for the same `(path, label)` within a single cycle
-        //     (hcfs-client serializes per-file work).
-        //
-        // Phase 2 Task 2.3 broadens `FileSyncedFn` into a richer event
-        // variant; that task threads `size_bytes` back through here.
+        // `ActivityDedupKey = (file_name, action, label, size_bytes)`
+        // (`hcfs_client::engine::runner::ActivityDedupKey`) regains
+        // full entropy now that `size_bytes` is non-zero on the common
+        // path.
         let activity_action: Option<SyncActivityAction> = match action {
             "uploaded" => Some(SyncActivityAction::Uploaded),
             "downloaded" => Some(SyncActivityAction::Downloaded),
@@ -2027,7 +2034,7 @@ pub fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcf
                 file_name: Arc::from(rel_path),
                 action: activity_action,
                 timestamp: chrono::Utc::now().timestamp(),
-                size_bytes: 0,
+                size_bytes,
                 label: Arc::clone(&label),
             });
         }

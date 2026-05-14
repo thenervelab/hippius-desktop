@@ -203,6 +203,13 @@ pub fn mark_file_error(sync: &SyncRunner, path: String, error: String) -> Result
 /// Mark a single file as fully synced (download/upload + AEAD verification
 /// complete) and emit a snapshot.
 ///
+/// Returns the file's `total_bytes` (the size the progress tracker
+/// observed during this cycle). Callers thread this value into per-file
+/// telemetry rows so the Recent-Files view and the dedup-key entropy
+/// don't lose the byte count just because `FileSyncedFn`'s upstream
+/// signature doesn't carry it. See [`crate::sync::lifecycle::build_file_synced_callback`]
+/// for the consumer.
+///
 /// Called from `build_file_synced_callback` in `lifecycle.rs`, which fires
 /// from hcfs-client's per-file `on_file_synced` callback. That callback is
 /// invoked from `drive/sync_flow.rs` only after the upload OR download task
@@ -221,8 +228,13 @@ pub fn mark_file_error(sync: &SyncRunner, path: String, error: String) -> Result
 /// individual file as soon as its own AEAD verification has succeeded,
 /// independent of other in-flight files.
 ///
-/// No-op if there's no current session, no file at the given path, or the
-/// file is already Completed.
+/// Returns `Ok(0)` if there's no current session, no file at the given
+/// path, or the file is already Completed. Zero is the truthful sentinel
+/// for "this call observed no size": the size is undefined in the
+/// no-session/no-file cases, and the already-Completed branch means a
+/// previous call (or `complete_pending_files`) already reported it. The
+/// caller treats zero as "unknown" and won't fabricate a row with a fake
+/// byte count.
 ///
 /// As of hcfs-client `33048ff5bc9228939b521c8a147533dcb221dfb5` (PR #110),
 /// `path_for_progress` in `drive/download.rs` always uses the full
@@ -230,21 +242,40 @@ pub fn mark_file_error(sync: &SyncRunner, path: String, error: String) -> Result
 /// callback matches the key passed to `on_file_synced`. A simple
 /// `session.files.get_mut(path)` lookup is sufficient — no basename
 /// fallback needed.
-pub fn mark_file_synced(sync: &SyncRunner, path: &str) -> Result<()> {
+///
+/// # Errors
+///
+/// Currently infallible — every branch returns `Ok(...)`. The `Result`
+/// wrapper is retained because any future addition of fallible work
+/// (e.g. a checked timestamp arithmetic the snapshot relies on) belongs
+/// inside this helper, and a non-`Result` signature would force every
+/// caller to absorb the breakage at the call site.
+pub fn mark_file_synced(sync: &SyncRunner, path: &str) -> Result<u64> {
     use hcfs_client::engine::progress::state::FileStatus;
 
-    {
+    // `total_bytes` is captured INSIDE the locked-state block (where the
+    // session/file references are valid) and returned AFTER the guard
+    // drops. `u64: Copy`, so the value moves out of the borrow region
+    // cleanly — no lifetime extension, no extra clone.
+    let observed_bytes = {
         let mut state = sync.progress.lock_state();
         let Some(session) = state.current_session.as_mut() else {
-            return Ok(());
+            return Ok(0);
         };
         let Some(file) = session.files.get_mut(path) else {
-            return Ok(());
+            return Ok(0);
         };
         if file.status == FileStatus::Completed {
-            return Ok(());
+            // Already terminal — a previous call (or end-of-cycle
+            // `complete_pending_files`) already accounted for this file.
+            // Returning 0 here means the caller's activity row gets the
+            // "unknown" sentinel; the alternative (returning
+            // `file.total_bytes` again) would risk double-counting if a
+            // future caller multiplies the value across re-entries.
+            return Ok(0);
         }
         let now = chrono::Utc::now().timestamp_millis();
+        let bytes = file.total_bytes;
         file.status = FileStatus::Completed;
         file.progress = 100;
         file.completed_at = Some(now);
@@ -252,9 +283,10 @@ pub fn mark_file_synced(sync: &SyncRunner, path: &str) -> Result<()> {
             file.bytes_transferred = file.total_bytes;
             file.bytes_encrypted = file.total_bytes;
         }
-    }
+        bytes
+    };
     sync.emit_snapshot(true);
-    Ok(())
+    Ok(observed_bytes)
 }
 
 /// Mark a single file as failed (per-file upload or download error) and
@@ -992,5 +1024,82 @@ mod tests {
         assert_eq!(result[1].action, FileAction::LocalDelete);
         assert_eq!(result[2].action, FileAction::Download);
         assert_eq!(result[3].action, FileAction::Upload);
+    }
+
+    // ── mark_file_synced return-value contract ──────────────────────
+    //
+    // These tests pin `mark_file_synced`'s `Result<u64>` shape so a
+    // future refactor cannot quietly drop the size signal — that signal
+    // is what `build_file_synced_callback` threads into
+    // `SyncActivityItem.size_bytes` so the Recent-Files view shows a
+    // real byte count instead of "unknown". The four cases mirror the
+    // four documented branches in the helper's contract.
+
+    #[test]
+    fn mark_file_synced_returns_total_bytes_on_success() {
+        // Common path: an `Uploading` entry transitions to `Completed`
+        // and the caller gets back the size the progress tracker
+        // observed during the cycle. This is the byte count the
+        // activity row needs to be non-zero.
+        let sync = test_runner();
+        seed_session(
+            &sync,
+            vec![make_file("a.bin", "default", FileStatus::Uploading, None, 8_192, FileAction::Upload)],
+        );
+
+        let observed = mark_file_synced(&sync, "a.bin").expect("infallible");
+        assert_eq!(observed, 8_192);
+
+        // Side-effect check: the row really did transition to Completed.
+        let state = sync.progress.lock_state();
+        let session = state.current_session.as_ref().expect("session was seeded");
+        let file = session.files.get("a.bin").expect("file present");
+        assert_eq!(file.status, FileStatus::Completed);
+        assert_eq!(file.progress, 100);
+    }
+
+    #[test]
+    fn mark_file_synced_returns_zero_when_no_session() {
+        // Edge case 1: no session at all. The activity-row caller
+        // treats this as "size unknown" and emits 0.
+        let sync = test_runner();
+        // Deliberately skip `seed_session` so `current_session` is None.
+
+        let observed = mark_file_synced(&sync, "missing.bin").expect("infallible");
+        assert_eq!(observed, 0);
+    }
+
+    #[test]
+    fn mark_file_synced_returns_zero_when_file_not_in_session() {
+        // Edge case 2: session exists, but the requested path isn't in
+        // it (rename race, or hcfs-client fired for a path we never
+        // tracked). Same 0 fallback.
+        let sync = test_runner();
+        seed_session(
+            &sync,
+            vec![make_file("present.bin", "default", FileStatus::Uploading, None, 99, FileAction::Upload)],
+        );
+
+        let observed = mark_file_synced(&sync, "absent.bin").expect("infallible");
+        assert_eq!(observed, 0);
+    }
+
+    #[test]
+    fn mark_file_synced_returns_zero_when_already_completed() {
+        // Edge case 3: the file was already marked Completed by a
+        // previous call (or by end-of-cycle `complete_pending_files`).
+        // Returning the size again would risk double-counting in any
+        // caller that aggregated `size_bytes` across re-entries; the
+        // contract is "this call observed nothing new" → 0.
+        let sync = test_runner();
+        seed_session(
+            &sync,
+            // `make_file` with `completed_at = Some(...)` sets the
+            // status to whatever we pass — explicitly Completed here.
+            vec![make_file("done.bin", "default", FileStatus::Completed, Some(1), 256, FileAction::Upload)],
+        );
+
+        let observed = mark_file_synced(&sync, "done.bin").expect("infallible");
+        assert_eq!(observed, 0);
     }
 }

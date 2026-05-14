@@ -42,8 +42,10 @@
 //! point is to assert the *enqueue location*, not to exercise the
 //! whole sync cycle (which hcfs-client's own tests already cover).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use hcfs_client::engine::progress::state::{FileAction, FileStatus, SyncFile, SyncSession};
 use hcfs_client::engine::types::SyncActivityAction;
 use hcfs_client::engine::{NoopCallbacks, NoopEventHandler, SyncRunner};
 use tauri_project_lib::sync::lifecycle::build_file_synced_callback;
@@ -63,6 +65,49 @@ fn make_sync_runner() -> Arc<SyncRunner> {
         Arc::new(NoopCallbacks),
         reqwest::Client::new(),
     ))
+}
+
+/// Seed `current_session.files` with a single `Uploading` entry whose
+/// `total_bytes` matches the value `mark_file_synced` is expected to
+/// return when the callback fires for `path`.
+///
+/// Mirrors the in-module `seed_session` helper in
+/// `src/sync/progress.rs`, but defined here so this integration test
+/// does not depend on any `#[cfg(test)]`-only re-export.
+fn seed_one_file_session(sync: &SyncRunner, path: &str, label: &str, total_bytes: u64, action: FileAction) {
+    let file = SyncFile {
+        id: Arc::from(path),
+        path: Arc::from(path),
+        file_name: Arc::from(path.rsplit('/').next().unwrap_or(path)),
+        label: Arc::from(label),
+        action,
+        // Non-terminal status so `mark_file_synced`'s already-Completed
+        // short-circuit doesn't trigger and the callback sees the
+        // pre-transition `total_bytes`.
+        status: FileStatus::Uploading,
+        progress: 0,
+        bytes_encrypted: 0,
+        bytes_transferred: 0,
+        total_bytes,
+        resumed_from_bytes: None,
+        started_at: 0,
+        completed_at: None,
+        error: None,
+    };
+    let mut state = sync.progress.lock_state();
+    let mut files: HashMap<String, SyncFile> = HashMap::with_capacity(1);
+    files.insert(path.to_string(), file);
+    state.current_session = Some(SyncSession {
+        session_id: Arc::from("test-session"),
+        started_at: 0,
+        completed_at: None,
+        is_active: true,
+        expected_uploads: 0,
+        expected_downloads: 0,
+        expected_local_deletes: 0,
+        expected_remote_deletes: 0,
+        files,
+    });
 }
 
 /// Read `src/sync/lifecycle.rs` and return its full source.
@@ -156,6 +201,15 @@ fn byte_progress_does_not_enqueue_pending_activity() {
 fn on_file_synced_enqueues_uploaded_activity() {
     let sync = make_sync_runner();
     let label: Arc<str> = Arc::from("drive-a");
+
+    // Seed the progress tracker BEFORE building the callback so that
+    // `mark_file_synced` (called inside the closure) returns the file's
+    // `total_bytes`. Without the seed the helper returns 0 — which is
+    // technically a valid edge case, but it doesn't pin the size-
+    // propagation contract this test exists to enforce.
+    const EXPECTED_SIZE: u64 = 4_096;
+    seed_one_file_session(&sync, "folder/file.txt", "drive-a", EXPECTED_SIZE, FileAction::Upload);
+
     let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
 
     // 32-byte path hash keyed by 'a' so the hex decode in the callback
@@ -175,6 +229,10 @@ fn on_file_synced_enqueues_uploaded_activity() {
     assert_eq!(item.action, SyncActivityAction::Uploaded);
     assert_eq!(&*item.file_name, "folder/file.txt");
     assert_eq!(&*item.label, "drive-a");
+    assert_eq!(
+        item.size_bytes, EXPECTED_SIZE,
+        "size_bytes must come from the progress tracker's total_bytes so the Recent Files view doesn't show 'unknown'"
+    );
 }
 
 /// Runtime invariant: a `Downloaded`-shaped server confirmation
@@ -186,6 +244,13 @@ fn on_file_synced_enqueues_uploaded_activity() {
 fn on_file_synced_enqueues_downloaded_activity_for_download_action() {
     let sync = make_sync_runner();
     let label: Arc<str> = Arc::from("drive-b");
+
+    // Downloads also have a `total_bytes` in the progress tracker
+    // (populated during chunked decryption); pin that the same wiring
+    // works for the download path.
+    const EXPECTED_SIZE: u64 = 12_345;
+    seed_one_file_session(&sync, "doc.txt", "drive-b", EXPECTED_SIZE, FileAction::Download);
+
     let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
 
     let fid = [0xBBu8; 32];
@@ -197,6 +262,7 @@ fn on_file_synced_enqueues_downloaded_activity_for_download_action() {
     assert_eq!(items[0].action, SyncActivityAction::Downloaded);
     assert_eq!(&*items[0].file_name, "doc.txt");
     assert_eq!(&*items[0].label, "drive-b");
+    assert_eq!(items[0].size_bytes, EXPECTED_SIZE);
 }
 
 /// Truth invariant: an `action` string that hcfs-client may introduce
@@ -208,6 +274,33 @@ fn on_file_synced_enqueues_downloaded_activity_for_download_action() {
 /// truthful.
 ///
 /// Pins issue I-3 from the Task 1.1 code review.
+/// Edge case: when the progress tracker has no entry for `rel_path`
+/// (no session seeded, or a race where the file vanished from the
+/// session between the per-chunk callback and `on_file_synced`),
+/// `mark_file_synced` returns 0 and the activity row's `size_bytes`
+/// falls back to 0. This is the truthful sentinel for "size unknown"
+/// — the Recent-Files view renders it as the existing
+/// "unknown"/"--" placeholder rather than fabricating a fake count.
+/// Pins the contract that the helper never panics on a missing entry.
+#[test]
+fn on_file_synced_without_progress_entry_falls_back_to_zero_size() {
+    let sync = make_sync_runner();
+    let label: Arc<str> = Arc::from("drive-c");
+    let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+
+    // Deliberately do NOT seed `current_session`. `mark_file_synced`
+    // hits the `None` branch on `current_session.as_mut()` and returns
+    // `Ok(0)`; the callback uses that for `size_bytes`.
+    let fid = [0xEEu8; 32];
+    callback("ghost.bin", &hex::encode(fid), "cid-ghost", "uploaded", None);
+
+    let pending = sync.pending_activity.lock().expect("mutex");
+    let items: Vec<_> = pending.iter().collect();
+    assert_eq!(items.len(), 1, "row is still enqueued — the upload succeeded; only the size is unknown");
+    assert_eq!(items[0].size_bytes, 0, "no progress entry → size_bytes is the 0 sentinel, not a panic");
+    assert_eq!(items[0].action, SyncActivityAction::Uploaded);
+}
+
 #[test]
 fn on_file_synced_with_unknown_action_does_not_enqueue() {
     let sync = make_sync_runner();
