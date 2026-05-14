@@ -10,8 +10,9 @@ import {
   memo,
 } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { WaitAMoment } from "@/components/ui";
 import FilesTable from "./files-table";
+import FilesTableSkeleton from "./files-table/FilesTableSkeleton";
+import CardViewSkeleton from "./card-view/CardViewSkeleton";
 import CardView from "./card-view";
 import IPFSNoEntriesFound from "./files-table/FilesNoEntriesFound";
 import UploadStatusWidget from "./UploadStatusWidget";
@@ -255,7 +256,17 @@ const DriveContent: FC<DriveContentProps> = ({
     // Only show full loading state on initial load (no data yet).
     // During background refetches (isFetching), keep showing existing data.
     if (isLoading) {
-      return <WaitAMoment isRecentFiles={isRecentFiles} />;
+      return viewMode === "card" ? (
+        <CardViewSkeleton
+          isRecentFiles={isRecentFiles}
+          cards={isRecentFiles ? 4 : 8}
+        />
+      ) : (
+        <FilesTableSkeleton
+          isRecentFiles={isRecentFiles}
+          rows={isRecentFiles ? 5 : 8}
+        />
+      );
     }
 
     if (

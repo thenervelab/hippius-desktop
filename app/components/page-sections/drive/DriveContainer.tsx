@@ -14,8 +14,9 @@ import useUserFiles, {
   FormattedUserFile,
 } from "@/app/lib/hooks/use-user-files";
 import useRecentFiles from "@/lib/hooks/use-recent-files";
-import { WaitAMoment } from "@/components/ui";
 import * as Typography from "@/components/ui/typography";
+import FilesTableSkeleton from "./files-table/FilesTableSkeleton";
+import CardViewSkeleton from "./card-view/CardViewSkeleton";
 import DriveOnboarding from "./DriveOnboarding";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { useDriveStorageStats } from "@/app/lib/hooks/api/useDriveStorageStats";
@@ -1077,7 +1078,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     !isNested && (isCheckingSyncPath || isLoadingPrivatePath);
 
   if (shouldShowLoading) {
-    content = <WaitAMoment />;
+    content =
+      viewMode === "card" ? (
+        <CardViewSkeleton isRecentFiles={isRecentFiles} />
+      ) : (
+        <FilesTableSkeleton isRecentFiles={isRecentFiles} />
+      );
   } else if (error && !isRecentFiles && !isNested) {
     // `useUserFiles` exposes a terminal error (after TanStack Query's
     // retry budget is exhausted or the 15 s wall-clock cap in the

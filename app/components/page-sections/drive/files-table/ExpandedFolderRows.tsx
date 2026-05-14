@@ -28,6 +28,7 @@ import NameCell from "./NameCell";
 import { VideoDialogTrigger } from "./VideoDialog";
 import { ImageDialogTrigger } from "./ImageDialog";
 import { PdfDialogTrigger } from "./PdfDialog";
+import { FolderRowsSkeleton } from "./FilesTableSkeleton";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
@@ -233,15 +234,10 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
 
   if (isLoading) {
     return (
-      <tr className="bg-grey-light-200 dark:bg-black-500">
-        {renderLeadingRailCells("loading")}
-        <td
-          colSpan={columnCount - (hasSelectionColumn ? 1 : 0)}
-          className="px-3 py-2 text-xs text-grey-60"
-        >
-          Loading folder contents...
-        </td>
-      </tr>
+      <FolderRowsSkeleton
+        orderedColumnIds={orderedColumnIds}
+        nameIndentPx={BASE_CHILD_INDENT_PX + (depth + 1) * DEPTH_INDENT_PX}
+      />
     );
   }
 
