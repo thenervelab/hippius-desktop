@@ -19,7 +19,22 @@
 //! across tasks. All methods are `&self`; SQLite serializes writes inside the
 //! pool, so callers don't need an external mutex.
 
+use std::collections::HashSet;
+
 use sqlx::sqlite::SqlitePool;
+
+/// Maximum number of `relative_path` values bound into a single
+/// `DELETE … WHERE relative_path IN (?, ?, …)` statement.
+///
+/// SQLite's compile-time `SQLITE_MAX_VARIABLE_NUMBER` defaults to 999 on
+/// versions <3.32 and 32_766 thereafter (source:
+/// https://www.sqlite.org/limits.html §11). A single oversized `IN` list
+/// returns `SQLITE_TOOBIG` at prepare time, not at execute, so the only
+/// safe pattern is to chunk. We pick the conservative floor of 999 and
+/// reserve headroom for the two fixed binds (`account_id`, `drive_label`)
+/// — 500 leaves comfortable slack and keeps the prepared-statement cache
+/// from exploding into a unique entry per pending-set size.
+const DELETE_CHUNK_SIZE: usize = 500;
 
 /// Repository handle backed by the `sync_intent` SQLite table.
 ///
@@ -70,67 +85,143 @@ impl IntentRepo {
         Self { pool }
     }
 
-    /// Upsert pending intent rows for the files the planner reports as
-    /// pending uploads.
+    /// Record the planner's current view of pending uploads for one drive:
+    /// **compact** stale pending rows that are no longer in the plan, then
+    /// **upsert** the rows that are.
     ///
-    /// **Semantics on conflict.** When a row already exists for
-    /// `(account_id, drive_label, relative_path)`, only `size_bytes` is
-    /// refreshed (the file may have grown between plan cycles). The original
-    /// `added_at_ms` is preserved so the manifest remains a durable
-    /// "since-when" record, and `completed_at_ms` is left untouched so an
-    /// already-completed row is NOT reverted to pending. The latter matters
-    /// because the planner's view of "still needs uploading" can disagree
-    /// briefly with the file-synced callback during sync teardown — Task 3
-    /// handles the explicit "no longer in plan" compaction.
+    /// # Why compaction lives here
     ///
-    /// **Empty input.** An empty `plan_uploads` slice returns `Ok(())`
-    /// without touching the database — the caller's planner can be wired
-    /// unconditionally without a guard.
+    /// The widget shows progress as `completed_files / total_files`. If the
+    /// planner stops listing `b.txt` because the user renamed it to `c.txt`,
+    /// deleted it before it uploaded, or added it to the exclusion rules,
+    /// the stale `b.txt` row inflates `total_files` forever and progress can
+    /// never hit 100%. The cheapest fix is reconciliation: every time the
+    /// planner reports a plan, we drop any pending row whose path is missing
+    /// from the new plan. Completed rows (`completed_at_ms IS NOT NULL`) are
+    /// preserved on purpose — they represent files the user has already
+    /// uploaded earlier in the session and belong to the displayed totals.
     ///
-    /// `added_at_ms` for new rows is computed inside SQLite via
-    /// `CAST((julianday('now') - 2440587.5) * 86400000.0 AS INTEGER)`, which
-    /// yields **true millisecond-granularity** Unix time. The earlier
-    /// `strftime('%s','now') * 1000` form rendered as the column's `_ms`
-    /// suffix promised but only delivered second precision (always `…000`);
-    /// the julianday math fixes that contract mismatch and avoids any
-    /// `unixepoch('now','subsec')` version dependency (julianday has been
-    /// in SQLite since 3.0; subsec arrived in 3.42). The value is monotonic
-    /// with the transaction commit order on the DB connection and immune
-    /// to client clock skew between the caller and SQLite.
+    /// # Semantics on conflict (upsert half)
+    ///
+    /// When a row already exists for `(account_id, drive_label,
+    /// relative_path)`, only `size_bytes` is refreshed (the file may have
+    /// grown between plan cycles). The original `added_at_ms` is preserved
+    /// so the manifest remains a durable "since-when" record, and
+    /// `completed_at_ms` is left untouched so an already-completed row is
+    /// NOT reverted to pending. `added_at_ms` for new rows uses
+    /// `CAST((julianday('now') - 2440587.5) * 86400000.0 AS INTEGER)` —
+    /// true millisecond-granularity Unix time (source:
+    /// https://www.sqlite.org/lang_datefunc.html). 2440587.5 is the Julian
+    /// Day Number of the Unix epoch (1970-01-01 00:00:00 UTC);
+    /// multiplying the fractional-day delta by 86_400_000 ms/day yields
+    /// exact ms-precision time. The CAST truncates the sub-ms remainder to
+    /// an i64.
+    ///
+    /// # Empty input semantics
+    ///
+    /// An empty `plan_uploads` slice does NOT short-circuit. It runs the
+    /// compaction half, which deletes every pending row for the
+    /// `(account_id, drive_label)` pair. That's how "the planner sees
+    /// nothing left to upload" gets reflected in the manifest. Completed
+    /// rows still survive.
+    ///
+    /// # Atomicity
+    ///
+    /// Compaction and upsert run in a single transaction. On any error the
+    /// whole call rolls back — the table cannot end up half-compacted /
+    /// half-upserted.
+    ///
+    /// # Defense in depth
+    ///
+    /// The completed-row guard is enforced in two independent places:
+    ///   1. The SELECT that drives the rust-side filter only fetches rows
+    ///      with `completed_at_ms IS NULL`.
+    ///   2. The DELETE statement repeats `AND completed_at_ms IS NULL` in
+    ///      its `WHERE` clause.
+    ///
+    /// Even if a future refactor accidentally puts a completed `relative_path`
+    /// into `to_delete`, the SQL guard still blocks the row from being
+    /// dropped. Belt and braces — losing a completed row corrupts the
+    /// widget's notion of "what the user already uploaded".
     ///
     /// # Errors
     /// Returns [`IntentError::Db`] if any SQLite operation fails (including
-    /// transaction commit). On failure the transaction is rolled back —
-    /// either no rows or all rows for this call are visible.
+    /// transaction commit).
     pub async fn record_plan(
         &self,
         account_id: &str,
         drive_label: &str,
         plan_uploads: &[(String, u64)],
     ) -> Result<(), IntentError> {
-        // Short-circuit so the caller can invoke this unconditionally without
-        // paying for a transaction round-trip when the plan is empty.
-        if plan_uploads.is_empty() {
-            return Ok(());
-        }
+        // Membership check needs O(1) lookup; borrowing into the slice means
+        // no per-path String allocation. Lifetime is the function body —
+        // dropped before the transaction commits.
+        let new_plan_paths: HashSet<&str> =
+            plan_uploads.iter().map(|(p, _)| p.as_str()).collect();
 
         let mut tx = self.pool.begin().await?;
 
-        // One INSERT per row, all inside the same transaction so partial
-        // failures don't leave the manifest half-written. `excluded` in
-        // SQLite refers to the row that would have been inserted; we
-        // deliberately reference ONLY `excluded.size_bytes` so `added_at_ms`
-        // (and `completed_at_ms`) keep their existing values on conflict.
+        // --- Compaction half ---
         //
-        // `added_at_ms` uses `julianday('now')` rather than `strftime('%s')`
-        // because the latter is second-granular and would render the `_ms`
-        // suffix a lie — every value would end in `000`. 2440587.5 is the
-        // Julian Day Number of the Unix epoch (1970-01-01 00:00:00 UTC);
-        // multiplying the fractional-day difference by 86_400_000 ms/day
-        // yields exact Unix time in milliseconds. The CAST truncates the
-        // sub-millisecond remainder to a SQLite INTEGER (i64). Source:
-        // https://www.sqlite.org/lang_datefunc.html — julianday returns a
-        // REAL (IEEE-754 f64), valid range 4714-11-24 BCE … 9999-12-31.
+        // Step 1: enumerate pending rows for this drive. The WHERE clause
+        // filters out completed rows at the DB layer so we never even
+        // materialize them into `currently_pending` — defense layer 1.
+        let currently_pending: Vec<(String,)> = sqlx::query_as(
+            "SELECT relative_path
+               FROM sync_intent
+              WHERE account_id = ?
+                AND drive_label = ?
+                AND completed_at_ms IS NULL",
+        )
+        .bind(account_id)
+        .bind(drive_label)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        // Step 2: paths to delete = (currently pending) - (new plan set).
+        // Collected into a Vec because we need to drive a `?,?,…` IN-list,
+        // and the chunked DELETE statement needs to iterate twice (once for
+        // SQL construction, once for binding).
+        let to_delete: Vec<String> = currently_pending
+            .into_iter()
+            .filter_map(|(path,)| (!new_plan_paths.contains(path.as_str())).then_some(path))
+            .collect();
+
+        // Step 3: chunked DELETE. SQLite's bind-parameter limit
+        // (`SQLITE_MAX_VARIABLE_NUMBER`, conservatively 999) means a single
+        // statement with a giant `IN(?, ?, …)` returns SQLITE_TOOBIG at
+        // prepare time. Chunking at `DELETE_CHUNK_SIZE` keeps every prepared
+        // statement well below the floor and is the documented safe pattern.
+        // The `completed_at_ms IS NULL` guard is repeated here — defense
+        // layer 2.
+        for chunk in to_delete.chunks(DELETE_CHUNK_SIZE) {
+            // SQL placeholders: build "?, ?, ?" from the chunk length so the
+            // statement matches the bind count exactly. `chunk` is never
+            // empty inside this loop (chunks() yields only non-empty slices
+            // from a non-empty source), so `placeholders` is never "".
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "DELETE FROM sync_intent
+                  WHERE account_id = ?
+                    AND drive_label = ?
+                    AND completed_at_ms IS NULL
+                    AND relative_path IN ({placeholders})",
+            );
+            let mut q = sqlx::query(&sql).bind(account_id).bind(drive_label);
+            for path in chunk {
+                q = q.bind(path);
+            }
+            q.execute(&mut *tx).await?;
+        }
+
+        // --- Upsert half ---
+        //
+        // One INSERT per row, same transaction. `excluded` is SQLite's name
+        // for the row that would have been inserted; we deliberately
+        // reference ONLY `excluded.size_bytes` so `added_at_ms` and
+        // `completed_at_ms` keep their existing values on conflict.
         for (rel_path, size_bytes) in plan_uploads {
             sqlx::query(
                 "INSERT INTO sync_intent
@@ -362,5 +453,93 @@ mod tests {
         assert_eq!(t1a.total_bytes, 100);
         assert_eq!(t1b.total_bytes, 200);
         assert_eq!(t2a.total_bytes, 300);
+    }
+
+    /// Compaction edge case 1: rename. The planner used to list `b.txt` but
+    /// no longer does (hcfs-client's `extract_renames` paired the
+    /// `b.txt` delete with the `c.txt` upload). The stale `b.txt` row must
+    /// vanish so widget progress isn't permanently inflated by a path that
+    /// no longer exists.
+    #[tokio::test]
+    async fn record_plan_drops_pending_rows_not_in_new_plan() {
+        let pool = fresh_pool().await;
+        let repo = IntentRepo::new(pool);
+        repo.record_plan("acct", "drive", &[("a.txt".into(), 100), ("b.txt".into(), 200)])
+            .await
+            .unwrap();
+
+        // Simulate: user renamed b.txt -> c.txt. The planner now reports a and c only.
+        repo.record_plan("acct", "drive", &[("a.txt".into(), 100), ("c.txt".into(), 50)])
+            .await
+            .unwrap();
+
+        let totals = repo.totals_for_drive("acct", "drive").await.unwrap();
+        assert_eq!(totals.total_files, 2, "b.txt should be dropped, c.txt added");
+        assert_eq!(totals.total_bytes, 150);
+    }
+
+    /// Critical invariant: completed rows are NOT dropped by compaction.
+    /// They represent files the user uploaded earlier in the session and
+    /// belong to the widget's displayed totals.
+    ///
+    /// **Test fixture rationale (axiom 110 / external-library edges).**
+    /// Task 4 will add a `mark_completed` method that flips `completed_at_ms`
+    /// from `NULL` to a unix-ms timestamp. Until that lands, the only way to
+    /// reach the "row exists, completed_at_ms IS NOT NULL" state through the
+    /// public API is to forge it with a raw `UPDATE`. The unit under test
+    /// here is the compaction-on-pending-only invariant — that invariant
+    /// requires a completed row to exist for it to be meaningfully
+    /// exercised, so the direct SQL is unavoidable for now. Once Task 4
+    /// ships, this test should be refactored to use `mark_completed`
+    /// instead.
+    #[tokio::test]
+    async fn record_plan_keeps_completed_rows_not_in_new_plan() {
+        let pool = fresh_pool().await;
+        let repo = IntentRepo::new(pool.clone());
+
+        repo.record_plan("acct", "drive", &[("a.txt".into(), 100)]).await.unwrap();
+        // Stamp the row complete. Raw UPDATE used because `mark_completed`
+        // does not yet exist (see method-level comment above).
+        sqlx::query(
+            "UPDATE sync_intent SET completed_at_ms = 1700000000000 WHERE relative_path = 'a.txt'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Next cycle: planner no longer lists a.txt (it's done). The
+        // completed row must survive both the rust-side filter (which only
+        // selects pending rows) and the DB-side guard (`AND completed_at_ms
+        // IS NULL` in the DELETE).
+        repo.record_plan("acct", "drive", &[]).await.unwrap();
+
+        let totals = repo.totals_for_drive("acct", "drive").await.unwrap();
+        assert_eq!(totals.total_files, 1);
+        assert_eq!(totals.completed_files, 1);
+        assert_eq!(totals.total_bytes, 100);
+        assert_eq!(totals.completed_bytes, 100);
+    }
+
+    /// Compaction is scoped to one `(account_id, drive_label)`. An empty
+    /// plan for `drive_a` must not touch `drive_b`'s rows — even though the
+    /// new short-circuit-free implementation runs a transaction every call.
+    /// This is the regression test that pins down the empty-input semantic
+    /// change.
+    #[tokio::test]
+    async fn record_plan_compaction_is_drive_scoped() {
+        let pool = fresh_pool().await;
+        let repo = IntentRepo::new(pool);
+
+        repo.record_plan("acct", "drive_a", &[("x.txt".into(), 100)]).await.unwrap();
+        repo.record_plan("acct", "drive_b", &[("y.txt".into(), 200)]).await.unwrap();
+
+        // Re-call record_plan on drive_a with an empty list. drive_b's row MUST survive.
+        repo.record_plan("acct", "drive_a", &[]).await.unwrap();
+
+        let ta = repo.totals_for_drive("acct", "drive_a").await.unwrap();
+        let tb = repo.totals_for_drive("acct", "drive_b").await.unwrap();
+        assert_eq!(ta.total_files, 0);
+        assert_eq!(tb.total_files, 1);
+        assert_eq!(tb.total_bytes, 200);
     }
 }
