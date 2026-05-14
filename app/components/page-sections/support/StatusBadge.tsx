@@ -36,10 +36,12 @@ type Config = {
 const STATUS_CONFIG: Record<string, Config> = {
   // Open: new ticket awaiting the first staff response.
   open: { dotColor: "#3167DD", label: "Open" },
-  // Pending: replied / waiting on someone — in flight.
-  pending: { dotColor: "#E89702", label: "Pending" },
-  // Legacy mid-conversation state — kept so historical tickets render.
-  in_progress: { dotColor: "#E89702", label: "In Progress" },
+  // Pending: replied / waiting on someone — in flight. Reads as a calm
+  // neutral so it doesn't fight the green "done" states for attention.
+  pending: { dotColor: "#8F8F8F", label: "Pending" },
+  // Legacy mid-conversation state — kept so historical tickets render
+  // with the same neutral treatment as Pending.
+  in_progress: { dotColor: "#8F8F8F", label: "In Progress" },
   // Resolved & Closed both read as "the ticket is done" — share the same
   // green dot so the table doesn't read as if Closed were a third
   // failure-shaped state. Anything truly unknown falls through to the
