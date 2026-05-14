@@ -301,6 +301,24 @@ async fn remove_drive_inmemory(sync: &SyncRunner, label: &str) -> (usize, Option
 
     sync.remove_state(label);
     sync.discard_pending_activity_for_label(label);
+    // Wipe the synced-paths timestamp cache for this label so a
+    // future re-registration under the same label starts from a
+    // clean slate (otherwise a stale entry survives across
+    // remove/re-add cycles, briefly showing the previous drive's
+    // upload dates in the UI until the first reconcile refreshes).
+    if let Ok(mut cache) = sync.synced_paths_cache.lock() {
+        cache.remove(label);
+    }
+    // Drop the producer-side first-reconcile gate so the next
+    // `register_drive` for this label installs a fresh gate. Any
+    // in-flight `wait_for_first_reconcile` from a still-running
+    // spawned reconcile task is unaffected — that task holds its
+    // own `Arc<ReconcileGate>` clone and will settle on its Arc
+    // independently. See the upstream `SyncRunner::remove_drive`
+    // comment for the full invariant.
+    if let Ok(mut gates) = sync.first_reconcile.lock() {
+        gates.remove(label);
+    }
     let _ = crate::sync::progress::remove_files_for_label(sync, label.to_string());
 
     (remaining, removed_path)
@@ -353,39 +371,120 @@ async fn register_drive(app: &AppHandle, sync: &Arc<SyncRunner>, manager: DriveM
     spawn_reconcile_timestamps(app, sync.clone(), reconcile_arc, label.to_string());
 }
 
-/// Background one-shot task: fetch the server manifest and refresh
-/// `remote_timestamps` on disk when the drive's local state is missing
-/// authoritative values. On success, reloads state from disk, rebuilds
-/// the in-memory synced-paths cache, and emits `hcfs_activity_updated`
-/// so the Files page re-queries and renders the freshly-populated
-/// "DATE UPLOADED" column. Silently fails open — drive init must stay
-/// usable even when the server is unreachable.
+/// Background task: drive a bounded-retry reconcile of the server
+/// manifest and settle the drive's first-reconcile readiness gate so
+/// consumers reading `synced_paths_cache` (e.g. `get_user_files`) can
+/// await it.
+///
+/// Compared to the prior fire-and-forget version, this:
+///
+/// - Retries transient failures (network / 5xx / timeout) up to the
+///   policy's budget (default 3 attempts at 0s / 2s / 5s) inside
+///   hcfs-client, so a brief server hiccup at cold start no longer
+///   leaves the FE looking at zero-timestamp entries until the next
+///   sync cycle.
+/// - Settles a per-label `ReconcileGate` regardless of outcome so the
+///   FE's `wait_for_first_reconcile` budget is correctly released.
+///   Without this, `get_user_files` would wait the full 6s on every
+///   cold start before reading a cache that's already fresh from
+///   disk (when reconcile is skipped).
+/// - On terminal failure (every attempt failed), emits
+///   `hcfs_metadata_stale` so the FE can show a per-drive banner.
+///   The banner self-clears when the next `ACTIVITY_UPDATED` fires
+///   for the same label (e.g. on the first successful sync cycle).
 fn spawn_reconcile_timestamps(app: &AppHandle, sync: Arc<SyncRunner>, manager_arc: Arc<TokioMutex<DriveManager>>, label: String) {
+    // Acquire the gate handle BEFORE spawning the task. This way,
+    // even if the spawn task is delayed (Tokio scheduler under
+    // load), any FE call to `wait_for_first_reconcile` already
+    // sees the gate as registered (returns Timeout, not
+    // NotRegistered) — keeping the readiness contract consistent.
+    let gate = sync.first_reconcile_gate(&label);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let manager = manager_arc.lock().await;
-        match manager.reconcile_remote_timestamps().await {
-            Ok(true) => match manager.load_sync_state().await {
-                Ok(state) => {
-                    let paths = build_synced_paths_from_state(&state);
-                    sync.update_synced_paths_cache(&label, paths);
-                    drop(manager);
-                    let _ = app.emit(crate::sync::events::ACTIVITY_UPDATED, ());
-                    info!(label = %label, "reconcile_remote_timestamps: cache refreshed");
+        use hcfs_client::drive::{FailureReason, ReconcileOutcome, RetryPolicy};
+
+        // Acquire the manager lock JUST long enough to construct the
+        // `'static` retry future, then drop the guard before awaiting
+        // it. The retry budget includes up to 7s of `tokio::time::sleep`
+        // across 0s / 2s / 5s backoffs; holding the per-drive mutex
+        // across those sleeps would block concurrent sync operations
+        // and IPC paths (like `get_user_files` -> try_lock on the same
+        // mutex) for the full retry window. `reconcile_with_retry`
+        // internally clones `Drive` (a cheap Arc-sharing clone) so
+        // the future is `'static` and lock-independent.
+        let reconcile_future = {
+            let manager = manager_arc.lock().await;
+            manager.reconcile_with_retry(RetryPolicy::first_reconcile_default())
+        };
+        let outcome = reconcile_future.await;
+
+        match &outcome {
+            ReconcileOutcome::Reconciled { duration_ms } => {
+                // Re-lock briefly to load the fresh state we just
+                // persisted. This window is microseconds (file read)
+                // versus the up-to-7s window we just eliminated.
+                let state_result = manager_arc.lock().await.load_sync_state().await;
+                match state_result {
+                    Ok(state) => {
+                        let paths = build_synced_paths_from_state(&state);
+                        sync.update_synced_paths_cache(&label, paths);
+                        let _ = app.emit(crate::sync::events::ACTIVITY_UPDATED, ());
+                        info!(label = %label, duration_ms = duration_ms, "reconcile: cache refreshed");
+                    }
+                    Err(e) => {
+                        warn!(label = %label, error = %e, "reconcile: post-fetch state reload failed");
+                    }
                 }
-                Err(e) => {
-                    warn!(label = %label, error = %e, "reconcile_remote_timestamps: post-fetch state reload failed");
-                }
-            },
-            Ok(false) => {
-                debug!(label = %label, "reconcile_remote_timestamps: skipped (fresh)");
             }
-            Err(e) => {
-                // Fail open — drive stays usable, the next sync cycle's
-                // own `fetch_remote_state` will pick up the slack.
-                warn!(label = %label, error = %e, "reconcile_remote_timestamps: failed");
+            ReconcileOutcome::Fresh => {
+                debug!(label = %label, "reconcile: skipped (fresh)");
+            }
+            ReconcileOutcome::Failed { reason, attempts } => {
+                let reason_str = match reason {
+                    FailureReason::Retryable { last_error } => {
+                        // `last_error` is `Arc<SyncError>`; Display
+                        // delegates through the Arc. Downstream
+                        // consumers wanting typed dispatch (e.g.
+                        // `SyncError::RateLimited`'s retry_after_secs)
+                        // can match on `last_error.as_ref()` from the
+                        // outcome variant.
+                        format!("transient error after {attempts} attempts: {last_error}")
+                    }
+                    FailureReason::Terminal { error } => {
+                        format!("non-retryable error: {error}")
+                    }
+                    // `FailureReason` is `#[non_exhaustive]` so an
+                    // hcfs-client bump can add new variants without
+                    // breaking the build. Render unknowns as a
+                    // generic transient failure — better than
+                    // hiding them entirely.
+                    _ => format!("reconcile failed after {attempts} attempts"),
+                };
+                warn!(label = %label, attempts = attempts, reason = %reason_str, "reconcile: failed, emitting metadata-stale");
+                let _ = app.emit(
+                    crate::sync::events::METADATA_STALE,
+                    crate::sync::events::MetadataStalePayload {
+                        label: label.clone(),
+                        reason: reason_str,
+                    },
+                );
+            }
+            // `ReconcileOutcome` is `#[non_exhaustive]`; tolerate
+            // unknown future variants by logging and falling
+            // through to the gate settle below (which guarantees
+            // awaiters never hang forever).
+            _ => {
+                warn!(label = %label, "reconcile: unknown outcome variant from hcfs-client (likely needs FE wiring)");
             }
         }
+
+        // Settle the gate AFTER all I/O so a consumer that wakes
+        // on the settle sees a fully-coherent cache. The gate is
+        // first-write-wins; settling here on every code path is
+        // safe and required (the readiness signal must be set even
+        // when the outcome is `Failed`, so awaiters don't hang
+        // until the timeout).
+        gate.settle(outcome);
     });
 }
 
@@ -2337,6 +2436,66 @@ mod tests {
             "should return the sync path of the removed drive"
         );
         assert!(!sync.drives.lock().await.contains_key(label), "drive should no longer be in the map");
+    }
+
+    /// Regression test for fix 3 in the date-uploaded readiness PR.
+    ///
+    /// `remove_drive_inmemory` used to leave two per-label side maps
+    /// untouched on each remove/re-add cycle: the synced-paths
+    /// timestamp cache and the first-reconcile gate registry. Both
+    /// leaks were silent (no functional bug surfaced) but they
+    /// accumulated per label until process exit AND they could
+    /// briefly surface stale upload dates after a remove-then-re-add
+    /// because the cache entry survived. This test pins the cleanup.
+    #[tokio::test]
+    async fn remove_drive_inmemory_clears_synced_paths_cache_and_first_reconcile_gate() {
+        use hcfs_client::engine::types::SyncedFileInfo;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let sync = test_sync_runner();
+        let label = "leak-test";
+
+        // Seed both side maps directly — `remove_drive_inmemory`
+        // doesn't depend on the drive actually being registered for
+        // the cleanup invariant to hold, and seeding lets the test
+        // stay focused on the cleanup itself.
+        sync.update_synced_paths_cache(
+            label,
+            HashMap::from([(
+                "file.txt".to_string(),
+                SyncedFileInfo {
+                    path_hash: [0u8; 32],
+                    arion_cid: Arc::from("cid-1"),
+                    uploaded_at: 1_700_000_000,
+                    updated_at: 1_700_000_100,
+                },
+            )]),
+        );
+        // Register the gate via the public API so we exercise the
+        // production code path that `register_drive` uses.
+        let _ = sync.first_reconcile_gate(label);
+
+        // Pre-conditions: both side maps have an entry for the label.
+        assert!(
+            sync.get_cached_synced_paths(label).is_some(),
+            "synced_paths_cache should have a pre-removal entry"
+        );
+        assert!(
+            sync.first_reconcile.lock().expect("lock").contains_key(label),
+            "first_reconcile gate map should have a pre-removal entry"
+        );
+
+        let _ = remove_drive_inmemory(&sync, label).await;
+
+        assert!(
+            sync.get_cached_synced_paths(label).is_none(),
+            "synced_paths_cache must be cleared by remove_drive_inmemory"
+        );
+        assert!(
+            !sync.first_reconcile.lock().expect("lock").contains_key(label),
+            "first_reconcile gate map must be cleared by remove_drive_inmemory"
+        );
     }
 
     #[tokio::test]

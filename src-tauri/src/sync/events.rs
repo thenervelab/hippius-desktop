@@ -82,6 +82,28 @@ pub const UPLOAD_PROCESSING: &str = "hcfs_upload_processing";
 /// flickering. State is owned by
 /// `crate::sync::credits_exhausted::CreditsExhaustedState`.
 pub const CREDITS_EXHAUSTED: &str = "hcfs_credits_exhausted";
+/// Emitted when the per-drive first-reconcile retry budget is
+/// exhausted (every attempt failed with either retryable or
+/// terminal errors). Tells the frontend to surface a per-drive
+/// "couldn't refresh upload dates" banner so the user knows the
+/// "DATE UPLOADED" column may be sparse for this drive. Cleared
+/// when the same drive next emits `ACTIVITY_UPDATED` (e.g. after a
+/// successful sync cycle backfills the missing timestamps).
+///
+/// Payload is [`MetadataStalePayload`]: `{ label, reason }` where
+/// `reason` is a short human-readable string. Distinct from the
+/// per-cycle `SYNC_ERROR` channel because reconcile failure is a
+/// metadata-only condition — the drive itself is still usable.
+pub const METADATA_STALE: &str = "hcfs_metadata_stale";
+
+/// Wire payload for [`METADATA_STALE`]. `label` is the drive's
+/// stable label string; `reason` is for display only (the FE
+/// renders it under the banner heading).
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct MetadataStalePayload {
+    pub label: String,
+    pub reason: String,
+}
 
 /// Exact stringification of [`hcfs_client::sync::SyncError::Cancelled`].
 ///
