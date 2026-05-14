@@ -8,10 +8,8 @@ export const metadata: Metadata = {
 };
 
 const SupportPage: React.FC = () => (
-  <DashboardTitleWrapper mainText="Help & Support">
-    <div className="w-full mt-6">
-      <Support />
-    </div>
+  <DashboardTitleWrapper mainText="Help and Support">
+    <Support />
   </DashboardTitleWrapper>
 );
 
