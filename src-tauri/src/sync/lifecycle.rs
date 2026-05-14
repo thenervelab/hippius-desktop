@@ -1236,14 +1236,30 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
     // sleeping through the full polling interval.
     app_state.drive_removed_notify.notify_waiters();
 
-    // Delete the DB row so the drive isn't resurrected on app restart.
-    // Best-effort: if the account or pool isn't available, the in-memory
-    // cleanup above still takes effect for this session.
+    // Delete the DB row so the drive isn't resurrected on app restart, and
+    // drop the intent-manifest rows for this drive so the snapshot overlay
+    // doesn't keep showing stale "X of Y" totals for a folder the user just
+    // removed.
+    //
+    // Both calls share the same prerequisites (pool + account known) and
+    // both are best-effort — failure here doesn't break sync correctness.
+    // The intent manifest is a UX overlay; stale rows will be cleaned up by
+    // the next manifest GC pass even if this call fails. `pause_drive`
+    // deliberately does NOT clear intent because pause is reversible and the
+    // in-flight totals must survive a resume.
     let acct = app_state.current_account_id().ok();
-    if let (Ok(pool), Some(acct)) = (app_state.pool(), acct.as_deref())
-        && let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, acct, &label).await
-    {
-        warn!("Failed to remove sync path for '{}' from DB: {e}", label);
+    if let (Ok(pool), Some(acct)) = (app_state.pool(), acct.as_deref()) {
+        if let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, acct, &label).await {
+            warn!("Failed to remove sync path for '{}' from DB: {e}", label);
+        }
+
+        // `IntentRepo::new` takes `SqlitePool` by value; the pool is internally
+        // `Arc`-shaped so `.clone()` is just an `Arc` bump — no connection
+        // pool duplication.
+        let repo = crate::sync::intent::IntentRepo::new(pool.clone());
+        if let Err(e) = repo.clear_drive(acct, &label).await {
+            warn!("Failed to clear intent rows for drive '{}': {e}", label);
+        }
     }
 
     // Drop the on-disk sync baseline. Without this, a re-add (whether at the

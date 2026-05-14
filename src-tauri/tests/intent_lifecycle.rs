@@ -250,3 +250,73 @@ async fn totals_for_account_sums_across_drives() {
         "unknown account returns zeros (COALESCE handles SQLite SUM-of-empty NULL)"
     );
 }
+
+/// Pins the `IntentRepo::clear_drive` contract that `remove_drive` in
+/// `src-tauri/src/sync/lifecycle.rs` wires into. Three invariants matter:
+///
+///   1. Both pending AND completed rows for the target `(account, drive)`
+///      pair are removed — a stale completed row would otherwise leak into
+///      "X of Y" totals for a future drive of the same label.
+///   2. Other drives on the SAME account survive untouched — a user with
+///      multiple sync folders must not lose progress on `drive_b` because
+///      they removed `drive_a`.
+///   3. The same `drive_label` on a DIFFERENT account survives untouched —
+///      account scoping is enforced by the WHERE clause, not by the caller.
+///
+/// We can't drive `remove_drive` end-to-end from a cargo-test integration
+/// test: it needs a live Tauri runtime + `AppState`-managed `SqlitePool`.
+/// The full flow is exercised by the manual smoke test in task 11. What
+/// this test guards against is a silent refactor of `clear_drive`'s scoping
+/// (e.g. dropping the `drive_label = ?` predicate) that would still compile
+/// at the wiring site but corrupt user data.
+#[tokio::test]
+async fn clear_drive_via_repo_drops_intent_rows_for_target_drive_only() {
+    let pool = fresh_pool().await;
+    let repo = IntentRepo::new(pool);
+
+    // Two drives on the same account, one of which (drive_a) has both a
+    // pending and a completed row — clear_drive must wipe both halves.
+    repo.record_plan("acct", "drive_a", &[("a.txt".into(), 100)])
+        .await
+        .expect("record_plan acct/drive_a");
+    repo.record_plan("acct", "drive_b", &[("b.txt".into(), 200)])
+        .await
+        .expect("record_plan acct/drive_b");
+    repo.mark_completed("acct", "drive_a", "a.txt", 1_000)
+        .await
+        .expect("mark_completed acct/drive_a/a.txt");
+    // Different account, same drive label — must survive (account scoping).
+    repo.record_plan("other_acct", "drive_a", &[("c.txt".into(), 999)])
+        .await
+        .expect("record_plan other_acct/drive_a");
+
+    repo.clear_drive("acct", "drive_a")
+        .await
+        .expect("clear_drive acct/drive_a");
+
+    // Invariant 1: drive_a on `acct` wiped (both pending and completed
+    // halves gone). `total_files == 0` proves the DELETE didn't skip
+    // either kind.
+    let ta = repo
+        .totals_for_drive("acct", "drive_a")
+        .await
+        .expect("totals acct/drive_a");
+    assert_eq!(ta.total_files, 0, "drive_a wiped: no rows remain");
+    assert_eq!(ta.completed_files, 0, "drive_a wiped: completed gone");
+
+    // Invariant 2: drive_b on the SAME account is untouched.
+    let tb = repo
+        .totals_for_drive("acct", "drive_b")
+        .await
+        .expect("totals acct/drive_b");
+    assert_eq!(tb.total_files, 1, "drive_b on same account preserved");
+    assert_eq!(tb.total_bytes, 200, "drive_b bytes preserved");
+
+    // Invariant 3: same drive_label under a different account is untouched.
+    let other = repo
+        .totals_for_drive("other_acct", "drive_a")
+        .await
+        .expect("totals other_acct/drive_a");
+    assert_eq!(other.total_files, 1, "other_acct's drive_a is isolated");
+    assert_eq!(other.total_bytes, 999);
+}
