@@ -198,6 +198,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     return names;
   }, [driveStatuses]);
 
+  const drivePathsByLabel = useMemo(() => {
+    const paths: Record<string, string> = {};
+    for (const [label, entry] of driveStatuses.entries()) {
+      if (entry.path) {
+        paths[label] = entry.path;
+      }
+    }
+    return paths;
+  }, [driveStatuses]);
+
   // ── Nested folder browsing (URL-param driven) ──────────────────────────────
   //
   // When the user clicks a folder row in DriveContent, NameCell builds a
@@ -1159,13 +1169,15 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 loadMore={loadMore}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
                 onSyncPathConfigured={
-                  isRecentFiles
-                    ? handleNavigateToSettings
-                    : handleStartSyncing
+                  isRecentFiles ? handleNavigateToSettings : handleStartSyncing
                 }
                 onUploadFile={handleContextUploadFile}
                 onAddFolder={handleContextAddFolder}
                 onAddSyncFolder={handleContextAddSyncFolder}
+                drivePathsByLabel={drivePathsByLabel}
+                currentSubfolderPath={
+                  isNested ? (urlSubFolderPath ?? "") : null
+                }
               />
             );
 

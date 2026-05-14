@@ -56,6 +56,8 @@ interface DriveContentProps {
   onUploadFile?: () => void;
   onAddFolder?: () => void;
   onAddSyncFolder?: () => void;
+  drivePathsByLabel?: Record<string, string>;
+  currentSubfolderPath?: string | null;
 }
 
 const DriveContent: FC<DriveContentProps> = ({
@@ -75,6 +77,8 @@ const DriveContent: FC<DriveContentProps> = ({
   onUploadFile,
   onAddFolder,
   onAddSyncFolder,
+  drivePathsByLabel,
+  currentSubfolderPath,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
@@ -290,6 +294,10 @@ const DriveContent: FC<DriveContentProps> = ({
           hasMore={hasMore}
           loadMore={loadMore}
           onHeaderContextMenu={handleHeaderContextMenu}
+          drivePathsByLabel={drivePathsByLabel}
+          currentSubfolderPath={currentSubfolderPath}
+          searchTerm={searchTerm}
+          activeFilterCount={activeFilters.length}
         />
       );
     } else {

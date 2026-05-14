@@ -17,11 +17,16 @@ const LOAD_TIMEOUT_MS = 15000;
 export const PdfDialogTrigger: React.FC<{
   children: ReactNode;
   onClick: () => void;
-}> = ({ children, onClick }) => {
+  className?: string;
+}> = ({ children, onClick, className }) => {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className="px-2 py-[5px] relative group overflow-hidden flex items-center w-full"
+      className={cn(
+        "relative group overflow-hidden flex items-center w-full px-2 py-[5px]",
+        className,
+      )}
     >
       <span className="flex-1 min-w-0">{children}</span>
       {/* Eye icon on hover */}

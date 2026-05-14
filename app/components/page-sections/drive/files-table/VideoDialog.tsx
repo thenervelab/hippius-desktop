@@ -4,6 +4,7 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Icons } from "@/components/ui";
 import VideoPlayer from "./VideoPlayer";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
+import { cn } from "@/lib/utils";
 import {
   getNextViewableFile,
   getPrevViewableFile,
@@ -15,11 +16,16 @@ import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
 export const VideoDialogTrigger: React.FC<{
   children: ReactNode;
   onClick: () => void;
-}> = ({ children, onClick }) => {
+  className?: string;
+}> = ({ children, onClick, className }) => {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className="px-2 py-[5px] relative group overflow-hidden flex items-center w-full"
+      className={cn(
+        "relative group overflow-hidden flex items-center w-full px-2 py-[5px]",
+        className,
+      )}
     >
       <span className="flex-1 min-w-0">{children}</span>
       {/* Play icon on hover */}

@@ -21,6 +21,8 @@ import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { Button } from "@/components/ui/button";
 import {
+  ChevronDown,
+  ChevronRight,
   Download,
   Link2,
   MoreVertical,
@@ -58,6 +60,8 @@ import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
 import { macosNameCmp } from "@/lib/utils/fileSort";
+import ExpandedFolderRows from "./ExpandedFolderRows";
+import { NameCellExpander } from "./FolderRail";
 
 import { toast } from "sonner";
 
@@ -66,20 +70,43 @@ const columnHelper = createColumnHelper<FormattedUserFile>();
 
 // Default widths when NOT in selection mode (no selection column)
 const DEFAULT_COLUMN_WIDTHS_NO_SELECTION = {
-  name: 35,
+  name: 37,
   size: 12,
-  date_uploaded: 32,
+  date_uploaded: 30,
   type: 16,
   actions: 5,
 };
 
 const MIN_COLUMN_WIDTHS = {
   selection: 10,
-  name: 17,
+  name: 23,
   size: 15,
   date_uploaded: 28,
   type: 20,
   actions: 10,
+};
+
+const normalizeBaseColumnWidths = (value: Record<string, number>) => {
+  const merged = {
+    ...DEFAULT_COLUMN_WIDTHS_NO_SELECTION,
+    ...value,
+  };
+  delete (merged as Record<string, number | undefined>).selection;
+  // Drop the legacy `folder` column from stored widths so users who already
+  // had the column persisted in localStorage don't keep its slice after it's
+  // been collapsed into the Name column.
+  delete (merged as Record<string, number | undefined>).folder;
+  const total = Object.values(merged).reduce((sum, width) => sum + width, 0);
+  if (total <= 0) {
+    return DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
+  }
+  if (Math.abs(total - 100) < 0.5) {
+    return merged;
+  }
+  const scale = 100 / total;
+  return Object.fromEntries(
+    Object.entries(merged).map(([key, width]) => [key, width * scale]),
+  ) as Record<string, number>;
 };
 
 // Store the "base" column widths (without selection column) to preserve user preferences
@@ -89,7 +116,7 @@ const getStoredBaseColumnWidths = (isRecentFiles: boolean) => {
     const key = `filesTable_baseColumnWidths_${isRecentFiles ? "recent" : "main"}`;
     const stored = localStorage.getItem(key);
     if (stored) {
-      return JSON.parse(stored);
+      return normalizeBaseColumnWidths(JSON.parse(stored));
     }
     return DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
   } catch {
@@ -151,6 +178,10 @@ interface FilesTableProps {
   hasMore: boolean;
   loadMore: () => void;
   onHeaderContextMenu?: (e: React.MouseEvent) => void;
+  drivePathsByLabel?: Record<string, string>;
+  currentSubfolderPath?: string | null;
+  searchTerm?: string;
+  activeFilterCount?: number;
 }
 
 const FilesTable: FC<FilesTableProps> = memo(
@@ -163,13 +194,61 @@ const FilesTable: FC<FilesTableProps> = memo(
     hasMore,
     loadMore,
     onHeaderContextMenu,
+    drivePathsByLabel,
+    currentSubfolderPath,
+    searchTerm,
+    activeFilterCount,
   }) => {
     const { polkadotAddress } = useWalletAuth();
+    const drivePaths = useMemo(
+      () => drivePathsByLabel ?? {},
+      [drivePathsByLabel],
+    );
+    const normalizedSubfolderPath = useMemo(() => {
+      if (!currentSubfolderPath) return "";
+      return currentSubfolderPath.replace(/^\/+|\/+$/g, "");
+    }, [currentSubfolderPath]);
+
+    const resolveRelativePath = useCallback(
+      (basePath: string, entryName: string) => {
+        const normalizedName = entryName.replace(/^\/+|\/+$/g, "");
+        if (!basePath) return normalizedName;
+        if (
+          normalizedName === basePath ||
+          normalizedName.startsWith(`${basePath}/`)
+        ) {
+          return normalizedName;
+        }
+        if (normalizedName.includes("/")) return normalizedName;
+        return `${basePath}/${normalizedName}`;
+      },
+      [],
+    );
+
+    const getFolderKey = useCallback(
+      (file: FormattedUserFile, basePath = normalizedSubfolderPath) => {
+        const name = file.actualFileName || file.name;
+        const relativePath = resolveRelativePath(basePath, name);
+        return `${file.label ?? ""}::${relativePath}`;
+      },
+      [normalizedSubfolderPath, resolveRelativePath],
+    );
+
+    const [expandedFolders, setExpandedFolders] = useState<
+      Record<string, boolean>
+    >({});
+    const toggleFolderExpanded = useCallback((folderKey: string) => {
+      setExpandedFolders((previous) => ({
+        ...previous,
+        [folderKey]: !previous[folderKey],
+      }));
+    }, []);
     // Share-feature gating: only show the menu item when the connected
     // hcfs-server advertises `shares: true`. The atom is populated once
     // per session by `useServerCapabilities` (mounted in SyncEventLogger).
     const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
     const setShareModalFile = useSetAtom(shareModalFileAtom);
+    const enableFolderExpander = !isRecentFiles;
     // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads.
     // Also suppress the "pending" upload arrow for files that just finished downloading
     // (they appear locally before the synced-set updates, so the backend marks them "pending").
@@ -250,6 +329,15 @@ const FilesTable: FC<FilesTableProps> = memo(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [allFiles, actionSignature]);
 
+    // Reserve the leading chevron slot only when the visible rows include
+    // at least one folder; pure-file views (or empty sync folders) skip
+    // the slot so file names sit flush against the cell edge and the
+    // "Name" header lines up with them.
+    const hasAnyFolder = useMemo(
+      () => enrichedAllFiles.some((file) => file.isFolder),
+      [enrichedAllFiles],
+    );
+
     // Sentinel ref for infinite scroll
     const sentinelRef = useRef<HTMLDivElement>(null);
 
@@ -271,7 +359,40 @@ const FilesTable: FC<FilesTableProps> = memo(
       return () => observer.disconnect();
     }, [hasMore, loadMore]);
 
+    useEffect(() => {
+      setExpandedFolders((previous) => {
+        const validKeys = new Set(
+          allFiles
+            .filter((file) => file.isFolder)
+            .map((file) => getFolderKey(file)),
+        );
+        const nextEntries = Object.entries(previous).filter(([key]) =>
+          validKeys.has(key),
+        );
+        return Object.fromEntries(nextEntries);
+      });
+    }, [allFiles, getFolderKey]);
+
+    useEffect(() => {
+      setExpandedFolders({});
+    }, [searchTerm, activeFilterCount, normalizedSubfolderPath, isRecentFiles]);
+
     const [sorting, setSorting] = useState<SortingState>([]);
+    const sortBy = useMemo<
+      "name" | "size" | "date_uploaded" | undefined
+    >(() => {
+      const activeSort = sorting[0];
+      if (!activeSort) return undefined;
+      if (activeSort.id === "name") return "name";
+      if (activeSort.id === "size") return "size";
+      if (activeSort.id === "date_uploaded") return "date_uploaded";
+      return undefined;
+    }, [sorting]);
+    const sortDir = useMemo<"asc" | "desc" | undefined>(() => {
+      const activeSort = sorting[0];
+      if (!activeSort) return undefined;
+      return activeSort.desc ? "desc" : "asc";
+    }, [sorting]);
     const { getParam } = useUrlParams();
     const router = useRouter();
     const {
@@ -380,6 +501,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         fileType: string | null,
         arionHash: string,
         canPreview: boolean = true,
+        folderExpansion?: { expanded: boolean; onToggle: () => void },
       ) => {
         // Compute folderUrl if file is a folder
         let folderUrl: string | undefined = undefined;
@@ -389,6 +511,21 @@ const FilesTable: FC<FilesTableProps> = memo(
         }
 
         return [
+          ...(file.isFolder && folderExpansion
+            ? [
+                {
+                  icon: folderExpansion.expanded ? (
+                    <ChevronDown className="size-4" />
+                  ) : (
+                    <ChevronRight className="size-4" />
+                  ),
+                  itemTitle: folderExpansion.expanded
+                    ? "Collapse Folder"
+                    : "Expand Folder",
+                  onItemClick: folderExpansion.onToggle,
+                },
+              ]
+            : []),
           ...(file.isFolder && folderUrl
             ? [
                 {
@@ -528,6 +665,39 @@ const FilesTable: FC<FilesTableProps> = memo(
               ),
             }),
           ];
+      // Mirrors the row layout used by ExpandedFolderRows so top-level
+      // and nested rows align icon-to-icon: a fixed-width chevron slot
+      // (folders get an interactive button, files get an empty spacer)
+      // followed by the existing NameCell or dialog-trigger content.
+      const renderNameCellWithExpander = (
+        file: FormattedUserFile,
+        children: React.ReactNode,
+      ) => {
+        const folderKey = file.isFolder ? getFolderKey(file) : "";
+        const isExpanded = file.isFolder
+          ? Boolean(expandedFolders[folderKey])
+          : false;
+        const canExpand = Boolean(
+          file.isFolder &&
+            enableFolderExpander &&
+            file.label &&
+            drivePaths[file.label],
+        );
+        return (
+          <div className="flex items-center min-w-0 gap-2 py-[5px] pl-2 pr-2">
+            {hasAnyFolder ? (
+              <NameCellExpander
+                expanded={isExpanded}
+                interactive={canExpand}
+                isFolder={Boolean(file.isFolder)}
+                onToggle={canExpand ? () => toggleFolderExpanded(folderKey) : undefined}
+              />
+            ) : null}
+            <div className="min-w-0 flex-1">{children}</div>
+          </div>
+        );
+      };
+      const triggerClass = "min-w-0 px-0 py-0";
       return [
         ...selectionColumn,
         columnHelper.accessor("name", {
@@ -542,140 +712,59 @@ const FilesTable: FC<FilesTableProps> = memo(
           minSize: 200,
           maxSize: 1000,
           cell: (info) => {
+            const file = info.row.original;
             const { fileFormat } = getFilePartsFromFileName(info.getValue());
             const fileType = getFileTypeFromExtension(fileFormat || null);
 
-            if (fileType === "video") {
-              return (
-                <>
-                  {isSelectionMode ? (
-                    <NameCell
-                      className="px-2 py-[5px]"
-                      rawName={info.getValue()}
-                      actualName={info.row.original.actualFileName}
-                      label={info.row.original.label}
-                      arionHash={info.row.original.arionHash}
-                      isAssigned={info.row.original.isAssigned}
-                      fileType={fileType}
-                      isPreviewable={false}
-                      isFolder={info.row.original.isFolder}
-                      source={info.row.original.source}
-                      mainReqHash={info.row.original.mainReqHash}
-                      syncStatus={info.row.original.syncStatus}
-                    />
-                  ) : (
-                    <VideoDialogTrigger
-                      onClick={() => handleSetSelectedFile(info.row.original)}
-                    >
-                      <NameCell
-                        rawName={info.getValue()}
-                        actualName={info.row.original.actualFileName}
-                        label={info.row.original.label}
-                        arionHash={info.row.original.arionHash}
-                        isAssigned={info.row.original.isAssigned}
-                        fileType={fileType}
-                        isPreviewable={true}
-                        isFolder={info.row.original.isFolder}
-                        source={info.row.original.source}
-                        mainReqHash={info.row.original.mainReqHash}
-                        syncStatus={info.row.original.syncStatus}
-                      />
-                    </VideoDialogTrigger>
-                  )}
-                </>
-              );
-            } else if (fileType === "image") {
-              return (
-                <>
-                  {isSelectionMode ? (
-                    <NameCell
-                      className="px-2 py-[5px]"
-                      rawName={info.getValue()}
-                      actualName={info.row.original.actualFileName}
-                      label={info.row.original.label}
-                      arionHash={info.row.original.arionHash}
-                      isAssigned={info.row.original.isAssigned}
-                      fileType={fileType}
-                      isPreviewable={false}
-                      isFolder={info.row.original.isFolder}
-                      source={info.row.original.source}
-                      mainReqHash={info.row.original.mainReqHash}
-                    />
-                  ) : (
-                    <ImageDialogTrigger
-                      onClick={() => handleSetSelectedFile(info.row.original)}
-                    >
-                      <NameCell
-                        rawName={info.getValue()}
-                        actualName={info.row.original.actualFileName}
-                        label={info.row.original.label}
-                        arionHash={info.row.original.arionHash}
-                        isAssigned={info.row.original.isAssigned}
-                        fileType={fileType}
-                        isPreviewable={true}
-                        isFolder={info.row.original.isFolder}
-                        source={info.row.original.source}
-                        mainReqHash={info.row.original.mainReqHash}
-                        syncStatus={info.row.original.syncStatus}
-                      />
-                    </ImageDialogTrigger>
-                  )}
-                </>
-              );
-            } else if (fileType === "PDF") {
-              return (
-                <>
-                  {isSelectionMode ? (
-                    <NameCell
-                      className="px-2 py-[5px]"
-                      rawName={info.getValue()}
-                      actualName={info.row.original.actualFileName}
-                      label={info.row.original.label}
-                      arionHash={info.row.original.arionHash}
-                      isAssigned={info.row.original.isAssigned}
-                      fileType={fileType}
-                      isPreviewable={false}
-                      isFolder={info.row.original.isFolder}
-                      source={info.row.original.source}
-                      mainReqHash={info.row.original.mainReqHash}
-                    />
-                  ) : (
-                    <PdfDialogTrigger
-                      onClick={() => handleSetSelectedFile(info.row.original)}
-                    >
-                      <NameCell
-                        rawName={info.getValue()}
-                        actualName={info.row.original.actualFileName}
-                        label={info.row.original.label}
-                        arionHash={info.row.original.arionHash}
-                        isAssigned={info.row.original.isAssigned}
-                        fileType={fileType}
-                        isPreviewable={true}
-                        isFolder={info.row.original.isFolder}
-                        source={info.row.original.source}
-                        mainReqHash={info.row.original.mainReqHash}
-                        syncStatus={info.row.original.syncStatus}
-                      />
-                    </PdfDialogTrigger>
-                  )}
-                </>
-              );
-            }
-            return (
+            const nameNode = (
               <NameCell
-                className="px-2 py-[5px]"
                 rawName={info.getValue()}
-                actualName={info.row.original.actualFileName}
-                label={info.row.original.label}
-                arionHash={info.row.original.arionHash}
-                isAssigned={info.row.original.isAssigned}
+                actualName={file.actualFileName}
+                label={file.label}
+                arionHash={file.arionHash}
+                isAssigned={file.isAssigned}
                 fileType={fileType || "document"}
-                isFolder={info.row.original.isFolder}
-                source={info.row.original.source}
-                mainReqHash={info.row.original.mainReqHash}
-                syncStatus={info.row.original.syncStatus}
+                isPreviewable={!isSelectionMode}
+                isFolder={file.isFolder}
+                source={file.source}
+                mainReqHash={file.mainReqHash}
+                syncStatus={file.syncStatus}
               />
             );
+
+            let content: React.ReactNode = nameNode;
+            if (!isSelectionMode) {
+              if (fileType === "video") {
+                content = (
+                  <VideoDialogTrigger
+                    onClick={() => handleSetSelectedFile(file)}
+                    className={triggerClass}
+                  >
+                    {nameNode}
+                  </VideoDialogTrigger>
+                );
+              } else if (fileType === "image") {
+                content = (
+                  <ImageDialogTrigger
+                    onClick={() => handleSetSelectedFile(file)}
+                    className={triggerClass}
+                  >
+                    {nameNode}
+                  </ImageDialogTrigger>
+                );
+              } else if (fileType === "PDF") {
+                content = (
+                  <PdfDialogTrigger
+                    onClick={() => handleSetSelectedFile(file)}
+                    className={triggerClass}
+                  >
+                    {nameNode}
+                  </PdfDialogTrigger>
+                );
+              }
+            }
+
+            return renderNameCellWithExpander(file, content);
           },
         }),
         columnHelper.accessor("size", {
@@ -745,7 +834,27 @@ const FilesTable: FC<FilesTableProps> = memo(
             const resolvedHash = arionHash;
             const { fileFormat } = getFilePartsFromFileName(name);
             const fileType = getFileTypeFromExtension(fileFormat || null);
-            const menuItems = createTableItems(file, fileType, resolvedHash);
+            const folderKey = file.isFolder ? getFolderKey(file) : "";
+            const isExpanded =
+              file.isFolder && folderKey
+                ? Boolean(expandedFolders[folderKey])
+                : false;
+            const canExpand =
+              file.isFolder &&
+              enableFolderExpander &&
+              Boolean(file.label && drivePaths[file.label]);
+            const menuItems = createTableItems(
+              file,
+              fileType,
+              resolvedHash,
+              true,
+              canExpand
+                ? {
+                    expanded: isExpanded,
+                    onToggle: () => toggleFolderExpanded(folderKey),
+                  }
+                : undefined,
+            );
 
             return (
               <div className="flex justify-center items-center">
@@ -763,7 +872,18 @@ const FilesTable: FC<FilesTableProps> = memo(
           },
         }),
       ];
-    }, [handleSetSelectedFile, createTableItems, isSelectionMode, files]);
+    }, [
+      handleSetSelectedFile,
+      createTableItems,
+      isSelectionMode,
+      files,
+      getFolderKey,
+      expandedFolders,
+      drivePaths,
+      enableFolderExpander,
+      toggleFolderExpanded,
+      hasAnyFolder,
+    ]);
 
     const [columnWidths, setColumnWidths] = useState(() => {
       const baseWidths = getStoredBaseColumnWidths(isRecentFiles);
@@ -995,12 +1115,45 @@ const FilesTable: FC<FilesTableProps> = memo(
                 onResizeStart={handleResizeStart}
                 preventSort={justResized}
                 disableUppercase
-                className="h-8 px-2 py-2 border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-600 dark:bg-black-600 dark:border-black-300 dark:hover:bg-black-400"
+                className={cn(
+                  "h-8 px-2 py-2 border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-600 dark:bg-black-600 dark:border-black-300 dark:hover:bg-black-400",
+                  // When the chevron slot is reserved in body rows, indent
+                  // the "Name" header by the same amount (slot 20px + gap 8px)
+                  // so the label visually lines up with the file names below.
+                  header.id === "name" && hasAnyFolder && "pl-9",
+                )}
               />
             ))}
           </TableModule.Tr>
         )),
-      [table, columnWidths, handleResizeStart, justResized, sorting],
+      [table, columnWidths, handleResizeStart, justResized, sorting, hasAnyFolder],
+    );
+
+    const columnCount = useMemo(
+      () => Object.keys(columnWidths).length,
+      [columnWidths],
+    );
+
+    // Canonical column order shared by the outer table's <colgroup> and
+    // by ExpandedFolderRows so child <tr>s render with the same leading
+    // rail cells as the header. Because child rows are rendered as flat
+    // siblings of parent rows in the same <tbody> (no nested <table>),
+    // every row inherits the colgroup directly and column borders line
+    // up exactly regardless of nesting depth or resize state.
+    const orderedColumnIds = useMemo(() => {
+      const baseOrder = ["selection", "name", "size", "date_uploaded", "type", "actions"];
+      return baseOrder.filter((id) => columnWidths[id] !== undefined);
+    }, [columnWidths]);
+
+    const tableColgroup = useMemo(
+      () => (
+        <colgroup>
+          {orderedColumnIds.map((id) => (
+            <col key={id} style={{ width: `${columnWidths[id]}%` }} />
+          ))}
+        </colgroup>
+      ),
+      [orderedColumnIds, columnWidths],
     );
 
     const tableBody = useMemo(
@@ -1016,69 +1169,101 @@ const FilesTable: FC<FilesTableProps> = memo(
             }
           }
 
-          return (
-            <TableModule.Tr
-              rowHover
-              key={`${row.id}-${rowState}`}
-              transparent
-              className={cn(
-                "border-b-0 odd:bg-grey-light-200 even:bg-grey-light-400 hover:bg-grey-light-300 dark:odd:bg-black-500 dark:even:bg-black-primary-bg dark:hover:bg-black-300",
-                rowState === "pending" && "animate-pulse",
-                rowState === "error" && "bg-red-200/20",
-                isSelectionMode && rowData.isAssigned && "cursor-pointer",
-                isSelectionMode &&
-                  selectedFiles.some(
-                    (f) =>
-                      f.actualFileName === rowData.actualFileName &&
-                      f.label === rowData.label,
-                  ) &&
-                  rowData.isAssigned &&
-                  "bg-primary-60/10",
-                isSelectionMode &&
-                  !selectedFiles.some(
-                    (f) =>
-                      f.actualFileName === rowData.actualFileName &&
-                      f.label === rowData.label,
-                  ) &&
-                  rowData.isAssigned &&
-                  "hover:bg-primary-60/8",
-                isSelectionMode &&
-                  !rowData.isAssigned &&
-                  "opacity-50 cursor-not-allowed",
-              )}
-              onContextMenu={(e) => localHandleContextMenu(e, rowData)}
-              onClick={(e) => {
-                // Don't handle clicks if it's on the action menu area or checkbox area
-                const target = e.target as HTMLElement;
-                if (
-                  target.closest(".action-menu-area") ||
-                  target.closest('[role="checkbox"]') ||
-                  target.closest(".checkbox-container")
-                ) {
-                  return;
-                }
+          const rowKey = rowData.isFolder
+            ? getFolderKey(rowData)
+            : `${rowData.label ?? ""}::${rowData.actualFileName ?? rowData.name}`;
+          const isExpanded = Boolean(expandedFolders[rowKey]);
+          const syncPath = rowData.label
+            ? drivePaths[rowData.label]
+            : undefined;
+          const canInlineExpand =
+            enableFolderExpander && rowData.isFolder && Boolean(syncPath);
 
-                if (isSelectionMode && rowData.isAssigned) {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  toggleFileSelection(rowData);
-                }
-              }}
-            >
-              {row.getVisibleCells().map((cell) => (
-                <TableModule.Td
-                  className={cn(
-                    "px-2 py-[5px] border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-800 text-xs dark:border-black-300",
-                    cell.column.id === "actions" && "p-0",
-                    cell.column.id === "name" && "p-0 relative",
-                    cell.column.id === "arionHash" && "p-0",
-                  )}
-                  key={cell.id}
-                  cell={cell}
-                  columnWidth={columnWidths[cell.column.id]}
+          return (
+            <React.Fragment key={`${row.id}-${rowState}`}>
+              <TableModule.Tr
+                rowHover
+                transparent
+                className={cn(
+                  "border-b-0 odd:bg-grey-light-200 even:bg-grey-light-400 hover:bg-grey-light-300 dark:odd:bg-black-500 dark:even:bg-black-primary-bg dark:hover:bg-black-300",
+                  rowState === "pending" && "animate-pulse",
+                  rowState === "error" && "bg-red-200/20",
+                  isSelectionMode && rowData.isAssigned && "cursor-pointer",
+                  isSelectionMode &&
+                    selectedFiles.some(
+                      (f) =>
+                        f.actualFileName === rowData.actualFileName &&
+                        f.label === rowData.label,
+                    ) &&
+                    rowData.isAssigned &&
+                    "bg-primary-60/10",
+                  isSelectionMode &&
+                    !selectedFiles.some(
+                      (f) =>
+                        f.actualFileName === rowData.actualFileName &&
+                        f.label === rowData.label,
+                    ) &&
+                    rowData.isAssigned &&
+                    "hover:bg-primary-60/8",
+                  isSelectionMode &&
+                    !rowData.isAssigned &&
+                    "opacity-50 cursor-not-allowed",
+                )}
+                onContextMenu={(e) => localHandleContextMenu(e, rowData)}
+                onClick={(e) => {
+                  // Don't handle clicks if it's on the action menu area or checkbox area
+                  const target = e.target as HTMLElement;
+                  if (
+                    target.closest(".action-menu-area") ||
+                    target.closest('[role="checkbox"]') ||
+                    target.closest(".checkbox-container") ||
+                    target.closest(".folder-expander-area")
+                  ) {
+                    return;
+                  }
+
+                  if (isSelectionMode && rowData.isAssigned) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    toggleFileSelection(rowData);
+                  }
+                }}
+              >
+                {row.getVisibleCells().map((cell) => (
+                  <TableModule.Td
+                    className={cn(
+                      "px-2 py-[5px] border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-800 text-xs dark:border-black-300",
+                      cell.column.id === "actions" && "p-0",
+                      cell.column.id === "name" && "p-0 relative",
+                      cell.column.id === "arionHash" && "p-0",
+                    )}
+                    key={cell.id}
+                    cell={cell}
+                    columnWidth={columnWidths[cell.column.id]}
+                  />
+                ))}
+              </TableModule.Tr>
+
+              {rowData.isFolder && isExpanded && canInlineExpand && (
+                <ExpandedFolderRows
+                  folder={rowData}
+                  accountId={polkadotAddress}
+                  syncPath={syncPath}
+                  label={rowData.label}
+                  baseSubfolderPath={normalizedSubfolderPath}
+                  orderedColumnIds={orderedColumnIds}
+                  createTableItems={createTableItems}
+                  onSelectFile={handleSetSelectedFile}
+                  onRowContextMenu={localHandleContextMenu}
+                  onOpenFolder={() => {
+                    const { url } = generateFolderUrl(rowData, getParam);
+                    router.push(url);
+                  }}
+                  sortBy={sortBy}
+                  sortDir={sortDir}
                 />
-              ))}
-            </TableModule.Tr>
+              )}
+            </React.Fragment>
           );
         }),
       [
@@ -1088,6 +1273,21 @@ const FilesTable: FC<FilesTableProps> = memo(
         toggleFileSelection,
         selectedFiles,
         columnWidths,
+        expandedFolders,
+        createTableItems,
+        getFolderKey,
+        drivePaths,
+        enableFolderExpander,
+        normalizedSubfolderPath,
+        polkadotAddress,
+        handleDownload,
+        handleSetSelectedFile,
+        getParam,
+        router,
+        columnCount,
+        sortBy,
+        sortDir,
+        orderedColumnIds,
       ],
     );
 
@@ -1128,9 +1328,11 @@ const FilesTable: FC<FilesTableProps> = memo(
             key={`table-${files?.length}-${isSelectionMode}`}
           >
             <TableModule.Table
-              className="w-full table-fixed"
+              className="w-full table-fixed border-collapse"
               key={`table-${isSelectionMode}`}
+              style={{ borderSpacing: 0 }}
             >
+              {tableColgroup}
               <TableModule.THead
                 onContextMenu={onHeaderContextMenu}
                 className={cn(!isRecentFiles ? "!bg-transparent" : "")}
