@@ -1107,7 +1107,15 @@ function startSyncActivityWatcher() {
               ? `${progress.completedFiles} of ${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} synced`
               : "Preparing files…";
           }
-          if (progress.bytesExpected > 0) {
+          // Prefer the intent overlay's "X of Y" while the user-dragged
+          // batch is in flight — this matches what the user expects to
+          // see ("I added 10 GB; 5 GB done"), unlike the per-cycle bytes
+          // which restart each sync attempt. `??` (not `||`) preserves
+          // the 0-vs-undefined distinction: an explicit `intentTotalBytes: 0`
+          // fails the `> 0` guard and we fall through to the per-cycle line.
+          if (progress.intentActive && (progress.intentTotalBytes ?? 0) > 0) {
+            sizeText = `${formatBytes(progress.intentCompletedBytes ?? 0)} of ${formatBytes(progress.intentTotalBytes ?? 0)}`;
+          } else if (progress.bytesExpected > 0) {
             sizeText = `${formatBytes(progress.progressBytes)} / ${formatBytes(progress.bytesExpected)}`;
           }
         } else if (effectiveCompleted && (effectiveSnapshot.failedFiles > 0)) {

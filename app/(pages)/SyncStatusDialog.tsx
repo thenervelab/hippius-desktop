@@ -718,11 +718,22 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               </div>
               <div className="flex items-center justify-between mt-1">
                 <div className="flex items-center gap-2">
-                  {snapshot.bytesExpected > 0 && (
+                  {/* When the intent manifest is active, show user-truthful
+                      "X of Y" totals (what the user dragged in, vs. what
+                      has finished). Use `??` (not `||`) so an explicit
+                      `intentTotalBytes: 0` is not misread as "fall back" —
+                      0-totals correctly fail the `> 0` guard. Fall back to
+                      the per-cycle line on legacy / pre-login snapshots
+                      where intent fields are `undefined`. */}
+                  {(snapshot.intentActive ?? false) && (snapshot.intentTotalBytes ?? 0) > 0 ? (
+                    <span className="text-[0.625rem] text-grey-50">
+                      {formatBytes(snapshot.intentCompletedBytes ?? 0)} of {formatBytes(snapshot.intentTotalBytes ?? 0)}
+                    </span>
+                  ) : snapshot.bytesExpected > 0 ? (
                     <span className="text-[0.625rem] text-grey-50">
                       {formatBytes(snapshot.progressBytes)} / {formatBytes(snapshot.bytesExpected)}
                     </span>
-                  )}
+                  ) : null}
                   {effectiveInProgress && speedBytesPerSec !== null && speedBytesPerSec > 0 && (
                     <span className="text-[0.625rem] text-grey-50">
                       · {formatBytes(Math.round(speedBytesPerSec))}/s

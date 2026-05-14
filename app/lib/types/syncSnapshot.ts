@@ -59,6 +59,22 @@ export interface SyncSnapshot {
   effectiveInProgress: boolean;
   /** True only when session complete AND no files still processing */
   effectiveCompleted: boolean;
+
+  /** Intent manifest totals — present only when an account is logged in
+   * and the backend successfully read the desktop-side intent overlay.
+   *
+   * `undefined` = no overlay available (e.g. early boot / DB error /
+   * legacy snapshot). `0` = the manifest exists but is empty.
+   * Frontend must treat absent and 0 differently when deciding to show
+   * the "X of Y" line. */
+  intentTotalFiles?: number;
+  intentTotalBytes?: number;
+  intentCompletedFiles?: number;
+  intentCompletedBytes?: number;
+  /** True iff intentTotalFiles > intentCompletedFiles. Gate for showing
+   * the "X of Y" line — backend computes this so the FE doesn't have
+   * to redo the comparison. */
+  intentActive?: boolean;
 }
 
 export const EMPTY_SNAPSHOT: SyncSnapshot = {
