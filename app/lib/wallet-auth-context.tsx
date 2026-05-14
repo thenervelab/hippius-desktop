@@ -201,21 +201,29 @@ export function WalletAuthProvider({
   }
 
   /** Start sync for the given account, called after any successful auth.
-   *  Defers until the splash screen is done so sync doesn't race the loading screen.
    *
    *  No longer takes a mnemonic argument — Rust's `auto_init_sync` resolves
    *  the mnemonic from `AuthInfo` via the 5-stage `get_mnemonic_for_account`
    *  fallback chain, and `login_with_mnemonic` / `ensure_sync_mnemonic`
    *  populate `AuthInfo` before this is called. Passing the phrase through
    *  JavaScript added no capability and kept it alive in heap memory longer
-   *  than necessary. */
+   *  than necessary.
+   *
+   *  Previously this gated on `splashCompleteAtom` to "defer sync init
+   *  until the splash screen finishes." The gate stranded init forever
+   *  on cold starts where the splash bailed early (the update-dialog
+   *  branch in `splash-screen/index.tsx:174` returns from
+   *  `runSetupPhases` without ever calling `setSplashComplete(true)`),
+   *  so `auto_init_sync` was never invoked, `runner.drives` stayed
+   *  empty, and every user upload sat on the 60 s
+   *  `upload_processing` watchdog because `trigger_sync` found no
+   *  drives. The gate is unnecessary anyway: `auto_init_sync` runs in
+   *  the Rust backend and doesn't render UI, and the splash component
+   *  renders over its children (`isReady && children`) until it's
+   *  ready — so backend sync events can't visibly "race the loading
+   *  screen". */
   function initSync(accountId: string) {
     if (syncInitialized.current) return;
-    if (!splashComplete) {
-      // Splash still showing — defer until it finishes
-      pendingSyncInit.current = { accountId };
-      return;
-    }
     syncInitialized.current = true;
     pendingSyncInit.current = null;
     invoke("stop_sync")
@@ -228,13 +236,17 @@ export function WalletAuthProvider({
     triggerMigrationCheck();
   }
 
-  // Trigger deferred sync init once the splash screen finishes
+  // Backward-compat: a previous version deferred init via
+  // `pendingSyncInit.current` when the splash wasn't ready. The gate
+  // is gone now, but this effect stays as a safety net — if any
+  // legacy code path stashes a pending init, fire it once
+  // `splashComplete` flips. In the steady state, `pendingSyncInit`
+  // is always null and this is a no-op.
   useEffect(() => {
     if (splashComplete && pendingSyncInit.current && !syncInitialized.current) {
       const { accountId } = pendingSyncInit.current;
       initSync(accountId);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [splashComplete]);
 
   // Boot: restore session from Rust DB or localStorage OAuth session
