@@ -7,10 +7,17 @@
 //! them complete, so post-restart `totals_for_drive` can answer "how much of
 //! the plan have we actually finished?" without a fresh re-plan.
 //!
-//! This file lands the **read/append** half of the repo (Task 2):
-//! `record_plan` upserts pending rows preserving original `added_at_ms`, and
-//! `totals_for_drive` aggregates counts and bytes for one drive. Compaction,
-//! completion, and clear/prune operations are added in Tasks 3 and 4.
+//! Methods landed across Tasks 2–4:
+//!
+//! * `record_plan` — upsert pending rows preserving original `added_at_ms`
+//!   (Task 2) and compact pending rows no longer in the plan (Task 3).
+//! * `totals_for_drive` — aggregate counts and bytes for one drive (Task 2).
+//! * `mark_completed` — flip a single row from pending to completed,
+//!   idempotently (Task 4).
+//! * `clear_drive` / `clear_account` — drop every row for a drive or for
+//!   an entire account (Task 4; wiring in Tasks 8 and 9).
+//! * `prune_settled` — delete completed rows older than a threshold,
+//!   returning the deleted-row count (Task 4).
 //!
 //! # Concurrency
 //!
@@ -241,6 +248,155 @@ impl IntentRepo {
 
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Mark a single file as completed at `now_ms`. Idempotent: calling
+    /// twice leaves the row's `completed_at_ms` set to the FIRST call's
+    /// value (a later mark is ignored). Unknown paths are a no-op success.
+    ///
+    /// # Why the `IS NULL` guard, not "last write wins"
+    ///
+    /// The first completion timestamp is the truthful one. `record_plan`'s
+    /// `DO UPDATE SET size_bytes = excluded.size_bytes` deliberately does
+    /// not clear `completed_at_ms`, so a once-completed row stays completed
+    /// across plan cycles. A second `mark_completed` ping for the same path
+    /// therefore can only be a redundant callback from hcfs-client (its
+    /// per-file completion can fire more than once on retry paths) — and
+    /// overwriting the original timestamp would silently lose the truthful
+    /// "when did this actually finish" record. The `AND completed_at_ms IS
+    /// NULL` predicate enforces first-write-wins at the storage layer so
+    /// no Rust callsite can break it by reordering.
+    ///
+    /// # Unknown-path semantics
+    ///
+    /// SQLite's `UPDATE` returns success (not an error) when no rows match;
+    /// `rows_affected()` is 0. Source: https://www.sqlite.org/lang_update.html
+    /// — "It is not an error if the UPDATE statement does not match any
+    /// rows." We propagate that contract: an unknown `(account_id,
+    /// drive_label, relative_path)` triple returns `Ok(())` silently. The
+    /// caller is hcfs-client's per-file callback which fires after the
+    /// upload succeeds — by the time it runs, the planner has already
+    /// recorded the row, so a missing row genuinely means "nothing to do
+    /// here" (e.g. the drive was cleared mid-sync).
+    ///
+    /// # Errors
+    /// Returns [`IntentError::Db`] on SQLite I/O failure.
+    pub async fn mark_completed(
+        &self,
+        account_id: &str,
+        drive_label: &str,
+        relative_path: &str,
+        now_ms: i64,
+    ) -> Result<(), IntentError> {
+        // The `AND completed_at_ms IS NULL` predicate is the idempotence
+        // anchor — without it a stale callback would overwrite the truthful
+        // first timestamp. It is also the WHY this method is not a plain
+        // SET: we want the storage layer to enforce first-write-wins so the
+        // Rust callsite cannot accidentally violate it by reordering.
+        sqlx::query(
+            "UPDATE sync_intent
+                SET completed_at_ms = ?
+              WHERE account_id = ?
+                AND drive_label = ?
+                AND relative_path = ?
+                AND completed_at_ms IS NULL",
+        )
+        .bind(now_ms)
+        .bind(account_id)
+        .bind(drive_label)
+        .bind(relative_path)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Drop every row for one drive (both pending and completed).
+    /// Called by `remove_drive`.
+    ///
+    /// # Why both kinds
+    ///
+    /// `remove_drive` deletes the entire `sync_paths` row and wipes the
+    /// on-disk baseline — the intent manifest is just the third leg of that
+    /// teardown. Keeping completed rows around for a removed drive would
+    /// leak them into a future drive of the same label.
+    ///
+    /// # Errors
+    /// Returns [`IntentError::Db`] on SQLite I/O failure.
+    pub async fn clear_drive(
+        &self,
+        account_id: &str,
+        drive_label: &str,
+    ) -> Result<(), IntentError> {
+        sqlx::query(
+            "DELETE FROM sync_intent
+              WHERE account_id = ? AND drive_label = ?",
+        )
+        .bind(account_id)
+        .bind(drive_label)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Drop every row for one account across all drives. Called by
+    /// `stop_sync` on logout.
+    ///
+    /// # Why account-scoped, not unconditional
+    ///
+    /// Multiple accounts can share the desktop's SQLite file (sub-accounts,
+    /// account switching without uninstall). A `DELETE FROM sync_intent`
+    /// with no predicate would wipe the other account's manifest too —
+    /// silently corrupting their widget on next login. The `account_id`
+    /// scope makes the destruction explicit and bounded.
+    ///
+    /// # Errors
+    /// Returns [`IntentError::Db`] on SQLite I/O failure.
+    pub async fn clear_account(&self, account_id: &str) -> Result<(), IntentError> {
+        sqlx::query("DELETE FROM sync_intent WHERE account_id = ?")
+            .bind(account_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Delete completed rows older than `older_than_ms`. Returns the row
+    /// count deleted (use 0 when nothing matched). Pending rows are
+    /// preserved regardless of age — they represent in-flight intent.
+    ///
+    /// # Why the explicit `IS NOT NULL`
+    ///
+    /// SQLite's `<` comparison against `NULL` evaluates to `NULL` (SQL
+    /// 3VL), which is treated as false by `WHERE`, so a pending row could
+    /// never be deleted by `completed_at_ms < ?` alone. But the predicate
+    /// is included anyway as explicit intent — it documents the invariant
+    /// at the SQL site and prevents a future "ah, let's also prune by some
+    /// other clock" refactor from accidentally widening the destruction.
+    /// Source: https://www.sqlite.org/lang_expr.html §NULL Handling.
+    ///
+    /// # Errors
+    /// Returns [`IntentError::Db`] on SQLite I/O failure.
+    pub async fn prune_settled(
+        &self,
+        account_id: &str,
+        drive_label: &str,
+        older_than_ms: i64,
+    ) -> Result<u64, IntentError> {
+        // `rows_affected()` on the returned `SqliteQueryResult` is `u64`.
+        // Source: existing call site `migrate_account_keys` at
+        // src-tauri/src/utils/schema.rs:626 uses the same shape.
+        let result = sqlx::query(
+            "DELETE FROM sync_intent
+              WHERE account_id = ?
+                AND drive_label = ?
+                AND completed_at_ms IS NOT NULL
+                AND completed_at_ms < ?",
+        )
+        .bind(account_id)
+        .bind(drive_label)
+        .bind(older_than_ms)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 
     /// Aggregate counts and byte sums for one `(account_id, drive_label)`
@@ -480,32 +636,17 @@ mod tests {
 
     /// Critical invariant: completed rows are NOT dropped by compaction.
     /// They represent files the user uploaded earlier in the session and
-    /// belong to the widget's displayed totals.
-    ///
-    /// **Test fixture rationale (axiom 110 / external-library edges).**
-    /// Task 4 will add a `mark_completed` method that flips `completed_at_ms`
-    /// from `NULL` to a unix-ms timestamp. Until that lands, the only way to
-    /// reach the "row exists, completed_at_ms IS NOT NULL" state through the
-    /// public API is to forge it with a raw `UPDATE`. The unit under test
-    /// here is the compaction-on-pending-only invariant — that invariant
-    /// requires a completed row to exist for it to be meaningfully
-    /// exercised, so the direct SQL is unavoidable for now. Once Task 4
-    /// ships, this test should be refactored to use `mark_completed`
-    /// instead.
+    /// belong to the widget's displayed totals. The completed row is staged
+    /// through the public `mark_completed` ingestion path — going through
+    /// the public API is more resilient to schema changes than a raw UPDATE
+    /// would be (rust_quality_111_test_rigor).
     #[tokio::test]
     async fn record_plan_keeps_completed_rows_not_in_new_plan() {
         let pool = fresh_pool().await;
-        let repo = IntentRepo::new(pool.clone());
+        let repo = IntentRepo::new(pool);
 
         repo.record_plan("acct", "drive", &[("a.txt".into(), 100)]).await.unwrap();
-        // Stamp the row complete. Raw UPDATE used because `mark_completed`
-        // does not yet exist (see method-level comment above).
-        sqlx::query(
-            "UPDATE sync_intent SET completed_at_ms = 1700000000000 WHERE relative_path = 'a.txt'",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        repo.mark_completed("acct", "drive", "a.txt", 1_700_000_000_000).await.unwrap();
 
         // Next cycle: planner no longer lists a.txt (it's done). The
         // completed row must survive both the rust-side filter (which only
@@ -541,5 +682,126 @@ mod tests {
         assert_eq!(ta.total_files, 0);
         assert_eq!(tb.total_files, 1);
         assert_eq!(tb.total_bytes, 200);
+    }
+
+    // ---------------- mark_completed ----------------
+
+    #[tokio::test]
+    async fn mark_completed_sets_completed_at_ms() {
+        let pool = fresh_pool().await;
+        let repo = IntentRepo::new(pool);
+        repo.record_plan("acct", "drive", &[("a.txt".into(), 100)]).await.unwrap();
+        repo.mark_completed("acct", "drive", "a.txt", 1_700_000_000_000).await.unwrap();
+        let totals = repo.totals_for_drive("acct", "drive").await.unwrap();
+        assert_eq!(totals.completed_files, 1);
+        assert_eq!(totals.completed_bytes, 100);
+        assert_eq!(totals.total_files, 1);
+    }
+
+    #[tokio::test]
+    async fn mark_completed_is_idempotent_preserving_first_timestamp() {
+        let pool = fresh_pool().await;
+        let repo = IntentRepo::new(pool.clone());
+        repo.record_plan("acct", "drive", &[("a.txt".into(), 100)]).await.unwrap();
+        repo.mark_completed("acct", "drive", "a.txt", 1_000).await.unwrap();
+        repo.mark_completed("acct", "drive", "a.txt", 2_000).await.unwrap();
+        let stored: i64 = sqlx::query_scalar(
+            "SELECT completed_at_ms FROM sync_intent WHERE relative_path = 'a.txt'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(stored, 1_000, "second mark must not overwrite the first timestamp");
+    }
+
+    #[tokio::test]
+    async fn mark_completed_unknown_path_is_noop() {
+        let pool = fresh_pool().await;
+        let repo = IntentRepo::new(pool);
+        // No record_plan call — the row doesn't exist.
+        repo.mark_completed("acct", "drive", "nonexistent.txt", 1_000).await.unwrap();
+        let totals = repo.totals_for_drive("acct", "drive").await.unwrap();
+        assert_eq!(totals.total_files, 0);
+    }
+
+    // ---------------- clear_drive ----------------
+
+    #[tokio::test]
+    async fn clear_drive_only_affects_that_drive() {
+        let pool = fresh_pool().await;
+        let repo = IntentRepo::new(pool);
+        repo.record_plan("acct", "drive_a", &[("a.txt".into(), 100)]).await.unwrap();
+        repo.record_plan("acct", "drive_b", &[("b.txt".into(), 200)]).await.unwrap();
+        repo.clear_drive("acct", "drive_a").await.unwrap();
+        let ta = repo.totals_for_drive("acct", "drive_a").await.unwrap();
+        let tb = repo.totals_for_drive("acct", "drive_b").await.unwrap();
+        assert_eq!(ta.total_files, 0);
+        assert_eq!(tb.total_files, 1);
+        assert_eq!(tb.total_bytes, 200);
+    }
+
+    #[tokio::test]
+    async fn clear_drive_drops_both_pending_and_completed() {
+        let pool = fresh_pool().await;
+        let repo = IntentRepo::new(pool);
+        repo.record_plan("acct", "drive", &[("p.txt".into(), 100), ("c.txt".into(), 200)]).await.unwrap();
+        repo.mark_completed("acct", "drive", "c.txt", 1_000).await.unwrap();
+        repo.clear_drive("acct", "drive").await.unwrap();
+        let t = repo.totals_for_drive("acct", "drive").await.unwrap();
+        assert_eq!(t.total_files, 0);
+    }
+
+    // ---------------- clear_account ----------------
+
+    #[tokio::test]
+    async fn clear_account_drops_all_rows_for_account() {
+        let pool = fresh_pool().await;
+        let repo = IntentRepo::new(pool);
+        repo.record_plan("acct1", "drive_a", &[("a.txt".into(), 100)]).await.unwrap();
+        repo.record_plan("acct1", "drive_b", &[("b.txt".into(), 200)]).await.unwrap();
+        repo.record_plan("acct2", "drive_a", &[("c.txt".into(), 300)]).await.unwrap();
+
+        repo.clear_account("acct1").await.unwrap();
+
+        let t1a = repo.totals_for_drive("acct1", "drive_a").await.unwrap();
+        let t1b = repo.totals_for_drive("acct1", "drive_b").await.unwrap();
+        let t2a = repo.totals_for_drive("acct2", "drive_a").await.unwrap();
+        assert_eq!(t1a.total_files, 0);
+        assert_eq!(t1b.total_files, 0);
+        assert_eq!(t2a.total_files, 1, "other account's rows must survive");
+        assert_eq!(t2a.total_bytes, 300);
+    }
+
+    // ---------------- prune_settled ----------------
+
+    #[tokio::test]
+    async fn prune_settled_drops_only_completed_rows_older_than_threshold() {
+        let pool = fresh_pool().await;
+        let repo = IntentRepo::new(pool);
+        repo.record_plan("acct", "drive", &[
+            ("old_completed.txt".into(), 100),
+            ("new_completed.txt".into(), 200),
+            ("pending.txt".into(), 300),
+        ]).await.unwrap();
+        repo.mark_completed("acct", "drive", "old_completed.txt", 500).await.unwrap();
+        repo.mark_completed("acct", "drive", "new_completed.txt", 5_000).await.unwrap();
+
+        // Prune anything completed before t=1_000.
+        let deleted = repo.prune_settled("acct", "drive", 1_000).await.unwrap();
+        assert_eq!(deleted, 1, "exactly one row (old_completed) qualifies");
+
+        let totals = repo.totals_for_drive("acct", "drive").await.unwrap();
+        assert_eq!(totals.total_files, 2, "new_completed + pending survive");
+        assert_eq!(totals.completed_files, 1);
+    }
+
+    #[tokio::test]
+    async fn prune_settled_returns_zero_when_nothing_to_prune() {
+        let pool = fresh_pool().await;
+        let repo = IntentRepo::new(pool);
+        repo.record_plan("acct", "drive", &[("a.txt".into(), 100)]).await.unwrap();
+        // Pending row, never completed.
+        let deleted = repo.prune_settled("acct", "drive", 9_999_999).await.unwrap();
+        assert_eq!(deleted, 0);
+
+        let totals = repo.totals_for_drive("acct", "drive").await.unwrap();
+        assert_eq!(totals.total_files, 1, "pending row preserved");
     }
 }
