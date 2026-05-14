@@ -470,7 +470,13 @@ fn emit(app: &tauri::AppHandle, label: &str, active: bool, pending_files: u64) {
 /// runs on the owned `Vec`, so no `MutexGuard` exists during the
 /// `.await` (axiom `Async Lock Hygiene`).
 pub fn spawn_watchdog(state: Weak<UploadProcessingState>, app: tauri::AppHandle) {
-    tokio::spawn(async move {
+    // `tauri::async_runtime::spawn` ensures the future runs on Tauri's
+    // own tokio runtime, which is already entered. `tokio::spawn` here
+    // panics at boot because Tauri's `setup` closure (our caller) is
+    // not running inside a tokio runtime context — `tokio::spawn` and
+    // `tokio::time::sleep` both require one. Tauri's `async_runtime`
+    // IS tokio under the hood, so the inner `sleep` is fine.
+    tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(BANNER_WATCHDOG_SCAN_INTERVAL).await;
             let Some(state) = state.upgrade() else {
