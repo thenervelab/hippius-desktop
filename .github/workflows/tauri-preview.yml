@@ -1,0 +1,213 @@
+name: publish-preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [redesign-preview]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: publish-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  publish-tauri-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup SSH for private Rust git deps
+        shell: bash
+        env:
+          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          # Decode private key from base64
+          python3 - <<'PY' > ~/.ssh/private_git_key
+          import os, base64, sys
+          b64 = os.environ["PRIVATE_GIT_DEPLOY_KEY_B64"].strip()
+          sys.stdout.buffer.write(base64.b64decode(b64))
+          PY
+          chmod 600 ~/.ssh/private_git_key
+
+          # Trust GitHub host key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+          # SSH config
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/private_git_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+          chmod 600 ~/.ssh/config
+
+          # Start ssh-agent
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+
+          # Add key (no passphrase)
+          ssh-add ~/.ssh/private_git_key
+          ssh-add -l
+
+      - name: Force Cargo to use git CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cargo
+          cat > ~/.cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: Verify SSH access to hcfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-remote ssh://git@github.com/thenervelab/hcfs.git HEAD
+
+      - name: Verify pinned hcfs commit is fetchable
+        shell: bash
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          set -euo pipefail
+          REV=$(grep -m1 'thenervelab/hcfs.git' src-tauri/Cargo.toml | sed 's/.*rev *= *"\([^"]*\)".*/\1/')
+          echo "Pinned hcfs rev: $REV"
+          if git ls-remote ssh://git@github.com/thenervelab/hcfs.git | grep -q "$REV"; then
+            echo "Commit $REV found at remote ref"
+          else
+            echo "Commit not at a ref tip, verifying via shallow clone..."
+            git clone --bare --filter=blob:none ssh://git@github.com/thenervelab/hcfs.git /tmp/hcfs-verify
+            git -C /tmp/hcfs-verify cat-file -t "$REV"
+          fi
+
+      - name: Get release notes
+        id: release_notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          PR_NUMBER="$(git log -1 --pretty=format:'%s' | grep -oE '#[0-9]+' | tr -d '# ' || true)"
+
+          if [[ -z "${PR_NUMBER:-}" ]]; then
+            PR_NUMBER="$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/commits/${SHA}/pulls" \
+              | jq -r '.[0].number // empty')"
+          fi
+
+          if [[ -n "${PR_NUMBER:-}" ]]; then
+            PR_INFO="$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/pulls/${PR_NUMBER}")"
+
+            TITLE="$(jq -r '.title // empty' <<<"$PR_INFO")"
+            BODY="$(jq -r '.body // empty'  <<<"$PR_INFO")"
+          else
+            TITLE="$(git log -1 --pretty=%s)"
+            BODY="$(git log -1 --pretty=%b)"
+          fi
+
+          TITLE="${TITLE//$'\r'/}"
+          BODY="${BODY//$'\r'/}"
+          if [[ -z "${BODY:-}" ]]; then
+            BODY="See the assets to download this version and install."
+          fi
+
+          BODY="$(printf '%s' "$BODY" | head -c 30000)"
+
+          {
+            echo "title<<__TITLE__"
+            echo "$TITLE"
+            echo "__TITLE__"
+            echo "body<<__BODY__"
+            echo "$BODY"
+            echo "__BODY__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9.12.3
+          run_install: false
+
+      - name: PNPM store path
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: PNPM cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Create src-tauri/.env
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri
+          cat > src-tauri/.env << 'EOF'
+          ${{ secrets.TAURI_ENV_FILE }}
+          EOF
+          chmod 600 src-tauri/.env
+
+      - name: Build frontend
+        run: pnpm build
+        env:
+          NODE_ENV: production
+
+      - name: Build & publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        with:
+          tagName: v__VERSION__-preview
+          releaseName: '[PREVIEW] ${{ steps.release_notes.outputs.title }}'
+          releaseBody: |
+            **🎨 Redesign Preview Build - macOS Only**
+
+            ${{ steps.release_notes.outputs.body }}
+          releaseDraft: false
+          prerelease: true
+          makeLatest: false
+          overwrite: true
+          args: '--target universal-apple-darwin'
