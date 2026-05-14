@@ -1904,7 +1904,7 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
 /// Ownership: all captures are owned (`AppHandle` is `Clone` and cheap;
 /// `label` and `plan_uploads` are moved in). The spawned future is
 /// `'static`, satisfying `tokio::spawn`'s `Send + 'static` bound.
-fn spawn_record_intent_plan(app: AppHandle, label: String, plan_uploads: Vec<(String, u64)>) {
+fn spawn_record_intent_plan<R: tauri::Runtime>(app: AppHandle<R>, label: String, plan_uploads: Vec<(String, u64)>) {
     tokio::spawn(async move {
         use tauri::Manager;
         let state: tauri::State<'_, crate::app_state::AppState> = app.state();
@@ -1932,9 +1932,60 @@ fn spawn_record_intent_plan(app: AppHandle, label: String, plan_uploads: Vec<(St
     });
 }
 
+/// Fire-and-forget: mark a single file as completed in the desktop-side
+/// `sync_intent` manifest.
+///
+/// Called from inside `build_file_synced_callback` only when hcfs-client's
+/// per-file callback reports `action == "uploaded"`. Downloads, deletes,
+/// and conflict events do NOT touch the intent manifest — the manifest
+/// counts user-initiated uploads, which is the only category the
+/// "X of Y uploaded across restarts" widget overlay needs.
+///
+/// Spawned because `FileSyncedFn` is a sync `Fn(...)` and
+/// [`crate::sync::intent::IntentRepo::mark_completed`] is async. The
+/// manifest is a pure UX overlay, NOT load-bearing for sync correctness,
+/// so on auth / pool / SQL failure we log and drop. Idempotence is
+/// enforced at the SQL layer (`AND completed_at_ms IS NULL`), so a
+/// duplicate fire — e.g. hcfs-client retrying a callback after a
+/// transient widget event drop — preserves the first completion
+/// timestamp.
+///
+/// Ownership: every capture is owned. `AppHandle<R>` is `Clone` and cheap
+/// (internally `Arc`); `label` and `rel_path` are moved in. The spawned
+/// future is `'static`, satisfying `tokio::spawn`'s `Send + 'static`
+/// bound.
+fn spawn_mark_intent_completed<R: tauri::Runtime>(app: AppHandle<R>, label: String, rel_path: String) {
+    tokio::spawn(async move {
+        use tauri::Manager;
+        let state: tauri::State<'_, crate::app_state::AppState> = app.state();
+        let account_id = match state.current_account_id() {
+            Ok(id) => id,
+            Err(e) => {
+                // Not logged in (or auth mutex poisoned). Treat like the
+                // plan-ready path: drop quietly, the next plan-ready will
+                // replay this row as pending until it gets uploaded again.
+                debug!(label = %label, path = %rel_path, error = %e, "skipping intent mark_completed: no active account");
+                return;
+            }
+        };
+        let pool = match state.pool() {
+            Ok(p) => p.clone(),
+            Err(e) => {
+                warn!(label = %label, path = %rel_path, error = %e, "skipping intent mark_completed: pool unavailable");
+                return;
+            }
+        };
+        let repo = crate::sync::intent::IntentRepo::new(pool);
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if let Err(e) = repo.mark_completed(&account_id, &label, &rel_path, now_ms).await {
+            warn!(label = %label, path = %rel_path, error = %e, "intent mark_completed failed");
+        }
+    });
+}
+
 /// Build the `on_sync_plan_ready` callback that merges the sync plan into the
 /// progress session and emits the `SYNC_PLAN_READY` event.
-fn build_plan_ready_callback(app: &AppHandle, label: Arc<str>, sync: &Arc<SyncRunner>) -> hcfs_client::sync::SyncPlanReadyFn {
+fn build_plan_ready_callback<R: tauri::Runtime>(app: &AppHandle<R>, label: Arc<str>, sync: &Arc<SyncRunner>) -> hcfs_client::sync::SyncPlanReadyFn {
     let app = app.clone();
     let sync = sync.clone();
     Arc::new(move |uploads, downloads, local_deletes, remote_deletes, renames| {
@@ -2103,7 +2154,16 @@ fn build_fetch_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) 
 /// soon as its individual AEAD verification has succeeded — instead of
 /// waiting for the entire sync cycle to finish. See
 /// [`crate::sync::progress::mark_file_synced`] for the full reasoning.
-pub fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_client::sync::FileSyncedFn {
+pub fn build_file_synced_callback<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    sync: Arc<SyncRunner>,
+    label: Arc<str>,
+) -> hcfs_client::sync::FileSyncedFn {
+    // Clone once at construction time; the closure (`Arc<dyn Fn(...)>`)
+    // captures the owned `AppHandle<R>`. Per-fire we `.clone()` again to
+    // hand an owned handle to the `'static`-bound spawn future. Both
+    // clones are cheap (`AppHandle` is internally `Arc`).
+    let app = app.clone();
     Arc::new(move |rel_path, path_hash_hex, arion_cid, action, timestamps| {
         debug!("File synced [{label}]: {rel_path} ({action}) cid={arion_cid}");
         if rel_path.is_empty() {
@@ -2203,6 +2263,26 @@ pub fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcf
                 size_bytes,
                 label: Arc::clone(&label),
             });
+        }
+
+        // Mark the file complete in the desktop-side intent manifest so
+        // the sync widget can show "X of Y" totals across app restarts.
+        // We mark intent complete ONLY on "uploaded":
+        //   - "downloaded": pulling someone else's file, not user upload intent.
+        //   - "deleted":    deletion is out of scope for the upload manifest.
+        //   - "conflict":   when a conflict resolves via upload, hcfs-client
+        //                   already arrives here with action="uploaded" (see
+        //                   `Drive::resolve_upload_conflict`), so the
+        //                   resolution is counted; the bare "conflict" event
+        //                   reports a non-upload outcome (kept-remote /
+        //                   manual-deferred) and must not advance totals.
+        //
+        // Spawned for the same async-Fn reason as `spawn_record_intent_plan`
+        // — `FileSyncedFn` is sync; `IntentRepo::mark_completed` is async.
+        // The manifest is a pure UX overlay, NOT load-bearing for sync
+        // correctness, so failures inside the spawn log and drop.
+        if action == "uploaded" {
+            spawn_mark_intent_completed(app.clone(), label.to_string(), rel_path.to_string());
         }
 
         // hcfs's `FileSyncedFn` callback passes `path_hash_hex` as a hex
@@ -2338,7 +2418,7 @@ pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManage
         )),
         on_scan_progress: Some(build_scan_callback(sync.clone(), app.clone(), Arc::clone(&label))),
         on_fetch_state_progress: Some(build_fetch_callback(sync.clone(), app.clone(), Arc::clone(&label))),
-        on_file_synced: Some(build_file_synced_callback(sync.clone(), Arc::clone(&label))),
+        on_file_synced: Some(build_file_synced_callback(app, sync.clone(), Arc::clone(&label))),
         // Phase 2 / Task 2.7: per-file failure callback fired synchronously
         // by hcfs-client at the error site. We mutate the in-memory
         // progress tracker here; the bridge's `SyncEvent::FileFailed` arm
@@ -2673,11 +2753,26 @@ mod tests {
         }
     }
 
+    /// Build a `tauri::test::MockRuntime` app handle for callbacks that
+    /// now take `&AppHandle<R>` (Task 6 — intent-manifest wiring). The
+    /// handle's only role in these tests is to satisfy the type system
+    /// and the closure's per-fire `app.clone()`; the spawned
+    /// `mark_intent_completed` lookup falls through the
+    /// "no `AppState` managed" branch silently because the mock app
+    /// hasn't called `manage()` on `AppState`. That's the exact
+    /// fire-and-forget contract — the surrounding cache write +
+    /// activity enqueue keep being the only behavior these tests assert
+    /// on. The `test` feature on `tauri` is enabled via dev-deps only.
+    fn mock_app_handle() -> tauri::AppHandle<tauri::test::MockRuntime> {
+        tauri::test::mock_app().handle().clone()
+    }
+
     #[tokio::test]
     async fn build_file_synced_callback_writes_timestamps_to_cache() {
         let sync = test_sync_runner();
         let label: Arc<str> = Arc::from("test-drive");
-        let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+        let app = mock_app_handle();
+        let callback = build_file_synced_callback(&app, sync.clone(), Arc::clone(&label));
 
         // 32-byte hash keyed by 'a' so the hex decode succeeds.
         let fid = [0xAAu8; 32];
@@ -2714,7 +2809,8 @@ mod tests {
         );
         sync.update_synced_paths_cache(&label, prior);
 
-        let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+        let app = mock_app_handle();
+        let callback = build_file_synced_callback(&app, sync.clone(), Arc::clone(&label));
         // Same file re-uploaded against a legacy server that omits
         // timestamps — callback receives `None`.
         callback("doc.txt", &hex::encode(fid), "cid-new", "uploaded", None);
@@ -2734,7 +2830,8 @@ mod tests {
         // just with zero timestamps. Reconcile will backfill them.
         let sync = test_sync_runner();
         let label: Arc<str> = Arc::from("fresh-legacy-drive");
-        let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+        let app = mock_app_handle();
+        let callback = build_file_synced_callback(&app, sync.clone(), Arc::clone(&label));
 
         let fid = [0xCCu8; 32];
         callback("new.txt", &hex::encode(fid), "cid-a", "uploaded", None);
@@ -2754,7 +2851,8 @@ mod tests {
         // Empty rel_path is the early-exit guard — don't touch the cache.
         let sync = test_sync_runner();
         let label: Arc<str> = Arc::from("guard-drive");
-        let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+        let app = mock_app_handle();
+        let callback = build_file_synced_callback(&app, sync.clone(), Arc::clone(&label));
 
         let fid = [0xDDu8; 32];
         let ts = make_timestamps(123, 456);

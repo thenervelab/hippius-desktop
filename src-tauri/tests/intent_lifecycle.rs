@@ -84,6 +84,60 @@ async fn record_plan_with_planner_style_payload_persists_rows() {
     assert_eq!(total_bytes, 4_251_024, "size_bytes sum mismatch");
 }
 
+/// Pins the contract `build_file_synced_callback` relies on (Task 6
+/// wiring): calling `mark_completed` after `record_plan` flips the
+/// matching row to completed in the per-drive totals, and a second fire
+/// is a no-op so a hcfs-client retry of the per-file callback cannot
+/// double-count bytes.
+///
+/// The closure itself can't be exercised end-to-end here — the spawn
+/// inside `build_file_synced_callback` resolves `tauri::State<AppState>`
+/// at runtime, which only the real Tauri AppHandle has. What this test
+/// guards against is the case where a refactor of `IntentRepo`'s public
+/// API silently breaks the closure's call site (it still compiles but
+/// stops moving totals).
+#[tokio::test]
+async fn mark_completed_after_record_plan_updates_totals_idempotently() {
+    let pool = fresh_pool().await;
+    let repo = IntentRepo::new(pool);
+
+    repo.record_plan("acct", "default", &[("photos/img1.jpg".into(), 4_000_000)])
+        .await
+        .expect("record_plan failed");
+    let before = repo.totals_for_drive("acct", "default").await.expect("totals before");
+    assert_eq!(before.completed_files, 0, "no rows completed yet");
+    assert_eq!(before.completed_bytes, 0, "no bytes completed yet");
+
+    // First completion: row flips, totals advance.
+    repo.mark_completed("acct", "default", "photos/img1.jpg", 1_000_000)
+        .await
+        .expect("mark_completed first call failed");
+    let after_first = repo
+        .totals_for_drive("acct", "default")
+        .await
+        .expect("totals after first mark");
+    assert_eq!(after_first.completed_files, 1, "one file completed");
+    // Completed bytes counts the FULL file size, not the mark timestamp.
+    assert_eq!(after_first.completed_bytes, 4_000_000, "completed bytes match plan size");
+
+    // Second completion (e.g. hcfs-client retry after a transient widget
+    // event drop). The `AND completed_at_ms IS NULL` guard inside
+    // `mark_completed` enforces first-write-wins at the SQL layer, so
+    // the totals must not move.
+    repo.mark_completed("acct", "default", "photos/img1.jpg", 2_000_000)
+        .await
+        .expect("mark_completed second call failed");
+    let after_second = repo
+        .totals_for_drive("acct", "default")
+        .await
+        .expect("totals after second mark");
+    assert_eq!(after_second.completed_files, 1, "still exactly one file completed");
+    assert_eq!(
+        after_second.completed_bytes, 4_000_000,
+        "completed bytes unchanged on duplicate callback"
+    );
+}
+
 /// Calling `record_plan` with an empty plan must compact every pending row
 /// for the (account, drive) pair.
 ///

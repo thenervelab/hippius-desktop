@@ -50,6 +50,18 @@ use hcfs_client::engine::types::SyncActivityAction;
 use hcfs_client::engine::{NoopCallbacks, NoopEventHandler, SyncRunner};
 use tauri_project_lib::sync::lifecycle::build_file_synced_callback;
 
+/// Build a `MockRuntime` `AppHandle` so the per-fire `app.clone()` and
+/// the fire-and-forget intent-mark spawn inside the callback compile
+/// and run without a real Tauri runtime. The spawn falls through the
+/// "no `AppState` managed" branch silently — exactly the fire-and-
+/// forget contract — leaving these tests focused on the activity
+/// enqueue and cache write, the behavior they were written to pin.
+/// The `test` feature on `tauri` is enabled only via dev-deps so this
+/// helper is unavailable in production builds.
+fn mock_app_handle() -> tauri::AppHandle<tauri::test::MockRuntime> {
+    tauri::test::mock_app().handle().clone()
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Helpers (test-local; nothing crosses back into the crate under test)
 // ─────────────────────────────────────────────────────────────────────
@@ -183,7 +195,12 @@ fn byte_progress_does_not_enqueue_pending_activity() {
          docs/plans/2026-05-13-sync-402-data-integrity.md Task 1.1."
     );
 
-    let synced_body = extract_fn_body(&src, "fn build_file_synced_callback(").expect("build_file_synced_callback declaration present");
+    // Marker omits the `(` so the substring match still works after
+    // the signature gained a `<R: tauri::Runtime>` generic parameter
+    // in Task 6 (intent manifest wiring). The brace scanner below
+    // jumps from the marker to the first `{`, so the runtime
+    // generic between the name and `(` doesn't affect body extraction.
+    let synced_body = extract_fn_body(&src, "fn build_file_synced_callback").expect("build_file_synced_callback declaration present");
     assert!(
         synced_body.contains("add_pending_activity"),
         "build_file_synced_callback MUST call add_pending_activity — \
@@ -197,8 +214,15 @@ fn byte_progress_does_not_enqueue_pending_activity() {
 /// `file_name`, and the correct `label`. Uses the public hcfs-client
 /// `SyncRunner::new` constructor — no test-only helpers, no
 /// `#[cfg(test)] pub` shims.
-#[test]
-fn on_file_synced_enqueues_uploaded_activity() {
+///
+/// Runs under `#[tokio::test]` because the closure now also fires a
+/// `tokio::spawn` (Task 6: fire-and-forget `mark_intent_completed`)
+/// on the `uploaded` action; without a Tokio reactor that spawn
+/// panics. The spawn itself is fire-and-forget and falls through the
+/// "no `AppState` managed" branch silently, so it doesn't affect the
+/// assertions below.
+#[tokio::test]
+async fn on_file_synced_enqueues_uploaded_activity() {
     let sync = make_sync_runner();
     let label: Arc<str> = Arc::from("drive-a");
 
@@ -210,7 +234,8 @@ fn on_file_synced_enqueues_uploaded_activity() {
     const EXPECTED_SIZE: u64 = 4_096;
     seed_one_file_session(&sync, "folder/file.txt", "drive-a", EXPECTED_SIZE, FileAction::Upload);
 
-    let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+    let app = mock_app_handle();
+    let callback = build_file_synced_callback(&app, sync.clone(), Arc::clone(&label));
 
     // 32-byte path hash keyed by 'a' so the hex decode in the callback
     // succeeds — otherwise the callback short-circuits before the
@@ -251,7 +276,8 @@ fn on_file_synced_enqueues_downloaded_activity_for_download_action() {
     const EXPECTED_SIZE: u64 = 12_345;
     seed_one_file_session(&sync, "doc.txt", "drive-b", EXPECTED_SIZE, FileAction::Download);
 
-    let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+    let app = mock_app_handle();
+    let callback = build_file_synced_callback(&app, sync.clone(), Arc::clone(&label));
 
     let fid = [0xBBu8; 32];
     callback("doc.txt", &hex::encode(fid), "cid-2", "downloaded", None);
@@ -282,11 +308,17 @@ fn on_file_synced_enqueues_downloaded_activity_for_download_action() {
 /// — the Recent-Files view renders it as the existing
 /// "unknown"/"--" placeholder rather than fabricating a fake count.
 /// Pins the contract that the helper never panics on a missing entry.
-#[test]
-fn on_file_synced_without_progress_entry_falls_back_to_zero_size() {
+///
+/// Runs under `#[tokio::test]` because the "uploaded" branch now
+/// spawns a fire-and-forget `mark_intent_completed` (Task 6) and a
+/// Tokio reactor is required for `tokio::spawn` not to panic. The
+/// spawn falls through silently — no `AppState` managed in this test.
+#[tokio::test]
+async fn on_file_synced_without_progress_entry_falls_back_to_zero_size() {
     let sync = make_sync_runner();
     let label: Arc<str> = Arc::from("drive-c");
-    let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+    let app = mock_app_handle();
+    let callback = build_file_synced_callback(&app, sync.clone(), Arc::clone(&label));
 
     // Deliberately do NOT seed `current_session`. `mark_file_synced`
     // hits the `None` branch on `current_session.as_mut()` and returns
@@ -305,7 +337,8 @@ fn on_file_synced_without_progress_entry_falls_back_to_zero_size() {
 fn on_file_synced_with_unknown_action_does_not_enqueue() {
     let sync = make_sync_runner();
     let label: Arc<str> = Arc::from("drive-test");
-    let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+    let app = mock_app_handle();
+    let callback = build_file_synced_callback(&app, sync.clone(), Arc::clone(&label));
 
     // Realistic-shape inputs: 32-byte hex path hash so the callback's
     // subsequent `upsert_synced_path` decode path also succeeds. The

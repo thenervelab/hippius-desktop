@@ -167,6 +167,16 @@ items_after_statements = "allow"
 needless_raw_string_hashes = "allow"
 
 [dev-dependencies]
+# `tauri` is also listed as a normal dependency above; the dev-deps entry
+# adds the `test` feature so unit tests in `src-tauri/src/sync/` can
+# build an `AppHandle<MockRuntime>` via `tauri::test::mock_app()` without
+# spinning up a real Wry runtime. Cargo merges features per build kind:
+# tests get `test` enabled, production binaries don't. The `test` feature
+# is a pure gate (`test = []` in tauri's Cargo.toml) so it adds no
+# transitive deps to either build. Required for in-module tests of
+# callbacks like `build_file_synced_callback` whose signature now takes
+# `&AppHandle<R>`.
+tauri = { version = "2", features = ["test"] }
 tokio = { version = "1", features = [
     "macros",
     "rt-multi-thread",

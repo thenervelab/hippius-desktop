@@ -185,12 +185,19 @@ fn end_cycle(sync: &SyncRunner) {
 /// - `sync.pending_activity` for `SyncActivityAction::Uploaded` rows
 ///   (must be empty after a 402, exactly one after a 200),
 /// - `CreditsExhaustedState::count_for` for the per-label banner count.
-#[test]
+///
+/// Runs under `#[tokio::test]` because the 200-cycle invocation of
+/// `build_file_synced_callback` with `action = "uploaded"` now fires a
+/// fire-and-forget `tokio::spawn` for the intent manifest mark
+/// (Task 6). Without a Tokio reactor `tokio::spawn` panics. The spawn
+/// falls through the "no `AppState` managed" branch, leaving the 402
+/// banner / activity assertions below unchanged.
+#[tokio::test]
 #[expect(
     clippy::too_many_lines,
     reason = "Three sequential sync cycles, each with its own setup + multi-invariant assertions, are deliberately kept in one function so the cycle ordering is readable end-to-end. Splitting into helpers would require sharing `sync`/`banner_state`/`label` across function boundaries with no abstraction win."
 )]
-fn three_cycle_402_402_200_full_chain() {
+async fn three_cycle_402_402_200_full_chain() {
     let sync = make_sync_runner();
     let label: Arc<str> = Arc::from("drive-402-e2e");
     let banner_state = CreditsExhaustedState::new();
@@ -378,7 +385,13 @@ fn three_cycle_402_402_200_full_chain() {
     // ──────────────────────────────────────────────────────────────────
     seed_one_upload(&sync, uploading_file("first.txt", &label, 2048, 2048), "cycle-3");
 
-    let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+    // `MockRuntime` AppHandle is enough — the intent-mark spawn inside
+    // the callback uses fire-and-forget semantics (no `AppState` managed
+    // here means it logs and drops, leaving the activity enqueue and
+    // cache write — the behavior this test pins — unaffected). Tauri's
+    // `test` feature is enabled via dev-deps for this binary.
+    let app = tauri::test::mock_app().handle().clone();
+    let callback = build_file_synced_callback(&app, sync.clone(), Arc::clone(&label));
     // 32-byte path hash keyed with 'a' so the hex decode succeeds —
     // matches the shape `hippius_activity_truth.rs` uses. A bad hex
     // would short-circuit the callback before `upsert_synced_path` and
