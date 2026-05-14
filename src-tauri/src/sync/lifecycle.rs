@@ -403,39 +403,56 @@ fn spawn_reconcile_timestamps(app: &AppHandle, sync: Arc<SyncRunner>, manager_ar
     tauri::async_runtime::spawn(async move {
         use hcfs_client::drive::{FailureReason, ReconcileOutcome, RetryPolicy};
 
-        // Acquire the manager lock JUST long enough to construct the
-        // `'static` retry future, then drop the guard before awaiting
-        // it. The retry budget includes up to 7s of `tokio::time::sleep`
-        // across 0s / 2s / 5s backoffs; holding the per-drive mutex
-        // across those sleeps would block concurrent sync operations
-        // and IPC paths (like `get_user_files` -> try_lock on the same
-        // mutex) for the full retry window. `reconcile_with_retry`
-        // internally clones `Drive` (a cheap Arc-sharing clone) so
-        // the future is `'static` and lock-independent.
-        let reconcile_future = {
-            let manager = manager_arc.lock().await;
-            manager.reconcile_with_retry(RetryPolicy::first_reconcile_default())
-        };
-        let outcome = reconcile_future.await;
+        // Hold the per-drive manager lock across the ENTIRE
+        // `reconcile_with_retry` await.
+        //
+        // The reviewer flagged this lock window as wasteful (up to
+        // ~7s with 0s / 2s / 5s backoffs and HTTP latency), and the
+        // hcfs-client API was changed so the returned future is
+        // `'static` precisely to allow a lock-free await. However,
+        // releasing the lock around the network call opened a
+        // concurrent file-write race: both `reconcile_with_retry`
+        // (on success) and `run_sync_cycle` (end of every cycle)
+        // persist `sync_state.json`. With the lock released, a sync
+        // cycle triggered by a user `add_files` IPC right after
+        // login could interleave its plan-and-save with the
+        // reconcile's save, dropping the upload entry from the
+        // baseline. Observed symptom: the "Adding ... to sync
+        // folder…" toast sat on the 60s `upload_processing`
+        // watchdog timeout because no first-chunk event ever fired.
+        //
+        // The cold-start reconcile is a one-shot per drive — once
+        // the cache is populated the gate stays settled for the
+        // rest of the session, so this lock window is paid at most
+        // once per drive per login. Restoring concurrency safety
+        // beats saving 7s on cold start.
+        //
+        // The hcfs-client `'static` future shape is preserved so
+        // that a future revision can move the file-write
+        // coordination into hcfs-client (e.g. an internal
+        // per-drive write mutex) and reclaim the lock-window
+        // optimization without another desktop change.
+        //
+        // Lock hygiene: `manager_arc` is a `tokio::sync::Mutex` so
+        // its guard is `Send` and safely held across `.await`
+        // points (Async Lock Hygiene axiom applies to
+        // `std::sync::Mutex` guards, not Tokio's).
+        let manager = manager_arc.lock().await;
+        let outcome = manager.reconcile_with_retry(RetryPolicy::first_reconcile_default()).await;
 
         match &outcome {
-            ReconcileOutcome::Reconciled { duration_ms } => {
-                // Re-lock briefly to load the fresh state we just
-                // persisted. This window is microseconds (file read)
-                // versus the up-to-7s window we just eliminated.
-                let state_result = manager_arc.lock().await.load_sync_state().await;
-                match state_result {
-                    Ok(state) => {
-                        let paths = build_synced_paths_from_state(&state);
-                        sync.update_synced_paths_cache(&label, paths);
-                        let _ = app.emit(crate::sync::events::ACTIVITY_UPDATED, ());
-                        info!(label = %label, duration_ms = duration_ms, "reconcile: cache refreshed");
-                    }
-                    Err(e) => {
-                        warn!(label = %label, error = %e, "reconcile: post-fetch state reload failed");
-                    }
+            ReconcileOutcome::Reconciled { duration_ms } => match manager.load_sync_state().await {
+                Ok(state) => {
+                    let paths = build_synced_paths_from_state(&state);
+                    sync.update_synced_paths_cache(&label, paths);
+                    drop(manager);
+                    let _ = app.emit(crate::sync::events::ACTIVITY_UPDATED, ());
+                    info!(label = %label, duration_ms = duration_ms, "reconcile: cache refreshed");
                 }
-            }
+                Err(e) => {
+                    warn!(label = %label, error = %e, "reconcile: post-fetch state reload failed");
+                }
+            },
             ReconcileOutcome::Fresh => {
                 debug!(label = %label, "reconcile: skipped (fresh)");
             }
