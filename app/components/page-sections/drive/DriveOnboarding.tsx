@@ -455,7 +455,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           "Local" and folder views. Settings reuses LocalFoldersSection /
           RemoteFoldersSection directly without this wrapper, so its
           gutter is unaffected. */}
-      <div className="w-full flex flex-col gap-6 mt-6 px-3">
+      <div className="w-full flex flex-col gap-3 px-3">
         {/* ──────── Local Sync Folders (shared component) ──────── */}
         <LocalFoldersSection
           syncFolders={syncFolders}

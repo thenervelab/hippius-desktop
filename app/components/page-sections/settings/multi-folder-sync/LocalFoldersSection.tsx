@@ -228,7 +228,7 @@ export function LocalFoldersSection({
                   // Settings reuses this same component with no
                   // onSelectFolder and keeps the subtler hover.
                   onSelectFolder
-                    ? "cursor-pointer [&_*]:cursor-pointer hover:bg-primary-100 dark:hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50"
+                    ? "cursor-pointer [&_*]:cursor-pointer hover:bg-grey-light-400 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50"
                     : "hover:bg-grey-light-400 dark:hover:bg-white/5",
                 )}
                 onClick={(e) => {
