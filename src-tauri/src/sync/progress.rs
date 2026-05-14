@@ -228,13 +228,16 @@ pub fn mark_file_error(sync: &SyncRunner, path: String, error: String) -> Result
 /// individual file as soon as its own AEAD verification has succeeded,
 /// independent of other in-flight files.
 ///
-/// Returns `Ok(0)` if there's no current session, no file at the given
-/// path, or the file is already Completed. Zero is the truthful sentinel
-/// for "this call observed no size": the size is undefined in the
-/// no-session/no-file cases, and the already-Completed branch means a
-/// previous call (or `complete_pending_files`) already reported it. The
-/// caller treats zero as "unknown" and won't fabricate a row with a fake
-/// byte count.
+/// Returns `Ok(0)` only when there's no current session or no file
+/// at the given path — i.e. the call observed no entry to read a
+/// size from. For the already-Completed branch we return
+/// `file.total_bytes` (the value the per-chunk callback recorded
+/// during this cycle) rather than 0, because in practice every
+/// successful upload reaches this branch (hcfs-client's
+/// `update_file_progress` flips `Completed` on the final chunk
+/// BEFORE `on_file_synced` fires). Returning 0 there caused every
+/// Recent-Files row to render its size as "Unknown" — see the
+/// regression test `mark_file_synced_returns_total_bytes_when_already_completed`.
 ///
 /// As of hcfs-client `33048ff5bc9228939b521c8a147533dcb221dfb5` (PR #110),
 /// `path_for_progress` in `drive/download.rs` always uses the full
@@ -266,13 +269,39 @@ pub fn mark_file_synced(sync: &SyncRunner, path: &str) -> Result<u64> {
             return Ok(0);
         };
         if file.status == FileStatus::Completed {
-            // Already terminal — a previous call (or end-of-cycle
-            // `complete_pending_files`) already accounted for this file.
-            // Returning 0 here means the caller's activity row gets the
-            // "unknown" sentinel; the alternative (returning
-            // `file.total_bytes` again) would risk double-counting if a
-            // future caller multiplies the value across re-entries.
-            return Ok(0);
+            // Already terminal. There are two ways this happens in
+            // practice:
+            //
+            //   1. End-of-cycle `complete_pending_files` ran before
+            //      our `on_file_synced` callback. Uncommon — files
+            //      almost always resolve via the per-file path first.
+            //
+            //   2. The byte-progress callback flipped `Completed` on
+            //      the FINAL upload chunk (hcfs-client
+            //      `progress/tracker.rs:325` flips status when
+            //      `bytes_transferred >= total_bytes`). This happens
+            //      for EVERY successful upload because the chunk
+            //      callback fires before `on_file_synced`.
+            //
+            // Returning 0 was the original defensive choice — the
+            // comment warned about a hypothetical caller that
+            // aggregated `size_bytes` across re-entries. No such
+            // caller exists: `build_file_synced_callback` reads the
+            // value once per activity row. The cost of the
+            // defensive 0 was real and user-visible: every Recent
+            // Files row for a successful upload rendered the size
+            // column as "Unknown" because the activity item
+            // serialized `size_bytes = 0`.
+            //
+            // Returning `file.total_bytes` here is the truthful
+            // value — the size was already observed via the
+            // per-chunk callback and stored on the entry, and the
+            // file is in a terminal state so the value won't be
+            // mutated again. The dedup-key entropy in
+            // `ActivityDedupKey = (file_name, action, label,
+            // size_bytes)` also benefits: distinct uploads of
+            // distinct files no longer collide on a shared 0.
+            return Ok(file.total_bytes);
         }
         let now = chrono::Utc::now().timestamp_millis();
         let bytes = file.total_bytes;
@@ -1085,21 +1114,30 @@ mod tests {
     }
 
     #[test]
-    fn mark_file_synced_returns_zero_when_already_completed() {
-        // Edge case 3: the file was already marked Completed by a
-        // previous call (or by end-of-cycle `complete_pending_files`).
-        // Returning the size again would risk double-counting in any
-        // caller that aggregated `size_bytes` across re-entries; the
-        // contract is "this call observed nothing new" → 0.
+    fn mark_file_synced_returns_total_bytes_when_already_completed() {
+        // Regression test for the Recent Files "Unknown" size bug.
+        //
+        // hcfs-client's `update_file_progress` flips `FileStatus` to
+        // `Completed` on the final upload chunk (tracker.rs:325)
+        // BEFORE `on_file_synced` fires for the file. The earlier
+        // implementation returned 0 from this branch as a defensive
+        // sentinel, but no caller actually aggregates across
+        // re-entries — `build_file_synced_callback` reads the value
+        // once per activity row. The 0 propagated into
+        // `SyncActivityItem.size_bytes`, then `RecentFile.size`,
+        // then rendered as "Unknown" in the Recent Files column for
+        // every successful upload.
+        //
+        // The contract is now: return `file.total_bytes` regardless
+        // of terminal status. The value was set by the per-chunk
+        // callback and is not mutated again once Completed.
         let sync = test_runner();
         seed_session(
             &sync,
-            // `make_file` with `completed_at = Some(...)` sets the
-            // status to whatever we pass — explicitly Completed here.
             vec![make_file("done.bin", "default", FileStatus::Completed, Some(1), 256, FileAction::Upload)],
         );
 
         let observed = mark_file_synced(&sync, "done.bin").expect("infallible");
-        assert_eq!(observed, 0);
+        assert_eq!(observed, 256, "must return total_bytes even when already Completed");
     }
 }
