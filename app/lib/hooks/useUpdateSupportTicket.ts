@@ -14,7 +14,7 @@ import { SupportTicket } from "./useSupportTickets";
 export interface UpdateTicketPayload {
   id: number;
   status?: "open" | "closed" | "in_progress";
-  priority?: "low" | "medium" | "high";
+  priority?: "low" | "normal" | "high" | "urgent";
   assigned_to?: number | null;
 }
 

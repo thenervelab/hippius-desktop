@@ -30,7 +30,9 @@ export interface SupportTicket {
   id: number;
   subject: string;
   status: "open" | "closed" | "in_progress" | "resolved";
-  priority: "low" | "medium" | "high";
+  // "medium" is retained for tickets created before the Low/Normal/High/Urgent
+  // taxonomy shipped — the badge and inline color map both still render it.
+  priority: "low" | "medium" | "normal" | "high" | "urgent";
   category: string;
   resource_type: string;
   resource_id: string;

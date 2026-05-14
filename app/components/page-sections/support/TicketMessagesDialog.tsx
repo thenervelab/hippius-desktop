@@ -36,7 +36,7 @@ const PRIORITY_COLOR: Record<string, string> = {
   medium: "text-warning-50 dark:text-[#FEB101]",
   normal: "text-warning-50 dark:text-[#FEB101]",
   high: "text-error-50 dark:text-[#FC7D73]",
-  urgent: "text-error-50 dark:text-[#FC7D73]",
+  urgent: "text-error-40 dark:text-[#FB4337]",
 };
 
 const getSeverityColor = (priority: string): string =>

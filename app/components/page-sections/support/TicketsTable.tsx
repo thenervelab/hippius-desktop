@@ -148,7 +148,7 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
         header: "STATUS",
         enableSorting: false,
         cell: ({ row }) => (
-          <PriorityBadge priority={row.original.priority || "medium"} />
+          <PriorityBadge priority={row.original.priority || "normal"} />
         ),
       }),
       col.accessor("created_at", {
