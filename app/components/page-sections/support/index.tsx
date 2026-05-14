@@ -6,6 +6,7 @@ import { Info } from "lucide-react";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
+import { InView } from "react-intersection-observer";
 import { getDiagonalTextureSvgBackgroundImage } from "@/app/lib/ui-textures";
 
 import TicketsTable from "./TicketsTable";
@@ -15,7 +16,7 @@ import CreateTicketModal, {
 } from "./CreateTicketModal";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import TicketMessagesDialog from "./TicketMessagesDialog";
-import { RefreshButton, SearchInput } from "../../ui";
+import { RefreshButton, RevealTextLine, SearchInput } from "../../ui";
 import { BackgroundContainer } from "@/components/ui/BackgroundContainer";
 import { LogoMark } from "@/components/ui/LogoMark";
 import useCreateSupportTicket from "@/app/lib/hooks/useCreateSupportTicket";
@@ -240,89 +241,114 @@ const Support: React.FC = () => {
       {showGate ? (
         <AccessKeyLoginGate />
       ) : (
-        <div className="flex flex-col px-4 pb-6 w-full">
-          {/* Page header — title + info tooltip on the left, New Ticket on the right */}
-          <div className="flex items-center justify-between gap-3 mt-3 px-1">
-            <div className="flex items-center gap-2">
-              <p className="text-[24px] font-medium leading-8 text-black-700 dark:text-white">
-                My Tickets
-              </p>
-              <TooltipPrimitive.Provider delayDuration={300}>
-                <TooltipPrimitive.Root>
-                  <TooltipPrimitive.Trigger asChild>
-                    <button
-                      type="button"
-                      aria-label="About support tickets"
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400 dark:hover:bg-black-300 dark:hover:text-white"
-                    >
-                      <Info className="size-3.5" />
-                    </button>
-                  </TooltipPrimitive.Trigger>
-                  <TooltipPrimitive.Portal>
-                    <TooltipPrimitive.Content
-                      side="bottom"
-                      align="start"
-                      sideOffset={8}
-                      avoidCollisions
-                      collisionPadding={8}
-                      className="z-[9999] max-w-[280px] rounded-[8px] border border-grey-dark-100 bg-white px-3 py-[10px] text-[12px] font-medium leading-4 tracking-[-0.24px] text-[#52525c] shadow-[0px_4px_24px_0px_rgba(0,0,0,0.08)] dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-[#a3a3a3] dark:shadow-black/25"
-                    >
-                      View and manage your support tickets. Click &ldquo;New
-                      Ticket&rdquo; to start a conversation with our support
-                      team.
-                      <TooltipPrimitive.Arrow className="fill-white dark:fill-[#2c2c2c]" />
-                    </TooltipPrimitive.Content>
-                  </TooltipPrimitive.Portal>
-                </TooltipPrimitive.Root>
-              </TooltipPrimitive.Provider>
-            </div>
+        <InView triggerOnce>
+          {({ inView, ref }) => (
+            <div
+              ref={ref}
+              className="flex flex-col px-4 pb-6 w-full"
+            >
+              {/* Page header — title + info tooltip on the left, New Ticket on the right.
+                  Staggered RevealTextLine mirrors the entrance animation used on the
+                  Settings page so navigating between sections feels consistent. */}
+              <RevealTextLine
+                rotate
+                reveal={inView}
+                className="delay-150 w-full"
+                parentClassName="w-full mt-3"
+              >
+                <div className="flex items-center justify-between gap-3 px-1 w-full">
+                  <div className="flex items-center gap-2">
+                    <p className="text-[24px] font-medium leading-8 text-black-700 dark:text-white">
+                      My Tickets
+                    </p>
+                    <TooltipPrimitive.Provider delayDuration={300}>
+                      <TooltipPrimitive.Root>
+                        <TooltipPrimitive.Trigger asChild>
+                          <button
+                            type="button"
+                            aria-label="About support tickets"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400 dark:hover:bg-black-300 dark:hover:text-white"
+                          >
+                            <Info className="size-3.5" />
+                          </button>
+                        </TooltipPrimitive.Trigger>
+                        <TooltipPrimitive.Portal>
+                          <TooltipPrimitive.Content
+                            side="bottom"
+                            align="start"
+                            sideOffset={8}
+                            avoidCollisions
+                            collisionPadding={8}
+                            className="z-[9999] max-w-[280px] rounded-[8px] border border-grey-dark-100 bg-white px-3 py-[10px] text-[12px] font-medium leading-4 tracking-[-0.24px] text-[#52525c] shadow-[0px_4px_24px_0px_rgba(0,0,0,0.08)] dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-[#a3a3a3] dark:shadow-black/25"
+                          >
+                            View and manage your support tickets. Click &ldquo;New
+                            Ticket&rdquo; to start a conversation with our support
+                            team.
+                            <TooltipPrimitive.Arrow className="fill-white dark:fill-[#2c2c2c]" />
+                          </TooltipPrimitive.Content>
+                        </TooltipPrimitive.Portal>
+                      </TooltipPrimitive.Root>
+                    </TooltipPrimitive.Provider>
+                  </div>
 
-            <CreateButton
-              text="+ New Ticket"
-              isLoading={false}
-              onClick={handleCreateTicket}
-            />
-          </div>
+                  <CreateButton
+                    text="+ New Ticket"
+                    isLoading={false}
+                    onClick={handleCreateTicket}
+                  />
+                </div>
+              </RevealTextLine>
 
-          {/* Tickets card — outer ring with search/refresh header, inner table */}
-          <div className="mt-6 flex flex-col items-center w-full rounded-[8px] border overflow-hidden bg-grey-light-300 border-grey-dark-100 dark:bg-black-primary-bg dark:border-black-300 shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]">
-            <div className="flex h-[46px] w-full items-center justify-end gap-2 pl-[14px] pr-[10px]">
-              <div className="w-[207px]">
-                <SearchInput
-                  value={searchTerm}
-                  onChange={(value: string) => setSearchTerm(value)}
-                  placeholder="Search Global"
-                />
-              </div>
-              <RefreshButton
-                refetching={isRefetching}
-                onClick={handleRefresh}
-                ariaLabel="Refresh tickets"
-              />
-            </div>
+              {/* Tickets card — outer ring with search/refresh header, inner table.
+                  Reveals slightly after the header so the eye lands on the title first. */}
+              <RevealTextLine
+                rotate
+                reveal={inView}
+                className="delay-300 w-full"
+                parentClassName="w-full mt-6 overflow-visible"
+              >
+                <div className="flex flex-col items-center w-full rounded-[8px] border overflow-hidden bg-grey-light-300 border-grey-dark-100 dark:bg-black-primary-bg dark:border-black-300 shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]">
+                  <div className="flex h-[46px] w-full items-center justify-end gap-2 pl-[14px] pr-[10px]">
+                    <div className="w-[207px]">
+                      <SearchInput
+                        value={searchTerm}
+                        onChange={(value: string) => setSearchTerm(value)}
+                        placeholder="Search Global"
+                      />
+                    </div>
+                    <RefreshButton
+                      refetching={isRefetching}
+                      onClick={handleRefresh}
+                      ariaLabel="Refresh tickets"
+                    />
+                  </div>
 
-            <div className="flex flex-col w-full flex-1 rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100 bg-white dark:bg-black-600 dark:border-black-300 overflow-hidden">
-              <TicketsTable
-                data={sortedTickets}
-                isLoading={isLoading}
-                isError={!!error}
-                isRefreshing={isRefetching}
-                currentPage={currentPage}
-                totalPages={totalPages}
-                totalCount={totalCount}
-                pageSize={pageSize}
-                onPageChange={setCurrentPage}
-                onPageSizeChange={(s) => {
-                  setPageSize(s);
-                  setCurrentPage(1);
-                }}
-                onViewMessages={handleViewMessages}
-                onCloseTicket={handleCloseTicket}
-                onCreateTicket={handleCreateTicket}
-              />
+                  <div className="flex flex-col w-full flex-1 rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100 bg-white dark:bg-black-600 dark:border-black-300 overflow-hidden">
+                    <TicketsTable
+                      data={sortedTickets}
+                      isLoading={isLoading}
+                      isError={!!error}
+                      isRefreshing={isRefetching}
+                      currentPage={currentPage}
+                      totalPages={totalPages}
+                      totalCount={totalCount}
+                      pageSize={pageSize}
+                      onPageChange={setCurrentPage}
+                      onPageSizeChange={(s) => {
+                        setPageSize(s);
+                        setCurrentPage(1);
+                      }}
+                      onViewMessages={handleViewMessages}
+                      onCloseTicket={handleCloseTicket}
+                      onCreateTicket={handleCreateTicket}
+                    />
+                  </div>
+                </div>
+              </RevealTextLine>
+
             </div>
-          </div>
-        </div>
+          )}
+        </InView>
       )}
 
       {/* Create Ticket Modal */}
@@ -479,4 +505,3 @@ const AccessKeyLoginGate: React.FC = () => {
     </div>
   );
 };
-
