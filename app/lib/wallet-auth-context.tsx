@@ -16,6 +16,7 @@ import { useRouter } from "next/navigation";
 import { logger } from "@/lib/utils/logger";
 
 import { invoke } from "@tauri-apps/api/core";
+import { invokeWithTimeout } from "./utils/invokeWithTimeout";
 import { useTrayInit, clearLoginStatusCache } from "./hooks/useTraySync";
 import { tryAutoInitSync } from "./hooks/useHcfsSync";
 import { appStore } from "./store/jotaiStore";
@@ -226,8 +227,17 @@ export function WalletAuthProvider({
     if (syncInitialized.current) return;
     syncInitialized.current = true;
     pendingSyncInit.current = null;
-    invoke("stop_sync")
-      .catch(() => { })
+    // Wrap `stop_sync` in a wall-clock timeout so a Rust-side hang
+    // (poisoned mutex, deadlocked sync loop, etc.) can't strand
+    // login. `stop_sync` is normally <500ms (GRACEFUL_SHUTDOWN +
+    // abort fallback in lifecycle.rs), so 8s is roomy. Whatever the
+    // outcome (success / Rust error / timeout) we proceed to
+    // `tryAutoInitSync` — fresh login should never block on
+    // teardown of state that may not even exist yet.
+    invokeWithTimeout<void>("stop_sync", undefined, 8_000)
+      .catch((err) => {
+        console.warn("[WalletAuth] stop_sync failed or timed out:", err);
+      })
       .then(() => {
         tryAutoInitSync(accountId).catch((err) =>
           console.error("[WalletAuth] Failed to start sync:", err)
@@ -274,8 +284,13 @@ export function WalletAuthProvider({
         ? (isNaN(Number(storedExpiry)) ? new Date(storedExpiry).getTime() : parseInt(storedExpiry, 10))
         : null;
 
-      // Single Rust call handles all validation, token checking, fallback
-      const result = await invoke<{
+      // Single Rust call handles all validation, token checking, fallback.
+      // 15s wall-clock cap protects the boot flow from a Rust-side hang
+      // (DB pool starvation, blockchain subscription init blocked on
+      // network, keychain access hanging). Without the cap a stuck
+      // `restore_session` would leave the entire auth context in its
+      // initial state forever — no login UI, no sync, no error.
+      const result = await invokeWithTimeout<{
         authenticated: boolean;
         substrateAddress: string | null;
         authType: string | null;
@@ -288,10 +303,14 @@ export function WalletAuthProvider({
          *  restore, so sync is wedged until the user re-enters their
          *  seed phrase. Surfaces the <SyncReauthRequiredAlert /> banner. */
         syncRequiresReauth: boolean;
-      }>("restore_session", {
-        oauthSessionJson: storedSession ?? null,
-        oauthExpiryMs: oauthExpiryMs ?? null,
-      });
+      }>(
+        "restore_session",
+        {
+          oauthSessionJson: storedSession ?? null,
+          oauthExpiryMs: oauthExpiryMs ?? null,
+        },
+        15_000,
+      );
 
       // Clear localStorage if Rust says so
       if (result.shouldClearOauth) {
