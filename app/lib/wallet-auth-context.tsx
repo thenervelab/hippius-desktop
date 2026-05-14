@@ -330,26 +330,48 @@ export function WalletAuthProvider({
         scheduleLogout(result.logoutTimeMs);
       }
 
-      // Init sync
+      // Init sync.
+      //
+      // `ensure_sync_mnemonic` parks on Rust's recovery gate
+      // (`sync/mnemonic.rs::await_recovery_resolved`) when the gate
+      // is `Pending` — set by `session_restore.rs:311` for OAuth
+      // users whose recommended recovery flow is anything other
+      // than `Proceed`. Awaiting this IPC before `initSync` meant
+      // any stall in the recovery dialog (it never renders, the
+      // user dismisses it without resolving, the event listener
+      // missed `oauth_recovery_check_needed`) stranded `initSync`
+      // forever — auto_init_sync was never invoked,
+      // `runner.drives` stayed empty, every upload hit the 60s
+      // `upload_processing` watchdog.
+      //
+      // Fix: fire `ensure_sync_mnemonic` in the background and call
+      // `initSync` immediately. Rust's `auto_init_sync` already has
+      // a retry ladder gated on the `hippius_auth_ready` event
+      // (subscribed BEFORE its first attempt, see
+      // `useHcfsSync.ts::tryAutoInitSync`). Both success paths of
+      // `ensure_sync_mnemonic` now emit `hippius_auth_ready` so
+      // when the mnemonic finally lands in `AuthInfo` (either from
+      // the cache hit, the recovery branch, or the freshly
+      // generated branch), the next retry picks it up. If
+      // `ensure_sync_mnemonic` fails with
+      // `MasterMnemonicUnrecoverable` (encrypted state exists but
+      // can't be decrypted), the catch flips the reauth banner —
+      // same UX as before, just without the gate.
       if (result.substrateAddress) {
         if (result.needsSyncMnemonic) {
-          try {
-            // Rust caches the mnemonic in AuthInfo; we don't read it back.
-            await invoke<void>("ensure_sync_mnemonic", { accountId: result.substrateAddress });
-          } catch (err) {
-            console.error("[WalletAuth] ensure_sync_mnemonic failed:", err);
-            // Rust refuses to mint a fresh mnemonic when encrypted
-            // state already exists on disk — returning
-            // `NotReady(MasterMnemonicUnrecoverable)`. Flip the
-            // reauth banner so the user can recover via re-entering
-            // their seed phrase, instead of silently falling through
-            // to `initSync` which would surface as the opaque
-            // `Crypto: decryption failed` error on the next drive
-            // resume.
-            if (isMasterMnemonicUnrecoverable(err)) {
-              appStore.set(syncRequiresReauthAtom, true);
+          // Fire-and-forget. NOT awaited.
+          void (async () => {
+            try {
+              await invoke<void>("ensure_sync_mnemonic", {
+                accountId: result.substrateAddress,
+              });
+            } catch (err) {
+              console.error("[WalletAuth] ensure_sync_mnemonic failed:", err);
+              if (isMasterMnemonicUnrecoverable(err)) {
+                appStore.set(syncRequiresReauthAtom, true);
+              }
             }
-          }
+          })();
         }
         initSync(result.substrateAddress);
       }
