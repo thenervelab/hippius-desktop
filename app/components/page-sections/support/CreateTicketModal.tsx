@@ -18,7 +18,7 @@ import { selectFilePath } from "@/app/lib/utils/tauri";
 
 export interface CreateTicketData {
   subject: string;
-  priority: "low" | "medium" | "high";
+  priority: "low" | "normal" | "high" | "urgent";
   category: string;
   description: string;
   attachment?: { path: string; name: string } | null;
@@ -42,8 +42,9 @@ const severities: Array<{
   label: string;
 }> = [
   { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
+  { value: "normal", label: "Normal" },
   { value: "high", label: "High" },
+  { value: "urgent", label: "Urgent" },
 ];
 
 export interface CreateTicketModalRef {

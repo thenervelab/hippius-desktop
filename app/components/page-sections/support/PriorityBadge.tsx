@@ -5,10 +5,14 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 /* Priority pill — matches the Figma "Miner Pill" tokens (node 4045:155478):
- *   Medium  → bg #fff2cc, border #fec134, text #e89702 (warning-100/300)
  *   Low     → bg #f0f0f0, border #e4e4e4, text #8f8f8f (grey-light-800)
+ *   Normal  → bg #fff2cc, border #fec134, text #e89702 (warning-100/300)
+ *             — same as legacy "medium" so older tickets still render.
  *   High    → bg rgba(252,125,115,0.14), border rgba(252,125,115,0.59),
- *             text #fc7d73 (declined-100)
+ *             text #fc7d73 (declined-100 / error-70 — coral)
+ *   Urgent  → bg rgba(245,26,10,0.10), border rgba(245,26,10,0.59),
+ *             text #F51A0A (error-50 — saturated red, distinct from
+ *             High's coral so the danger signal reads instantly).
  * 20px tall, 8px horizontal padding, 90px radius, 10px Geist Medium with
  * -0.2px tracking. */
 const badgeVariants = cva(
@@ -23,7 +27,7 @@ const badgeVariants = cva(
           "bg-[#fff2cc] border-[#fec134] text-[#e89702] dark:bg-[rgba(232,151,2,0.18)] dark:border-[rgba(232,151,2,0.5)] dark:text-[#FEB101]",
         high: "bg-[rgba(252,125,115,0.14)] border-[rgba(252,125,115,0.59)] text-[#fc7d73] dark:bg-[rgba(252,125,115,0.18)] dark:border-[rgba(252,125,115,0.5)] dark:text-[#FC7D73]",
         urgent:
-          "bg-[rgba(252,125,115,0.14)] border-[rgba(252,125,115,0.59)] text-[#fc7d73] dark:bg-[rgba(252,125,115,0.18)] dark:border-[rgba(252,125,115,0.5)] dark:text-[#FC7D73]",
+          "bg-[rgba(245,26,10,0.10)] border-[rgba(245,26,10,0.59)] text-[#F51A0A] dark:bg-[rgba(245,26,10,0.2)] dark:border-[rgba(245,26,10,0.55)] dark:text-[#FB4337]",
       },
     },
   }

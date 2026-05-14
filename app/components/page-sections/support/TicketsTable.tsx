@@ -35,7 +35,7 @@ const HEADERS = [
   "TICKET SUBJECT",
   "STATUS",
   "CATEGORY",
-  "STATUS",
+  "PRIORITY",
   "DATE CREATED",
   "",
 ];
@@ -44,9 +44,10 @@ const MIN_W = "min-w-[640px] sm:min-w-[820px]";
 
 const statusOrder: { [key: string]: number } = {
   open: 0,
+  pending: 1,
   in_progress: 1,
-  closed: 2,
-  resolved: 3,
+  resolved: 2,
+  closed: 3,
 };
 
 const formatDate = (dateString: string): string => {
@@ -145,10 +146,10 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
       }),
       col.display({
         id: "priority",
-        header: "STATUS",
+        header: "PRIORITY",
         enableSorting: false,
         cell: ({ row }) => (
-          <PriorityBadge priority={row.original.priority || "medium"} />
+          <PriorityBadge priority={row.original.priority || "normal"} />
         ),
       }),
       col.accessor("created_at", {
@@ -163,6 +164,14 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
       col.display({
         id: "actions",
         header: "",
+        // Pin the trailing action column to a tight, icon-sized width so
+        // the table's auto-layout stops giving it an equal share. The
+        // Th/Td primitives read meta.headerClassName / meta.cellClassName
+        // and apply them to the rendered cells (see app/components/ui/table/Th.tsx).
+        meta: {
+          headerClassName: "w-[44px]",
+          cellClassName: "w-[44px]",
+        },
         cell: ({ row }) => {
           const ticket = row.original;
           const items = [];

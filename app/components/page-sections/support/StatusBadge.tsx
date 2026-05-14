@@ -1,9 +1,15 @@
 "use client";
 
 import React from "react";
-import { cn } from "@/lib/utils";
 
-export type TicketStatus = "open" | "closed" | "in_progress" | "resolved";
+export type TicketStatus =
+  | "open"
+  | "pending"
+  | "resolved"
+  | "closed"
+  // Legacy value — older tickets created before the Open/Pending split
+  // can still arrive from the server; keep the type so callers compile.
+  | "in_progress";
 
 interface StatusBadgeProps {
   status: TicketStatus | string;
@@ -15,50 +21,33 @@ interface StatusBadgeProps {
   textVersion?: boolean;
 }
 
-type Tone = "success" | "warning" | "neutral";
-
 type Config = {
-  tone: Tone;
+  /** Hex fill for the dot — drives both the solid inner circle and the
+   *  0.2-opacity outer halo. The pill chrome itself stays neutral. */
+  dotColor: string;
   label: string;
 };
 
+/* Every status shares the same neutral pill chrome — the dot color is
+ * the ONLY visual signal that varies. This keeps the table calm even
+ * when many tickets sit side by side, and meets the design ask of
+ * "status color only in our circles". Hex values pulled from the
+ * project's CSS tokens (--primary-50, --warning-50, --success-60). */
 const STATUS_CONFIG: Record<string, Config> = {
-  // Awaiting first staff reply — surface as "Pending" in the Off (gray)
-  // pill style.
-  open: { tone: "neutral", label: "Pending" },
-  in_progress: { tone: "warning", label: "In Progress" },
-  resolved: { tone: "success", label: "Resolved" },
-  closed: { tone: "success", label: "Closed" },
-};
-
-/* Mirror the On/Off pill from NotificationSection so the table reads as
- * a slimmer sibling of the toggles users see in settings. */
-const TONE_CLASSES: Record<
-  Tone,
-  {
-    pill: string;
-    label: string;
-    dotFill: string;
-    dotInline?: React.CSSProperties;
-  }
-> = {
-  success: {
-    pill: "bg-[rgba(4,200,112,0.2)]",
-    label: "",
-    dotFill: "#04C870",
-    dotInline: { color: "#04c870" },
-  },
-  warning: {
-    pill: "bg-[rgba(232,151,2,0.2)]",
-    label: "",
-    dotFill: "#E89702",
-    dotInline: { color: "#E89702" },
-  },
-  neutral: {
-    pill: "bg-[#f0f0f0] dark:bg-white/10 text-[#b6b6b6] dark:text-grey-dark-500",
-    label: "",
-    dotFill: "currentColor",
-  },
+  // Open: new ticket awaiting the first staff response.
+  open: { dotColor: "#3167DD", label: "Open" },
+  // Pending: replied / waiting on someone — in flight. Reads as a calm
+  // neutral so it doesn't fight the green "done" states for attention.
+  pending: { dotColor: "#8F8F8F", label: "Pending" },
+  // Legacy mid-conversation state — kept so historical tickets render
+  // with the same neutral treatment as Pending.
+  in_progress: { dotColor: "#8F8F8F", label: "In Progress" },
+  // Resolved & Closed both read as "the ticket is done" — share the same
+  // green dot so the table doesn't read as if Closed were a third
+  // failure-shaped state. Anything truly unknown falls through to the
+  // grey fallback below.
+  resolved: { dotColor: "#04C870", label: "Resolved" },
+  closed: { dotColor: "#04C870", label: "Closed" },
 };
 
 function Dot({ fill }: { fill: string }) {
@@ -84,38 +73,35 @@ export default function StatusBadge({
   const key = String(status ?? "")
     .toLowerCase()
     .replace(/[\s-]+/g, "_");
+  // Fallback for unknown server values: title-case whatever arrived and
+  // colour the dot grey, matching the "Closed" treatment.
   const cfg: Config = STATUS_CONFIG[key] ?? {
-    tone: "neutral",
-    label: String(status ?? "—"),
+    dotColor: "#8F8F8F",
+    label: status
+      ? String(status).charAt(0).toUpperCase() +
+        String(status).slice(1).toLowerCase()
+      : "—",
   };
-  const tone = TONE_CLASSES[cfg.tone];
 
   // Inline variant — drops the pill background so the badge can sit
   // inside other chrome (e.g. the first-message header strip).
   if (textVersion) {
     return (
-      <span
-        className={cn("inline-flex items-center gap-[5px]", tone.label)}
-        style={tone.dotInline}
-      >
-        <Dot fill={tone.dotFill} />
-        <span className="text-[10px] font-semibold leading-none tracking-[-0.2px]">
+      <span className="inline-flex items-center gap-1">
+        <Dot fill={cfg.dotColor} />
+        <span className="text-[10px] font-semibold leading-none tracking-[-0.2px] text-grey-10 dark:text-grey-light-100">
           {cfg.label}
         </span>
       </span>
     );
   }
 
+  /* Figma spec: 20px tall, 4px / 8px padding, 49px radius, 4px gap, neutral
+   * #EFEFEF pill. The dot is the only piece that carries status colour. */
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-[5px] px-[8.8px] py-[5px] rounded-full flex-shrink-0",
-        tone.pill
-      )}
-      style={tone.dotInline}
-    >
-      <Dot fill={tone.dotFill} />
-      <span className="text-[10px] font-semibold leading-none tracking-[-0.2px]">
+    <span className="inline-flex h-[20px] items-center gap-[4px] px-[8px] py-[4px] rounded-[49px] flex-shrink-0 bg-[#EFEFEF] dark:bg-white/10">
+      <Dot fill={cfg.dotColor} />
+      <span className="text-[10px] font-semibold leading-none tracking-[-0.2px] text-grey-10 dark:text-grey-light-100">
         {cfg.label}
       </span>
     </span>
