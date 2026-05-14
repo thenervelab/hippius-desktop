@@ -1891,6 +1891,47 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
     debug!("{} [{}]: {}/{} bytes, path: {:?}", dir_name, ctx.label, bytes, total, path);
 }
 
+/// Fire-and-forget: persist the planner's view of pending uploads to the
+/// `sync_intent` table.
+///
+/// Called from `build_plan_ready_callback` once per sync cycle. The intent
+/// manifest is a pure UX overlay used by the sync widget to render
+/// "5 GB of 10 GB" across app restarts — it is NOT load-bearing for sync
+/// correctness. Failures (no logged-in user, missing pool, SQLite error)
+/// are logged and dropped; the next plan-ready call will replay the same
+/// uploads.
+///
+/// Ownership: all captures are owned (`AppHandle` is `Clone` and cheap;
+/// `label` and `plan_uploads` are moved in). The spawned future is
+/// `'static`, satisfying `tokio::spawn`'s `Send + 'static` bound.
+fn spawn_record_intent_plan(app: AppHandle, label: String, plan_uploads: Vec<(String, u64)>) {
+    tokio::spawn(async move {
+        use tauri::Manager;
+        let state: tauri::State<'_, crate::app_state::AppState> = app.state();
+        let account_id = match state.current_account_id() {
+            Ok(id) => id,
+            Err(e) => {
+                // Not logged in (or auth mutex poisoned). The widget overlay
+                // is a UX nicety, not load-bearing — drop rather than emit a
+                // noisy error. Next plan-ready after login replays uploads.
+                debug!(label = %label, error = %e, "skipping intent record_plan: no active account");
+                return;
+            }
+        };
+        let pool = match state.pool() {
+            Ok(p) => p.clone(),
+            Err(e) => {
+                warn!(label = %label, error = %e, "skipping intent record_plan: pool unavailable");
+                return;
+            }
+        };
+        let repo = crate::sync::intent::IntentRepo::new(pool);
+        if let Err(e) = repo.record_plan(&account_id, &label, &plan_uploads).await {
+            warn!(label = %label, error = %e, "intent record_plan failed");
+        }
+    });
+}
+
 /// Build the `on_sync_plan_ready` callback that merges the sync plan into the
 /// progress session and emits the `SYNC_PLAN_READY` event.
 fn build_plan_ready_callback(app: &AppHandle, label: Arc<str>, sync: &Arc<SyncRunner>) -> hcfs_client::sync::SyncPlanReadyFn {
@@ -1898,6 +1939,15 @@ fn build_plan_ready_callback(app: &AppHandle, label: Arc<str>, sync: &Arc<SyncRu
     let sync = sync.clone();
     Arc::new(move |uploads, downloads, local_deletes, remote_deletes, renames| {
         sync.touch_progress_time();
+        // Persist the planner's view to the desktop-side intent manifest.
+        // Runs UNCONDITIONALLY — above the `total == 0` early-return —
+        // because an empty plan must still flush stale pending rows (see
+        // `IntentRepo::record_plan`'s "Empty input semantics" docstring).
+        // Logic is delegated to `spawn_record_intent_plan` so this closure
+        // stays under the project's 100-line per-function ceiling.
+        let plan_uploads: Vec<(String, u64)> = uploads.iter().map(|f| (f.path.clone(), f.size_bytes)).collect();
+        spawn_record_intent_plan(app.clone(), label.to_string(), plan_uploads);
+
         let total = uploads.len() + downloads.len() + local_deletes.len() + remote_deletes.len() + renames.len();
         if total == 0 {
             return;
