@@ -280,11 +280,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   //   - recent files (read-only): use the recent-files query flags
   //   - nested folder browsing: use the nested-listing hook's flags
   //   - root drive view: use the regular useUserFiles flags
-  const isLoading = isRecentFiles
-    ? isRecentFilesLoading
-    : isNested
-      ? nestedListing.isLoading
-      : isRegularFilesLoading;
+  // `isLoading` itself is computed *after* `useFilteredFiles` below so it
+  // can fold in `isFiltering`, which surfaces the debounce/IPC window
+  // during transitions like nested→root and sync-folder switches.
   const isFetching = isRecentFiles
     ? isRecentFilesFetching
     : isNested
@@ -328,13 +326,30 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // `useFilteredFiles` debounces fast typing so we don't IPC per keystroke.
   // In nested mode the listing is already scoped to one folder, so
   // `folderTab` is null (no second-pass label filter needed).
-  const filteredData = useFilteredFiles(allFilteredData, {
-    searchTerm,
-    fileTypes: filterState.fileTypes,
-    dateFilter: filterState.date,
-    fileSizes: filterState.fileSizes,
-    folderTab: isRecentFiles || isNested ? null : activeSyncFolderLabel,
-  });
+  // `isFiltering` is true while the IPC for the current inputs hasn't
+  // landed yet — folded into the loading derivation below so transitions
+  // like nested→root or sync-folder switches show the skeleton instead
+  // of the previous filter result.
+  const { data: filteredData, isFiltering } = useFilteredFiles(
+    allFilteredData,
+    {
+      searchTerm,
+      fileTypes: filterState.fileTypes,
+      dateFilter: filterState.date,
+      fileSizes: filterState.fileSizes,
+      folderTab: isRecentFiles || isNested ? null : activeSyncFolderLabel,
+    },
+  );
+
+  // Folded into `isLoading` so transitions where the underlying dataset
+  // swaps — nested→root navigation, switching `activeSyncFolderLabel`
+  // from the Local cards — surface the skeleton instead of the previous
+  // filter result during the ~150ms debounce + IPC window.
+  const isLoading = isRecentFiles
+    ? isRecentFilesLoading || isFiltering
+    : isNested
+      ? nestedListing.isLoading || isFiltering
+      : isRegularFilesLoading || isFiltering;
 
   // Infinite scroll state for list and card views
   const { visibleData, hasMore, loadMore, resetScroll } =
