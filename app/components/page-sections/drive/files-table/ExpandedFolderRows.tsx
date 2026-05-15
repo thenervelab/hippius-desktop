@@ -31,6 +31,7 @@ import { ImageDialogTrigger } from "./ImageDialog";
 import { PdfDialogTrigger } from "./PdfDialog";
 import { FolderRowsSkeleton } from "./FilesTableSkeleton";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const MAX_INLINE_DEPTH = 8;
@@ -459,7 +460,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                 if (isSelectionMode && canSelect) {
                   event.preventDefault();
                   event.stopPropagation();
-                  handleToggleChild();
+                  preserveClosestScrollPosition(target, handleToggleChild);
                 }
               }}
             >
@@ -486,7 +487,14 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                         onClick={(event) => {
                           event.preventDefault();
                           event.stopPropagation();
-                          handleToggleSubfolder(childFile, childRelativePath);
+                          preserveClosestScrollPosition(
+                            event.currentTarget,
+                            () =>
+                              handleToggleSubfolder(
+                                childFile,
+                                childRelativePath,
+                              ),
+                          );
                         }}
                         className="folder-expander-area flex size-5 items-center justify-center rounded text-grey-60 transition-colors hover:text-grey-20 dark:text-grey-dark-700 dark:hover:text-grey-dark-200"
                         aria-label={

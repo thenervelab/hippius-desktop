@@ -3,7 +3,6 @@ import React, {
   useState,
   useMemo,
   useEffect,
-  useLayoutEffect,
   useCallback,
   memo,
   useRef,
@@ -63,37 +62,12 @@ import { revealFile } from "@/lib/utils/revealFile";
 import { macosNameCmp } from "@/lib/utils/fileSort";
 import ExpandedFolderRows from "./ExpandedFolderRows";
 import { NameCellExpander } from "./FolderRail";
+import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
 
 import { toast } from "sonner";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserFile>();
-
-type ScrollTarget = Window | HTMLElement;
-
-const isScrollableElement = (element: HTMLElement) => {
-  const style = window.getComputedStyle(element);
-  const overflowY = style.overflowY;
-  const overflowX = style.overflowX;
-  const canScrollY =
-    (overflowY === "auto" || overflowY === "scroll") &&
-    element.scrollHeight > element.clientHeight;
-  const canScrollX =
-    (overflowX === "auto" || overflowX === "scroll") &&
-    element.scrollWidth > element.clientWidth;
-  return canScrollY || canScrollX;
-};
-
-const getScrollTarget = (start: HTMLElement | null): ScrollTarget => {
-  let current = start;
-  while (current) {
-    if (isScrollableElement(current)) {
-      return current;
-    }
-    current = current.parentElement;
-  }
-  return window;
-};
 
 /**
  * Identity key for an item currently mid-deletion. Files carry their
@@ -460,11 +434,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       classifyVisualSelection,
       clearAggregateSelection,
     } = useFolderAggregateSelection();
-    const pendingSelectionScrollRef = useRef<{
-      target: ScrollTarget;
-      x: number;
-      y: number;
-    } | null>(null);
 
     // State for captured files to delete (to handle timing issue with clearSelection)
     const [filesToDelete, setFilesToDelete] = useState<FormattedUserFile[]>([]);
@@ -638,49 +607,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       },
       [deleteFiles, addDeletingItems, removeDeletingItems],
     );
-
-    // The files page scrolls inside ResponsiveContent's overflow container,
-    // not always on `window`, so capture the real scroll parent before the click
-    // and restore that same target after selection updates.
-    const captureSelectionScrollPosition = useCallback(
-      (start: HTMLElement) => {
-        if (!isSelectionMode) return;
-        const target = getScrollTarget(start);
-        const isWindowTarget = target instanceof Window;
-        pendingSelectionScrollRef.current = {
-          target,
-          x: isWindowTarget ? target.scrollX : target.scrollLeft,
-          y: isWindowTarget ? target.scrollY : target.scrollTop,
-        };
-      },
-      [isSelectionMode],
-    );
-
-    useLayoutEffect(() => {
-      const snapshot = pendingSelectionScrollRef.current;
-      if (!snapshot) return;
-
-      pendingSelectionScrollRef.current = null;
-      const frameId = window.requestAnimationFrame(() => {
-        const { target } = snapshot;
-        if (target instanceof Window) {
-          if (target.scrollX !== snapshot.x || target.scrollY !== snapshot.y) {
-            target.scrollTo(snapshot.x, snapshot.y);
-          }
-          return;
-        }
-
-        if (
-          target.scrollLeft !== snapshot.x ||
-          target.scrollTop !== snapshot.y
-        ) {
-          target.scrollLeft = snapshot.x;
-          target.scrollTop = snapshot.y;
-        }
-      });
-
-      return () => window.cancelAnimationFrame(frameId);
-    }, [selectedFiles]);
 
     const createTableItems = useCallback(
       (
@@ -1619,7 +1545,9 @@ const FilesTable: FC<FilesTableProps> = memo(
                   if (isSelectionMode && canSelectRow) {
                     e.preventDefault();
                     e.stopPropagation();
-                    handleToggleTopLevelRow(rowData);
+                    preserveClosestScrollPosition(target, () => {
+                      handleToggleTopLevelRow(rowData);
+                    });
                   }
                 }}
               >
@@ -1717,12 +1645,7 @@ const FilesTable: FC<FilesTableProps> = memo(
 
     return (
       <div className="flex flex-col gap-y-8 relative">
-        <div
-          className="w-full relative"
-          onMouseDownCapture={(event) => {
-            captureSelectionScrollPosition(event.target as HTMLElement);
-          }}
-        >
+        <div className="w-full relative">
           <TableModule.TableWrapper
             className={cn(
               "duration-300 delay-300 bg-white border-grey-dark-100 rounded-[8px] dark:bg-black-600 dark:border-black-300",
@@ -1732,11 +1655,9 @@ const FilesTable: FC<FilesTableProps> = memo(
               // Recent Files keeps the standalone card look.
               !isRecentFiles && "rounded-none border-0 bg-transparent",
             )}
-            key={`table-${files?.length}-${isSelectionMode}`}
           >
             <TableModule.Table
               className="w-full table-fixed border-collapse"
-              key={`table-${isSelectionMode}`}
               style={{ borderSpacing: 0 }}
             >
               {tableColgroup}

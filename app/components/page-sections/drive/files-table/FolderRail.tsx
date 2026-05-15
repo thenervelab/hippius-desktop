@@ -3,6 +3,7 @@
 import React from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
 
 /**
  * Inline chevron slot rendered at the start of every Name cell.
@@ -52,7 +53,9 @@ export const NameCellExpander = ({
       onClick={(event) => {
         event.preventDefault();
         event.stopPropagation();
-        onToggle?.();
+        preserveClosestScrollPosition(event.currentTarget, () => {
+          onToggle?.();
+        });
       }}
       className={cn(
         "folder-expander-area flex size-5 shrink-0 items-center justify-center rounded",
