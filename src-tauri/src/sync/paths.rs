@@ -48,9 +48,7 @@ pub struct SyncPathResult {
 /// doesn't exist (e.g. during validation of a path the user just typed),
 /// preserving the prefix-matching semantics tested by the unit tests below.
 async fn validate_no_path_overlap(new_path: &Path, new_label: &str, existing: &[(String, String)]) -> Result<()> {
-    let canonical_new = tokio::fs::canonicalize(new_path)
-        .await
-        .unwrap_or_else(|_| new_path.to_path_buf());
+    let canonical_new = tokio::fs::canonicalize(new_path).await.unwrap_or_else(|_| new_path.to_path_buf());
 
     for (label, path_str) in existing {
         if label == new_label {
@@ -290,6 +288,32 @@ mod label_tests {
     }
 }
 
+/// Look up the drive label for a given local sync-root `path`.
+///
+/// Used by IPC commands in `files.rs` (`add_file`, `add_folder`,
+/// `add_files`) to resolve the FE-supplied `sync_path` into the
+/// per-label key used by `UploadProcessingState` (and any other
+/// per-drive state going forward).
+///
+/// Returns `Ok(Some(label))` when a row exists, `Ok(None)` when no
+/// row matches — callers gracefully degrade to a no-op rather than
+/// surfacing a hard error (the FE may have invoked this IPC during
+/// a brief teardown window after the drive's row was removed).
+///
+/// # Errors
+///
+/// Returns `Err` only when the SQL query itself fails (DB locked,
+/// connection lost). Missing rows are an `Ok(None)` outcome.
+pub(crate) async fn label_for_sync_path(pool: &SqlitePool, account_id: &str, sync_path: &str) -> Result<Option<String>> {
+    let owner = account_key(account_id);
+    let label: Option<String> = sqlx::query_scalar("SELECT label FROM sync_paths WHERE owner = ? AND path = ? LIMIT 1")
+        .bind(&owner)
+        .bind(sync_path)
+        .fetch_optional(pool)
+        .await?;
+    Ok(label)
+}
+
 /// Set the `is_paused` flag for a sync path in the DB.
 pub(crate) async fn set_sync_path_paused(pool: &SqlitePool, account_id: &str, label: &str, paused: bool) -> Result<()> {
     let owner = account_key(account_id);
@@ -357,7 +381,11 @@ mod tests {
     #[tokio::test]
     async fn sibling_paths_are_allowed() {
         let existing = pairs(&[("photos", "/home/user/Photos")]);
-        assert!(validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing).await.is_ok());
+        assert!(
+            validate_no_path_overlap(Path::new("/home/user/Documents"), "docs", &existing)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -379,7 +407,11 @@ mod tests {
     #[tokio::test]
     async fn same_label_skips_self() {
         let existing = pairs(&[("docs", "/home/user/Documents")]);
-        assert!(validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "docs", &existing).await.is_ok());
+        assert!(
+            validate_no_path_overlap(Path::new("/home/user/Documents/Work"), "docs", &existing)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

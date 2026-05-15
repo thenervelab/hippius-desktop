@@ -1,3 +1,4 @@
+import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
 import { useInvokeQuery } from "./useInvokeQuery";
 
 /**
@@ -28,19 +29,16 @@ export function useDriveStorageStats() {
     command: "get_drive_storage_stats",
     queryKey: (addr) => [DRIVE_STORAGE_STATS_QUERY_KEY, addr],
     options: {
-      // The indexer ingests new shards asynchronously and can run
-      // hours behind the chain when load spikes (observed 26h on
-      // 2026-05-06). We can't fix the lag, but we can make sure the
-      // tile is never the bottleneck once the indexer catches up:
-      //   * staleTime: 0 — every refetch trigger actually refetches.
-      //   * refetchOnWindowFocus — refocusing the desktop after a
-      //     break pulls fresh totals without a manual reload.
-      //   * refetchInterval: 30 s — gentle background poll so an
-      //     idle home page eventually shows the new numbers without
-      //     the user touching anything.
+      // The indexer ingests new shards asynchronously and can run hours
+      // behind the chain when load spikes (observed 26h on 2026-05-06).
+      // We can't fix the lag, but the tile must never be the bottleneck
+      // once the indexer catches up: staleTime 0 so every trigger
+      // refetches, focus refetch for the desktop-resume case, and a
+      // block-cadence poll (LIVE_DATA_REFRESH_MS) so an idle home page
+      // shows new totals within one block of the indexer catching up.
       staleTime: 0,
       refetchOnWindowFocus: true,
-      refetchInterval: 30_000,
+      refetchInterval: LIVE_DATA_REFRESH_MS,
     },
   });
 }

@@ -7,6 +7,7 @@ import ProfileCard from "@/components/dashboard-title-wrapper/ProfileCard";
 import BlockChainStats from "@/components/dashboard-title-wrapper/BlockChainStats";
 import ConflictsBanner from "@/components/ui/ConflictsBanner";
 import MigrationBanner from "@/components/ui/MigrationBanner";
+import CreditsExhaustedBanner from "@/components/billing/CreditsExhaustedBanner";
 import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert";
 
 export default function ResponsiveContent({
@@ -35,6 +36,7 @@ export default function ResponsiveContent({
           </div>
           <ConflictsBanner />
           <MigrationBanner />
+          <CreditsExhaustedBanner />
           {/* `SyncReauthRequiredAlert` auto-renders null unless Rust's
               `restore_session` flagged `sync_requires_reauth = true`
               (keychain-miss for a mnemonic user). Mounting it here in

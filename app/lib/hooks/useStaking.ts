@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { useWalletAuth } from '@/app/lib/wallet-auth-context';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { invoke } from '@tauri-apps/api/core';
+import { LIVE_DATA_REFRESH_MS } from '@/lib/constants';
 
 interface UnbondingPeriod {
     /** Raw planck amount as a decimal-digit string (full precision). */
@@ -59,7 +60,12 @@ export const useStaking = () => {
     const { data, isLoading, error, refetch } = useQuery<StakingInfoResult>({
         queryKey: ['staking-info', polkadotAddress],
         enabled: !!polkadotAddress,
-        refetchInterval: 30_000,
+        // Bonded/rewards/unbonding move every block; poll at block
+        // cadence so stake screens track the chain in step with the
+        // wallet balance (which shares the same constant).
+        staleTime: 0,
+        refetchOnWindowFocus: true,
+        refetchInterval: LIVE_DATA_REFRESH_MS,
         queryFn: () => invoke<StakingInfoResult>('get_staking_info'),
     });
 

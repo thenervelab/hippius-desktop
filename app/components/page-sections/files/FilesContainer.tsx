@@ -48,6 +48,7 @@ import {
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import { SyncConnectivityAlert } from "@/components/ui/SyncConnectivityAlert";
+import { MetadataStaleAlert } from "@/components/ui/MetadataStaleAlert";
 import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
 import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
 import {
@@ -906,6 +907,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
               on every authenticated route (not just /files). */}
           <div className="mb-4 space-y-2">
             <SyncConnectivityAlert variant={isRecentFiles ? "compact" : "banner"} />
+            {!isRecentFiles && <MetadataStaleAlert label={selectedFolderTab} />}
           </div>
 
           <FilesHeader

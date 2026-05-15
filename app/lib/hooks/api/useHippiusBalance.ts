@@ -1,3 +1,4 @@
+import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
 import { useInvokeQuery } from "./useInvokeQuery";
 
 /**
@@ -42,7 +43,11 @@ export function useHippiusBalance() {
     queryKey: (addr) => ["hippius-balance", addr],
     params: (polkadotAddress) => ({ address: polkadotAddress }),
     options: {
-      refetchInterval: 30_000,
+      // Balance changes every block (transfers, staking, fees); poll at
+      // block cadence so the wallet header tracks the chain.
+      staleTime: 0,
+      refetchOnWindowFocus: true,
+      refetchInterval: LIVE_DATA_REFRESH_MS,
       select: (balance) => {
         try {
           return {

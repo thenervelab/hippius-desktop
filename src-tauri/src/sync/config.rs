@@ -201,6 +201,10 @@ pub(crate) fn build_hcfs_config(server_url: &str, bearer_token: &str, account_id
         billing_bypass_token: None,
         ss58_address: account_id.to_string(),
         folder_hash: folder_hash.to_string(),
+        // `None` selects hcfs-client's `DEFAULT_READ_TIMEOUT_SECS` (60s).
+        // The desktop has no reason to override yet — set explicitly only
+        // if a deployment profile needs a different per-read deadline.
+        read_timeout_ms: None,
     }
 }
 
