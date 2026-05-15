@@ -427,10 +427,14 @@ impl IntentRepo {
         &self,
         account_id: &str,
     ) -> Result<IntentTotals, IntentError> {
-        // One index scan over (account_id, completed_at_ms) — same covering
-        // index used by `totals_for_drive`. The `WHERE` filters by
-        // account_id only; the drive_label column is left unrestricted so
-        // SQLite walks every (account_id, *) entry.
+        // The `WHERE` filters by account_id only (drive_label left
+        // unrestricted), so SQLite seeks on the leftmost prefix of
+        // idx_sync_intent_drive (account_id, …) and walks every
+        // (account_id, *) entry. NOT a covering scan: size_bytes is not
+        // in the index, so SUM() costs a rowid lookup per matched row.
+        // Acceptable because the per-account row count is bounded (one
+        // row per queued file) and this runs off the hot path — one
+        // detached query per snapshot emit, never per chunk-tick.
         let row: (i64, i64, i64, i64) = sqlx::query_as(
             "SELECT
                 COUNT(*)                                                                AS total_files,
@@ -471,9 +475,11 @@ impl IntentRepo {
         account_id: &str,
         drive_label: &str,
     ) -> Result<IntentTotals, IntentError> {
-        // Each aggregate runs in a single index scan over
-        // (account_id, drive_label, completed_at_ms) — the covering index
-        // declared alongside the table.
+        // Each aggregate runs as one index scan over the full
+        // idx_sync_intent_drive key (account_id, drive_label,
+        // completed_at_ms). NOT covering: size_bytes is not in the
+        // index, so SUM() costs a rowid lookup per matched row —
+        // bounded by the per-drive queued-file count, so acceptable.
         let row: (i64, i64, i64, i64) = sqlx::query_as(
             "SELECT
                 COUNT(*)                                                                AS total_files,
