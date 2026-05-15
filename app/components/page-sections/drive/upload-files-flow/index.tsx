@@ -1,7 +1,9 @@
 // Unified file upload flow component — handles both root-level uploads and folder-targeted uploads.
 import { FC, useState, useEffect, useCallback } from "react";
 import useFilesUpload from "@/lib/hooks/useFilesUpload";
-import { Icons, CardButton } from "@/components/ui";
+import { Icons, Button } from "@/components/ui";
+import { ArrowRight } from "lucide-react";
+import { cn } from "@/lib/utils";
 import FileDropzone from "./FileDropzone";
 import { useSetAtom, useAtomValue } from "jotai";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
@@ -409,15 +411,15 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       {/* Selected files list */}
       {files.length > 0 && (
         <div className="mt-4">
-          <label className="text-sm font-medium text-grey-50 mb-1.5 block">
+          <label className="mb-1.5 block text-sm font-medium text-grey-50 dark:text-grey-dark-600">
             Selected File{files.length > 1 ? "s" : ""}
           </label>
-          <div className="bg-grey-90 max-h-[12.5rem] overflow-y-auto custom-scrollbar-thin pr-2 rounded-[0.5rem]">
-            <div className="flex items-center font-medium px-2 gap-x-3 pr-1.5 py-1.5">
-              <div className="text-grey-10 flex items-center justify-start w-0 grow">
+          <div className="max-h-[12.5rem] overflow-y-auto custom-scrollbar-thin rounded-[8px] border border-grey-80 bg-grey-90 pr-2 dark:border-[#313131] dark:bg-[#1a1a1a]">
+            <div className="flex items-center gap-x-3 px-2 pr-1.5 py-1.5 font-medium">
+              <div className="flex w-0 grow items-center justify-start text-grey-10 dark:text-white">
                 <div className="w-fit truncate">{files[0].name}</div>
                 {files.length > 1 && !revealFiles && (
-                  <div className="text-grey-60 ml-1 mr-auto min-w-fit p-0.5 px-[0.1875rem] border rounded-[0.125rem] border-grey-80 text-[0.625rem]">
+                  <div className="ml-1 mr-auto min-w-fit rounded-[0.125rem] border border-grey-80 p-0.5 px-[0.1875rem] text-[0.625rem] text-grey-60 dark:border-[#3a3a3a] dark:text-grey-dark-600">
                     + {files.length - 1} More File
                     {files.length > 2 ? "s" : ""}
                   </div>
@@ -427,7 +429,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
                 {files.length > 1 && (
                   <button
                     onClick={() => setRevealFiles((v) => !v)}
-                    className="flex items-center gap-x-2 text-sm text-grey-10"
+                    className="flex items-center gap-x-2 text-sm text-grey-10 dark:text-white"
                     disabled={isUploading}
                   >
                     {revealFiles ? "Hide" : "View"}{" "}
@@ -436,7 +438,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
                 )}
                 <button
                   onClick={() => removeFile(0)}
-                  className="text-grey-60 hover:text-error-50"
+                  className="text-grey-60 hover:text-error-50 dark:text-grey-dark-600"
                   title="Remove file"
                   disabled={isUploading}
                 >
@@ -446,16 +448,16 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
             </div>
 
             {revealFiles && (
-              <div className="px-2 flex flex-col w-full gap-y-1 pb-1 font-medium text-grey-10">
+              <div className="flex w-full flex-col gap-y-1 px-2 pb-1 font-medium text-grey-10 dark:text-white">
                 {files.slice(1).map((file, i) => (
                   <div
                     key={file.path || file.name}
-                    className="w-full flex items-center justify-between"
+                    className="flex w-full items-center justify-between"
                   >
                     <div className="w-0 grow truncate">{file.name}</div>
                     <button
                       onClick={() => removeFile(i + 1)}
-                      className="ml-2 text-grey-60 hover:text-error-50 flex-shrink-0"
+                      className="ml-2 flex-shrink-0 text-grey-60 hover:text-error-50 dark:text-grey-dark-600"
                       title="Remove file"
                       disabled={isUploading}
                     >
@@ -469,40 +471,48 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
         </div>
       )}
 
-
-
       {/* Progress bar — folder mode only */}
       {isFolder && isUploading && (
         <div className="mt-3">
-          <div className="w-full h-2 bg-grey-80 rounded-full overflow-hidden">
+          <div className="w-full h-2 bg-grey-80 dark:bg-[#313131] rounded-full overflow-hidden">
             <div
               className="h-full bg-primary-50 transition-all duration-300"
               style={{ width: `${uploadProgress}%` }}
             />
           </div>
-          <div className="mt-1 text-center text-sm text-grey-40">
+          <div className="mt-1 text-center text-sm text-grey-40 dark:text-grey-dark-600">
             {uploadProgress}% complete
           </div>
         </div>
       )}
 
-      {/* Action buttons */}
-      <div className="mt-3 flex flex-col gap-y-3">
-        <CardButton
+      {/* Action buttons — match SyncDestinationDialog Figma styling */}
+      <div className="mt-4 flex flex-col gap-3">
+        <Button
+          variant="primary"
+          size="auto"
           onClick={handleUpload}
           disabled={files.length === 0 || isUploading}
-          className="w-full"
+          loading={isUploading}
+          className={cn(
+            "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px] gap-2.5",
+            "border-[#3167DD] bg-[#3167DD] text-white",
+            "hover:bg-[#2454c4] hover:border-[#2454c4]",
+            "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
+          )}
         >
           {isUploading ? uploadingLabel : uploadLabel}
-        </CardButton>
-        <CardButton
+          {!isUploading && <ArrowRight className="size-4" />}
+        </Button>
+        <Button
+          variant="defaultStable"
+          size="auto"
           onClick={handleCancel}
-          className="w-full"
-          variant="secondary"
           disabled={isUploading}
+          className="h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]"
         >
           Cancel
-        </CardButton>
+        </Button>
       </div>
     </div>
   );

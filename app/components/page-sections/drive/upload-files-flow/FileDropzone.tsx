@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { cn } from "@/lib/utils";
-import { Icons, AbstractIconWrapper, P } from "@/components/ui";
+import { Icons, AbstractIconWrapper } from "@/components/ui";
 import { getLastBrowseDirectory, saveLastBrowseDirectory } from "@/lib/utils/userPreferencesDb";
 
 // Type for handling both file paths (from dialog) and browser Files (from drop)
@@ -113,37 +113,35 @@ const FileDropzone: FC<{
   return (
     <div
       className={cn(
-        "w-full h-full border rounded-[0.5rem] p-2 transition-colors duration-200",
-        isDragging
-          ? "border-primary-50 border-2 bg-primary-50/5"
-          : "border-grey-80"
+        "w-full h-full rounded-[8px] border p-2 transition-colors duration-200",
+        "border-grey-80 bg-white",
+        "dark:border-[#313131] dark:bg-[#1a1a1a]",
+        isDragging &&
+          "border-primary-50 dark:border-primary-50 bg-primary-50/5 dark:bg-primary-50/10"
       )}
     >
       <button
+        type="button"
         onClick={handleSelectFiles}
         className={cn(
-          "h-full w-full flex border border-dashed justify-center py-10 px-10 bg-white cursor-pointer hover:bg-grey-90 duration-300 rounded-[0.5rem]",
-          isDragging
-            ? "border-primary-50 bg-primary-50/10"
-            : "border-grey-80"
+          "h-full w-full flex flex-col items-center justify-center gap-3 rounded-[8px] border border-dashed px-6 py-6 cursor-pointer transition-colors duration-200",
+          "border-grey-80 bg-white hover:bg-grey-light-300",
+          "dark:border-[#313131] dark:bg-[#1a1a1a] dark:hover:bg-[#222222]",
+          isDragging &&
+            "border-primary-50 dark:border-primary-50 bg-primary-50/10"
         )}
       >
-        <div className="flex flex-col items-center">
-          <AbstractIconWrapper className="size-8">
-            <Icons.Box className="relative" />
-          </AbstractIconWrapper>
+        <AbstractIconWrapper className="size-10">
+          <Icons.Box className="relative size-4" />
+        </AbstractIconWrapper>
 
-          <div className="mt-2 flex flex-col">
-            <P className="font-semibold text-grey-10" size="md">
-              Upload a File Here
-            </P>
-            <P
-              size="sm"
-              className="mt-2 text-center text-grey-60 max-w-[16.5rem]"
-            >
-              Drag and drop or click to add one or more files here to upload
-            </P>
-          </div>
+        <div className="flex flex-col items-center gap-1">
+          <span className="font-geist text-base font-medium leading-[22px] tracking-[-0.32px] text-grey-10 dark:text-white">
+            Upload a File Here
+          </span>
+          <span className="font-geist text-sm font-medium leading-5 tracking-[-0.28px] text-center text-grey-60 dark:text-grey-dark-600 max-w-[262px]">
+            Drag and drop or click to add one or more files here to upload
+          </span>
         </div>
       </button>
     </div>
