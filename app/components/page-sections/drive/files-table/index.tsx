@@ -69,20 +69,20 @@ const columnHelper = createColumnHelper<FormattedUserFile>();
 
 // Default widths when NOT in selection mode (no selection column)
 const DEFAULT_COLUMN_WIDTHS_NO_SELECTION = {
-  name: 37,
+  name: 58,
   size: 12,
-  date_uploaded: 30,
-  type: 16,
+  date_uploaded: 15,
+  type: 10,
   actions: 5,
 };
 
 const MIN_COLUMN_WIDTHS = {
   selection: 10,
   name: 23,
-  size: 15,
-  date_uploaded: 28,
-  type: 20,
-  actions: 10,
+  size: 10,
+  date_uploaded: 14,
+  type: 10,
+  actions: 5,
 };
 
 const normalizeBaseColumnWidths = (value: Record<string, number>) => {
@@ -112,7 +112,7 @@ const normalizeBaseColumnWidths = (value: Record<string, number>) => {
 const getStoredBaseColumnWidths = (isRecentFiles: boolean) => {
   if (typeof window === "undefined") return DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
   try {
-    const key = `filesTable_baseColumnWidths_${isRecentFiles ? "recent" : "main"}`;
+    const key = `filesTable_baseColumnWidths_v2_${isRecentFiles ? "recent" : "main"}`;
     const stored = localStorage.getItem(key);
     if (stored) {
       return normalizeBaseColumnWidths(JSON.parse(stored));
@@ -133,7 +133,7 @@ const saveBaseColumnWidths = (
     const baseWidths = { ...columnWidths };
     delete baseWidths.selection;
 
-    const key = `filesTable_baseColumnWidths_${isRecentFiles ? "recent" : "main"}`;
+    const key = `filesTable_baseColumnWidths_v2_${isRecentFiles ? "recent" : "main"}`;
     localStorage.setItem(key, JSON.stringify(baseWidths));
   } catch {}
 };
@@ -672,9 +672,9 @@ const FilesTable: FC<FilesTableProps> = memo(
           : false;
         const canExpand = Boolean(
           file.isFolder &&
-            enableFolderExpander &&
-            file.label &&
-            drivePaths[file.label],
+          enableFolderExpander &&
+          file.label &&
+          drivePaths[file.label],
         );
         return (
           <div className="flex items-center min-w-0 gap-2 py-[5px] pl-2 pr-2">
@@ -683,7 +683,9 @@ const FilesTable: FC<FilesTableProps> = memo(
                 expanded={isExpanded}
                 interactive={canExpand}
                 isFolder={Boolean(file.isFolder)}
-                onToggle={canExpand ? () => toggleFolderExpanded(folderKey) : undefined}
+                onToggle={
+                  canExpand ? () => toggleFolderExpanded(folderKey) : undefined
+                }
               />
             ) : null}
             <div className="min-w-0 flex-1">{children}</div>
@@ -1119,7 +1121,14 @@ const FilesTable: FC<FilesTableProps> = memo(
             ))}
           </TableModule.Tr>
         )),
-      [table, columnWidths, handleResizeStart, justResized, sorting, hasAnyFolder],
+      [
+        table,
+        columnWidths,
+        handleResizeStart,
+        justResized,
+        sorting,
+        hasAnyFolder,
+      ],
     );
 
     const columnCount = useMemo(
@@ -1134,7 +1143,14 @@ const FilesTable: FC<FilesTableProps> = memo(
     // every row inherits the colgroup directly and column borders line
     // up exactly regardless of nesting depth or resize state.
     const orderedColumnIds = useMemo(() => {
-      const baseOrder = ["selection", "name", "size", "date_uploaded", "type", "actions"];
+      const baseOrder = [
+        "selection",
+        "name",
+        "size",
+        "date_uploaded",
+        "type",
+        "actions",
+      ];
       return baseOrder.filter((id) => columnWidths[id] !== undefined);
     }, [columnWidths]);
 

@@ -14,10 +14,10 @@ interface FilesTableSkeletonProps {
 // the skeleton sits at the same column widths as the real table — when the
 // data loads the columns don't shift.
 const COLUMN_WIDTHS: Record<string, number> = {
-  name: 37,
-  size: 12,
-  date_uploaded: 30,
-  type: 16,
+  name: 47,
+  size: 13,
+  date_uploaded: 18,
+  type: 17,
   actions: 5,
 };
 
