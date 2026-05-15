@@ -46,13 +46,26 @@ const FileDropzone: FC<{
     }
   }, [setFiles]);
 
-  // Listen to Tauri native drag-drop events for the dropzone
+  // Listen to Tauri native drag-drop events for the dropzone.
+  // `cancelled` guards against the async-await + effect-cleanup race
+  // where an `await listen(...)` resolves after cleanup ran, leaking a
+  // stale listener bound to a previous `setFiles` reference.
   useEffect(() => {
+    let cancelled = false;
     const unlisteners: Array<() => void> = [];
+
+    const safePush = (un: () => void) => {
+      if (cancelled) {
+        un();
+        return;
+      }
+      unlisteners.push(un);
+    };
 
     (async () => {
       try {
         const { listen } = await import("@tauri-apps/api/event");
+        if (cancelled) return;
 
         const unDragEnter = await listen<{ paths: string[] }>(
           "tauri://drag-enter",
@@ -60,7 +73,8 @@ const FileDropzone: FC<{
             setIsDragging(true);
           }
         );
-        unlisteners.push(unDragEnter);
+        safePush(unDragEnter);
+        if (cancelled) return;
 
         const unDragOver = await listen(
           "tauri://drag-over",
@@ -68,7 +82,8 @@ const FileDropzone: FC<{
             // Keep showing drag state
           }
         );
-        unlisteners.push(unDragOver);
+        safePush(unDragOver);
+        if (cancelled) return;
 
         const unDragDrop = await listen<{ paths: string[] }>(
           "tauri://drag-drop",
@@ -91,7 +106,8 @@ const FileDropzone: FC<{
             }
           }
         );
-        unlisteners.push(unDragDrop);
+        safePush(unDragDrop);
+        if (cancelled) return;
 
         const unDragLeave = await listen(
           "tauri://drag-leave",
@@ -99,13 +115,14 @@ const FileDropzone: FC<{
             setIsDragging(false);
           }
         );
-        unlisteners.push(unDragLeave);
+        safePush(unDragLeave);
       } catch (err) {
         console.error("[FileDropzone] Failed to register drag listeners:", err);
       }
     })();
 
     return () => {
+      cancelled = true;
       unlisteners.forEach((fn) => fn());
     };
   }, [setFiles]);

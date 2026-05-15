@@ -89,24 +89,43 @@ export default function FolderUploadDialog({
   // Tauri native drag-drop: accept exactly one dropped directory.
   // Listeners are only registered while the dialog is open so we don't
   // hijack drops in other surfaces.
+  //
+  // `cancelled` closes the async-await + cleanup race: if `open` flips
+  // back to false while an `await listen(...)` is in flight, the
+  // synchronous cleanup runs against an empty `unlisteners` array and
+  // the awaited listener leaks. The flag turns the late resolution into
+  // an immediate unregister.
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
     const unlisteners: Array<() => void> = [];
+
+    const safePush = (un: () => void) => {
+      if (cancelled) {
+        un();
+        return;
+      }
+      unlisteners.push(un);
+    };
 
     (async () => {
       try {
         const { listen } = await import("@tauri-apps/api/event");
+        if (cancelled) return;
         const { stat } = await import("@tauri-apps/plugin-fs");
+        if (cancelled) return;
 
         const unDragEnter = await listen("tauri://drag-enter", () => {
           setIsDragging(true);
         });
-        unlisteners.push(unDragEnter);
+        safePush(unDragEnter);
+        if (cancelled) return;
 
         const unDragLeave = await listen("tauri://drag-leave", () => {
           setIsDragging(false);
         });
-        unlisteners.push(unDragLeave);
+        safePush(unDragLeave);
+        if (cancelled) return;
 
         const unDragDrop = await listen<{ paths: string[] }>(
           "tauri://drag-drop",
@@ -139,7 +158,7 @@ export default function FolderUploadDialog({
             saveLastBrowseDirectory(first);
           },
         );
-        unlisteners.push(unDragDrop);
+        safePush(unDragDrop);
       } catch (err) {
         console.error(
           "[FolderUploadDialog] Failed to register drag listeners:",
@@ -149,6 +168,7 @@ export default function FolderUploadDialog({
     })();
 
     return () => {
+      cancelled = true;
       unlisteners.forEach((fn) => fn());
     };
   }, [open]);

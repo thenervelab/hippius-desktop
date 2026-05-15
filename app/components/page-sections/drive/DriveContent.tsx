@@ -129,13 +129,32 @@ const DriveContent: FC<DriveContentProps> = ({
     }
   }, [filteredData, fileDetailsFile, setFileDetailsFile]);
 
-  // Tauri native drag-and-drop via global event listeners
+  // Tauri native drag-and-drop via global event listeners.
+  //
+  // `cancelled` + the per-await guard exist because the effect's deps
+  // include `isSyncPathEmpty` / `isRecentFiles`. When those change while
+  // an `await listen(...)` is still in flight, the synchronous cleanup
+  // runs against an empty `unlisteners` array, then the awaited listener
+  // resolves and registers itself with the now-stale captured value.
+  // Without the guard, a "set up sync folder" toast leaks from the stale
+  // listener even after the real listener correctly opens the upload
+  // dialog.
   useEffect(() => {
+    let cancelled = false;
     const unlisteners: Array<() => void> = [];
+
+    const safePush = (un: () => void) => {
+      if (cancelled) {
+        un();
+        return;
+      }
+      unlisteners.push(un);
+    };
 
     (async () => {
       try {
         const { listen } = await import("@tauri-apps/api/event");
+        if (cancelled) return;
 
         console.log("[DragDrop] Registering global Tauri drag-drop listeners");
 
@@ -152,7 +171,8 @@ const DriveContent: FC<DriveContentProps> = ({
             setAnimateCloud(true);
           }, 200);
         });
-        unlisteners.push(unDragEnter);
+        safePush(unDragEnter);
+        if (cancelled) return;
 
         const unDragOver = await listen<{ position: { x: number; y: number } }>(
           "tauri://drag-over",
@@ -160,7 +180,8 @@ const DriveContent: FC<DriveContentProps> = ({
             // Keep showing drag state
           },
         );
-        unlisteners.push(unDragOver);
+        safePush(unDragOver);
+        if (cancelled) return;
 
         const unDragDrop = await listen<{
           paths: string[];
@@ -199,7 +220,8 @@ const DriveContent: FC<DriveContentProps> = ({
             addButtonRef.current.openWithPaths(paths);
           }
         });
-        unlisteners.push(unDragDrop);
+        safePush(unDragDrop);
+        if (cancelled) return;
 
         const unDragLeave = await listen("tauri://drag-leave", () => {
           console.log("[DragDrop] drag-leave event received");
@@ -210,7 +232,7 @@ const DriveContent: FC<DriveContentProps> = ({
             dragTimeoutRef.current = null;
           }
         });
-        unlisteners.push(unDragLeave);
+        safePush(unDragLeave);
 
         console.log("[DragDrop] All listeners registered successfully");
       } catch (err) {
@@ -222,6 +244,7 @@ const DriveContent: FC<DriveContentProps> = ({
     })();
 
     return () => {
+      cancelled = true;
       unlisteners.forEach((fn) => fn());
       if (dragTimeoutRef.current) {
         clearTimeout(dragTimeoutRef.current);
