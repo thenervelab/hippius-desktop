@@ -33,6 +33,12 @@ use tokio::net::TcpListener;
 use tauri_project_lib::app_state::AppState;
 use tauri_project_lib::auth::auth_session_repo::{UpsertSession, upsert};
 use tauri_project_lib::billing::eligibility::{InsufficientCreditsAction, require_eligible};
+// Each `require_eligible` call below uses `bytes = 0` because these
+// cases assert the static-threshold layer that is the floor for every
+// upload action regardless of payload size (legacy `> 0` semantics).
+// The bytes-priced layer is covered by the dedicated regression test
+// in `tests/hippius_eligibility_pricing.rs`, which spins up the same
+// mock billing API with carefully chosen byte counts.
 use tauri_project_lib::error::{AppError, NotReadyKind};
 
 /// Shared state for the mock balance endpoint. The credit value is
@@ -150,7 +156,7 @@ async fn require_eligible_enforces_thresholds_against_mock_billing_api() {
         InsufficientCreditsAction::FolderSync,
         InsufficientCreditsAction::VmCreation,
     ] {
-        let err = require_eligible(&state, account_id, action)
+        let err = require_eligible(&state, account_id, action, 0)
             .await
             .expect_err(&format!("zero balance must reject {action:?}"));
         match err {
@@ -167,16 +173,16 @@ async fn require_eligible_enforces_thresholds_against_mock_billing_api() {
     // client. The other three actions must pass.
     // -----------------------------------------------------------------
     *mock.balance.lock().unwrap() = "5".to_string();
-    require_eligible(&state, account_id, InsufficientCreditsAction::FileUpload)
+    require_eligible(&state, account_id, InsufficientCreditsAction::FileUpload, 0)
         .await
         .expect("5 credits passes FileUpload `> 0` gate");
-    require_eligible(&state, account_id, InsufficientCreditsAction::FolderUpload)
+    require_eligible(&state, account_id, InsufficientCreditsAction::FolderUpload, 0)
         .await
         .expect("5 credits passes FolderUpload `> 0` gate");
-    require_eligible(&state, account_id, InsufficientCreditsAction::FolderSync)
+    require_eligible(&state, account_id, InsufficientCreditsAction::FolderSync, 0)
         .await
         .expect("5 credits passes FolderSync `> 0` gate");
-    let err = require_eligible(&state, account_id, InsufficientCreditsAction::VmCreation)
+    let err = require_eligible(&state, account_id, InsufficientCreditsAction::VmCreation, 0)
         .await
         .expect_err("5 credits must NOT pass VmCreation ≥10 gate");
     assert!(
@@ -200,7 +206,7 @@ async fn require_eligible_enforces_thresholds_against_mock_billing_api() {
         InsufficientCreditsAction::FolderSync,
         InsufficientCreditsAction::VmCreation,
     ] {
-        require_eligible(&state, account_id, action)
+        require_eligible(&state, account_id, action, 0)
             .await
             .unwrap_or_else(|e| panic!("100 credits must pass {action:?}, got {e:?}"));
     }
@@ -211,12 +217,12 @@ async fn require_eligible_enforces_thresholds_against_mock_billing_api() {
     // (10 passes, 9.99 fails). The `> 0` actions also have to pass.
     // -----------------------------------------------------------------
     *mock.balance.lock().unwrap() = "10".to_string();
-    require_eligible(&state, account_id, InsufficientCreditsAction::VmCreation)
+    require_eligible(&state, account_id, InsufficientCreditsAction::VmCreation, 0)
         .await
         .expect("exactly 10 credits passes the VmCreation ≥10 gate");
 
     *mock.balance.lock().unwrap() = "9.99".to_string();
-    let err = require_eligible(&state, account_id, InsufficientCreditsAction::VmCreation)
+    let err = require_eligible(&state, account_id, InsufficientCreditsAction::VmCreation, 0)
         .await
         .expect_err("9.99 credits must NOT pass the VmCreation ≥10 gate");
     assert!(

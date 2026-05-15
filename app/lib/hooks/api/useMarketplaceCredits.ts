@@ -3,6 +3,7 @@ import {
   UseQueryResult,
   keepPreviousData,
 } from "@tanstack/react-query";
+import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
 import { useInvokeQuery } from "./useInvokeQuery";
 
 // Define types based on the indexer API response
@@ -65,6 +66,12 @@ export default function useMarketplaceCredits(
       limit,
     }),
     options: {
+      // Wallet-wide marketplace credit feed: same block-cadence poll as
+      // the drive-scoped tile so chart and tile never disagree. Caller
+      // `options` still win via the trailing spread.
+      staleTime: 0,
+      refetchOnWindowFocus: true,
+      refetchInterval: LIVE_DATA_REFRESH_MS,
       select: (data) => {
         return data.events.map((event) => ({
           blockNumber: event.block_number,

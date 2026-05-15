@@ -42,6 +42,23 @@ pub struct AppState {
     /// uploads. Drives the top-of-page processing banner. See
     /// `crate::sync::upload_processing`.
     pub upload_processing: std::sync::Arc<crate::sync::upload_processing::UploadProcessingState>,
+    /// Tracks the scan + remote-state-fetch + plan-build window for
+    /// file-watcher-initiated sync cycles. Drives the bottom-right
+    /// widget's "Preparing sync…" badge so the user has feedback
+    /// between `SyncStarted` and the first ProgressSnapshot with
+    /// files. IPC uploads use `upload_processing` instead — the two
+    /// surfaces are intentionally exclusive (the `SyncStarted`
+    /// handler suppresses `mark_preparing` when the banner is
+    /// already raised). See `crate::sync::preparing`.
+    pub preparing: std::sync::Arc<crate::sync::preparing::PreparingState>,
+    /// Per-label running count of `InsufficientBalance` per-file
+    /// failures in the current sync cycle. Read by the `FileFailed`
+    /// arm of the bridge to attach `file_count` to the
+    /// `hcfs_credits_exhausted` payload, cleared on every cycle
+    /// boundary (`SyncStarted`, `SyncStopped`, the non-cancel branch
+    /// of `SyncError`, and globally on `SyncReset`). See
+    /// `crate::sync::credits_exhausted`.
+    pub credits_exhausted: std::sync::Arc<crate::sync::credits_exhausted::CreditsExhaustedState>,
     /// Monotonically increasing counter, incremented on every
     /// `SyncStarted` event. The `UploadProcessingState` clear gate
     /// reads this to distinguish events from a cycle that began
@@ -129,6 +146,8 @@ impl AppState {
             oauth: OAuthState::new(),
             migration: MigrationState::new(),
             upload_processing: std::sync::Arc::new(crate::sync::upload_processing::UploadProcessingState::new()),
+            preparing: std::sync::Arc::new(crate::sync::preparing::PreparingState::new()),
+            credits_exhausted: std::sync::Arc::new(crate::sync::credits_exhausted::CreditsExhaustedState::new()),
             sync_session_epoch: AtomicU64::new(0),
             health_client,
             // Explicit timeouts. Without them a hung connection (e.g. a

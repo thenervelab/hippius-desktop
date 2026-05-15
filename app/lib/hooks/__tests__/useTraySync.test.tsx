@@ -830,3 +830,276 @@ describe("useTraySync — stalled completion shows Sync Complete", () => {
     unmount();
   });
 });
+
+// ── Preparing state transitions ────────────────────────────────────
+//
+// The Rust `apply_preparing_override` flips `widgetState="preparing"`
+// (and `widgetVisible=true`) on otherwise-invisible snapshots when a
+// file-watcher-triggered sync cycle is between `SyncStarted` and its
+// first session-populated snapshot. The tray must:
+//   1. Treat `widgetState==="preparing"` as `isActive` so the icon
+//      switches to the syncing variant.
+//   2. UNLATCH any previously-latched "Sync Complete" so the label
+//      transitions to "⟳ Preparing sync…" immediately instead of
+//      sticking on the old completion for the several seconds
+//      `scan_local_files`+`fetch_remote_state` runs.
+//   3. Render "⟳ Preparing sync…" as the header label.
+//
+// Pre-fix the tray's `isActive` derivation read `effectiveInProgress
+// || inProgressCount > 0 || (totalFiles > 0 && ...)`. For a preparing
+// snapshot all three are false (the session is empty), so `isActive`
+// stayed false, the latched completion never unwound, and the tray
+// read "✓ Sync Complete" while the user was waiting for their newly-
+// dropped folder to start uploading. This test pins the contract by
+// sequencing a completed snapshot then a preparing snapshot and
+// asserting the label flips.
+
+describe("useTraySync — latched complete → preparing transitions", () => {
+  type ListenCallback = (e: { payload: SyncSnapshot }) => void;
+
+  function installInvokeMock() {
+    vi.mocked(invoke).mockImplementation(
+      (async (cmd: string) => {
+        switch (cmd) {
+          case "sp_get_snapshot":
+            return { ...EMPTY_SNAPSHOT };
+          case "get_tray_menu_data":
+            return { loggedIn: true, credits: 100, substrateAddress: "addr" };
+          default:
+            return null;
+        }
+      }) as unknown as typeof invoke
+    );
+  }
+
+  function installListenMock(): { current: ListenCallback | null } {
+    const capture: { current: ListenCallback | null } = { current: null };
+    vi.mocked(listen).mockImplementation(
+      (async (event: string, cb: ListenCallback) => {
+        if (event === "sync_progress_snapshot") {
+          capture.current = cb;
+        }
+        return () => {
+          /* noop unsub */
+        };
+      }) as unknown as typeof listen
+    );
+    return capture;
+  }
+
+  /**
+   * Build a "completed sync" snapshot that the tray will latch (so
+   * subsequent empty snapshots don't immediately tear down the row
+   * set — see the existing latch logic in useTraySync.ts).
+   */
+  function makeCompletedSnapshot(startedAt: number): SyncSnapshot {
+    return {
+      ...EMPTY_SNAPSHOT,
+      isActive: false,
+      totalFiles: 5,
+      completedFiles: 5,
+      failedFiles: 0,
+      overallPercent: 100,
+      progressBytes: 100,
+      bytesExpected: 100,
+      startedAt,
+      completedAt: startedAt + 100,
+      widgetVisible: true,
+      widgetState: "completed",
+      statusVariant: "success",
+      effectiveInProgress: false,
+      effectiveCompleted: true,
+      syncedCount: 5,
+      actualTotal: 5,
+    };
+  }
+
+  /**
+   * Build a "preparing" snapshot — empty session, but the Rust
+   * override has flipped `widgetVisible=true` and
+   * `widgetState="preparing"` so the tray knows a file-watcher cycle
+   * has begun. `startedAt=null` mirrors production: at the moment
+   * `SyncStarted` fires the runner has not yet created a progress
+   * session, so the snapshot has no `started_at` to compare against.
+   */
+  function makePreparingSnapshot(): SyncSnapshot {
+    return {
+      ...EMPTY_SNAPSHOT,
+      isActive: false,
+      totalFiles: 0,
+      completedFiles: 0,
+      failedFiles: 0,
+      overallPercent: 0,
+      progressBytes: 0,
+      bytesExpected: 0,
+      startedAt: null,
+      completedAt: null,
+      widgetVisible: true,
+      widgetState: "preparing",
+      statusVariant: "progress",
+      effectiveInProgress: false,
+      effectiveCompleted: false,
+    };
+  }
+
+  it("flips tray label from '✓ Sync Complete' to '⟳ Preparing sync…' when a Finder-add lands after a completion", async () => {
+    installInvokeMock();
+    const listenerCapture = installListenMock();
+
+    const { unmount } = await setupHook();
+
+    await waitFor(() => {
+      expect(listenerCapture.current).not.toBeNull();
+      expect(menuRegistry.length).toBeGreaterThan(0);
+    });
+
+    const rootMenu = menuRegistry[0];
+
+    // Step 1: drive the tray to the latched-complete state. The
+    // listener fans this snapshot into `updateTraySyncLabel` which
+    // writes the header MenuItem; the latch capture also fires.
+    await act(async () => {
+      listenerCapture.current!({
+        payload: makeCompletedSnapshot(Date.now()),
+      });
+      for (let i = 0; i < 32; i++) {
+        await Promise.resolve();
+      }
+    });
+
+    await waitFor(async () => {
+      const items = await rootMenu.items();
+      const syncItem = items.find(
+        (i) =>
+          typeof i === "object" &&
+          i !== null &&
+          "id" in i &&
+          (i as { id?: string }).id === "sync"
+      ) as { text?: string } | undefined;
+      expect(syncItem?.text).toBe("✓ Sync Complete");
+    });
+
+    // Step 2: simulate the user dropping a folder via Finder. The
+    // Rust bridge fires SyncStarted → preparing.mark_preparing → an
+    // immediate emit_snapshot. That snapshot lands on the listener
+    // here with widgetState="preparing".
+    await act(async () => {
+      listenerCapture.current!({ payload: makePreparingSnapshot() });
+      for (let i = 0; i < 32; i++) {
+        await Promise.resolve();
+      }
+    });
+
+    // Step 3: the tray label must transition. Both invariants are
+    // load-bearing: the new label must be the preparing one, and the
+    // OLD "Sync Complete" must not still be showing (the bug shape
+    // before this fix).
+    await waitFor(async () => {
+      const items = await rootMenu.items();
+      const syncItem = items.find(
+        (i) =>
+          typeof i === "object" &&
+          i !== null &&
+          "id" in i &&
+          (i as { id?: string }).id === "sync"
+      ) as { text?: string } | undefined;
+      expect(syncItem?.text).toBe("⟳ Preparing sync…");
+      expect(syncItem?.text).not.toContain("Sync Complete");
+    });
+
+    unmount();
+  });
+
+  /**
+   * Regression: a no-op periodic sync cycle (nothing to upload —
+   * `Computed sync plan uploads=0 downloads=0`) emits SyncStarted
+   * (→ a brief "preparing" snapshot) then SyncCompleted, whose bridge
+   * arm clears the preparing set and emits a fresh, fully-idle
+   * snapshot (no session: widgetState!="preparing", totalFiles=0,
+   * completedFiles=0). `isCompleted` is false (nothing was synced) so
+   * the tray falls into the idle-teardown branch. That branch must
+   * also clear the sync HEADER — otherwise the "⟳ Preparing sync…"
+   * text set during the ~1s SyncStarted window is frozen in the tray
+   * forever (re-set, never cleared, every periodic cycle). This is
+   * the user-reported "stuck on Preparing sync… but nothing is
+   * syncing" bug.
+   */
+  function makeIdleSnapshot(): SyncSnapshot {
+    return {
+      ...EMPTY_SNAPSHOT,
+      isActive: false,
+      totalFiles: 0,
+      completedFiles: 0,
+      failedFiles: 0,
+      overallPercent: 0,
+      progressBytes: 0,
+      bytesExpected: 0,
+      startedAt: null,
+      completedAt: null,
+      widgetVisible: false,
+      widgetState: "idle",
+      statusVariant: "progress",
+      effectiveInProgress: false,
+      effectiveCompleted: false,
+    };
+  }
+
+  it("clears the tray header after a no-op cycle's idle snapshot (not stuck on 'Preparing sync…')", async () => {
+    installInvokeMock();
+    const listenerCapture = installListenMock();
+
+    const { unmount } = await setupHook();
+
+    await waitFor(() => {
+      expect(listenerCapture.current).not.toBeNull();
+      expect(menuRegistry.length).toBeGreaterThan(0);
+    });
+
+    const rootMenu = menuRegistry[0];
+
+    // SyncStarted of a no-op cycle → preparing override snapshot.
+    await act(async () => {
+      listenerCapture.current!({ payload: makePreparingSnapshot() });
+      for (let i = 0; i < 32; i++) {
+        await Promise.resolve();
+      }
+    });
+
+    await waitFor(async () => {
+      const items = await rootMenu.items();
+      const syncItem = items.find(
+        (i) =>
+          typeof i === "object" &&
+          i !== null &&
+          "id" in i &&
+          (i as { id?: string }).id === "sync"
+      ) as { text?: string } | undefined;
+      expect(syncItem?.text).toBe("⟳ Preparing sync…");
+    });
+
+    // SyncCompleted of the no-op cycle → bridge cleared preparing and
+    // emitted a fully-idle snapshot. The tray must remove the sync
+    // header (no "sync" item), exactly as the logout cleanup path
+    // does via updateTraySyncLabel(null).
+    await act(async () => {
+      listenerCapture.current!({ payload: makeIdleSnapshot() });
+      for (let i = 0; i < 32; i++) {
+        await Promise.resolve();
+      }
+    });
+
+    await waitFor(async () => {
+      const items = await rootMenu.items();
+      const syncItem = items.find(
+        (i) =>
+          typeof i === "object" &&
+          i !== null &&
+          "id" in i &&
+          (i as { id?: string }).id === "sync"
+      ) as { text?: string } | undefined;
+      expect(syncItem).toBeUndefined();
+    });
+
+    unmount();
+  });
+});

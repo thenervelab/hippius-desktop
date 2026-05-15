@@ -34,7 +34,11 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 // Mock SyncStatusDialog to inspect props. The widget is rendered iff
 // `open === true` — matching the handler's pass-through of
-// `snapshot.widgetVisible`.
+// `snapshot.widgetVisible`. We surface intent fields as data attributes
+// so we can pin that the handler hands the new optional fields to the
+// dialog without reading or mutating them — they should pass straight
+// through. Rendering of the actual "X of Y" line is verified directly
+// against SyncStatusDialog in `SyncStatusDialog.test.tsx`.
 const mockOnClose = vi.fn();
 vi.mock("../SyncStatusDialog", () => ({
   default: ({ snapshot, open, onClose }: {
@@ -44,7 +48,13 @@ vi.mock("../SyncStatusDialog", () => ({
   }) => {
     mockOnClose.mockImplementation(onClose);
     return open ? (
-      <div data-testid="sync-widget" data-started-at={snapshot.startedAt}>
+      <div
+        data-testid="sync-widget"
+        data-started-at={snapshot.startedAt}
+        data-intent-active={String(snapshot.intentActive ?? "undefined")}
+        data-intent-total-bytes={String(snapshot.intentTotalBytes ?? "undefined")}
+        data-intent-completed-bytes={String(snapshot.intentCompletedBytes ?? "undefined")}
+      >
         Widget visible
       </div>
     ) : null;
@@ -201,6 +211,52 @@ describe("SyncStatusHandler – projection of widgetVisible", () => {
     );
 
     expect(queryByTestId("sync-widget")).not.toBeInTheDocument();
+  });
+
+  // ── Intent overlay passthrough ──────────────────────────────────
+  // The handler is intentionally agnostic about intent semantics —
+  // those fields are computed in Rust and rendered by the dialog.
+  // We pin that the handler does not strip, default, or recompute them,
+  // and that `undefined` (legacy snapshot) and an explicit value travel
+  // through unchanged. The actual "X of Y" rendering test lives in
+  // SyncStatusDialog.test.tsx (this test file mocks the dialog).
+  it("passes intent fields through to the dialog when intentActive is true", () => {
+    const snap = visibleSnapshot({
+      intentTotalFiles: 100,
+      intentCompletedFiles: 50,
+      intentTotalBytes: 10_000_000_000,
+      intentCompletedBytes: 5_000_000_000,
+      intentActive: true,
+    });
+    const store = createTestStore([[snapshotAtom, snap]]);
+
+    const { queryByTestId } = render(
+      <Provider store={store}><SyncStatusHandler /></Provider>,
+    );
+
+    const widget = queryByTestId("sync-widget");
+    expect(widget).toBeInTheDocument();
+    expect(widget?.dataset.intentActive).toBe("true");
+    expect(widget?.dataset.intentTotalBytes).toBe("10000000000");
+    expect(widget?.dataset.intentCompletedBytes).toBe("5000000000");
+  });
+
+  it("passes undefined intent fields through when snapshot omits them", () => {
+    // Legacy / pre-login snapshot shape: factory does not populate intent
+    // fields, so they should arrive at the dialog as `undefined`. The
+    // "undefined" string is what our mock writes when the field is absent.
+    const snap = visibleSnapshot();
+    expect(snap.intentActive).toBeUndefined();
+    const store = createTestStore([[snapshotAtom, snap]]);
+
+    const { queryByTestId } = render(
+      <Provider store={store}><SyncStatusHandler /></Provider>,
+    );
+
+    const widget = queryByTestId("sync-widget");
+    expect(widget).toBeInTheDocument();
+    expect(widget?.dataset.intentActive).toBe("undefined");
+    expect(widget?.dataset.intentTotalBytes).toBe("undefined");
   });
 
   it("keeps widget visible when Rust latches widgetVisible across a heartbeat", () => {

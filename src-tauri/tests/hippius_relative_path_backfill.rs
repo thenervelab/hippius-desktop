@@ -246,6 +246,7 @@ fn make_client(base_url: &str) -> HcfsClient {
         billing_bypass_token: None,
         ss58_address: TEST_ACCOUNT.to_string(),
         folder_hash: TEST_FOLDER_HASH.to_string(),
+        read_timeout_ms: None,
     };
     HcfsClient::new(config).expect("build HcfsClient")
 }

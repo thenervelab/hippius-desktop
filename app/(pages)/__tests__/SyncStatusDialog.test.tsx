@@ -261,6 +261,144 @@ describe("SyncStatusDialog", () => {
     expect(percentText).toBeInTheDocument();
   });
 
+  // ── Intent overlay rendering ────────────────────────────────────
+  // The size row under "Overall progress" prefers the intent manifest's
+  // user-truthful "X of Y" totals when the backend signals intentActive.
+  // Falls back to per-cycle "progressBytes / bytesExpected" otherwise.
+  // We assert on the dialog directly (not via SyncStatusHandler) because
+  // the handler test mocks SyncStatusDialog away — rendering assertions
+  // belong here where the real component runs.
+
+  /** Return the "Overall progress" section element, or null if absent.
+   * Per-file rows live OUTSIDE this subtree, so this lets us assert
+   * about the aggregate size span without false matches from file rows
+   * that also display their own "X / Y" text via formatBytes. */
+  function overallProgressSection(container: HTMLElement): Element | null {
+    const label = Array.from(container.querySelectorAll("span")).find(
+      (el) => el.textContent === "Overall progress",
+    );
+    // The label sits two divs deep inside the wrapper that owns the bar
+    // and the size row (`<div class="px-4 pt-3">…`).
+    return label?.parentElement?.parentElement ?? null;
+  }
+
+  /** Text content of all `text-[0.625rem] text-grey-50` size-line spans
+   * inside the overall-progress section. The intent line and the
+   * fallback per-cycle line both render with this class. */
+  function overallSizeLineTexts(container: HTMLElement): string[] {
+    const section = overallProgressSection(container);
+    if (!section) return [];
+    return Array.from(
+      section.querySelectorAll("span.text-\\[0\\.625rem\\].text-grey-50"),
+    ).map((el) => el.textContent ?? "");
+  }
+
+  it("renders 'X of Y' intent line when intentActive is true", () => {
+    // Multi-file in-progress snapshot — required for the "Overall progress"
+    // section to render (gated by !isSingleFile && effectiveInProgress).
+    const files = [
+      makeFileProgress("a.bin", {
+        status: "inProgress",
+        progressPercent: 50,
+        bytesTransferred: 2_500_000,
+        totalBytes: 5_000_000,
+      }),
+      makeFileProgress("b.bin", {
+        status: "pending",
+        totalBytes: 2_500_000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files, {
+      intentTotalFiles: 100,
+      intentCompletedFiles: 50,
+      intentTotalBytes: 10_000_000_000,
+      intentCompletedBytes: 5_000_000_000,
+      intentActive: true,
+    });
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    // formatBytes(10_000_000_000) → "10 GB" (default 2 decimals, trailing
+    // zeros trimmed by parseFloat); formatBytes(5_000_000_000) → "5 GB".
+    const overallTexts = overallSizeLineTexts(container);
+    expect(overallTexts).toContain("5 GB of 10 GB");
+    // Per-cycle slash line must NOT appear at the aggregate level when
+    // intent is active. The two branches are mutually exclusive in the
+    // JSX (`if/else if/null`), so verifying the absence of any
+    // slash-separated total here pins that contract.
+    expect(overallTexts.some((t) => / \/ /.test(t))).toBe(false);
+  });
+
+  it("falls back to per-cycle line when intent fields are undefined", () => {
+    // Legacy / pre-login snapshot shape: no intent overlay. The size row
+    // must keep showing the per-cycle "progressBytes / bytesExpected".
+    const files = [
+      makeFileProgress("a.bin", {
+        status: "inProgress",
+        progressPercent: 50,
+        bytesTransferred: 2_500_000,
+        totalBytes: 5_000_000,
+      }),
+      makeFileProgress("b.bin", {
+        status: "pending",
+        totalBytes: 2_500_000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files);
+    // Sanity check: factory did not silently populate intent fields.
+    expect(snapshot.intentActive).toBeUndefined();
+    expect(snapshot.intentTotalBytes).toBeUndefined();
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    // progressBytes = 2.5 MB (a.bin transferred), bytesExpected = 7.5 MB
+    // (a.bin + b.bin totals). formatBytes(7_500_000) → "7.5 MB".
+    const overallTexts = overallSizeLineTexts(container);
+    expect(overallTexts).toContain("2.5 MB / 7.5 MB");
+    // The intent "of <unit>" form must not appear at the aggregate level.
+    expect(overallTexts.some((t) => / of /.test(t))).toBe(false);
+  });
+
+  it("falls back to per-cycle line when intentActive is true but intentTotalBytes is 0", () => {
+    // Manifest exists but is empty — the `> 0` guard on intentTotalBytes
+    // catches this so we do not render "0 B of 0 B". The `??` operator
+    // (not `||`) lets us distinguish absent (undefined) from explicit 0
+    // in the type, even though both fail the guard here.
+    const files = [
+      makeFileProgress("a.bin", {
+        status: "inProgress",
+        progressPercent: 50,
+        bytesTransferred: 2_500_000,
+        totalBytes: 5_000_000,
+      }),
+      makeFileProgress("b.bin", {
+        status: "pending",
+        totalBytes: 2_500_000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files, {
+      intentTotalFiles: 0,
+      intentCompletedFiles: 0,
+      intentTotalBytes: 0,
+      intentCompletedBytes: 0,
+      intentActive: true,
+    });
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    const overallTexts = overallSizeLineTexts(container);
+    // Falls back to per-cycle slash line.
+    expect(overallTexts).toContain("2.5 MB / 7.5 MB");
+    // Empty intent banner must not appear.
+    expect(overallTexts.some((t) => t === "0 B of 0 B")).toBe(false);
+  });
+
   it("shows Complete when Rust fixes stalled active session at 100%", () => {
     // Reproduces the bug scenario: hcfs-client leaves is_active=true due to
     // its file watcher detecting self-generated writes (changes_pending stuck).

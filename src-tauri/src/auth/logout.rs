@@ -69,5 +69,23 @@ pub async fn logout_full(app: tauri::AppHandle, account_id: String) -> Result<()
         warn!("sp_clear_all_data during logout failed: {e}");
     }
 
+    // 4. Clear intent manifest rows for this account. Intent represents
+    //    in-flight upload intent; logging out should not leak it into the
+    //    next session if a different user logs in. Best-effort: a stale
+    //    row would only show wrong totals in the widget, not affect sync
+    //    correctness. Symmetric with how the auth_session row is cleared
+    //    in step 2. Account-scoped (NOT unconditional) so a different
+    //    account sharing the SQLite file is unaffected — the invariant
+    //    lives at the SQL layer in `IntentRepo::clear_account`.
+    match state.pool() {
+        Ok(pool) => {
+            let repo = crate::sync::intent::IntentRepo::new(pool.clone());
+            if let Err(e) = repo.clear_account(&account_id).await {
+                warn!("clear_account during logout failed: {e}");
+            }
+        }
+        Err(e) => warn!("pool unavailable during logout clear_account: {e}"),
+    }
+
     Ok(())
 }

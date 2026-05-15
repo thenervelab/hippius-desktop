@@ -126,7 +126,10 @@ pub async fn create_vm(
     // Enforce credit eligibility at the IPC boundary. Refuses to call
     // the spawn endpoint if the user has fewer than 10 credits OR a zero
     // chain balance — see `crate::billing::eligibility::thresholds`.
-    crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::VmCreation).await?;
+    // VM creation has no upload payload; pass `bytes = 0` so the
+    // bytes-priced layer is a no-op and the gate falls back to the
+    // static `VM_CREATION` threshold (10 credits).
+    crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::VmCreation, 0).await?;
 
     info!(
         name = %params.name,

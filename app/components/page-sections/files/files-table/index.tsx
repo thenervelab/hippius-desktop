@@ -183,12 +183,19 @@ const FilesTable: FC<FilesTableProps> = memo(
     const actionSignature = useMemo(() => {
       const parts: string[] = [];
       for (const f of snapshot.files) {
+        // Failed rows are actionable even though their status isn't a
+        // transfer-in-flight phase — include them so the enricher memo
+        // re-runs when a row flips from `inProgress` to `error` (e.g. 402).
         const isInFlight =
           f.status !== "completed" &&
+          f.status !== "error" &&
+          (f.action === "upload" || f.action === "download");
+        const isFailed =
+          f.status === "error" &&
           (f.action === "upload" || f.action === "download");
         const isCompletedDownload =
           f.status === "completed" && f.action === "download";
-        if (isInFlight || isCompletedDownload) {
+        if (isInFlight || isFailed || isCompletedDownload) {
           parts.push(`${f.path}|${f.fileName}|${f.status}|${f.action}`);
         }
       }
@@ -199,17 +206,29 @@ const FilesTable: FC<FilesTableProps> = memo(
     const enrichedAllFiles = useMemo(() => {
       if (actionSignature === "") return allFiles;
 
-      // Index by full path (preferred, no collisions) and basename (fallback)
-      const actionByPath = new Map<string, "upload" | "download">();
-      const actionByName = new Map<string, "upload" | "download">();
+      // Index by full path (preferred, no collisions) and basename (fallback).
+      // We track in-flight transfers and per-file failures separately because
+      // they map to distinct row statuses (`uploading`/`downloading` vs
+      // `failed`), and the failure path must NOT be collapsed into "uploading"
+      // — that's the bug this enrichment fixes (a 402'd file would otherwise
+      // render with the upload spinner forever).
+      type ActionKind = "upload" | "download";
+      const actionByPath = new Map<string, ActionKind>();
+      const actionByName = new Map<string, ActionKind>();
+      const failedByPath = new Map<string, ActionKind>();
+      const failedByName = new Map<string, ActionKind>();
       const completedDownloadPaths = new Set<string>();
       const completedDownloadNames = new Set<string>();
 
       for (const f of snapshot.files) {
-        if (f.status !== "completed" && (f.action === "upload" || f.action === "download")) {
+        if (f.action !== "upload" && f.action !== "download") continue;
+        if (f.status === "error") {
+          failedByPath.set(f.path, f.action);
+          failedByName.set(f.fileName, f.action);
+        } else if (f.status !== "completed") {
           actionByPath.set(f.path, f.action);
           actionByName.set(f.fileName, f.action);
-        } else if (f.status === "completed" && f.action === "download") {
+        } else if (f.action === "download") {
           completedDownloadPaths.add(f.path);
           completedDownloadNames.add(f.fileName);
         }
@@ -217,6 +236,11 @@ const FilesTable: FC<FilesTableProps> = memo(
 
       return allFiles.map((file) => {
         const key = file.actualFileName || file.name;
+        // Failed takes precedence over in-flight: a row can't be both
+        // failed and uploading, and the failure is what the user needs to see.
+        if (failedByPath.has(key) || failedByName.has(key)) {
+          return { ...file, syncStatus: "failed" as const };
+        }
         const action = actionByPath.get(key) ?? actionByName.get(key);
         if (action) {
           const liveSyncStatus: FormattedUserFile["syncStatus"] =

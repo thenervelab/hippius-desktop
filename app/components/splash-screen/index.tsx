@@ -170,8 +170,32 @@ export default function SplashWrapper({
       // when the updater resolves immediately (cached / offline).
       await runWithMinDuration(updateCheckPromise, MIN_PHASE_DURATION);
 
+      // If an update dialog opened, wait for the user to resolve it
+      // (install / skip / cancel) before continuing to the main
+      // phases. The PRIOR code did `return;` here, which left
+      // `setupStartedRef.current` permanently `true` so `runSetupPhases`
+      // never resumed — `setSplashComplete(true)` at the bottom was
+      // never called, and any consumer gated on the atom (historically
+      // `wallet-auth-context.tsx`'s `initSync`) was stranded forever.
+      // Spinning here resumes naturally once `updateDialogOpenRef`
+      // flips, after which the main phases run and the splash
+      // completes normally. The interval is cheap (a single ref read
+      // every 100ms); the cap is a safety net in case the dialog
+      // state somehow gets stuck — at that point we proceed anyway
+      // because the cost of an orphaned splash overlay is worse than
+      // the cost of the main phases running concurrently with a
+      // visible dialog.
+      const DIALOG_WAIT_CAP_MS = 60_000;
+      const dialogWaitStart = Date.now();
+      while (updateDialogOpenRef.current && Date.now() - dialogWaitStart < DIALOG_WAIT_CAP_MS) {
+        await wait(100);
+      }
       if (updateDialogOpenRef.current) {
-        return;
+        console.warn(
+          "[Setup] Update dialog still open after",
+          DIALOG_WAIT_CAP_MS,
+          "ms — proceeding past update-check phase anyway to avoid stranding splash."
+        );
       }
 
       setIsUpdateCheckPhase(false);
