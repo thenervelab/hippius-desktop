@@ -1009,4 +1009,97 @@ describe("useTraySync — latched complete → preparing transitions", () => {
 
     unmount();
   });
+
+  /**
+   * Regression: a no-op periodic sync cycle (nothing to upload —
+   * `Computed sync plan uploads=0 downloads=0`) emits SyncStarted
+   * (→ a brief "preparing" snapshot) then SyncCompleted, whose bridge
+   * arm clears the preparing set and emits a fresh, fully-idle
+   * snapshot (no session: widgetState!="preparing", totalFiles=0,
+   * completedFiles=0). `isCompleted` is false (nothing was synced) so
+   * the tray falls into the idle-teardown branch. That branch must
+   * also clear the sync HEADER — otherwise the "⟳ Preparing sync…"
+   * text set during the ~1s SyncStarted window is frozen in the tray
+   * forever (re-set, never cleared, every periodic cycle). This is
+   * the user-reported "stuck on Preparing sync… but nothing is
+   * syncing" bug.
+   */
+  function makeIdleSnapshot(): SyncSnapshot {
+    return {
+      ...EMPTY_SNAPSHOT,
+      isActive: false,
+      totalFiles: 0,
+      completedFiles: 0,
+      failedFiles: 0,
+      overallPercent: 0,
+      progressBytes: 0,
+      bytesExpected: 0,
+      startedAt: null,
+      completedAt: null,
+      widgetVisible: false,
+      widgetState: "idle",
+      statusVariant: "progress",
+      effectiveInProgress: false,
+      effectiveCompleted: false,
+    };
+  }
+
+  it("clears the tray header after a no-op cycle's idle snapshot (not stuck on 'Preparing sync…')", async () => {
+    installInvokeMock();
+    const listenerCapture = installListenMock();
+
+    const { unmount } = await setupHook();
+
+    await waitFor(() => {
+      expect(listenerCapture.current).not.toBeNull();
+      expect(menuRegistry.length).toBeGreaterThan(0);
+    });
+
+    const rootMenu = menuRegistry[0];
+
+    // SyncStarted of a no-op cycle → preparing override snapshot.
+    await act(async () => {
+      listenerCapture.current!({ payload: makePreparingSnapshot() });
+      for (let i = 0; i < 32; i++) {
+        await Promise.resolve();
+      }
+    });
+
+    await waitFor(async () => {
+      const items = await rootMenu.items();
+      const syncItem = items.find(
+        (i) =>
+          typeof i === "object" &&
+          i !== null &&
+          "id" in i &&
+          (i as { id?: string }).id === "sync"
+      ) as { text?: string } | undefined;
+      expect(syncItem?.text).toBe("⟳ Preparing sync…");
+    });
+
+    // SyncCompleted of the no-op cycle → bridge cleared preparing and
+    // emitted a fully-idle snapshot. The tray must remove the sync
+    // header (no "sync" item), exactly as the logout cleanup path
+    // does via updateTraySyncLabel(null).
+    await act(async () => {
+      listenerCapture.current!({ payload: makeIdleSnapshot() });
+      for (let i = 0; i < 32; i++) {
+        await Promise.resolve();
+      }
+    });
+
+    await waitFor(async () => {
+      const items = await rootMenu.items();
+      const syncItem = items.find(
+        (i) =>
+          typeof i === "object" &&
+          i !== null &&
+          "id" in i &&
+          (i as { id?: string }).id === "sync"
+      ) as { text?: string } | undefined;
+      expect(syncItem).toBeUndefined();
+    });
+
+    unmount();
+  });
 });

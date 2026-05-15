@@ -511,8 +511,16 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // shutdown can drop the state without keeping it alive via
         // a long-lived background task. See `spawn_watchdog`.
         let upload_processing_weak = std::sync::Arc::downgrade(&app_state.upload_processing);
+        // Same Weak-before-manage discipline for the preparing-override
+        // watchdog: it self-clears a stuck "Preparing sync…" when
+        // hcfs-client drops a terminal event (drive removed mid-cycle).
+        // It needs the runner too, to force the snapshot re-emit that
+        // pushes the cleared state to the FE.
+        let preparing_weak = std::sync::Arc::downgrade(&app_state.preparing);
+        let sync_weak = std::sync::Arc::downgrade(&app_state.sync);
         app_handle.manage(app_state);
         crate::sync::upload_processing::spawn_watchdog(upload_processing_weak, app_handle.clone());
+        crate::sync::preparing::spawn_watchdog(preparing_weak, sync_weak);
         let win = app.get_webview_window("main").expect("main window not found");
 
         // Open devtools on startup when `HIPPIUS_DEVTOOLS=1` is set in the

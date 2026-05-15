@@ -1053,7 +1053,18 @@ function startSyncActivityWatcher() {
       lastSyncSummarySignature = signature;
 
       if (!isActive && !effectiveCompleted && effectiveDeleteCount === 0) {
-        // No sync activity and no recent deletes — remove summary rows and reset icon
+        // No sync activity and no recent deletes — remove summary rows,
+        // the sync header, and reset the icon.
+        //
+        // Clearing the header (SYNC_ID item) here is load-bearing: a
+        // no-op periodic cycle emits SyncStarted → a ~1s "preparing"
+        // snapshot that sets the header to "⟳ Preparing sync…", then
+        // SyncCompleted whose idle snapshot lands here. Without this
+        // updateTraySyncLabel(null) the header text is never cleared
+        // (the detail-row removals below don't touch SYNC_ID), so the
+        // tray is frozen on "Preparing sync…" forever even though
+        // nothing is syncing. Mirrors the logout-cleanup path.
+        await updateTraySyncLabel(null);
         if (syncProgressItem) {
           try { await menu.remove(syncProgressItem); } catch { /* already removed */ }
           syncProgressItem = null;
