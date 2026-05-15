@@ -1,18 +1,44 @@
 import React, { createContext, useContext, useState, ReactNode, useMemo, useCallback } from 'react';
 import { FormattedUserFile } from '../lib/hooks/use-user-files';
 
+/**
+ * Identity key for a selected row. `label` + `actualFileName` is globally
+ * unique for files (whose actualFileName is the full sync-root-relative
+ * path) but folder rows carry only their basename in `actualFileName`, so
+ * `parentRelativePath` is the disambiguator that makes the same folder
+ * name in two different locations distinct. Stored when the row is added
+ * to selection and re-used by every downstream selection check.
+ */
+const selectionKey = (file: FormattedUserFile): string => {
+    const name = file.actualFileName ?? file.name;
+    if (file.isFolder) {
+        const parent = file.parentRelativePath ?? "";
+        return `folder:${file.label ?? ""}::${parent ? `${parent}/` : ""}${name}`;
+    }
+    return `file:${file.label ?? ""}::${name}`;
+};
+
 interface FileSelectionContextProps {
     isSelectionMode: boolean;
     selectedFiles: FormattedUserFile[];
     toggleSelectionMode: () => void;
     toggleFileSelection: (file: FormattedUserFile) => void;
+    toggleFolderSelection: (folder: FormattedUserFile) => void;
     isFileSelected: (file: FormattedUserFile) => boolean;
     clearSelection: () => void;
     selectAllFiles: (files: FormattedUserFile[]) => void;
     unselectAllFiles: () => void;
     enterSelectionModeAndSelectFile: (file: FormattedUserFile) => void;
     addFilesToSelection: (files: FormattedUserFile[]) => void;
+    removeFileFromSelection: (file: FormattedUserFile) => void;
     removeFilesFromSelection: (files: FormattedUserFile[]) => void;
+    /**
+     * Drops every entry under `folder` (same label, path prefix match)
+     * from the selection set, without removing the folder itself. Used
+     * by the cascade-split path so a folder visually "unchecks" cleanly
+     * after the user clicks a single descendant.
+     */
+    removeDescendantsOf: (folder: FormattedUserFile) => void;
 }
 
 const FileSelectionContext = createContext<FileSelectionContextProps | undefined>(undefined);
@@ -36,7 +62,6 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
     const toggleSelectionMode = useCallback(() => {
         setIsSelectionMode(prev => {
             if (prev) {
-                // Clear selection when exiting selection mode
                 setSelectedFiles([]);
             }
             return !prev;
@@ -44,33 +69,69 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
     }, []);
 
     const toggleFileSelection = useCallback((file: FormattedUserFile) => {
-        // Only allow selection of files that can be deleted (isAssigned)
         if (!file.isAssigned) {
             return;
         }
-
+        const key = selectionKey(file);
         setSelectedFiles(prevSelected => {
-            const isSelected = prevSelected.some(f => f.actualFileName === file.actualFileName && f.label === file.label);
-
-            if (isSelected) {
-                return prevSelected.filter(f => !(f.actualFileName === file.actualFileName && f.label === file.label));
-            } else {
-                return [...prevSelected, file];
+            const exists = prevSelected.some(f => selectionKey(f) === key);
+            if (exists) {
+                return prevSelected.filter(f => selectionKey(f) !== key);
             }
+            return [...prevSelected, file];
+        });
+    }, []);
+
+    /**
+     * Folder-specific toggle. Selecting a folder subsumes any
+     * individually-selected descendants — once the folder is in the
+     * set, those children are visually represented by the cascade so
+     * keeping them around would just double-count at delete time.
+     * Mirrors the console's `toggleFolderSelection`.
+     */
+    const toggleFolderSelection = useCallback((folder: FormattedUserFile) => {
+        if (!folder.isAssigned) {
+            return;
+        }
+        const folderKey = selectionKey(folder);
+        const label = folder.label ?? "";
+        const folderName = folder.actualFileName ?? folder.name;
+        const folderParent = folder.parentRelativePath ?? "";
+        const folderFullPath = folderParent ? `${folderParent}/${folderName}` : folderName;
+        const descendantPrefix = `${folderFullPath}/`;
+        setSelectedFiles(prevSelected => {
+            const alreadySelected = prevSelected.some(f => selectionKey(f) === folderKey);
+            if (alreadySelected) {
+                return prevSelected.filter(f => selectionKey(f) !== folderKey);
+            }
+            // Drop any descendants of this folder — the folder itself
+            // now represents them in the selection set.
+            const withoutDescendants = prevSelected.filter(f => {
+                if ((f.label ?? "") !== label) return true;
+                if (f.isFolder) {
+                    const parent = f.parentRelativePath ?? "";
+                    const name = f.actualFileName ?? f.name;
+                    const fullPath = parent ? `${parent}/${name}` : name;
+                    return fullPath !== folderFullPath && !fullPath.startsWith(descendantPrefix);
+                }
+                const filePath = f.actualFileName ?? f.name;
+                return !filePath.startsWith(descendantPrefix);
+            });
+            return [...withoutDescendants, folder];
         });
     }, []);
 
     const isFileSelected = useCallback((file: FormattedUserFile) => {
-        return selectedFiles.some(f => f.actualFileName === file.actualFileName && f.label === file.label);
+        const key = selectionKey(file);
+        return selectedFiles.some(f => selectionKey(f) === key);
     }, [selectedFiles]);
 
     const clearSelection = useCallback(() => {
         setSelectedFiles([]);
-        setIsSelectionMode(false); // Exit selection mode when clearing
+        setIsSelectionMode(false);
     }, []);
 
     const selectAllFiles = useCallback((files: FormattedUserFile[]) => {
-        // Filter to only include files that can be deleted (isAssigned)
         const deletableFiles = files.filter(file => file.isAssigned);
         setSelectedFiles(deletableFiles);
     }, []);
@@ -80,66 +141,84 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
     }, []);
 
     const enterSelectionModeAndSelectFile = useCallback((file: FormattedUserFile) => {
-        // Only allow entering selection mode with deletable files
         if (!file.isAssigned) {
             return;
         }
-
-        // Set selection mode and select the file in one atomic operation
         setIsSelectionMode(true);
         setSelectedFiles([file]);
     }, []);
 
     const addFilesToSelection = useCallback((files: FormattedUserFile[]) => {
-        // Only add files that can be deleted (isAssigned)
         const deletableFiles = files.filter(file => file.isAssigned);
-
         setSelectedFiles(prevSelected => {
-            // Create a set of already selected file keys (name + label) for efficient lookup
-            const selectedFileKeys = new Set(prevSelected.map(f => `${f.actualFileName}::${f.label ?? ''}`));
-
-            // Add only files that aren't already selected
-            const newFiles = deletableFiles.filter(file => !selectedFileKeys.has(`${file.actualFileName}::${file.label ?? ''}`));
-
+            const selectedKeys = new Set(prevSelected.map(selectionKey));
+            const newFiles = deletableFiles.filter(file => !selectedKeys.has(selectionKey(file)));
             return [...prevSelected, ...newFiles];
         });
     }, []);
 
+    const removeFileFromSelection = useCallback((file: FormattedUserFile) => {
+        const key = selectionKey(file);
+        setSelectedFiles(prevSelected => prevSelected.filter(f => selectionKey(f) !== key));
+    }, []);
+
     const removeFilesFromSelection = useCallback((files: FormattedUserFile[]) => {
         setSelectedFiles(prevSelected => {
-            // Create a set of file keys (name + label) to remove for efficient lookup
-            const fileKeysToRemove = new Set(files.map(f => `${f.actualFileName}::${f.label ?? ''}`));
-
-            // Keep only files that are not in the removal list
-            return prevSelected.filter(file => !fileKeysToRemove.has(`${file.actualFileName}::${file.label ?? ''}`));
+            const keysToRemove = new Set(files.map(selectionKey));
+            return prevSelected.filter(file => !keysToRemove.has(selectionKey(file)));
         });
     }, []);
 
-    // Memoize the context value to prevent unnecessary re-renders
+    const removeDescendantsOf = useCallback((folder: FormattedUserFile) => {
+        const label = folder.label ?? "";
+        const folderName = folder.actualFileName ?? folder.name;
+        const folderParent = folder.parentRelativePath ?? "";
+        const folderFullPath = folderParent ? `${folderParent}/${folderName}` : folderName;
+        const descendantPrefix = `${folderFullPath}/`;
+        setSelectedFiles(prevSelected => prevSelected.filter(f => {
+            if ((f.label ?? "") !== label) return true;
+            if (f.isFolder) {
+                const parent = f.parentRelativePath ?? "";
+                const name = f.actualFileName ?? f.name;
+                const fullPath = parent ? `${parent}/${name}` : name;
+                if (fullPath === folderFullPath) return true;
+                return !fullPath.startsWith(descendantPrefix);
+            }
+            const filePath = f.actualFileName ?? f.name;
+            return !filePath.startsWith(descendantPrefix);
+        }));
+    }, []);
+
     const contextValue = useMemo(() => ({
         isSelectionMode,
         selectedFiles,
         toggleSelectionMode,
         toggleFileSelection,
+        toggleFolderSelection,
         isFileSelected,
         clearSelection,
         selectAllFiles,
         unselectAllFiles,
         enterSelectionModeAndSelectFile,
         addFilesToSelection,
-        removeFilesFromSelection
+        removeFileFromSelection,
+        removeFilesFromSelection,
+        removeDescendantsOf
     }), [
         isSelectionMode,
         selectedFiles,
         toggleSelectionMode,
         toggleFileSelection,
+        toggleFolderSelection,
         isFileSelected,
         clearSelection,
         selectAllFiles,
         unselectAllFiles,
         enterSelectionModeAndSelectFile,
         addFilesToSelection,
-        removeFilesFromSelection
+        removeFileFromSelection,
+        removeFilesFromSelection,
+        removeDescendantsOf
     ]);
 
     return (
@@ -148,3 +227,5 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
         </FileSelectionContext.Provider>
     );
 };
+
+export { selectionKey };

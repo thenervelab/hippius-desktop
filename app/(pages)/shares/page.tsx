@@ -1,19 +1,3 @@
-// "My Shares" page — lists every active share-token this device's
-// keystore knows about for the logged-in account, with Copy, Reshare,
-// and Revoke affordances per row.
-//
-// Layout: two TanStack tables — Active Shares (top) and History
-// (bottom) — rendered through the same `alt-table` primitives My
-// Drive uses. We reuse `useReactTable` + `createColumnHelper` so the
-// headers (sort arrows, uppercase, alignment, borders) come out
-// identical to /files without restyling them by hand.
-//
-// Refresh strategy: TanStack Query with a 30-second `refetchInterval`
-// so the list stays in step with server-side TTL expiry without the
-// user reloading. Page is gated by `shareFeatureEnabledAtom` — if the
-// connected hcfs-server doesn't advertise `shares: true`, we render a
-// short "feature unavailable" panel instead of an empty list.
-
 "use client";
 
 import React from "react";
@@ -21,24 +5,45 @@ import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createColumnHelper,
-  flexRender,
   getCoreRowModel,
   getSortedRowModel,
   type SortingState,
   useReactTable,
 } from "@tanstack/react-table";
 import { useAtomValue } from "jotai";
-import { Check, Copy as CopyIcon, Loader2, MoreVertical, RefreshCcw, Trash2 } from "lucide-react";
+import {
+  Check,
+  Copy as CopyIcon,
+  Loader2,
+  MoreVertical,
+  RefreshCcw,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { AbstractIconWrapper, Icons } from "@/components/ui";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
 import { Button } from "@/components/ui/button";
-import * as TableModule from "@/components/ui/alt-table";
-import TableActionMenu, { type ActionItem } from "@/app/components/ui/alt-table/TableActionMenu";
-import ConfirmDialog from "@/components/ui/ConfirmDialog";
-import { listShares, reshare, revokeShare, type ShareSummary } from "@/app/lib/tauri/shares";
+import {
+  Table,
+  TableWrapper,
+  THead,
+  TBody,
+  Tr,
+  Th,
+  Td,
+} from "@/components/ui/table";
+import TableActionMenu, {
+  type ActionItem,
+} from "@/app/components/ui/alt-table/TableActionMenu";
+import { FramedDialog } from "@/components/ui/FramedDialog";
+import {
+  listShares,
+  reshare,
+  revokeShare,
+  type ShareSummary,
+} from "@/app/lib/tauri/shares";
 import {
   clearShareHistory,
   listShareHistory,
@@ -58,45 +63,14 @@ const SHARES_QUERY_KEY = "shares-list";
 const HISTORY_QUERY_KEY = "shares-history-list";
 const REFRESH_INTERVAL_MS = 30_000;
 
-// Column width percentages. Active Shares has six columns (Name | Link |
-// Size | Created | Expires | actions); History keeps the original five
-// (Name | Size | Created | Ended | actions). The `link` key is only
-// used by the active table — History rows have no live URL to copy.
-const COLUMN_WIDTHS: Record<string, number> = {
-  name: 33,
-  link: 30,
-  size: 10,
-  created: 12,
-  endsAt: 11,
-  actions: 4,
-};
-
-const HISTORY_COLUMN_WIDTHS: Record<string, number> = {
-  name: 42,
-  size: 14,
-  created: 18,
-  endsAt: 22,
-  actions: 4,
-};
-
 export default function MySharesPage() {
   const { polkadotAddress } = useWalletAuth();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const queryClient = useQueryClient();
   const router = useRouter();
-  // Revoke is destructive and irreversible — the row click queues a token
-  // here; `confirmRevoke` only fires after the user accepts in the
-  // `ConfirmDialog`. Keeping the token (not a boolean) lets us reuse the
-  // same dialog for any row without an extra "which token?" piece of state.
   const [tokenPendingRevoke, setTokenPendingRevoke] = React.useState<string | null>(null);
   const [revokeBusy, setRevokeBusy] = React.useState(false);
-  // Token whose reshare IPC is currently in flight. Used to replace
-  // that row's 3-dot button with a spinner so the user knows we are
-  // working, and to prevent a second reshare click on the same row.
   const [resharingToken, setResharingToken] = React.useState<string | null>(null);
-  // `clearAllOpen` drives the "Clear all history" confirmation dialog.
-  // Single boolean (not a token carrier) because the action is global —
-  // there is nothing per-row to remember while the dialog is open.
   const [clearAllOpen, setClearAllOpen] = React.useState(false);
 
   const { data, isLoading, error } = useQuery({
@@ -106,11 +80,6 @@ export default function MySharesPage() {
     refetchInterval: REFRESH_INTERVAL_MS,
   });
 
-  // History is a separate query because the lists rotate at different
-  // cadences (active list churns on revoke/reshare, history grows
-  // monotonically until the user clears it). Same refetch interval so
-  // the diff path on the Rust side can keep both surfaces in step
-  // without the FE doing any cross-list bookkeeping.
   const { data: historyData } = useQuery({
     queryKey: [HISTORY_QUERY_KEY, polkadotAddress],
     queryFn: () => listShareHistory(),
@@ -126,9 +95,6 @@ export default function MySharesPage() {
     try {
       await revokeShare(tokenPendingRevoke);
       toast.success("Share link revoked");
-      // Refresh both lists immediately rather than waiting for the 30s
-      // tick — Rust records a `RevokedHere` history entry on success, so
-      // the new row would otherwise pop in late.
       queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY, polkadotAddress] });
       queryClient.invalidateQueries({ queryKey: [HISTORY_QUERY_KEY, polkadotAddress] });
     } catch (err) {
@@ -142,7 +108,6 @@ export default function MySharesPage() {
   const onRemoveHistory = async (token: string) => {
     try {
       await removeShareHistory(token);
-      // No success toast — the row disappearing is its own confirmation.
       queryClient.invalidateQueries({ queryKey: [HISTORY_QUERY_KEY, polkadotAddress] });
     } catch (err) {
       toast.error(`Could not remove from history: ${errorMessage(err)}`);
@@ -153,15 +118,10 @@ export default function MySharesPage() {
     setResharingToken(token);
     try {
       const link = await reshare(token);
-      // Auto-copy mirrors the create-share modal: the user pressed
-      // Reshare *to share again*, so the new URL on the clipboard is
-      // the obvious next step.
       try {
         await navigator.clipboard.writeText(link.shareUrl);
         toast.success("New link copied to clipboard");
       } catch {
-        // Clipboard rejection (Safari focus rules etc.) shouldn't
-        // hide the success — the row will repaint with the new URL.
         toast.success("Link reshared with a fresh expiry");
       }
       queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY, polkadotAddress] });
@@ -187,164 +147,194 @@ export default function MySharesPage() {
 
   return (
     <DashboardTitleWrapper mainText="Shared Links">
-      {/* `← Back` button sits tight to the page header, mirroring the
-          folder-page convention (`files-folder/index.tsx`). The shares
-          page only has one place to go back to (Drive), so a single
-          back button is clearer than a two-segment breadcrumb. */}
-      <button
-        onClick={() => router.push("/files")}
-        // `focus:outline-none` kills the default ring that browsers
-        // apply to a button when focus persists after a click-driven
-        // navigation. `focus-visible:ring-*` keeps the affordance for
-        // keyboard users so we don't regress a11y. Same approach used
-        // by the row buttons in `RowButton`/files-table.
-        className="mt-3 flex items-center gap-2 font-semibold text-lg text-grey-10 hover:text-primary-50 transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-50 focus-visible:ring-offset-2"
-      >
-        <Icons.ArrowLeft className="size-5" />
-        Back
-      </button>
+      <div className="flex flex-col px-4 pb-6">
+        <button
+          onClick={() => router.push("/files")}
+          className="mt-3 mb-4 flex items-center gap-2 font-semibold text-base text-grey-10 dark:text-grey-light-100 hover:text-primary-50 transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-50 focus-visible:ring-offset-2 w-fit"
+        >
+          <Icons.ArrowLeft className="size-4" />
+          Back
+        </button>
 
-      <div className="mt-3 flex flex-col gap-6">
         {!shareEnabled && <FeatureUnavailable />}
 
         {shareEnabled && (
-          <SectionPanel
-            title="Active Shares"
-            count={data?.length ?? 0}
-            countLabel="active link"
-            countLabelPlural="active links"
-          >
-            {isLoading && (
-              <div className="flex items-center gap-2 text-sm text-grey-30 p-6">
-                <Loader2 className="size-4 animate-spin" />
-                Loading shared links…
-              </div>
-            )}
+          <div className="flex flex-col gap-6">
+            {/* Active Shares card */}
+            <SectionCard
+              title="Active Shares"
+              count={data?.length ?? 0}
+              countLabel="active link"
+              countLabelPlural="active links"
+            >
+              {isLoading && (
+                <div className="flex items-center gap-2 text-sm text-grey-40 dark:text-grey-dark-600 px-4 py-6">
+                  <Loader2 className="size-4 animate-spin" />
+                  Loading shared links…
+                </div>
+              )}
+              {error && (
+                <p className="text-sm text-error-50 px-4 py-6">
+                  Couldn&apos;t load shares: {errorMessage(error)}
+                </p>
+              )}
+              {!isLoading && !error && data && data.length === 0 && <EmptyState />}
+              {!isLoading && data && data.length > 0 && (
+                <ActiveSharesTable
+                  rows={data}
+                  onCopy={onCopy}
+                  onRevoke={queueRevoke}
+                  onReshare={onReshare}
+                  resharingToken={resharingToken}
+                />
+              )}
+            </SectionCard>
 
-            {error && (
-              <p className="text-sm text-error-50 p-6">
-                Couldn&apos;t load shares: {errorMessage(error)}
-              </p>
-            )}
-
-            {!isLoading && !error && data && data.length === 0 && <EmptyState />}
-
-            {!isLoading && data && data.length > 0 && (
-              <ActiveSharesTable
-                rows={data}
-                onCopy={onCopy}
-                onRevoke={queueRevoke}
-                onReshare={onReshare}
-                resharingToken={resharingToken}
-              />
-            )}
-          </SectionPanel>
-        )}
-
-        {shareEnabled && historyData && historyData.length > 0 && (
-          <SectionPanel
-            title="History"
-            count={historyData.length}
-            countLabel="entry"
-            countLabelPlural="entries"
-            action={
-              <button
-                onClick={() => setClearAllOpen(true)}
-                className="flex items-center gap-1.5 h-9 px-3 rounded text-sm font-medium text-error-60 bg-grey-90 border border-grey-80 hover:bg-error-60 hover:text-white active:bg-error-70 transition-colors focus:outline-none focus:ring-2 focus:ring-error-50"
+            {/* History card */}
+            {historyData && historyData.length > 0 && (
+              <SectionCard
+                title="History"
+                count={historyData.length}
+                countLabel="entry"
+                countLabelPlural="entries"
+                action={
+                  <button
+                    onClick={() => setClearAllOpen(true)}
+                    className="flex items-center gap-1.5 h-7 px-2.5 rounded text-xs font-medium text-error-60 bg-white border border-grey-dark-100 hover:bg-error-60 hover:text-white active:bg-error-70 transition-colors focus:outline-none focus:ring-2 focus:ring-error-50 dark:bg-black-500 dark:border-black-300 dark:text-error-50 dark:hover:bg-error-60 dark:hover:text-white"
+                  >
+                    <Trash2 className="size-3.5" />
+                    Clear all
+                  </button>
+                }
               >
-                <Trash2 className="size-4" />
-                Clear all history
-              </button>
-            }
-          >
-            <HistoryTable rows={historyData} onRemove={onRemoveHistory} />
-          </SectionPanel>
+                <HistoryTable rows={historyData} onRemove={onRemoveHistory} />
+              </SectionCard>
+            )}
+          </div>
         )}
 
-        <ConfirmDialog
-          // Treating `tokenPendingRevoke !== null` as the open signal lets the
-          // dialog double as a "which token are we asking about?" carrier —
-          // closing it (cancel, escape, outside-click) zeroes the token in
-          // `onOpenChange`, so the page settles back to a clean state.
+        {/* Revoke confirmation */}
+        <FramedDialog
           open={tokenPendingRevoke !== null}
-          onOpenChange={(open) => {
-            if (!open) setTokenPendingRevoke(null);
-          }}
-          variant="danger"
+          onClose={() => { if (!revokeBusy) setTokenPendingRevoke(null); }}
           title="Revoke this link?"
-          description="Anyone with the link will lose access immediately. This can't be undone."
-          confirmText="Revoke"
-          cancelText="Cancel"
-          onConfirm={confirmRevoke}
-          isLoading={revokeBusy}
-        />
+          icon={<Trash2 className="size-5 text-white" />}
+          maxWidth="max-w-[480px]"
+          iconBgClassName="bg-[#fc7d73]"
+        >
+          <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+            Anyone with the link will lose access immediately. This can&apos;t be undone.
+          </p>
+          <div className="flex gap-3">
+            <Button
+              variant="defaultStable"
+              size="auto"
+              onClick={() => setTokenPendingRevoke(null)}
+              disabled={revokeBusy}
+              className="h-[42px] w-full rounded-[6px] text-sm font-medium"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="auto"
+              onClick={confirmRevoke}
+              disabled={revokeBusy}
+              loading={revokeBusy}
+              className={cn(
+                "h-[42px] w-full rounded-[6px] border text-sm font-medium",
+                "border-[#fc7d73] bg-[#fc7d73] text-white",
+                "hover:bg-[#fb695e] hover:border-[#fb695e]",
+              )}
+            >
+              {revokeBusy ? "Revoking…" : "Revoke"}
+            </Button>
+          </div>
+        </FramedDialog>
 
-        <ConfirmDialog
+        {/* Clear history confirmation */}
+        <FramedDialog
           open={clearAllOpen}
-          onOpenChange={setClearAllOpen}
-          variant="danger"
+          onClose={() => setClearAllOpen(false)}
           title="Clear all share history?"
-          description={`This removes ${historyData?.length ?? 0} entries from this device's history. The shares are already revoked or expired — this only clears the local list.`}
-          confirmText="Clear history"
-          cancelText="Cancel"
-          onConfirm={async () => {
-            try {
-              await clearShareHistory();
-              queryClient.invalidateQueries({ queryKey: [HISTORY_QUERY_KEY, polkadotAddress] });
-            } catch (err) {
-              toast.error(`Could not clear history: ${errorMessage(err)}`);
-            }
-          }}
-        />
+          icon={<Trash2 className="size-5 text-white" />}
+          maxWidth="max-w-[480px]"
+          iconBgClassName="bg-[#fc7d73]"
+        >
+          <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+            This removes {historyData?.length ?? 0}{" "}
+            {(historyData?.length ?? 0) === 1 ? "entry" : "entries"} from this device&apos;s history.
+            The shares are already revoked or expired — this only clears the local list.
+          </p>
+          <div className="flex gap-3">
+            <Button
+              variant="defaultStable"
+              size="auto"
+              onClick={() => setClearAllOpen(false)}
+              className="h-[42px] w-full rounded-[6px] text-sm font-medium"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="auto"
+              onClick={async () => {
+                try {
+                  await clearShareHistory();
+                  queryClient.invalidateQueries({ queryKey: [HISTORY_QUERY_KEY, polkadotAddress] });
+                  setClearAllOpen(false);
+                } catch (err) {
+                  toast.error(`Could not clear history: ${errorMessage(err)}`);
+                }
+              }}
+              className={cn(
+                "h-[42px] w-full rounded-[6px] border text-sm font-medium",
+                "border-[#fc7d73] bg-[#fc7d73] text-white",
+                "hover:bg-[#fb695e] hover:border-[#fb695e]",
+              )}
+            >
+              Clear history
+            </Button>
+          </div>
+        </FramedDialog>
       </div>
     </DashboardTitleWrapper>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Section panel                                                             */
+/*  Section card — billing-style outer card with mono header                 */
 /* -------------------------------------------------------------------------- */
 
-interface SectionPanelProps {
+interface SectionCardProps {
   title: string;
   count: number;
-  /** Singular label, e.g. `"entry"` — shown when `count === 1`. */
   countLabel: string;
-  /** Plural label, e.g. `"entries"` — shown for any count other than 1. */
   countLabelPlural: string;
   action?: React.ReactNode;
   children: React.ReactNode;
 }
 
-/**
- * Card-like wrapper around each table — title, row count, optional
- * trailing action (e.g. "Clear all history"), and the table body.
- *
- * Plurals are passed as explicit `countLabel` / `countLabelPlural`
- * props rather than synthesised by appending `"s"`, so words like
- * "entry" → "entries" come out right.
- */
-function SectionPanel({
-  title,
-  count,
-  countLabel,
-  countLabelPlural,
-  action,
-  children,
-}: SectionPanelProps) {
+function SectionCard({ title, count, countLabel, countLabelPlural, action, children }: SectionCardProps) {
   return (
-    <section className="flex flex-col gap-3">
-      <header className="flex items-center justify-between">
+    <div className="flex flex-col items-center w-full rounded-[8px] border overflow-hidden bg-grey-light-300 border-grey-dark-100 dark:bg-black-primary-bg dark:border-black-300 shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]">
+      {/* Header row */}
+      <div className="flex h-[46px] w-full items-center justify-between pl-[14px] pr-[10px]">
         <div className="flex items-baseline gap-2">
-          <h2 className="text-base font-semibold text-grey-10">{title}</h2>
-          <span className="text-xs text-grey-50">
+          <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
+            {title}
+          </p>
+          <span className="text-[11px] text-grey-50 dark:text-grey-dark-600">
             {count} {count === 1 ? countLabel : countLabelPlural}
           </span>
         </div>
         {action}
-      </header>
-      {children}
-    </section>
+      </div>
+      {/* Inner white card */}
+      <div className="flex flex-col w-full flex-1 border-t border-grey-dark-100 bg-white dark:bg-black-600 dark:border-black-300 overflow-hidden">
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -363,57 +353,52 @@ interface ActiveSharesTableProps {
 }
 
 function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare, resharingToken }: ActiveSharesTableProps) {
-  // Server returns rows newest-first by createdAt. Default the visible
-  // sort cursor to that order so the chevron in the column header
-  // reflects what the user is actually seeing.
-  const [sorting, setSorting] = React.useState<SortingState>([
-    { id: "created", desc: true },
-  ]);
+  const [sorting, setSorting] = React.useState<SortingState>([{ id: "created", desc: true }]);
 
   const columns = React.useMemo(
     () => [
       activeColumnHelper.accessor("filename", {
         id: "name",
-        header: "NAME",
+        header: "Name",
         enableSorting: true,
         cell: (info) => <ActiveNameCell row={info.row.original} />,
       }),
       activeColumnHelper.display({
         id: "link",
-        header: "LINK",
+        header: "Link",
         enableSorting: false,
-        enableResizing: false,
         cell: ({ row }) => <LinkCell shareUrl={row.original.shareUrl} />,
       }),
       activeColumnHelper.accessor("plaintextSize", {
         id: "size",
-        header: "SIZE",
+        header: "Size",
         enableSorting: true,
         cell: (info) => (
-          <span className="text-grey-20 text-sm font-medium">
+          <span className="font-medium text-grey-20 dark:text-grey-dark-200">
             {formatBytes(info.getValue())}
           </span>
         ),
       }),
       activeColumnHelper.accessor((row) => Date.parse(row.createdAt), {
         id: "created",
-        header: "CREATED",
+        header: "Created",
         enableSorting: true,
-        cell: (info) => {
-          const original = info.row.original.createdAt;
-          return <span className="text-grey-20 text-sm">{formatRelative(original)}</span>;
-        },
+        cell: (info) => (
+          <span className="font-medium text-grey-20 dark:text-grey-dark-200">
+            {formatRelative(info.row.original.createdAt)}
+          </span>
+        ),
       }),
       activeColumnHelper.accessor((row) => Date.parse(row.expiresAt), {
         id: "endsAt",
-        header: "EXPIRES",
+        header: "Expires",
         enableSorting: true,
         cell: (info) => {
           const original = info.row.original.expiresAt;
           const ms = Date.parse(original);
           const expired = !Number.isNaN(ms) && ms <= Date.now();
           return (
-            <span className={cn("text-sm", expired ? "text-error-50" : "text-grey-20")}>
+            <span className={cn("font-medium", expired ? "text-error-50" : "text-grey-20 dark:text-grey-dark-200")}>
               {expired ? "Expired" : formatRelative(original)}
             </span>
           );
@@ -423,7 +408,6 @@ function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare, resharingToken }
         id: "actions",
         header: "",
         enableSorting: false,
-        enableResizing: false,
         cell: ({ row }) => (
           <ActiveActionsCell
             row={row.original}
@@ -448,30 +432,64 @@ function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare, resharingToken }
     getRowId: (row) => row.shareToken,
   });
 
-  return <RenderedTable table={table} columnWidths={COLUMN_WIDTHS} />;
+  return (
+    <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
+      <div className="overflow-x-auto custom-scrollbar-thin">
+        <Table className="min-w-[540px]">
+          <THead>
+            {table.getHeaderGroups().map((hg) => (
+              <Tr key={hg.id}>
+                {hg.headers.map((h) => (
+                  <Th
+                    key={h.id}
+                    header={h}
+                    className="bg-white dark:!bg-[#111111] !border-[#E3E3E3] dark:!border-[#313131]"
+                  />
+                ))}
+              </Tr>
+            ))}
+          </THead>
+          <TBody>
+            {table.getRowModel().rows.map((row) => (
+              <Tr key={row.id}>
+                {row.getVisibleCells().map((cell) => (
+                  <Td
+                    key={cell.id}
+                    cell={cell}
+                    className={cn(
+                      "!border-[#E3E3E3] dark:!border-[#313131]",
+                      row.index % 2 === 0
+                        ? "bg-[#fbfbfb] dark:bg-[#161616]"
+                        : "bg-[#f5f5f5] dark:bg-[#1e1e1e]",
+                    )}
+                  />
+                ))}
+              </Tr>
+            ))}
+          </TBody>
+        </Table>
+      </div>
+    </TableWrapper>
+  );
 }
 
 function ActiveNameCell({ row }: { row: ShareSummary }) {
   const expiresMs = Date.parse(row.expiresAt);
   const expired = !Number.isNaN(expiresMs) && expiresMs <= Date.now();
-  // The "minted on another device" signal is already conveyed by the
-  // empty link column ("Not available on this device") and the
-  // disabled Copy/Reshare items in the row menu — adding a name-cell
-  // badge for it just made the row noisy. The Expired badge stays;
-  // it's the only one carrying information neither column repeats.
-  const suffix = expired ? (
-    <span className="ml-1.5"><Badge tone="muted">Expired</Badge></span>
-  ) : undefined;
 
   return (
-    <div className="flex items-center gap-3 min-w-0">
-      <AbstractIconWrapper className="size-8 shrink-0">
-        <Icons.Link className="absolute size-4 text-primary-50" />
-      </AbstractIconWrapper>
+    <div className="flex items-center gap-2 min-w-0 max-w-[260px]">
+      <Icons.Link className="size-3.5 shrink-0 text-primary-50" />
       <MiddleTruncatedName
         name={row.filename}
-        textClassName="text-sm font-medium text-grey-10"
-        suffix={suffix}
+        textClassName="text-xs font-medium text-grey-20 dark:text-grey-dark-200"
+        suffix={
+          expired ? (
+            <span className="ml-1.5">
+              <Badge tone="muted">Expired</Badge>
+            </span>
+          ) : undefined
+        }
       />
     </div>
   );
@@ -493,7 +511,7 @@ function ActiveActionsCell({
   if (isResharing) {
     return (
       <div className="flex justify-center items-center h-8">
-        <Loader2 className="size-4 animate-spin text-grey-40" />
+        <Loader2 className="size-4 animate-spin text-grey-40 dark:text-grey-dark-600" />
       </div>
     );
   }
@@ -505,9 +523,7 @@ function ActiveActionsCell({
       itemTitle: "Copy link",
       onItemClick: () => onCopy(row.shareUrl),
       disabled: !row.shareUrl,
-      tooltip: row.shareUrl
-        ? undefined
-        : "The link can only be copied from the device that created it.",
+      tooltip: row.shareUrl ? undefined : "The link can only be copied from the device that created it.",
     },
     {
       icon: <RefreshCcw className="size-4" />,
@@ -540,15 +556,13 @@ interface HistoryTableProps {
 }
 
 function HistoryTable({ rows, onRemove }: HistoryTableProps) {
-  const [sorting, setSorting] = React.useState<SortingState>([
-    { id: "endsAt", desc: true },
-  ]);
+  const [sorting, setSorting] = React.useState<SortingState>([{ id: "endsAt", desc: true }]);
 
   const columns = React.useMemo(
     () => [
       historyColumnHelper.accessor((row) => row.filename ?? "", {
         id: "name",
-        header: "NAME",
+        header: "Name",
         enableSorting: true,
         sortingFn: (a, b) =>
           pickHistoryRowDisplay(a.original.filename).text.localeCompare(
@@ -558,12 +572,12 @@ function HistoryTable({ rows, onRemove }: HistoryTableProps) {
       }),
       historyColumnHelper.accessor((row) => row.plaintextSize ?? -1, {
         id: "size",
-        header: "SIZE",
+        header: "Size",
         enableSorting: true,
         cell: (info) => {
           const size = info.row.original.plaintextSize;
           return (
-            <span className="text-grey-20 text-sm font-medium">
+            <span className="font-medium text-grey-20 dark:text-grey-dark-200">
               {size !== null ? formatBytes(size) : "—"}
             </span>
           );
@@ -571,22 +585,22 @@ function HistoryTable({ rows, onRemove }: HistoryTableProps) {
       }),
       historyColumnHelper.accessor((row) => Date.parse(row.createdAt), {
         id: "created",
-        header: "CREATED",
+        header: "Created",
         enableSorting: true,
         cell: (info) => (
-          <span className="text-grey-20 text-sm">
+          <span className="font-medium text-grey-20 dark:text-grey-dark-200">
             {formatRelative(info.row.original.createdAt)}
           </span>
         ),
       }),
       historyColumnHelper.accessor((row) => Date.parse(row.endedAt), {
         id: "endsAt",
-        header: "ENDED",
+        header: "Ended",
         enableSorting: true,
         cell: (info) => {
           const entry = info.row.original;
           return (
-            <span className="text-grey-20 text-sm">
+            <span className="font-medium text-grey-20 dark:text-grey-dark-200">
               {historyEndedPhrase(entry.endReason)} {formatRelative(entry.endedAt)}
             </span>
           );
@@ -596,7 +610,6 @@ function HistoryTable({ rows, onRemove }: HistoryTableProps) {
         id: "actions",
         header: "",
         enableSorting: false,
-        enableResizing: false,
         cell: ({ row }) => (
           <RowActionMenu
             items={[
@@ -624,19 +637,55 @@ function HistoryTable({ rows, onRemove }: HistoryTableProps) {
     getRowId: (row) => row.shareToken,
   });
 
-  return <RenderedTable table={table} columnWidths={HISTORY_COLUMN_WIDTHS} />;
+  return (
+    <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
+      <div className="overflow-x-auto custom-scrollbar-thin">
+        <Table className="min-w-[400px]">
+          <THead>
+            {table.getHeaderGroups().map((hg) => (
+              <Tr key={hg.id}>
+                {hg.headers.map((h) => (
+                  <Th
+                    key={h.id}
+                    header={h}
+                    className="bg-white dark:!bg-[#111111] !border-[#E3E3E3] dark:!border-[#313131]"
+                  />
+                ))}
+              </Tr>
+            ))}
+          </THead>
+          <TBody>
+            {table.getRowModel().rows.map((row) => (
+              <Tr key={row.id}>
+                {row.getVisibleCells().map((cell) => (
+                  <Td
+                    key={cell.id}
+                    cell={cell}
+                    className={cn(
+                      "!border-[#E3E3E3] dark:!border-[#313131]",
+                      row.index % 2 === 0
+                        ? "bg-[#fbfbfb] dark:bg-[#161616]"
+                        : "bg-[#f5f5f5] dark:bg-[#1e1e1e]",
+                    )}
+                  />
+                ))}
+              </Tr>
+            ))}
+          </TBody>
+        </Table>
+      </div>
+    </TableWrapper>
+  );
 }
 
 function HistoryNameCell({ entry }: { entry: ShareHistoryEntry }) {
   const display = pickHistoryRowDisplay(entry.filename);
   return (
-    <div className="flex items-center gap-3 min-w-0">
-      <AbstractIconWrapper className="size-8 shrink-0">
-        <Icons.Link className="absolute size-4 text-grey-40" />
-      </AbstractIconWrapper>
+    <div className="flex items-center gap-2 min-w-0 max-w-[260px]">
+      <Icons.Link className="size-3.5 shrink-0 text-grey-40 dark:text-grey-dark-600" />
       {display.isPlaceholder ? (
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="text-sm italic text-grey-50 truncate" title={display.text}>
+          <span className="text-xs italic text-grey-50 dark:text-grey-dark-600 truncate" title={display.text}>
             {display.text}
           </span>
           <HistoryStatusBadge reason={entry.endReason} />
@@ -644,7 +693,7 @@ function HistoryNameCell({ entry }: { entry: ShareHistoryEntry }) {
       ) : (
         <MiddleTruncatedName
           name={display.text}
-          textClassName="text-sm font-medium text-grey-10"
+          textClassName="text-xs font-medium text-grey-20 dark:text-grey-dark-200"
           suffix={
             <span className="ml-1.5">
               <HistoryStatusBadge reason={entry.endReason} />
@@ -657,74 +706,9 @@ function HistoryNameCell({ entry }: { entry: ShareHistoryEntry }) {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Shared table renderer                                                     */
+/*  Link cell                                                                 */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Renders a TanStack table through the alt-table primitives so the
- * header (sort chevrons, alignment, uppercase) and body cells match
- * the My Drive table 1:1. Generic over both the active-shares and
- * history row shapes.
- */
-function RenderedTable<T>({
-  table,
-  columnWidths,
-}: {
-  table: ReturnType<typeof useReactTable<T>>;
-  columnWidths: Record<string, number>;
-}) {
-  return (
-    <TableModule.TableWrapper>
-      <TableModule.Table className="w-full table-fixed">
-        <TableModule.THead>
-          {table.getHeaderGroups().map((headerGroup) => (
-            <TableModule.Tr key={headerGroup.id}>
-              {headerGroup.headers.map((header) => (
-                <TableModule.Th
-                  key={header.id}
-                  header={header}
-                  align={header.id === "actions" ? "center" : "left"}
-                  columnWidth={columnWidths[header.id]}
-                  // Shares table has fixed proportions (CSS-defined), so
-                  // hide the resize handle entirely. The drag affordance
-                  // adds visual noise without offering anything useful.
-                  disableResize
-                />
-              ))}
-            </TableModule.Tr>
-          ))}
-        </TableModule.THead>
-        <TableModule.TBody>
-          {table.getRowModel().rows.map((row) => (
-            <TableModule.Tr key={row.id} rowHover transparent>
-              {row.getVisibleCells().map((cell) => (
-                <td
-                  key={cell.id}
-                  className={cn(
-                    "font-medium px-2.5 py-3 border-x border-grey-80 text-grey-60 text-sm last:border-r-0 first:border-l-0 overflow-hidden align-middle",
-                    cell.column.id === "actions" && "p-0",
-                  )}
-                  style={{ width: `${columnWidths[cell.column.id]}%` }}
-                >
-                  <div className="w-full min-w-0">
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </div>
-                </td>
-              ))}
-            </TableModule.Tr>
-          ))}
-        </TableModule.TBody>
-      </TableModule.Table>
-    </TableModule.TableWrapper>
-  );
-}
-
-/**
- * Inline link cell for the active-shares table. Renders a truncated
- * URL with a copy icon that flips to a green check for 2 s after a
- * successful copy. When the key is absent (cross-device share), shows
- * a muted placeholder — the 3-dot menu explains why.
- */
 function LinkCell({ shareUrl }: { shareUrl: string | null }) {
   const [copied, setCopied] = React.useState(false);
 
@@ -741,10 +725,15 @@ function LinkCell({ shareUrl }: { shareUrl: string | null }) {
   };
 
   if (!shareUrl) {
-    return <span className="text-grey-50 text-xs italic">Not available on this device</span>;
+    return (
+      <span className="text-xs italic text-grey-50 dark:text-grey-dark-600">
+        Not available on this device
+      </span>
+    );
   }
+
   return (
-    <div className="flex items-center gap-1.5 min-w-0">
+    <div className="flex items-center gap-1.5 min-w-0 max-w-[320px]">
       <span className="text-xs text-primary-50 font-mono truncate" title={shareUrl}>
         {shareUrl}
       </span>
@@ -757,7 +746,7 @@ function LinkCell({ shareUrl }: { shareUrl: string | null }) {
           "shrink-0 p-1 rounded transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-50",
           copied
             ? "text-success-50"
-            : "text-grey-40 hover:text-grey-10 hover:bg-grey-90",
+            : "text-grey-40 hover:text-grey-10 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:text-white dark:hover:bg-black-400",
         )}
       >
         {copied ? <Check className="size-3.5" /> : <CopyIcon className="size-3.5" />}
@@ -773,7 +762,7 @@ function RowActionMenu({ items }: { items: ActionItem[] }) {
         <Button
           variant="ghost"
           size="auto"
-          className="h-8 w-8 p-0 text-grey-70 action-menu-area"
+          className="h-6 w-6 p-0 text-grey-50 dark:text-grey-dark-600 hover:text-grey-10 dark:hover:text-white action-menu-area"
         >
           <MoreVertical className="size-4" />
         </Button>
@@ -782,17 +771,11 @@ function RowActionMenu({ items }: { items: ActionItem[] }) {
   );
 }
 
-/**
- * Subtitle verb for the "ended" half of a history-row subtitle.
- */
 function historyEndedPhrase(reason: HistoryEndReason): string {
   switch (reason) {
-    case "expired":
-      return "expired";
-    case "revoked_here":
-      return "revoked";
-    case "revoked_elsewhere":
-      return "revoked elsewhere";
+    case "expired":      return "Expired";
+    case "revoked_here": return "Revoked";
+    case "revoked_elsewhere": return "Revoked elsewhere";
   }
 }
 
@@ -807,33 +790,27 @@ function HistoryStatusBadge({ reason }: { reason: HistoryEndReason }) {
   }
 }
 
-function Badge({
-  tone,
-  children,
-}: {
-  tone: "muted" | "muted-italic" | "error";
-  children: React.ReactNode;
-}) {
+function Badge({ tone, children }: { tone: "muted" | "muted-italic" | "error"; children: React.ReactNode }) {
   const base = "text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded shrink-0";
   const toneClass =
     tone === "error"
-      ? "bg-error-100 text-error-50"
+      ? "bg-error-100 text-error-50 dark:bg-error-50/20 dark:text-error-50"
       : tone === "muted-italic"
-        ? "bg-grey-90 text-grey-30 italic"
-        : "bg-grey-90 text-grey-30";
+        ? "bg-grey-90 text-grey-30 italic dark:bg-black-400 dark:text-grey-dark-600"
+        : "bg-grey-90 text-grey-30 dark:bg-black-400 dark:text-grey-dark-600";
   return <span className={cn(base, toneClass)}>{children}</span>;
 }
 
 function EmptyState() {
   return (
-    <div className="flex flex-col items-center justify-center text-center p-12 bg-white border border-grey-80 rounded-lg">
-      <AbstractIconWrapper className="size-12 mb-3">
-        <Icons.Link className="absolute size-6 text-primary-50" />
+    <div className="flex flex-col items-center justify-center text-center px-6 py-10">
+      <AbstractIconWrapper className="size-10 mb-2.5">
+        <Icons.Link className="absolute size-5 text-primary-50" />
       </AbstractIconWrapper>
-      <h3 className="text-grey-10 font-medium text-base">No shared links</h3>
-      <p className="text-xs text-grey-60 mt-1 max-w-sm">
-        Right-click any synced file and choose &ldquo;Share via link&rdquo; to mint a public link. Active links
-        appear here with options to copy, refresh the expiry, or revoke.
+      <h3 className="text-grey-10 dark:text-grey-light-100 font-medium text-sm">No shared links</h3>
+      <p className="text-xs text-grey-60 dark:text-grey-dark-600 mt-1 max-w-sm">
+        Right-click any synced file and choose &ldquo;Share via link&rdquo; to mint a public link.
+        Active links appear here with options to copy, refresh the expiry, or revoke.
       </p>
     </div>
   );
@@ -841,16 +818,15 @@ function EmptyState() {
 
 function FeatureUnavailable() {
   return (
-    <div className="flex flex-col items-center justify-center text-center p-12 bg-white border border-grey-80 rounded-lg">
-      <AbstractIconWrapper className="size-12 mb-3">
-        <Icons.Link className="absolute size-6 text-grey-40" />
+    <div className="flex flex-col items-center justify-center text-center px-6 py-10 bg-white dark:bg-black-600 border border-grey-dark-100 dark:border-black-300 rounded-[8px]">
+      <AbstractIconWrapper className="size-10 mb-2.5">
+        <Icons.Link className="absolute size-5 text-grey-40 dark:text-grey-dark-600" />
       </AbstractIconWrapper>
-      <h3 className="text-grey-10 font-medium text-base">File sharing unavailable</h3>
-      <p className="text-xs text-grey-60 mt-1 max-w-sm">
+      <h3 className="text-grey-10 dark:text-grey-light-100 font-medium text-sm">File sharing unavailable</h3>
+      <p className="text-xs text-grey-60 dark:text-grey-dark-600 mt-1 max-w-sm">
         The connected server doesn&apos;t advertise the file-sharing capability. Update the server, or
         connect to one that supports public links.
       </p>
     </div>
   );
 }
-

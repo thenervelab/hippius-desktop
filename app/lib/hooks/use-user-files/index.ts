@@ -34,6 +34,16 @@ export type FormattedUserFile = {
   syncStatus?: "synced" | "pending" | "uploading" | "downloading" | "unknown" | "excluded";
   label?: string;
   fileCount?: number;
+  /**
+   * For folder rows whose `actualFileName` is only the basename (the
+   * inline-expanded tree never embeds the path in the folder name), this
+   * carries the sync-root-relative path of the containing folder. Stored
+   * at selection time and used by `FileSelectionContext` and the cascade
+   * logic to disambiguate two folders with the same name at different
+   * tree locations. Files don't need this because their `actualFileName`
+   * already contains the full relative path.
+   */
+  parentRelativePath?: string;
 };
 
 export interface LabelStats {

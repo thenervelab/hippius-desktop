@@ -20,6 +20,7 @@ import {
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { useNestedFolderListing } from "@/app/lib/hooks/use-nested-folder-listing";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
+import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregate-selection";
 import TableActionMenu, {
   type ActionItem,
 } from "@/app/components/ui/alt-table/TableActionMenu";
@@ -93,6 +94,20 @@ export interface ExpandedFolderRowsProps {
   onOpenFolder?: (folder: FormattedUserFile, parentSubFolderPath: string) => void;
   sortBy?: "name" | "size" | "date_uploaded";
   sortDir?: "asc" | "desc";
+  /**
+   * Chain of folder rows that are currently selected and lie strictly
+   * above this rendering context. When non-empty, every visible row at
+   * this depth visually cascades-selected (the topmost ancestor is
+   * checked, so the user "sees" the selection flow downward). The
+   * parent passes its own row appended when it is itself selected.
+   */
+  ancestorChain?: FormattedUserFile[];
+  /**
+   * Bridge to FilesTable's deletion tracker. Same shape as the
+   * `isItemDeleting` helper there — accepts the row and its parent
+   * relative path, returns true while the delete IPC is in flight.
+   */
+  isItemDeleting?: (file: FormattedUserFile, parentPath: string) => boolean;
 }
 
 /**
@@ -125,9 +140,21 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
   onOpenFolder,
   sortBy,
   sortDir,
+  ancestorChain = [],
+  isItemDeleting,
 }) => {
-  const { isSelectionMode, toggleFileSelection, isFileSelected } =
-    useFileSelection();
+  const {
+    isSelectionMode,
+    toggleFileSelection,
+    toggleFolderSelection,
+    removeFileFromSelection,
+    addFilesToSelection,
+  } = useFileSelection();
+  const {
+    isVisuallySelected,
+    classifyVisualSelection,
+    clearAggregateSelection,
+  } = useFolderAggregateSelection();
   const [expandedSubfolders, setExpandedSubfolders] = useState<
     Record<string, boolean>
   >({});
@@ -274,8 +301,19 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
 
         const { fileFormat } = getFilePartsFromFileName(childFile.name);
         const fileType = getFileTypeFromExtension(fileFormat || null);
-        const isSelected = isFileSelected(childFile);
-        const canSelect = childFile.isAssigned;
+        // Annotate child row with its parent path so all selection /
+        // deletion keys downstream are unambiguous.
+        const annotatedChild: FormattedUserFile = {
+          ...childFile,
+          parentRelativePath: childFile.isFolder
+            ? folderRelativePath
+            : childFile.parentRelativePath,
+        };
+        const isDeleting = Boolean(
+          isItemDeleting?.(childFile, folderRelativePath),
+        );
+        const isSelected = isVisuallySelected(annotatedChild, ancestorChain);
+        const canSelect = childFile.isAssigned && !isDeleting;
         const isChildFolder = Boolean(childFile.isFolder);
         const childRelativePath = resolveRelativePath(
           folderRelativePath,
@@ -283,6 +321,45 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
         );
         const isSubfolderExpanded =
           isChildFolder && Boolean(expandedSubfolders[childRelativePath]);
+
+        // Cascade-aware toggle for nested rows. Same branching as the
+        // top-level handler in FilesTable: cascade → split ancestor
+        // into visible siblings; direct → remove (and wipe leaves on
+        // folder deselect); none → fresh add via folder-or-file path.
+        const handleToggleChild = () => {
+          const kind = classifyVisualSelection(annotatedChild, ancestorChain);
+          if (kind === "cascade" && ancestorChain.length > 0) {
+            const topAncestor = ancestorChain[0];
+            removeFileFromSelection(topAncestor);
+            const siblings = visibleData
+              .filter(
+                (other) =>
+                  (other.actualFileName ?? other.name) !==
+                  (childFile.actualFileName ?? childFile.name),
+              )
+              .map((other) => ({
+                ...other,
+                parentRelativePath: other.isFolder
+                  ? folderRelativePath
+                  : other.parentRelativePath,
+              }));
+            addFilesToSelection(siblings);
+            return;
+          }
+          if (kind === "direct") {
+            removeFileFromSelection(annotatedChild);
+            if (annotatedChild.isFolder) {
+              clearAggregateSelection(annotatedChild);
+            }
+            return;
+          }
+          if (annotatedChild.isFolder) {
+            clearAggregateSelection(annotatedChild);
+            toggleFolderSelection(annotatedChild);
+          } else {
+            toggleFileSelection(annotatedChild);
+          }
+        };
 
         const nameNode = (
           <NameCell
@@ -345,6 +422,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                 "border-b-0 odd:bg-grey-light-200 even:bg-grey-light-400 hover:bg-grey-light-300 dark:odd:bg-black-500 dark:even:bg-black-primary-bg dark:hover:bg-black-300",
                 rowState === "pending" && "animate-pulse",
                 rowState === "error" && "bg-red-200/20",
+                isDeleting && "opacity-50 cursor-not-allowed pointer-events-none",
                 isSelectionMode && canSelect && "cursor-pointer",
                 isSelectionMode &&
                   isSelected &&
@@ -358,8 +436,16 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                   !canSelect &&
                   "opacity-50 cursor-not-allowed",
               )}
-              onContextMenu={(event) => onRowContextMenu?.(event, childFile)}
+              onContextMenu={(event) => {
+                if (isDeleting) return;
+                onRowContextMenu?.(event, childFile);
+              }}
               onClick={(event) => {
+                if (isDeleting) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  return;
+                }
                 const target = event.target as HTMLElement;
                 if (
                   target.closest(".action-menu-area") ||
@@ -373,7 +459,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                 if (isSelectionMode && canSelect) {
                   event.preventDefault();
                   event.stopPropagation();
-                  toggleFileSelection(childFile);
+                  handleToggleChild();
                 }
               }}
             >
@@ -382,7 +468,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                   <div className="flex justify-center checkbox-container">
                     <FileCheckbox
                       selected={isSelected}
-                      onChange={() => toggleFileSelection(childFile)}
+                      onChange={handleToggleChild}
                       disabled={!canSelect}
                     />
                   </div>
@@ -474,6 +560,12 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                 onOpenFolder={onOpenFolder}
                 sortBy={sortBy}
                 sortDir={sortDir}
+                ancestorChain={
+                  isSelected
+                    ? [...ancestorChain, annotatedChild]
+                    : ancestorChain
+                }
+                isItemDeleting={isItemDeleting}
               />
             ) : null}
           </React.Fragment>

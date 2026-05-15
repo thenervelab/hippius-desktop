@@ -96,7 +96,7 @@ const TopBarLogoMenu = () => {
           side="bottom"
           sideOffset={8}
           className={cn(
-            "w-[222px] rounded-[8px] border border-grey-dark-100 bg-white p-1",
+            "w-[222px] rounded-[8px] border border-grey-dark-100 bg-white p-1 z-[1100]",
             "shadow-[0_4px_24px_0_rgba(0,0,0,0.08)]",
             "dark:border-[#313131] dark:bg-[#161616]",
           )}

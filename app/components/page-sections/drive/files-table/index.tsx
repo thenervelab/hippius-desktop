@@ -3,6 +3,7 @@ import React, {
   useState,
   useMemo,
   useEffect,
+  useLayoutEffect,
   useCallback,
   memo,
   useRef,
@@ -55,6 +56,7 @@ import { useRouter } from "next/navigation";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { FormattedTimestamp } from "@/app/components/ui"; // Add this import
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
+import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregate-selection";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
@@ -66,6 +68,56 @@ import { toast } from "sonner";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserFile>();
+
+type ScrollTarget = Window | HTMLElement;
+
+const isScrollableElement = (element: HTMLElement) => {
+  const style = window.getComputedStyle(element);
+  const overflowY = style.overflowY;
+  const overflowX = style.overflowX;
+  const canScrollY =
+    (overflowY === "auto" || overflowY === "scroll") &&
+    element.scrollHeight > element.clientHeight;
+  const canScrollX =
+    (overflowX === "auto" || overflowX === "scroll") &&
+    element.scrollWidth > element.clientWidth;
+  return canScrollY || canScrollX;
+};
+
+const getScrollTarget = (start: HTMLElement | null): ScrollTarget => {
+  let current = start;
+  while (current) {
+    if (isScrollableElement(current)) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return window;
+};
+
+/**
+ * Identity key for an item currently mid-deletion. Files carry their
+ * full sync-root-relative path in `actualFileName`, but folder rows only
+ * carry the basename, so the `parentPath` context must be supplied by
+ * the caller (e.g. `normalizedSubfolderPath` for top-level rows,
+ * `folderRelativePath` for nested rows).
+ */
+const getDeletionItemKey = (
+  file: FormattedUserFile,
+  parentPath: string,
+): string => {
+  const name = file.actualFileName ?? file.name;
+  if (file.isFolder) {
+    const fullPath = parentPath ? `${parentPath}/${name}` : name;
+    return `folder:${file.label ?? ""}::${fullPath}`;
+  }
+  return `file:${file.label ?? ""}::${name}`;
+};
+
+// Fixed pixel width for the selection (checkbox) column. The other columns
+// remain percentage-based; under `table-layout: fixed` the browser reserves
+// these 40px for the checkbox and distributes the remainder proportionally.
+const SELECTION_COLUMN_WIDTH_PX = 40;
 
 // Default widths when NOT in selection mode (no selection column)
 const DEFAULT_COLUMN_WIDTHS_NO_SELECTION = {
@@ -399,10 +451,75 @@ const FilesTable: FC<FilesTableProps> = memo(
       selectedFiles,
       enterSelectionModeAndSelectFile,
       toggleFileSelection,
+      toggleFolderSelection,
+      removeFileFromSelection,
+      addFilesToSelection,
     } = useFileSelection();
+    const {
+      isVisuallySelected,
+      classifyVisualSelection,
+      clearAggregateSelection,
+    } = useFolderAggregateSelection();
+    const pendingSelectionScrollRef = useRef<{
+      target: ScrollTarget;
+      x: number;
+      y: number;
+    } | null>(null);
 
     // State for captured files to delete (to handle timing issue with clearSelection)
     const [filesToDelete, setFilesToDelete] = useState<FormattedUserFile[]>([]);
+
+    // ── Mid-deletion tracking ───────────────────────────────────────
+    // Keys in this Set are items whose delete IPC is still in flight.
+    // Mirrors hippius-console's `deletingItemKeys` so the same row
+    // can't be deleted twice, double-clicked, navigated into, or have
+    // its action menu re-opened while the backend works through it.
+    // The ref is the source of truth (read synchronously inside
+    // callbacks); state is mirrored only to retrigger renders.
+    const [deletingItemKeys, setDeletingItemKeys] = useState<string[]>([]);
+    const deletingItemKeysRef = useRef<Set<string>>(new Set());
+
+    const syncDeletingItemKeys = useCallback((nextKeys: Set<string>) => {
+      deletingItemKeysRef.current = nextKeys;
+      setDeletingItemKeys(Array.from(nextKeys));
+    }, []);
+
+    const addDeletingItems = useCallback(
+      (items: FormattedUserFile[], parentPath: string) => {
+        const nextKeys = new Set(deletingItemKeysRef.current);
+        items.forEach((item) =>
+          nextKeys.add(getDeletionItemKey(item, parentPath)),
+        );
+        syncDeletingItemKeys(nextKeys);
+      },
+      [syncDeletingItemKeys],
+    );
+
+    const removeDeletingItems = useCallback(
+      (items: FormattedUserFile[], parentPath: string) => {
+        const nextKeys = new Set(deletingItemKeysRef.current);
+        items.forEach((item) =>
+          nextKeys.delete(getDeletionItemKey(item, parentPath)),
+        );
+        syncDeletingItemKeys(nextKeys);
+      },
+      [syncDeletingItemKeys],
+    );
+
+    /**
+     * Checks if `file` is currently mid-deletion. The lookup key combines
+     * `label` + full relative path; folder rows must be passed the
+     * `parentPath` they were rendered in so two folders that share a
+     * basename in different locations don't disable each other.
+     */
+    const isItemDeleting = useCallback(
+      (file: FormattedUserFile, parentPath: string) =>
+        deletingItemKeysRef.current.has(getDeletionItemKey(file, parentPath)),
+      // deletingItemKeys is in deps so consumers re-render when the set
+      // changes; the ref read is intentional (it's always up-to-date).
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [deletingItemKeys],
+    );
 
     const { mutate: deleteFiles, isPending: isDeleting } = useDeleteFile({
       files: filesToDelete,
@@ -452,10 +569,24 @@ const FilesTable: FC<FilesTableProps> = memo(
 
     const handleDeleteFile = useCallback(
       (file: FormattedUserFile) => {
-        // Enter selection mode and select this file for deletion
-        enterSelectionModeAndSelectFile(file);
+        // Don't allow re-entering delete flow for a row that's already
+        // mid-deletion — the action menu shouldn't get here anyway
+        // because it disables the item, but guard defensively.
+        if (isItemDeleting(file, normalizedSubfolderPath)) return;
+        // Annotate the row with its parent path so the selection
+        // context can build a unique key for folders sharing a name.
+        enterSelectionModeAndSelectFile({
+          ...file,
+          parentRelativePath: file.isFolder
+            ? normalizedSubfolderPath
+            : file.parentRelativePath,
+        });
       },
-      [enterSelectionModeAndSelectFile],
+      [
+        enterSelectionModeAndSelectFile,
+        isItemDeleting,
+        normalizedSubfolderPath,
+      ],
     );
 
     // Handle file deletion with captured files from confirmation dialog
@@ -463,22 +594,94 @@ const FilesTable: FC<FilesTableProps> = memo(
       (capturedFiles: FormattedUserFile[]) => {
         if (capturedFiles.length === 0) return;
 
-        setFilesToDelete(capturedFiles);
+        // Filter out anything already mid-deletion so a fast double-tap
+        // can't queue the same delete twice.
+        const fresh = capturedFiles.filter(
+          (f) =>
+            !deletingItemKeysRef.current.has(
+              getDeletionItemKey(
+                f,
+                f.isFolder ? (f.parentRelativePath ?? "") : "",
+              ),
+            ),
+        );
+        if (fresh.length === 0) return;
 
-        // Use setTimeout to ensure the delete hook reinitializes with new files
+        // Mark every targeted row as mid-deletion BEFORE kicking off
+        // the mutation so the table re-renders with disabled state on
+        // the very next paint. The parentPath here mirrors what the
+        // row was rendered with so the key matches lookups in the
+        // table body.
+        fresh.forEach((f) => {
+          const parentPath = f.isFolder ? (f.parentRelativePath ?? "") : "";
+          addDeletingItems([f], parentPath);
+        });
+
+        setFilesToDelete(fresh);
+
+        // setTimeout matches the pre-existing pattern: it lets the
+        // useDeleteFile hook re-initialise with `filesToDelete`
+        // before `deleteFiles` reads its mutation function.
         setTimeout(() => {
           deleteFiles(undefined, {
-            onSuccess: () => {
-              setFilesToDelete([]);
-            },
-            onError: () => {
+            onSettled: () => {
+              fresh.forEach((f) => {
+                const parentPath = f.isFolder
+                  ? (f.parentRelativePath ?? "")
+                  : "";
+                removeDeletingItems([f], parentPath);
+              });
               setFilesToDelete([]);
             },
           });
         }, 100);
       },
-      [deleteFiles],
+      [deleteFiles, addDeletingItems, removeDeletingItems],
     );
+
+    // The files page scrolls inside ResponsiveContent's overflow container,
+    // not always on `window`, so capture the real scroll parent before the click
+    // and restore that same target after selection updates.
+    const captureSelectionScrollPosition = useCallback(
+      (start: HTMLElement) => {
+        if (!isSelectionMode) return;
+        const target = getScrollTarget(start);
+        const isWindowTarget = target instanceof Window;
+        pendingSelectionScrollRef.current = {
+          target,
+          x: isWindowTarget ? target.scrollX : target.scrollLeft,
+          y: isWindowTarget ? target.scrollY : target.scrollTop,
+        };
+      },
+      [isSelectionMode],
+    );
+
+    useLayoutEffect(() => {
+      const snapshot = pendingSelectionScrollRef.current;
+      if (!snapshot) return;
+
+      pendingSelectionScrollRef.current = null;
+      const frameId = window.requestAnimationFrame(() => {
+        const { target } = snapshot;
+        if (target instanceof Window) {
+          if (target.scrollX !== snapshot.x || target.scrollY !== snapshot.y) {
+            target.scrollTo(snapshot.x, snapshot.y);
+          }
+          return;
+        }
+
+        if (
+          target.scrollLeft !== snapshot.x ||
+          target.scrollTop !== snapshot.y
+        ) {
+          target.scrollLeft = snapshot.x;
+          target.scrollTop = snapshot.y;
+        }
+      });
+
+      return () => window.cancelAnimationFrame(frameId);
+    }, [selectedFiles]);
+
     const createTableItems = useCallback(
       (
         file: FormattedUserFile,
@@ -503,6 +706,17 @@ const FilesTable: FC<FilesTableProps> = memo(
           folderUrl = url;
         }
 
+        // Action-menu items disable themselves when their row is
+        // mid-deletion. The parent-path used for the key MUST match
+        // what the row was rendered with: top-level rows use
+        // `normalizedSubfolderPath`, nested rows use the calling
+        // ExpandedFolderRows' `folderRelativePath` (passed via
+        // `parentSubFolderPath`).
+        const itemDeleting = isItemDeleting(
+          file,
+          parentSubFolderPath ?? normalizedSubfolderPath,
+        );
+
         return [
           ...(file.isFolder && folderExpansion
             ? [
@@ -516,6 +730,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                     ? "Collapse Folder"
                     : "Expand Folder",
                   onItemClick: folderExpansion.onToggle,
+                  disabled: itemDeleting,
                 },
               ]
             : []),
@@ -527,6 +742,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   onItemClick: () => {
                     router.push(folderUrl);
                   },
+                  disabled: itemDeleting,
                 },
               ]
             : []),
@@ -534,6 +750,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             icon: <Download className="size-4" />,
             itemTitle: "Download",
             onItemClick: () => handleDownload(file),
+            disabled: itemDeleting,
           },
           ...((fileType === "video" ||
             fileType === "image" ||
@@ -544,6 +761,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   icon: <Icons.Eye className="size-4" />,
                   itemTitle: "View",
                   onItemClick: () => handleSetSelectedFile(file),
+                  disabled: itemDeleting,
                 },
               ]
             : []),
@@ -566,11 +784,13 @@ const FilesTable: FC<FilesTableProps> = memo(
                 );
               }
             },
+            disabled: itemDeleting,
           },
           {
             icon: <Icons.InfoCircle className="size-4" />,
             itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,
             onItemClick: () => localHandleShowFileDetails(file),
+            disabled: itemDeleting,
           },
           ...(!file.isFolder && arionHash && arionHash !== "pending"
             ? [
@@ -586,6 +806,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                       console.error("Failed to open Explorer:", error);
                     }
                   },
+                  disabled: itemDeleting,
                 },
               ]
             : []),
@@ -601,21 +822,27 @@ const FilesTable: FC<FilesTableProps> = memo(
                   onItemClick: () => {
                     setShareModalFile(file);
                   },
+                  disabled: itemDeleting,
                 },
               ]
             : []),
-          // Always show delete option, but disabled for unpinned files
+          // Delete is gated by both sync state (unassigned files are
+          // mid-upload) and live deletion state (already in flight).
           {
             icon: <Icons.Trash className="size-4" />,
             itemTitle: !file.isAssigned
               ? "Delete (Syncing in progress...)"
-              : "Delete",
-            disabled: !file.isAssigned,
+              : itemDeleting
+                ? "Deleting..."
+                : "Delete",
+            disabled: !file.isAssigned || itemDeleting,
             tooltip: !file.isAssigned
               ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete."
-              : undefined,
+              : itemDeleting
+                ? "This item is already being deleted."
+                : undefined,
             onItemClick: () => {
-              if (file.isAssigned) {
+              if (file.isAssigned && !itemDeleting) {
                 handleDeleteFile(file);
               }
             },
@@ -633,6 +860,8 @@ const FilesTable: FC<FilesTableProps> = memo(
         polkadotAddress,
         shareEnabled,
         setShareModalFile,
+        isItemDeleting,
+        normalizedSubfolderPath,
       ],
     );
 
@@ -946,7 +1175,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         const currentIndex = columnIds.indexOf(columnId);
         const nextColumnId = columnIds[currentIndex + 1];
 
-        if (nextColumnId && columnId !== "actions") {
+        if (nextColumnId && columnId !== "actions" && columnId !== "selection") {
           setIsResizing(true);
           setResizeData({
             columnId,
@@ -1101,24 +1330,39 @@ const FilesTable: FC<FilesTableProps> = memo(
             draggable={false}
             className="border-b-grey-dark-100"
           >
-            {headerGroup.headers.map((header) => (
-              <TableModule.Th
-                key={header.id}
-                header={header}
-                align={header.id === "selection" ? "center" : "left"}
-                columnWidth={columnWidths[header.id]}
-                onResizeStart={handleResizeStart}
-                preventSort={justResized}
-                disableUppercase
-                className={cn(
-                  "h-8 px-2 py-2 border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-600 dark:bg-black-600 dark:border-black-300 dark:hover:bg-black-400",
-                  // When the chevron slot is reserved in body rows, indent
-                  // the "Name" header by the same amount (slot 20px + gap 8px)
-                  // so the label visually lines up with the file names below.
-                  header.id === "name" && hasAnyFolder && "pl-9",
-                )}
-              />
-            ))}
+            {headerGroup.headers.map((header) => {
+              const isSelectionHeader = header.id === "selection";
+              return (
+                <TableModule.Th
+                  key={header.id}
+                  header={header}
+                  align={isSelectionHeader ? "center" : "left"}
+                  columnWidth={
+                    isSelectionHeader ? undefined : columnWidths[header.id]
+                  }
+                  onResizeStart={handleResizeStart}
+                  preventSort={justResized}
+                  disableUppercase
+                  disableResize={isSelectionHeader}
+                  style={
+                    isSelectionHeader
+                      ? {
+                          width: SELECTION_COLUMN_WIDTH_PX,
+                          minWidth: SELECTION_COLUMN_WIDTH_PX,
+                          maxWidth: SELECTION_COLUMN_WIDTH_PX,
+                        }
+                      : undefined
+                  }
+                  className={cn(
+                    "h-8 px-2 py-2 border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-600 dark:bg-black-600 dark:border-black-300 dark:hover:bg-black-400",
+                    // When the chevron slot is reserved in body rows, indent
+                    // the "Name" header by the same amount (slot 20px + gap 8px)
+                    // so the label visually lines up with the file names below.
+                    header.id === "name" && hasAnyFolder && "pl-9",
+                  )}
+                />
+              );
+            })}
           </TableModule.Tr>
         )),
       [
@@ -1158,11 +1402,135 @@ const FilesTable: FC<FilesTableProps> = memo(
       () => (
         <colgroup>
           {orderedColumnIds.map((id) => (
-            <col key={id} style={{ width: `${columnWidths[id]}%` }} />
+            <col
+              key={id}
+              style={{
+                width:
+                  id === "selection" ? `${SELECTION_COLUMN_WIDTH_PX}px` : `${columnWidths[id]}%`,
+              }}
+            />
           ))}
         </colgroup>
       ),
       [orderedColumnIds, columnWidths],
+    );
+
+    /**
+     * Cascade ancestor (singular) — the top-level folder row that is
+     * currently selected and contains every visible row at this level.
+     * The console supports an arbitrary-depth chain; on desktop the
+     * top-level table only ever renders one level (drilling deeper
+     * happens inside `ExpandedFolderRows`), so a single optional
+     * ancestor is enough here. Deeper chains are propagated into the
+     * expanded rows separately.
+     */
+    const cascadeAncestor = useMemo<FormattedUserFile | null>(() => {
+      for (const sel of selectedFiles) {
+        if (!sel.isFolder) continue;
+        if ((sel.parentRelativePath ?? "") === normalizedSubfolderPath) {
+          // A folder rendered at this level is selected — every row
+          // below it that's a strict descendant should cascade-render.
+          return sel;
+        }
+      }
+      return null;
+    }, [selectedFiles, normalizedSubfolderPath]);
+
+    const cascadeAncestorChain = useMemo<FormattedUserFile[]>(
+      () => (cascadeAncestor ? [cascadeAncestor] : []),
+      [cascadeAncestor],
+    );
+
+    /**
+     * Cascade-aware toggle for top-level rows. Branches by why the row
+     * currently renders checked:
+     *   - "direct": row itself is in selectedFiles → just remove it (and
+     *     wipe any straggling individual descendant selections if it's
+     *     a folder, so the visual is fully clean).
+     *   - "cascade": an ancestor folder is selected and this row is
+     *     visually checked through that → split the ancestor out into
+     *     its visible siblings minus the clicked path.
+     *   - "none": fresh selection. Folders use `toggleFolderSelection`
+     *     (subsumes existing descendants); files use
+     *     `toggleFileSelection`.
+     */
+    const handleToggleTopLevelRow = useCallback(
+      (file: FormattedUserFile) => {
+        // Always annotate with the parent path of the row so the
+        // selection identity is unambiguous downstream.
+        const annotated: FormattedUserFile = {
+          ...file,
+          parentRelativePath: file.isFolder
+            ? normalizedSubfolderPath
+            : file.parentRelativePath,
+        };
+        const kind = classifyVisualSelection(annotated, cascadeAncestorChain);
+
+        if (kind === "cascade" && cascadeAncestor) {
+          // Replace the ancestor folder selection with the visible
+          // siblings (other than the clicked row). Past this level we
+          // can't enumerate descendants the user hasn't expanded, so
+          // those branches stay collapsed under the ancestor's
+          // disappearance — same trade-off as the console.
+          const visibleAtThisLevel = visibleRows
+            .map((row) => row.original)
+            .filter((other) => {
+              const sameLabel =
+                (other.label ?? "") === (cascadeAncestor.label ?? "");
+              return sameLabel;
+            });
+          removeFileFromSelection(cascadeAncestor);
+          const siblings = visibleAtThisLevel
+            .filter((other) => {
+              if (other === file) return false;
+              if (other.isFolder && file.isFolder) {
+                return (
+                  (other.actualFileName ?? other.name) !==
+                  (file.actualFileName ?? file.name)
+                );
+              }
+              return (
+                (other.actualFileName ?? other.name) !==
+                (file.actualFileName ?? file.name)
+              );
+            })
+            .map((other) => ({
+              ...other,
+              parentRelativePath: other.isFolder
+                ? normalizedSubfolderPath
+                : other.parentRelativePath,
+            }));
+          addFilesToSelection(siblings);
+          return;
+        }
+
+        if (kind === "direct") {
+          removeFileFromSelection(annotated);
+          if (annotated.isFolder) {
+            clearAggregateSelection(annotated);
+          }
+          return;
+        }
+
+        if (annotated.isFolder) {
+          clearAggregateSelection(annotated);
+          toggleFolderSelection(annotated);
+        } else {
+          toggleFileSelection(annotated);
+        }
+      },
+      [
+        classifyVisualSelection,
+        cascadeAncestor,
+        cascadeAncestorChain,
+        normalizedSubfolderPath,
+        visibleRows,
+        addFilesToSelection,
+        removeFileFromSelection,
+        clearAggregateSelection,
+        toggleFolderSelection,
+        toggleFileSelection,
+      ],
     );
 
     const tableBody = useMemo(
@@ -1187,39 +1555,56 @@ const FilesTable: FC<FilesTableProps> = memo(
             : undefined;
           const canInlineExpand =
             enableFolderExpander && rowData.isFolder && Boolean(syncPath);
+          // Annotated copy used everywhere selection/cascade keys are
+          // looked up — keeps the row's parent path on the row object
+          // so context helpers can build keys without re-deriving it.
+          const annotatedRow: FormattedUserFile = {
+            ...rowData,
+            parentRelativePath: rowData.isFolder
+              ? normalizedSubfolderPath
+              : rowData.parentRelativePath,
+          };
+          const isDeleting = isItemDeleting(rowData, normalizedSubfolderPath);
+          const isSelectedRow = isVisuallySelected(
+            annotatedRow,
+            cascadeAncestorChain,
+          );
+          const canSelectRow = rowData.isAssigned && !isDeleting;
 
           return (
             <React.Fragment key={`${row.id}-${rowState}`}>
               <TableModule.Tr
-                rowHover
+                rowHover={!isDeleting}
                 transparent
                 className={cn(
                   "border-b-0 odd:bg-grey-light-200 even:bg-grey-light-400 hover:bg-grey-light-300 dark:odd:bg-black-500 dark:even:bg-black-primary-bg dark:hover:bg-black-300",
                   rowState === "pending" && "animate-pulse",
                   rowState === "error" && "bg-red-200/20",
-                  isSelectionMode && rowData.isAssigned && "cursor-pointer",
+                  isDeleting &&
+                    "opacity-50 cursor-not-allowed pointer-events-none",
+                  isSelectionMode && canSelectRow && "cursor-pointer",
                   isSelectionMode &&
-                    selectedFiles.some(
-                      (f) =>
-                        f.actualFileName === rowData.actualFileName &&
-                        f.label === rowData.label,
-                    ) &&
-                    rowData.isAssigned &&
+                    isSelectedRow &&
+                    canSelectRow &&
                     "bg-primary-60/10",
                   isSelectionMode &&
-                    !selectedFiles.some(
-                      (f) =>
-                        f.actualFileName === rowData.actualFileName &&
-                        f.label === rowData.label,
-                    ) &&
-                    rowData.isAssigned &&
+                    !isSelectedRow &&
+                    canSelectRow &&
                     "hover:bg-primary-60/8",
                   isSelectionMode &&
-                    !rowData.isAssigned &&
+                    !canSelectRow &&
                     "opacity-50 cursor-not-allowed",
                 )}
-                onContextMenu={(e) => localHandleContextMenu(e, rowData)}
+                onContextMenu={(e) => {
+                  if (isDeleting) return;
+                  localHandleContextMenu(e, rowData);
+                }}
                 onClick={(e) => {
+                  if (isDeleting) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                  }
                   // Don't handle clicks if it's on the action menu area or checkbox area
                   const target = e.target as HTMLElement;
                   if (
@@ -1231,26 +1616,40 @@ const FilesTable: FC<FilesTableProps> = memo(
                     return;
                   }
 
-                  if (isSelectionMode && rowData.isAssigned) {
+                  if (isSelectionMode && canSelectRow) {
                     e.preventDefault();
                     e.stopPropagation();
-                    toggleFileSelection(rowData);
+                    handleToggleTopLevelRow(rowData);
                   }
                 }}
               >
-                {row.getVisibleCells().map((cell) => (
-                  <TableModule.Td
-                    className={cn(
-                      "px-2 py-[5px] border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-800 text-xs dark:border-black-300",
-                      cell.column.id === "actions" && "p-0",
-                      cell.column.id === "name" && "p-0 relative",
-                      cell.column.id === "arionHash" && "p-0",
-                    )}
-                    key={cell.id}
-                    cell={cell}
-                    columnWidth={columnWidths[cell.column.id]}
-                  />
-                ))}
+                {row.getVisibleCells().map((cell) => {
+                  const isSelectionCell = cell.column.id === "selection";
+                  return (
+                    <TableModule.Td
+                      className={cn(
+                        "px-2 py-[5px] border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-800 text-xs dark:border-black-300",
+                        cell.column.id === "actions" && "p-0",
+                        cell.column.id === "name" && "p-0 relative",
+                        cell.column.id === "arionHash" && "p-0",
+                      )}
+                      key={cell.id}
+                      cell={cell}
+                      columnWidth={
+                        isSelectionCell ? undefined : columnWidths[cell.column.id]
+                      }
+                      style={
+                        isSelectionCell
+                          ? {
+                              width: SELECTION_COLUMN_WIDTH_PX,
+                              minWidth: SELECTION_COLUMN_WIDTH_PX,
+                              maxWidth: SELECTION_COLUMN_WIDTH_PX,
+                            }
+                          : undefined
+                      }
+                    />
+                  );
+                })}
               </TableModule.Tr>
 
               {rowData.isFolder && isExpanded && canInlineExpand && (
@@ -1274,6 +1673,12 @@ const FilesTable: FC<FilesTableProps> = memo(
                   }}
                   sortBy={sortBy}
                   sortDir={sortDir}
+                  ancestorChain={
+                    isSelectedRow
+                      ? [...cascadeAncestorChain, annotatedRow]
+                      : cascadeAncestorChain
+                  }
+                  isItemDeleting={isItemDeleting}
                 />
               )}
             </React.Fragment>
@@ -1283,8 +1688,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         visibleRows,
         localHandleContextMenu,
         isSelectionMode,
-        toggleFileSelection,
-        selectedFiles,
+        handleToggleTopLevelRow,
         columnWidths,
         expandedFolders,
         createTableItems,
@@ -1301,6 +1705,9 @@ const FilesTable: FC<FilesTableProps> = memo(
         sortBy,
         sortDir,
         orderedColumnIds,
+        cascadeAncestorChain,
+        isVisuallySelected,
+        isItemDeleting,
       ],
     );
 
@@ -1310,7 +1717,12 @@ const FilesTable: FC<FilesTableProps> = memo(
 
     return (
       <div className="flex flex-col gap-y-8 relative">
-        <div className="w-full relative">
+        <div
+          className="w-full relative"
+          onMouseDownCapture={(event) => {
+            captureSelectionScrollPosition(event.target as HTMLElement);
+          }}
+        >
           <TableModule.TableWrapper
             className={cn(
               "duration-300 delay-300 bg-white border-grey-dark-100 rounded-[8px] dark:bg-black-600 dark:border-black-300",

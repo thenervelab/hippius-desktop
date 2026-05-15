@@ -1,17 +1,14 @@
-import React, { ReactNode, useState, useEffect, useCallback, useMemo } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
+import React, { ReactNode, useState, useEffect } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Icons } from "@/components/ui";
 import VideoPlayer from "./VideoPlayer";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { cn } from "@/lib/utils";
-import {
-  getNextViewableFile,
-  getPrevViewableFile,
-  getViewableFilePosition
-} from "@/app/lib/utils/mediaNavigation";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
+import {
+  FileViewerLayout,
+  FileViewerTitle,
+} from "@/app/components/page-sections/drive/file-viewer";
 
 export const VideoDialogTrigger: React.FC<{
   children: ReactNode;
@@ -43,195 +40,59 @@ const VideoDialog: React.FC<{
   onNavigate: (file: FormattedUserFile) => void;
   handleFileDownload: (
     file: FormattedUserFile,
-    polkadotAddress: string
+    polkadotAddress: string,
   ) => void;
 }> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload }) => {
-  const [nextFile, setNextFile] = useState<FormattedUserFile | null>(null);
-  const [prevFile, setPrevFile] = useState<FormattedUserFile | null>(null);
   const [resolvedUrl, setResolvedUrl] = useState<string>("");
-  const [position, setPosition] = useState<{ current: number; total: number } | null>(null);
-  const { polkadotAddress } = useWalletAuth();
-
-  // Track the current file to prevent race conditions
-  const currentFileRef = React.useRef<FormattedUserFile | null>(null);
-
-  // All files are private — only navigate between locally synced files
-  const navigationOptions = useMemo(() => ({ localOnly: true }), []);
 
   useEffect(() => {
     if (!file) return;
-
-    const next = getNextViewableFile(file, allFiles, navigationOptions);
-    const prev = getPrevViewableFile(file, allFiles, navigationOptions);
-    const pos = getViewableFilePosition(file, allFiles, navigationOptions);
-
-    setNextFile(next);
-    setPrevFile(prev);
-    setPosition(pos);
-  }, [file, allFiles, navigationOptions]);
-
-  // Resolve URL whenever file changes
-  useEffect(() => {
-    if (!file) return;
-
-    currentFileRef.current = file;
     setResolvedUrl("");
-
-    const result = getFileUrl(file);
-    setResolvedUrl(result.url);
-  }, [file]);
-
-  const handleNext = useCallback(() => {
-    if (nextFile) {
-      onNavigate(nextFile);
-    }
-  }, [nextFile, onNavigate]);
-
-  const handlePrev = useCallback(() => {
-    if (prevFile) {
-      onNavigate(prevFile);
-    }
-  }, [prevFile, onNavigate]);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!file) return;
-
-      if (e.key === "ArrowRight" && nextFile) {
-        handleNext();
-      } else if (e.key === "ArrowLeft" && prevFile) {
-        handlePrev();
-      } else if (e.key === "Escape") {
-        onCloseClicked();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [file, nextFile, prevFile, handleNext, handlePrev, onCloseClicked]);
-
-  // Prevent body and html scroll when dialog is open, and scroll to top
-  useEffect(() => {
-    if (file) {
-      const scrollY = window.scrollY;
-      document.documentElement.style.overflow = 'hidden';
-      document.body.style.overflow = 'hidden';
-      window.scrollTo(0, 0);
-      return () => {
-        document.documentElement.style.overflow = '';
-        document.body.style.overflow = '';
-        window.scrollTo(0, scrollY);
-      };
-    }
+    setResolvedUrl(getFileUrl(file).url);
   }, [file]);
 
   if (!file) return null;
 
   const { fileFormat } = getFilePartsFromFileName(file.name);
+
   return (
-    <Dialog.Root
-      open={!!file}
-      onOpenChange={(o) => {
-        if (!o) {
-          onCloseClicked();
-        }
-      }}
+    <FileViewerLayout
+      file={file}
+      allFiles={allFiles}
+      onClose={onCloseClicked}
+      onNavigate={onNavigate}
+      handleFileDownload={handleFileDownload}
     >
-      <Dialog.Portal>
-        <Dialog.Overlay className="bg-black/80 fixed inset-0 pt-8 sm:pt-10 md:pt-20 p-3 sm:p-10 md:p-20 z-[999] flex items-center justify-center overflow-hidden data-[state=open]:animate-fade-in-0.3">
-          <Dialog.Content className="h-full max-w-screen-1.5xl max-h-[90vh] text-grey-10 w-full flex flex-col">
-            {(() => {
-              if (file) {
-                return (
-                  <>
-                    <div className="absolute flex justify-center top-4 px-2 sm:px-6 animate-fade-in-0.3 left-0 right-0">
-                      <div className="flex justify-between gap-2 sm:gap-6 w-full ">
-                        <Dialog.Title className="data-[state=open] font-medium flex items-center gap-x-2 min-w-0 flex-1 text-xl">
-                          <div className="rounded flex-shrink-0 flex items-center justify-center">
-                            <Icons.Video className="size-8" />
-                          </div>
-                          <span
-                            title={file.name}
-                            className="truncate text-grey-100 text-[1.375rem] font-medium"
-                          >
-                            {file.name}
-                          </span>
-                          {position && position.total > 1 && (
-                            <span className="ml-2 text-sm text-grey-60 font-normal whitespace-nowrap">
-                              {position.current} of {position.total}
-                            </span>
-                          )}
-                        </Dialog.Title>
-
-                        <div className="flex gap-x-4 items-center">
-                          <button
-                            onClick={() => {
-                              handleFileDownload(file, polkadotAddress ?? "");
-                            }}
-                            className="flex duration-300 text-sm font-medium gap-x-2 items-center bg-white whitespace-nowrap rounded border border-grey-80 p-2"
-                          >
-                            <Icons.DocumentDownload className="size-4 min-w-4" />
-                            <span className="max-sm:hidden text-grey-10 text-sm">
-                              Download File
-                            </span>
-                          </button>
-                          <button
-                            className="duration-300"
-                            onClick={onCloseClicked}
-                          >
-                            <Icons.CloseCircle className="size-7 [&>path]:stroke-2 text-grey-100" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-
-                    {prevFile && (
-                      <button
-                        onClick={handlePrev}
-                        className="absolute left-5 top-1/2 -translate-y-1/2 z-10 border border-grey-80 bg-white/80 hover:bg-white rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
-                        aria-label="Previous video"
-                      >
-                        <Icons.ArrowLeft2 className="size-6 text-grey-50" />
-                      </button>
-                    )}
-
-                    {nextFile && (
-                      <button
-                        onClick={handleNext}
-                        className="absolute right-5 top-1/2 -translate-y-1/2 z-10 border border-grey-80 bg-white/80 hover:bg-white rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
-                        aria-label="Next video"
-                      >
-                        <Icons.ArrowRight2 className="size-6 text-grey-50" />
-                      </button>
-                    )}
-
-                    <div className="animate-scale-in-95-0.4 shadow-dialo grow flex w-full h-full flex-col mt-12 rounded overflow-hidden relative data-[state=open]:animate-scale-in-95-0.4">
-                      {resolvedUrl ? (
-                        <VideoPlayer
-                          key={resolvedUrl} // Force re-mount on URL change
-                          videoUrl={resolvedUrl}
-                          isFromIpfs={false}
-                          isFromLocal={true}
-                          fileFormat={fileFormat}
-                          file={file}
-                          handleFileDownload={handleFileDownload}
-                        />
-                      ) : (
-                        <div className="flex items-center justify-center w-full h-full">
-                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-50" />
-                        </div>
-                      )}
-                    </div>
-                  </>
-                );
-              }
-            })()}
-          </Dialog.Content>
-        </Dialog.Overlay>
-      </Dialog.Portal>
-    </Dialog.Root>
+      {/* Title row + media row. Video fills the available width, so the
+          title at the wrapper's left edge naturally sits at the video's
+          left edge. */}
+      <div className="w-full h-full flex flex-col gap-2">
+        <FileViewerTitle file={file} />
+        <div
+          className={cn(
+            "relative flex-1 min-h-0 min-w-0 w-full flex flex-col rounded-[8px] overflow-hidden",
+            "shadow-[0_14px_31px_rgba(0,0,0,0.06),0_56px_56px_rgba(0,0,0,0.05)]",
+            "animate-scale-in-95-0.4",
+          )}
+        >
+          {resolvedUrl ? (
+            <VideoPlayer
+              key={resolvedUrl}
+              videoUrl={resolvedUrl}
+              isFromIpfs={false}
+              isFromLocal={true}
+              fileFormat={fileFormat}
+              file={file}
+              handleFileDownload={handleFileDownload}
+            />
+          ) : (
+            <div className="flex items-center justify-center w-full h-full">
+              <div className="animate-spin rounded-full size-8 border-b-2 border-primary-50" />
+            </div>
+          )}
+        </div>
+      </div>
+    </FileViewerLayout>
   );
 };
 

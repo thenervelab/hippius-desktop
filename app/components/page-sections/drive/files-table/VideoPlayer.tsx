@@ -65,7 +65,11 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [reloadKey, setReloadKey] = useState<number>(0);
   const timeoutRef = useRef<number | undefined>(undefined);
   const playerContainerRef = useRef<HTMLDivElement>(null);
-  const LOAD_TIMEOUT = 120_000;
+  // Linux/WebKitGTK without gstreamer plugins hangs silently instead of
+  // firing onError, so we keep the load window short there to surface the
+  // "open in system player" fallback quickly. Other platforms get a long
+  // window because slow networks should not look like a failure.
+  const LOAD_TIMEOUT = _isLinux ? 10_000 : 120_000;
 
   const clearLoadTimer = () => {
     if (timeoutRef.current) {
@@ -225,19 +229,11 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     ? { src: videoUrl, type: mimeType as import("@vidstack/react").VideoMimeType }
     : videoUrl;
 
-  // On Linux, skip the media player entirely and show the fallback UI.
-  // WebKitGTK lacks codecs for most video formats.
-  if (isTauri && _isLinux) {
-    return (
-      <div className="relative w-full h-full bg-black">
-        <VideoPlayerError
-          message="Video playback is not supported in the built-in player on Linux."
-          file={file}
-          handleFileDownload={handleFileDownload}
-        />
-      </div>
-    );
-  }
+  // On Linux we used to short-circuit to the system-player fallback
+  // because WebKitGTK often lacks gstreamer codec plugins. That blocked
+  // every Linux user, including those with codecs installed. Now we let
+  // the player attempt playback and rely on the (Linux-shortened)
+  // LOAD_TIMEOUT above to surface the fallback if it hangs.
 
   return (
     <div
