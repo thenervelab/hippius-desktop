@@ -19,7 +19,10 @@ import {
 import { sidebarCollapsedAtom } from "@/components/sidebar/sideBarAtoms";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/app/lib/utils";
-import CheckForUpdateDialog from "@/components/updater/CheckForUpdateDialog";
+import {
+  updateDialogOpenAtom,
+  updateStore,
+} from "@/app/components/updater/updateStore";
 
 const TopBarLogoMenu = () => {
   const [isMac] = useState(() => {
@@ -31,14 +34,17 @@ const TopBarLogoMenu = () => {
   const collapsed = useAtomValue(sidebarCollapsedAtom);
   const router = useRouter();
   const { logout } = useWalletAuth();
-  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
 
   const handleOpenSettings = () => {
     router.push("/settings?section=sync");
   };
 
+  // Manual "Check for Updates" — route through the same store atom the
+  // auto-trigger uses. UpdateDialogWrapper (mounted in UpdateChecker)
+  // observes the atom and renders the unified dialog. The dialog runs
+  // tauri's check() itself on open and handles all six states.
   const handleOpenUpdate = () => {
-    setUpdateDialogOpen(true);
+    updateStore.set(updateDialogOpenAtom, true);
   };
 
   const handleSignOut = () => {
@@ -135,12 +141,6 @@ const TopBarLogoMenu = () => {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-
-      <CheckForUpdateDialog
-        open={updateDialogOpen}
-        onOpenChange={setUpdateDialogOpen}
-        onClose={() => setUpdateDialogOpen(false)}
-      />
     </div>
   );
 };
