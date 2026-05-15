@@ -5,7 +5,6 @@ import {
   useState,
   useRef,
   useEffect,
-  useMemo,
   useCallback,
   memo,
 } from "react";
@@ -16,10 +15,8 @@ import CardViewSkeleton from "./card-view/CardViewSkeleton";
 import CardView from "./card-view";
 import IPFSNoEntriesFound from "./files-table/FilesNoEntriesFound";
 import UploadStatusWidget from "./UploadStatusWidget";
-import SidebarDialog from "@/app/components/ui/SidebarDialog";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import DeleteConfirmationDialog from "@/app/components/DeleteConfirmationDialog";
-import SidebarDialogContent from "./file-details-dialog-content";
 import VideoDialog from "./files-table/VideoDialog";
 import ImageDialog from "./files-table/ImageDialog";
 import PdfDialog from "./files-table/PdfDialog";
@@ -108,8 +105,6 @@ const DriveContent: FC<DriveContentProps> = ({
     setSelectedFile,
     fileDetailsFile,
     setFileDetailsFile,
-    isFileDetailsOpen,
-    setIsFileDetailsOpen,
     deleteFile,
     isDeleting,
     getFileType,
@@ -119,19 +114,20 @@ const DriveContent: FC<DriveContentProps> = ({
 
   const selectedFileType = selectedFile ? getFileType(selectedFile) : null;
 
-  // Look up the latest version of the file details from live query data.
-  // The captured snapshot in fileDetailsFile may have stale arion hashes
-  // if it was opened before sync completed.
-  const liveFileDetailsFile = useMemo(() => {
-    if (!fileDetailsFile) return null;
-    return (
-      filteredData.find(
-        (f) =>
-          f.actualFileName === fileDetailsFile.actualFileName &&
-          f.label === fileDetailsFile.label,
-      ) ?? fileDetailsFile
+  // Re-sync the panel atom with the freshest copy from `filteredData`.
+  // The atom snapshot can get stale (e.g. arion hash arrives after the panel
+  // opens), so when filteredData updates we push the live row back in.
+  useEffect(() => {
+    if (!fileDetailsFile) return;
+    const live = filteredData.find(
+      (f) =>
+        f.actualFileName === fileDetailsFile.actualFileName &&
+        f.label === fileDetailsFile.label,
     );
-  }, [fileDetailsFile, filteredData]);
+    if (live && live !== fileDetailsFile) {
+      setFileDetailsFile(live);
+    }
+  }, [filteredData, fileDetailsFile, setFileDetailsFile]);
 
   // Tauri native drag-and-drop via global event listeners
   useEffect(() => {
@@ -440,7 +436,6 @@ const DriveContent: FC<DriveContentProps> = ({
           }}
           onShowFileDetails={(file) => {
             setFileDetailsFile(file);
-            setIsFileDetailsOpen(true);
             setContextMenu(null);
           }}
           onShareFile={(file) => {
@@ -490,14 +485,6 @@ const DriveContent: FC<DriveContentProps> = ({
       )}
 
       <UploadStatusWidget />
-
-      <SidebarDialog
-        heading={`${fileDetailsFile?.isFolder ? "Folder" : "File"} Details`}
-        open={isFileDetailsOpen}
-        onOpenChange={setIsFileDetailsOpen}
-      >
-        <SidebarDialogContent file={liveFileDetailsFile ?? undefined} />
-      </SidebarDialog>
     </>
   );
 };

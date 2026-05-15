@@ -1,10 +1,13 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { useAtom } from "jotai";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
+import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
+
 export interface FileViewSharedState {
   fileToDelete: FormattedUserFile | null;
   setFileToDelete: (file: FormattedUserFile | null) => void;
@@ -14,8 +17,6 @@ export interface FileViewSharedState {
   setSelectedFile: (file: FormattedUserFile | null) => void;
   fileDetailsFile: FormattedUserFile | null;
   setFileDetailsFile: (file: FormattedUserFile | null) => void;
-  isFileDetailsOpen: boolean;
-  setIsFileDetailsOpen: (isOpen: boolean) => void;
   deleteFile: () => Promise<void>;
   isDeleting: boolean;
   handleDelete: () => void;
@@ -41,9 +42,10 @@ export function useFileViewShared(): FileViewSharedState {
 
   const [selectedFile, setSelectedFile] =
     useState<FormattedUserFile | null>(null);
-  const [fileDetailsFile, setFileDetailsFile] =
-    useState<FormattedUserFile | null>(null);
-  const [isFileDetailsOpen, setIsFileDetailsOpen] = useState(false);
+  // File-details state lives in a global atom so the inline FileDetailsPanel
+  // mounted on the page (sibling of <Drive />) can read it. Every consumer —
+  // table rows, card view, context menus — flips this single source of truth.
+  const [fileDetailsFile, setFileDetailsFile] = useAtom(fileDetailsPanelAtom);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -58,10 +60,12 @@ export function useFileViewShared(): FileViewSharedState {
     setOpenDeleteModal(true);
   };
 
-  const handleShowFileDetails = useCallback((file: FormattedUserFile) => {
-    setFileDetailsFile(file);
-    setIsFileDetailsOpen(true);
-  }, []);
+  const handleShowFileDetails = useCallback(
+    (file: FormattedUserFile) => {
+      setFileDetailsFile(file);
+    },
+    [setFileDetailsFile],
+  );
 
   const getFileType = useCallback(
     (file: FormattedUserFile): string | null => {
@@ -96,8 +100,6 @@ export function useFileViewShared(): FileViewSharedState {
     setSelectedFile,
     fileDetailsFile,
     setFileDetailsFile,
-    isFileDetailsOpen,
-    setIsFileDetailsOpen,
     deleteFile,
     isDeleting,
     handleDelete,

@@ -49,8 +49,7 @@ import { PdfDialogTrigger } from "./PdfDialog";
 import { Icons } from "@/app/components/ui";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { FileViewSharedState } from "@/app/components/page-sections/drive/shared/FileViewUtils";
-import FileDetailsDialogContent from "@/app/components/page-sections/drive/file-details-dialog-content";
-import SidebarDialog from "@/app/components/ui/SidebarDialog";
+import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { useRouter } from "next/navigation";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
@@ -409,37 +408,22 @@ const FilesTable: FC<FilesTableProps> = memo(
       files: filesToDelete,
     });
 
-    const [localFileDetailsFile, setLocalFileDetailsFile] =
-      useState<FormattedUserFile | null>(null);
-    const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
-
-    // Look up the latest version of the file details from live query data.
-    // The captured snapshot may have stale arion hashes if it was opened
-    // before sync completed.
-    const liveLocalFileDetailsFile = useMemo(() => {
-      if (!localFileDetailsFile) return null;
-      return (
-        allFiles.find(
-          (f) =>
-            f.actualFileName === localFileDetailsFile.actualFileName &&
-            f.label === localFileDetailsFile.label,
-        ) ?? localFileDetailsFile
-      );
-    }, [localFileDetailsFile, allFiles]);
+    // Defensive fallback: if no sharedState was passed, dispatch directly to
+    // the global file-details atom so the inline panel still opens.
+    const setFileDetailsAtom = useSetAtom(fileDetailsPanelAtom);
 
     const { setSelectedFile, handleShowFileDetails, handleContextMenu } =
       sharedState || {};
 
     const localHandleShowFileDetails = useCallback(
       (file: FormattedUserFile) => {
-        if (!handleShowFileDetails) {
-          setLocalFileDetailsFile(file);
-          setLocalIsFileDetailsOpen(true);
-        } else {
+        if (handleShowFileDetails) {
           handleShowFileDetails(file);
+        } else {
+          setFileDetailsAtom(file);
         }
       },
-      [handleShowFileDetails],
+      [handleShowFileDetails, setFileDetailsAtom],
     );
 
     const localHandleContextMenu = useCallback(
@@ -1291,22 +1275,9 @@ const FilesTable: FC<FilesTableProps> = memo(
       ],
     );
 
-    const dialogComponent = useMemo(() => {
-      if (sharedState || !localIsFileDetailsOpen) return null;
-      return (
-        <SidebarDialog
-          heading={`${
-            liveLocalFileDetailsFile?.isFolder ? "Folder" : "File"
-          } Details`}
-          open={localIsFileDetailsOpen}
-          onOpenChange={setLocalIsFileDetailsOpen}
-        >
-          <FileDetailsDialogContent
-            file={liveLocalFileDetailsFile ?? undefined}
-          />
-        </SidebarDialog>
-      );
-    }, [sharedState, localIsFileDetailsOpen, liveLocalFileDetailsFile]);
+    // The inline FileDetailsPanel is mounted at the FilesPage level and
+    // reads from the global atom — no local dialog mount needed here.
+    const dialogComponent = null;
 
     return (
       <div className="flex flex-col gap-y-8 relative">
