@@ -1281,12 +1281,7 @@ const FilesTable: FC<FilesTableProps> = memo(
 
     return (
       <div className="flex flex-col gap-y-8 relative">
-        <div
-          className={cn(
-            "w-full relative",
-            !isRecentFiles && "min-h-[43.75rem]",
-          )}
-        >
+        <div className="w-full relative">
           <TableModule.TableWrapper
             className={cn(
               "duration-300 delay-300 bg-white border-grey-dark-100 rounded-[8px] dark:bg-black-600 dark:border-black-300",

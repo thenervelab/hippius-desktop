@@ -356,7 +356,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         // the file content (passed in as children).
         <div
           className={cn(
-            "w-full flex flex-col items-stretch",
+            "w-full flex flex-col items-stretch mb-2.5",
             "bg-grey-light-300 border border-grey-dark-100 rounded-[8px]",
             "shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.04)]",
             "dark:bg-black-primary-bg dark:border-black-300",
@@ -379,11 +379,16 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             </div>
           </div>
 
-          {/* Inner white card — wraps the filter row, chips, and file content. */}
+          {/* Inner white card — wraps the filter row, chips, and file content.
+              Only the top edge needs its own border (acts as the horizontal
+              divider between the breadcrumb row and the filter row). The
+              left/right/bottom borders are intentionally omitted: the outer
+              grey card already paints those sides, and stacking a second 1px
+              border right next to it produced a visible doubled line. */}
           <div
             className={cn(
-              "w-full flex flex-col pb-2.5",
-              "bg-white border border-grey-dark-100 rounded-[8px]",
+              "w-full flex flex-col",
+              "bg-white border-t border-grey-dark-100 rounded-b-[7px]",
               "dark:bg-black-primary-bg dark:border-black-300",
             )}
           >
