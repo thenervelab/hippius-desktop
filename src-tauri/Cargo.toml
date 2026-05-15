@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.1.99"
+version = "0.1.98"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
