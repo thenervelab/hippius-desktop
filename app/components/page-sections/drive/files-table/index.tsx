@@ -486,11 +486,20 @@ const FilesTable: FC<FilesTableProps> = memo(
         arionHash: string,
         canPreview: boolean = true,
         folderExpansion?: { expanded: boolean; onToggle: () => void },
+        // Parent path inside the sync drive when the action menu is
+        // built for a row in an inline-expanded subtree. Without it,
+        // the "Open" item would inherit the page URL's subFolderPath
+        // and skip the intermediate folders the user expanded into.
+        parentSubFolderPath?: string,
       ) => {
         // Compute folderUrl if file is a folder
         let folderUrl: string | undefined = undefined;
         if (file.isFolder) {
-          const { url } = generateFolderUrl(file, getParam);
+          const { url } = generateFolderUrl(
+            file,
+            getParam,
+            parentSubFolderPath,
+          );
           folderUrl = url;
         }
 
@@ -1239,8 +1248,12 @@ const FilesTable: FC<FilesTableProps> = memo(
                   createTableItems={createTableItems}
                   onSelectFile={handleSetSelectedFile}
                   onRowContextMenu={localHandleContextMenu}
-                  onOpenFolder={() => {
-                    const { url } = generateFolderUrl(rowData, getParam);
+                  onOpenFolder={(childFile, parentPath) => {
+                    const { url } = generateFolderUrl(
+                      childFile,
+                      getParam,
+                      parentPath,
+                    );
                     router.push(url);
                   }}
                   sortBy={sortBy}

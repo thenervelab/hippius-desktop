@@ -79,10 +79,18 @@ export interface ExpandedFolderRowsProps {
     fileType: string | null,
     arionHash: string,
     canPreview?: boolean,
+    folderExpansion?: { expanded: boolean; onToggle: () => void },
+    parentSubFolderPath?: string,
   ) => ActionItem[];
   onSelectFile: (file: FormattedUserFile) => void;
   onRowContextMenu?: (event: React.MouseEvent, file: FormattedUserFile) => void;
-  onOpenFolder?: (folder: FormattedUserFile) => void;
+  /** Invoked when a folder click should escape inline expansion and
+   *  navigate via the URL (depth overflow, or future opt-outs). The
+   *  second arg is the parent folder's path inside the sync drive so
+   *  callers can build the correct deep-link URL — the previous
+   *  signature dropped this and produced URLs missing intermediate
+   *  segments. */
+  onOpenFolder?: (folder: FormattedUserFile, parentSubFolderPath: string) => void;
   sortBy?: "name" | "size" | "date_uploaded";
   sortDir?: "asc" | "desc";
 }
@@ -196,7 +204,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
   const handleToggleSubfolder = useCallback(
     (childFile: FormattedUserFile, childPath: string) => {
       if (depth >= MAX_INLINE_DEPTH) {
-        onOpenFolder?.(childFile);
+        onOpenFolder?.(childFile, folderRelativePath);
         return;
       }
       setExpandedSubfolders((previous) => ({
@@ -204,7 +212,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
         [childPath]: !previous[childPath],
       }));
     },
-    [depth, onOpenFolder],
+    [depth, onOpenFolder, folderRelativePath],
   );
 
   const renderLeadingRailCells = (key: string) => (
@@ -289,6 +297,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
             source={childFile.source}
             mainReqHash={childFile.mainReqHash}
             syncStatus={childFile.syncStatus}
+            parentSubFolderPath={folderRelativePath}
           />
         );
 
@@ -323,6 +332,8 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
           fileType,
           childFile.arionHash,
           true,
+          undefined,
+          folderRelativePath,
         );
 
         return (

@@ -35,6 +35,12 @@ type NameCellProps = {
    *  badge to look the file up in the shares index — the badge
    *  silently no-ops when missing, so old call sites keep working. */
   label?: string;
+  /** Parent folder's path inside the sync drive (e.g.
+   *  "MyDrive/Photos/2024"). Set by ExpandedFolderRows so that clicking
+   *  a folder name in an inline-expanded subtree produces a URL that
+   *  reflects the full path, not whatever the current URL still shows.
+   *  When unset, the previous URL-driven behaviour is preserved. */
+  parentSubFolderPath?: string;
 };
 
 const SyncStatusIcon: FC<{ status?: SyncStatusType }> = ({ status }) => {
@@ -103,17 +109,28 @@ const NameCell: FC<NameCellProps> = ({
   mainReqHash,
   syncStatus,
   label,
+  parentSubFolderPath,
 }) => {
   const { icon: Icon, color } = getFileIcon(fileType, isFolder);
   const { getParam } = useUrlParams();
 
   const mainFolderHash = getParam("mainFolderCid", "");
   const folderActualName = isFolder ? actualName || "" : "";
-  const mainFolderActualName = getParam(
-    "mainFolderActualName",
-    isFolder ? actualName || "" : "",
-  );
-  const subFolderPath = getParam("subFolderPath", "");
+  // When the caller hands us a runtime-known parent path (inline-expanded
+  // subtree), its first segment is the authoritative `mainFolderActualName`
+  // and the whole string is the authoritative `subFolderPath`. Falling back
+  // to URL params at this point would re-introduce the deep-click bug.
+  const trimmedParentPath =
+    parentSubFolderPath?.replace(/^\/+|\/+$/g, "") ?? "";
+  const parentMainFolder = trimmedParentPath
+    ? trimmedParentPath.split("/")[0] ?? ""
+    : "";
+  const mainFolderActualName = trimmedParentPath
+    ? parentMainFolder
+    : getParam("mainFolderActualName", isFolder ? actualName || "" : "");
+  const subFolderPath = trimmedParentPath
+    ? trimmedParentPath
+    : getParam("subFolderPath", "");
 
   const effectiveMainFolderHash = mainFolderHash || arionHash;
 
