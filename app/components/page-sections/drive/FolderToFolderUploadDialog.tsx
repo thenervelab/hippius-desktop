@@ -142,7 +142,7 @@ export default function FolderToFolderUploadDialog({
             onClose={handleClose}
             title="Add Folder"
             icon={<FolderPlus className="size-4 text-white" />}
-            maxWidth="min-w-[693px] max-w-[693px]"
+            maxWidth="max-w-[653px]"
         >
             {/* Section label row — matches New File dialog layout */}
             <div className="mb-2.5 flex items-center justify-between gap-2">

@@ -1,15 +1,16 @@
 "use client";
 
-import React, { useState } from "react";
-import { AlertCircle, FolderIcon, FolderPlus } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { AlertCircle, Folder, X } from "lucide-react";
 import { toast } from "sonner";
 import { open as openSelection } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { useAtomValue } from "jotai";
 import { queryClientAtom } from "jotai-tanstack-query";
 
-import { Button, Input } from "@/components/ui";
+import { Button, Icons } from "@/components/ui";
 import { FramedDialog } from "@/components/ui/FramedDialog";
+import GraphSheetContainer from "@/components/ui/graphsheet";
 import PrivacyBadge from "@/components/ui/PrivacyBadge";
 import { cn } from "@/lib/utils";
 
@@ -55,6 +56,8 @@ export default function FolderUploadDialog({
     defaultFolderLabel ?? null,
   );
   const [selectedSyncPath, setSelectedSyncPath] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSelectFolder = async () => {
     try {
@@ -78,6 +81,78 @@ export default function FolderUploadDialog({
     }
   };
 
+  const handleClearSelection = () => {
+    setFolderPath("");
+    setFolderError(null);
+  };
+
+  // Tauri native drag-drop: accept exactly one dropped directory.
+  // Listeners are only registered while the dialog is open so we don't
+  // hijack drops in other surfaces.
+  useEffect(() => {
+    if (!open) return;
+    const unlisteners: Array<() => void> = [];
+
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        const { stat } = await import("@tauri-apps/plugin-fs");
+
+        const unDragEnter = await listen("tauri://drag-enter", () => {
+          setIsDragging(true);
+        });
+        unlisteners.push(unDragEnter);
+
+        const unDragLeave = await listen("tauri://drag-leave", () => {
+          setIsDragging(false);
+        });
+        unlisteners.push(unDragLeave);
+
+        const unDragDrop = await listen<{ paths: string[] }>(
+          "tauri://drag-drop",
+          async (event) => {
+            setIsDragging(false);
+            const paths = event.payload.paths;
+            if (!paths || paths.length === 0) return;
+
+            const first = paths[0];
+            try {
+              const info = await stat(first);
+              if (!info.isDirectory) {
+                toast.error(
+                  "Only folders can be added here. Drop a folder, not a file.",
+                );
+                return;
+              }
+            } catch (err) {
+              console.error("[FolderUploadDialog] stat failed:", err);
+              toast.error("Could not read the dropped item. Try again.");
+              return;
+            }
+
+            if (paths.length > 1) {
+              toast.info("Only the first dropped folder will be used.");
+            }
+
+            setFolderPath(first);
+            setFolderError(null);
+            saveLastBrowseDirectory(first);
+          },
+        );
+        unlisteners.push(unDragDrop);
+      } catch (err) {
+        console.error(
+          "[FolderUploadDialog] Failed to register drag listeners:",
+          err,
+        );
+      }
+    })();
+
+    return () => {
+      unlisteners.forEach((fn) => fn());
+    };
+  }, [open]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -98,6 +173,7 @@ export default function FolderUploadDialog({
       return;
     }
 
+    setIsSubmitting(true);
     handleClose();
 
     toast.success("Folder added. Your sync will start soon.", {
@@ -135,12 +211,15 @@ export default function FolderUploadDialog({
       toast.error(
         `Failed to upload folder: ${error instanceof Error ? error.message : String(error)}`,
       );
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleClose = () => {
     setFolderPath("");
     setFolderError(null);
+    setIsDragging(false);
     setSelectedFolderLabel(defaultFolderLabel ?? null);
     setSelectedSyncPath(null);
     onClose();
@@ -151,7 +230,7 @@ export default function FolderUploadDialog({
       open={open}
       onClose={handleClose}
       title="Upload Folder"
-      icon={<FolderPlus className="size-4 text-white" />}
+      icon={<Icons.FolderPlus className="size-5 text-white" />}
       maxWidth="max-w-[653px]"
     >
       {/* Section label row — matches New File dialog layout */}
@@ -178,26 +257,108 @@ export default function FolderUploadDialog({
           }}
         />
 
+        {/* Folder dropzone — same styling as AddLocalFolderDialog */}
         <div className="flex flex-col gap-2">
-          <Input
-            id="folderPath"
-            placeholder="Select folder location"
-            value={folderPath}
-            readOnly
-            onClick={handleSelectFolder}
-            startAdornment={<FolderIcon className="size-5" />}
-            endAdornment={
-              <button
-                type="button"
-                onClick={handleSelectFolder}
-                className="text-sm font-medium text-primary-50 hover:text-primary-40"
-              >
-                Browse
-              </button>
-            }
-            wrapperClassName="cursor-pointer"
-            className="cursor-pointer truncate"
-          />
+          <div
+            className={cn(
+              "rounded-[8px] border bg-white p-2 transition-[border-color,box-shadow] duration-200",
+              "border-grey-80 shadow-[0px_0px_0px_4px_rgba(10,10,10,0.05)]",
+              "dark:border-[#494949] dark:bg-[#1f1f1f] dark:shadow-[0px_0px_0px_4px_rgba(255,255,255,0.03)]",
+              isDragging &&
+                "border-primary-50 shadow-[0px_0px_0px_4px_rgba(49,103,221,0.12)] dark:border-primary-65 dark:shadow-[0px_0px_0px_4px_rgba(97,140,232,0.15)]",
+            )}
+          >
+            <div
+              className={cn(
+                "rounded-[8px] border-[1.5px] border-dashed bg-white transition-colors",
+                "border-grey-70 dark:border-grey-dark-700 dark:bg-[#1f1f1f]",
+                isDragging &&
+                  "border-primary-50 bg-primary-50/5 dark:border-primary-50 dark:bg-primary-50/10",
+                isSubmitting && "opacity-60",
+              )}
+            >
+              {folderPath ? (
+                <div className="flex w-full items-center gap-2 px-3 py-3">
+                  <button
+                    type="button"
+                    onClick={handleSelectFolder}
+                    disabled={isSubmitting}
+                    title="Click to change folder"
+                    className="flex flex-1 min-w-0 items-center gap-3 rounded-md px-2 py-1.5 -mx-2 -my-1.5 text-left transition-colors hover:bg-grey-light-400 dark:hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <Folder className="size-5 text-primary-50 flex-shrink-0" />
+                    <p className="font-mono text-xs text-grey-40 dark:text-grey-dark-300 break-all">
+                      {folderPath}
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearSelection}
+                    disabled={isSubmitting}
+                    aria-label="Clear selected folder"
+                    title="Clear selection"
+                    className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md text-grey-60 hover:text-grey-30 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:text-white dark:hover:bg-white/10 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleSelectFolder}
+                  disabled={isSubmitting}
+                  className={cn(
+                    "flex w-full flex-col items-center justify-center gap-4 rounded-[8px] px-4 py-[22px] transition-colors",
+                    "hover:bg-[#fafafa] dark:hover:bg-[#252525]",
+                    isSubmitting && "cursor-not-allowed",
+                  )}
+                >
+                  {/* Decorative grid + blue badge — mirrors the FramedDialog icon at 40px */}
+                  <div className="relative flex size-10 items-center justify-center overflow-hidden rounded-[4px] dark:rounded-full">
+                    <GraphSheetContainer
+                      majorCell={{
+                        lineColor: [31, 80, 189, 1.0],
+                        lineWidth: 2,
+                        cellDim: 200,
+                      }}
+                      minorCell={{
+                        lineColor: [49, 103, 211, 1.0],
+                        lineWidth: 1,
+                        cellDim: 20,
+                      }}
+                      className="absolute inset-0 size-full opacity-30 dark:hidden"
+                    />
+                    <div
+                      className="absolute inset-0 size-full hidden dark:block"
+                      style={{
+                        backgroundImage:
+                          "linear-gradient(to right, rgba(31,80,189,0.85) 1px, transparent 1px), linear-gradient(to bottom, rgba(31,80,189,0.85) 1px, transparent 1px)",
+                        backgroundSize: "17px 17px",
+                        maskImage:
+                          "radial-gradient(55% 70% at 50% 50%, black 0%, transparent 100%)",
+                        WebkitMaskImage:
+                          "radial-gradient(55% 70% at 50% 50%, black 0%, transparent 100%)",
+                      }}
+                    />
+                    <div className="bg-gradient-to-b from-white/80 via-white/40 to-transparent absolute inset-0 dark:hidden" />
+                    <div className="relative flex size-[22.857px] items-center justify-center rounded-[5.714px] bg-[#3167dd]">
+                      <Icons.FolderPlus className="size-3 text-white" />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col items-center gap-0.5">
+                    <p className="font-geist text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-10 dark:text-white">
+                      Select Folder
+                    </p>
+                    <p className="font-geist w-[262px] max-w-full text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#7D7D7D] dark:text-grey-dark-600 text-center">
+                      Drag and drop or click to add folder here to upload
+                    </p>
+                  </div>
+                </button>
+              )}
+            </div>
+          </div>
+
           {folderError && (
             <div className="flex items-center gap-2 text-sm font-medium text-error-70">
               <AlertCircle className="size-4 !relative" />
@@ -211,7 +372,8 @@ export default function FolderUploadDialog({
             type="submit"
             variant="primary"
             size="auto"
-            disabled={IS_SYNC_PAUSED}
+            disabled={IS_SYNC_PAUSED || isSubmitting}
+            loading={isSubmitting}
             className={cn(
               "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
               "border-[#3167DD] bg-[#3167DD] text-white",
@@ -226,6 +388,7 @@ export default function FolderUploadDialog({
             variant="defaultStable"
             size="auto"
             onClick={handleClose}
+            disabled={isSubmitting}
             className="h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]"
           >
             {IS_SYNC_PAUSED ? "Close" : "Cancel"}

@@ -1,11 +1,21 @@
 "use client";
 import React from "react";
 import { useAtom } from "jotai";
-import { insufficientCreditsDialogOpenAtom, InsufficientCreditsReason } from "./atoms/query-atoms";
-import { Icons, CardButton, AbstractIconWrapper } from "@/components/ui";
+import { AlertCircle } from "lucide-react";
+
+import {
+  insufficientCreditsDialogOpenAtom,
+  InsufficientCreditsReason,
+} from "./atoms/query-atoms";
+import { Button } from "@/components/ui";
+import { FramedDialog } from "@/components/ui/FramedDialog";
+import { cn } from "@/lib/utils";
 import { openLinkByKey } from "@/app/lib/utils/links";
 
-const copy: Record<InsufficientCreditsReason, { title: string; description: string }> = {
+const copy: Record<
+  InsufficientCreditsReason,
+  { title: string; description: string }
+> = {
   "file-upload": {
     title: "Insufficient Credits for File Upload",
     description:
@@ -35,11 +45,7 @@ const InsufficientCreditsDialog: React.FC = () => {
 
   const { title, description } = copy[reason];
 
-  const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget) {
-      setReason(false);
-    }
-  };
+  const handleClose = () => setReason(false);
 
   const handleOpenConsoleBillingPage = () => {
     setReason(false);
@@ -51,43 +57,41 @@ const InsufficientCreditsDialog: React.FC = () => {
   };
 
   return (
-    <div
-      className="fixed inset-0 flex items-center justify-center z-[60] bg-white/70"
-      onClick={handleOverlayClick}
+    <FramedDialog
+      open={!!reason}
+      onClose={handleClose}
+      title={title}
+      icon={<AlertCircle className="size-5 text-white" />}
+      maxWidth="max-w-[653px]"
     >
-      <div className="bg-white rounded-lg shadow-dialog max-w-[26.75rem] max-h-[85vh] overflow-y-auto w-full p-6 animate-in fade-in border border-grey-80 relative">
-        <div className="flex flex-col items-center">
-          <AbstractIconWrapper className="size-8 mb-4">
-            <Icons.BoxSimple2 className="relative size-5 text-primary-50" />
-          </AbstractIconWrapper>
+      <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+        {description}
+      </p>
 
-          <h2 className="text-2xl font-medium text-grey-10 text-center">
-            {title}
-          </h2>
-
-          <p className="mt-3 text-base text-center text-grey-50 mb-6">
-            {description}
-          </p>
-
-          <div className="flex flex-col w-full gap-y-2">
-            <CardButton
-              className="w-full"
-              onClick={handleOpenConsoleCreditsPage}
-            >
-              Buy Credits
-            </CardButton>
-
-            <CardButton
-              variant="secondary"
-              className="w-full"
-              onClick={handleOpenConsoleBillingPage}
-            >
-              Subscribe
-            </CardButton>
-          </div>
-        </div>
+      <div className="flex flex-col gap-3">
+        <Button
+          variant="primary"
+          size="auto"
+          onClick={handleOpenConsoleCreditsPage}
+          className={cn(
+            "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
+            "border-[#3167DD] bg-[#3167DD] text-white",
+            "hover:bg-[#2454c4] hover:border-[#2454c4]",
+            "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
+          )}
+        >
+          Buy Credits
+        </Button>
+        <Button
+          variant="defaultStable"
+          size="auto"
+          onClick={handleOpenConsoleBillingPage}
+          className="h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]"
+        >
+          Subscribe
+        </Button>
       </div>
-    </div>
+    </FramedDialog>
   );
 };
 
