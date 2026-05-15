@@ -52,11 +52,11 @@ import { formatBytes } from "@/lib/utils/formatBytes";
 import { formatRelative } from "@/app/lib/utils/timeRelative";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/lib/utils";
+import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
 import { pickHistoryRowDisplay } from "./shareRowDisplay";
 
 const SHARES_QUERY_KEY = "shares-list";
 const HISTORY_QUERY_KEY = "shares-history-list";
-const REFRESH_INTERVAL_MS = 30_000;
 
 // Column width percentages. Active Shares has six columns (Name | Link |
 // Size | Created | Expires | actions); History keeps the original five
@@ -103,7 +103,9 @@ export default function MySharesPage() {
     queryKey: [SHARES_QUERY_KEY, polkadotAddress],
     queryFn: () => listShares(),
     enabled: Boolean(polkadotAddress) && shareEnabled,
-    refetchInterval: REFRESH_INTERVAL_MS,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    refetchInterval: LIVE_DATA_REFRESH_MS,
   });
 
   // History is a separate query because the lists rotate at different
@@ -115,7 +117,9 @@ export default function MySharesPage() {
     queryKey: [HISTORY_QUERY_KEY, polkadotAddress],
     queryFn: () => listShareHistory(),
     enabled: Boolean(polkadotAddress) && shareEnabled,
-    refetchInterval: REFRESH_INTERVAL_MS,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    refetchInterval: LIVE_DATA_REFRESH_MS,
   });
 
   const queueRevoke = (token: string) => setTokenPendingRevoke(token);
