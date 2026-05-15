@@ -21,12 +21,14 @@ import DriveOnboarding from "./DriveOnboarding";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { useDriveStorageStats } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
-import { FileTypes } from "@/lib/types/fileTypes";
+import type { FileExtension } from "@/app/lib/utils/fileTypeMapper";
+import type { DateRange } from "@/app/lib/types/dateRange";
 import {
   generateActiveFilters,
   ActiveFilter,
 } from "@/lib/utils/fileFilterUtils";
 import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
+import { useRecursiveFileSearch } from "@/app/lib/hooks/useRecursiveFileSearch";
 import DriveHeader from "./DriveHeader";
 import DriveContent from "./DriveContent";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
@@ -135,10 +137,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Search state
   const [searchTerm, setSearchTerm] = useState<string>("");
 
-  // Filter states - using a single atomic state to prevent race conditions
+  // Filter states - using a single atomic state to prevent race conditions.
+  // `fileExtension` is the console-style single-select specific extension
+  // ("mp4", "jpg", ...). The legacy multi-select coarse category has been
+  // removed in favour of the grouped extension dropdown shipped to align
+  // with hippius-console's File Type filter.
   const [filterState, setFilterState] = useState({
-    fileTypes: [] as FileTypes[],
-    date: "",
+    fileExtension: undefined as FileExtension | undefined,
+    dateRange: undefined as DateRange | undefined,
     fileSize: 0,
     fileSizes: [] as number[],
     lastUpdated: Date.now(),
@@ -330,26 +336,101 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // landed yet — folded into the loading derivation below so transitions
   // like nested→root or sync-folder switches show the skeleton instead
   // of the previous filter result.
-  const { data: filteredData, isFiltering } = useFilteredFiles(
+  // `fileExtensionsCriteria` MUST be memoised on the single selected
+  // extension — otherwise `[filterState.fileExtension]` would be a new
+  // array on every render, the downstream `currentInputs` useMemo in
+  // `useFilteredFiles` / `useRecursiveFileSearch` would invalidate, and
+  // `isFetching` would never settle to `false` (the symptom: picking a
+  // file-type filter pinned the page in a permanent loading state).
+  const fileExtensionsCriteria = useMemo(
+    () =>
+      filterState.fileExtension ? [filterState.fileExtension] : undefined,
+    [filterState.fileExtension],
+  );
+
+  const { data: inMemoryFilteredData, isFiltering } = useFilteredFiles(
     allFilteredData,
     {
       searchTerm,
-      fileTypes: filterState.fileTypes,
-      dateFilter: filterState.date,
+      fileExtensions: fileExtensionsCriteria,
+      dateRange: filterState.dateRange,
       fileSizes: filterState.fileSizes,
       folderTab: isRecentFiles || isNested ? null : activeSyncFolderLabel,
     },
   );
 
+  // Recursive cross-folder search — fires only when an active filter is
+  // set AND we have a real drive context (root view of a drive or a
+  // nested folder under it). Matches the web console's `/search_files`
+  // behaviour: results are a flat list of leaf files spanning every
+  // nested folder under the drive (scoped to `subfolder` when nested).
+  //
+  // Recent Files is excluded because its dataset is already a synthetic
+  // cross-drive merge — running another recursive search on top would
+  // be misleading. The drive root and nested-folder paths share the
+  // same hook so the user gets identical deep-search behaviour at any
+  // depth.
+  const recursiveSearchLabel = isRecentFiles
+    ? null
+    : isNested
+      ? nestedDrive?.label ?? null
+      : activeSyncFolderLabel;
+  const recursiveSearchSubfolder = isNested ? urlSubFolderPath ?? null : null;
+  const hasActiveSearchOrFilter =
+    Boolean(searchTerm.trim()) ||
+    Boolean(filterState.fileExtension) ||
+    Boolean(filterState.dateRange?.from) ||
+    filterState.fileSizes.length > 0;
+  // Same memoisation discipline as `fileExtensionsCriteria` — the
+  // criteria object itself needs a stable identity across renders so
+  // the hook's internal `useMemo` for `currentInputs` doesn't drift,
+  // which would otherwise keep `isFetching: true` forever.
+  const recursiveCriteria = useMemo(
+    () => ({
+      searchTerm,
+      fileExtensions: fileExtensionsCriteria,
+      dateRange: filterState.dateRange,
+      fileSizes: filterState.fileSizes,
+    }),
+    [
+      searchTerm,
+      fileExtensionsCriteria,
+      filterState.dateRange,
+      filterState.fileSizes,
+    ],
+  );
+
+  const { data: recursiveResults, isFetching: isRecursiveSearching } =
+    useRecursiveFileSearch({
+      accountId: polkadotAddress,
+      label: recursiveSearchLabel,
+      subfolder: recursiveSearchSubfolder,
+      criteria: recursiveCriteria,
+      enabled: hasActiveSearchOrFilter && !isRecentFiles,
+    });
+
+  // When the recursive search is active (filter set + drive context),
+  // show its flat result; otherwise fall back to the in-memory filter
+  // applied to the current level's listing. This is the console-parity
+  // behaviour the user asked for: filters reach across every nested
+  // folder instead of stopping at the rows currently loaded in memory.
+  const useRecursiveResults =
+    hasActiveSearchOrFilter && Boolean(recursiveSearchLabel) && !isRecentFiles;
+  const filteredData = useRecursiveResults ? recursiveResults : inMemoryFilteredData;
+
   // Folded into `isLoading` so transitions where the underlying dataset
   // swaps — nested→root navigation, switching `activeSyncFolderLabel`
   // from the Local cards — surface the skeleton instead of the previous
   // filter result during the ~150ms debounce + IPC window.
+  // `isRecursiveSearching` covers the cross-folder filter path: the user
+  // typed into search and we're still waiting on the new IPC. Folding it
+  // in keeps the loading shell consistent whether the active filter
+  // path is in-memory or recursive.
   const isLoading = isRecentFiles
     ? isRecentFilesLoading || isFiltering
     : isNested
-      ? nestedListing.isLoading || isFiltering
-      : isRegularFilesLoading || isFiltering;
+      ? nestedListing.isLoading || isFiltering || isRecursiveSearching
+      : isRegularFilesLoading || isFiltering || isRecursiveSearching;
 
   // Infinite scroll state for list and card views
   const { visibleData, hasMore, loadMore, resetScroll } =
@@ -372,15 +453,15 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Update active filters when filter settings change
   useEffect(() => {
     const newActiveFilters = generateActiveFilters(
-      filterState.fileTypes,
-      filterState.date,
+      filterState.fileExtension,
+      filterState.dateRange,
       filterState.fileSize,
       filterState.fileSizes,
     );
     setActiveFilters(newActiveFilters);
   }, [
-    filterState.fileTypes,
-    filterState.date,
+    filterState.fileExtension,
+    filterState.dateRange,
     filterState.fileSize,
     filterState.fileSizes,
     filterState.lastUpdated,
@@ -391,8 +472,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     resetScroll();
   }, [
     searchTerm,
-    filterState.fileTypes,
-    filterState.date,
+    filterState.fileExtension,
+    filterState.dateRange,
     filterState.fileSize,
     filterState.fileSizes,
     filterState.lastUpdated,
@@ -400,19 +481,21 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     resetScroll,
   ]);
 
-  // Handle removing a filter
+  // Handle removing a filter chip from the bar above the table.
+  // Each filter type clears its own slice of state; the chip generator
+  // keeps the chip-type strings stable across the codebase via
+  // `ActiveFilter['type']`, so this switch is the one place that needs
+  // to map them back to state mutations.
   const handleRemoveFilter = useCallback(
     (filter: ActiveFilter) => {
       const updates: Partial<typeof filterState> = {};
       switch (filter.type) {
-        case "fileType":
-          updates.fileTypes = filterState.fileTypes.filter(
-            (type: FileTypes) => type !== filter.value,
-          );
+        case "fileExtension":
+          updates.fileExtension = undefined;
           break;
 
-        case "date":
-          updates.date = "";
+        case "dateRange":
+          updates.dateRange = undefined;
           break;
 
         case "fileSize":
@@ -426,7 +509,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
       updateFilters(updates);
     },
-    [filterState.fileTypes, filterState.fileSizes, updateFilters],
+    [filterState.fileSizes, updateFilters],
   );
 
   // Header "Total Storage Used":
@@ -463,16 +546,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   }, []);
 
   // Handle filter changes using atomic state updates
-  const handleFileTypesChange = useCallback(
-    (types: FileTypes[]) => {
-      updateFilters({ fileTypes: types });
+  const handleFileExtensionChange = useCallback(
+    (extension: FileExtension | undefined) => {
+      updateFilters({ fileExtension: extension });
     },
     [updateFilters],
   );
 
-  const handleDateChange = useCallback(
-    (date: string) => {
-      updateFilters({ date });
+  const handleDateRangeChange = useCallback(
+    (range: DateRange | undefined) => {
+      updateFilters({ dateRange: range });
     },
     [updateFilters],
   );
@@ -900,24 +983,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     }
   }, [error]);
 
-  // Header "Number of Files":
-  //   - "All" tab, no search/filters: indexer count (deduplicated).
-  //   - Folder tab, no search/filters: Rust-aggregated per-label count
-  //     (one entry per leaf file; empty folders contribute 0).
-  //   - Search or filter active: count the filtered list. Folder rows
-  //     contribute their recursive file_count; empty folders contribute 0.
-  //     Safe from double-count because list_sync_folder is single-level —
-  //     a folder row's descendants are never in regularFilesData.files.
+  // Header "Number of Files" — drive-level stat, NOT filter-aware.
+  //   - Folder tab: Rust-aggregated per-label count (one entry per leaf
+  //     file; empty folders contribute 0).
+  //   - No active folder (mid-bootstrap): indexer count (deduplicated).
+  // Search / filter activity intentionally does NOT change this number:
+  // users asked for the header to stay anchored to the drive's totals
+  // so they can see how a filtered result compares to the whole drive.
   const displayedFileCount = useMemo(() => {
-    if (searchTerm || activeFilters.length > 0) {
-      return filteredData.reduce((count, item) => {
-        if (item.isFolder) {
-          return count + (item.fileCount ?? 0);
-        }
-        return count + 1;
-      }, 0);
-    }
-
     if (activeSyncFolderLabel) {
       return (
         regularFilesData?.labelStats?.[activeSyncFolderLabel]?.fileCount ?? 0
@@ -930,9 +1003,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
     return 0;
   }, [
-    filteredData,
-    searchTerm,
-    activeFilters.length,
     activeSyncFolderLabel,
     remoteFileCount,
     regularFilesData?.labelStats,
@@ -1228,11 +1298,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 onStartSyncing={handleStartSyncing}
                 hasNoSyncPaths={hasNoSyncPaths}
                 onNavigateToSettings={handleNavigateToSettings}
-                selectedFileTypes={filterState.fileTypes}
-                selectedDate={filterState.date}
+                selectedFileExtension={filterState.fileExtension}
+                selectedDateRange={filterState.dateRange}
                 selectedFileSizes={filterState.fileSizes}
-                onFileTypesChange={handleFileTypesChange}
-                onDateChange={handleDateChange}
+                onFileExtensionChange={handleFileExtensionChange}
+                onDateRangeChange={handleDateRangeChange}
                 onFileSizesChange={handleFileSizesChange}
                 defaultFolderLabel={activeSyncFolderLabel}
                 isFolderUploadOpen={isFolderUploadOpen}

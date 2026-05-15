@@ -19,7 +19,8 @@ import useNavigationLoader from "@/app/lib/hooks/useNavigationLoader";
 import { List } from "lucide-react";
 import StartSyncingButton from "@/app/components/StartSyncingButton";
 import FilterPills from "./FilterPills";
-import { FileTypes } from "@/lib/types/fileTypes";
+import type { FileExtension } from "@/app/lib/utils/fileTypeMapper";
+import type { DateRange } from "@/app/lib/types/dateRange";
 import { IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import { useAtomValue } from "jotai";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
@@ -74,12 +75,12 @@ interface DriveHeaderProps {
   onStartSyncing?: () => void;
   hasNoSyncPaths?: boolean;
   onNavigateToSettings?: () => void;
-  // New filter props
-  selectedFileTypes: FileTypes[];
-  selectedDate: string;
+  // Filter props — single-select extension + date-range match console UX.
+  selectedFileExtension?: FileExtension;
+  selectedDateRange?: DateRange;
   selectedFileSizes: number[];
-  onFileTypesChange: (types: FileTypes[]) => void;
-  onDateChange: (date: string) => void;
+  onFileExtensionChange: (extension: FileExtension | undefined) => void;
+  onDateRangeChange: (range: DateRange | undefined) => void;
   onFileSizesChange: (sizes: number[]) => void;
   defaultFolderLabel?: string | null;
   isFolderUploadOpen?: boolean;
@@ -133,12 +134,12 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   onStartSyncing,
   hasNoSyncPaths = false,
   onNavigateToSettings,
-  // New filter props
-  selectedFileTypes,
-  selectedDate,
+  // Filter props
+  selectedFileExtension,
+  selectedDateRange,
   selectedFileSizes,
-  onFileTypesChange,
-  onDateChange,
+  onFileExtensionChange,
+  onDateRangeChange,
   onFileSizesChange,
   defaultFolderLabel,
   isFolderUploadOpen: isFolderUploadOpenProp,
@@ -400,11 +401,11 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               {/* Line 2 — Filter pills (left) | stats + search + view-mode (right). */}
               <div className="flex items-center justify-between w-full gap-3 flex-wrap">
                 <FilterPills
-                  selectedFileTypes={selectedFileTypes}
-                  selectedDate={selectedDate}
+                  selectedFileExtension={selectedFileExtension}
+                  selectedDateRange={selectedDateRange}
                   selectedFileSizes={selectedFileSizes}
-                  onFileTypesChange={onFileTypesChange}
-                  onDateChange={onDateChange}
+                  onFileExtensionChange={onFileExtensionChange}
+                  onDateRangeChange={onDateRangeChange}
                   onFileSizesChange={onFileSizesChange}
                 />
                 <div className="flex items-center gap-3 shrink-0">

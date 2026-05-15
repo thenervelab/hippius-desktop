@@ -1,17 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import type { FileTypes } from "@/lib/types/fileTypes";
+import type { FileExtension } from "@/app/lib/utils/fileTypeMapper";
+import type { DateRange } from "@/app/lib/types/dateRange";
 
 /**
  * Shape of the filter criteria passed to the Rust `filter_file_entries`
  * IPC. Mirrors `FileFilterCriteria` in `src-tauri/src/sync/files.rs`
  * (all fields optional, camelCase via serde rename_all).
+ *
+ * `fileExtensions` and `dateRange` line up with the new console-style
+ * filter dropdowns. The legacy `fileTypes` (coarse categories) and
+ * `dateFilter` (preset string) fields are still accepted by Rust for
+ * backward-compat but the desktop UI no longer sets them.
  */
 export interface FileFilterRequest {
     searchTerm?: string;
-    fileTypes?: FileTypes[];
-    dateFilter?: string;
+    fileExtensions?: FileExtension[];
+    dateRange?: DateRange;
     fileSizes?: number[];
     folderTab?: string | null;
 }
@@ -56,8 +62,8 @@ export function useFilteredFiles<T extends FormattedUserFile>(
 
     const isNoopCriteria =
         !criteria.searchTerm &&
-        (!criteria.fileTypes || criteria.fileTypes.length === 0) &&
-        !criteria.dateFilter &&
+        (!criteria.fileExtensions || criteria.fileExtensions.length === 0) &&
+        !criteria.dateRange &&
         (!criteria.fileSizes || criteria.fileSizes.length === 0) &&
         !criteria.folderTab;
 
@@ -70,16 +76,16 @@ export function useFilteredFiles<T extends FormattedUserFile>(
         () => ({
             files,
             searchTerm: criteria.searchTerm,
-            fileTypes: criteria.fileTypes,
-            dateFilter: criteria.dateFilter,
+            fileExtensions: criteria.fileExtensions,
+            dateRange: criteria.dateRange,
             fileSizes: criteria.fileSizes,
             folderTab: criteria.folderTab,
         }),
         [
             files,
             criteria.searchTerm,
-            criteria.fileTypes,
-            criteria.dateFilter,
+            criteria.fileExtensions,
+            criteria.dateRange,
             criteria.fileSizes,
             criteria.folderTab,
         ],
@@ -108,8 +114,8 @@ export function useFilteredFiles<T extends FormattedUserFile>(
                     files,
                     filters: {
                         searchTerm: criteria.searchTerm ?? null,
-                        fileTypes: criteria.fileTypes ?? null,
-                        dateFilter: criteria.dateFilter ?? null,
+                        fileExtensions: criteria.fileExtensions ?? null,
+                        dateRange: criteria.dateRange ?? null,
                         fileSizes: criteria.fileSizes ?? null,
                         folderTab: criteria.folderTab ?? null,
                     },
@@ -133,8 +139,8 @@ export function useFilteredFiles<T extends FormattedUserFile>(
     }, [
         files,
         criteria.searchTerm,
-        criteria.fileTypes,
-        criteria.dateFilter,
+        criteria.fileExtensions,
+        criteria.dateRange,
         criteria.fileSizes,
         criteria.folderTab,
         debounceMs,

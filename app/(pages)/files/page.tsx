@@ -21,12 +21,6 @@ const FilesPage: FC = () => {
   useEffect(() => {
     return () => setFileDetails(null);
   }, [setFileDetails]);
-
-  // Nested folder browsing used to live on a separate route (FolderView).
-  // It now folds back into DriveContainer, which reads the URL params
-  // (folderName, subFolderPath, folderSource…) itself and renders the
-  // breadcrumb-based view in-place. The page wrapper stays the same in
-  // both the root and nested cases.
   return (
     <>
       <PageHeader

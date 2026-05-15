@@ -1459,13 +1459,41 @@ pub async fn list_sync_folder_grouped_inner(
     })
 }
 
+/// Inclusive [from, to] date window for the files page Date filter.
+///
+/// Both fields are `YYYY-MM-DD` strings (local-date). The filter rule
+/// expands `from` to 00:00:00 local and `to` to 23:59:59.999 local so a
+/// single-day pick (`from == to`) still matches every file uploaded
+/// during that day. Mirrors the web console's `DateRange` shape so the
+/// frontend can hand the same payload to both clients unchanged.
+#[derive(serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DateRangeFilter {
+    pub from: String,
+    pub to: String,
+}
+
 /// Filter criteria for the files page, matching the frontend `FilterCriteria`.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FileFilterCriteria {
     pub search_term: Option<String>,
     pub file_types: Option<Vec<String>>,
+    /// Explicit file extensions to match (e.g. ["mp4", "jpg"]). Independent
+    /// from `file_types` (coarse categories) — present so the web-console
+    /// style "specific extension" dropdown can request exact matches without
+    /// re-encoding into category groups. Matched case-insensitively against
+    /// the trailing extension of the entry name.
+    pub file_extensions: Option<Vec<String>>,
+    /// Legacy single-date / preset string filter (`"YYYY-MM-DD"`, `"today"`,
+    /// `"last7days"`, `"last30days"`, `"thisyear"`, `"lastyear"`). Retained
+    /// for backward-compat with older IPC callers. The desktop UI no
+    /// longer sets this — it sends `date_range` instead.
     pub date_filter: Option<String>,
+    /// Console-style date-range window. When `Some`, `date_filter` is
+    /// ignored and only files whose `created_at` falls inside the
+    /// inclusive `[from, to]` window are kept.
+    pub date_range: Option<DateRangeFilter>,
     pub file_sizes: Option<Vec<u64>>,
     pub folder_tab: Option<String>,
 }
@@ -1478,7 +1506,12 @@ impl FileFilterCriteria {
     pub fn is_empty(&self) -> bool {
         self.search_term.as_deref().is_none_or(str::is_empty)
             && self.file_types.as_ref().is_none_or(std::vec::Vec::is_empty)
+            && self
+                .file_extensions
+                .as_ref()
+                .is_none_or(std::vec::Vec::is_empty)
             && self.date_filter.as_deref().is_none_or(str::is_empty)
+            && self.date_range.is_none()
             && self.file_sizes.as_ref().is_none_or(std::vec::Vec::is_empty)
             && self.folder_tab.is_none()
     }
@@ -1739,6 +1772,278 @@ pub async fn get_user_files(
     })
 }
 
+/// Recursively walk a sync drive's on-disk subtree and emit one
+/// [`UserFileEntry`] per file (folders are excluded — this is the
+/// recursive-search path, which returns leaves only).
+///
+/// `actual_file_name` carries the full relative path inside the drive
+/// (e.g. `"Photos/2024/IMG_001.jpg"`), so the frontend can show users
+/// where a deep match lives. `name` carries just the basename for
+/// display in the existing table columns.
+///
+/// `prefix` is the rel-path of the directory we're descending into
+/// (`""` for the drive root, `"sub"` for a one-level descent, etc.).
+/// Hidden files (`.`-prefixed) and failed-download / encrypted-name
+/// stubs are skipped to match `list_sync_folder_inner`'s rules.
+async fn walk_disk_files_recursive(
+    base: &Path,
+    rel_prefix: &str,
+    label: &str,
+    folder_path: &str,
+    synced: Option<&HashMap<String, hcfs_client::engine::types::SyncedFileInfo>>,
+    excluded: &[String],
+    out: &mut Vec<UserFileEntry>,
+) {
+    let dir_path = if rel_prefix.is_empty() {
+        base.to_path_buf()
+    } else {
+        base.join(rel_prefix)
+    };
+
+    let Ok(mut dir) = tokio::fs::read_dir(&dir_path).await else {
+        return;
+    };
+
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let Ok(meta) = entry.metadata().await else {
+            continue;
+        };
+        let rel_path = if rel_prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{rel_prefix}/{name}")
+        };
+
+        if meta.is_dir() {
+            // Recurse — folders themselves are never emitted.
+            Box::pin(walk_disk_files_recursive(
+                base,
+                &rel_path,
+                label,
+                folder_path,
+                synced,
+                excluded,
+                out,
+            ))
+            .await;
+            continue;
+        }
+
+        // Skip failed-download artifacts and 0-byte encrypted-name stubs
+        // (mirror `list_sync_folder_inner` — these aren't user files).
+        if hcfs_client::engine::classify::is_failed_download_artifact(&name).is_some() {
+            continue;
+        }
+        if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some()
+            && meta.len() == 0
+        {
+            continue;
+        }
+
+        let is_excluded = !excluded.is_empty() && excluded.iter().any(|p| p == &rel_path);
+        let (sync_status, info) = if is_excluded {
+            ("excluded", None)
+        } else {
+            match synced {
+                Some(map) => match map.get(&rel_path) {
+                    Some(i) => ("synced", Some(i)),
+                    None => ("pending", None),
+                },
+                None => ("unknown", None),
+            }
+        };
+
+        // Match the timestamp rules used by `get_user_files` so the UI's
+        // "Date Uploaded" column lines up regardless of which path
+        // produced the entry. Fall back to the file's local mtime when
+        // the server's `uploaded_at` isn't yet populated (common for
+        // freshly uploaded files where hcfs-client hasn't completed a
+        // reconcile cycle with timestamps yet) — without this fallback
+        // the date-range filter excludes the file silently because
+        // `created_at == 0` short-circuits the filter to "drop".
+        let uploaded_at_ms = info.map_or(0_i64, |i| if i.uploaded_at != 0 { i.uploaded_at * 1000 } else { 0 });
+        let updated_at_ms = info.map_or(0_i64, |i| if i.updated_at != 0 { i.updated_at * 1000 } else { 0 });
+        let local_modified_ms = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| i64::try_from(d.as_millis()).unwrap_or(0))
+            .unwrap_or(0);
+        let created_at_ms = if uploaded_at_ms != 0 {
+            uploaded_at_ms
+        } else {
+            local_modified_ms
+        };
+        let last_charged_at_ms = if updated_at_ms != 0 { updated_at_ms } else { uploaded_at_ms };
+
+        let display_name = if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some()
+            || (name.len() >= 16 && !name.contains('.') && name.chars().all(|c| c.is_ascii_hexdigit()))
+        {
+            "Encrypted file".to_string()
+        } else {
+            name.clone()
+        };
+
+        out.push(UserFileEntry {
+            name: display_name,
+            actual_file_name: rel_path.clone(),
+            size: meta.len(),
+            created_at: created_at_ms,
+            arion_hash: info.map_or_else(String::new, hcfs_client::engine::types::SyncedFileInfo::path_hash_hex),
+            arion_cid: info.map_or_else(String::new, |i| i.arion_cid.to_string()),
+            source: format!("{folder_path}/{rel_path}"),
+            miner_ids: Vec::new(),
+            is_assigned: true,
+            last_charged_at: last_charged_at_ms,
+            is_folder: false,
+            file_type: "private".to_string(),
+            is_erasure_coded: false,
+            main_req_hash: String::new(),
+            sync_status: sync_status.to_string(),
+            label: label.to_string(),
+            file_count: None,
+            deleted: false,
+        });
+    }
+}
+
+/// Recursively search a single sync drive for files matching `filters`.
+///
+/// Returns a flat list of [`UserFileEntry`] across every nested folder in
+/// the drive (or only under `subfolder` when set). Mirrors the web
+/// console's `/search_files` API: when the user has an active search or
+/// filter, the UI shows matches from anywhere in the drive — not just the
+/// rows it already had in memory.
+///
+/// The walk combines two sources so files synced from other devices show
+/// up before they've downloaded locally:
+///   1. The on-disk tree under `sync_path[/subfolder]`.
+///   2. The drive's server-known rel-path index (`synced_paths_for_label`),
+///      filtered to entries whose key starts with the subfolder prefix.
+///      Entries already produced by the disk walk are skipped via a
+///      `seen` set keyed on the relative path.
+///
+/// Filter application is delegated to [`apply_file_filters`] so the same
+/// search/type/extension/date/size rules used everywhere else apply here
+/// unchanged.
+#[tauri::command]
+pub async fn search_user_files_recursive(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    label: String,
+    subfolder: Option<String>,
+    filters: FileFilterCriteria,
+) -> Result<Vec<UserFileEntry>> {
+    let pool = state.pool()?;
+    let owner = account_key(&account_id);
+    let sync_paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
+        .await
+        .unwrap_or_default();
+    // Drive must be a real registered sync path for this user. Defends
+    // against a caller-supplied label that points at a different account's
+    // drive (the synced_paths_for_label lookup itself is in-memory keyed
+    // by label and doesn't enforce ownership).
+    let Some(sp) = sync_paths.iter().find(|sp| sp.label == label && !sp.path.is_empty()) else {
+        // Unknown label / not yet initialised — surface as empty rather
+        // than failing the IPC. Matches `get_user_files` which silently
+        // skips drives that fail to list.
+        let _ = owner; // suppress unused-var warning when the branch is taken
+        return Ok(Vec::new());
+    };
+
+    let base = PathBuf::from(&sp.path);
+    // Normalise the optional subfolder to a `rel_prefix` and validate
+    // that, if provided, it stays inside the sync root.
+    let rel_prefix = match subfolder.as_deref() {
+        Some(s) if !s.is_empty() => {
+            let target = base.join(s);
+            ensure_within(&base, &target)?;
+            s.trim_matches('/').to_string()
+        }
+        _ => String::new(),
+    };
+
+    // Snapshot of synced paths + excludes under a single per-drive lock
+    // (matches `list_sync_folder_inner`). `synced` may be `None` if the
+    // drive isn't currently mounted; in that case we still walk the disk.
+    let (synced, excluded) = synced_paths_and_excludes_for_label(&state.sync, &label).await;
+
+    let mut out: Vec<UserFileEntry> = Vec::new();
+
+    // 1. On-disk walk — collects everything physically present locally.
+    walk_disk_files_recursive(
+        &base,
+        &rel_prefix,
+        &label,
+        &sp.path,
+        synced.as_ref(),
+        &excluded,
+        &mut out,
+    )
+    .await;
+
+    // 2. Server-only overlay — files known on the server that haven't
+    // downloaded to this device yet. We surface them as `sync_status =
+    // "pending"` so the UI can render the same arrow it does at the root
+    // listing for not-yet-local files.
+    let prefix = if rel_prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{rel_prefix}/")
+    };
+    if let Some(map) = &synced {
+        // Owned-string set so the loop body can `out.push(...)` (mutable
+        // borrow) while we still need the set to dedupe further iterations.
+        // Borrowing from `out.iter().map(...)` would keep an immutable
+        // borrow alive across the push and fail the borrow checker.
+        let seen: std::collections::HashSet<String> = out.iter().map(|e| e.actual_file_name.clone()).collect();
+        for (rel, info) in map {
+            if !prefix.is_empty() && !rel.starts_with(&prefix) {
+                continue;
+            }
+            if seen.contains(rel) {
+                continue;
+            }
+            let basename = rel.rsplit('/').next().unwrap_or(rel).to_string();
+            let uploaded_at_ms = if info.uploaded_at != 0 { info.uploaded_at * 1000 } else { 0 };
+            let updated_at_ms = if info.updated_at != 0 { info.updated_at * 1000 } else { 0 };
+            let last_charged_at_ms = if updated_at_ms != 0 { updated_at_ms } else { uploaded_at_ms };
+            out.push(UserFileEntry {
+                name: basename.clone(),
+                actual_file_name: rel.clone(),
+                size: 0,
+                created_at: uploaded_at_ms,
+                arion_hash: info.path_hash_hex(),
+                arion_cid: info.arion_cid.to_string(),
+                source: format!("{}/{}", sp.path, rel),
+                miner_ids: Vec::new(),
+                is_assigned: true,
+                last_charged_at: last_charged_at_ms,
+                is_folder: false,
+                file_type: "private".to_string(),
+                is_erasure_coded: false,
+                main_req_hash: String::new(),
+                sync_status: "pending".to_string(),
+                label: label.clone(),
+                file_count: None,
+                deleted: false,
+            });
+        }
+    }
+
+    apply_file_filters(&mut out, &filters);
+
+    // Newest-first by upload/charge timestamp — mirrors `get_user_files`'s
+    // default ordering so the UI sees the same shape across both paths.
+    out.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
+
+    Ok(out)
+}
+
 /// Apply the full filter chain to a mutable file list in place.
 ///
 /// Shared between [`get_user_files`] (initial fetch with filters) and
@@ -1782,7 +2087,68 @@ fn apply_file_filters(files: &mut Vec<UserFileEntry>, f: &FileFilterCriteria) {
             }
         }
 
-        if let Some(ref date) = f.date_filter
+        // Explicit extension match (case-insensitive). Folders are always
+        // excluded by an active extension filter since extensions apply to
+        // files only — same shape as the console's File Type dropdown.
+        if let Some(ref exts) = f.file_extensions
+            && !exts.is_empty()
+        {
+            if file.is_folder {
+                return false;
+            }
+            let ext = file.name.rsplit('.').next().unwrap_or("").to_lowercase();
+            let matches = exts.iter().any(|e| e.trim_start_matches('.').to_lowercase() == ext);
+            if !matches {
+                return false;
+            }
+        }
+
+        // Console-style date-range window. Mirrors hippius-console:
+        //   from = local midnight on `range.from`
+        //   to   = local 23:59:59.999 on `range.to`
+        // The comparison is in absolute timestamps (UTC ms) so files
+        // uploaded near local midnight aren't dropped just because their
+        // UTC *date* lands on a neighbouring day — that was the bug the
+        // user reported (console returned hits, desktop returned none).
+        if let Some(ref range) = f.date_range {
+            if file.created_at == 0 {
+                return false;
+            }
+            let file_ms = if file.created_at > 946_684_800_000 {
+                file.created_at
+            } else {
+                file.created_at * 1000
+            };
+            use chrono::TimeZone;
+            let parse_local_start = |s: &str| -> Option<i64> {
+                chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                    .ok()
+                    .and_then(|d| d.and_hms_opt(0, 0, 0))
+                    .and_then(|dt| chrono::Local.from_local_datetime(&dt).single())
+                    .map(|dt| dt.timestamp_millis())
+            };
+            let parse_local_end = |s: &str| -> Option<i64> {
+                chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                    .ok()
+                    .and_then(|d| d.and_hms_milli_opt(23, 59, 59, 999))
+                    .and_then(|dt| chrono::Local.from_local_datetime(&dt).single())
+                    .map(|dt| dt.timestamp_millis())
+            };
+            let from_ms = parse_local_start(&range.from);
+            // Allow "from only" / "to only" partial ranges by treating an
+            // unparseable bound on either side as "no constraint there".
+            let to_ms = parse_local_end(&range.to);
+            if let Some(f_ms) = from_ms
+                && file_ms < f_ms
+            {
+                return false;
+            }
+            if let Some(t_ms) = to_ms
+                && file_ms > t_ms
+            {
+                return false;
+            }
+        } else if let Some(ref date) = f.date_filter
             && !date.is_empty()
         {
             if file.created_at == 0 {

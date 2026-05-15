@@ -8,11 +8,11 @@ describe("FilterPills", () => {
   it("uses moe pill styling for filter triggers", () => {
     render(
       <FilterPills
-        selectedFileTypes={[]}
-        selectedDate=""
+        selectedFileExtension={undefined}
+        selectedDateRange={undefined}
         selectedFileSizes={[]}
-        onFileTypesChange={vi.fn()}
-        onDateChange={vi.fn()}
+        onFileExtensionChange={vi.fn()}
+        onDateRangeChange={vi.fn()}
         onFileSizesChange={vi.fn()}
       />,
     );
@@ -20,7 +20,7 @@ describe("FilterPills", () => {
     const buttons = [
       screen.getByRole("button", { name: /file type/i }),
       screen.getByRole("button", { name: /^size$/i }),
-      screen.getByRole("button", { name: /^date$/i }),
+      screen.getByRole("button", { name: /date range/i }),
     ];
 
     for (const button of buttons) {

@@ -77,7 +77,7 @@ use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::files::{
     add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, filter_file_entries, get_recent_files, get_user_files,
-    list_sync_folder, list_sync_folder_grouped, resolve_file_info, resolve_file_path,
+    list_sync_folder, list_sync_folder_grouped, resolve_file_info, resolve_file_path, search_user_files_recursive,
 };
 use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
 use crate::sync::lifecycle::{
@@ -187,6 +187,7 @@ fn main() {
             get_recent_files,
             get_user_files,
             filter_file_entries,
+            search_user_files_recursive,
             export_file,
             resolve_file_path,
             resolve_file_info,

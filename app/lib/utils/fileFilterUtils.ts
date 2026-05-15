@@ -1,35 +1,55 @@
-import { FileTypes } from "@/lib/types/fileTypes";
 import { formatBytesFromBigInt } from "./formatBytes";
+import { getFileExtensions, type FileExtension } from "./fileTypeMapper";
+import type { DateRange } from "@/app/lib/types/dateRange";
 
 /**
  * Filter criteria for the files page / folder view. Mirrors
  * `FileFilterCriteria` on the Rust side (`src-tauri/src/sync/files.rs`).
  * Every rule (date ranges, size thresholds, search behaviour) lives in
  * Rust — this frontend helper only handles presentation concerns
- * (active-filter chip labels) and threading state into `filter_file_entries`.
+ * (active-filter chip labels) and threading state into
+ * `filter_file_entries` / `search_user_files_recursive`.
  */
 export interface FilterCriteria {
     searchTerm: string;
-    fileTypes: FileTypes[];
-    dateFilter: string;
+    /** Specific extension to match (e.g. "mp4"). Console-equivalent. */
+    fileExtension?: FileExtension;
+    /** Inclusive date window — `{from, to}` are YYYY-MM-DD. */
+    dateRange?: DateRange;
     fileSize: number;
     fileSizes?: number[];
 }
 
 export interface ActiveFilter {
-    type: 'fileType' | 'date' | 'fileSize';
+    type: 'fileExtension' | 'dateRange' | 'fileSize';
     value: string;
     label: string;
     displayValue: string;
 }
 
-export const getDateOptions = () => ({
-    today: "Today",
-    last7days: "Last 7 days",
-    last30days: "Last 30 days",
-    thisyear: `This year`,
-    lastyear: `Last year`,
-});
+const MONTHS_SHORT = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+/** Format a YYYY-MM-DD string as "Mar 5, 2026" without timezone shifts. */
+function formatYmd(ymd: string): string {
+    const parts = ymd.split('-');
+    if (parts.length !== 3) return ymd;
+    const year = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1;
+    const day = parseInt(parts[2], 10);
+    if (
+        Number.isNaN(year) ||
+        Number.isNaN(month) ||
+        Number.isNaN(day) ||
+        month < 0 ||
+        month > 11
+    ) {
+        return ymd;
+    }
+    return `${MONTHS_SHORT[month]} ${day}, ${year}`;
+}
 
 /**
  * Generate the filter-chip display objects shown above the files table.
@@ -38,53 +58,33 @@ export const getDateOptions = () => ({
  * Rust (`filter_file_entries`).
  */
 export function generateActiveFilters(
-    fileTypes: FileTypes[],
-    dateFilter: string,
+    fileExtension: FileExtension | undefined,
+    dateRange: DateRange | undefined,
     fileSize: number,
     fileSizes?: number[]
 ): ActiveFilter[] {
     const activeFilters: ActiveFilter[] = [];
-    const dateOptions = getDateOptions();
 
-    fileTypes.forEach(type => {
+    if (fileExtension) {
+        const ext = getFileExtensions().find((e) => e.value === fileExtension);
         activeFilters.push({
-            type: 'fileType',
-            value: type,
+            type: 'fileExtension',
+            value: fileExtension,
             label: 'Type',
-            displayValue: type.charAt(0).toUpperCase() + type.slice(1)
+            displayValue: ext?.label ?? fileExtension.toUpperCase(),
         });
-    });
+    }
 
-    if (dateFilter && dateFilter.trim() !== '') {
-        let displayValue: string;
-
-        if (dateFilter.match(/^\d{4}-\d{2}-\d{2}$/)) {
-            try {
-                const date = new Date(dateFilter);
-                const months = [
-                    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-                ];
-                displayValue = `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
-            } catch {
-                displayValue = dateFilter;
-            }
-        } else {
-            const currentYear = new Date().getFullYear();
-            displayValue = dateOptions[dateFilter as keyof typeof dateOptions] || dateFilter;
-
-            if (dateFilter === 'thisyear') {
-                displayValue = `${displayValue} (${currentYear})`;
-            } else if (dateFilter === 'lastyear') {
-                displayValue = `${displayValue} (${currentYear - 1})`;
-            }
-        }
-
+    if (dateRange?.from) {
+        const fromLabel = formatYmd(dateRange.from);
+        const toLabel = dateRange.to ? formatYmd(dateRange.to) : fromLabel;
+        const displayValue =
+            dateRange.from === dateRange.to ? fromLabel : `${fromLabel} - ${toLabel}`;
         activeFilters.push({
-            type: 'date',
-            value: dateFilter,
+            type: 'dateRange',
+            value: `${dateRange.from}_${dateRange.to ?? dateRange.from}`,
             label: 'Date',
-            displayValue
+            displayValue,
         });
     }
 
