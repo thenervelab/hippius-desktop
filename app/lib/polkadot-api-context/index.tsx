@@ -29,13 +29,33 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
 
     setState((prev) => ({ ...prev, isConnecting: true }));
 
-    // Start the Rust block subscription
-    invoke("start_block_subscription").catch((err) => {
-      console.warn("[PolkadotApi] Failed to start block subscription:", err);
-      if (!destroyed) {
-        setState((prev) => ({ ...prev, isConnecting: false }));
-      }
-    });
+    // Start the Rust block subscription. `isConnecting` is also
+    // cleared by:
+    //
+    // - the `.catch` below, if the IPC itself failed
+    // - the `block_number_updated` listener, if at least one finalized
+    //   block has arrived from the subscription
+    //
+    // Neither of those clears triggers when the IPC succeeds (so no
+    // catch) but the subscription stays silent (no blocks for a long
+    // window, e.g. the WS connected but the chain hasn't produced a
+    // new finalized block yet). The UI would then sit on "Connecting"
+    // indefinitely. Clearing `isConnecting` on successful IPC return
+    // collapses the steady "connected, no block yet" state into the
+    // post-connect view; `isConnected` correctly stays false until
+    // the listener flips it.
+    invoke("start_block_subscription")
+      .then(() => {
+        if (!destroyed) {
+          setState((prev) => ({ ...prev, isConnecting: false }));
+        }
+      })
+      .catch((err) => {
+        console.warn("[PolkadotApi] Failed to start block subscription:", err);
+        if (!destroyed) {
+          setState((prev) => ({ ...prev, isConnecting: false }));
+        }
+      });
 
     // Listen for block updates from Rust
     listen<BlockUpdate>("block_number_updated", (e) => {

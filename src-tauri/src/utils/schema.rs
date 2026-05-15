@@ -15,8 +15,9 @@ use tracing::{debug, info, warn};
 const EXPECTED_TABLES: &[&str] = &[
     // Declarative TABLE_SCHEMAS block (1 table)
     "sub_accounts",
-    // Imperative CREATE TABLE statements (16 tables)
+    // Imperative CREATE TABLE statements (17 tables)
     "sync_paths",
+    "sync_intent",
     "wss_endpoint",
     "security_scoped_bookmarks",
     "auth_session",
@@ -239,6 +240,45 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             info!("sync_paths constraint migration completed");
         }
     }
+
+    // sync_intent — persistent upload-intent manifest for the sync widget.
+    //
+    // The sync widget previously reset progress on app restart after a partial
+    // bulk upload (drag 10 GB → close at 5 GB → reopen shows "0 / 5 GB" instead
+    // of "5 / 10 GB") because the in-memory snapshot was the only source of
+    // truth. This table is the durable shadow: every queued file is recorded
+    // here when its plan lands, and `completed_at_ms` is set when the file
+    // finishes uploading. The composite primary key `(account_id, drive_label,
+    // relative_path)` makes "same file enqueued twice for the same drive"
+    // unrepresentable at the storage layer; subsequent tasks decide the
+    // ON CONFLICT policy when wiring `record_plan`.
+    //
+    // `completed_at_ms` is NULLABLE on purpose: NULL is the canonical "still
+    // pending" marker. The covering index `(account_id, drive_label,
+    // completed_at_ms)` keeps the per-drive "pending count" and totals queries
+    // (Task 2) off a full table scan as the table grows across long-running
+    // sync sessions. `added_at_ms` is non-NULL so age-based prune policies have
+    // a deterministic ordering key.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_intent (
+            account_id      TEXT    NOT NULL,
+            drive_label     TEXT    NOT NULL,
+            relative_path   TEXT    NOT NULL,
+            size_bytes      INTEGER NOT NULL,
+            added_at_ms     INTEGER NOT NULL,
+            completed_at_ms INTEGER,
+            PRIMARY KEY (account_id, drive_label, relative_path)
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_sync_intent_drive
+            ON sync_intent (account_id, drive_label, completed_at_ms)",
+    )
+    .execute(&mut *tx)
+    .await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS wss_endpoint (

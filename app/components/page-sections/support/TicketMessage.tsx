@@ -69,7 +69,7 @@ const TicketMessageComponent: React.FC<TicketMessageProps> = ({
           (isStaff
             ? "rounded-br-[12px] rounded-tl-[12px] rounded-tr-[12px]"
             : "rounded-bl-[12px] rounded-tl-[12px] rounded-tr-[12px]"),
-        className
+        className,
       )}
     >
       <p className="text-sm font-medium text-grey-10 leading-5 tracking-[-0.28px] whitespace-pre-wrap break-words dark:text-grey-dark-500">
@@ -102,7 +102,7 @@ const TicketMessageComponent: React.FC<TicketMessageProps> = ({
                       "h-auto max-h-[200px] w-full object-cover transition-opacity duration-300",
                       loadedImages.has(attachment.id)
                         ? "opacity-100"
-                        : "opacity-0"
+                        : "opacity-0",
                     )}
                   />
                 </button>

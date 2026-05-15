@@ -4,6 +4,7 @@ import { sidebarCollapsedAtom } from "@/components/sidebar/sideBarAtoms";
 import cn from "@/app/lib/utils/cn";
 import ConflictsBanner from "@/components/ui/ConflictsBanner";
 import MigrationBanner from "@/components/ui/MigrationBanner";
+import CreditsExhaustedBanner from "@/components/billing/CreditsExhaustedBanner";
 import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert";
 import FileDetailsPanel from "../components/page-sections/drive/FileDetailsPanel";
 
@@ -26,6 +27,13 @@ export default function ResponsiveContent({
         <div className="sticky top-0 z-30 px-4">
           <ConflictsBanner />
           <MigrationBanner />
+          <CreditsExhaustedBanner />
+          {/* `SyncReauthRequiredAlert` auto-renders null unless Rust's
+              `restore_session` flagged `sync_requires_reauth = true`
+              (keychain-miss for a mnemonic user). Mounting it here in
+              the sticky toolbar makes it visible on every authenticated
+              route — the previous FilesContainer-only mount missed
+              users whose last-visited page was /wallet, /billing, etc. */}
           <SyncReauthRequiredAlert className="mt-2" />
         </div>
 

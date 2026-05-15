@@ -12,6 +12,7 @@ import { listen } from "@tauri-apps/api/event";
 import { migrationLockAtom } from "../global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 import { isNotReady } from "../utils/dispatchTauriError";
+import { invokeWithTimeout } from "../utils/invokeWithTimeout";
 
 export interface UseHcfsSyncResult {
   tryInitializeSync: (accountId: string, label: string, mnemonic?: string) => Promise<boolean>;
@@ -219,10 +220,20 @@ export async function tryAutoInitSync(
   // than necessary.
   const attempt = async (): Promise<"retry" | boolean> => {
     try {
-      const result = await invoke<AutoInitResult>("auto_init_sync", {
-        accountId,
-        mnemonic: null,
-      });
+      // 15s wall-clock cap per attempt. `auto_init_sync_inner`
+      // contains its own bounded operations (HCFS config read,
+      // credit check, per-drive init fan-out), but a deadlock in
+      // any one of those would otherwise leave this promise
+      // pending forever — and the retry ladder ABOVE relies on
+      // `attempt()` returning so it can decide whether to wait for
+      // `hippius_auth_ready` and try again. With the cap, the worst
+      // case is 3 timeouts (~45s) and a clean false return; without
+      // it, the worst case is "never returns".
+      const result = await invokeWithTimeout<AutoInitResult>(
+        "auto_init_sync",
+        { accountId, mnemonic: null },
+        15_000,
+      );
 
       // Per-drive Active status is emitted by Rust from `auto_init_sync`
       // for each successful drive init — useDriveStatuses picks them up
@@ -231,6 +242,14 @@ export async function tryAutoInitSync(
 
       return result.anyInitialized;
     } catch (err) {
+      // Treat timeout the same as a retryable transient failure:
+      // the next attempt may succeed if the underlying hang clears
+      // (e.g. a Rust-side lock that was briefly held). Bail terminal
+      // only after the full retry budget is exhausted.
+      if (err instanceof Error && err.message.endsWith("timed out")) {
+        console.warn("[AutoSync] auto_init_sync timed out — will retry");
+        return "retry";
+      }
       // `MasterMnemonicUnrecoverable` is the specific signal that auth
       // state hasn't been populated yet. Any other error (insufficient
       // credits, validation, network) is terminal and must not retry.

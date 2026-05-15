@@ -46,6 +46,14 @@ pub enum AppError {
     #[error("Lock poisoned: {0}")]
     Lock(String),
 
+    /// Failures from the persistent sync-intent manifest.
+    ///
+    /// Wrapped as a typed module error (not folded into `Db`) so callers
+    /// distinguish intent-store I/O from generic database operations and
+    /// `IntentError`'s `source()` chain remains intact through `?`.
+    #[error("Sync intent error: {0}")]
+    Intent(#[from] crate::sync::intent::IntentError),
+
     #[error("{0}")]
     Other(String),
 }
@@ -153,6 +161,7 @@ impl Serialize for AppError {
             Self::NotReady(_) => "NotReady",
             Self::Progress(_) => "Progress",
             Self::Lock(_) => "Lock",
+            Self::Intent(_) => "Intent",
             Self::Other(_) => "Other",
         };
 
@@ -461,6 +470,9 @@ mod tests {
             AppError::NotReady(NotReadyKind::ConfigMissing),
             AppError::Progress("tracker".into()),
             AppError::Lock("poisoned".into()),
+            AppError::Intent(crate::sync::intent::IntentError::Db(sqlx::Error::ColumnNotFound(
+                "test_col".into(),
+            ))),
             AppError::Other("misc".into()),
         ];
         let expected_kinds = [
@@ -475,6 +487,7 @@ mod tests {
             "NotReady",
             "Progress",
             "Lock",
+            "Intent",
             "Other",
         ];
 

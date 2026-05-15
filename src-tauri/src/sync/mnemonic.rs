@@ -247,6 +247,17 @@ pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppS
         // sure the active AuthInfo slot has it so downstream Rust callers
         // pick it up without re-traversing the fallback chain.
         state.auth.lock()?.cache_session_mnemonic(&account_id, (*m).clone());
+        // Re-emit `hippius_auth_ready` so the FE's `tryAutoInitSync`
+        // retry ladder picks up. The FE now fires
+        // `ensure_sync_mnemonic` in parallel with `initSync` (no
+        // longer awaiting it before invoking `auto_init_sync`), so
+        // the first `auto_init_sync` attempt may land while
+        // `AuthInfo.mnemonic` is still empty. The ladder's listener
+        // is armed before attempt 1, so an emit here unblocks the
+        // next retry the moment the cache is populated. Cheap (one
+        // Tauri event), no-op for paths where the FE didn't actually
+        // race.
+        state.sync_bridge.emit_auth_ready();
         return Ok(());
     }
 
@@ -296,6 +307,12 @@ pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppS
     // substrate_address so a stale cache from a previous account never
     // leaks across logins.
     state.auth.lock()?.cache_session_mnemonic(&account_id, (*generated).clone());
+
+    // Same rationale as the fast-recovery branch above — the FE
+    // races `ensure_sync_mnemonic` with `initSync`, so emit
+    // `hippius_auth_ready` once the cache is populated so the retry
+    // ladder picks up.
+    state.sync_bridge.emit_auth_ready();
 
     Ok(())
 }

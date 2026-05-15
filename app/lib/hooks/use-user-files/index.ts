@@ -31,7 +31,11 @@ export type FormattedUserFile = {
   parentFolderId?: string;
   parentFolderName?: string;
   mainReqHash: string;
-  syncStatus?: "synced" | "pending" | "uploading" | "downloading" | "unknown" | "excluded";
+  // `failed` is set by the files-table row enricher when the live sync
+  // snapshot reports `status === "error"` for the matching file (e.g. 402
+  // Payment Required during upload). It keeps the row visually distinct from
+  // an in-flight upload so a stuck failure can't keep masquerading as progress.
+  syncStatus?: "synced" | "pending" | "uploading" | "downloading" | "failed" | "unknown" | "excluded";
   label?: string;
   fileCount?: number;
   /**

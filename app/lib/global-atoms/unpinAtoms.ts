@@ -89,6 +89,26 @@ export const hasConfiguredDrivesAtom = atom((get) => {
 });
 
 /**
+ * Per-drive "metadata stale" set, keyed by drive label.
+ *
+ * A label appears in this map when Rust's `spawn_reconcile_timestamps`
+ * exhausts its retry budget for that drive (every attempt to fetch
+ * the server's authoritative `remote_timestamps` failed). The value
+ * is the short human-readable reason from the backend, suitable for
+ * display under the banner heading.
+ *
+ * The entry self-clears the next time the same label emits
+ * `hcfs_activity_updated` — the assumption being that any successful
+ * cycle has backfilled the missing timestamps. This avoids an
+ * explicit "retry now" channel; the next normal sync handles it.
+ *
+ * Owned by `useMetadataStaleListener`, which is mounted via
+ * `SyncEventLogger`. Frontend code must never mutate this atom from
+ * a click handler — it mirrors backend state.
+ */
+export const metadataStaleLabelsAtom = atom<Map<string, string>>(new Map());
+
+/**
  * Set to `true` when Rust's `restore_session` successfully rehydrated
  * the session but the OS keychain didn't contain the user's BIP-39
  * mnemonic — so `AuthInfo.mnemonic` is `None` and the sync engine is

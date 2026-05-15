@@ -1,3 +1,4 @@
+import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
 import { useInvokeQuery } from "./useInvokeQuery";
 
 /**
@@ -29,7 +30,13 @@ export function useDriveCreditsTotal(options?: { enabled?: boolean }) {
     command: "get_drive_credits_total",
     queryKey: (addr) => [DRIVE_CREDITS_TOTAL_QUERY_KEY, addr],
     options: {
-      staleTime: 60_000,
+      // Credits are consumed on-chain every block; staleTime 0 + a
+      // block-cadence poll keeps the "Total Credit Used" tile in step
+      // with the storage tile so the home page never shows a stale
+      // total next to a fresh size.
+      staleTime: 0,
+      refetchOnWindowFocus: true,
+      refetchInterval: LIVE_DATA_REFRESH_MS,
       enabled: options?.enabled ?? true,
     },
   });

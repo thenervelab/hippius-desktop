@@ -1,4 +1,5 @@
 import { keepPreviousData, UseQueryOptions, UseQueryResult } from "@tanstack/react-query";
+import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
 import { useInvokeQuery } from "./useInvokeQuery";
 
 export interface CreditEventObject {
@@ -31,7 +32,12 @@ export default function useAddCreditEvent(
       limit,
     }),
     options: {
-      refetchInterval: 30000,
+      // Add-credit events land one per block; poll at block cadence and
+      // keep polling when the window is backgrounded so a top-up made
+      // elsewhere shows up without refocusing the app.
+      staleTime: 0,
+      refetchOnWindowFocus: true,
+      refetchInterval: LIVE_DATA_REFRESH_MS,
       refetchIntervalInBackground: true,
       placeholderData: keepPreviousData,
       ...options,

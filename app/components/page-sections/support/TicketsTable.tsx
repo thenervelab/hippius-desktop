@@ -118,7 +118,7 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
               title={subject}
               className={cn(
                 "block w-full truncate text-left text-[12px] font-medium leading-[18px] tracking-[-0.24px]",
-                "text-grey-10 dark:text-grey-dark-200 hover:text-primary-50 dark:hover:text-primary-brand-dark transition-colors"
+                "text-grey-10 dark:text-grey-dark-200 hover:text-primary-50 dark:hover:text-primary-brand-dark transition-colors",
               )}
             >
               {subject}
@@ -215,7 +215,7 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
         },
       }),
     ],
-    [onViewMessages, onCloseTicket, openMenuRowId]
+    [onViewMessages, onCloseTicket, openMenuRowId],
   );
 
   const table = useReactTable({
@@ -300,12 +300,8 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
             totalPages={totalPages}
             pageSize={pageSize}
             totalCount={totalCount}
-            onPrev={() =>
-              onPageChange?.(Math.max(1, currentPage - 1))
-            }
-            onNext={() =>
-              onPageChange?.(Math.min(totalPages, currentPage + 1))
-            }
+            onPrev={() => onPageChange?.(Math.max(1, currentPage - 1))}
+            onNext={() => onPageChange?.(Math.min(totalPages, currentPage + 1))}
           />
         </div>
       )}
@@ -349,7 +345,7 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
                           "!border-[#E3E3E3] dark:!border-[#313131]",
                           rowBgClass,
                           !isMenuOpen &&
-                            "group-hover/ticket-row:bg-[#f1f1f1] dark:group-hover/ticket-row:bg-black-primary-bg/70"
+                            "group-hover/ticket-row:bg-[#f1f1f1] dark:group-hover/ticket-row:bg-black-primary-bg/70",
                         )}
                       />
                     ))}

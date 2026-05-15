@@ -203,6 +203,13 @@ pub fn mark_file_error(sync: &SyncRunner, path: String, error: String) -> Result
 /// Mark a single file as fully synced (download/upload + AEAD verification
 /// complete) and emit a snapshot.
 ///
+/// Returns the file's `total_bytes` (the size the progress tracker
+/// observed during this cycle). Callers thread this value into per-file
+/// telemetry rows so the Recent-Files view and the dedup-key entropy
+/// don't lose the byte count just because `FileSyncedFn`'s upstream
+/// signature doesn't carry it. See [`crate::sync::lifecycle::build_file_synced_callback`]
+/// for the consumer.
+///
 /// Called from `build_file_synced_callback` in `lifecycle.rs`, which fires
 /// from hcfs-client's per-file `on_file_synced` callback. That callback is
 /// invoked from `drive/sync_flow.rs` only after the upload OR download task
@@ -221,8 +228,16 @@ pub fn mark_file_error(sync: &SyncRunner, path: String, error: String) -> Result
 /// individual file as soon as its own AEAD verification has succeeded,
 /// independent of other in-flight files.
 ///
-/// No-op if there's no current session, no file at the given path, or the
-/// file is already Completed.
+/// Returns `Ok(0)` only when there's no current session or no file
+/// at the given path — i.e. the call observed no entry to read a
+/// size from. For the already-Completed branch we return
+/// `file.total_bytes` (the value the per-chunk callback recorded
+/// during this cycle) rather than 0, because in practice every
+/// successful upload reaches this branch (hcfs-client's
+/// `update_file_progress` flips `Completed` on the final chunk
+/// BEFORE `on_file_synced` fires). Returning 0 there caused every
+/// Recent-Files row to render its size as "Unknown" — see the
+/// regression test `mark_file_synced_returns_total_bytes_when_already_completed`.
 ///
 /// As of hcfs-client `33048ff5bc9228939b521c8a147533dcb221dfb5` (PR #110),
 /// `path_for_progress` in `drive/download.rs` always uses the full
@@ -230,8 +245,111 @@ pub fn mark_file_error(sync: &SyncRunner, path: String, error: String) -> Result
 /// callback matches the key passed to `on_file_synced`. A simple
 /// `session.files.get_mut(path)` lookup is sufficient — no basename
 /// fallback needed.
-pub fn mark_file_synced(sync: &SyncRunner, path: &str) -> Result<()> {
+///
+/// # Errors
+///
+/// Currently infallible — every branch returns `Ok(...)`. The `Result`
+/// wrapper is retained because any future addition of fallible work
+/// (e.g. a checked timestamp arithmetic the snapshot relies on) belongs
+/// inside this helper, and a non-`Result` signature would force every
+/// caller to absorb the breakage at the call site.
+pub fn mark_file_synced(sync: &SyncRunner, path: &str) -> Result<u64> {
     use hcfs_client::engine::progress::state::FileStatus;
+
+    // `total_bytes` is captured INSIDE the locked-state block (where the
+    // session/file references are valid) and returned AFTER the guard
+    // drops. `u64: Copy`, so the value moves out of the borrow region
+    // cleanly — no lifetime extension, no extra clone.
+    let observed_bytes = {
+        let mut state = sync.progress.lock_state();
+        let Some(session) = state.current_session.as_mut() else {
+            return Ok(0);
+        };
+        let Some(file) = session.files.get_mut(path) else {
+            return Ok(0);
+        };
+        if file.status == FileStatus::Completed {
+            // Already terminal. There are two ways this happens in
+            // practice:
+            //
+            //   1. End-of-cycle `complete_pending_files` ran before
+            //      our `on_file_synced` callback. Uncommon — files
+            //      almost always resolve via the per-file path first.
+            //
+            //   2. The byte-progress callback flipped `Completed` on
+            //      the FINAL upload chunk (hcfs-client
+            //      `progress/tracker.rs:325` flips status when
+            //      `bytes_transferred >= total_bytes`). This happens
+            //      for EVERY successful upload because the chunk
+            //      callback fires before `on_file_synced`.
+            //
+            // Returning 0 was the original defensive choice — the
+            // comment warned about a hypothetical caller that
+            // aggregated `size_bytes` across re-entries. No such
+            // caller exists: `build_file_synced_callback` reads the
+            // value once per activity row. The cost of the
+            // defensive 0 was real and user-visible: every Recent
+            // Files row for a successful upload rendered the size
+            // column as "Unknown" because the activity item
+            // serialized `size_bytes = 0`.
+            //
+            // Returning `file.total_bytes` here is the truthful
+            // value — the size was already observed via the
+            // per-chunk callback and stored on the entry, and the
+            // file is in a terminal state so the value won't be
+            // mutated again. The dedup-key entropy in
+            // `ActivityDedupKey = (file_name, action, label,
+            // size_bytes)` also benefits: distinct uploads of
+            // distinct files no longer collide on a shared 0.
+            return Ok(file.total_bytes);
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        let bytes = file.total_bytes;
+        file.status = FileStatus::Completed;
+        file.progress = 100;
+        file.completed_at = Some(now);
+        if file.total_bytes > 0 {
+            file.bytes_transferred = file.total_bytes;
+            file.bytes_encrypted = file.total_bytes;
+        }
+        bytes
+    };
+    sync.emit_snapshot(true);
+    Ok(observed_bytes)
+}
+
+/// Mark a single file as failed (per-file upload or download error) and
+/// emit a snapshot.
+///
+/// Called from `build_file_failed_callback` in `lifecycle.rs`, which fires
+/// from hcfs-client's per-file `on_file_failed` callback the moment the
+/// per-file task returns `Err`. This is the synchronous counterpart to
+/// [`mark_file_synced`] for the failure path: the file's progress row
+/// flips to terminal `FileStatus::Error` immediately instead of waiting
+/// for end-of-cycle `mark_pending_files_as_failed`.
+///
+/// Why this exists: cycle-level `mark_pending_files_as_failed` only sees
+/// the shortfall (`expected_uploads - actual_uploads`), so a partial
+/// failure scenario (some files 402, some succeed inside the same cycle)
+/// arrives at the FE only after the whole cycle finalises — the failure
+/// banner UX needs the signal at the failure site, not 30 seconds later.
+///
+/// Field semantics mirror hcfs-client's [`hcfs_client::engine::progress::tracker::ProgressTracker::mark_file_error`]:
+///
+/// - `file.status = FileStatus::Error` — terminal for this cycle.
+/// - `file.error = Some(error.into())` — display text for the FE row tooltip.
+/// - `file.bytes_transferred = 0`, `file.progress = 0` — reset so the
+///   progress bar doesn't show "99% then Error" (the upstream tracker
+///   resets too, see `engine/progress/tracker.rs:491-492`).
+/// - `file.completed_at = Some(now)` — terminal timestamp, sorts the row
+///   to the recent-activity tail.
+///
+/// No-op if there's no current session, no file at the given path
+/// (rename races), or the file is already in `Error` state (re-entry from
+/// a retry that also failed — keep the first error message).
+pub fn mark_file_failed(sync: &SyncRunner, path: &str, error: &str) -> Result<()> {
+    use hcfs_client::engine::progress::state::FileStatus;
+    use std::sync::Arc;
 
     {
         let mut state = sync.progress.lock_state();
@@ -241,17 +359,18 @@ pub fn mark_file_synced(sync: &SyncRunner, path: &str) -> Result<()> {
         let Some(file) = session.files.get_mut(path) else {
             return Ok(());
         };
-        if file.status == FileStatus::Completed {
+        if file.status == FileStatus::Error {
+            // Already terminal — preserve the first error to avoid the
+            // hcfs-client retry loop clobbering the 402 message with a
+            // subsequent generic network error.
             return Ok(());
         }
         let now = chrono::Utc::now().timestamp_millis();
-        file.status = FileStatus::Completed;
-        file.progress = 100;
+        file.status = FileStatus::Error;
+        file.error = Some(Arc::from(error));
         file.completed_at = Some(now);
-        if file.total_bytes > 0 {
-            file.bytes_transferred = file.total_bytes;
-            file.bytes_encrypted = file.total_bytes;
-        }
+        file.bytes_transferred = 0;
+        file.progress = 0;
     }
     sync.emit_snapshot(true);
     Ok(())
@@ -347,7 +466,7 @@ pub fn collect_cycle_files_for_label(sync: &SyncRunner, label: &str, max_files: 
 }
 
 /// Get a full snapshot with retry state injected.
-pub fn get_snapshot(sync: &SyncRunner) -> Result<SyncSnapshot> {
+pub fn get_snapshot(sync: &SyncRunner, preparing: &crate::sync::preparing::PreparingState) -> Result<SyncSnapshot> {
     let mut snapshot = sync.progress.build_snapshot();
     let retry_at = sync.retry_at.load(std::sync::atomic::Ordering::Relaxed);
     if retry_at > 0 {
@@ -358,7 +477,7 @@ pub fn get_snapshot(sync: &SyncRunner) -> Result<SyncSnapshot> {
         snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
     }
     snapshot.last_error = sync.last_error.lock().ok().and_then(|g| g.clone());
-    prepare_snapshot_for_emit(&mut snapshot);
+    prepare_snapshot_for_emit(&mut snapshot, preparing);
     Ok(snapshot)
 }
 
@@ -368,9 +487,48 @@ pub fn get_snapshot(sync: &SyncRunner) -> Result<SyncSnapshot> {
 /// (every live update). Keeping a single funnel guarantees the two paths
 /// can't drift — a stalled-completion snapshot seen at mount must look
 /// identical to one observed mid-session.
-pub(crate) fn prepare_snapshot_for_emit(snapshot: &mut SyncSnapshot) {
+///
+/// Order of operations matters. `fixup_stalled_completion` may flip
+/// the snapshot into a visible "completed" state; we run it first so
+/// the preparing override does not paper over a real completion.
+/// `apply_preparing_override` runs second and only takes effect when
+/// the snapshot is still invisible (no real session yet). `cap_snapshot_files`
+/// runs last to truncate the file list — order-independent relative
+/// to the previous two.
+pub(crate) fn prepare_snapshot_for_emit(snapshot: &mut SyncSnapshot, preparing: &crate::sync::preparing::PreparingState) {
     fixup_stalled_completion(snapshot);
+    apply_preparing_override(snapshot, preparing);
     cap_snapshot_files(snapshot);
+}
+
+/// Surface a "preparing" widget state when any drive is between
+/// `SyncStarted` and its first session-populated snapshot.
+///
+/// Only takes effect when the snapshot is otherwise invisible — never
+/// demotes an already-visible widget. Sets `widget_state` to
+/// `"preparing"` — a fourth variant added on top of the
+/// `"active" | "completed" | "idle"` set that hcfs-client's
+/// `build_snapshot` produces (see `hcfs-client/src/engine/progress/snapshot.rs`).
+/// The frontend widget and tray treat the new value as the
+/// preparing-state branch in their badge/title/icon switches without
+/// having to inspect the preparing set directly.
+///
+/// We deliberately leave `effective_in_progress` / `total_files` /
+/// `overall_percent` at their original (zero/false) values: the
+/// dialog's badge logic already has a "Preparing sync…" fallback
+/// branch for the (not-error, not-completed, not-in-progress) case
+/// (see `app/(pages)/SyncStatusDialog.tsx`), and flipping
+/// `effective_in_progress=true` here would force it into the
+/// `"0 of 0 files synced"` branch instead.
+fn apply_preparing_override(snapshot: &mut SyncSnapshot, preparing: &crate::sync::preparing::PreparingState) {
+    if snapshot.widget_visible {
+        return;
+    }
+    if !preparing.is_any_preparing() {
+        return;
+    }
+    snapshot.widget_visible = true;
+    snapshot.widget_state = "preparing".to_string();
 }
 
 /// Detect and correct a stalled completion state.
@@ -433,7 +591,7 @@ pub fn sp_clear_all_data(state: tauri::State<'_, crate::app_state::AppState>) ->
 
 #[tauri::command]
 pub fn sp_get_snapshot(state: tauri::State<'_, crate::app_state::AppState>) -> Result<SyncSnapshot> {
-    get_snapshot(&state.sync)
+    get_snapshot(&state.sync, &state.preparing)
 }
 
 /// Dismiss the sync status widget for the current session.
@@ -572,7 +730,8 @@ mod tests {
         snap.widget_state = "active".to_string();
         snap.status_variant = "progress".to_string();
 
-        prepare_snapshot_for_emit(&mut snap);
+        let preparing = crate::sync::preparing::PreparingState::new();
+        prepare_snapshot_for_emit(&mut snap, &preparing);
 
         assert!(!snap.effective_in_progress, "stall should flip effective_in_progress to false");
         assert!(snap.effective_completed, "stall should flip effective_completed to true");
@@ -604,9 +763,73 @@ mod tests {
             })
             .collect();
 
-        prepare_snapshot_for_emit(&mut snap);
+        let preparing = crate::sync::preparing::PreparingState::new();
+        prepare_snapshot_for_emit(&mut snap, &preparing);
 
         assert_eq!(snap.files.len(), MAX_EVENT_FILES);
+    }
+
+    /// When a drive is marked preparing AND the snapshot would otherwise
+    /// be invisible (no active session yet), the override sets
+    /// `widget_visible=true` and `widget_state="preparing"` so the
+    /// bottom-right widget and tray show feedback during the
+    /// SyncStarted → first-snapshot gap.
+    #[test]
+    fn preparing_override_makes_invisible_snapshot_visible() {
+        let mut snap = base_snapshot();
+        // Empty snapshot, widget would otherwise be hidden.
+        assert!(!snap.widget_visible);
+
+        let preparing = crate::sync::preparing::PreparingState::new();
+        preparing.mark_preparing("drive-a");
+
+        prepare_snapshot_for_emit(&mut snap, &preparing);
+
+        assert!(snap.widget_visible, "preparing should force widget_visible=true");
+        assert_eq!(snap.widget_state, "preparing");
+        // `effective_in_progress` deliberately stays false so the
+        // dialog's "Preparing sync…" fallback branch renders instead
+        // of "0 of 0 files synced". See `apply_preparing_override`'s
+        // doc comment for the rationale.
+        assert!(!snap.effective_in_progress);
+        assert_eq!(snap.total_files, 0);
+    }
+
+    /// Override is a no-op when no drive is preparing. Snapshots whose
+    /// session is genuinely empty (e.g. between sync cycles, with no
+    /// pending work) must stay hidden.
+    #[test]
+    fn preparing_override_is_noop_when_set_empty() {
+        let mut snap = base_snapshot();
+        let preparing = crate::sync::preparing::PreparingState::new();
+
+        prepare_snapshot_for_emit(&mut snap, &preparing);
+
+        assert!(!snap.widget_visible);
+        assert_eq!(snap.widget_state, "idle");
+    }
+
+    /// The override must never demote an already-visible widget. An
+    /// active sync mid-cycle has `widget_visible=true` from
+    /// `build_snapshot`; the preparing helper should leave it alone
+    /// (otherwise it would clobber the real `widget_state="active"`
+    /// label with `"preparing"` in the gap between a SyncStarted for
+    /// drive B and B's plan_ready, while drive A is still uploading).
+    #[test]
+    fn preparing_override_does_not_demote_visible_snapshot() {
+        let mut snap = base_snapshot();
+        snap.widget_visible = true;
+        snap.widget_state = "active".to_string();
+        snap.is_active = true;
+        snap.total_files = 5;
+
+        let preparing = crate::sync::preparing::PreparingState::new();
+        preparing.mark_preparing("drive-b");
+
+        prepare_snapshot_for_emit(&mut snap, &preparing);
+
+        assert!(snap.widget_visible);
+        assert_eq!(snap.widget_state, "active");
     }
 
     #[test]
@@ -830,5 +1053,91 @@ mod tests {
         assert_eq!(result[1].action, FileAction::LocalDelete);
         assert_eq!(result[2].action, FileAction::Download);
         assert_eq!(result[3].action, FileAction::Upload);
+    }
+
+    // ── mark_file_synced return-value contract ──────────────────────
+    //
+    // These tests pin `mark_file_synced`'s `Result<u64>` shape so a
+    // future refactor cannot quietly drop the size signal — that signal
+    // is what `build_file_synced_callback` threads into
+    // `SyncActivityItem.size_bytes` so the Recent-Files view shows a
+    // real byte count instead of "unknown". The four cases mirror the
+    // four documented branches in the helper's contract.
+
+    #[test]
+    fn mark_file_synced_returns_total_bytes_on_success() {
+        // Common path: an `Uploading` entry transitions to `Completed`
+        // and the caller gets back the size the progress tracker
+        // observed during the cycle. This is the byte count the
+        // activity row needs to be non-zero.
+        let sync = test_runner();
+        seed_session(
+            &sync,
+            vec![make_file("a.bin", "default", FileStatus::Uploading, None, 8_192, FileAction::Upload)],
+        );
+
+        let observed = mark_file_synced(&sync, "a.bin").expect("infallible");
+        assert_eq!(observed, 8_192);
+
+        // Side-effect check: the row really did transition to Completed.
+        let state = sync.progress.lock_state();
+        let session = state.current_session.as_ref().expect("session was seeded");
+        let file = session.files.get("a.bin").expect("file present");
+        assert_eq!(file.status, FileStatus::Completed);
+        assert_eq!(file.progress, 100);
+    }
+
+    #[test]
+    fn mark_file_synced_returns_zero_when_no_session() {
+        // Edge case 1: no session at all. The activity-row caller
+        // treats this as "size unknown" and emits 0.
+        let sync = test_runner();
+        // Deliberately skip `seed_session` so `current_session` is None.
+
+        let observed = mark_file_synced(&sync, "missing.bin").expect("infallible");
+        assert_eq!(observed, 0);
+    }
+
+    #[test]
+    fn mark_file_synced_returns_zero_when_file_not_in_session() {
+        // Edge case 2: session exists, but the requested path isn't in
+        // it (rename race, or hcfs-client fired for a path we never
+        // tracked). Same 0 fallback.
+        let sync = test_runner();
+        seed_session(
+            &sync,
+            vec![make_file("present.bin", "default", FileStatus::Uploading, None, 99, FileAction::Upload)],
+        );
+
+        let observed = mark_file_synced(&sync, "absent.bin").expect("infallible");
+        assert_eq!(observed, 0);
+    }
+
+    #[test]
+    fn mark_file_synced_returns_total_bytes_when_already_completed() {
+        // Regression test for the Recent Files "Unknown" size bug.
+        //
+        // hcfs-client's `update_file_progress` flips `FileStatus` to
+        // `Completed` on the final upload chunk (tracker.rs:325)
+        // BEFORE `on_file_synced` fires for the file. The earlier
+        // implementation returned 0 from this branch as a defensive
+        // sentinel, but no caller actually aggregates across
+        // re-entries — `build_file_synced_callback` reads the value
+        // once per activity row. The 0 propagated into
+        // `SyncActivityItem.size_bytes`, then `RecentFile.size`,
+        // then rendered as "Unknown" in the Recent Files column for
+        // every successful upload.
+        //
+        // The contract is now: return `file.total_bytes` regardless
+        // of terminal status. The value was set by the per-chunk
+        // callback and is not mutated again once Completed.
+        let sync = test_runner();
+        seed_session(
+            &sync,
+            vec![make_file("done.bin", "default", FileStatus::Completed, Some(1), 256, FileAction::Upload)],
+        );
+
+        let observed = mark_file_synced(&sync, "done.bin").expect("infallible");
+        assert_eq!(observed, 256, "must return total_bytes even when already Completed");
     }
 }

@@ -41,19 +41,39 @@ export function useSyncEvents() {
     let cancelled = false;
     const unsubs: (() => void)[] = [];
 
-    // Debounced recent-files refresh: when individual files finish
-    // uploading/downloading, schedule a refresh after 2 s of quiet.
-    let fileCompletionTimer: ReturnType<typeof setTimeout> | null = null;
-    const scheduleRecentFilesRefresh = () => {
-      if (fileCompletionTimer) clearTimeout(fileCompletionTimer);
-      fileCompletionTimer = setTimeout(() => {
-        fileCompletionTimer = null;
+    // Coalesced "files completed" dispatch (fixes Bug 3 — refresh flicker).
+    //
+    // Three backend events can each trigger a file-list refetch:
+    //   - hcfs_sync_completed         (whole-cycle summary)
+    //   - hcfs_file_transfer_complete (per-file finish)
+    //   - hcfs_activity_updated       (rename / metadata change)
+    //
+    // When a sync cycle finishes, all three can arrive within a few
+    // milliseconds.  Dispatching the window event three times re-runs
+    // the row enricher in `use-recent-files` / `use-user-files` three
+    // times, which the user sees as a visible flicker.  A trailing-
+    // edge 250 ms debounce collapses any burst into a single dispatch
+    // while still being fast enough to feel instantaneous.
+    let pendingDispatchTimer: ReturnType<typeof setTimeout> | null = null;
+    // Carry the largest filesCompleted seen during the burst forward
+    // to the single coalesced dispatch.  `hcfs_activity_updated` reports
+    // 0, but if a sibling `hcfs_sync_completed` reported N>0 we want
+    // the consumer to see N rather than have it overwritten by 0.
+    let pendingFilesCompleted = 0;
+    const DEBOUNCE_MS = 250;
+    const scheduleCompletedDispatch = (filesCompleted: number) => {
+      pendingFilesCompleted = Math.max(pendingFilesCompleted, filesCompleted);
+      if (pendingDispatchTimer) clearTimeout(pendingDispatchTimer);
+      pendingDispatchTimer = setTimeout(() => {
+        const total = pendingFilesCompleted;
+        pendingDispatchTimer = null;
+        pendingFilesCompleted = 0;
         window.dispatchEvent(
           new CustomEvent("sync_files_completed_changed", {
-            detail: { filesCompleted: 1 },
+            detail: { filesCompleted: total },
           })
         );
-      }, 2000);
+      }, DEBOUNCE_MS);
     };
 
     // Query current health state on mount (backend may already be running)
@@ -80,22 +100,14 @@ export function useSyncEvents() {
             p.files_deleted_locally +
             p.files_deleted_remotely;
 
-          // Cancel the debounced per-file refresh — the full sync
-          // completion below supersedes it.
-          if (fileCompletionTimer) {
-            clearTimeout(fileCompletionTimer);
-            fileCompletionTimer = null;
-          }
-
           // Always dispatch so file listings refresh metadata (arion
           // hashes, sync status, timestamps) even when no files were
           // transferred — the first sync after login typically has
-          // zero transfers but populates server-side metadata.
-          window.dispatchEvent(
-            new CustomEvent("sync_files_completed_changed", {
-              detail: { filesCompleted: totalCompleted },
-            })
-          );
+          // zero transfers but populates server-side metadata.  Routed
+          // through the coalescing scheduler so a near-simultaneous
+          // hcfs_file_transfer_complete or hcfs_activity_updated does
+          // not produce a second refetch.
+          scheduleCompletedDispatch(totalCompleted);
 
           if (totalCompleted > 0) {
             queryClient.invalidateQueries({
@@ -103,21 +115,16 @@ export function useSyncEvents() {
             });
           }
         }],
-        // Refresh recent files when individual files finish syncing.
-        // Rust emits this event when bytes == total — no byte-count
-        // interpretation needed in TypeScript.
+        // Per-file completion — Rust emits this when bytes == total.
+        // Coalesced with the rest so a multi-file batch produces one
+        // refetch, not one per file.
         ["hcfs_file_transfer_complete", () => {
-          scheduleRecentFilesRefresh();
+          scheduleCompletedDispatch(1);
         }],
-        // Activity updated (e.g. file renamed on disk) — dispatch
-        // immediately so recent files reflect the new name without
-        // the 2-second debounce used for upload/download completion.
+        // Activity updated (e.g. file renamed on disk) — coalesced
+        // with siblings so a sync-completed burst doesn't flicker.
         ["hcfs_activity_updated", () => {
-          window.dispatchEvent(
-            new CustomEvent("sync_files_completed_changed", {
-              detail: { filesCompleted: 0 },
-            })
-          );
+          scheduleCompletedDispatch(0);
         }],
         // Connectivity health updates
         ["hcfs_connectivity_changed", (e) => {
@@ -152,7 +159,9 @@ export function useSyncEvents() {
 
     return () => {
       cancelled = true;
-      if (fileCompletionTimer) clearTimeout(fileCompletionTimer);
+      // Drop any pending debounced dispatch so an unmount mid-burst
+      // doesn't fire a refetch against a stale store or torn-down hook.
+      if (pendingDispatchTimer) clearTimeout(pendingDispatchTimer);
       unsubs.forEach((u) => u());
     };
   }, [setSyncEngineHealthAtom, queryClient]);

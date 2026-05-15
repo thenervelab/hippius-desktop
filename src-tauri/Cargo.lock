@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Hippius"
-version = "0.1.98"
+version = "0.1.100"
 dependencies = [
  "aes",
  "alloy-signer",
@@ -3383,7 +3383,7 @@ dependencies = [
 [[package]]
 name = "hcfs-client"
 version = "0.1.9"
-source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=ce60d47#ce60d475b86c59f63c94f9586b0d42e6cdb7c089"
+source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=48d2207#48d22073247b1301232a56a4b5067fc0d7990f70"
 dependencies = [
  "argon2",
  "async-stream",
@@ -3420,7 +3420,7 @@ dependencies = [
 [[package]]
 name = "hcfs-shared"
 version = "0.1.8"
-source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=ce60d47#ce60d475b86c59f63c94f9586b0d42e6cdb7c089"
+source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=48d2207#48d22073247b1301232a56a4b5067fc0d7990f70"
 dependencies = [
  "blake3",
  "ed25519-dalek",

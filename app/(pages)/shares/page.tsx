@@ -57,11 +57,11 @@ import { formatBytes } from "@/lib/utils/formatBytes";
 import { formatRelative } from "@/app/lib/utils/timeRelative";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/lib/utils";
+import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
 import { pickHistoryRowDisplay } from "./shareRowDisplay";
 
 const SHARES_QUERY_KEY = "shares-list";
 const HISTORY_QUERY_KEY = "shares-history-list";
-const REFRESH_INTERVAL_MS = 30_000;
 
 export default function MySharesPage() {
   const { polkadotAddress } = useWalletAuth();
@@ -77,14 +77,18 @@ export default function MySharesPage() {
     queryKey: [SHARES_QUERY_KEY, polkadotAddress],
     queryFn: () => listShares(),
     enabled: Boolean(polkadotAddress) && shareEnabled,
-    refetchInterval: REFRESH_INTERVAL_MS,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    refetchInterval: LIVE_DATA_REFRESH_MS,
   });
 
   const { data: historyData } = useQuery({
     queryKey: [HISTORY_QUERY_KEY, polkadotAddress],
     queryFn: () => listShareHistory(),
     enabled: Boolean(polkadotAddress) && shareEnabled,
-    refetchInterval: REFRESH_INTERVAL_MS,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    refetchInterval: LIVE_DATA_REFRESH_MS,
   });
 
   const queueRevoke = (token: string) => setTokenPendingRevoke(token);
