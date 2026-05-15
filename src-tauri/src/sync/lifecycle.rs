@@ -1919,9 +1919,16 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
 ///
 /// Ownership: all captures are owned (`AppHandle` is `Clone` and cheap;
 /// `label` and `plan_uploads` are moved in). The spawned future is
-/// `'static`, satisfying `tokio::spawn`'s `Send + 'static` bound.
+/// `'static + Send`, satisfying `tauri::async_runtime::spawn`'s bound.
+///
+/// Uses `tauri::async_runtime::spawn`, NOT bare `tokio::spawn`: this runs
+/// from the hcfs `on_sync_plan_ready` callback, whose calling thread is
+/// not contractually guaranteed to be inside a Tokio runtime. Bare
+/// `tokio::spawn` panics ("there is no reactor running") off-runtime —
+/// the same crash class fixed in `tauri_bridge::spawn_snapshot_emit`.
+/// Tauri's runtime handle is global and thread-context-independent.
 fn spawn_record_intent_plan<R: tauri::Runtime>(app: AppHandle<R>, label: String, plan_uploads: Vec<(String, u64)>) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         use tauri::Manager;
         let state: tauri::State<'_, crate::app_state::AppState> = app.state();
         let account_id = match state.current_account_id() {
@@ -1968,10 +1975,16 @@ fn spawn_record_intent_plan<R: tauri::Runtime>(app: AppHandle<R>, label: String,
 ///
 /// Ownership: every capture is owned. `AppHandle<R>` is `Clone` and cheap
 /// (internally `Arc`); `label` and `rel_path` are moved in. The spawned
-/// future is `'static`, satisfying `tokio::spawn`'s `Send + 'static`
+/// future is `'static + Send`, satisfying `tauri::async_runtime::spawn`'s
 /// bound.
+///
+/// Uses `tauri::async_runtime::spawn`, NOT bare `tokio::spawn`: this runs
+/// from the hcfs `on_file_synced` callback, whose calling thread is not
+/// contractually guaranteed to be inside a Tokio runtime. Bare
+/// `tokio::spawn` panics ("there is no reactor running") off-runtime —
+/// the same crash class fixed in `tauri_bridge::spawn_snapshot_emit`.
 fn spawn_mark_intent_completed<R: tauri::Runtime>(app: AppHandle<R>, label: String, rel_path: String) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         use tauri::Manager;
         let state: tauri::State<'_, crate::app_state::AppState> = app.state();
         let account_id = match state.current_account_id() {

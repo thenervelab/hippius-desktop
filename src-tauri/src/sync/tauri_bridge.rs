@@ -622,47 +622,21 @@ impl SyncEventHandler for TauriSyncBridge {
                 prepare_snapshot_for_emit(&mut snapshot, &app_state.preparing);
 
                 // The intent overlay needs an async SQLite SUM/COUNT query,
-                // but `on_event` is the sync half of `SyncEventHandler`. We
-                // spawn the overlay-build + fingerprint-claim + emit
-                // together so the whole IPC tail runs off this synchronous
-                // arm.
-                //
-                // Ordering concern: with `tokio::spawn`, two close-spaced
-                // snapshots can complete their DB read in either order.
-                // The fingerprint atomic uses `swap` (not CAS), so each
-                // spawn's `try_claim` compares its own fp against whatever
-                // got written last; differing fingerprints both emit
-                // (which is the safe outcome — the FE renders the most
-                // recent message and reorder of by-fingerprint-identical
-                // emits is a harmless duplicate IPC). The previous
-                // synchronous claim-then-emit path could collapse two
-                // identical snapshots to one IPC; the spawn path collapses
-                // each snapshot's own duplicate but not a cross-snapshot
-                // race — that's acceptable because the FE re-renders
-                // either way.
-                //
-                // Why not `block_in_place + Handle::current().block_on`:
-                // that pattern (used by `shares::keystore`) panics on a
-                // single-threaded runtime and risks deadlock if any caller
-                // ever invokes `on_event` from inside an existing
-                // `block_on` frame. Spawning is unconditionally safe and
-                // the ordering trade-off is bounded.
-                let app_for_spawn = app.clone();
-                tokio::spawn(async move {
-                    let overlay = build_intent_overlay(&app_for_spawn).await;
-                    let fp = snapshot_fingerprint(&snapshot, overlay);
-                    if try_claim_snapshot_fingerprint(&LAST_EMITTED_FINGERPRINT, fp) {
-                        let wire = SyncSnapshotWire {
-                            inner: &snapshot,
-                            intent_total_files: overlay.total_files,
-                            intent_total_bytes: overlay.total_bytes,
-                            intent_completed_files: overlay.completed_files,
-                            intent_completed_bytes: overlay.completed_bytes,
-                            intent_active: overlay.active,
-                        };
-                        let _ = app_for_spawn.emit(events::PROGRESS_SNAPSHOT, &wire);
-                    }
-                });
+                // but `on_event` is the SYNCHRONOUS half of
+                // `SyncEventHandler` and hcfs-client's
+                // `SyncRunner::emit_snapshot` invokes it on whatever thread
+                // calls it — including the main GUI thread, which is NOT a
+                // Tokio runtime worker (e.g. the console-upload dedup path
+                // routes an emit through a synchronous context). A bare
+                // `tokio::spawn` here panics "there is no reactor running"
+                // on such a thread and the panic double-faults across the
+                // hcfs callback boundary into a process abort. The fire-
+                // and-forget work is therefore delegated to a helper that
+                // schedules onto Tauri's OWNED global runtime regardless of
+                // the calling thread's context — see `spawn_snapshot_emit`
+                // and the in-repo precedent at
+                // `sync::upload_processing::spawn_watchdog`.
+                spawn_snapshot_emit(app.clone(), snapshot);
             }
         }
     }
@@ -791,7 +765,57 @@ struct SyncSnapshotWire<'a> {
 /// multiple drives configured. One aggregate-summing query keeps the
 /// per-emit cost to a single indexed SQLite scan. Source: see
 /// `IntentRepo::totals_for_account`'s `# Why account-scoped` block.
-async fn build_intent_overlay(app: &AppHandle) -> SyncIntentOverlay {
+/// Fire-and-forget the intent-overlay build + fingerprint-claim + snapshot
+/// emit onto Tauri's owned global async runtime.
+///
+/// # Why this exists / why `tauri::async_runtime::spawn`
+///
+/// `on_event` is the synchronous half of `SyncEventHandler`. hcfs-client's
+/// `SyncRunner::emit_snapshot` calls it on whatever thread invokes it —
+/// `finalize_session_for_label`, `handle_sync_error`, and (the crash we are
+/// fixing) a main-thread console-upload path that is NOT inside a Tokio
+/// runtime. Bare `tokio::spawn` / `Handle::current()` panic
+/// ("there is no reactor running, must be called from the context of a
+/// Tokio 1.x runtime") on such a thread, and that panic double-faults
+/// across the hcfs callback boundary into `failed to initiate panic …
+/// aborting`. `tauri::async_runtime::spawn` schedules onto Tauri's own
+/// global runtime handle and is therefore safe from ANY thread regardless
+/// of ambient runtime context — the same reasoning documented at
+/// `sync::upload_processing::spawn_watchdog` and used by
+/// `lifecycle::spawn_record_intent_plan` / `spawn_mark_intent_completed`.
+///
+/// # Ordering / dedup contract (unchanged by the runtime-handle swap)
+///
+/// Two close-spaced snapshots can complete their DB read in either order.
+/// `try_claim_snapshot_fingerprint` uses `swap` (not CAS): differing
+/// fingerprints both emit (safe — the FE renders the most recent message;
+/// a reordered fingerprint-identical pair is a harmless duplicate IPC).
+/// The spawn collapses each snapshot's own duplicate but not a
+/// cross-snapshot race — acceptable because the FE re-renders either way.
+///
+/// Ownership: `app` is `Clone` (cheap `Arc`); `snapshot` is moved into the
+/// future and the `&snapshot` borrow inside is owned-by-future, so the
+/// future is `'static + Send`, satisfying `tauri::async_runtime::spawn`'s
+/// bound (identical to `tokio::spawn`'s).
+fn spawn_snapshot_emit<R: tauri::Runtime>(app: tauri::AppHandle<R>, snapshot: SyncSnapshot) {
+    tauri::async_runtime::spawn(async move {
+        let overlay = build_intent_overlay(&app).await;
+        let fp = snapshot_fingerprint(&snapshot, overlay);
+        if try_claim_snapshot_fingerprint(&LAST_EMITTED_FINGERPRINT, fp) {
+            let wire = SyncSnapshotWire {
+                inner: &snapshot,
+                intent_total_files: overlay.total_files,
+                intent_total_bytes: overlay.total_bytes,
+                intent_completed_files: overlay.completed_files,
+                intent_completed_bytes: overlay.completed_bytes,
+                intent_active: overlay.active,
+            };
+            let _ = app.emit(events::PROGRESS_SNAPSHOT, &wire);
+        }
+    });
+}
+
+async fn build_intent_overlay<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> SyncIntentOverlay {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
 
@@ -1112,5 +1136,43 @@ mod tests {
         assert!(json["intentCompletedFiles"].is_null());
         assert!(json["intentCompletedBytes"].is_null());
         assert!(json["intentActive"].is_null());
+    }
+
+    /// Regression for the production crash:
+    /// `thread 'main' panicked at tauri_bridge.rs: there is no reactor
+    /// running, must be called from the context of a Tokio 1.x runtime`
+    /// → `failed to initiate panic … aborting`.
+    ///
+    /// hcfs-client's `SyncRunner::emit_snapshot` invokes the synchronous
+    /// `SyncEventHandler::on_event` on whatever thread calls it, including
+    /// the main GUI thread (no ambient Tokio runtime). The fire-and-forget
+    /// snapshot spawn MUST therefore schedule onto Tauri's owned runtime,
+    /// not require `Handle::current()` on the caller.
+    ///
+    /// We drive `spawn_snapshot_emit` from a plain `std::thread` —
+    /// guaranteed NOT inside a Tokio runtime — and assert the CALLING
+    /// thread survives. Bare `tokio::spawn` panics synchronously on that
+    /// thread (`join()` → `Err`); `tauri::async_runtime::spawn` returns
+    /// normally (`join()` → `Ok`). The spawned future's own fate (it will
+    /// hit unmanaged `AppState` in this mock and panic on Tauri's runtime
+    /// worker) is irrelevant — that panic is captured by the dropped
+    /// `JoinHandle` and never reaches this assertion, which is exactly the
+    /// production/​test distinction: the crash is the SPAWN CALL, not the
+    /// task body.
+    #[test]
+    fn spawn_snapshot_emit_does_not_panic_off_runtime() {
+        let app = tauri::test::mock_app().handle().clone();
+        let snapshot = fixture_snapshot();
+        let outcome = std::thread::spawn(move || {
+            spawn_snapshot_emit(app, snapshot);
+        })
+        .join();
+        assert!(
+            outcome.is_ok(),
+            "spawn_snapshot_emit panicked when called from a non-Tokio \
+             thread — this is the production abort. The fire-and-forget \
+             spawn must use tauri::async_runtime::spawn (Tauri-owned \
+             runtime), not bare tokio::spawn (requires Handle::current())."
+        );
     }
 }
