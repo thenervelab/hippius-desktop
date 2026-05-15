@@ -133,9 +133,14 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
     handleFileDownload(file, polkadotAddress ?? "");
   }, [handleFileDownload, file, polkadotAddress]);
 
+  // Mirror the "Share via Link" table-row menu item: close the viewer
+  // first so the share dialog isn't stacked over the full-screen
+  // preview. ShareFileModal is mounted at the page root and reads the
+  // atom, so setting it after onClose() opens it cleanly.
   const handleShare = useCallback(() => {
+    onClose();
     setShareModalFile(file);
-  }, [setShareModalFile, file]);
+  }, [onClose, setShareModalFile, file]);
 
   const handleDelete = useCallback(() => {
     onClose();

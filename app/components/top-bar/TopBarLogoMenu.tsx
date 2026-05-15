@@ -3,13 +3,8 @@
 import { useState } from "react";
 import { useAtomValue } from "jotai";
 import { useRouter } from "next/navigation";
-import {
-  HippiusLogo,
-  ChevronDown,
-  Setting,
-  Logout,
-  TrendUp,
-} from "@/components/ui/icons";
+import { ChevronDown, Setting, Logout, TrendUp } from "@/components/ui/icons";
+import { HippiusBrandMark } from "@/components/ui/HippiusBrandMark";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -73,18 +68,15 @@ const TopBarLogoMenu = () => {
               "dark:hover:bg-white/10 dark:data-[state=open]:bg-white/10",
             )}
           >
-            <HippiusLogo className="size-[28px] shrink-0 text-primary-50" />
-            <span
-              className={cn(
-                "font-[557] text-[18px] leading-[18px] text-primary-50 tracking-[0px]",
+            <HippiusBrandMark
+              logoClassName="shrink-0"
+              textClassName={cn(
                 "overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out",
                 collapsed
                   ? "max-w-0 opacity-0 -ml-[8px]"
                   : "max-w-[120px] opacity-100",
               )}
-            >
-              Hippius
-            </span>
+            />
             <span className="flex items-center justify-center w-[25px] h-[24px] shrink-0">
               <ChevronDown className="size-[12px] text-black-700/60 dark:text-grey-light-300/60" />
             </span>

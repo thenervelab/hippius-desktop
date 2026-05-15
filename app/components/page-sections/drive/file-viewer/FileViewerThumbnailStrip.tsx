@@ -52,6 +52,10 @@ const FileViewerThumbnailStrip: React.FC<FileViewerThumbnailStripProps> = ({
         ref={scrollRef}
         className={cn(
           "flex items-center gap-[13px] overflow-x-auto",
+          // `safe center` centers the row when its content fits, but
+          // falls back to flex-start when the row overflows so the
+          // first thumbnail stays reachable via scroll.
+          "[justify-content:safe_center]",
           "custom-scrollbar-thin",
           "py-[8px] px-[15px]",
         )}

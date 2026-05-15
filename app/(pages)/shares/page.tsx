@@ -63,6 +63,11 @@ import { pickHistoryRowDisplay } from "./shareRowDisplay";
 const SHARES_QUERY_KEY = "shares-list";
 const HISTORY_QUERY_KEY = "shares-history-list";
 
+// Destructive accent — matches drive/DeleteConfirmationDialog so the
+// "revoke this link" and "clear history" framed dialogs read as
+// destructive (red frame border + red icon badge).
+const DESTRUCTIVE_BG = "bg-[#fc7d73]";
+
 export default function MySharesPage() {
   const { polkadotAddress } = useWalletAuth();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
@@ -222,38 +227,39 @@ export default function MySharesPage() {
           open={tokenPendingRevoke !== null}
           onClose={() => { if (!revokeBusy) setTokenPendingRevoke(null); }}
           title="Revoke this link?"
-          icon={<Trash2 className="size-5 text-white" />}
-          maxWidth="max-w-[480px]"
-          iconBgClassName="bg-[#fc7d73]"
+          icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
+          borderClassName={DESTRUCTIVE_BG}
+          iconBgClassName={DESTRUCTIVE_BG}
+          maxWidth="max-w-[585px]"
+          cardClassName="bg-white dark:bg-[#161616]"
+          contentClassName="sm:w-[405px]"
         >
-          <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+          <p className="mb-6 text-center text-base font-medium leading-[22px] tracking-[-0.32px] text-grey-20 dark:text-grey-dark-700 font-geist">
             Anyone with the link will lose access immediately. This can&apos;t be undone.
           </p>
-          <div className="flex gap-3">
-            <Button
-              variant="defaultStable"
-              size="auto"
-              onClick={() => setTokenPendingRevoke(null)}
-              disabled={revokeBusy}
-              className="h-[42px] w-full rounded-[6px] text-sm font-medium"
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              size="auto"
-              onClick={confirmRevoke}
-              disabled={revokeBusy}
-              loading={revokeBusy}
-              className={cn(
-                "h-[42px] w-full rounded-[6px] border text-sm font-medium",
-                "border-[#fc7d73] bg-[#fc7d73] text-white",
-                "hover:bg-[#fb695e] hover:border-[#fb695e]",
-              )}
-            >
-              {revokeBusy ? "Revoking…" : "Revoke"}
-            </Button>
-          </div>
+          <Button
+            variant="destructive"
+            size="auto"
+            onClick={confirmRevoke}
+            disabled={revokeBusy}
+            loading={revokeBusy}
+            className="h-[52px] w-full text-white"
+          >
+            {revokeBusy ? "Revoking…" : "Revoke link"}
+          </Button>
+          <Button
+            variant="defaultStable"
+            size="auto"
+            onClick={() => setTokenPendingRevoke(null)}
+            disabled={revokeBusy}
+            className={cn(
+              "mt-3 h-[52px] w-full rounded-[6px] border bg-transparent text-base font-normal tracking-[-0.36px]",
+              "border-[#e3e3e3] text-grey-10 hover:bg-grey-90",
+              "dark:border-[#494949] dark:text-white dark:hover:bg-[#2c2c2c]",
+            )}
+          >
+            Cancel
+          </Button>
         </FramedDialog>
 
         {/* Clear history confirmation */}
@@ -261,45 +267,46 @@ export default function MySharesPage() {
           open={clearAllOpen}
           onClose={() => setClearAllOpen(false)}
           title="Clear all share history?"
-          icon={<Trash2 className="size-5 text-white" />}
-          maxWidth="max-w-[480px]"
-          iconBgClassName="bg-[#fc7d73]"
+          icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
+          borderClassName={DESTRUCTIVE_BG}
+          iconBgClassName={DESTRUCTIVE_BG}
+          maxWidth="max-w-[585px]"
+          cardClassName="bg-white dark:bg-[#161616]"
+          contentClassName="sm:w-[405px]"
         >
-          <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+          <p className="mb-6 text-center text-base font-medium leading-[22px] tracking-[-0.32px] text-grey-20 dark:text-grey-dark-700 font-geist">
             This removes {historyData?.length ?? 0}{" "}
             {(historyData?.length ?? 0) === 1 ? "entry" : "entries"} from this device&apos;s history.
             The shares are already revoked or expired — this only clears the local list.
           </p>
-          <div className="flex gap-3">
-            <Button
-              variant="defaultStable"
-              size="auto"
-              onClick={() => setClearAllOpen(false)}
-              className="h-[42px] w-full rounded-[6px] text-sm font-medium"
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              size="auto"
-              onClick={async () => {
-                try {
-                  await clearShareHistory();
-                  queryClient.invalidateQueries({ queryKey: [HISTORY_QUERY_KEY, polkadotAddress] });
-                  setClearAllOpen(false);
-                } catch (err) {
-                  toast.error(`Could not clear history: ${errorMessage(err)}`);
-                }
-              }}
-              className={cn(
-                "h-[42px] w-full rounded-[6px] border text-sm font-medium",
-                "border-[#fc7d73] bg-[#fc7d73] text-white",
-                "hover:bg-[#fb695e] hover:border-[#fb695e]",
-              )}
-            >
-              Clear history
-            </Button>
-          </div>
+          <Button
+            variant="destructive"
+            size="auto"
+            onClick={async () => {
+              try {
+                await clearShareHistory();
+                queryClient.invalidateQueries({ queryKey: [HISTORY_QUERY_KEY, polkadotAddress] });
+                setClearAllOpen(false);
+              } catch (err) {
+                toast.error(`Could not clear history: ${errorMessage(err)}`);
+              }
+            }}
+            className="h-[52px] w-full text-white"
+          >
+            Clear history
+          </Button>
+          <Button
+            variant="defaultStable"
+            size="auto"
+            onClick={() => setClearAllOpen(false)}
+            className={cn(
+              "mt-3 h-[52px] w-full rounded-[6px] border bg-transparent text-base font-normal tracking-[-0.36px]",
+              "border-[#e3e3e3] text-grey-10 hover:bg-grey-90",
+              "dark:border-[#494949] dark:text-white dark:hover:bg-[#2c2c2c]",
+            )}
+          >
+            Cancel
+          </Button>
         </FramedDialog>
       </div>
     </DashboardTitleWrapper>
