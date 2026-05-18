@@ -35,6 +35,10 @@ import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const MAX_INLINE_DEPTH = 8;
+// Minimum time the inner-folder skeleton stays visible. Cached listings can
+// resolve in <50ms, which produces a jarring flash; clamping to this lower
+// bound makes the expand feel intentional. Tweak as needed.
+const MIN_SKELETON_DURATION_MS = 200;
 // Child rows need to align against the parent row's existing name-cell
 // layout: 8px left padding, then a 20px icon, then an 8px gap before
 // the label. That means:
@@ -92,7 +96,10 @@ export interface ExpandedFolderRowsProps {
    *  callers can build the correct deep-link URL — the previous
    *  signature dropped this and produced URLs missing intermediate
    *  segments. */
-  onOpenFolder?: (folder: FormattedUserFile, parentSubFolderPath: string) => void;
+  onOpenFolder?: (
+    folder: FormattedUserFile,
+    parentSubFolderPath: string,
+  ) => void;
   sortBy?: "name" | "size" | "date_uploaded";
   sortDir?: "asc" | "desc";
   /**
@@ -110,6 +117,56 @@ export interface ExpandedFolderRowsProps {
    */
   isItemDeleting?: (file: FormattedUserFile, parentPath: string) => boolean;
 }
+
+/**
+ * Holds `showSkeleton` true for at least `minDurationMs` once a load
+ * starts, even when the upstream `isLoading` flips back to false sooner
+ * (cached react-query hits, in-memory listings, etc.). Returns the
+ * delayed flag the caller should render against.
+ *
+ * If the real load takes longer than `minDurationMs`, the flag tracks
+ * `isLoading` directly — the minimum is a floor, not a fixed duration.
+ */
+const useMinimumLoadingTime = (
+  isLoading: boolean,
+  minDurationMs: number,
+): boolean => {
+  const [showSkeleton, setShowSkeleton] = useState(isLoading);
+  const startedAtRef = useRef<number | null>(
+    isLoading ? performance.now() : null,
+  );
+
+  useEffect(() => {
+    if (isLoading) {
+      // Re-entering the loading state — reset the floor timer.
+      startedAtRef.current = performance.now();
+      setShowSkeleton(true);
+      return;
+    }
+
+    const startedAt = startedAtRef.current;
+    if (startedAt == null) {
+      setShowSkeleton(false);
+      return;
+    }
+
+    const elapsed = performance.now() - startedAt;
+    if (elapsed >= minDurationMs) {
+      startedAtRef.current = null;
+      setShowSkeleton(false);
+      return;
+    }
+
+    const remaining = minDurationMs - elapsed;
+    const timeout = setTimeout(() => {
+      startedAtRef.current = null;
+      setShowSkeleton(false);
+    }, remaining);
+    return () => clearTimeout(timeout);
+  }, [isLoading, minDurationMs]);
+
+  return showSkeleton;
+};
 
 /**
  * Renders the contents of an expanded folder as a flat sequence of
@@ -177,6 +234,11 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
     enabled: listingEnabled,
   });
 
+  const showLoadingSkeleton = useMinimumLoadingTime(
+    isLoading,
+    MIN_SKELETON_DURATION_MS,
+  );
+
   const sortedChildRows = useMemo(() => {
     if (!sortBy) return data;
     const direction = sortDir === "asc" ? 1 : -1;
@@ -225,7 +287,9 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
   // level so child chevrons align with parent icons and child icons
   // align with parent text.
   const depthIndentStyle = useMemo(
-    () => ({ paddingLeft: `${BASE_CHILD_INDENT_PX + (depth + 1) * DEPTH_INDENT_PX}px` }),
+    () => ({
+      paddingLeft: `${BASE_CHILD_INDENT_PX + (depth + 1) * DEPTH_INDENT_PX}px`,
+    }),
     [depth],
   );
 
@@ -268,7 +332,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
     );
   }
 
-  if (isLoading) {
+  if (showLoadingSkeleton) {
     return (
       <FolderRowsSkeleton
         orderedColumnIds={orderedColumnIds}
@@ -423,7 +487,8 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                 "border-b-0 odd:bg-grey-light-200 even:bg-grey-light-400 hover:bg-grey-light-300 dark:odd:bg-black-500 dark:even:bg-black-primary-bg dark:hover:bg-black-300",
                 rowState === "pending" && "animate-pulse",
                 rowState === "error" && "bg-red-200/20",
-                isDeleting && "opacity-50 cursor-not-allowed pointer-events-none",
+                isDeleting &&
+                  "opacity-50 cursor-not-allowed pointer-events-none",
                 isSelectionMode && canSelect && "cursor-pointer",
                 isSelectionMode &&
                   isSelected &&
@@ -465,7 +530,9 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
               }}
             >
               {hasSelectionColumn ? (
-                <td className={cn(BASE_CELL_CLASS, "px-2 py-[5px] text-center")}>
+                <td
+                  className={cn(BASE_CELL_CLASS, "px-2 py-[5px] text-center")}
+                >
                   <div className="flex justify-center checkbox-container">
                     <FileCheckbox
                       selected={isSelected}
