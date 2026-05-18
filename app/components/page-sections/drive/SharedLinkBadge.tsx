@@ -26,7 +26,12 @@ interface SharedLinkBadgeProps {
   className?: string;
 }
 
-const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({ label, actualName, isFolder, className }) => {
+const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
+  label,
+  actualName,
+  isFolder,
+  className,
+}) => {
   const { getSharesFor } = useSharedFiles();
 
   // Folders don't go through `hcfs_create_share` (the Rust path
@@ -46,12 +51,12 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({ label, actualName, isFolder
           <span
             className={cn(
               "inline-flex items-center justify-center text-primary-50 flex-shrink-0",
-              "bg-primary-95 rounded-full p-1",
-              className
+              "bg-primary-95 rounded-full px-1 pt-1",
+              className,
             )}
             aria-label="Shared via public link"
           >
-            <LinkIcon className="size-4" />
+            <LinkIcon className="size-3.5" />
           </span>
         </Tooltip.Trigger>
         <Tooltip.Portal>
