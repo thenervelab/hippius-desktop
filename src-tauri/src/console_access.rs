@@ -24,7 +24,7 @@ use tracing::warn;
 use zeroize::Zeroizing;
 
 use crate::auth::tokens::get_api_token;
-use crate::error::{AppError, NotReadyKind, Result};
+use crate::error::{AppError, Result};
 
 // ---------------------------------------------------------------------------
 // Passphrase strength types (consumed by the recovery dialog's meter)
@@ -200,6 +200,19 @@ impl HcfsServerCtx {
             .ok_or_else(|| AppError::Other("No authentication token — please log in again.".into()))?;
 
         let base_url = resolve_hcfs_base_url(pool, &account_id).await?;
+        // Empty == region auto-detect sentinel. The sync path lets
+        // hcfs-client's own client race the regions; this raw-reqwest
+        // recovery path has no such step, so resolve it here. Either
+        // region is correctness-equivalent — the blob store is a shared
+        // replicated DB (hcfs-client region.rs:3-7) — so the race is a
+        // pure latency choice and cannot cause a false 404 / wrong Signup.
+        let base_url = if base_url.is_empty() {
+            hcfs_client::client::pick_fastest(&state.api_client)
+                .await
+                .map_err(|e| AppError::Hcfs(e.to_string()))?
+        } else {
+            base_url
+        };
         Ok(Self {
             client: state.api_client.clone(),
             base_url,
@@ -209,21 +222,20 @@ impl HcfsServerCtx {
     }
 }
 
-/// Resolve the hcfs-server URL the desktop uses for blob traffic.
+/// Resolve the hcfs-server URL stored for this account.
 ///
-/// Reads `hcfs_config.server_url`. Refuses to fall back to a hardcoded
-/// default here — a user who has never configured sync on this account
-/// would otherwise upload their sealed blob to the public host even on
-/// a self-hosted deployment, leaving orphaned ciphertext on the wrong
-/// server. Recovery flows seed the default URL explicitly via
-/// `recovery::seed_hcfs_server_url_if_missing` before calling this.
+/// Returns the `hcfs_config.server_url` value verbatim, including the
+/// empty string. Empty is the region auto-detect sentinel
+/// (`recovery::seed_hcfs_server_url_if_missing` seeds `''`); turning it
+/// into a concrete endpoint is [`HcfsServerCtx::resolve`]'s job via
+/// [`hcfs_client::client::pick_fastest`]. Keeping this helper a pure,
+/// network-free DB read is what makes it unit-testable. A missing row
+/// also resolves to the sentinel rather than an error — recovery seeds a
+/// row first, but the network layer must still cope if it did not.
 async fn resolve_hcfs_base_url(pool: &sqlx::SqlitePool, account_id: &str) -> Result<String> {
     let config = crate::sync::config::get_hcfs_config_internal(pool, account_id)
         .await
         .map_err(|e| AppError::Other(format!("Could not read sync config: {e}")))?;
-    if config.server_url.is_empty() {
-        return Err(AppError::NotReady(NotReadyKind::ConfigMissing));
-    }
     Ok(config.server_url)
 }
 
@@ -416,28 +428,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_base_url_rejects_empty_server_url() {
+    async fn resolve_base_url_returns_empty_for_auto_detect_sentinel() {
+        // Empty server_url is the region auto-detect sentinel
+        // (recovery::seed_hcfs_server_url_if_missing seeds ''). It must
+        // pass through here, NOT error — HcfsServerCtx::resolve turns the
+        // empty string into a concrete URL via region::pick_fastest. The
+        // old ConfigMissing rejection broke every fresh-OAuth-device
+        // recovery (see docs/plans/2026-05-18-oauth-recovery-region-resolution.md).
         let pool = make_empty_pool_with_hcfs_config().await;
-        let err = resolve_hcfs_base_url(&pool, "5GrwvaEF…").await.expect_err("empty config must fail");
-        assert!(
-            matches!(err, AppError::NotReady(NotReadyKind::ConfigMissing)),
-            "expected NotReady(ConfigMissing), got {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_base_url_rejects_blank_string_row() {
-        let pool = make_empty_pool_with_hcfs_config().await;
-        let owner = crate::auth::account_key::account_key("5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY");
+        let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        let owner = crate::auth::account_key::account_key(account);
         sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, '', '', 0)")
             .bind(&owner)
             .execute(&pool)
             .await
             .unwrap();
-        let err = resolve_hcfs_base_url(&pool, "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY")
-            .await
-            .expect_err("blank server_url must fail");
-        assert!(matches!(err, AppError::NotReady(NotReadyKind::ConfigMissing)));
+        let url = resolve_hcfs_base_url(&pool, account).await.expect("empty must pass through");
+        assert_eq!(url, "", "auto-detect sentinel must round-trip untouched");
+    }
+
+    #[tokio::test]
+    async fn resolve_base_url_returns_empty_when_no_row() {
+        // No hcfs_config row at all also resolves to the auto-detect
+        // sentinel rather than ConfigMissing — recovery seeds a row first
+        // in practice, but the network layer must still cope if it didn't.
+        let pool = make_empty_pool_with_hcfs_config().await;
+        let url = resolve_hcfs_base_url(&pool, "5GrwvaEF…").await.expect("missing row → empty");
+        assert_eq!(url, "");
     }
 
     #[tokio::test]
