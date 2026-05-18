@@ -16,7 +16,7 @@ const FILTER_PILL_TRIGGER_CLASSES = cn(
   "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)]",
   "text-[12px] font-medium font-mono uppercase tracking-[-0.24px] leading-[20px]",
   "text-black-700 transition-colors hover:bg-grey-light-700",
-  "dark:bg-[rgba(255,255,255,0.02)] dark:border-black-300 dark:text-grey-light-100",
+  "dark:bg-[rgba(255,255,255,0.02)] dark:border-black-300 dark:text-white",
   "dark:shadow-[0px_0px_0px_1px_rgba(0,0,0,1)] dark:hover:bg-black-500",
 );
 
@@ -122,41 +122,41 @@ const EnhancedFileSizeSelector: React.FC<EnhancedFileSizeSelectorProps> = ({
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
           <button className={FILTER_PILL_TRIGGER_CLASSES}>
-            <div className="text-black-700 dark:text-grey-light-100">
+            <div className="text-black-700 dark:text-white">
               {getDisplayText()}
             </div>
-            <Icons.ChevronDown className="size-4 text-black-700 transition-transform duration-200 group-data-[state=open]:rotate-180 dark:text-grey-light-100" />
+            <Icons.ChevronDown className="size-4 text-black-700 transition-transform duration-200 group-data-[state=open]:rotate-180 dark:text-white" />
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content
             sideOffset={4}
             align="start"
-            className="mt-1 bg-white border border-grey-80 rounded-lg px-2 py-1 shadow-menu min-w-[13.75rem] z-50"
+            className="mt-1 bg-white border border-grey-80 rounded-lg px-2 py-1 shadow-menu min-w-[13.75rem] z-50 dark:bg-black-primary-bg dark:border-black-300"
           >
             {selectedSizes.length > 0 && (
               <>
                 <DropdownMenu.Item
-                  className="flex items-center gap-2 p-2 hover:bg-grey-80 cursor-pointer rounded text-grey-40 text-xs font-medium outline-none w-full"
+                  className="flex items-center gap-2 p-2 hover:bg-grey-80 cursor-pointer rounded text-grey-40 text-xs font-medium outline-none w-full dark:hover:bg-[#2a171b]"
                   onSelect={(e) => {
                     e.preventDefault();
                     onSizesSelect?.([]);
                   }}
                 >
                   <div className="h-4 w-4 flex items-center justify-center">
-                    <X className="h-3.5 w-3.5 text-red-500" />
+                    <X className="h-3.5 w-3.5 text-red-500 dark:text-[#ff8b8b]" />
                   </div>
-                  <span className="font-medium text-xs text-red-600">
+                  <span className="font-medium text-xs text-red-600 dark:text-[#ff8b8b]">
                     Clear All Sizes
                   </span>
                 </DropdownMenu.Item>
-                <div className="border-t border-grey-90 my-1" />
+                <div className="border-t border-grey-90 my-1 dark:border-black-300" />
               </>
             )}
             {fileSizeOptions.map((option) => (
               <DropdownMenu.Item
                 key={option.value}
-                className="flex items-center gap-2 p-2 hover:bg-grey-80 cursor-pointer rounded text-grey-40 text-xs font-medium outline-none w-full"
+                className="group flex items-center gap-2 p-2 hover:bg-grey-80 cursor-pointer rounded text-grey-40 text-xs font-medium outline-none w-full dark:hover:bg-black-300/40"
                 onSelect={(e) => {
                   e.preventDefault();
                   handleSizeToggle(option.value);
@@ -164,7 +164,7 @@ const EnhancedFileSizeSelector: React.FC<EnhancedFileSizeSelectorProps> = ({
               >
                 {option.value !== -1 ? (
                   <Checkbox.Root
-                    className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-grey-90 data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors"
+                    className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-grey-90 data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors dark:border-black-300 dark:bg-black-500"
                     checked={selectedSizes.includes(option.value)}
                     onCheckedChange={() => handleSizeToggle(option.value)}
                   >
@@ -178,10 +178,10 @@ const EnhancedFileSizeSelector: React.FC<EnhancedFileSizeSelectorProps> = ({
                   </div>
                 )}
                 <div className="flex flex-col flex-1">
-                  <span className="font-medium text-base text-grey-40">
+                  <span className="font-medium text-base text-grey-40 dark:text-grey-light-100 dark:group-hover:text-white">
                     {option.label}
                   </span>
-                  <span className="text-sm text-grey-50">
+                  <span className="text-sm text-grey-50 dark:text-grey-dark-700">
                     {option.description}
                   </span>
                 </div>
@@ -198,8 +198,8 @@ const EnhancedFileSizeSelector: React.FC<EnhancedFileSizeSelectorProps> = ({
       >
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 shadow-lg z-50 min-w-[25rem]">
-            <Dialog.Title className="text-lg font-semibold text-grey-10 mb-4">
+          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 shadow-lg z-50 min-w-[25rem] dark:bg-black-primary-bg dark:border dark:border-black-300">
+            <Dialog.Title className="text-lg font-semibold text-grey-10 mb-4 dark:text-white">
               Filter Custom Size
             </Dialog.Title>
 
@@ -215,7 +215,7 @@ const EnhancedFileSizeSelector: React.FC<EnhancedFileSizeSelectorProps> = ({
             <div className="flex gap-3 justify-end">
               <button
                 onClick={() => setIsCustomDialogOpen(false)}
-                className="px-4 py-2 text-grey-50 hover:text-grey-30 transition-colors"
+                className="px-4 py-2 text-grey-50 hover:text-grey-30 transition-colors dark:text-grey-light-100 dark:hover:text-white"
               >
                 Cancel
               </button>
@@ -229,7 +229,7 @@ const EnhancedFileSizeSelector: React.FC<EnhancedFileSizeSelectorProps> = ({
 
             <Dialog.Close asChild>
               <button
-                className="absolute top-3 right-3 text-grey-50 hover:text-grey-30"
+                className="absolute top-3 right-3 text-grey-50 hover:text-grey-30 dark:text-grey-light-100 dark:hover:text-white"
                 aria-label="Close"
               >
                 <X className="h-4 w-4" />

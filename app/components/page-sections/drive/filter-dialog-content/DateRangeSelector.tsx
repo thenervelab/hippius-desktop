@@ -232,10 +232,10 @@ const DateRangeSelector: React.FC<DateRangeSelectorProps> = ({
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <button className={FILTER_PILL_TRIGGER_CLASSES} type="button">
-          <div className="text-black-700 dark:text-grey-light-100">
+          <div className="text-black-700 dark:text-white">
             {getDisplayText()}
           </div>
-          <Icons.CalendarNew className="size-4 text-black-700 dark:text-grey-light-100" />
+          <Icons.CalendarNew className="size-4 text-black-700 dark:text-white" />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -253,13 +253,13 @@ const DateRangeSelector: React.FC<DateRangeSelectorProps> = ({
                   className="rounded p-1 transition-colors hover:bg-grey-90 dark:hover:bg-black-300/40"
                   aria-label="Previous month"
                 >
-                  <ChevronLeft className="size-4 text-grey-50 dark:text-grey-dark-700" />
+                  <ChevronLeft className="size-4 text-grey-50 dark:text-grey-light-100" />
                 </button>
               )}
               <button
                 type="button"
                 onClick={() => setShowYearPicker((v) => !v)}
-                className="min-w-[7.5rem] text-center text-sm font-medium text-grey-10 transition-colors hover:text-primary-50 dark:text-grey-dark-200 dark:hover:text-grey-light-100"
+                className="min-w-[7.5rem] text-center text-sm font-medium text-grey-10 transition-colors hover:text-primary-50 dark:text-white dark:hover:text-primary-50"
               >
                 {showYearPicker
                   ? `${viewDate.getFullYear()}`
@@ -276,7 +276,7 @@ const DateRangeSelector: React.FC<DateRangeSelectorProps> = ({
                   className="rounded p-1 transition-colors hover:bg-grey-90 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-black-300/40"
                   aria-label="Next month"
                 >
-                  <ChevronRight className="size-4 text-grey-50 dark:text-grey-dark-700" />
+                  <ChevronRight className="size-4 text-grey-50 dark:text-grey-light-100" />
                 </button>
               )}
             </div>
@@ -293,7 +293,7 @@ const DateRangeSelector: React.FC<DateRangeSelectorProps> = ({
             </div>
           </div>
 
-          <div className="mb-2 text-center text-xs text-grey-50 dark:text-grey-dark-800">
+          <div className="mb-2 text-center text-xs text-grey-50 dark:text-grey-light-100">
             {selectingFrom ? "Select start date" : "Select end date"}
           </div>
 
@@ -346,7 +346,7 @@ const DateRangeSelector: React.FC<DateRangeSelectorProps> = ({
                   {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => (
                     <div
                       key={day}
-                      className="py-1 text-center text-xs font-medium text-grey-50 dark:text-grey-dark-700"
+                      className="py-1 text-center text-xs font-medium text-grey-50 dark:text-grey-light-100"
                     >
                       {day}
                     </div>
@@ -376,20 +376,20 @@ const DateRangeSelector: React.FC<DateRangeSelectorProps> = ({
                         className={cn(
                           "relative min-h-[1.75rem] rounded py-2 px-1 text-xs transition-colors",
                           !dayObj.isCurrentMonth
-                            ? "cursor-pointer text-grey-80 hover:bg-grey-90 dark:text-black-300 dark:hover:bg-black-300/30"
+                            ? "cursor-pointer text-grey-80 hover:bg-grey-90 dark:text-grey-dark-500 dark:hover:bg-black-300/30"
                             : dayObj.isFuture
-                              ? "cursor-not-allowed text-grey-80 dark:text-black-300"
-                              : "cursor-pointer text-grey-30 hover:bg-grey-90 dark:text-grey-dark-800 dark:hover:bg-black-300/40",
+                              ? "cursor-not-allowed text-grey-80 dark:text-grey-dark-500"
+                              : "cursor-pointer text-grey-30 hover:bg-grey-90 dark:text-grey-light-100 dark:hover:bg-black-300/40 dark:hover:text-white",
                           dayObj.isToday &&
                             !dayObj.isFromDate &&
                             !dayObj.isToDate &&
-                            "bg-primary-100 font-medium text-primary-40 dark:bg-black-300/50 dark:text-grey-light-100",
+                            "bg-primary-100 font-medium text-primary-40 dark:bg-black-300/50 dark:text-white",
                           dayObj.isInRange &&
                             !dayObj.isFromDate &&
                             !dayObj.isToDate &&
-                            "bg-primary-80 text-white dark:bg-transparent dark:text-grey-light-100",
+                            "bg-primary-80 text-white dark:bg-primary-50/30 dark:text-white",
                           (dayObj.isFromDate || dayObj.isToDate) &&
-                            "bg-primary-50 font-medium text-white hover:bg-primary-50 hover:text-white dark:bg-grey-light-100 dark:text-primary-50",
+                            "bg-primary-50 font-medium text-white hover:bg-primary-50 hover:text-white dark:bg-primary-50 dark:text-white",
                         )}
                       >
                         {dayObj.date.getDate()}

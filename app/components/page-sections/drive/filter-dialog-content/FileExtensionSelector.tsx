@@ -41,7 +41,7 @@ const FILTER_PILL_TRIGGER_CLASSES = cn(
   "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)]",
   "text-[12px] font-medium font-mono uppercase tracking-[-0.24px] leading-[20px]",
   "text-black-700 transition-colors hover:bg-grey-light-700",
-  "dark:bg-[rgba(255,255,255,0.02)] dark:border-black-300 dark:text-grey-light-100",
+  "dark:bg-[rgba(255,255,255,0.02)] dark:border-black-300 dark:text-white",
   "dark:shadow-[0px_0px_0px_1px_rgba(0,0,0,1)] dark:hover:bg-black-500",
 );
 
@@ -100,10 +100,10 @@ const FileExtensionSelector: React.FC<FileExtensionSelectorProps> = ({
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <button className={FILTER_PILL_TRIGGER_CLASSES} type="button">
-          <div className="text-black-700 dark:text-grey-light-100">
+          <div className="text-black-700 dark:text-white">
             {triggerText}
           </div>
-          <Icons.ChevronDown className="size-4 text-black-700 transition-transform duration-200 group-data-[state=open]:rotate-180 dark:text-grey-light-100" />
+          <Icons.ChevronDown className="size-4 text-black-700 transition-transform duration-200 group-data-[state=open]:rotate-180 dark:text-white" />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -137,14 +137,14 @@ const FileExtensionSelector: React.FC<FileExtensionSelectorProps> = ({
                 return (
                   <DropdownMenu.Item
                     key={ext.value}
-                    className="flex w-full cursor-pointer items-center gap-2 rounded p-2 text-xs font-medium text-grey-40 outline-none hover:bg-grey-80 dark:text-grey-dark-800 dark:hover:bg-black-300/40 dark:hover:text-grey-light-100"
+                    className="group flex w-full cursor-pointer items-center gap-2 rounded p-2 text-xs font-medium text-grey-40 outline-none hover:bg-grey-80 dark:text-grey-light-100 dark:hover:bg-black-300/40 dark:hover:text-white"
                     onSelect={(e) => {
                       e.preventDefault();
                       handleToggle(ext.value);
                     }}
                   >
                     <Checkbox.Root
-                      className="flex h-4 w-4 items-center justify-center rounded border border-grey-70 bg-grey-90 transition-colors data-[state=checked]:border-primary-50 data-[state=checked]:bg-primary-50"
+                      className="flex h-4 w-4 items-center justify-center rounded border border-grey-70 bg-grey-90 transition-colors data-[state=checked]:border-primary-50 data-[state=checked]:bg-primary-50 dark:border-black-300 dark:bg-black-500"
                       checked={selectedExtension === ext.value}
                       onCheckedChange={() => handleToggle(ext.value)}
                     >
@@ -153,9 +153,9 @@ const FileExtensionSelector: React.FC<FileExtensionSelectorProps> = ({
                       </Checkbox.Indicator>
                     </Checkbox.Root>
                     {IconComponent && (
-                      <IconComponent className="size-4 text-grey-40 dark:text-grey-dark-800" />
+                      <IconComponent className="size-4 text-grey-40 dark:text-grey-light-100" />
                     )}
-                    <span className="font-medium text-grey-40 dark:text-grey-dark-800 dark:group-hover:text-grey-light-100">
+                    <span className="font-medium text-grey-40 dark:text-grey-light-100 dark:group-hover:text-white">
                       {ext.label}
                     </span>
                   </DropdownMenu.Item>

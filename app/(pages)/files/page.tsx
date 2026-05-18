@@ -30,7 +30,7 @@ const FilesPage: FC = () => {
             onClick={() => openUrl(DRIVE_DOCS_URL)}
             aria-label="Drive documentation"
             title="Drive documentation"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-grey-dark-100 bg-grey-light-700 text-black transition-colors hover:bg-grey-90 hover:text-primary-50"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-grey-dark-100 bg-grey-light-700 text-black transition-colors hover:bg-grey-90 hover:text-primary-50 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400"
           >
             <InfoCircle className="size-4" />
           </button>
