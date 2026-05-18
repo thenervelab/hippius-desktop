@@ -394,7 +394,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           <div
             className={cn(
               "w-full flex flex-col",
-              "bg-white border-t border-grey-dark-100 rounded-b-[7px]",
+              "bg-white border-t border-grey-dark-100 rounded-[12px]",
               "dark:bg-black-primary-bg dark:border-black-300",
             )}
           >
