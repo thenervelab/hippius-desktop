@@ -113,7 +113,7 @@ const Sidebar: React.FC = () => {
               collapsed ? "w-[3.8125rem]" : "w-[16.4375rem]",
             )}
           >
-            <div className="flex flex-col flex-1 min-h-0 overflow-y-auto px-3 pt-0 pb-2 overflow-x-hidden">
+            <div className="flex flex-col flex-1 min-h-0 overflow-y-auto px-3 pt-0.5 pb-2 overflow-x-hidden">
               <SidebarSearch collapsed={collapsed} />
 
               {visibleSections.map((section) => (
