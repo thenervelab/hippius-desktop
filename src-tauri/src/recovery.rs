@@ -1212,4 +1212,22 @@ mod tests {
         // Idempotent clear.
         super::clear_rotation_sidecar(account).await;
     }
+
+    /// After `seed_hcfs_server_url_if_missing`, the recovery base-URL
+    /// resolver must NOT reject the seeded row. This pins the fix for the
+    /// fresh-OAuth-device dead-end where empty server_url → ConfigMissing
+    /// → probe (None,None) → RecoveryFlow::Unknown forever.
+    /// See docs/plans/2026-05-18-oauth-recovery-region-resolution.md.
+    #[tokio::test]
+    async fn seeded_row_is_accepted_by_base_url_resolver() {
+        let pool = crate::console_access::tests_support_make_hcfs_config_pool().await;
+        let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        seed_hcfs_server_url_if_missing(&pool, account)
+            .await
+            .expect("seed must succeed");
+        let url = crate::console_access::resolve_hcfs_base_url_for_test(&pool, account)
+            .await
+            .expect("seeded empty row must resolve to the sentinel, not error");
+        assert_eq!(url, "", "seeded server_url is the auto-detect sentinel");
+    }
 }

@@ -326,6 +326,21 @@ pub(crate) fn crypto_to_err(e: hcfs_client::mnemonic_blob::MnemonicBlobError) ->
 // Tests
 // ---------------------------------------------------------------------------
 
+// Test-only seams letting `recovery.rs`'s test module exercise this
+// module's private base-URL resolver against the exact in-memory schema
+// this module's own tests use. Declared before `mod tests` (clippy's
+// `items_after_test_module`); `#[cfg(test)]` so they never reach a
+// release binary and widen no production visibility.
+#[cfg(test)]
+pub(crate) async fn resolve_hcfs_base_url_for_test(pool: &sqlx::SqlitePool, account_id: &str) -> Result<String> {
+    resolve_hcfs_base_url(pool, account_id).await
+}
+
+#[cfg(test)]
+pub(crate) async fn tests_support_make_hcfs_config_pool() -> sqlx::SqlitePool {
+    tests::make_empty_pool_with_hcfs_config().await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,15 +425,20 @@ mod tests {
 
     // ── resolve_hcfs_base_url ──────────────────────────────────────────
 
-    async fn make_empty_pool_with_hcfs_config() -> sqlx::SqlitePool {
+    pub(crate) async fn make_empty_pool_with_hcfs_config() -> sqlx::SqlitePool {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.expect("open in-memory db");
+        // Mirror the production schema in `utils/schema.rs` exactly,
+        // including `updated_at` — `recovery::seed_hcfs_server_url_if_missing`
+        // writes that column, so a fixture missing it would fail a true
+        // seed-then-resolve test for a reason unrelated to the resolver.
         sqlx::query(
             "CREATE TABLE hcfs_config (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 owner TEXT NOT NULL UNIQUE,
                 server_url TEXT NOT NULL DEFAULT '',
                 drive_password TEXT NOT NULL DEFAULT '',
-                encryption_version INTEGER NOT NULL DEFAULT 0
+                encryption_version INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )",
         )
         .execute(&pool)
