@@ -253,9 +253,9 @@ export default function FolderUploadDialog({
       icon={<Icons.FolderPlus className="size-5 text-white" />}
       maxWidth="max-w-[653px]"
     >
-      {/* Section label row — matches New File dialog layout */}
+      {/* Section label row — mirrors the AddFile dialog's "Upload File" + Private layout. */}
       <div className="mb-2.5 flex items-center justify-between gap-2">
-        <span className="font-geist text-sm font-medium text-grey-60 dark:text-grey-dark-600 tracking-[-0.28px]">
+        <span className="font-geist text-sm font-medium text-grey-60 dark:text-grey-dark-700 tracking-[-0.28px]">
           Folder Location
         </span>
         {!IS_SYNC_PAUSED && <PrivacyBadge variant="folder" />}
@@ -268,22 +268,13 @@ export default function FolderUploadDialog({
       )}
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-        <SyncFolderSelect
-          value={selectedFolderLabel}
-          defaultLabel={defaultFolderLabel}
-          onChange={(label, path) => {
-            setSelectedFolderLabel(label);
-            setSelectedSyncPath(path);
-          }}
-        />
-
         {/* Folder dropzone — same styling as AddLocalFolderDialog */}
         <div className="flex flex-col gap-2">
           <div
             className={cn(
               "rounded-[8px] border bg-white p-2 transition-[border-color,box-shadow] duration-200",
               "border-grey-80 shadow-[0px_0px_0px_4px_rgba(10,10,10,0.05)]",
-              "dark:border-[#494949] dark:bg-[#1f1f1f] dark:shadow-[0px_0px_0px_4px_rgba(255,255,255,0.03)]",
+              "dark:border-[#333] dark:bg-[#171717] dark:shadow-[0px_0px_0px_4px_rgba(255,255,255,0.03)]",
               isDragging &&
                 "border-primary-50 shadow-[0px_0px_0px_4px_rgba(49,103,221,0.12)] dark:border-primary-65 dark:shadow-[0px_0px_0px_4px_rgba(97,140,232,0.15)]",
             )}
@@ -291,7 +282,7 @@ export default function FolderUploadDialog({
             <div
               className={cn(
                 "rounded-[8px] border-[1.5px] border-dashed bg-white transition-colors",
-                "border-grey-70 dark:border-grey-dark-700 dark:bg-[#1f1f1f]",
+                "border-grey-70 dark:border-[#444] dark:bg-[#1e1e1e]",
                 isDragging &&
                   "border-primary-50 bg-primary-50/5 dark:border-primary-50 dark:bg-primary-50/10",
                 isSubmitting && "opacity-60",
@@ -386,6 +377,15 @@ export default function FolderUploadDialog({
             </div>
           )}
         </div>
+
+        <SyncFolderSelect
+          value={selectedFolderLabel}
+          defaultLabel={defaultFolderLabel}
+          onChange={(label, path) => {
+            setSelectedFolderLabel(label);
+            setSelectedSyncPath(path);
+          }}
+        />
 
         <div className="mt-2 flex flex-col gap-3">
           <Button

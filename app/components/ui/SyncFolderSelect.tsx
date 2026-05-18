@@ -78,26 +78,26 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
 
   return (
     <div className={cn("flex flex-col gap-1.5", className)} ref={containerRef}>
-      <label className="text-sm font-medium text-grey-50">
+      <label className="text-sm font-medium text-grey-50 dark:text-grey-dark-700">
         Upload to folder
       </label>
       <div className="relative">
         <button
           type="button"
           onClick={() => setOpen((prev) => !prev)}
-          className="flex w-full justify-between cursor-pointer items-center gap-2 px-4 h-[3rem] text-sm font-medium border border-grey-80 rounded-lg text-grey-10 bg-grey-100 focus:outline-none"
+          className="flex w-full justify-between cursor-pointer items-center gap-2 px-4 h-[3rem] text-sm font-medium border border-grey-80 rounded-lg text-grey-10 bg-grey-100 focus:outline-none dark:border-[#494949] dark:bg-[#1f1f1f] dark:text-white dark:hover:bg-[#252525]"
         >
           <span className="truncate">{selectedLabel ?? "Select folder"}</span>
           <Icons.ChevronDown
             className={cn(
-              "h-5 w-5 text-grey-50 shrink-0 transition-transform duration-200",
+              "h-5 w-5 text-grey-50 shrink-0 transition-transform duration-200 dark:text-[#7d7d7d]",
               open && "rotate-180"
             )}
           />
         </button>
 
         {open && (
-          <div className="absolute left-0 right-0 top-full mt-1 overflow-hidden rounded-lg bg-white shadow-lg border border-grey-80 z-[100]">
+          <div className="absolute left-0 right-0 top-full mt-1 overflow-hidden rounded-lg bg-white shadow-lg border border-grey-80 z-[100] dark:bg-[#1f1f1f] dark:border-[#494949]">
             <div className="p-1.5 max-h-60 overflow-auto flex flex-col gap-0.5">
               {syncPaths.map((sp) => {
                 const isSelected = sp.label === value;
@@ -111,8 +111,10 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
                       setOpen(false);
                     }}
                     className={cn(
-                      "flex items-center px-3 py-2.5 text-sm cursor-pointer text-grey-10 transition-colors duration-150 select-none rounded-md hover:bg-grey-90 truncate",
-                      isSelected ? "bg-grey-80 font-medium" : "",
+                      "flex items-center px-3 py-2.5 text-sm cursor-pointer text-grey-10 transition-colors duration-150 select-none rounded-md hover:bg-grey-90 truncate dark:text-[#a3a3a3] dark:hover:bg-[#2c2c2c] dark:hover:text-white",
+                      isSelected
+                        ? "bg-grey-80 font-medium dark:bg-[#2c2c2c] dark:text-white"
+                        : "",
                     )}
                     title={sp.label}
                   >

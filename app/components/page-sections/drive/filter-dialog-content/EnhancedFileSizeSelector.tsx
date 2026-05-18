@@ -178,10 +178,10 @@ const EnhancedFileSizeSelector: React.FC<EnhancedFileSizeSelectorProps> = ({
                   </div>
                 )}
                 <div className="flex flex-col flex-1">
-                  <span className="font-medium text-base text-grey-40 dark:text-grey-light-100 dark:group-hover:text-white">
+                  <span className="font-medium text-xs text-grey-40 dark:text-grey-light-100 dark:group-hover:text-white">
                     {option.label}
                   </span>
-                  <span className="text-sm text-grey-50 dark:text-grey-dark-700">
+                  <span className="text-[11px] text-grey-50 dark:text-grey-dark-700">
                     {option.description}
                   </span>
                 </div>

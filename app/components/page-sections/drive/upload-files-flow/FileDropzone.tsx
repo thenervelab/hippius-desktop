@@ -132,7 +132,7 @@ const FileDropzone: FC<{
       className={cn(
         "w-full h-full rounded-[8px] border p-2 transition-colors duration-200",
         "border-grey-80 bg-white",
-        "dark:border-[#313131] dark:bg-[#1a1a1a]",
+        "dark:border-[#333] dark:bg-[#171717]",
         isDragging &&
           "border-primary-50 dark:border-primary-50 bg-primary-50/5 dark:bg-primary-50/10"
       )}
@@ -143,12 +143,16 @@ const FileDropzone: FC<{
         className={cn(
           "h-full w-full flex flex-col items-center justify-center gap-3 rounded-[8px] border border-dashed px-6 py-6 cursor-pointer transition-colors duration-200",
           "border-grey-80 bg-white hover:bg-grey-light-300",
-          "dark:border-[#313131] dark:bg-[#1a1a1a] dark:hover:bg-[#222222]",
+          "dark:border-[#444] dark:bg-[#1e1e1e] dark:hover:bg-[#252525]",
           isDragging &&
             "border-primary-50 dark:border-primary-50 bg-primary-50/10"
         )}
       >
-        <AbstractIconWrapper className="size-10">
+        <AbstractIconWrapper
+          transparent
+          className="size-10 text-primary-50"
+          iconGridClassName="text-[#d4e0fb] dark:text-[#2a3a5c]"
+        >
           <Icons.Box className="relative size-4" />
         </AbstractIconWrapper>
 
