@@ -592,7 +592,13 @@ export default function UpdateDialog() {
                     <div className="relative flex size-14 items-center justify-center">
                       <Icons.Decoration className="absolute inset-0 size-full" />
                       <div className="relative flex size-8 items-center justify-center rounded-[6px] bg-primary-50">
-                        <HippiusLogo className="size-5 text-white" />
+                        {/* The shared HippiusLogo SVG hardcodes a 34-unit
+                            white stroke so a colored fill (text-primary-50,
+                            etc.) reads with a halo on busy backgrounds. On a
+                            solid blue badge we want a pure white logo; the
+                            stroke fills the interior cutouts and turns the
+                            mark into a featureless blob, so suppress it. */}
+                        <HippiusLogo className="size-5 text-white [&_path]:[stroke:none]" />
                       </div>
                     </div>
 
