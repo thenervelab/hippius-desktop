@@ -85,6 +85,10 @@ interface DriveHeaderProps {
   defaultFolderLabel?: string | null;
   isFolderUploadOpen?: boolean;
   onSetFolderUploadOpen?: (open: boolean) => void;
+  /** Pre-populates the FolderUploadDialog's path field — used when a
+   *  folder is dropped onto the files table and the dialog is opened
+   *  with that folder already selected. */
+  folderUploadInitialPath?: string;
   // Breadcrumb props — rendered as the first line of the drive (non-recent) header.
   // The breadcrumb lives inside DriveHeader so line 1 (breadcrumb + action buttons)
   // and line 2 (filter pills + stats/search/view-mode) can share one flex column.
@@ -144,6 +148,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   defaultFolderLabel,
   isFolderUploadOpen: isFolderUploadOpenProp,
   onSetFolderUploadOpen,
+  folderUploadInitialPath,
   breadcrumbSegments = [],
   onBreadcrumbLocalClick,
   isNested = false,
@@ -469,6 +474,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           onClose={() => setIsFolderUploadOpen(false)}
           onRefresh={refetchUserFiles}
           defaultFolderLabel={defaultFolderLabel}
+          initialFolderPath={folderUploadInitialPath}
         />
       )}
     </>

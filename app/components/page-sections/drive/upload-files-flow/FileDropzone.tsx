@@ -92,16 +92,29 @@ const FileDropzone: FC<{
             const paths = event.payload.paths;
             if (!paths || paths.length === 0) return;
 
-            // Filter out directories (shows toast if any dropped)
             try {
               const { filterDroppedPaths } = await import("@/lib/utils/filterDroppedPaths");
-              const filePaths = await filterDroppedPaths(paths);
-              if (filePaths.length > 0) {
-                setFiles(filePaths);
+              const { files, folders } = await filterDroppedPaths(paths);
+              if (folders.length > 0 && files.length === 0) {
+                // Files-only zone — surface the mismatch.
+                toast.error(
+                  "Folders cannot be uploaded here. Use \"+ New Folder\" instead.",
+                  { duration: 5000 },
+                );
+                return;
+              }
+              if (folders.length > 0) {
+                toast.info(
+                  "Folders were skipped. Use \"+ New Folder\" to upload a folder.",
+                );
+              }
+              if (files.length > 0) {
+                setFiles(files);
               }
             } catch (err) {
               console.error("[FileDropzone] Error checking paths:", err);
-              // Fallback: pass all paths through
+              // Fallback: pass all paths through — uploader will surface
+              // per-path errors itself.
               setFiles(paths);
             }
           }

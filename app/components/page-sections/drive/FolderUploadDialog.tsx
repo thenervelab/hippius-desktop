@@ -36,6 +36,9 @@ type Props = {
   onSuccess?: (folderCid: string) => void;
   onRefresh?: () => void;
   defaultFolderLabel?: string | null;
+  /** Path to seed when the dialog opens (e.g. from a drag-drop onto
+   *  the files table). Re-applied each time `open` flips to true. */
+  initialFolderPath?: string;
 };
 
 export default function FolderUploadDialog({
@@ -44,14 +47,25 @@ export default function FolderUploadDialog({
   onSuccess,
   onRefresh,
   defaultFolderLabel,
+  initialFolderPath,
 }: Props) {
   const { polkadotAddress } = useWalletAuth();
   const queryClient = useAtomValue(queryClientAtom);
   const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
   const { checkEligibility } = useCreditCheck();
 
-  const [folderPath, setFolderPath] = useState<string>("");
+  const [folderPath, setFolderPath] = useState<string>(initialFolderPath ?? "");
   const [folderError, setFolderError] = useState<string | null>(null);
+
+  // When the dialog is opened (or reopened) with a different
+  // `initialFolderPath`, replace whatever path was left from a previous
+  // session. Closing alone doesn't trigger this — that's `handleClose`'s job.
+  useEffect(() => {
+    if (open && initialFolderPath) {
+      setFolderPath(initialFolderPath);
+      setFolderError(null);
+    }
+  }, [open, initialFolderPath]);
   const [selectedFolderLabel, setSelectedFolderLabel] = useState<string | null>(
     defaultFolderLabel ?? null,
   );

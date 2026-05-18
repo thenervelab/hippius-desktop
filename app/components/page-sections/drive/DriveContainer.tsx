@@ -107,6 +107,22 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   // Folder upload dialog state (lifted from DriveHeader so context menus can trigger it)
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
+  // When a folder is dropped onto the files table we open the dialog
+  // with this path pre-filled. Cleared on close so the next open starts
+  // empty (or seeded again by another drop).
+  const [folderUploadInitialPath, setFolderUploadInitialPath] = useState<
+    string | undefined
+  >(undefined);
+
+  const handleFolderUploadOpenChange = useCallback((open: boolean) => {
+    setIsFolderUploadOpen(open);
+    if (!open) setFolderUploadInitialPath(undefined);
+  }, []);
+
+  const handleAddFolderFromDrop = useCallback((path: string) => {
+    setFolderUploadInitialPath(path);
+    setIsFolderUploadOpen(true);
+  }, []);
 
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState(
     undefined as string | null | undefined,
@@ -771,6 +787,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   }, []);
 
   const handleContextAddFolder = useCallback(() => {
+    setFolderUploadInitialPath(undefined);
     setIsFolderUploadOpen(true);
   }, []);
 
@@ -1265,6 +1282,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 onUploadFile={handleContextUploadFile}
                 onAddFolder={handleContextAddFolder}
                 onAddSyncFolder={handleContextAddSyncFolder}
+                onAddFolderFromDrop={handleAddFolderFromDrop}
+                isFolderUploadOpen={isFolderUploadOpen}
                 drivePathsByLabel={drivePathsByLabel}
                 currentSubfolderPath={
                   isNested ? (urlSubFolderPath ?? "") : null
@@ -1306,7 +1325,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 onFileSizesChange={handleFileSizesChange}
                 defaultFolderLabel={activeSyncFolderLabel}
                 isFolderUploadOpen={isFolderUploadOpen}
-                onSetFolderUploadOpen={setIsFolderUploadOpen}
+                onSetFolderUploadOpen={handleFolderUploadOpenChange}
+                folderUploadInitialPath={folderUploadInitialPath}
                 breadcrumbSegments={breadcrumbSegments}
                 onBreadcrumbLocalClick={handleNavigateToLocalView}
                 isNested={isNested}

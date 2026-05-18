@@ -54,6 +54,14 @@ interface DriveContentProps {
   onUploadFile?: () => void;
   onAddFolder?: () => void;
   onAddSyncFolder?: () => void;
+  /** Routes a folder dropped on the files table into the
+   *  FolderUploadDialog with its path pre-filled. Pure files keep
+   *  flowing through `addButtonRef.openWithPaths`. */
+  onAddFolderFromDrop?: (folderPath: string) => void;
+  /** True while the FolderUploadDialog is open. Used to suppress the
+   *  table-level drag-drop handler so a drop onto the dialog isn't
+   *  also processed by the table behind it. */
+  isFolderUploadOpen?: boolean;
   drivePathsByLabel?: Record<string, string>;
   currentSubfolderPath?: string | null;
 }
@@ -75,6 +83,8 @@ const DriveContent: FC<DriveContentProps> = ({
   onUploadFile,
   onAddFolder,
   onAddSyncFolder,
+  onAddFolderFromDrop,
+  isFolderUploadOpen = false,
   drivePathsByLabel,
   currentSubfolderPath,
 }) => {
@@ -164,8 +174,10 @@ const DriveContent: FC<DriveContentProps> = ({
         }>("tauri://drag-enter", (event) => {
           console.log("[DragDrop] drag-enter event received", event.payload);
           if (isSyncPathEmpty && !isRecentFiles) return;
-          // Don't show background overlay if upload dialog is already open
+          // Don't show background overlay if either upload dialog is open —
+          // both have their own dropzone visuals.
           if (addButtonRef?.current?.isDialogOpen()) return;
+          if (isFolderUploadOpen) return;
           setIsDragging(true);
           dragTimeoutRef.current = setTimeout(() => {
             setAnimateCloud(true);
@@ -195,8 +207,12 @@ const DriveContent: FC<DriveContentProps> = ({
             dragTimeoutRef.current = null;
           }
 
-          // If upload dialog is already open, don't handle here (FileDropzone handles it)
+          // If either upload dialog is already open, the dialog's own
+          // drag-drop listener handles the drop. Skipping here prevents
+          // the table from also showing a "folders not allowed" toast on
+          // a folder drop that the open FolderUploadDialog accepted.
           if (addButtonRef?.current?.isDialogOpen()) return;
+          if (isFolderUploadOpen) return;
 
           if (isSyncPathEmpty && !isRecentFiles) {
             toast.info("Please set up sync folder first to upload files.");
@@ -206,17 +222,44 @@ const DriveContent: FC<DriveContentProps> = ({
           const paths = event.payload.paths;
           if (!paths || paths.length === 0 || !addButtonRef?.current) return;
 
-          // Filter out directories (shows toast if any dropped)
+          // Classify the drop. Files flow into the AddFile dialog;
+          // a folder drop opens the FolderUploadDialog with the path
+          // pre-filled (one folder at a time — FolderUploadDialog
+          // accepts a single root). Mixed drops upload the files and
+          // surface a single toast about the dropped folders.
           try {
             const { filterDroppedPaths } =
               await import("@/lib/utils/filterDroppedPaths");
-            const filePaths = await filterDroppedPaths(paths);
-            if (filePaths.length > 0) {
-              addButtonRef.current.openWithPaths(filePaths);
+            const { files, folders } = await filterDroppedPaths(paths);
+
+            if (files.length === 0 && folders.length > 0) {
+              if (onAddFolderFromDrop) {
+                if (folders.length > 1) {
+                  toast.info(
+                    "Only the first dropped folder will be used.",
+                  );
+                }
+                onAddFolderFromDrop(folders[0]);
+              } else {
+                toast.error(
+                  "Folder uploads aren't available in this view.",
+                );
+              }
+              return;
+            }
+
+            if (files.length > 0) {
+              if (folders.length > 0) {
+                toast.info(
+                  "Folders were skipped. Use \"+ New Folder\" to upload a folder.",
+                );
+              }
+              addButtonRef.current.openWithPaths(files);
             }
           } catch (err) {
             console.error("[DragDrop] Error checking paths:", err);
-            // Fallback: pass all paths through
+            // Fallback: pass all paths through — uploader will surface
+            // per-path errors itself.
             addButtonRef.current.openWithPaths(paths);
           }
         });
@@ -251,7 +294,13 @@ const DriveContent: FC<DriveContentProps> = ({
         dragTimeoutRef.current = null;
       }
     };
-  }, [addButtonRef, isSyncPathEmpty, isRecentFiles]);
+  }, [
+    addButtonRef,
+    isSyncPathEmpty,
+    isRecentFiles,
+    isFolderUploadOpen,
+    onAddFolderFromDrop,
+  ]);
 
   const handleFileDownload = (
     file: FormattedUserFile,
