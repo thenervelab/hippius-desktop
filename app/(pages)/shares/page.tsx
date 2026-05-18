@@ -24,6 +24,7 @@ import { toast } from "sonner";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { AbstractIconWrapper, Icons } from "@/components/ui";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
+import NoEntriesFound from "@/components/ui/NoEntriesFound";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -187,7 +188,14 @@ export default function MySharesPage() {
                   Couldn&apos;t load shares: {errorMessage(error)}
                 </p>
               )}
-              {!isLoading && !error && data && data.length === 0 && <EmptyState />}
+              {!isLoading && !error && data && data.length === 0 && (
+                <NoEntriesFound
+                  title="No shared links yet"
+                  description='Right-click any synced file and choose "Share via link" to mint a public link. Active links appear here with options to copy, refresh the expiry, or revoke.'
+                  cardView={false}
+                  className="!bg-white dark:!bg-black-600 p-4 sm:p-8"
+                />
+              )}
               {!isLoading && data && data.length > 0 && (
                 <ActiveSharesTable
                   rows={data}
@@ -209,9 +217,25 @@ export default function MySharesPage() {
                 action={
                   <button
                     onClick={() => setClearAllOpen(true)}
-                    className="flex items-center gap-1.5 h-7 px-2.5 rounded text-xs font-medium text-error-60 bg-white border border-grey-dark-100 hover:bg-error-60 hover:text-white active:bg-error-70 transition-colors focus:outline-none focus:ring-2 focus:ring-error-50 dark:bg-black-500 dark:border-black-300 dark:text-error-50 dark:hover:bg-error-60 dark:hover:text-white"
+                    className={cn(
+                      "group inline-flex items-center gap-1.5 h-7 px-2.5 rounded-[6px]",
+                      "text-xs font-medium tracking-[-0.12px]",
+                      "border transition-all duration-150",
+                      "focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1",
+                      "focus-visible:ring-error-50 focus-visible:ring-offset-white",
+                      "dark:focus-visible:ring-offset-black-primary-bg",
+                      // Light mode: soft red surface, red text, subtle red border
+                      "bg-error-100 text-error-60 border-error-90",
+                      "hover:bg-error-60 hover:text-white hover:border-error-60",
+                      "active:bg-error-70 active:border-error-70",
+                      "shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]",
+                      // Dark mode: translucent red wash, brighter red text
+                      "dark:bg-error-50/10 dark:text-error-50 dark:border-error-50/30",
+                      "dark:hover:bg-error-50 dark:hover:text-white dark:hover:border-error-50",
+                      "dark:active:bg-error-60 dark:active:border-error-60",
+                    )}
                   >
-                    <Trash2 className="size-3.5" />
+                    <Trash2 className="size-3.5 transition-transform group-hover:scale-110" />
                     Clear all
                   </button>
                 }
@@ -364,7 +388,7 @@ interface ActiveSharesTableProps {
 }
 
 function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare, resharingToken }: ActiveSharesTableProps) {
-  const [sorting, setSorting] = React.useState<SortingState>([{ id: "created", desc: true }]);
+  const [sorting, setSorting] = React.useState<SortingState>([]);
 
   const columns = React.useMemo(
     () => [
@@ -455,6 +479,7 @@ function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare, resharingToken }
                     key={h.id}
                     header={h}
                     className="bg-white dark:!bg-[#111111] !border-[#E3E3E3] dark:!border-[#313131]"
+                    activeSortClassName="text-grey-10 dark:text-grey-light-100"
                   />
                 ))}
               </Tr>
@@ -567,7 +592,7 @@ interface HistoryTableProps {
 }
 
 function HistoryTable({ rows, onRemove }: HistoryTableProps) {
-  const [sorting, setSorting] = React.useState<SortingState>([{ id: "endsAt", desc: true }]);
+  const [sorting, setSorting] = React.useState<SortingState>([]);
 
   const columns = React.useMemo(
     () => [
@@ -660,6 +685,7 @@ function HistoryTable({ rows, onRemove }: HistoryTableProps) {
                     key={h.id}
                     header={h}
                     className="bg-white dark:!bg-[#111111] !border-[#E3E3E3] dark:!border-[#313131]"
+                    activeSortClassName="text-grey-10 dark:text-grey-light-100"
                   />
                 ))}
               </Tr>
@@ -810,21 +836,6 @@ function Badge({ tone, children }: { tone: "muted" | "muted-italic" | "error"; c
         ? "bg-grey-90 text-grey-30 italic dark:bg-black-400 dark:text-grey-dark-600"
         : "bg-grey-90 text-grey-30 dark:bg-black-400 dark:text-grey-dark-600";
   return <span className={cn(base, toneClass)}>{children}</span>;
-}
-
-function EmptyState() {
-  return (
-    <div className="flex flex-col items-center justify-center text-center px-6 py-10">
-      <AbstractIconWrapper className="size-10 mb-2.5">
-        <Icons.Link className="absolute size-5 text-primary-50" />
-      </AbstractIconWrapper>
-      <h3 className="text-grey-10 dark:text-grey-light-100 font-medium text-sm">No shared links</h3>
-      <p className="text-xs text-grey-60 dark:text-grey-dark-600 mt-1 max-w-sm">
-        Right-click any synced file and choose &ldquo;Share via link&rdquo; to mint a public link.
-        Active links appear here with options to copy, refresh the expiry, or revoke.
-      </p>
-    </div>
-  );
 }
 
 function FeatureUnavailable() {
