@@ -1101,7 +1101,11 @@ const FilesTable: FC<FilesTableProps> = memo(
         const currentIndex = columnIds.indexOf(columnId);
         const nextColumnId = columnIds[currentIndex + 1];
 
-        if (nextColumnId && columnId !== "actions" && columnId !== "selection") {
+        if (
+          nextColumnId &&
+          columnId !== "actions" &&
+          columnId !== "selection"
+        ) {
           setIsResizing(true);
           setResizeData({
             columnId,
@@ -1332,7 +1336,9 @@ const FilesTable: FC<FilesTableProps> = memo(
               key={id}
               style={{
                 width:
-                  id === "selection" ? `${SELECTION_COLUMN_WIDTH_PX}px` : `${columnWidths[id]}%`,
+                  id === "selection"
+                    ? `${SELECTION_COLUMN_WIDTH_PX}px`
+                    : `${columnWidths[id]}%`,
               }}
             />
           ))}
@@ -1564,7 +1570,9 @@ const FilesTable: FC<FilesTableProps> = memo(
                       key={cell.id}
                       cell={cell}
                       columnWidth={
-                        isSelectionCell ? undefined : columnWidths[cell.column.id]
+                        isSelectionCell
+                          ? undefined
+                          : columnWidths[cell.column.id]
                       }
                       style={
                         isSelectionCell

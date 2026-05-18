@@ -1,19 +1,12 @@
 "use client";
 
-import {
-  FC,
-  useState,
-  useRef,
-  useEffect,
-  useCallback,
-  memo,
-} from "react";
+import { FC, useState, useRef, useEffect, useCallback, memo } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import FilesTable from "./files-table";
 import FilesTableSkeleton from "./files-table/FilesTableSkeleton";
 import CardViewSkeleton from "./card-view/CardViewSkeleton";
 import CardView from "./card-view";
-import IPFSNoEntriesFound from "./files-table/FilesNoEntriesFound";
+import FilesNoEntriesFound from "./files-table/FilesNoEntriesFound";
 import UploadStatusWidget from "./UploadStatusWidget";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import DeleteConfirmationDialog from "@/app/components/DeleteConfirmationDialog";
@@ -235,15 +228,11 @@ const DriveContent: FC<DriveContentProps> = ({
             if (files.length === 0 && folders.length > 0) {
               if (onAddFolderFromDrop) {
                 if (folders.length > 1) {
-                  toast.info(
-                    "Only the first dropped folder will be used.",
-                  );
+                  toast.info("Only the first dropped folder will be used.");
                 }
                 onAddFolderFromDrop(folders[0]);
               } else {
-                toast.error(
-                  "Folder uploads aren't available in this view.",
-                );
+                toast.error("Folder uploads aren't available in this view.");
               }
               return;
             }
@@ -251,7 +240,7 @@ const DriveContent: FC<DriveContentProps> = ({
             if (files.length > 0) {
               if (folders.length > 0) {
                 toast.info(
-                  "Folders were skipped. Use \"+ New Folder\" to upload a folder.",
+                  'Folders were skipped. Use "+ New Folder" to upload a folder.',
                 );
               }
               addButtonRef.current.openWithPaths(files);
@@ -342,7 +331,7 @@ const DriveContent: FC<DriveContentProps> = ({
       error
     ) {
       return (
-        <IPFSNoEntriesFound
+        <FilesNoEntriesFound
           isRecentFiles={isRecentFiles}
           isSyncPathConfigured={!isSyncPathEmpty}
           onStartSyncing={onSyncPathConfigured}

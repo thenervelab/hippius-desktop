@@ -46,7 +46,7 @@ export default function BackgroundContextMenu({
   };
 
   const menuItemClass =
-    "flex items-center gap-2 p-2 text-xs font-medium !text-grey-30 hover:!text-grey-40 hover:bg-grey-90 cursor-pointer";
+    "flex items-center gap-2 p-2 text-xs font-medium !text-grey-30 hover:!text-grey-40 hover:bg-grey-90 cursor-pointer dark:!text-grey-dark-200 dark:hover:!text-grey-light-100 dark:hover:bg-white/5";
 
   return createPortal(
     <div
@@ -54,10 +54,10 @@ export default function BackgroundContextMenu({
       style={menuStyle}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="bg-white border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] rounded-lg overflow-hidden p-0 min-w-[9.375rem]">
+      <div className="bg-white border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] rounded-lg overflow-hidden p-0 min-w-[9.375rem] dark:bg-black-500 dark:border-black-300 dark:shadow-[0px_12px_32px_8px_rgba(0,0,0,0.3)]">
         <div className="flex flex-col">
           <button
-            className={`${menuItemClass} border-b border-grey-80`}
+            className={`${menuItemClass} border-b border-grey-80 dark:border-black-300`}
             onClick={() => {
               onUploadFile();
               onClose();
@@ -68,7 +68,7 @@ export default function BackgroundContextMenu({
           </button>
 
           <button
-            className={`${menuItemClass} border-b border-grey-80`}
+            className={`${menuItemClass} border-b border-grey-80 dark:border-black-300`}
             onClick={() => {
               onAddFolder();
               onClose();

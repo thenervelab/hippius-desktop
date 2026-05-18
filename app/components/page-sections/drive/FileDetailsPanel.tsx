@@ -231,7 +231,7 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
 const FileDetailsPanel: React.FC = () => {
   const [file, setFile] = useAtom(fileDetailsPanelAtom);
   const isOpen = file !== null;
-  const { isLargeDesktop } = useBreakpoint();
+  const { isDesktop } = useBreakpoint();
 
   const onClose = useCallback(() => {
     setFile(null);
@@ -240,7 +240,7 @@ const FileDetailsPanel: React.FC = () => {
   // Inline panel — animated width slide on 2xl. Sits as a sibling of <main>
   // (in ResponsiveContent) so it stays pinned to the available screen height
   // and never scrolls with page content.
-  if (isLargeDesktop) {
+  if (isDesktop) {
     return (
       <AnimatePresence initial={false}>
         {isOpen && file && (
