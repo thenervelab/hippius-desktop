@@ -29,6 +29,16 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
     refetch,
   } = useMarketplaceCredits();
 
+  // isLoading: true only on the first fetch when no data is cached yet.
+  // isFetching: true on every background poll (every LIVE_DATA_REFRESH_MS).
+  // The skeleton must follow isLoading only — keepPreviousData already
+  // preserves the chart while a poll is in flight, so reacting to
+  // isFetching here would flash the skeleton every 6 s and look like
+  // the chart is stuck "loading". The RefreshButton still surfaces
+  // isFetching so users can see when a background refresh is happening.
+  const hasData = Array.isArray(credits);
+  const showSkeleton = isLoading && !hasData;
+
   const [isRefreshing, setIsRefreshing] = useState(false);
   const handleRefresh = useCallback(async () => {
     if (isRefreshing || isFetching) return;
@@ -46,8 +56,6 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
   );
 
   const usedTotal = useMemo(() => totalCreditsUsed(credits ?? []), [credits]);
-
-  const showSkeleton = isLoading || isFetching;
 
   return (
     <div
