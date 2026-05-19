@@ -5,12 +5,11 @@ import {
 } from "@tanstack/react-table";
 import * as TableModule from "@/components/ui/alt-table";
 import { FC, useMemo, useState, useEffect } from "react";
-import { Key } from "lucide-react";
 import { P } from "../../ui/typography";
 import { cn } from "@/lib/utils";
 import { getDesktopColumns } from "./ssh-keys-columns";
 import useSSHKeys from "@/app/lib/hooks/api/useSSHKeys";
-import NoDataFound from "../../ui/NoDataFound";
+import NoEntriesFound from "../../ui/NoEntriesFound";
 import type { VMTablePaginationState } from "../instances-table";
 
 export interface SSHKey {
@@ -120,7 +119,7 @@ const SSHKeysTable: FC<SSHKeysTableProps> = ({
 
   return (
     <div className="flex flex-col gap-y-8">
-      <TableModule.TableWrapper className=" duration-300 delay-300">
+      <TableModule.TableWrapper className="duration-300 delay-300 border-0 rounded-none">
         {error ? (
           <div className="w-full h-[50rem] flex items-center justify-center p-6">
             <P className="text-error-70 font-medium">
@@ -159,13 +158,13 @@ const SSHKeysTable: FC<SSHKeysTableProps> = ({
             </TableModule.TBody>
           </TableModule.Table>
         ) : !data || data.length === 0 ? (
-          <NoDataFound
-            icon={Key}
+          <NoEntriesFound
             title="No SSH Keys Found"
             description="You currently do not have any SSH keys. Create your first SSH key to securely access your virtual machines."
-            buttonText="New SSH Key"
-            onButtonClick={onCreateNew || (() => {})}
-            showButton={!!onCreateNew}
+            buttonText={onCreateNew ? "New SSH Key" : undefined}
+            onButtonClick={onCreateNew}
+            cardView={false}
+            className="!bg-white dark:!bg-black-600"
           />
         ) : (
           <TableModule.Table>

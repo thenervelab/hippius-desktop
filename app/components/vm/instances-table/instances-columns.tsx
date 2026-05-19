@@ -3,7 +3,6 @@ import { Instance } from "./index";
 import { MoreVertical } from "lucide-react";
 import React from "react";
 import StatusCell from "./status-cell";
-import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import TableActionMenu from "../../ui/alt-table/TableActionMenu";
 import { Icons } from "../../ui";
@@ -31,7 +30,7 @@ export const getDesktopColumns = (
   onReboot?: (instance: Instance) => void,
 ) => [
   columnHelper.accessor("name", {
-    header: "NAME",
+    header: "Name",
     cell: (d) => {
       const instance = d.row.original;
       const fullName = d.getValue();
@@ -39,22 +38,23 @@ export const getDesktopColumns = (
       return (
         <Link
           href={`/vm/instance-details?instanceId=${instance.id}`}
-          className="text-grey-20 text-base hover:text-primary-50 transition-colors cursor-pointer block truncate"
+          className="font-medium text-[12px] tracking-[-0.24px] text-[#1d1d1d] dark:text-white hover:text-primary-50 dark:hover:text-primary-50 transition-colors cursor-pointer block truncate"
           title={fullName}
         >
           {displayName}
         </Link>
       );
     },
-    size: 200,
-    minSize: 150,
+    size: 180,
+    minSize: 160,
     maxSize: 300,
     meta: {
-      cellClassName: "!max-w-[18.75rem] !min-w-[9.375rem] !w-[12.5rem]",
+      cellClassName: "max-w-[300px] min-w-[160px] w-[180px]",
+      headerClassName: "min-w-[160px] w-[180px]",
     },
   }),
   columnHelper.accessor("flavor", {
-    header: "TEMPLATE",
+    header: "Template",
     cell: (d) => {
       const flavorName = d.getValue();
       const flavor = flavors?.find(
@@ -78,17 +78,21 @@ export const getDesktopColumns = (
     },
   }),
   columnHelper.accessor("image", {
-    header: "IMAGE",
+    header: "Image",
     cell: (d) => {
       return <ImageCell value={parseImageName(d.getValue())} />;
     },
   }),
   columnHelper.accessor("nebula_ip", {
-    header: "NEBULA IP",
+    header: "Nebula IP",
     cell: (d) => {
       const ip = d.getValue();
       if (!ip) {
-        return <span className="text-grey-20 text-base">—</span>;
+        return (
+          <span className="font-medium text-[12px] tracking-[-0.24px] text-[#1d1d1d] dark:text-white">
+            —
+          </span>
+        );
       }
       return (
         <div className="overflow-hidden">
@@ -97,86 +101,99 @@ export const getDesktopColumns = (
             toastMessage="Nebula IP Copied Successfully!"
             copyAbleText={ip}
             numberOfCharactersFromStartAndEnd={30}
-            className="h-full font-sans text-xs font-semibold text-black-90 dark:text-grey-dark-200"
+            className="h-full font-medium text-[12px] tracking-[-0.24px] text-[#1d1d1d] dark:text-white"
           />
         </div>
       );
     },
   }),
   columnHelper.accessor("status", {
-    header: "STATUS",
+    header: "Status",
     cell: (d) => <StatusCell value={d.getValue()} />,
   }),
   columnHelper.accessor("created_at", {
-    header: "CREATED AT",
-    cell: (d) => formatDate(d.getValue()),
+    header: "Created At",
+    cell: (d) => (
+      <span className="font-medium text-[12px] tracking-[-0.24px] text-[#7d7d7d] dark:text-[#a3a3a3] whitespace-nowrap">
+        {formatDate(d.getValue())}
+      </span>
+    ),
   }),
   columnHelper.display({
     id: "actions",
     header: "",
+    size: 35,
+    minSize: 35,
+    maxSize: 35,
+    meta: {
+      cellClassName: "w-[35px] min-w-[35px] max-w-[35px] px-0",
+      headerClassName: "w-[35px] min-w-[35px] max-w-[35px] px-0",
+    },
     cell: ({ row }) => {
       const instance = row.original;
       return (
-        <TableActionMenu
-          dropdownTitle="Instance Options"
-          items={[
-            {
-              icon: <Icons.Code className="size-4" />,
-              itemTitle: "Instance Details",
-              isLink: true,
-              href: `/vm/instance-details?instanceId=${instance.id}`,
-            },
-            {
-              icon: <Icons.CodeCircle className="size-4" />,
-              itemTitle: "Access Console",
-              isLink: true,
-              href: `/vm/instance-details?instanceId=${instance.id}&tab=console`,
-            },
-            // {
-            //   icon: <Icons.CloudConnection className="size-4" />,
-            //   itemTitle: "SSH Connection",
-            //   disabled: true,
-            //   onItemClick: () => console.log("SSH connection"),
-            // },
-            {
-              icon:
-                instance.status.toLowerCase() === "stopped" ? (
-                  <Icons.PlayCircle className="size-4" />
-                ) : (
-                  <Icons.StopCircle className="size-4" />
-                ),
-              itemTitle:
-                instance.status.toLowerCase() === "stopped"
-                  ? "Start Instance"
-                  : "Stop Instance",
-              disabled:
-                instance.status.toLowerCase() !== "running" &&
-                instance.status.toLowerCase() !== "stopped",
-              onItemClick: () =>
-                onStartStop && onStartStop(instance, instance.status),
-            },
-            {
-              icon: <Icons.Refresh2 className="size-4" />,
-              itemTitle: "Reboot Instance",
-              disabled: instance.status.toLowerCase() !== "running",
-              onItemClick: () => onReboot && onReboot(instance),
-            },
-            {
-              icon: <Icons.Trash className="size-4" />,
-              itemTitle: "Delete Instance",
-              onItemClick: () => onDelete && onDelete(instance),
-              variant: "destructive",
-            },
-          ]}
-        >
-          <Button
-            variant="ghost"
-            size="auto"
-            className="h-8 w-16 p-0 text-grey-70 action-menu-area"
+        <div className="flex justify-center">
+          <TableActionMenu
+            dropdownTitle="Instance Options"
+            items={[
+              {
+                icon: <Icons.Code className="size-4" />,
+                itemTitle: "Instance Details",
+                isLink: true,
+                href: `/vm/instance-details?instanceId=${instance.id}`,
+              },
+              {
+                icon: <Icons.CodeCircle className="size-4" />,
+                itemTitle: "Access Console",
+                isLink: true,
+                href: `/vm/instance-details?instanceId=${instance.id}&tab=console`,
+              },
+              // {
+              //   icon: <Icons.CloudConnection className="size-4" />,
+              //   itemTitle: "SSH Connection",
+              //   disabled: true,
+              //   onItemClick: () => console.log("SSH connection"),
+              // },
+              {
+                icon:
+                  instance.status.toLowerCase() === "stopped" ? (
+                    <Icons.PlayCircle className="size-4" />
+                  ) : (
+                    <Icons.StopCircle className="size-4" />
+                  ),
+                itemTitle:
+                  instance.status.toLowerCase() === "stopped"
+                    ? "Start Instance"
+                    : "Stop Instance",
+                disabled:
+                  instance.status.toLowerCase() !== "running" &&
+                  instance.status.toLowerCase() !== "stopped",
+                onItemClick: () =>
+                  onStartStop && onStartStop(instance, instance.status),
+              },
+              {
+                icon: <Icons.Refresh2 className="size-4" />,
+                itemTitle: "Reboot Instance",
+                disabled: instance.status.toLowerCase() !== "running",
+                onItemClick: () => onReboot && onReboot(instance),
+              },
+              {
+                icon: <Icons.Trash className="size-4" />,
+                itemTitle: "Delete Instance",
+                onItemClick: () => onDelete && onDelete(instance),
+                variant: "destructive",
+              },
+            ]}
           >
-            <MoreVertical className="size-4" />
-          </Button>
-        </TableActionMenu>
+            <button
+              type="button"
+              aria-label={`Open actions for ${instance.name}`}
+              className="inline-flex size-5 items-center justify-center rounded-[6px] text-[#989898] transition-colors hover:bg-grey-90 hover:text-grey-20 dark:text-grey-dark-700 dark:hover:bg-black-primary-bg dark:hover:text-grey-dark-200 action-menu-area"
+            >
+              <MoreVertical className="size-4" />
+            </button>
+          </TableActionMenu>
+        </div>
       );
     },
   }),

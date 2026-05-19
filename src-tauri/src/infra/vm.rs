@@ -9,14 +9,21 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 /// Hardware configuration template for VM provisioning (vCPUs, RAM, disk).
+///
+/// `name` is the short flavor identifier (e.g. "spark", "vault") used by the
+/// frontend to match flavors and assign UI categories. `credits_per_hour`
+/// is forwarded as JSON to preserve whichever shape the upstream API uses
+/// (number or string) — both the Templates tab and instance-row lookup
+/// just stringify it for display.
 #[derive(Serialize, Deserialize)]
 pub struct VMFlavor {
     pub id: i64,
+    pub name: String,
     pub display_name: String,
     pub cpu_cores: i64,
     pub memory_mb: i64,
     pub data_disk_gb: i64,
-    pub credits_per_hour: String,
+    pub credits_per_hour: serde_json::Value,
     pub description: Option<String>,
 }
 

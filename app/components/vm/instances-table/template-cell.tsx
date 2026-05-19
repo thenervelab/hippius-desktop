@@ -9,12 +9,28 @@ export interface TemplateCellProps {
   };
 }
 
+const Divider = () => (
+  <span className="inline-block h-[14px] w-px shrink-0 bg-[#e3e3e3] dark:bg-[#313131]" />
+);
+
 const TemplateCell: React.FC<TemplateCellProps> = ({ value }) => {
   return (
-    <div className="text-grey-60 text-xs">
-      <span className="text-grey-20 font-semibold text-sm">{value.name}</span>
-      <span className="text-grey-70 mx-1.5">•</span>
-      {value.cpu} | {value.ram} RAM | {value.gpu}
+    <div className="flex items-center gap-[4px] min-w-0 overflow-hidden">
+      <span className="font-medium text-[12px] tracking-[-0.24px] text-[#1d1d1d] dark:text-white whitespace-nowrap shrink-0">
+        {value.name}
+      </span>
+      <span className="size-[2px] shrink-0 rounded-full bg-[#7d7d7d]" />
+      <span className="font-medium text-[12px] tracking-[-0.24px] text-[#7d7d7d] whitespace-nowrap shrink-0">
+        {value.cpu}
+      </span>
+      <Divider />
+      <span className="font-medium text-[12px] tracking-[-0.24px] text-[#7d7d7d] whitespace-nowrap shrink-0">
+        {value.ram} RAM
+      </span>
+      <Divider />
+      <span className="font-medium text-[12px] tracking-[-0.24px] text-[#7d7d7d] whitespace-nowrap shrink-0">
+        {value.gpu}
+      </span>
     </div>
   );
 };

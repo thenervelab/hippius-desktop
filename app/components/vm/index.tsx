@@ -28,6 +28,8 @@ import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
 import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
 import NoEntriesFound from "../ui/NoEntriesFound";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { cn } from "@/lib/utils";
+import SidebarVm from "../ui/icons/SidebarVm";
 const VM_DOCS_URL = "https://docs.hippius.com/use/virtual-machines";
 const VM_SSH_DOCS_URL =
   "https://docs.hippius.com/use/virtual-machines#ssh-keys";
@@ -156,7 +158,7 @@ const VirtualMachines: FC = () => {
   const tabs: TabOption[] = [
     {
       tabName: "Instances",
-      icon: <Icons.DriverRefresh className="size-3.5" />,
+      icon: <SidebarVm className="size-3.5" />,
     },
     {
       tabName: "Templates",
@@ -283,12 +285,12 @@ const VirtualMachines: FC = () => {
   ) : null;
 
   return (
-    <div className="w-full">
+    <div className="w-full px-3">
       {/* Top section header — PageHeader (title + info button) on the left,
           contextual Create button on the right. Mirrors the Files page
           treatment so VM / SSH Keys / Templates share the same header
           language as the rest of the app. */}
-      <div className="flex items-center w-full justify-between gap-4 flex-wrap p-3">
+      <div className="flex items-center w-full justify-between gap-4 flex-wrap py-3">
         <PageHeader
           hideStats
           title={getHeaderTitle()}
@@ -323,80 +325,53 @@ const VirtualMachines: FC = () => {
         )}
       </div>
 
-      {/* Tabs row — tab list on the left and search / refresh / mini
-          pagination on the right. Matches the Figma toolbar pattern. */}
-      <div className="flex items-center w-full justify-between gap-4 flex-wrap mb-4 px-3">
-        <TabList
-          tabs={tabs}
-          activeTab={activeTab}
-          onTabChange={handleTabChange}
-          gap="gap-[3.831px]"
-          width="w-auto"
-          height="h-6"
-          tabItemPaddingX="px-[6.13px]"
-          textClassName="font-medium text-[12px] tracking-[-0.24px] leading-[1.109]"
-          className="p-[3.065px]"
-        />
-        {showToolbarControls && (
-          <div className="flex items-center gap-x-3 flex-wrap">
-            <SearchInput
-              placeholder={toolbarSearchPlaceholder}
-              className="h-8 w-[207px]"
-              value={toolbarSearchTerm}
-              onChange={(value) => setToolbarSearchTerm(value)}
-            />
-            <RefreshButton
-              refetching={isToolbarRefetching}
-              onClick={handleToolbarRefresh}
-              className="!w-[30px] !h-[30px]"
-              iconClassName="!size-[14px]"
-            />
-            {miniPagination}
-          </div>
-        )}
-      </div>
-
-      {/* Display content based on activeTab */}
-      <div className="mt-3 px-3">
-        <div className="animate-in fade-in duration-300">
-          {isInstancesTab ? (
-            isBetaError(instancesError) ? (
-              <NoEntriesFound className="h-[31.25rem]">
-                <div className="text-center">
-                  <p className="text-grey-30 font-semibold mb-1 text-base">
-                    Feature Not Available
-                  </p>
-                  <p className="text-grey-50 text-sm max-w-md">
-                    {betaAccessMessage}
-                  </p>
-                </div>
-              </NoEntriesFound>
-            ) : (
-              <InstancesTable
-                onDeleteInstance={handleDeleteInstance}
-                onCreateNew={handleModalOpen}
-                flavors={flavors}
-                isFlavorsLoading={isFlavorsLoading}
-                searchTerm={debouncedInstanceSearchTerm}
-                onError={setInstancesError}
-                onRefetchChange={setRefetchInstances}
-                onFetchingChange={setIsInstancesFetching}
-                onPaginationChange={setInstancesPagination}
+      <div className=" mb-3 flex flex-col  bg-grey-light-300 dark:bg-black-primary-bg dark:border-black-300 shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)] overflow-hidden">
+        {/* Tabs row — tab list on the left and search / refresh / mini
+            pagination on the right. */}
+        <div className="flex items-center w-full justify-between gap-4 flex-wrap pt-2 pb-4 px-[10px] rounded-t-lg border border-b-0 border-grey-dark-100">
+          <TabList
+            tabs={tabs}
+            activeTab={activeTab}
+            onTabChange={handleTabChange}
+            gap="gap-[3.831px]"
+            width="w-auto"
+            height="h-6"
+            tabItemPaddingX="px-[6.13px]"
+            textClassName="font-medium text-[12px] tracking-[-0.24px] leading-[1.109]"
+            className="p-[3.065px]"
+          />
+          {showToolbarControls && (
+            <div className="flex items-center gap-x-3 flex-wrap">
+              <SearchInput
+                placeholder={toolbarSearchPlaceholder}
+                className="h-8 w-[207px]"
+                value={toolbarSearchTerm}
+                onChange={(value) => setToolbarSearchTerm(value)}
               />
-            )
-          ) : isSSHKeysTab ? (
-            <SSHKeysTable
-              onDeleteKey={handleDeleteSSHKey}
-              searchTerm={debouncedSSHKeySearchTerm}
-              refreshTrigger={sshKeyRefreshTrigger}
-              onRefetchingChange={setIsSSHKeyRefetching}
-              onCreateNew={handleModalOpen}
-              onPaginationChange={setSSHKeysPagination}
-            />
-          ) : isTemplatesTab ? (
-            <>
-              {isBetaError(flavorsError) ? (
-                <NoEntriesFound className="h-[31.25rem]">
+              <RefreshButton
+                refetching={isToolbarRefetching}
+                onClick={handleToolbarRefresh}
+                className="!w-[30px] !h-[30px]"
+                iconClassName="!size-[14px]"
+              />
+              {miniPagination}
+            </div>
+          )}
+        </div>
+
+        <div
+          className={cn(
+            "flex flex-col w-full overflow-hidden rounded-lg border border-grey-dark-100 -mt-2 bg-white dark:bg-black-600 dark:border-black-300",
+            isTemplatesTab && "p-4",
+          )}
+        >
+          <div className="animate-in fade-in duration-300">
+            {isInstancesTab ? (
+              isBetaError(instancesError) ? (
+                <NoEntriesFound
+                  cardView={false}
+                  className="!bg-white dark:!bg-black-600 h-[31.25rem]"
+                >
                   <div className="text-center">
                     <p className="text-grey-30 font-semibold mb-1 text-base">
                       Feature Not Available
@@ -406,41 +381,84 @@ const VirtualMachines: FC = () => {
                     </p>
                   </div>
                 </NoEntriesFound>
-              ) : flavorsLoading ? (
-                <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
-                  {Array.from({ length: 8 }).map((_, index) => (
-                    <VMTemplateCardSkeleton key={`skeleton-${index}`} />
-                  ))}
-                </div>
-              ) : templates.length === 0 ? (
-                <NoEntriesFound title="No templates available" />
               ) : (
-                <>
+                <InstancesTable
+                  onDeleteInstance={handleDeleteInstance}
+                  onCreateNew={handleModalOpen}
+                  flavors={flavors}
+                  isFlavorsLoading={isFlavorsLoading}
+                  searchTerm={debouncedInstanceSearchTerm}
+                  onError={setInstancesError}
+                  onRefetchChange={setRefetchInstances}
+                  onFetchingChange={setIsInstancesFetching}
+                  onPaginationChange={setInstancesPagination}
+                />
+              )
+            ) : isSSHKeysTab ? (
+              <SSHKeysTable
+                onDeleteKey={handleDeleteSSHKey}
+                searchTerm={debouncedSSHKeySearchTerm}
+                refreshTrigger={sshKeyRefreshTrigger}
+                onRefetchingChange={setIsSSHKeyRefetching}
+                onCreateNew={handleModalOpen}
+                onPaginationChange={setSSHKeysPagination}
+              />
+            ) : isTemplatesTab ? (
+              <>
+                {isBetaError(flavorsError) ? (
+                  <NoEntriesFound
+                    cardView={false}
+                    className="!bg-white dark:!bg-black-600 h-[31.25rem]"
+                  >
+                    <div className="text-center">
+                      <p className="text-grey-30 font-semibold mb-1 text-base">
+                        Feature Not Available
+                      </p>
+                      <p className="text-grey-50 text-sm max-w-md">
+                        {betaAccessMessage}
+                      </p>
+                    </div>
+                  </NoEntriesFound>
+                ) : flavorsLoading ? (
                   <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
-                    {templates.map((template) => (
-                      <VMTemplateCard
-                        key={template.id}
-                        template={template}
-                        showSetupButton={false}
-                        hideMenu={true}
-                      />
+                    {Array.from({ length: 8 }).map((_, index) => (
+                      <VMTemplateCardSkeleton key={`skeleton-${index}`} />
                     ))}
                   </div>
-                  {templatesTotalPages > 1 && (
-                    <TableModule.Pagination
-                      currentPage={templatesCurrentPage}
-                      totalPages={templatesTotalPages}
-                      setPage={setTemplatesPage}
-                    />
-                  )}
-                </>
-              )}
-            </>
-          ) : (
-            <div className="p-6 text-center text-grey-50">
-              {activeTab} content will appear here
-            </div>
-          )}
+                ) : templates.length === 0 ? (
+                  <NoEntriesFound
+                    title="No templates available"
+                    cardView={false}
+                    className="!bg-white dark:!bg-black-600"
+                  />
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
+                      {templates.map((template) => (
+                        <VMTemplateCard
+                          key={template.id}
+                          template={template}
+                          showSetupButton={false}
+                          hideMenu={true}
+                        />
+                      ))}
+                    </div>
+                    {templatesTotalPages > 1 && (
+                      <TableModule.Pagination
+                        currentPage={templatesCurrentPage}
+                        totalPages={templatesTotalPages}
+                        setPage={setTemplatesPage}
+                      />
+                    )}
+                  </>
+                )}
+              </>
+            ) : (
+              <div className="p-6 text-center text-grey-50">
+                {activeTab} content will appear here
+              </div>
+            )}
+          </div>
         </div>
       </div>
       {/* Delete Instance Confirmation */}

@@ -6,8 +6,7 @@ import VirtualMachineInfo from "./virtual-machine-info";
 import NetworksInfo from "./networks-info";
 import VncConsole from "./vnc-console";
 import useVMInstanceDetails from "@/app/lib/hooks/api/useVMInstanceDetails";
-import NoDataFound from "../../ui/NoDataFound";
-import { Server } from "lucide-react";
+import NoEntriesFound from "../../ui/NoEntriesFound";
 
 const InstanceDetails: React.FC = () => {
   const searchParams = useSearchParams();
@@ -37,13 +36,11 @@ const InstanceDetails: React.FC = () => {
 
   if (error) {
     return (
-      <NoDataFound
-        icon={Server}
+      <NoEntriesFound
         title="Failed to load instance"
         description={
           error instanceof Error ? error.message : "An error occurred"
         }
-        showButton={false}
       />
     );
   }
@@ -51,11 +48,9 @@ const InstanceDetails: React.FC = () => {
   // Only show "not found" after loading is complete and there's no data
   if (!loading && !instanceData) {
     return (
-      <NoDataFound
-        icon={Server}
+      <NoEntriesFound
         title="Instance not found"
         description="The instance you're looking for doesn't exist or has been deleted."
-        showButton={false}
       />
     );
   }
