@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { getDesktopColumns } from "./ssh-keys-columns";
 import useSSHKeys from "@/app/lib/hooks/api/useSSHKeys";
 import NoDataFound from "../../ui/NoDataFound";
+import type { VMTablePaginationState } from "../instances-table";
 
 export interface SSHKey {
   id: number;
@@ -27,6 +28,7 @@ interface SSHKeysTableProps {
   refreshTrigger?: number;
   onRefetchingChange?: (isRefetching: boolean) => void;
   onCreateNew?: () => void;
+  onPaginationChange?: (pagination: VMTablePaginationState) => void;
 }
 
 const SSHKeysTable: FC<SSHKeysTableProps> = ({
@@ -35,6 +37,7 @@ const SSHKeysTable: FC<SSHKeysTableProps> = ({
   refreshTrigger,
   onRefetchingChange,
   onCreateNew,
+  onPaginationChange,
 }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(10);
@@ -77,6 +80,33 @@ const SSHKeysTable: FC<SSHKeysTableProps> = ({
       onRefetchingChange(isRefetching);
     }
   }, [isRefetching, onRefetchingChange]);
+
+  const totalCount = apiData?.count ?? 0;
+  const safeTotalPages = Math.max(1, totalPages);
+
+  useEffect(() => {
+    onPaginationChange?.({
+      currentPage,
+      totalPages: safeTotalPages,
+      pageSize,
+      totalCount,
+      hasData: data.length > 0,
+      isLoading,
+      isRefetching,
+      isError: !!error,
+      setPage: setCurrentPage,
+    });
+  }, [
+    currentPage,
+    safeTotalPages,
+    pageSize,
+    totalCount,
+    data.length,
+    isLoading,
+    isRefetching,
+    error,
+    onPaginationChange,
+  ]);
 
   // Get columns with the deletion handler
   const desktopColumns = getDesktopColumns(onDeleteKey);
@@ -168,10 +198,10 @@ const SSHKeysTable: FC<SSHKeysTableProps> = ({
         )}
       </TableModule.TableWrapper>
 
-      {totalPages > 1 && (
+      {safeTotalPages > 1 && (
         <TableModule.Pagination
           currentPage={currentPage}
-          totalPages={totalPages}
+          totalPages={safeTotalPages}
           setPage={setCurrentPage}
         />
       )}

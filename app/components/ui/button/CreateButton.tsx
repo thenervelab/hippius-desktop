@@ -22,7 +22,8 @@ const CreateButton: FC<CreateButtonProps> = ({
       size="auto"
       onClick={onClick}
       className={cn(
-        "h-[33px] sm:h-[37px] rounded-[6px] px-[18px] text-[13px] sm:text-[16px] font-normal tracking-[-0.26px] sm:tracking-[-0.32px]",
+        "h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px]",
+        "font-geist text-[14px] tracking-[-0.28px] leading-[1.109]",
         className,
       )}
     >

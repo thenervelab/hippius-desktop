@@ -29,6 +29,18 @@ export interface Instance {
   created_at: string;
 }
 
+export interface VMTablePaginationState {
+  currentPage: number;
+  totalPages: number;
+  pageSize: number;
+  totalCount: number;
+  hasData: boolean;
+  isLoading: boolean;
+  isRefetching: boolean;
+  isError: boolean;
+  setPage: (page: number) => void;
+}
+
 interface InstancesTableProps {
   onDeleteInstance?: (instance: Instance) => void;
   onCreateNew?: () => void;
@@ -38,6 +50,7 @@ interface InstancesTableProps {
   onError?: (error: Error | null) => void;
   onRefetchChange?: (refetch: () => void) => void;
   onFetchingChange?: (isFetching: boolean) => void;
+  onPaginationChange?: (pagination: VMTablePaginationState) => void;
 }
 
 const InstancesTable: FC<InstancesTableProps> = ({
@@ -49,6 +62,7 @@ const InstancesTable: FC<InstancesTableProps> = ({
   onError,
   onRefetchChange,
   onFetchingChange,
+  onPaginationChange,
 }) => {
   const {
     data: instances,
@@ -85,12 +99,48 @@ const InstancesTable: FC<InstancesTableProps> = ({
   }, [instances, searchTerm]);
 
   // Use client-side pagination on filtered data
+  const pageSize = 10;
   const {
     paginatedData: data,
     setCurrentPage,
     currentPage,
     totalPages,
-  } = usePagination(filteredInstances, 10);
+  } = usePagination(filteredInstances, pageSize);
+  const safeTotalPages = Math.max(1, totalPages);
+
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, setCurrentPage]);
+
+  React.useEffect(() => {
+    if (currentPage > safeTotalPages) {
+      setCurrentPage(safeTotalPages);
+    }
+  }, [currentPage, safeTotalPages, setCurrentPage]);
+
+  React.useEffect(() => {
+    onPaginationChange?.({
+      currentPage,
+      totalPages: safeTotalPages,
+      pageSize,
+      totalCount: filteredInstances.length,
+      hasData: filteredInstances.length > 0,
+      isLoading: isLoading || !!isFlavorsLoading,
+      isRefetching: isFetching && !isLoading,
+      isError: !!error,
+      setPage: setCurrentPage,
+    });
+  }, [
+    currentPage,
+    safeTotalPages,
+    filteredInstances.length,
+    isLoading,
+    isFlavorsLoading,
+    isFetching,
+    error,
+    onPaginationChange,
+    setCurrentPage,
+  ]);
 
   // Instance control hooks
   const { handleStartStopInstance, StartStopConfirmModal } =
@@ -207,10 +257,10 @@ const InstancesTable: FC<InstancesTableProps> = ({
         )}
       </TableModule.TableWrapper>
 
-      {totalPages > 1 && (
+      {safeTotalPages > 1 && (
         <TableModule.Pagination
           currentPage={currentPage}
-          totalPages={totalPages}
+          totalPages={safeTotalPages}
           setPage={setCurrentPage}
         />
       )}
