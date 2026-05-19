@@ -22,33 +22,33 @@ interface CreditGraphProps {
 
 const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
   const [timeRange, setTimeRange] = useState<CreditChartRange>("last7days");
+  // Billing page only: opt out of the hook's default 6 s refetchInterval
+  // so the chart doesn't silently re-poll. Manual refresh via the
+  // RefreshButton still works through refetch().
   const {
     data: credits,
     isLoading,
-    isFetching,
     refetch,
-  } = useMarketplaceCredits();
-
-  // isLoading: true only on the first fetch when no data is cached yet.
-  // isFetching: true on every background poll (every LIVE_DATA_REFRESH_MS).
-  // The skeleton must follow isLoading only — keepPreviousData already
-  // preserves the chart while a poll is in flight, so reacting to
-  // isFetching here would flash the skeleton every 6 s and look like
-  // the chart is stuck "loading". The RefreshButton still surfaces
-  // isFetching so users can see when a background refresh is happening.
-  const hasData = Array.isArray(credits);
-  const showSkeleton = isLoading && !hasData;
+  } = useMarketplaceCredits(undefined, { refetchInterval: false });
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const handleRefresh = useCallback(async () => {
-    if (isRefreshing || isFetching) return;
+    if (isRefreshing) return;
     setIsRefreshing(true);
     try {
       await refetch();
     } finally {
       setIsRefreshing(false);
     }
-  }, [isRefreshing, isFetching, refetch]);
+  }, [isRefreshing, refetch]);
+
+  // Skeleton shows on (1) the first fetch when no data is cached yet, and
+  // (2) while the user-triggered refresh is in flight. Background
+  // isFetching is intentionally ignored — there's no automatic polling on
+  // this page anymore, and any other refetch source (window focus, etc.)
+  // should keep the existing data via keepPreviousData rather than flash.
+  const hasData = Array.isArray(credits);
+  const showSkeleton = (isLoading && !hasData) || isRefreshing;
 
   const chartData = useMemo(
     () => formatCreditsForChart(credits ?? [], timeRange),
@@ -78,7 +78,7 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
         <div className="flex items-center gap-2.5">
           <RefreshButton
             onClick={handleRefresh}
-            refetching={isRefreshing || isFetching}
+            refetching={isRefreshing}
             ariaLabel="Refresh credit overview"
           />
           <Select
