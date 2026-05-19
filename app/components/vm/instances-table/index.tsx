@@ -26,6 +26,7 @@ export interface Instance {
   flavor: string;
   image: string;
   public_ip: string | null;
+  nebula_ip: string | null;
   created_at: string;
 }
 
@@ -192,11 +193,12 @@ const InstancesTable: FC<InstancesTableProps> = ({
               <TableModule.SkeletonTableRow
                 rowClassName="h-[4.3125rem]"
                 rows={10}
-                columns={7}
+                columns={8}
                 columnWidths={[
                   "6.25rem",
                   "10rem",
                   "8.75rem",
+                  "6.25rem",
                   "6.25rem",
                   "6.25rem",
                   "5.625rem",

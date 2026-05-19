@@ -92,9 +92,10 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
                 flavor: instanceData.flavor.name,
                 image: instanceData.image,
                 public_ip: instanceData.public_ip,
+                nebula_ip: instanceData.nebula_ip || null,
                 created_at: instanceData.created_at,
               },
-              instanceData.status
+              instanceData.status,
             ),
         },
         {
@@ -110,6 +111,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
               flavor: instanceData.flavor.name,
               image: instanceData.image,
               public_ip: instanceData.public_ip,
+              nebula_ip: instanceData.nebula_ip || null,
               created_at: instanceData.created_at,
             }),
         },
@@ -125,6 +127,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
               flavor: instanceData.flavor.name,
               image: instanceData.image,
               public_ip: instanceData.public_ip,
+              nebula_ip: instanceData.nebula_ip || null,
               created_at: instanceData.created_at,
             }),
           variant: "destructive",
@@ -146,7 +149,9 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
     <>
       <InfoPanel
         title="Virtual Machine Information"
-        icon={<Icons.Driver className="size-[1.125rem] relative text-primary-50" />}
+        icon={
+          <Icons.Driver className="size-[1.125rem] relative text-primary-50" />
+        }
         headerAction={vmControlsMenu}
       >
         {/* Miner ID
@@ -249,7 +254,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
                 <TemplateItem
                   label="RAM"
                   value={`${(instanceData.flavor.memory_mb / 1024).toFixed(
-                    0
+                    0,
                   )} GB`}
                 />
                 <TemplateItem

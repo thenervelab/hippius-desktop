@@ -325,7 +325,7 @@ const VirtualMachines: FC = () => {
 
       {/* Tabs row — tab list on the left and search / refresh / mini
           pagination on the right. Matches the Figma toolbar pattern. */}
-      <div className="flex items-center w-full justify-between gap-4 flex-wrap mb-4">
+      <div className="flex items-center w-full justify-between gap-4 flex-wrap mb-4 px-3">
         <TabList
           tabs={tabs}
           activeTab={activeTab}
@@ -348,6 +348,8 @@ const VirtualMachines: FC = () => {
             <RefreshButton
               refetching={isToolbarRefetching}
               onClick={handleToolbarRefresh}
+              className="!w-[30px] !h-[30px]"
+              iconClassName="!size-[14px]"
             />
             {miniPagination}
           </div>
@@ -355,7 +357,7 @@ const VirtualMachines: FC = () => {
       </div>
 
       {/* Display content based on activeTab */}
-      <div className="mt-6">
+      <div className="mt-3 px-3">
         <div className="animate-in fade-in duration-300">
           {isInstancesTab ? (
             isBetaError(instancesError) ? (

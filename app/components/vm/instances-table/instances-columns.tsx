@@ -12,6 +12,7 @@ import { formatDate } from "@/app/lib/utils/formatters/formatDate";
 import ImageCell from "./image-cell";
 import TemplateCell from "./template-cell";
 import { VMFlavorResponse } from "@/app/lib/hooks/api/useVMFlavors";
+import { CopyableCell } from "../../ui/alt-table/CopyableCell";
 
 const columnHelper = createColumnHelper<Instance>();
 
@@ -27,7 +28,7 @@ export const getDesktopColumns = (
   flavors: VMFlavorResponse[] | undefined,
   onDelete?: (instance: Instance) => void,
   onStartStop?: (instance: Instance, status: string) => void,
-  onReboot?: (instance: Instance) => void
+  onReboot?: (instance: Instance) => void,
 ) => [
   columnHelper.accessor("name", {
     header: "NAME",
@@ -57,7 +58,7 @@ export const getDesktopColumns = (
     cell: (d) => {
       const flavorName = d.getValue();
       const flavor = flavors?.find(
-        (f) => f.name.toLowerCase() === flavorName.toLowerCase()
+        (f) => f.name.toLowerCase() === flavorName.toLowerCase(),
       );
 
       if (!flavor) {
@@ -80,6 +81,26 @@ export const getDesktopColumns = (
     header: "IMAGE",
     cell: (d) => {
       return <ImageCell value={parseImageName(d.getValue())} />;
+    },
+  }),
+  columnHelper.accessor("nebula_ip", {
+    header: "NEBULA IP",
+    cell: (d) => {
+      const ip = d.getValue();
+      if (!ip) {
+        return <span className="text-grey-20 text-base">—</span>;
+      }
+      return (
+        <div className="overflow-hidden">
+          <CopyableCell
+            title="Copy Nebula IP"
+            toastMessage="Nebula IP Copied Successfully!"
+            copyAbleText={ip}
+            numberOfCharactersFromStartAndEnd={30}
+            className="h-full font-sans text-xs font-semibold text-black-90 dark:text-grey-dark-200"
+          />
+        </div>
+      );
     },
   }),
   columnHelper.accessor("status", {

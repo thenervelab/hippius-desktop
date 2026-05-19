@@ -49,13 +49,13 @@ const TabItem: React.FC<TabItemProps> = ({
     <div
       data-tab-label={dataLabel ?? label}
       className={cn(
-        "flex shrink-0 cursor-pointer items-center justify-center rounded-[3px] transition-opacity duration-200",
+        "flex shrink-0 cursor-pointer items-center justify-center rounded-[3.065px] transition-opacity duration-200 border-[0.766px]",
         paddingX,
         paddingY ? paddingY : height,
         iconOnly ? "w-[2.5rem]" : width,
         isActive
-          ? "bg-grey-light-300 border border-grey-dark-100 text-black-900 shadow-[0px_12.26px_3.831px_0px_rgba(0,0,0,0.00),0px_8.429px_3.065px_0px_rgba(0,0,0,0.01),0px_4.597px_3.065px_0px_rgba(0,0,0,0.04),0px_2.299px_2.299px_0px_rgba(0,0,0,0.08),0px_0.766px_0.766px_0px_rgba(0,0,0,0.09)] dark:bg-black-primary-bg dark:border-black-300 dark:text-white"
-          : "opacity-50 text-black-900 hover:opacity-75 dark:text-white",
+          ? "bg-grey-light-300 border-grey-dark-100 text-black-900 shadow-[0px_12.26px_3.831px_0px_rgba(0,0,0,0.00),0px_8.429px_3.065px_0px_rgba(0,0,0,0.01),0px_4.597px_3.065px_0px_rgba(0,0,0,0.04),0px_2.299px_2.299px_0px_rgba(0,0,0,0.08),0px_0.766px_0.766px_0px_rgba(0,0,0,0.09)] dark:bg-black-primary-bg dark:border-black-300 dark:text-white"
+          : "border-transparent opacity-50 text-black-900 hover:opacity-75 dark:text-white",
         tabItemClassName,
       )}
       onClick={onClick}

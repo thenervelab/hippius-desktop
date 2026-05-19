@@ -94,6 +94,7 @@ const InstanceDetails: React.FC = () => {
                     flavor: instanceData.flavor.name,
                     image: instanceData.image,
                     public_ip: instanceData.public_ip,
+                    nebula_ip: instanceData.nebula_ip || null,
                     created_at: instanceData.created_at,
                   }
                 : undefined
