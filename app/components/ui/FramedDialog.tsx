@@ -66,7 +66,7 @@ export function FramedDialog({
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
       <Dialog.Portal>
         {/* Backdrop */}
-        <Dialog.Overlay className="fixed inset-0 z-[60] bg-white/[0.4] backdrop-blur-[20px] dark:bg-[rgba(4,4,4,0.2)] dark:backdrop-blur-[20px]" />
+        <Dialog.Overlay className="fixed inset-0 z-[60] bg-white/70 backdrop-blur-[5.75px] dark:bg-[rgba(4, 4, 4, 0.4)] dark:backdrop-blur-[11.5px]" />
 
         {/* Full-screen positioner — click outside closes */}
         <Dialog.Content
@@ -82,7 +82,10 @@ export function FramedDialog({
             borderClassName={borderClassName}
             contentClassName="flex justify-center"
             shellClassName={cn("w-full min-w-0", maxWidth)}
-            cardClassName={cn("w-full min-w-0 max-w-full gap-0 p-0", cardClassName)}
+            cardClassName={cn(
+              "w-full min-w-0 max-w-full gap-0 p-0",
+              cardClassName,
+            )}
             stopClickPropagation
             addDotWithBlurryEffect
             isDialog
@@ -106,65 +109,73 @@ export function FramedDialog({
                 </button>
               </Dialog.Close>
 
-            {/* Scrollable inner area */}
-            <div
-              className={cn(
-                "mx-auto w-full max-h-[85vh] overflow-y-auto px-4 pb-5 pt-4",
-                "sm:max-h-[calc(100vh-200px)] sm:px-5",
-                contentClassName,
-              )}
-            >
-              {/* Icon badge with WebGL grid background */}
-              <div className="relative flex size-12 sm:size-14 items-center justify-center overflow-hidden rounded-[4px] dark:rounded-full mx-auto mb-3">
-                {/* Light mode: WebGL canvas grid */}
-                <GraphSheetContainer
-                  majorCell={{ lineColor: [31, 80, 189, 1.0], lineWidth: 2, cellDim: 200 }}
-                  minorCell={{ lineColor: [49, 103, 211, 1.0], lineWidth: 1, cellDim: 20 }}
-                  className="absolute inset-0 size-full opacity-30 dark:hidden"
-                />
-
-                {/* Dark mode: CSS grid with radial fade mask */}
-                <div
-                  className="absolute inset-0 size-full hidden dark:block"
-                  style={{
-                    backgroundImage:
-                      "linear-gradient(to right, rgba(31,80,189,0.85) 1px, transparent 1px), linear-gradient(to bottom, rgba(31,80,189,0.85) 1px, transparent 1px)",
-                    backgroundSize: "17px 17px",
-                    maskImage:
-                      "radial-gradient(55% 70% at 50% 50%, black 0%, transparent 100%)",
-                    WebkitMaskImage:
-                      "radial-gradient(55% 70% at 50% 50%, black 0%, transparent 100%)",
-                  }}
-                />
-
-                {/* Light mode gradient wash */}
-                <div className="bg-gradient-to-b from-white/80 via-white/40 to-transparent absolute inset-0 dark:hidden" />
-
-                {/* Icon container */}
-                <div
-                  className={cn(
-                    "relative flex size-8 items-center justify-center rounded-lg",
-                    iconBgClassName,
-                  )}
-                >
-                  {icon}
-                </div>
-              </div>
-
-              {/* Title */}
-              <Dialog.Title
+              {/* Scrollable inner area */}
+              <div
                 className={cn(
-                  "mb-2 text-center text-[22px] font-semibold leading-tight text-[#0a0a0a] dark:text-white",
-                  "sm:text-[28px] sm:leading-9",
-                  titleClassName,
+                  "mx-auto w-full max-h-[85vh] overflow-y-auto px-4 pb-5 pt-4",
+                  "sm:max-h-[calc(100vh-200px)] sm:px-5",
+                  contentClassName,
                 )}
               >
-                {title}
-              </Dialog.Title>
+                {/* Icon badge with WebGL grid background */}
+                <div className="relative flex size-12 sm:size-14 items-center justify-center overflow-hidden rounded-[4px] dark:rounded-full mx-auto mb-3">
+                  {/* Light mode: WebGL canvas grid */}
+                  <GraphSheetContainer
+                    majorCell={{
+                      lineColor: [31, 80, 189, 1.0],
+                      lineWidth: 2,
+                      cellDim: 200,
+                    }}
+                    minorCell={{
+                      lineColor: [49, 103, 211, 1.0],
+                      lineWidth: 1,
+                      cellDim: 20,
+                    }}
+                    className="absolute inset-0 size-full opacity-30 dark:hidden"
+                  />
 
-              {/* Body */}
-              {children}
-            </div>
+                  {/* Dark mode: CSS grid with radial fade mask */}
+                  <div
+                    className="absolute inset-0 size-full hidden dark:block"
+                    style={{
+                      backgroundImage:
+                        "linear-gradient(to right, rgba(31,80,189,0.85) 1px, transparent 1px), linear-gradient(to bottom, rgba(31,80,189,0.85) 1px, transparent 1px)",
+                      backgroundSize: "17px 17px",
+                      maskImage:
+                        "radial-gradient(55% 70% at 50% 50%, black 0%, transparent 100%)",
+                      WebkitMaskImage:
+                        "radial-gradient(55% 70% at 50% 50%, black 0%, transparent 100%)",
+                    }}
+                  />
+
+                  {/* Light mode gradient wash */}
+                  <div className="bg-gradient-to-b from-white/80 via-white/40 to-transparent absolute inset-0 dark:hidden" />
+
+                  {/* Icon container */}
+                  <div
+                    className={cn(
+                      "relative flex size-8 items-center justify-center rounded-lg",
+                      iconBgClassName,
+                    )}
+                  >
+                    {icon}
+                  </div>
+                </div>
+
+                {/* Title */}
+                <Dialog.Title
+                  className={cn(
+                    "mb-2 text-center text-[22px] font-semibold leading-tight text-[#0a0a0a] dark:text-white",
+                    "sm:text-[28px] sm:leading-9",
+                    titleClassName,
+                  )}
+                >
+                  {title}
+                </Dialog.Title>
+
+                {/* Body */}
+                {children}
+              </div>
             </div>
           </BackgroundContainer>
         </Dialog.Content>
