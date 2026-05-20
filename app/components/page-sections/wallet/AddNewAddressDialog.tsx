@@ -1,12 +1,26 @@
-import * as Dialog from "@radix-ui/react-dialog";
+"use client";
+
 import React, { useState } from "react";
-import { Label } from "@/components/ui/label";
-import DialogContainer from "@/components/ui/DialogContainer";
-import { AbstractIconWrapper, CardButton, Icons, Input } from "@/components/ui";
 import { AlertCircle } from "lucide-react";
 import { toast } from "sonner";
+
+import { Label } from "@/components/ui/label";
+import { Input, Icons } from "@/components/ui";
+import { cn } from "@/lib/utils";
+
 import { addContact } from "@/app/lib/helpers/addressBookDb";
 import { useAddressValidation } from "@/lib/hooks/useAddressValidation";
+import {
+  WalletDialogShell,
+  WalletDialogFooter,
+} from "./shared/WalletDesign";
+
+/* Add New Address dialog.
+ *
+ * Phase 4 of the wallet redesign — ports the address-book add flow
+ * from the legacy DialogContainer onto WalletDialogShell. Persistence
+ * already lives in Rust SQLite via add_contact, so this surface is
+ * purely a UI rewrite (same hook wiring, same validation). */
 
 interface AddNewAddressDialogProps {
   open: boolean;
@@ -24,7 +38,7 @@ const AddNewAddressDialog: React.FC<AddNewAddressDialogProps> = ({
     address,
     setAddress,
     addressError,
-    handleAddressChange: onAddressChange,
+    handleAddressChange,
     validateAddress,
     clearAddressError,
   } = useAddressValidation();
@@ -39,7 +53,6 @@ const AddNewAddressDialog: React.FC<AddNewAddressDialogProps> = ({
     } else {
       setNameError(undefined);
     }
-
     const addressValid = await validateAddress();
     return nameValid && addressValid;
   };
@@ -47,32 +60,6 @@ const AddNewAddressDialog: React.FC<AddNewAddressDialogProps> = ({
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setName(e.target.value);
     if (nameError) setNameError(undefined);
-  };
-
-  const handleAddressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    onAddressChange(e.target.value);
-  };
-
-  const handleSave = async () => {
-    if (!(await validateForm())) return;
-
-    setLoading(true);
-    try {
-      const success = await addContact(name, address);
-
-      if (success) {
-        toast.success("Address saved successfully");
-        onAddSuccess?.();
-        handleClose();
-      } else {
-        toast.error("Failed to save address");
-      }
-    } catch (error) {
-      toast.error("An error occurred while saving the address");
-      console.error("Error saving address:", error);
-    } finally {
-      setLoading(false);
-    }
   };
 
   const handleClose = () => {
@@ -83,116 +70,103 @@ const AddNewAddressDialog: React.FC<AddNewAddressDialogProps> = ({
     onClose();
   };
 
+  const handleSave = async () => {
+    if (!(await validateForm())) return;
+    setLoading(true);
+    try {
+      const success = await addContact(name, address);
+      if (success) {
+        toast.success("Address saved successfully");
+        onAddSuccess?.();
+        handleClose();
+      } else {
+        toast.error("Failed to save address");
+      }
+    } catch (e) {
+      toast.error("An error occurred while saving the address");
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <Dialog.Root
+    <WalletDialogShell
       open={open}
-      onOpenChange={(isOpen) => !isOpen && handleClose()}
+      onClose={handleClose}
+      title="Add New Address"
+      description="Save a wallet address to your address book for faster transfers later."
+      icon={<Icons.DocumentText className="size-4 text-white" />}
+      iconTitleGap="mt-4 mb-0"
+      titleDescriptionGap="mt-0"
+      maxWidth="max-w-[500px]"
+      contentClassName="px-4 pb-4 pt-5 sm:w-[420px] sm:px-5 sm:pb-5"
+      footer={
+        <WalletDialogFooter
+          primaryLabel={loading ? "Saving..." : "Save Address"}
+          secondaryLabel="Cancel"
+          onPrimaryClick={handleSave}
+          onSecondaryClick={handleClose}
+          primaryLoading={loading}
+          secondaryDisabled={loading}
+        />
+      }
     >
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit">
-        <Dialog.Title className="sr-only">Add New Address</Dialog.Title>
-        {/* Mobile accent line */}
-        <div className="h-4 bg-primary-50 md:hidden" />
-
-        <div className="px-4">
-          {/* Desktop Header */}
-          <div className="hidden md:flex flex-col items-center justify-center pb-4 pt-4 gap-2">
-            <div className="flex items-center mb-2 p-2">
-              <AbstractIconWrapper className="size-8 @sm:size-10">
-                <Icons.DocumentText className="absolute size-4 @sm:size-6 text-primary-50" />
-              </AbstractIconWrapper>
+      <div className="space-y-3.5">
+        <div className="space-y-2">
+          <Label
+            htmlFor="contact-name"
+            className="text-[14px] font-medium leading-[normal] tracking-[-0.28px] text-[#7d7d7d]"
+          >
+            Name
+          </Label>
+          <Input
+            id="contact-name"
+            placeholder="Enter a name"
+            type="text"
+            value={name}
+            onChange={handleNameChange}
+            aria-invalid={!!nameError}
+            disabled={loading}
+            className={cn("h-12 text-base font-medium", nameError && "border-error-50")}
+          />
+          {nameError ? (
+            <div className="flex items-center gap-2 text-error-70 text-sm font-medium">
+              <AlertCircle className="size-4" />
+              <span>{nameError}</span>
             </div>
-            <span className="text-center text-2xl text-grey-10 font-medium">
-              Add New Address
-            </span>
-          </div>
-
-          {/* Mobile Header */}
-          <div className="flex py-4 items-center justify-between text-grey-10 md:hidden">
-            <span className="text-lg font-medium">Add New Address</span>
-            <button onClick={handleClose}>
-              <Icons.CloseCircle className="size-6" />
-            </button>
-          </div>
-
-          {/* Form Fields */}
-          <div className="flex flex-col gap-4 mb-4">
-            {/* Name */}
-            <div className="flex flex-col gap-2 w-full text-grey-10">
-              <Label
-                htmlFor="name"
-                className="text-sm font-medium text-grey-70"
-              >
-                Name
-              </Label>
-              <Input
-                id="name"
-                placeholder="Enter a name"
-                type="text"
-                value={name}
-                onChange={handleNameChange}
-                className={`border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${nameError ? "border-error-50" : ""
-                  }`}
-                disabled={loading}
-              />
-              {nameError && (
-                <div className="flex items-center gap-2 text-error-70 text-sm font-medium mt-1">
-                  <AlertCircle className="size-4" />
-                  <span>{nameError}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Address */}
-            <div className="flex flex-col gap-2 w-full text-grey-10">
-              <Label
-                htmlFor="address"
-                className="text-sm font-medium text-grey-70"
-              >
-                Address
-              </Label>
-              <Input
-                id="address"
-                placeholder="Enter wallet address"
-                type="text"
-                value={address}
-                onChange={handleAddressChange}
-                className={`border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${addressError ? "border-error-50" : ""
-                  }`}
-                disabled={loading}
-              />
-              {addressError && (
-                <div className="flex items-center gap-2 text-error-70 text-sm font-medium mt-1">
-                  <AlertCircle className="size-4" />
-                  <span>{addressError}</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex flex-col gap-4 mt-4 mb-4">
-            <CardButton
-              className="bg-primary-50 text-[1.125rem] hover:bg-primary-40 transition text-white w-full font-medium"
-              variant="dialog"
-              onClick={handleSave}
-              disabled={loading}
-              loading={loading}
-            >
-              {loading ? "Saving..." : "Save Address"}
-            </CardButton>
-
-            <CardButton
-              className="w-full text-[1.125rem]"
-              variant="secondary"
-              onClick={handleClose}
-              disabled={loading}
-            >
-              Cancel
-            </CardButton>
-          </div>
+          ) : null}
         </div>
-      </DialogContainer>
-    </Dialog.Root>
+
+        <div className="space-y-2">
+          <Label
+            htmlFor="contact-address"
+            className="text-[14px] font-medium leading-[normal] tracking-[-0.28px] text-[#7d7d7d]"
+          >
+            Address
+          </Label>
+          <Input
+            id="contact-address"
+            placeholder="Enter wallet address"
+            type="text"
+            value={address}
+            onChange={(e) => handleAddressChange(e.target.value)}
+            aria-invalid={!!addressError}
+            disabled={loading}
+            className={cn(
+              "h-12 text-base font-medium",
+              addressError && "border-error-50",
+            )}
+          />
+          {addressError ? (
+            <div className="flex items-center gap-2 text-error-70 text-sm font-medium">
+              <AlertCircle className="size-4" />
+              <span>{addressError}</span>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </WalletDialogShell>
   );
 };
 
