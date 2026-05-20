@@ -6,17 +6,203 @@ import {
   Check,
   ChevronDown,
   Copy,
+  ExternalLink,
   Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { open as openShell } from "@tauri-apps/plugin-shell";
 
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { HardDriveUpload } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { getDiagonalTextureBackgroundImage } from "@/lib/ui-textures";
 
 interface ActiveWalletSelectorProps {
   className?: string;
+}
+
+/* ── 4-corner dot decoration — positioned OUTSIDE the border boundary ── */
+function CornerDots({
+  variant = "grey",
+  show = false,
+}: {
+  variant?: "grey" | "blue";
+  show?: boolean;
+}) {
+  const color =
+    variant === "blue"
+      ? "border-[#3167dd] bg-[#3167dd]/10 dark:border-primary-brand-dark dark:bg-primary-brand-dark/10"
+      : "border-[#c9c9c9] bg-white dark:border-[#555] dark:bg-black-600";
+  const visibility = show ? "opacity-100" : "opacity-0 group-hover/row:opacity-100";
+  const dot =
+    "pointer-events-none absolute size-[4px] rounded-[1px] border transition-opacity";
+  return (
+    <>
+      <span className={cn(dot, "-left-[5px] -top-[5px]", color, visibility)} />
+      <span className={cn(dot, "-right-[5px] -top-[5px]", color, visibility)} />
+      <span className={cn(dot, "-bottom-[5px] -left-[5px]", color, visibility)} />
+      <span className={cn(dot, "-bottom-[5px] -right-[5px]", color, visibility)} />
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Wallet Row  (inside dropdown) — mirrors hippius-web WalletRow
+   ─ active:  blue border + blue bg + corner dots always visible
+   ─ default: grey border, corner dots appear on hover, plus a
+              diagonal-stripe texture wash
+   ═══════════════════════════════════════════════════════════════ */
+function WalletRow({
+  name,
+  address,
+  fullAddress,
+  isActive,
+  onSelect,
+  onExplorer,
+}: {
+  name: string;
+  address: string;
+  fullAddress: string;
+  isActive: boolean;
+  onSelect: () => void;
+  onExplorer: (e: React.MouseEvent) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyAddress = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(fullAddress);
+      setCopied(true);
+      toast.success("Address copied to clipboard");
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("Failed to copy address");
+    }
+  };
+
+  return (
+    <div
+      onClick={isActive ? undefined : onSelect}
+      className={cn(
+        "group/row relative flex cursor-pointer items-center justify-between overflow-visible border p-3 transition-all",
+        isActive
+          ? "rounded-[6px] border-[#3167dd] bg-[#3167dd]/[0.12] dark:border-primary-brand-dark dark:bg-primary-brand-dark/[0.12]"
+          : "rounded-[6px] border-[#e3e3e3] bg-white hover:rounded-[62px] hover:bg-[#f8f8f8] dark:border-black-300 dark:bg-black-600 dark:hover:border-black-200 dark:hover:bg-black-500",
+      )}
+    >
+      {/* Diagonal lines texture on hover */}
+      {!isActive && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 -z-[1] rounded-[inherit] opacity-0 transition-opacity duration-200 group-hover/row:opacity-100"
+          style={{
+            backgroundImage: getDiagonalTextureBackgroundImage({
+              color: "rgba(0,0,0,0.03)",
+              gap: 6,
+              lineWidth: 1,
+            }),
+          }}
+        />
+      )}
+
+      {/* Wallet info */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span
+          className={cn(
+            "truncate text-[13px] font-medium leading-[20px] tracking-[-0.26px]",
+            isActive
+              ? "text-[#3167dd] dark:text-primary-brand-dark"
+              : "text-[#0a0a0a] dark:text-grey-light-100",
+          )}
+        >
+          {name || "Unnamed"}
+        </span>
+        <div className="flex w-fit items-center gap-1.5">
+          <TooltipProvider delayDuration={0}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className={cn(
+                    "cursor-default text-[11px] leading-normal tracking-[-0.2px]",
+                    isActive
+                      ? "text-[#3167dd]/70 dark:text-primary-brand-dark/70"
+                      : "text-[#7d7d7d] dark:text-[#9a9a9a]",
+                  )}
+                >
+                  {address}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent
+                side="bottom"
+                align="start"
+                sideOffset={6}
+                className="rounded-lg border border-[#e3e3e3] bg-white px-3 py-2 font-mono text-[11px] text-[#4f4f4f] shadow-md dark:border-black-300 dark:bg-black-600 dark:text-grey-light-100"
+              >
+                {fullAddress}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <button
+            onClick={handleCopyAddress}
+            className={cn(
+              "shrink-0 rounded p-0.5 transition-colors",
+              isActive
+                ? "text-[#3167dd]/50 hover:text-[#3167dd] dark:text-primary-brand-dark/50 dark:hover:text-primary-brand-dark"
+                : "text-[#b0b0b0] hover:bg-[#f0f0f0] hover:text-[#4f4f4f] dark:text-[#6a6a6a] dark:hover:bg-black-400 dark:hover:text-grey-light-100",
+            )}
+            aria-label="Copy address"
+          >
+            {copied ? (
+              <Check className="size-3 text-[#22c55e]" />
+            ) : (
+              <Copy className="size-3" />
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="ml-3 flex shrink-0 items-center gap-2.5">
+        {isActive ? (
+          <span className="flex h-[21px] items-center rounded-[4px] border border-[#3167dd] bg-[#3167dd]/20 px-2 text-[10px] font-medium text-[#3167dd] dark:border-primary-brand-dark dark:bg-primary-brand-dark/20 dark:text-primary-brand-dark">
+            Active wallet
+          </span>
+        ) : (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect();
+            }}
+            className="flex h-[21px] items-center rounded-[4px] border border-[#cecece] bg-[#eaeaea] px-2 text-[10px] font-medium text-[#0a0a0a]/60 opacity-90 transition-colors hover:bg-[#e0e0e0] dark:border-black-300 dark:bg-black-400 dark:text-white/60 dark:hover:bg-black-300"
+          >
+            Switch wallet
+          </button>
+        )}
+        <button
+          onClick={onExplorer}
+          className={cn(
+            "flex size-[21px] items-center justify-center rounded-[4px] border transition-colors",
+            isActive
+              ? "border-[#3167dd] bg-[#3167dd]/[0.14] text-[#3167dd] opacity-70 hover:opacity-100 dark:border-primary-brand-dark dark:bg-primary-brand-dark/[0.14] dark:text-primary-brand-dark"
+              : "border-[#cecece] bg-[#eaeaea] text-[#0a0a0a]/60 opacity-90 hover:bg-[#e0e0e0] dark:border-black-300 dark:bg-black-400 dark:text-white/60 dark:hover:bg-black-300",
+          )}
+          aria-label="Open in explorer"
+        >
+          <ExternalLink className="size-[11px]" />
+        </button>
+      </div>
+
+      <CornerDots variant={isActive ? "blue" : "grey"} show={isActive} />
+    </div>
+  );
 }
 
 const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
@@ -32,7 +218,6 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
   } = useLocalWallet();
 
   const [isOpen, setIsOpen] = useState(false);
-  const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -67,18 +252,6 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
       toast.success("Switched wallet");
     } else {
       toast.error("Failed to switch wallet");
-    }
-  };
-
-  const handleCopy = async (address: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(address);
-      setCopiedAddress(address);
-      toast.success("Address copied");
-      setTimeout(() => setCopiedAddress(null), 2000);
-    } catch {
-      toast.error("Failed to copy address");
     }
   };
 
@@ -272,72 +445,47 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
       {isOpen && (
         <div
           className={cn(
-            "absolute right-0 top-full mt-1 z-50 min-w-[280px] rounded-[8px] border shadow-lg",
-            "border-grey-dark-100 bg-white dark:border-black-300 dark:bg-black-primary-bg",
+            "absolute right-0 top-full mt-2 z-50 w-[380px] rounded-[12px] border shadow-lg overflow-visible",
+            "border-[#e3e3e3] bg-white dark:border-black-300 dark:bg-black-600",
           )}
           role="listbox"
         >
-          <div className="py-1 max-h-[280px] overflow-y-auto custom-scrollbar-thin">
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-[#e3e3e3] px-4 py-3 dark:border-black-300">
+            <span className="font-geist text-[14px] font-semibold text-[#0a0a0a] dark:text-grey-light-100">
+              Your Wallets
+            </span>
+          </div>
+
+          {/* Wallet rows */}
+          <div className="max-h-[480px] space-y-3 overflow-y-auto p-3">
             {wallets.map((wallet) => {
               const isActive = activeWallet.id === wallet.id;
-              const isCopied = copiedAddress === wallet.address;
               return (
-                <button
+                <WalletRow
                   key={wallet.id}
-                  type="button"
-                  onClick={() => handleSwitch(wallet.id)}
-                  className={cn(
-                    "w-full flex items-center justify-between gap-3 px-3 py-2",
-                    "transition-colors hover:bg-grey-light-700 dark:hover:bg-black-300",
-                    isActive && "bg-primary-40/[0.06] dark:bg-primary-brand-dark/[0.08]",
-                  )}
-                  role="option"
-                  aria-selected={isActive}
-                >
-                  <div className="flex flex-col items-start min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      {isActive ? (
-                        <span className="size-1.5 rounded-full bg-primary-40 dark:bg-primary-brand-dark" />
-                      ) : (
-                        <span className="size-1.5 rounded-full bg-grey-80 dark:bg-grey-dark-700" />
-                      )}
-                      <span className="text-[13px] font-medium text-grey-10 dark:text-grey-light-100 truncate">
-                        {wallet.name}
-                      </span>
-                    </div>
-                    <span className="font-mono text-[11px] text-grey-50 dark:text-grey-dark-600 mt-0.5 truncate">
-                      {truncateAddress(wallet.address, 6, 5)}
-                    </span>
-                  </div>
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    aria-label="Copy address"
-                    className="shrink-0 flex items-center justify-center size-7 rounded-[6px] hover:bg-grey-light-800 dark:hover:bg-black-500 text-grey-50 dark:text-grey-dark-600"
-                    onClick={(e) => handleCopy(wallet.address, e)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        handleCopy(wallet.address, e as unknown as React.MouseEvent);
-                      }
-                    }}
-                  >
-                    {isCopied ? (
-                      <Check className="size-3.5 text-success-30" />
-                    ) : (
-                      <Copy className="size-3.5" />
-                    )}
-                  </span>
-                </button>
+                  name={wallet.name}
+                  address={truncateAddress(wallet.address, 8, 6)}
+                  fullAddress={wallet.address}
+                  isActive={isActive}
+                  onSelect={() => handleSwitch(wallet.id)}
+                  onExplorer={(e) => {
+                    e.stopPropagation();
+                    void openShell(
+                      `https://hipstats.com/accounts/${wallet.address}`,
+                    );
+                  }}
+                />
               );
             })}
           </div>
 
-          <div className="border-t border-grey-dark-100 dark:border-black-300">
+          {/* Footer — Add another wallet */}
+          <div className="border-t border-[#e3e3e3] dark:border-black-300">
             <button
               type="button"
               onClick={handleCreate}
-              className="w-full flex items-center gap-2 px-3 py-2.5 text-[13px] font-medium text-primary-50 dark:text-primary-brand-dark hover:bg-grey-light-700 dark:hover:bg-black-300"
+              className="w-full flex items-center justify-center gap-2 px-3 py-3 text-[13px] font-medium text-primary-50 dark:text-primary-brand-dark hover:bg-[#f8f8f8] dark:hover:bg-black-500 transition-colors"
             >
               <Plus className="size-3.5" />
               Add another wallet
