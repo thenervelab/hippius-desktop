@@ -17,7 +17,7 @@ const summaryLabelClassName =
   "text-sm font-medium leading-[18px] tracking-[-0.28px] text-[#a6a6ab] dark:text-[#7d7d7d]";
 
 const summaryValueClassName =
-  "text-right text-[15px] font-medium leading-[22px] tracking-[-0.3px] text-black-900 dark:text-white sm:text-base sm:tracking-[-0.32px]";
+  "text-right text-sm font-medium leading-[16.8px] text-black-900 dark:text-white";
 
 const getOperatingSystemIcon = (operatingSystemLabel: string) => {
   const normalizedLabel = operatingSystemLabel.toLowerCase();
@@ -44,10 +44,10 @@ const Step2Summary: React.FC<Step2Props> = ({
 
   return (
     <div className="rounded-[14px] bg-[#f4f4f4] p-4 font-geist dark:bg-[#2c2c2c]">
-      <div className="space-y-2.5 sm:space-y-3">
+      <div className="space-y-2.5">
         <div className="flex items-start justify-between gap-4">
           <p className={summaryLabelClassName}>Model</p>
-          <span className="inline-flex rounded-[4px] bg-primary-50/[0.12] px-1.5 py-[3px] text-xs font-medium leading-[14px] tracking-[-0.24px] text-primary-50 sm:rounded-[6px] sm:px-2 sm:py-1 sm:text-sm sm:leading-4 sm:tracking-[-0.28px] dark:bg-primary-65/[0.18] dark:text-primary-65">
+          <span className="inline-flex rounded-[4px] bg-primary-50/[0.19] px-1.5 py-[3px] text-[11.5px] font-semibold leading-[14.4px] text-primary-50 dark:bg-primary-65/[0.18] dark:text-primary-65">
             {template?.name ?? "-"}
           </span>
         </div>
@@ -64,7 +64,9 @@ const Step2Summary: React.FC<Step2Props> = ({
               {operatingSystemLabel || "-"}
             </p>
             {OperatingSystemIcon ? (
-              <OperatingSystemIcon className="size-6 shrink-0 sm:size-[18px]" />
+              <div className="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-[6px] border border-[#dbdbdb] bg-white dark:border-[#494949] dark:bg-[#1e1e1e]">
+                <OperatingSystemIcon className="size-4" />
+              </div>
             ) : null}
           </div>
         </div>

@@ -398,10 +398,10 @@ const CreateVMModal: React.FC<Props> = ({
       >
         <div className="mt-3 flex flex-col gap-4">
           <div className="flex items-center justify-between gap-3">
-            <h3 className="text-[18px] font-medium leading-[21px] tracking-[-0.36px] text-black-900 dark:text-white sm:text-base sm:leading-[22px] sm:tracking-[-0.32px]">
+            <h3 className="text-base font-medium leading-[22px] tracking-[-0.32px] text-black-900 dark:text-white">
               {currentStep === 1 ? "Model Configuration" : "Summary"}
             </h3>
-            <span className="inline-flex rounded-full bg-primary-50/[0.12] px-2 py-1 text-xs font-medium leading-[18px] tracking-[-0.24px] text-primary-50 sm:px-3 dark:bg-primary-65/[0.18] dark:text-primary-65">
+            <span className="inline-flex rounded-full bg-primary-50/20 px-2 py-1 text-xs font-medium leading-[18px] tracking-[-0.24px] text-primary-50 dark:bg-primary-65/[0.18] dark:text-primary-65">
               Step {currentStep}/2
             </span>
           </div>

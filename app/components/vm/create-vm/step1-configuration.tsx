@@ -111,7 +111,7 @@ const Step1Configuration: React.FC<Step1Props> = ({
   errors = {},
 }) => {
   return (
-    <div className="space-y-2.5 sm:space-y-4">
+    <div className="space-y-2.5">
       {/* Instance Name */}
       <div>
         <label className={labelClassName}>Instance Name</label>
@@ -130,7 +130,7 @@ const Step1Configuration: React.FC<Step1Props> = ({
       </div>
 
       {/* Operating System and Image Row */}
-      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3">
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
         {/* Operating System */}
         <div className="min-w-0">
           <label className={labelClassName}>Operating System</label>
@@ -262,7 +262,7 @@ const Step1Configuration: React.FC<Step1Props> = ({
       <button
         type="button"
         onClick={onCreateSSHKey}
-        className="!mt-3 inline-flex items-center gap-2 pt-1.5 text-black-900 transition-colors hover:text-grey-20 dark:text-white dark:hover:text-[#a3a3a3]"
+        className="!mt-4 inline-flex items-center gap-2 text-black-900 transition-colors hover:text-grey-20 dark:text-white dark:hover:text-[#a3a3a3]"
       >
         <AddSquare className="size-5 shrink-0" />
         <span className="text-base font-medium leading-[22px] tracking-[-0.32px]">
