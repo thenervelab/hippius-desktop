@@ -13,12 +13,17 @@ const LocalWalletSetup: React.FC = () => {
   const { setupStep, setSetupStep, isLoading, refreshWallets } =
     useLocalWallet();
 
-  // Owned here (not in context) so the mnemonic is scoped to this
-  // orchestrator and gets dropped on unmount.
+  // Owned here (not in context) so the mnemonic and the name picked on
+  // the create-mnemonic step are scoped to this orchestrator and get
+  // dropped on unmount.
   const [pendingMnemonic, setPendingMnemonic] = useState<string | null>(null);
+  const [pendingName, setPendingName] = useState<string | null>(null);
 
   useEffect(() => {
-    return () => setPendingMnemonic(null);
+    return () => {
+      setPendingMnemonic(null);
+      setPendingName(null);
+    };
   }, []);
 
   if (isLoading || setupStep === "loading") {
@@ -45,8 +50,9 @@ const LocalWalletSetup: React.FC = () => {
     case "create-mnemonic":
       return (
         <CreateMnemonicScreen
-          onContinue={(mnemonic) => {
+          onContinue={(mnemonic, name) => {
             setPendingMnemonic(mnemonic);
+            setPendingName(name);
             setSetupStep("create-password");
           }}
           onBack={() => setSetupStep("welcome")}
@@ -71,8 +77,10 @@ const LocalWalletSetup: React.FC = () => {
       return (
         <CreatePasswordScreen
           mnemonic={pendingMnemonic}
+          initialName={pendingName ?? undefined}
           onCreated={() => {
             setPendingMnemonic(null);
+            setPendingName(null);
             void refreshWallets();
           }}
           onBack={() => setSetupStep("welcome")}
