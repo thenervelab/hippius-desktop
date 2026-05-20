@@ -36,6 +36,10 @@ interface PageHeaderProps {
   subtitle?: string;
   infoButton?: ReactNode;
   showTopUpCredits?: boolean;
+  /** When provided, replaces the default right-side block (Wallet +
+   * Active Plan chips + Top-up button) with the supplied node. Used by
+   * the wallet page to slot in the ActiveWalletSelector instead. */
+  rightSlot?: ReactNode;
 }
 
 const PageHeader: FC<PageHeaderProps> = ({
@@ -43,6 +47,7 @@ const PageHeader: FC<PageHeaderProps> = ({
   subtitle = "Store. Compute. Own your infrastructure.",
   infoButton,
   showTopUpCredits = true,
+  rightSlot,
 }) => {
   const { stakingInfo } = useStaking();
   const { activeSubscription, isLoadingActive } = useSubscriptionData();
@@ -96,6 +101,9 @@ const PageHeader: FC<PageHeaderProps> = ({
         </p>
       </div>
 
+      {rightSlot ? (
+        <div className="flex items-center justify-end">{rightSlot}</div>
+      ) : (
       <div
         className={cn(
           "flex items-stretch rounded-[8px]",
@@ -200,6 +208,7 @@ const PageHeader: FC<PageHeaderProps> = ({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 };

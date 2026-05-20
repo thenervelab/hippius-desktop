@@ -76,7 +76,7 @@ const CreateMnemonicScreen: React.FC<CreateMnemonicScreenProps> = ({
       </h1>
       <p className="text-base text-grey-60 dark:text-grey-dark-600 text-center mb-6 max-w-[420px]">
         Write down these 12 words in order and store them somewhere safe.
-        They're the only way to recover this wallet if you lose access.
+        They&apos;re the only way to recover this wallet if you lose access.
       </p>
 
       <div className="w-full rounded-[14px] border border-grey-80 dark:border-[#494949] bg-grey-light-700 dark:bg-[#1a1a1a] p-4 mb-3">
@@ -130,7 +130,7 @@ const CreateMnemonicScreen: React.FC<CreateMnemonicScreenProps> = ({
           className="mt-[3px] size-4 shrink-0 rounded border-grey-80 text-primary-50 focus:ring-primary-50"
         />
         <span className="text-[13px] text-grey-60 dark:text-grey-dark-600">
-          I've saved my recovery phrase somewhere safe. I understand that
+          I&apos;ve saved my recovery phrase somewhere safe. I understand that
           Hippius cannot recover it if I lose access.
         </span>
       </label>

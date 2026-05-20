@@ -83,7 +83,7 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
         Set a Password
       </h1>
       <p className="text-base text-grey-60 dark:text-grey-dark-600 text-center mb-6 max-w-[400px]">
-        This password encrypts your wallet on this device. You'll enter it
+        This password encrypts your wallet on this device. You&apos;ll enter it
         whenever you sign a transaction.
       </p>
 
