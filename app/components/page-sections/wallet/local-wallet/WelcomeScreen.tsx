@@ -111,7 +111,11 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           shellClassName={cn(
             "w-full min-w-0 max-w-[494px]",
             "bg-white dark:bg-[#1a1a1a]",
-            "border border-grey-dark-100 dark:border-[#313131]",
+            // Solid 1px outline expressed as a box-shadow so it lays
+            // on top of the inner card's drop-shadow halo and doesn't
+            // get visually washed out. Matches the Figma spec
+            // 1px solid #E3E3E3 / #313131 in dark.
+            "shadow-[0_0_0_1px_#E3E3E3] dark:shadow-[0_0_0_1px_#313131]",
             "p-3 sm:p-3 rounded-[8px] sm:rounded-[8px]",
           )}
           cardClassName={cn(
