@@ -63,7 +63,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
     try {
       const ok = await validateMnemonic(trimmed);
       if (!ok) {
-        setError("Invalid recovery phrase. Check the words and order.");
+        setError("Invalid access key. Check the words and order.");
         return;
       }
       onAccessKeyContinue(trimmed);
@@ -132,7 +132,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 Welcome to Hippius Wallet
               </h1>
               <p className="max-w-[424px] text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-50 dark:text-grey-dark-500">
-                Enter your wallet mnemonic to continue or create a new wallet
+                Enter your access key to continue or create a new wallet
               </p>
             </div>
           </div>

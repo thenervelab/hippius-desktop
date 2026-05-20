@@ -145,7 +145,7 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
                 Create New Wallet
               </h1>
               <p className="max-w-[424px] text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-50 dark:text-grey-dark-500">
-                Enter your wallet mnemonic to continue or create a new wallet
+                Enter your access key to continue or create a new wallet
               </p>
             </div>
           </div>

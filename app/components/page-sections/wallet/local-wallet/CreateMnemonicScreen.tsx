@@ -43,8 +43,8 @@ const CreateMnemonicScreen: React.FC<CreateMnemonicScreenProps> = ({
         const m = await generateMnemonic();
         if (!cancelled) setMnemonic(m);
       } catch (e) {
-        console.error("Failed to generate mnemonic:", e);
-        if (!cancelled) toast.error("Failed to generate recovery phrase");
+        console.error("Failed to generate access key:", e);
+        if (!cancelled) toast.error("Failed to generate access key");
       } finally {
         if (!cancelled) setIsGenerating(false);
       }
@@ -59,7 +59,7 @@ const CreateMnemonicScreen: React.FC<CreateMnemonicScreenProps> = ({
     try {
       await navigator.clipboard.writeText(mnemonic);
       setCopied(true);
-      toast.success("Recovery phrase copied");
+      toast.success("Access key copied");
       setTimeout(() => setCopied(false), 2000);
     } catch {
       toast.error("Failed to copy");
@@ -140,7 +140,7 @@ const CreateMnemonicScreen: React.FC<CreateMnemonicScreenProps> = ({
                 Create New Wallet
               </h1>
               <p className="max-w-[424px] text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-50 dark:text-grey-dark-500">
-                Enter your wallet mnemonic to continue or create a new wallet
+                Enter your access key to continue or create a new wallet
               </p>
             </div>
           </div>

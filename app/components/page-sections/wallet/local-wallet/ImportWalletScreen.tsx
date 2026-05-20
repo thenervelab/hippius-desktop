@@ -36,7 +36,7 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
       if (!ok) {
         setIsValid(false);
         setPreviewAddress(null);
-        setError("Invalid recovery phrase. Check the words and order.");
+        setError("Invalid access key. Check the words and order.");
         return;
       }
       setIsValid(true);
@@ -50,11 +50,11 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
   const handleContinue = () => {
     const trimmed = mnemonic.trim();
     if (!trimmed) {
-      setError("Please enter your recovery phrase");
+      setError("Please enter your access key");
       return;
     }
     if (!isValid) {
-      setError("Invalid recovery phrase. Check the words and order.");
+      setError("Invalid access key. Check the words and order.");
       return;
     }
     onContinue(trimmed);
@@ -66,13 +66,13 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
         Import Existing Wallet
       </h1>
       <p className="text-base text-grey-60 dark:text-grey-dark-600 text-center mb-6 max-w-[420px]">
-        Paste your 12 or 24-word recovery phrase to import an existing
-        Hippius wallet onto this device.
+        Paste your 12 or 24-word access key to import an existing Hippius
+        wallet onto this device.
       </p>
 
       <div className="w-full mb-2">
         <label className="text-[13px] font-medium text-grey-70 dark:text-grey-dark-800 mb-1.5 block">
-          Recovery Phrase
+          Access Key
         </label>
         <textarea
           value={mnemonic}
