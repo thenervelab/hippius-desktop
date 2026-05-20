@@ -6,24 +6,28 @@ import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui";
+import { BackgroundContainer } from "@/components/ui/BackgroundContainer";
 import { HippiusLogo, Key } from "@/components/ui/icons";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { getDiagonalTextureSvgBackgroundImage } from "@/app/lib/ui-textures";
 
 /* Wallet onboarding welcome screen.
  *
- * Matches the Figma: a centered card on a diagonal-stripe textured
- * surface (same texture as the Help & Support access-key login gate).
- * Three entry paths:
- *   1. Inline "Access Key" input — paste an existing mnemonic and hit
- *      Continue to skip the dedicated import screen.
- *   2. "Create New Wallet" footer link — generate a fresh mnemonic.
- *   3. "Import Your Wallet" footer link — open the guided import
- *      textarea (kept around for users who prefer that flow).
+ * Visual recipe matches the Help & Support page's access-key login
+ * gate so the two onboarding surfaces feel like siblings:
  *
- * The diagonal-texture tiles use w-screen sizing so the backdrop
- * reaches every viewport edge regardless of the centered card's
- * dimensions — same pattern shipped on the support page. */
+ *   1. Full-screen diagonal-stripe corner tiles sized to the viewport
+ *      so the texture reaches every edge regardless of card width.
+ *   2. Project's BackgroundContainer for the inner chrome — gray outer
+ *      ring, framed inner stripe pattern, four corner-bracket
+ *      "hippo logos", and a white content card. The default blue
+ *      accent ring is suppressed via borderClassName="bg-transparent"
+ *      per the wallet design (Help & Support keeps it).
+ *
+ * Three onboarding entry paths render inside the card body: inline
+ * Access Key + Continue (paste a mnemonic and skip the dedicated import
+ * screen), "Create New Wallet" link, and "Import Your Wallet" link.
+ * The orchestrator (LocalWalletSetup) wires the callbacks. */
 
 const cornerTextureLight = getDiagonalTextureSvgBackgroundImage({
   opacity: 0.21,
@@ -36,8 +40,6 @@ const cornerTextureDark = getDiagonalTextureSvgBackgroundImage({
 interface WelcomeScreenProps {
   onCreateNew: () => void;
   onImport: () => void;
-  /** Called with a validated mnemonic from the inline Access Key
-   * input. The orchestrator hands it to the password step. */
   onAccessKeyContinue: (mnemonic: string) => void;
 }
 
@@ -73,8 +75,6 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
 
-  // Clear the error as soon as the user resumes typing — they're
-  // self-correcting whatever was wrong with the last submission.
   useEffect(() => {
     if (error) setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -104,8 +104,10 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   return (
     <div className="flex flex-1 w-full items-center justify-center px-4 py-6 overflow-hidden">
       <div className="relative">
-        {/* Diagonal-texture backdrop tiles, light + dark. Same recipe
-            as the support page's AccessKeyLoginGate. */}
+        {/* Full-screen diagonal-stripe corner tiles — same recipe as
+            the support page's AccessKeyLoginGate. The w-screen
+            sizing makes the texture cover the visible area
+            regardless of card dimensions. */}
         <div
           aria-hidden="true"
           className="pointer-events-none absolute right-full bottom-full w-screen h-screen bg-[rgba(242,242,242,0.42)] dark:hidden"
@@ -127,14 +129,17 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           style={{ backgroundImage: cornerTextureDark }}
         />
 
-        {/* Card */}
-        <div
-          className={cn(
-            "relative w-full max-w-[460px] rounded-[16px] p-6 sm:p-8",
-            "bg-white dark:bg-[#1a1a1a]",
-            "border border-grey-dark-100 dark:border-[#313131]",
-            "shadow-[0px_14px_31px_0px_rgba(0,0,0,0.06),0px_56px_56px_0px_rgba(0,0,0,0.05)] dark:shadow-[0px_14px_31px_0px_rgba(0,0,0,0.4)]",
-          )}
+        <BackgroundContainer
+          className="relative w-full max-w-[460px]"
+          fillClassName="fill-[#f9f9f9] dark:fill-[#202020]"
+          strokeClassName="stroke-[#b3b3b3] dark:stroke-[#6c6c6c]"
+          // Suppress the default blue accent ring per the Figma — the
+          // outer gray ring and the white card stay; the inner colored
+          // border just disappears.
+          borderClassName="bg-transparent dark:bg-transparent p-0 sm:p-0"
+          contentClassName="flex justify-center"
+          shellClassName="w-full min-w-0 max-w-[460px]"
+          cardClassName="w-full min-w-0 max-w-full p-6 sm:p-8 gap-0 items-stretch"
         >
           <WalletIllustration />
 
@@ -185,8 +190,6 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
             size="auto"
             className={cn(
               "mt-4 h-12 w-full rounded-[8px] text-[15px] font-medium tracking-[-0.3px] gap-2",
-              // Lavender disabled state matching the Figma "inactive
-              // Continue" treatment — fades the brand blue with white.
               !canContinue && "!bg-primary-50/40 hover:!bg-primary-50/40",
             )}
             onClick={handleContinue}
@@ -218,7 +221,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
               </button>
             </p>
           </div>
-        </div>
+        </BackgroundContainer>
       </div>
     </div>
   );
