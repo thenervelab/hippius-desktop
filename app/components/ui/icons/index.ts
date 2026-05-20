@@ -224,3 +224,9 @@ export {
   CornerBracketDown,
   PlusCrossIcon,
 } from "./CornerBracket";
+export { default as ArrowDownToLine } from "./ArrowDownToLine";
+export { default as ArrowUpToLine } from "./ArrowUpToLine";
+export { default as InGoing } from "./InGoing";
+export { default as OutGoing } from "./OutGoing";
+export { default as LiCoins } from "./LiCoins";
+export { default as GitCompareArrows } from "./GitCompareArrows";

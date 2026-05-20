@@ -3,8 +3,8 @@
 import { FC } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { GripIcon } from "@/components/ui/icons";
-import { Lock, Unlock } from "lucide-react";
+import { GripIcon, LiCoins } from "@/components/ui/icons";
+import { Unlock } from "lucide-react";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { toast } from "sonner";
 
@@ -87,7 +87,7 @@ const WalletStakeCard: FC<WalletStakeCardProps> = ({ className }) => {
             className="h-[36px] rounded-[8px] text-[13px] font-medium tracking-[-0.26px] gap-[7px]"
             onClick={notReadyToast}
           >
-            <Lock className="size-3.5 shrink-0" />
+            <LiCoins className="size-3.5 shrink-0" />
             Stake Now
           </Button>
           <Button

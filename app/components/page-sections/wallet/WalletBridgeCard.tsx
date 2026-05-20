@@ -3,8 +3,7 @@
 import { FC } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { GripIcon } from "@/components/ui/icons";
-import { ArrowLeftRight } from "lucide-react";
+import { GripIcon, GitCompareArrows } from "@/components/ui/icons";
 import { toast } from "sonner";
 
 /* BRIDGE TOKENS card. Matches the billing-page card chrome.
@@ -66,7 +65,7 @@ const WalletBridgeCard: FC<WalletBridgeCardProps> = ({ className }) => {
           className="h-[36px] w-full rounded-[8px] text-[13px] font-medium tracking-[-0.26px] gap-[7px]"
           onClick={() => toast.info("Bridge is coming soon.")}
         >
-          <ArrowLeftRight className="size-3.5 shrink-0" />
+          <GitCompareArrows className="size-3.5 shrink-0" />
           Bridge Tokens
         </Button>
       </div>

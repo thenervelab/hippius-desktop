@@ -5,10 +5,11 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   GripIcon,
-  CoinsIcon,
+  ArrowDownToLine,
+  ArrowUpToLine,
 } from "@/components/ui/icons";
 import Warning from "@/components/ui/icons/Warning";
-import { RefreshCcwDot, ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { RefreshCcwDot } from "lucide-react";
 import TimeAgo from "react-timeago";
 import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -176,7 +177,7 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
               onClick={() => setReceiveDialogOpen(true)}
               disabled={!polkadotAddress}
             >
-              <ArrowDownLeft className="size-3.5 shrink-0" />
+              <ArrowDownToLine className="size-3.5 shrink-0" />
               Receive
             </Button>
             <Button
@@ -186,7 +187,7 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
               onClick={handleSend}
               disabled={!polkadotAddress || isLoading || !!error}
             >
-              <ArrowUpRight className="size-3.5 shrink-0" />
+              <ArrowUpToLine className="size-3.5 shrink-0" />
               Send
             </Button>
           </div>
@@ -214,9 +215,5 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
     </>
   );
 };
-
-// Silence unused-import lint; CoinsIcon stays as an alternate icon
-// option for design iteration without re-importing.
-void CoinsIcon;
 
 export default WalletBalanceCard;
