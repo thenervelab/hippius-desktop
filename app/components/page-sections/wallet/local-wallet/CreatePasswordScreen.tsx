@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui";
 import { BackgroundContainer } from "@/components/ui/BackgroundContainer";
-import { Decoration, Key } from "@/components/ui/icons";
+import { Decoration, Key, WalletAsterisk } from "@/components/ui/icons";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { getDiagonalTextureSvgBackgroundImage } from "@/app/lib/ui-textures";
 
@@ -22,9 +22,17 @@ const cornerTextureDark = getDiagonalTextureSvgBackgroundImage({
 
 const MIN_LEN = 8;
 
+// `create` is the default reached from "Create New Wallet" (step 2 of
+// the new-wallet flow). `access` is reached from the welcome screen
+// after the user pastes an existing access key — same underlying form,
+// different hero / heading / footer wording so it reads as "logging in"
+// rather than "creating".
+export type CreatePasswordVariant = "create" | "access";
+
 interface CreatePasswordScreenProps {
   mnemonic: string;
   initialName?: string;
+  variant?: CreatePasswordVariant;
   onCreated: () => void;
   onBack: () => void;
 }
@@ -32,6 +40,7 @@ interface CreatePasswordScreenProps {
 const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
   mnemonic,
   initialName,
+  variant = "create",
   onCreated,
   onBack,
 }) => {
@@ -127,25 +136,44 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
           )}
         >
           <div className="flex flex-col items-center gap-[19px]">
-            <div className="relative flex items-center justify-center size-[56px] shrink-0">
-              <Decoration
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-0 size-full"
-              />
-              <div className="relative flex items-center justify-center size-[32px] aspect-square rounded-[8px] bg-primary-50 dark:bg-primary-brand-dark">
-                <Plus
-                  className="size-4 shrink-0 text-white"
-                  strokeWidth={2.5}
+            {variant === "access" ? (
+              <div className="flex items-center justify-center -space-x-3 shrink-0">
+                <WalletAsterisk
+                  aria-hidden="true"
+                  className="size-[88px]"
+                />
+                <WalletAsterisk
+                  aria-hidden="true"
+                  className="size-[88px]"
+                />
+                <WalletAsterisk
+                  aria-hidden="true"
+                  className="size-[88px]"
                 />
               </div>
-            </div>
+            ) : (
+              <div className="relative flex items-center justify-center size-[56px] shrink-0">
+                <Decoration
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 size-full"
+                />
+                <div className="relative flex items-center justify-center size-[32px] aspect-square rounded-[8px] bg-primary-50 dark:bg-primary-brand-dark">
+                  <Plus
+                    className="size-4 shrink-0 text-white"
+                    strokeWidth={2.5}
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="flex flex-col items-center gap-2 text-center">
               <h1 className="text-[24px] font-medium leading-[32px] text-grey-10 dark:text-grey-light-100">
-                Create New Wallet
+                {variant === "access" ? "Enter Your Passcode" : "Create New Wallet"}
               </h1>
               <p className="max-w-[424px] text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-50 dark:text-grey-dark-500">
-                Enter your access key to continue or create a new wallet
+                {variant === "access"
+                  ? "Enter your account passcode to confirm and get started"
+                  : "Enter your access key to continue or create a new wallet"}
               </p>
             </div>
           </div>
@@ -252,7 +280,13 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
               onClick={handleSubmit}
               disabled={!canSubmit}
             >
-              {submitting ? "Creating..." : "Create Wallet"}
+              {submitting
+                ? variant === "access"
+                  ? "Continuing..."
+                  : "Creating..."
+                : variant === "access"
+                  ? "Continue"
+                  : "Create Wallet"}
               {!submitting ? <ArrowRight className="size-4 shrink-0" /> : null}
             </Button>
           </div>
@@ -260,14 +294,20 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
           <div className="flex flex-col gap-2 text-center">
             <p className="flex items-center justify-center gap-2 text-[18px] leading-6 tracking-[-0.36px]">
               <span className="font-medium text-grey-50 dark:text-grey-dark-500">
-                Already have a wallet?
+                {variant === "access"
+                  ? "Don't have a wallet?"
+                  : "Already have a wallet?"}
               </span>
               <button
                 type="button"
-                onClick={onBack}
+                onClick={
+                  variant === "access"
+                    ? () => setSetupStep("create-mnemonic")
+                    : onBack
+                }
                 className="font-semibold text-grey-10 dark:text-grey-light-100 hover:text-primary-50 dark:hover:text-primary-brand-dark hover:underline underline-offset-2 transition-colors"
               >
-                Access Wallet
+                {variant === "access" ? "Create New Wallet" : "Access Wallet"}
               </button>
             </p>
             <p className="flex items-center justify-center gap-2 text-[18px] leading-6 tracking-[-0.36px]">

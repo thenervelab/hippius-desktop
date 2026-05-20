@@ -49,6 +49,12 @@ const LocalWalletSetup: React.FC = () => {
   // dropped on unmount.
   const [pendingMnemonic, setPendingMnemonic] = useState<string | null>(null);
   const [pendingName, setPendingName] = useState<string | null>(null);
+  // Tracks how the user reached the create-password step so that screen
+  // can render the right variant ("create" badge + headline vs the
+  // "access" asterisk hero + "Enter Your Passcode" wording).
+  const [passwordFlow, setPasswordFlow] = useState<"create" | "access">(
+    "create",
+  );
 
   // Direction tracking for slide animations: +1 = forward, -1 = back, 0
   // = sibling step (same depth). Updated AFTER the render so the
@@ -89,6 +95,7 @@ const LocalWalletSetup: React.FC = () => {
             onImport={() => setSetupStep("import-wallet")}
             onAccessKeyContinue={(mnemonic) => {
               setPendingMnemonic(mnemonic);
+              setPasswordFlow("access");
               setSetupStep("create-password");
             }}
           />
@@ -99,6 +106,7 @@ const LocalWalletSetup: React.FC = () => {
             onContinue={(mnemonic, name) => {
               setPendingMnemonic(mnemonic);
               setPendingName(name);
+              setPasswordFlow("create");
               setSetupStep("create-password");
             }}
             onBack={() => setSetupStep("welcome")}
@@ -109,6 +117,12 @@ const LocalWalletSetup: React.FC = () => {
           <ImportWalletScreen
             onContinue={(mnemonic) => {
               setPendingMnemonic(mnemonic);
+              // Import flow currently still routes through the create-
+              // password step (uses the "create" variant chrome). The
+              // Figma calls for skipping this step entirely; that needs
+              // a separate refactor of ImportWalletScreen since
+              // createWallet requires a password.
+              setPasswordFlow("create");
               setSetupStep("create-password");
             }}
             onBack={() => setSetupStep("welcome")}
@@ -124,9 +138,11 @@ const LocalWalletSetup: React.FC = () => {
           <CreatePasswordScreen
             mnemonic={pendingMnemonic}
             initialName={pendingName ?? undefined}
+            variant={passwordFlow}
             onCreated={() => {
               setPendingMnemonic(null);
               setPendingName(null);
+              setPasswordFlow("create");
               void refreshWallets();
             }}
             onBack={() => setSetupStep("welcome")}
@@ -145,6 +161,7 @@ const LocalWalletSetup: React.FC = () => {
             onImport={() => setSetupStep("import-wallet")}
             onAccessKeyContinue={(mnemonic) => {
               setPendingMnemonic(mnemonic);
+              setPasswordFlow("access");
               setSetupStep("create-password");
             }}
           />
