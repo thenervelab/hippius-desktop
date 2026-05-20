@@ -271,54 +271,69 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
                 Upload File
               </label>
 
-              {fileName ? (
+              {/* Two-layer shell matches the Add-a-Local-Folder dialog:
+                  outer rounded box mirrors the Input field shell (border
+                  + focus-ring-like shadow), inner dashed area carries
+                  the dropzone visuals. */}
+              <div
+                className={cn(
+                  "rounded-[8px] border bg-white p-2 transition-[border-color,box-shadow] duration-200",
+                  "border-grey-80 shadow-[0px_0px_0px_4px_rgba(10,10,10,0.05)]",
+                  "dark:border-[#494949] dark:bg-[#1f1f1f] dark:shadow-[0px_0px_0px_4px_rgba(255,255,255,0.03)]",
+                  isDragging &&
+                    "border-primary-50 shadow-[0px_0px_0px_4px_rgba(49,103,221,0.12)] dark:border-primary-65 dark:shadow-[0px_0px_0px_4px_rgba(97,140,232,0.15)]",
+                )}
+              >
                 <div
                   className={cn(
-                    "flex flex-col items-center justify-center gap-3 rounded-[8px] border-2 border-dashed py-6",
-                    "border-grey-dark-100 bg-white dark:border-black-300 dark:bg-[#1a1a1a]",
+                    "rounded-[8px] border-[1.5px] border-dashed bg-white transition-colors",
+                    "border-grey-70 dark:border-grey-dark-700 dark:bg-[#1f1f1f]",
+                    isDragging &&
+                      "border-primary-50 bg-primary-50/5 dark:border-primary-50 dark:bg-primary-50/10",
                   )}
                 >
-                  <WalletBackupFile className="h-[94px] w-[78px] shrink-0 drop-shadow-[0_2px_4px_rgba(0,0,0,0.06)]" />
-                  <div className="flex items-center gap-2">
-                    <span className="text-[14px] font-medium text-grey-10 dark:text-grey-light-100">
-                      {fileName}
-                    </span>
+                  {fileName ? (
+                    <div className="flex w-full flex-col items-center justify-center gap-3 px-4 py-[22px]">
+                      <WalletBackupFile className="h-[94px] w-[78px] shrink-0 drop-shadow-[0_2px_4px_rgba(0,0,0,0.06)]" />
+                      <div className="flex items-center gap-2">
+                        <span className="text-[14px] font-medium text-grey-10 dark:text-grey-light-100">
+                          {fileName}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleClear}
+                          className="text-grey-50 hover:text-error-70 dark:text-grey-dark-600"
+                          aria-label="Remove file"
+                        >
+                          <X className="size-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
                     <button
                       type="button"
-                      onClick={handleClear}
-                      className="text-grey-50 hover:text-error-70 dark:text-grey-dark-600"
-                      aria-label="Remove file"
+                      onClick={handlePick}
+                      className={cn(
+                        "flex w-full flex-col items-center justify-center gap-4 rounded-[8px] px-4 py-[22px] transition-colors",
+                        "hover:bg-[#fafafa] dark:hover:bg-[#252525]",
+                      )}
                     >
-                      <X className="size-4" />
+                      <span className="flex items-center justify-center size-[32px] aspect-square rounded-[8px] bg-primary-50 dark:bg-primary-brand-dark">
+                        <FilePlus className="size-3 shrink-0 text-white" />
+                      </span>
+                      <div className="flex flex-col items-center gap-0.5 text-center">
+                        <span className="font-geist text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-10 dark:text-white">
+                          Upload a File Here
+                        </span>
+                        <span className="font-geist w-[262px] max-w-full text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#7D7D7D] dark:text-grey-dark-600">
+                          Drag and drop or click to add one or more files
+                          here to upload
+                        </span>
+                      </div>
                     </button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handlePick}
-                  className={cn(
-                    "flex flex-col items-center justify-center gap-3 rounded-[8px] border-2 border-dashed py-8 px-4 transition-colors cursor-pointer",
-                    "border-grey-dark-100 bg-white hover:bg-grey-light-300",
-                    "dark:border-black-300 dark:bg-[#1a1a1a] dark:hover:bg-[#222]",
-                    isDragging &&
-                      "border-primary-50 bg-primary-50/5 dark:border-primary-brand-dark dark:bg-primary-50/10",
                   )}
-                >
-                  <span className="flex items-center justify-center size-[32px] aspect-square rounded-[8px] bg-primary-50 dark:bg-primary-brand-dark">
-                    <FilePlus className="size-3 shrink-0 text-white" />
-                  </span>
-                  <div className="flex flex-col items-center gap-1 text-center">
-                    <span className="text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-10 dark:text-grey-light-100">
-                      Upload a File Here
-                    </span>
-                    <span className="max-w-[260px] text-[14px] font-medium leading-5 tracking-[-0.28px] text-grey-50 dark:text-grey-dark-500">
-                      Drag and drop or click to add one or more files here to
-                      upload
-                    </span>
-                  </div>
-                </button>
-              )}
+                </div>
+              </div>
             </div>
 
             <div className="flex flex-col gap-2.5">
