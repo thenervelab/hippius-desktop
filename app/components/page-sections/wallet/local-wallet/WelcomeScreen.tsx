@@ -75,7 +75,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   const canContinue = mnemonic.trim().length > 0 && !verifying;
 
   return (
-    <div className="flex flex-1 w-full items-center justify-center px-4 py-6 overflow-hidden">
+    <div className="flex flex-1 w-full items-center justify-center px-4 py-6 mt-[14px] overflow-hidden rounded-[8px] border border-[#E3E3E3] dark:border-[#313131] bg-white dark:bg-[#1a1a1a]">
       <div className="relative">
         {/* Texture tiles are sized to the viewport, not the card, so
             wide displays don't end up with blank quadrants. */}
@@ -108,14 +108,12 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           // Help & Support gate keeps it, the wallet welcome doesn't.
           borderClassName="bg-transparent dark:bg-transparent p-0 sm:p-0"
           contentClassName="flex justify-center"
+          // Figma welcome spec replaces the default fading gradient
+          // guide lines with a solid 1px stroke at this opacity.
+          decorationLineColor="rgba(151, 151, 151, 0.17)"
           shellClassName={cn(
             "w-full min-w-0 max-w-[494px]",
             "bg-white dark:bg-[#1a1a1a]",
-            // Solid 1px outline expressed as a box-shadow so it lays
-            // on top of the inner card's drop-shadow halo and doesn't
-            // get visually washed out. Matches the Figma spec
-            // 1px solid #E3E3E3 / #313131 in dark.
-            "shadow-[0_0_0_1px_#E3E3E3] dark:shadow-[0_0_0_1px_#313131]",
             "p-3 sm:p-3 rounded-[8px] sm:rounded-[8px]",
           )}
           cardClassName={cn(
