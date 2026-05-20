@@ -105,6 +105,7 @@ const CreateMnemonicScreen: React.FC<CreateMnemonicScreenProps> = ({
           borderClassName="bg-transparent dark:bg-transparent p-0 sm:p-0"
           contentClassName="flex justify-center"
           decorationLineColor="rgba(151, 151, 151, 0.17)"
+          addDotWithBlurryEffect
           shellClassName={cn(
             "w-full min-w-0 max-w-[494px]",
             "bg-white dark:bg-[#1a1a1a]",
@@ -119,32 +120,8 @@ const CreateMnemonicScreen: React.FC<CreateMnemonicScreenProps> = ({
           )}
         >
           <div className="flex flex-col items-center gap-[19px]">
-            <div className="relative size-[60px] flex items-center justify-center shrink-0">
-              {/* Decorative sparkle marks at the 4 corners of the hero,
-                  matching the Figma "create" badge. */}
-              <Plus
-                aria-hidden="true"
-                className="absolute -top-0.5 -left-0.5 size-2.5 text-primary-50/70"
-                strokeWidth={2.5}
-              />
-              <Plus
-                aria-hidden="true"
-                className="absolute -top-0.5 -right-0.5 size-2.5 text-primary-50/70"
-                strokeWidth={2.5}
-              />
-              <Plus
-                aria-hidden="true"
-                className="absolute -bottom-0.5 -left-0.5 size-2.5 text-primary-50/70"
-                strokeWidth={2.5}
-              />
-              <Plus
-                aria-hidden="true"
-                className="absolute -bottom-0.5 -right-0.5 size-2.5 text-primary-50/70"
-                strokeWidth={2.5}
-              />
-              <div className="flex items-center justify-center size-[48px] rounded-[12px] bg-primary-50">
-                <Plus className="size-6 text-white" strokeWidth={2.5} />
-              </div>
+            <div className="flex items-center justify-center size-[48px] rounded-[12px] bg-primary-50 shrink-0">
+              <Plus className="size-6 text-white" strokeWidth={2.5} />
             </div>
 
             <div className="flex flex-col items-center gap-2 text-center">
