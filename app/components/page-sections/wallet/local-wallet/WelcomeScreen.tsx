@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui";
 import { BackgroundContainer } from "@/components/ui/BackgroundContainer";
-import { HippiusLogo, Key } from "@/components/ui/icons";
+import { Key, WalletWelcomeLogo } from "@/components/ui/icons";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { getDiagonalTextureSvgBackgroundImage } from "@/app/lib/ui-textures";
 
@@ -43,26 +43,28 @@ interface WelcomeScreenProps {
   onAccessKeyContinue: (mnemonic: string) => void;
 }
 
-/* Small wallet-with-card illustration used as the card hero. Built
- * inline as nested rounded rects + HippiusLogo so the page ships
- * without a new PNG/SVG asset. Drop-in replacement once Figma exports
- * the final artwork. */
-const WalletIllustration: React.FC = () => (
-  <div className="relative mx-auto mb-5 h-[88px] w-[112px]">
-    {/* Card peeking out behind the wallet */}
-    <div className="absolute inset-x-3 top-0 h-[34px] rounded-[6px] bg-primary-50 shadow-[0px_2px_6px_rgba(49,103,221,0.35)]" />
-    {/* Wallet body */}
-    <div className="absolute inset-x-0 bottom-0 h-[64px] rounded-[10px] bg-[#0a0a0a] dark:bg-[#202020] shadow-[0px_4px_12px_rgba(0,0,0,0.18)]">
-      {/* Card slot detail */}
-      <div className="absolute left-3 right-3 top-2 h-[4px] rounded-full bg-[#2a2a2a]" />
-      {/* Centered logo badge */}
-      <div className="absolute inset-0 flex items-center justify-center">
-        <div className="flex size-[34px] items-center justify-center rounded-[6px] bg-primary-50">
-          <HippiusLogo className="size-[18px] text-white [&_path]:[stroke:none]" />
-        </div>
-      </div>
-    </div>
-  </div>
+/* Wallet hero illustration matched 1:1 to the Figma export
+ * (app/components/ui/icons/WalletWelcomeLogo.tsx). 120×92 viewBox
+ * rendered at 120×92 to keep it crisp on hidpi; the surrounding card
+ * is wide enough that the natural size sits comfortably.
+ *
+ * Dark-mode handling: the SVG's wallet body uses dark grays (#252525,
+ * #181818, #3B3B3B) that read fine against the white card surface
+ * but flatten against the redesign's #1a1a1a dark card. The
+ * `dark:[filter:brightness(1.55)_contrast(0.92)]` lifts the wallet
+ * body just enough that the layered shadows, dashed cutouts, and
+ * blue card all stay legible without changing the artwork itself.
+ *
+ * The blue card and the embedded hippo logo stay vibrant in both
+ * themes — they don't need any tweak. */
+const WalletHero: React.FC = () => (
+  <WalletWelcomeLogo
+    aria-hidden="true"
+    className={cn(
+      "block h-[92px] w-[120px] shrink-0",
+      "dark:[filter:brightness(1.55)_contrast(0.92)]",
+    )}
+  />
 );
 
 const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
@@ -132,7 +134,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
         <BackgroundContainer
           // Figma form/input is 462px wide; the inner card adds 16px
           // padding each side, so the outer max needs to be ~494px.
-          className="relative w-full max-w-[494px]"
+          className="relative w-full max-w-[594px]"
           fillClassName="fill-[#f9f9f9] dark:fill-[#202020]"
           strokeClassName="stroke-[#b3b3b3] dark:stroke-[#6c6c6c]"
           // Suppress the default blue accent ring per the Figma — the
@@ -147,7 +149,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           cardClassName="w-full min-w-0 max-w-full p-4 gap-[26px] items-stretch"
         >
           <div className="flex flex-col items-center gap-[19px]">
-            <WalletIllustration />
+            <WalletHero />
 
             <div className="flex flex-col items-center gap-2 text-center">
               <h1 className="text-[24px] font-medium leading-[32px] text-grey-10 dark:text-grey-light-100">
