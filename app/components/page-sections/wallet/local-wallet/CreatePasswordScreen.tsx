@@ -206,11 +206,11 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
 
             <div className="flex flex-col items-center gap-2 text-center">
               <h1 className="text-[24px] font-medium leading-[32px] text-grey-10 dark:text-grey-light-100">
-                {variant === "access" ? "Enter Your Passcode" : "Create New Wallet"}
+                {variant === "access" ? "Enter Your Password" : "Create New Wallet"}
               </h1>
               <p className="max-w-[424px] text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-50 dark:text-grey-dark-500">
                 {variant === "access"
-                  ? "Enter your account passcode to confirm and get started"
+                  ? "Enter your account password to confirm and get started"
                   : "Enter your access key to continue or create a new wallet"}
               </p>
             </div>
@@ -219,20 +219,20 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2.5">
               <label
-                htmlFor="wallet-passcode"
+                htmlFor="wallet-password"
                 className="text-[14px] font-medium leading-5 tracking-[-0.28px] text-grey-dark-600 dark:text-grey-dark-600"
               >
-                Passcode
+                Password
               </label>
               <Input
-                id="wallet-passcode"
+                id="wallet-password"
                 value={password}
                 onChange={(e) => {
                   setPassword(e.target.value);
                   setError(null);
                 }}
                 type={showPassword ? "text" : "password"}
-                placeholder="Enter your passcode"
+                placeholder="Enter your password"
                 autoComplete="new-password"
                 aria-invalid={!!password && !isPasswordStrong(password)}
                 startAdornment={<Key className="size-5 sm:size-6" />}
@@ -242,7 +242,7 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
                     onClick={() => setShowPassword((s) => !s)}
                     className="text-grey-50 dark:text-grey-dark-600 hover:text-grey-10 dark:hover:text-grey-light-100"
                     aria-label={
-                      showPassword ? "Hide passcode" : "Show passcode"
+                      showPassword ? "Hide password" : "Show password"
                     }
                   >
                     {showPassword ? (
@@ -263,20 +263,20 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
 
             <div className="flex flex-col gap-2.5">
               <label
-                htmlFor="wallet-passcode-confirm"
+                htmlFor="wallet-password-confirm"
                 className="text-[14px] font-medium leading-5 tracking-[-0.28px] text-grey-dark-600 dark:text-grey-dark-600"
               >
-                Confirm Passcode
+                Confirm Password
               </label>
               <Input
-                id="wallet-passcode-confirm"
+                id="wallet-password-confirm"
                 value={confirm}
                 onChange={(e) => {
                   setConfirm(e.target.value);
                   setError(null);
                 }}
                 type={showConfirm ? "text" : "password"}
-                placeholder="Confirm your passcode"
+                placeholder="Confirm your password"
                 autoComplete="new-password"
                 aria-invalid={!!confirm && confirm !== password}
                 startAdornment={<Key className="size-5 sm:size-6" />}
@@ -285,7 +285,7 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
                     type="button"
                     onClick={() => setShowConfirm((s) => !s)}
                     className="text-grey-50 dark:text-grey-dark-600 hover:text-grey-10 dark:hover:text-grey-light-100"
-                    aria-label={showConfirm ? "Hide passcode" : "Show passcode"}
+                    aria-label={showConfirm ? "Hide password" : "Show password"}
                   >
                     {showConfirm ? (
                       <EyeOff className="size-5" />

@@ -51,7 +51,7 @@ const LocalWalletSetup: React.FC = () => {
   const [pendingName, setPendingName] = useState<string | null>(null);
   // Tracks how the user reached the create-password step so that screen
   // can render the right variant ("create" badge + headline vs the
-  // "access" asterisk hero + "Enter Your Passcode" wording).
+  // "access" asterisk hero + "Enter Your Password" wording).
   const [passwordFlow, setPasswordFlow] = useState<"create" | "access">(
     "create",
   );
@@ -116,7 +116,7 @@ const LocalWalletSetup: React.FC = () => {
         return (
           <ImportWalletScreen
             onImported={() => {
-              // Import is a single-screen flow — file + passcode are
+              // Import is a single-screen flow — file + password are
               // submitted from inside ImportWalletScreen, no separate
               // create-password step. After the wallet lands in the
               // local store, refresh and route back to welcome; the

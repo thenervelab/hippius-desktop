@@ -76,8 +76,8 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
   const { importEncryptedWallet, setSetupStep } = useLocalWallet();
   const [fileName, setFileName] = useState<string | null>(null);
   const [parsed, setParsed] = useState<ParsedBackup | null>(null);
-  const [passcode, setPasscode] = useState("");
-  const [showPasscode, setShowPasscode] = useState(false);
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -171,8 +171,8 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
   }, [loadFile]);
 
   const canSubmit = useMemo(
-    () => !!parsed && passcode.length > 0 && !submitting,
-    [parsed, passcode, submitting],
+    () => !!parsed && password.length > 0 && !submitting,
+    [parsed, password, submitting],
   );
 
   const handleSubmit = async () => {
@@ -190,7 +190,7 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
         toast.success("Wallet imported");
         onImported();
       } else {
-        setError("Failed to import wallet. Check the file and passcode.");
+        setError("Failed to import wallet. Check the file and password.");
       }
     } catch (e) {
       console.error("[ImportWalletScreen] import failed:", e);
@@ -338,30 +338,30 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
 
             <div className="flex flex-col gap-2.5">
               <label
-                htmlFor="import-passcode"
+                htmlFor="import-password"
                 className="text-[14px] font-medium leading-5 tracking-[-0.28px] text-grey-dark-600 dark:text-grey-dark-600"
               >
-                Passcode
+                Password
               </label>
               <Input
-                id="import-passcode"
-                value={passcode}
+                id="import-password"
+                value={password}
                 onChange={(e) => {
-                  setPasscode(e.target.value);
+                  setPassword(e.target.value);
                   setError(null);
                 }}
-                type={showPasscode ? "text" : "password"}
-                placeholder="Enter your passcode"
+                type={showPassword ? "text" : "password"}
+                placeholder="Enter your password"
                 autoComplete="off"
                 startAdornment={<Key className="size-5 sm:size-6" />}
                 endAdornment={
                   <button
                     type="button"
-                    onClick={() => setShowPasscode((s) => !s)}
+                    onClick={() => setShowPassword((s) => !s)}
                     className="text-grey-50 dark:text-grey-dark-600 hover:text-grey-10 dark:hover:text-grey-light-100"
-                    aria-label={showPasscode ? "Hide passcode" : "Show passcode"}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
                   >
-                    {showPasscode ? (
+                    {showPassword ? (
                       <EyeOff className="size-5" />
                     ) : (
                       <Eye className="size-5" />
