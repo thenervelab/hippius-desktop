@@ -137,7 +137,7 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
         >
           <div className="flex flex-col items-center gap-[19px]">
             {variant === "access" ? (
-              <div className="flex items-center justify-center -space-x-3 shrink-0">
+              <div className="flex items-center justify-center gap-2 shrink-0">
                 <WalletAsterisk
                   aria-hidden="true"
                   className="size-[88px]"
