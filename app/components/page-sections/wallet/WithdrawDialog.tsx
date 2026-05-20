@@ -12,6 +12,7 @@ import {
 import TransactionFlowToast, {
   type TransactionFlowState,
 } from "./shared/TransactionFlowToast";
+import WalletPasswordPrompt from "./WalletPasswordPrompt";
 import { useStaking } from "@/lib/hooks/useStaking";
 
 /* Withdraw redeemable hALPHA dialog.
@@ -49,34 +50,45 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
     if (open) refetch();
   }, [open, refetch]);
 
-  const runWithdrawFlow = useCallback(async () => {
-    if (isProcessingRef.current) return;
-    isProcessingRef.current = true;
-    setFlowState("pending");
-    setSubmittedAmount(withdrawableHip);
-    try {
-      await operations.withdrawUnbonded();
-      setFlowState("success");
-      await refetch();
-      onSuccess?.();
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setFlowState("error");
-      toast.error("Withdraw failed", { description: msg });
-    } finally {
-      isProcessingRef.current = false;
-    }
-  }, [operations, refetch, withdrawableHip, onSuccess]);
+  // Local-wallet signing migration (Step 6): withdraw_unbonded now
+  // requires the active wallet's password for keypair derivation.
+  const runWithdrawFlow = useCallback(
+    async (password: string) => {
+      if (isProcessingRef.current) return;
+      isProcessingRef.current = true;
+      setFlowState("pending");
+      setSubmittedAmount(withdrawableHip);
+      try {
+        await operations.withdrawUnbonded(password);
+        setFlowState("success");
+        await refetch();
+        onSuccess?.();
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setFlowState("error");
+        toast.error("Withdraw failed", { description: msg });
+      } finally {
+        isProcessingRef.current = false;
+      }
+    },
+    [operations, refetch, withdrawableHip, onSuccess],
+  );
 
-  const handleConfirm = async () => {
+  const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
+
+  const handleConfirm = () => {
     if (!hasWithdrawable) return;
-    onClose();
-    setIsMinimized(true);
-    await runWithdrawFlow();
+    setShowPasswordPrompt(true);
   };
 
-  const handleRetry = async () => {
-    await runWithdrawFlow();
+  const handlePasswordConfirmed = async (password: string) => {
+    onClose();
+    setIsMinimized(true);
+    await runWithdrawFlow(password);
+  };
+
+  const handleRetry = () => {
+    setShowPasswordPrompt(true);
   };
 
   const closeFlowToast = () => {
@@ -151,6 +163,14 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
           onDismiss={closeFlowToast}
         />
       )}
+
+      <WalletPasswordPrompt
+        open={showPasswordPrompt}
+        onClose={() => setShowPasswordPrompt(false)}
+        onConfirm={handlePasswordConfirmed}
+        title="Confirm Withdraw"
+        description={`Withdrawing ${withdrawableHip} hALPHA to your wallet`}
+      />
     </>
   );
 };

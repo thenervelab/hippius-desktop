@@ -15,6 +15,7 @@ import {
 import TransactionFlowToast, {
   type TransactionFlowState,
 } from "./shared/TransactionFlowToast";
+import WalletPasswordPrompt from "./WalletPasswordPrompt";
 import { useStaking } from "@/lib/hooks/useStaking";
 
 /* Unstake hALPHA dialog.
@@ -90,8 +91,10 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
     );
   }, [amount, bondedHip]);
 
+  // Local-wallet signing migration (Step 6): unbond now requires the
+  // active wallet's password to derive the signing keypair in Rust.
   const runUnstakeFlow = useCallback(
-    async (hipAmount: string) => {
+    async (hipAmount: string, password: string) => {
       if (isProcessingRef.current) return;
       isProcessingRef.current = true;
       setFlowState("pending");
@@ -100,7 +103,7 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
         const planck = await invoke<string>("to_plancks", {
           amount: hipAmount,
         });
-        await operations.unbond(planck);
+        await operations.unbond(planck, password);
         setFlowState("success");
         await refetch();
         onSuccess?.();
@@ -123,27 +126,40 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
     setShowConfirmation(true);
   };
 
-  const handleConfirmUnstake = async () => {
+  // After confirmation, open the password prompt instead of running the
+  // flow directly. Once the prompt resolves with a verified password we
+  // call runUnstakeFlow with it.
+  const [pendingAmount, setPendingAmount] = useState<string | null>(null);
+  const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
+
+  const handleConfirmUnstake = () => {
     if (!isAmountValid) {
       setShowConfirmation(false);
       return;
     }
-    const submitted = amount;
-    setAmount("");
-    setActiveButton(null);
+    setPendingAmount(amount);
     setShowConfirmation(false);
-    onClose();
-    setIsMinimized(true);
-    await runUnstakeFlow(submitted);
+    setShowPasswordPrompt(true);
   };
 
-  const handleRetryUnstake = async () => {
+  const handlePasswordConfirmed = async (password: string) => {
+    const submitted = pendingAmount ?? amount;
+    setPendingAmount(null);
+    setAmount("");
+    setActiveButton(null);
+    onClose();
+    setIsMinimized(true);
+    await runUnstakeFlow(submitted, password);
+  };
+
+  const handleRetryUnstake = () => {
     if (!submittedAmount) {
       setFlowState("idle");
       setIsMinimized(false);
       return;
     }
-    await runUnstakeFlow(submittedAmount);
+    setPendingAmount(submittedAmount);
+    setShowPasswordPrompt(true);
   };
 
   const closeFlowToast = () => {
@@ -318,6 +334,18 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
           onDismiss={closeFlowToast}
         />
       )}
+
+      <WalletPasswordPrompt
+        open={showPasswordPrompt}
+        onClose={() => setShowPasswordPrompt(false)}
+        onConfirm={handlePasswordConfirmed}
+        title="Confirm Unstake"
+        description={
+          pendingAmount
+            ? `Unstaking ${pendingAmount} hALPHA`
+            : "Confirm with your wallet password"
+        }
+      />
     </>
   );
 };

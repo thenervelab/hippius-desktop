@@ -15,6 +15,7 @@ import {
 import TransactionFlowToast, {
   type TransactionFlowState,
 } from "./shared/TransactionFlowToast";
+import WalletPasswordPrompt from "./WalletPasswordPrompt";
 import { useStaking } from "@/lib/hooks/useStaking";
 import { useHippiusBalance } from "@/lib/hooks/api/useHippiusBalance";
 
@@ -109,8 +110,12 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
     );
   }, [amount, availableHip]);
 
+  // Local-wallet signing migration (Step 6): every IPC call that signs
+  // takes the wallet password as its last argument. We capture the
+  // user's amount once they hit "Confirm Stake", open the password
+  // prompt, and pass the verified password into `operations.bond`.
   const runStakeFlow = useCallback(
-    async (hipAmount: string) => {
+    async (hipAmount: string, password: string) => {
       if (isProcessingRef.current) return;
       isProcessingRef.current = true;
       setFlowState("pending");
@@ -119,7 +124,7 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
         const planck = await invoke<string>("to_plancks", {
           amount: hipAmount,
         });
-        await operations.bond(planck);
+        await operations.bond(planck, password);
         setFlowState("success");
         await refetch();
         await refetchBalance();
@@ -143,27 +148,44 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
     setShowConfirmation(true);
   };
 
-  const handleConfirmStake = async () => {
+  // Stash the amount when the user OKs the confirmation step, so that
+  // when the password prompt resolves we still have a stable value to
+  // send (the input is wiped on confirm so the user doesn't accidentally
+  // re-fire the same amount).
+  const [pendingAmount, setPendingAmount] = useState<string | null>(null);
+  const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
+
+  const handleConfirmStake = () => {
     if (!isAmountValid) {
       setShowConfirmation(false);
       return;
     }
-    const submitted = amount;
-    setAmount("");
-    setActiveButton(null);
+    setPendingAmount(amount);
     setShowConfirmation(false);
-    onClose();
-    setIsMinimized(true);
-    await runStakeFlow(submitted);
+    setShowPasswordPrompt(true);
   };
 
-  const handleRetryStake = async () => {
+  const handlePasswordConfirmed = async (password: string) => {
+    const submitted = pendingAmount ?? amount;
+    setPendingAmount(null);
+    setAmount("");
+    setActiveButton(null);
+    onClose();
+    setIsMinimized(true);
+    await runStakeFlow(submitted, password);
+  };
+
+  // The retry path has to re-prompt for the password: by the time the
+  // user gets here the toast has lived past the original signing call
+  // and the password has been wiped from memory.
+  const handleRetryStake = () => {
     if (!submittedAmount) {
       setFlowState("idle");
       setIsMinimized(false);
       return;
     }
-    await runStakeFlow(submittedAmount);
+    setPendingAmount(submittedAmount);
+    setShowPasswordPrompt(true);
   };
 
   const closeFlowToast = () => {
@@ -325,6 +347,18 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
           onDismiss={closeFlowToast}
         />
       )}
+
+      <WalletPasswordPrompt
+        open={showPasswordPrompt}
+        onClose={() => setShowPasswordPrompt(false)}
+        onConfirm={handlePasswordConfirmed}
+        title="Confirm Stake"
+        description={
+          pendingAmount
+            ? `Staking ${pendingAmount} hALPHA on Hippius`
+            : "Confirm with your wallet password"
+        }
+      />
     </>
   );
 };

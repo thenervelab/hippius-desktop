@@ -46,11 +46,11 @@ interface TxResult {
 }
 
 interface StakingOperations {
-    bond: (amount: string) => Promise<void>;
-    bondExtra: (amount: string) => Promise<void>;
-    unbond: (amount: string) => Promise<void>;
-    withdrawUnbonded: () => Promise<void>;
-    claimRewards: () => Promise<void>;
+    bond: (amount: string, password: string) => Promise<void>;
+    bondExtra: (amount: string, password: string) => Promise<void>;
+    unbond: (amount: string, password: string) => Promise<void>;
+    withdrawUnbonded: (password: string) => Promise<void>;
+    claimRewards: (password: string) => Promise<void>;
 }
 
 export const useStaking = () => {
@@ -92,29 +92,33 @@ export const useStaking = () => {
         queryClient.invalidateQueries({ queryKey: ['hippius-balance'] });
     }, [queryClient]);
 
-    const bond = useCallback(async (amount: string): Promise<void> => {
-        await invoke<TxResult>('stake_bond', { amount });
+    // Step 6 of the local-wallet port: every signing IPC now takes the
+    // active local wallet's password so Rust can decrypt the mnemonic +
+    // derive the keypair on demand. The password is never cached; it
+    // travels exactly once per signing call, prompted by the FE.
+    const bond = useCallback(async (amount: string, password: string): Promise<void> => {
+        await invoke<TxResult>('stake_bond', { amount, password });
         invalidate();
     }, [invalidate]);
 
-    const bondExtra = useCallback(async (amount: string): Promise<void> => {
+    const bondExtra = useCallback(async (amount: string, password: string): Promise<void> => {
         // stake_bond auto-detects whether to use bond or bond_extra
-        await invoke<TxResult>('stake_bond', { amount });
+        await invoke<TxResult>('stake_bond', { amount, password });
         invalidate();
     }, [invalidate]);
 
-    const unbond = useCallback(async (amount: string): Promise<void> => {
-        await invoke<TxResult>('stake_unbond', { amount });
+    const unbond = useCallback(async (amount: string, password: string): Promise<void> => {
+        await invoke<TxResult>('stake_unbond', { amount, password });
         invalidate();
     }, [invalidate]);
 
-    const withdrawUnbonded = useCallback(async (): Promise<void> => {
-        await invoke<TxResult>('stake_withdraw_unbonded');
+    const withdrawUnbonded = useCallback(async (password: string): Promise<void> => {
+        await invoke<TxResult>('stake_withdraw_unbonded', { password });
         invalidate();
     }, [invalidate]);
 
-    const claimRewards = useCallback(async (): Promise<void> => {
-        await invoke<TxResult>('stake_claim_rewards');
+    const claimRewards = useCallback(async (password: string): Promise<void> => {
+        await invoke<TxResult>('stake_claim_rewards', { password });
         invalidate();
     }, [invalidate]);
 

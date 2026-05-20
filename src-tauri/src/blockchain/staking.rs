@@ -7,9 +7,14 @@ use crate::blockchain::types::TxResult;
 use tracing::info;
 
 /// Bond tokens for staking. If already bonded, calls `bond_extra` instead.
+/// Requires the active local wallet's password to derive a signing keypair.
 #[tauri::command]
-pub async fn stake_bond(state: tauri::State<'_, crate::app_state::AppState>, amount: String) -> Result<TxResult, crate::error::AppError> {
-    let (signer, address) = get_signer_and_address(&state)?;
+pub async fn stake_bond(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    amount: String,
+    password: String,
+) -> Result<TxResult, crate::error::AppError> {
+    let (signer, address) = get_signer_and_address(&state, &password).await?;
     let client = get_substrate_client(&state).await?;
 
     let amount: u128 = amount
@@ -67,9 +72,14 @@ pub async fn stake_bond(state: tauri::State<'_, crate::app_state::AppState>, amo
 }
 
 /// Unbond tokens (schedule for withdrawal after the unbonding period).
+/// Requires the active local wallet's password.
 #[tauri::command]
-pub async fn stake_unbond(state: tauri::State<'_, crate::app_state::AppState>, amount: String) -> Result<TxResult, crate::error::AppError> {
-    let signer = get_signer(&state)?;
+pub async fn stake_unbond(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    amount: String,
+    password: String,
+) -> Result<TxResult, crate::error::AppError> {
+    let signer = get_signer(&state, &password).await?;
     let client = get_substrate_client(&state).await?;
 
     let amount: u128 = amount
@@ -96,9 +106,13 @@ pub async fn stake_unbond(state: tauri::State<'_, crate::app_state::AppState>, a
 }
 
 /// Withdraw unbonded tokens (after the unbonding period completes).
+/// Requires the active local wallet's password.
 #[tauri::command]
-pub async fn stake_withdraw_unbonded(state: tauri::State<'_, crate::app_state::AppState>) -> Result<TxResult, crate::error::AppError> {
-    let (signer, address) = get_signer_and_address(&state)?;
+pub async fn stake_withdraw_unbonded(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    password: String,
+) -> Result<TxResult, crate::error::AppError> {
+    let (signer, address) = get_signer_and_address(&state, &password).await?;
     let client = get_substrate_client(&state).await?;
 
     let account_id = address
@@ -139,9 +153,13 @@ pub async fn stake_withdraw_unbonded(state: tauri::State<'_, crate::app_state::A
 }
 
 /// Claim staking rewards via `payout_stakers` for the previous era.
+/// Requires the active local wallet's password.
 #[tauri::command]
-pub async fn stake_claim_rewards(state: tauri::State<'_, crate::app_state::AppState>) -> Result<TxResult, crate::error::AppError> {
-    let (signer, address) = get_signer_and_address(&state)?;
+pub async fn stake_claim_rewards(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    password: String,
+) -> Result<TxResult, crate::error::AppError> {
+    let (signer, address) = get_signer_and_address(&state, &password).await?;
     let client = get_substrate_client(&state).await?;
 
     let account_id = address

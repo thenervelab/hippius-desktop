@@ -41,7 +41,7 @@ pub async fn get_account_balance(
 /// Query staking state for the current authenticated user.
 #[tauri::command]
 pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState>) -> Result<StakingInfo, crate::error::AppError> {
-    let address = get_substrate_address(&state)?;
+    let address = get_substrate_address(&state).await?;
     let client = get_substrate_client(&state).await?;
     let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| format!("Invalid SS58 address: {address}"))?;
 

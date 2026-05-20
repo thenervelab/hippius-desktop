@@ -17,6 +17,7 @@ import { WalletDialogShell } from "./shared/WalletDesign";
 import TransactionFlowToast, {
   type TransactionFlowState,
 } from "./shared/TransactionFlowToast";
+import WalletPasswordPrompt from "./WalletPasswordPrompt";
 
 import { useAddressValidation } from "@/lib/hooks/useAddressValidation";
 
@@ -152,8 +153,16 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
   // Wraps the Rust submit. Runs after the user confirms; the dialog +
   // confirmation are hidden and the bottom-right toast surfaces flow
   // status until dismissed.
+  // Local-wallet signing migration (Step 6): transfer_balance now
+  // requires the active wallet's password. We capture the password
+  // via WalletPasswordPrompt once the user OKs the confirmation step.
   const runTransferFlow = useCallback(
-    async (planck: string, amountForToast: string, addrForToast: string) => {
+    async (
+      planck: string,
+      amountForToast: string,
+      addrForToast: string,
+      password: string,
+    ) => {
       if (isProcessingRef.current) return;
       isProcessingRef.current = true;
       setLoading(true);
@@ -164,6 +173,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
         await invoke<{ txHash: string; success: boolean }>("transfer_balance", {
           recipientAddress: addrForToast,
           amount: planck,
+          password,
         });
         setFlowState("success");
         refetchBalance?.();
@@ -180,16 +190,30 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
     [refetchBalance, resetForm],
   );
 
-  const handleTransfer = async () => {
+  const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
+
+  const handleTransfer = () => {
+    if (!validatedPlanck) return;
+    // The confirmation step has already collected everything. Open the
+    // password prompt; the actual submit fires once a verified password
+    // is returned.
+    setShowConfirmation(false);
+    setShowPasswordPrompt(true);
+  };
+
+  const handlePasswordConfirmed = async (password: string) => {
     if (!validatedPlanck) return;
     const amountForToast = amount;
     const addrForToast = address;
     const planckForRetry = validatedPlanck;
-    // Close dialogs and surface the minimized toast immediately.
-    setShowConfirmation(false);
     onClose();
     setIsMinimized(true);
-    await runTransferFlow(planckForRetry, amountForToast, addrForToast);
+    await runTransferFlow(
+      planckForRetry,
+      amountForToast,
+      addrForToast,
+      password,
+    );
   };
 
   const handleRetryTransfer = async () => {
@@ -198,25 +222,9 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
       setIsMinimized(false);
       return;
     }
-    // Re-derive planck from the originally-submitted amount; the
-    // recipient could still have moved (no chain-state change) but
-    // the validate hop covers that — keep this lightweight.
-    try {
-      const result = await invoke<{ planckAmount: string }>(
-        "validate_send_balance",
-        { recipientAddress: submittedAddress, amount: submittedAmount },
-      );
-      await runTransferFlow(
-        result.planckAmount,
-        submittedAmount,
-        submittedAddress,
-      );
-    } catch (e: unknown) {
-      setFlowState("error");
-      toast.error("Validation failed", {
-        description: e instanceof Error ? e.message : String(e),
-      });
-    }
+    // Re-prompt for the password before retrying — by the time the
+    // user gets here the previous attempt's password has been wiped.
+    setShowPasswordPrompt(true);
   };
 
   const closeFlowToast = () => {
@@ -380,6 +388,18 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
           onDismiss={closeFlowToast}
         />
       )}
+
+      <WalletPasswordPrompt
+        open={showPasswordPrompt}
+        onClose={() => setShowPasswordPrompt(false)}
+        onConfirm={handlePasswordConfirmed}
+        title="Confirm Transfer"
+        description={
+          amount && address
+            ? `Sending ${amount} hALPHA`
+            : "Confirm with your wallet password"
+        }
+      />
     </>
   );
 };
