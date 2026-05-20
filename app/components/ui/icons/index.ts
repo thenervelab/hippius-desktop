@@ -234,3 +234,5 @@ export { default as GitCompareArrows } from "./GitCompareArrows";
 export { default as WalletWelcomeLogo } from "./WalletWelcomeLogo";
 export { default as ExcludeLogo } from "./ExcludeLogo";
 export { default as WalletAsterisk } from "./WalletAsterisk";
+export { default as FilePlus } from "./FilePlus";
+export { default as WalletBackupFile } from "./WalletBackupFile";
