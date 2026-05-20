@@ -1,19 +1,5 @@
 import { IconComponent } from "@/app/lib/types";
 
-/* Wallet hero illustration used on the local-wallet welcome screen.
- *
- * The exported Figma asset is a multi-layered illustration with
- * filter-based shadows and a dashed inner cutout pattern, so we keep
- * it as a single self-contained SVG component (the project's icon
- * convention) rather than fragmenting it into Tailwind divs.
- *
- * The artwork uses fixed dark grays (#252525, #181818, #3B3B3B) for
- * the wallet body and #1F66FF for the card. Against a white card
- * background that reads well; against the redesign's dark-mode card
- * background (#1a1a1a / #161616) the wallet body becomes a touch flat,
- * so callers wrap with the `dark:` brightness filter exposed via the
- * className prop (see WelcomeScreen for the pattern). */
-
 export const WalletWelcomeLogo: IconComponent = ({ className, ...props }) => (
   <svg
     viewBox="0 0 120 92"

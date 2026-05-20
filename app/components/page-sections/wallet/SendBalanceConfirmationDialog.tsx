@@ -7,12 +7,6 @@ import {
   WalletDialogFooter,
 } from "./shared/WalletDesign";
 
-/* Review step of the Send flow.
- *
- * Phase 2 of the wallet redesign — ported from the hippius-web console
- * onto WalletDialogShell. Renders the final amount + truncated
- * recipient address in an inset card, with Cancel + Confirm CTAs. */
-
 interface SendBalanceConfirmationDialogProps {
   open: boolean;
   onClose: () => void;

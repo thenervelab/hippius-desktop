@@ -92,10 +92,6 @@ export const useStaking = () => {
         queryClient.invalidateQueries({ queryKey: ['hippius-balance'] });
     }, [queryClient]);
 
-    // Step 6 of the local-wallet port: every signing IPC now takes the
-    // active local wallet's password so Rust can decrypt the mnemonic +
-    // derive the keypair on demand. The password is never cached; it
-    // travels exactly once per signing call, prompted by the FE.
     const bond = useCallback(async (amount: string, password: string): Promise<void> => {
         await invoke<TxResult>('stake_bond', { amount, password });
         invalidate();

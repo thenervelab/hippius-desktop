@@ -21,23 +21,6 @@ import WalletPasswordPrompt from "./WalletPasswordPrompt";
 
 import { useAddressValidation } from "@/lib/hooks/useAddressValidation";
 
-/* Send Balance dialog.
- *
- * Phase 2 of the wallet redesign — ported from hippius-web's
- * SendBalanceDialog onto WalletDialogShell, with the desktop signing
- * model (single local-wallet path through Rust IPCs) replacing the
- * console's extension-vs-mnemonic dual path.
- *
- * Three-stage flow:
- *   1. Input dialog (recipient + amount + MAX button + Available label).
- *   2. Confirmation dialog (SendBalanceConfirmationDialog).
- *   3. Minimized TransactionFlowToast (pending → success | error).
- *
- * Validation and the planck conversion both run through Rust:
- *   - compute_max_transferable(balance_planck)  → MAX amount minus fees.
- *   - validate_send_balance(recipient, amount)  → returns planckAmount.
- *   - transfer_balance(recipient, planck)       → submits the extrinsic. */
-
 export interface SendBalanceDialogProps {
   open: boolean;
   onClose: () => void;
@@ -153,9 +136,6 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
   // Wraps the Rust submit. Runs after the user confirms; the dialog +
   // confirmation are hidden and the bottom-right toast surfaces flow
   // status until dismissed.
-  // Local-wallet signing migration (Step 6): transfer_balance now
-  // requires the active wallet's password. We capture the password
-  // via WalletPasswordPrompt once the user OKs the confirmation step.
   const runTransferFlow = useCallback(
     async (
       planck: string,
@@ -194,9 +174,6 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
 
   const handleTransfer = () => {
     if (!validatedPlanck) return;
-    // The confirmation step has already collected everything. Open the
-    // password prompt; the actual submit fires once a verified password
-    // is returned.
     setShowConfirmation(false);
     setShowPasswordPrompt(true);
   };
@@ -222,8 +199,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
       setIsMinimized(false);
       return;
     }
-    // Re-prompt for the password before retrying — by the time the
-    // user gets here the previous attempt's password has been wiped.
+    // Retry has to re-prompt — the original password is long gone.
     setShowPasswordPrompt(true);
   };
 

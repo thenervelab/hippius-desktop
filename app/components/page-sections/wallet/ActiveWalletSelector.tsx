@@ -7,24 +7,6 @@ import { toast } from "sonner";
 
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 
-/* Active-wallet badge + dropdown.
- *
- * Renders as a chip on the wallet page header. Shows the currently-active
- * wallet's name and a truncated address, with a chevron that opens a
- * dropdown listing every local wallet. Clicking a non-active wallet
- * switches via `local_wallet_set_active`. The dropdown also exposes an
- * "Add another wallet" affordance that drops the user back into the
- * onboarding flow.
- *
- * Visual aligns with the Figma reference:
- *   - blue dot + "ACTIVE WALLET" label
- *   - wallet name below
- *   - truncated address pill with chevron on the right
- *
- * Desktop diverges from console's ActiveWalletSelector because there's no
- * browser-extension wallet here — every entry is a locally-stored wallet
- * managed by the Rust wallet module. */
-
 interface ActiveWalletSelectorProps {
   className?: string;
 }
@@ -39,8 +21,6 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Close on outside-click or Escape so the badge feels like a typical
-  // menu, not a sticky popover.
   useEffect(() => {
     if (!isOpen) return;
     const handleClick = (e: MouseEvent) => {
@@ -90,15 +70,12 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
 
   const handleAdd = () => {
     setIsOpen(false);
-    // Drop back into the onboarding flow's welcome screen — the
-    // orchestrator will reuse the same Create / Import paths.
     setSetupStep("welcome");
   };
 
+  // Reached only while the wallets list is loading — the gate
+  // component renders the onboarding flow when truly no wallet exists.
   if (!activeWallet) {
-    // No wallets at all — the gate component renders the onboarding
-    // flow instead of this selector, so seeing this branch in practice
-    // means the wallets list is loading. Render a quiet placeholder.
     return (
       <div
         className={cn(

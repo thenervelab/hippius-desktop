@@ -9,20 +9,9 @@ import { cn } from "@/lib/utils";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 
 interface CreateMnemonicScreenProps {
-  /** Called once the user confirms they've saved the mnemonic. Receives
-   * the freshly-generated mnemonic so the next screen (password setup)
-   * can hand it to `createWallet`. */
   onContinue: (mnemonic: string) => void;
   onBack: () => void;
 }
-
-/* Step 2 of the "create new wallet" flow.
- *
- * Generates a 12-word BIP-39 mnemonic via the Rust IPC, displays it in a
- * 3-column grid for the user to write down, and only enables "Continue"
- * once they've ticked the "I've saved it" checkbox. Mnemonic lives in
- * this component's React state — it never touches storage, never leaves
- * memory once the user navigates away. */
 
 const CreateMnemonicScreen: React.FC<CreateMnemonicScreenProps> = ({
   onContinue,
@@ -61,8 +50,6 @@ const CreateMnemonicScreen: React.FC<CreateMnemonicScreenProps> = ({
       await navigator.clipboard.writeText(mnemonic);
       setCopied(true);
       toast.success("Recovery phrase copied to clipboard");
-      // Defensive: clear the clipboard intent flag after the toast lives
-      // out its lifetime so the icon doesn't stay green forever.
       setTimeout(() => setCopied(false), 2500);
     } catch {
       toast.error("Failed to copy to clipboard");

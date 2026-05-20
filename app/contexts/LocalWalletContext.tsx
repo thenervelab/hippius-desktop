@@ -10,29 +10,7 @@ import React, {
   useState,
 } from "react";
 
-/* Local-wallet context.
- *
- * Ported from `feature/wallet-updates`. The original implementation kept
- * persistence (sql.js), crypto (CryptoJS), and key derivation
- * (`@polkadot/keyring`) in TypeScript. Per CLAUDE.md we keep all of that
- * in Rust — this file is now a thin React shell over the
- * `local_wallet_*` Tauri IPCs added in `src-tauri/src/wallet/commands.rs`.
- *
- * Key shape differences from the legacy TS implementation:
- *   - There is no `KeyringPair` in TS anymore. The unlocked keypair lives
- *     in Rust (after Step 6 of the port). For now we just track an
- *     "is unlocked" boolean derived from whether the user recently
- *     verified their password.
- *   - `signTransaction(password)` no longer returns a Polkadot pair; it
- *     returns a boolean indicating whether the password was accepted.
- *     Each signing IPC (transfer_balance, stake_bond, etc.) will take
- *     the password directly in Step 6 — until then signing still flows
- *     through the existing auth session mnemonic and this surface is
- *     not yet wired to it.
- */
-
-/** A wallet record as returned by the Rust IPC. Mirrors
- *  `PublicLocalWallet` in `src-tauri/src/wallet/repo.rs`. */
+/** Mirrors `PublicLocalWallet` in `src-tauri/src/wallet/repo.rs`. */
 export interface LocalWallet {
   id: number;
   name: string;
@@ -44,15 +22,14 @@ export interface LocalWallet {
 
 export type WalletSetupStep =
   | "loading"
-  | "welcome"          // No wallet yet — show create/import prompt
-  | "create-mnemonic"  // Show generated mnemonic to the user
-  | "create-password"  // Set password for the wallet being created
-  | "enter-password"   // (unused for now) — kept for parity with legacy flow
-  | "import-wallet"    // Paste an existing mnemonic
-  | "ready";           // At least one wallet exists; FE can browse it
+  | "welcome"
+  | "create-mnemonic"
+  | "create-password"
+  | "enter-password"
+  | "import-wallet"
+  | "ready";
 
 interface LocalWalletContextValue {
-  // State
   wallets: LocalWallet[];
   activeWallet: LocalWallet | null;
   isUnlocked: boolean;
@@ -60,7 +37,6 @@ interface LocalWalletContextValue {
   isLoading: boolean;
   hasWallets: boolean;
 
-  // Wallet management
   generateMnemonic: () => Promise<string>;
   validateMnemonic: (mnemonic: string) => Promise<boolean>;
   deriveAddress: (mnemonic: string) => Promise<string | null>;
@@ -84,13 +60,11 @@ interface LocalWalletContextValue {
   renameWallet: (walletId: number, name: string) => Promise<boolean>;
   removeWallet: (walletId: number) => Promise<boolean>;
 
-  // Authentication
   unlockWallet: (password: string) => Promise<boolean>;
   unlockWalletById: (walletId: number, password: string) => Promise<boolean>;
   verifyPassword: (password: string) => Promise<boolean>;
   lockWallet: () => void;
 
-  // Backup / recovery
   getDecryptedMnemonic: (password: string) => Promise<string | null>;
   getDecryptedMnemonicById: (
     walletId: number,
@@ -104,11 +78,9 @@ interface LocalWalletContextValue {
     exportedAt: string;
   } | null>;
 
-  // Navigation
   setSetupStep: (step: WalletSetupStep) => void;
   refreshWallets: () => Promise<void>;
 
-  // Utilities
   truncateAddress: (address: string, start?: number, end?: number) => string;
 }
 
@@ -152,8 +124,6 @@ export function LocalWalletProvider({
     }
   }, []);
 
-  // Initial load — decides whether to drop the user into the onboarding
-  // flow (welcome) or into the regular wallet UI (ready).
   useEffect(() => {
     let cancelled = false;
     const init = async () => {
@@ -218,8 +188,8 @@ export function LocalWalletProvider({
           password,
         });
         await refreshWallets();
-        // The user just typed the password — treat them as unlocked so the
-        // next signing action doesn't re-prompt for it immediately.
+        // User typed the password in the create flow — avoid an
+        // immediate re-prompt on their first signing action.
         setIsUnlocked(true);
         setSetupStep("ready");
         return true;
@@ -231,9 +201,8 @@ export function LocalWalletProvider({
     [refreshWallets],
   );
 
-  // Import is functionally identical to create from Rust's perspective —
-  // both call `local_wallet_create`. Kept as a separate function so the
-  // import-from-mnemonic onboarding screen reads naturally.
+  // Same Rust IPC as `createWallet`; kept as an alias so the import
+  // screen reads naturally at the call site.
   const importWallet = createWallet;
 
   const importEncryptedWallet = useCallback(
@@ -267,8 +236,8 @@ export function LocalWalletProvider({
       try {
         await invoke("local_wallet_set_active", { id: walletId });
         await refreshWallets();
-        // Switching wallets invalidates the previous unlocked state — the
-        // new active wallet has its own password.
+        // The new active wallet has its own password; force a prompt
+        // on the next signing action.
         setIsUnlocked(false);
         return true;
       } catch (e) {

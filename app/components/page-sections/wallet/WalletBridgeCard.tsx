@@ -6,15 +6,9 @@ import { Button } from "@/components/ui/button";
 import { GripIcon, GitCompareArrows } from "@/components/ui/icons";
 import { toast } from "sonner";
 
-/* BRIDGE TOKENS card. Matches the billing-page card chrome.
- *
- * Bridge work is deferred behind Phases 2-4 because the underlying
- * Rust IPC commands (bridge submit, bridge history) don't exist yet
- * and require dual-chain (Hippius + Bittensor) work that's a separate
- * scoped project. The card surface is rendered today so the wallet
- * page reads as the final shape; the CTA shows a toast directing
- * users to the standalone /stake?tab=bridge route once it's enabled. */
-
+// Bridge IPCs aren't built yet (dual-chain work, scoped separately);
+// the card surface ships now so the wallet page reads as the final
+// shape, but the CTA only toasts.
 interface WalletBridgeCardProps {
   className?: string;
 }

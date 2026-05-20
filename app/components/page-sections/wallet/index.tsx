@@ -24,22 +24,6 @@ import useBalanceTransactions from "@/app/lib/hooks/api/useBalanceTransactions";
 import useSystemBalance from "@/app/lib/hooks/api/useSystemBalance";
 import { getContacts } from "@/app/lib/helpers/addressBookDb";
 
-/* Wallet page — Phase 1 of the redesign.
- *
- * Layout mirrors the billing page (card chrome + table chrome) so the
- * two pages read as siblings. Three cards at the top (Balance, Stake,
- * Bridge), a Transaction Overview chart panel, and a 3-tab table
- * section (Transaction History / Bridge Transactions / Address Book).
- *
- * Phase 1 keeps existing data hooks (useBalanceTransactions,
- * useSystemBalance, useHippiusBalance) and existing dialog
- * implementations (SendBalanceDialog / ReceiveBalanceDialog /
- * AddNewAddressDialog). Later phases swap each surface in turn:
- *   - Phase 2 rebuilds Send / Receive on WalletDialogShell.
- *   - Phase 3 ships Stake / Unstake / Withdraw dialogs.
- *   - Phase 4 moves address-book persistence to Rust SQLite.
- *   - Bridge is deferred until the Rust IPC backend lands. */
-
 const TAB_OPTIONS = [
   { value: "Transaction History" as const, label: "Transaction History" },
   { value: "Bridge Transactions" as const, label: "Bridge Transactions" },

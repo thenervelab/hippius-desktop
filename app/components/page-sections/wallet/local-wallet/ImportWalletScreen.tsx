@@ -11,15 +11,6 @@ interface ImportWalletScreenProps {
   onBack: () => void;
 }
 
-/* Step 2 of the "import existing wallet" flow.
- *
- * The user pastes a 12 or 24-word mnemonic. We validate it via the Rust
- * IPC (which calls bip39::Mnemonic::parse_normalized) before letting them
- * continue, and surface a derived address as confirmation that the phrase
- * is well-formed. The mnemonic lives in component state only — handed
- * directly to the orchestrator's `onContinue` callback when the user
- * proceeds, never persisted anywhere prior. */
-
 const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
   onContinue,
   onBack,
@@ -30,9 +21,8 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
   const [previewAddress, setPreviewAddress] = useState<string | null>(null);
   const [isValid, setIsValid] = useState(false);
 
-  // Debounced validate-and-derive. The IPC is cheap (pure-Rust bip39
-  // parse + sr25519 derive) so 300ms is enough buffer to feel snappy
-  // without spamming the bridge on every keystroke.
+  // 300ms debounce keeps the IPC off the keystroke path while still
+  // feeling instant.
   useEffect(() => {
     const trimmed = mnemonic.trim();
     if (!trimmed) {

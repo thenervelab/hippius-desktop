@@ -13,21 +13,6 @@ import {
 } from "./shared/WalletDesign";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 
-/* Password prompt for signing actions.
- *
- * Step 6 of the local-wallet port flipped every signing IPC
- * (transfer_balance, stake_bond, stake_unbond, stake_withdraw_unbonded,
- * stake_claim_rewards) so it requires the active local wallet's password
- * — Rust verifies the hash, decrypts the mnemonic, derives the keypair,
- * and signs, all in one IPC call. The password is never cached by Rust
- * and lives in this component's React state only for the duration of
- * the prompt.
- *
- * The host dialog is responsible for orchestrating the password flow:
- * mount <WalletPasswordPrompt open ... /> when the user clicks the
- * confirm button, await the user's password via `onConfirm`, then call
- * the signing IPC with that password as the last argument. */
-
 export interface WalletPasswordPromptProps {
   open: boolean;
   onClose: () => void;
@@ -60,15 +45,14 @@ const WalletPasswordPrompt: React.FC<WalletPasswordPromptProps> = ({
   const [verifying, setVerifying] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Reset state every time the prompt is reopened so a previous error
-  // or typed value doesn't leak between consecutive signing flows.
+  // Reset on reopen so a stale password / error from the previous
+  // signing flow doesn't leak into the next one.
   useEffect(() => {
     if (!open) return;
     setPassword("");
     setShow(false);
     setError(null);
     setVerifying(false);
-    // Focus the input on open — this is a one-thing prompt; type and go.
     const t = setTimeout(() => inputRef.current?.focus(), 30);
     return () => clearTimeout(t);
   }, [open]);
@@ -85,9 +69,8 @@ const WalletPasswordPrompt: React.FC<WalletPasswordPromptProps> = ({
         setError("Incorrect password");
         return;
       }
-      // Capture the password before clearing local state — onConfirm
-      // typically kicks off the signing IPC and we want this prompt to
-      // close immediately while that runs in the host dialog.
+      // Snapshot before clear so the IPC fires with the value even
+      // though the prompt is closing.
       const submitted = password;
       setPassword("");
       onClose();

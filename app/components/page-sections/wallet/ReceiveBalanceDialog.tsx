@@ -10,17 +10,6 @@ import { InGoing } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { WalletDialogShell } from "./shared/WalletDesign";
 
-/* Receive Balance dialog.
- *
- * Phase 2 of the wallet redesign — ported from the hippius-web console
- * onto WalletDialogShell. Surfaces an info banner explaining the SS58
- * address, the QR code itself, and a copy-to-clipboard address row.
- *
- * Desktop signs locally so there's no extension-vs-mnemonic branching
- * in this surface — just renders the local account's polkadot address.
- * The confidentiality masking from console is intentionally dropped:
- * the desktop confidentiality system isn't wired up yet. */
-
 export interface ReceiveBalanceDialogProps {
   open: boolean;
   onClose: () => void;

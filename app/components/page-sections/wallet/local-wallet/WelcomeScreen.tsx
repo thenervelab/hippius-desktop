@@ -11,24 +11,6 @@ import { Key, WalletWelcomeLogo } from "@/components/ui/icons";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { getDiagonalTextureSvgBackgroundImage } from "@/app/lib/ui-textures";
 
-/* Wallet onboarding welcome screen.
- *
- * Visual recipe matches the Help & Support page's access-key login
- * gate so the two onboarding surfaces feel like siblings:
- *
- *   1. Full-screen diagonal-stripe corner tiles sized to the viewport
- *      so the texture reaches every edge regardless of card width.
- *   2. Project's BackgroundContainer for the inner chrome — gray outer
- *      ring, framed inner stripe pattern, four corner-bracket
- *      "hippo logos", and a white content card. The default blue
- *      accent ring is suppressed via borderClassName="bg-transparent"
- *      per the wallet design (Help & Support keeps it).
- *
- * Three onboarding entry paths render inside the card body: inline
- * Access Key + Continue (paste a mnemonic and skip the dedicated import
- * screen), "Create New Wallet" link, and "Import Your Wallet" link.
- * The orchestrator (LocalWalletSetup) wires the callbacks. */
-
 const cornerTextureLight = getDiagonalTextureSvgBackgroundImage({
   opacity: 0.21,
 });
@@ -43,20 +25,9 @@ interface WelcomeScreenProps {
   onAccessKeyContinue: (mnemonic: string) => void;
 }
 
-/* Wallet hero illustration matched 1:1 to the Figma export
- * (app/components/ui/icons/WalletWelcomeLogo.tsx). 120×92 viewBox
- * rendered at 120×92 to keep it crisp on hidpi; the surrounding card
- * is wide enough that the natural size sits comfortably.
- *
- * Dark-mode handling: the SVG's wallet body uses dark grays (#252525,
- * #181818, #3B3B3B) that read fine against the white card surface
- * but flatten against the redesign's #1a1a1a dark card. The
- * `dark:[filter:brightness(1.55)_contrast(0.92)]` lifts the wallet
- * body just enough that the layered shadows, dashed cutouts, and
- * blue card all stay legible without changing the artwork itself.
- *
- * The blue card and the embedded hippo logo stay vibrant in both
- * themes — they don't need any tweak. */
+// The exported wallet artwork uses dark grays that flatten against the
+// dark card surface; the brightness filter lifts the body just enough
+// to keep the layered shadows and dashed cutouts legible.
 const WalletHero: React.FC = () => (
   <WalletWelcomeLogo
     aria-hidden="true"
@@ -106,10 +77,8 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   return (
     <div className="flex flex-1 w-full items-center justify-center px-4 py-6 overflow-hidden">
       <div className="relative">
-        {/* Full-screen diagonal-stripe corner tiles — same recipe as
-            the support page's AccessKeyLoginGate. The w-screen
-            sizing makes the texture cover the visible area
-            regardless of card dimensions. */}
+        {/* Texture tiles are sized to the viewport, not the card, so
+            wide displays don't end up with blank quadrants. */}
         <div
           aria-hidden="true"
           className="pointer-events-none absolute right-full bottom-full w-screen h-screen bg-[rgba(242,242,242,0.42)] dark:hidden"
@@ -132,30 +101,18 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
         />
 
         <BackgroundContainer
-          // Figma form/input is 462px wide; the inner card adds 16px
-          // padding each side, so the outer max needs to be ~494px.
           className="relative w-full max-w-[594px]"
           fillClassName="fill-[#f9f9f9] dark:fill-[#202020]"
           strokeClassName="stroke-[#b3b3b3] dark:stroke-[#6c6c6c]"
-          // Suppress the default blue accent ring per the Figma — the
-          // outer wrapper and the white card stay; the inner colored
-          // border just disappears.
+          // The default blue accent ring is suppressed for this card; the
+          // Help & Support gate keeps it, the wallet welcome doesn't.
           borderClassName="bg-transparent dark:bg-transparent p-0 sm:p-0"
           contentClassName="flex justify-center"
-          // Outer container per the Figma spec: white background, 12px
-          // padding, 22px radius. Dark-mode swap to #1a1a1a so the
-          // chrome doesn't disappear into the page background while
-          // staying just above the inner card's #161616 surface.
           shellClassName={cn(
             "w-full min-w-0 max-w-[494px]",
             "bg-white dark:bg-[#1a1a1a]",
             "p-3 sm:p-3 rounded-[22px] sm:rounded-[22px]",
           )}
-          // Inner card per the Figma spec: 16px padding, 26px gap,
-          // 10px radius, 5-layer drop shadow, white background. The
-          // shadow stack is the exact Figma export. Dark mode: solid
-          // #161616 card, shadow stack stays but reads softer against
-          // the dark surface (its alpha keeps things subtle).
           cardClassName={cn(
             "w-full min-w-0 max-w-full",
             "p-4 gap-[26px] items-stretch",
@@ -168,14 +125,9 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
             <WalletHero />
 
             <div className="flex flex-col items-center gap-2 text-center">
-              {/* Title — Figma: 24/32 Geist Medium, #0A0A0A. Token
-                  `text-grey-10` resolves to #0A0A0A so the literal
-                  matches; dark mode lifts to grey-light-100 (#fff). */}
               <h1 className="text-[24px] font-medium leading-[32px] text-grey-10 dark:text-grey-light-100">
                 Welcome to Hippius Wallet
               </h1>
-              {/* Subtitle — Figma: 16/22 Geist Medium, #4F4F4F,
-                  letter-spacing -0.32px, wrapped to 424px. */}
               <p className="max-w-[424px] text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-50 dark:text-grey-dark-500">
                 Enter your wallet mnemonic to continue or create a new wallet
               </p>
@@ -184,19 +136,14 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
 
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2.5">
-              {/* Label — Figma: 14/20 Geist Medium, #A3A3A3 (Body/03),
-                  tracking -0.28px. `text-grey-dark-600` resolves to
-                  #A3A3A3; keep the same value in dark mode since it
-                  reads fine against the #161616 card surface. */}
               <label
                 htmlFor="wallet-access-key"
                 className="text-[14px] font-medium leading-5 tracking-[-0.28px] text-grey-dark-600 dark:text-grey-dark-600"
               >
                 Access Key
               </label>
-              {/* Use the project's Input adornment slot rather than an
-                  absolute icon — keeps the shell's min-h-[54px] + p-4
-                  geometry exactly matching the Figma input (462×54). */}
+              {/* Adornment slot keeps the shell's min-h-[54px] geometry —
+                  an absolute icon + pl-* would inflate total height. */}
               <Input
                 id="wallet-access-key"
                 type="password"
@@ -236,16 +183,6 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
             </Button>
           </div>
 
-          {/* Footer prompts — Figma:
-                Plain prompt text: 18/24 Geist Medium, #4F4F4F,
-                  tracking -0.36px (Body/01/Medium).
-                Action link:      18/24 Geist Semibold, #0A0A0A,
-                  tracking -0.36px (Body/01/Semibold).
-              Tokens map exactly: text-grey-50 = #4F4F4F,
-              text-grey-10 = #0A0A0A. Hover lifts the action to
-              primary-50 (#3167dd) in light, primary-brand-dark in
-              dark, with an underline so the affordance is obvious
-              regardless of color contrast. */}
           <div className="flex flex-col gap-2 text-center">
             <p className="flex items-center justify-center gap-2 text-[18px] leading-6 tracking-[-0.36px]">
               <span className="font-medium text-grey-50 dark:text-grey-dark-500">

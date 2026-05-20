@@ -15,12 +15,6 @@ import {
   WalletDialogFooter,
 } from "./shared/WalletDesign";
 
-/* Edit Address dialog.
- *
- * Phase 4 of the wallet redesign — ports the address-book edit flow
- * from the legacy DialogContainer onto WalletDialogShell. Persistence
- * already lives in Rust SQLite via update_contact. */
-
 interface Contact {
   id: number;
   name: string;

@@ -30,14 +30,6 @@ import { deleteContact } from "@/app/lib/helpers/addressBookDb";
 import EditAddressDialog from "./EditAddressDialog";
 import { formatDate } from "./TransactionHistoryTable";
 
-/* Address Book tab.
- *
- * Mirrors BillingnHistoryTable's chrome (same Th/Td primitives, same
- * border + row-alternation palette, SkeletonTableRow on load,
- * MiniPaginationControl + Pagination). Phase 4 of the wallet redesign
- * will swap the IndexedDB persistence layer below for Rust SQLite —
- * the table surface stays the same. */
-
 interface Contact {
   id: number;
   name: string;

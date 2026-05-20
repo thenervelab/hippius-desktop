@@ -17,14 +17,6 @@ import SendBalanceDialog from "./SendBalanceDialog";
 import ReceiveBalanceDialog from "./ReceiveBalanceDialog";
 import { toast } from "sonner";
 
-/* MY BALANCE card. Mirrors the billing-page CreditsWidget chrome:
- * outer rounded card with a gray header strip + inner white panel.
- *
- * The Receive / Send buttons wire to the existing SendBalanceDialog /
- * ReceiveBalanceDialog implementations during Phase 1 of the wallet
- * redesign — Phase 2 swaps those dialogs for the new
- * WalletDialogShell-based versions without changing this surface. */
-
 interface WalletBalanceCardProps {
   className?: string;
   refetchTransactions?: () => void;

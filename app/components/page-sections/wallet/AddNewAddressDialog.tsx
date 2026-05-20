@@ -15,13 +15,6 @@ import {
   WalletDialogFooter,
 } from "./shared/WalletDesign";
 
-/* Add New Address dialog.
- *
- * Phase 4 of the wallet redesign — ports the address-book add flow
- * from the legacy DialogContainer onto WalletDialogShell. Persistence
- * already lives in Rust SQLite via add_contact, so this surface is
- * purely a UI rewrite (same hook wiring, same validation). */
-
 interface AddNewAddressDialogProps {
   open: boolean;
   onClose: () => void;

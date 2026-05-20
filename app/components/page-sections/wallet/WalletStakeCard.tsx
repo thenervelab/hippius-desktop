@@ -10,13 +10,6 @@ import StakeDialog from "./StakeDialog";
 import UnstakeDialog from "./UnstakeDialog";
 import WithdrawDialog from "./WithdrawDialog";
 
-/* STAKE hALPHA card. Matches the billing-page card chrome.
- *
- * Phase 3 of the wallet redesign wires the Stake Now / Unstake /
- * Withdraw CTAs to dialog-based flows built on WalletDialogShell.
- * The Withdraw row only renders when there's a redeemable balance
- * (chunks that have finished their unbonding period). */
-
 interface WalletStakeCardProps {
   className?: string;
 }

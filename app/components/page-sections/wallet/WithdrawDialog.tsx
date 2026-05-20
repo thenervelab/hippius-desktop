@@ -15,16 +15,6 @@ import TransactionFlowToast, {
 import WalletPasswordPrompt from "./WalletPasswordPrompt";
 import { useStaking } from "@/lib/hooks/useStaking";
 
-/* Withdraw redeemable hALPHA dialog.
- *
- * Phase 3 of the wallet redesign. Single confirmation dialog (no
- * amount input) since withdraw consumes all withdrawable balance —
- * the user just confirms and the Rust IPC sweeps the chunks that
- * have finished their unbonding period.
- *
- * Rust IPC:
- *   - stake_withdraw_unbonded()  → no args, sweeps redeemable. */
-
 interface WithdrawDialogProps {
   open: boolean;
   onClose: () => void;
@@ -50,8 +40,6 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
     if (open) refetch();
   }, [open, refetch]);
 
-  // Local-wallet signing migration (Step 6): withdraw_unbonded now
-  // requires the active wallet's password for keypair derivation.
   const runWithdrawFlow = useCallback(
     async (password: string) => {
       if (isProcessingRef.current) return;

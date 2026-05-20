@@ -11,25 +11,12 @@ import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 
 interface CreatePasswordScreenProps {
   mnemonic: string;
-  /** Default name pre-filled in the input. Used so re-entering the
-   * screen after a back-and-forth keeps the user's chosen name. */
   initialName?: string;
   onCreated: () => void;
   onBack: () => void;
 }
 
 const MIN_LEN = 8;
-
-/* Final step of the create/import flows.
- *
- * Collects:
- *   - A wallet display name (defaults to "Main Wallet" — the user can
- *     rename later from the active-wallet selector).
- *   - A password used to encrypt the mnemonic at rest.
- *
- * On submit, calls the context's `createWallet`. The mnemonic is handed
- * off to Rust via `local_wallet_create` and never seen by this component
- * after the IPC resolves. */
 
 const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
   mnemonic,

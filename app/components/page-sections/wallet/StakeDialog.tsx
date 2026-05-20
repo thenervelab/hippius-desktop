@@ -19,22 +19,6 @@ import WalletPasswordPrompt from "./WalletPasswordPrompt";
 import { useStaking } from "@/lib/hooks/useStaking";
 import { useHippiusBalance } from "@/lib/hooks/api/useHippiusBalance";
 
-/* Stake hALPHA dialog.
- *
- * Phase 3 of the wallet redesign — ported from hippius-web's
- * StakeDialog onto WalletDialogShell, replacing the dual signer paths
- * with desktop's single local-wallet path through Rust IPCs.
- *
- * Three-step flow:
- *   1. Input dialog (amount + MAX/50%/25% chips + "You have" label).
- *   2. Confirmation dialog (action badge + amount).
- *   3. Minimized TransactionFlowToast (pending → success | error).
- *
- * Rust IPCs:
- *   - to_plancks(amount)            → HIP string → planck integer.
- *   - stake_bond(amount)            → submits bond_extra or bond
- *                                     (Rust auto-detects which). */
-
 interface StakeDialogProps {
   open: boolean;
   onClose: () => void;
@@ -110,10 +94,6 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
     );
   }, [amount, availableHip]);
 
-  // Local-wallet signing migration (Step 6): every IPC call that signs
-  // takes the wallet password as its last argument. We capture the
-  // user's amount once they hit "Confirm Stake", open the password
-  // prompt, and pass the verified password into `operations.bond`.
   const runStakeFlow = useCallback(
     async (hipAmount: string, password: string) => {
       if (isProcessingRef.current) return;
@@ -148,10 +128,8 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
     setShowConfirmation(true);
   };
 
-  // Stash the amount when the user OKs the confirmation step, so that
-  // when the password prompt resolves we still have a stable value to
-  // send (the input is wiped on confirm so the user doesn't accidentally
-  // re-fire the same amount).
+  // Held outside `amount` so the value survives the input being
+  // wiped between confirm and the eventual password-prompt resolve.
   const [pendingAmount, setPendingAmount] = useState<string | null>(null);
   const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
 
@@ -175,9 +153,8 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
     await runStakeFlow(submitted, password);
   };
 
-  // The retry path has to re-prompt for the password: by the time the
-  // user gets here the toast has lived past the original signing call
-  // and the password has been wiped from memory.
+  // Retry from the error-state toast re-prompts for the password —
+  // the original prompt's value is long gone by then.
   const handleRetryStake = () => {
     if (!submittedAmount) {
       setFlowState("idle");

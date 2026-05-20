@@ -18,17 +18,6 @@ import TransactionFlowToast, {
 import WalletPasswordPrompt from "./WalletPasswordPrompt";
 import { useStaking } from "@/lib/hooks/useStaking";
 
-/* Unstake hALPHA dialog.
- *
- * Phase 3 of the wallet redesign — mirrors the Stake dialog shape but
- * pulls the available cap from currently-bonded balance (you can only
- * unstake what's already bonded). The confirmation screen adds a
- * warning block explaining the unbonding period.
- *
- * Rust IPCs:
- *   - to_plancks(amount)   → HIP string → planck integer.
- *   - stake_unbond(amount) → submits the unbond extrinsic. */
-
 interface UnstakeDialogProps {
   open: boolean;
   onClose: () => void;
@@ -91,8 +80,6 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
     );
   }, [amount, bondedHip]);
 
-  // Local-wallet signing migration (Step 6): unbond now requires the
-  // active wallet's password to derive the signing keypair in Rust.
   const runUnstakeFlow = useCallback(
     async (hipAmount: string, password: string) => {
       if (isProcessingRef.current) return;
@@ -126,9 +113,6 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
     setShowConfirmation(true);
   };
 
-  // After confirmation, open the password prompt instead of running the
-  // flow directly. Once the prompt resolves with a verified password we
-  // call runUnstakeFlow with it.
   const [pendingAmount, setPendingAmount] = useState<string | null>(null);
   const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
 
