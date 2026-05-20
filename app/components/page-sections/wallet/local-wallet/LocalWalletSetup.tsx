@@ -115,15 +115,15 @@ const LocalWalletSetup: React.FC = () => {
       case "import-wallet":
         return (
           <ImportWalletScreen
-            onContinue={(mnemonic) => {
-              setPendingMnemonic(mnemonic);
-              // Import flow currently still routes through the create-
-              // password step (uses the "create" variant chrome). The
-              // Figma calls for skipping this step entirely; that needs
-              // a separate refactor of ImportWalletScreen since
-              // createWallet requires a password.
-              setPasswordFlow("create");
-              setSetupStep("create-password");
+            onImported={() => {
+              // Import is a single-screen flow — file + passcode are
+              // submitted from inside ImportWalletScreen, no separate
+              // create-password step. After the wallet lands in the
+              // local store, refresh and route back to welcome; the
+              // wallet selector will switch to the new entry on its
+              // own once refreshWallets settles.
+              void refreshWallets();
+              setSetupStep("welcome");
             }}
             onBack={() => setSetupStep("welcome")}
           />
