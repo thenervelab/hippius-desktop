@@ -15,8 +15,6 @@ import {
   Tr,
   Th,
   Td,
-  Pagination,
-  MiniPaginationControl,
   SkeletonTableRow,
 } from "@/components/ui/table";
 import { AlertCircle } from "lucide-react";
@@ -70,29 +68,23 @@ interface TicketsTableProps {
   isLoading?: boolean;
   isError?: boolean;
   isRefreshing?: boolean;
-  currentPage?: number;
-  totalPages?: number;
-  totalCount?: number;
-  pageSize?: number;
-  onPageChange?: (page: number) => void;
-  onPageSizeChange?: (size: number) => void;
   onViewMessages?: (ticket: SupportTicket) => void;
   onCloseTicket?: (ticket: SupportTicket) => void;
   /** Click handler for the "+ New Ticket" CTA inside the empty state. */
   onCreateTicket?: () => void;
 }
 
+// Skeleton row count while the all-tickets request is in flight. Used
+// only for the loading state; the real list renders every ticket the
+// backend returns (the support page issues a single un-paginated
+// fetch — see ALL_TICKETS_LIMIT in support/index.tsx).
+const LOADING_SKELETON_ROWS = 8;
+
 const TicketsTable: React.FC<TicketsTableProps> = ({
   data = [],
   isLoading = false,
   isError = false,
   isRefreshing = false,
-  currentPage = 1,
-  totalPages = 1,
-  totalCount = 0,
-  pageSize = 10,
-  onPageChange,
-  onPageSizeChange,
   onViewMessages,
   onCloseTicket,
   onCreateTicket,
@@ -263,7 +255,7 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
             </THead>
             <TBody>
               <SkeletonTableRow
-                rows={pageSize}
+                rows={LOADING_SKELETON_ROWS}
                 columns={HEADERS.length}
                 columnWidths={SKEL_WIDTHS}
                 rowClassName="odd:bg-[#fbfbfb] even:bg-[#f5f5f5] dark:odd:bg-[#161616] dark:even:bg-[#1e1e1e]"
@@ -293,19 +285,6 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
   // ── Loaded ─────────────────────────────────────────────────────────────
   return (
     <>
-      {totalCount > pageSize && (
-        <div className="flex justify-end px-3 pt-3 mb-3">
-          <MiniPaginationControl
-            currentPage={currentPage}
-            totalPages={totalPages}
-            pageSize={pageSize}
-            totalCount={totalCount}
-            onPrev={() => onPageChange?.(Math.max(1, currentPage - 1))}
-            onNext={() => onPageChange?.(Math.min(totalPages, currentPage + 1))}
-          />
-        </div>
-      )}
-
       <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
         <div className="overflow-x-auto custom-scrollbar-thin">
           <Table className={MIN_W}>
@@ -356,19 +335,6 @@ const TicketsTable: React.FC<TicketsTableProps> = ({
           </Table>
         </div>
       </TableWrapper>
-
-      {totalCount > pageSize && (
-        <div className="px-3 pb-3 mt-3">
-          <Pagination
-            currentPage={currentPage}
-            totalPages={totalPages}
-            setPage={(p) => onPageChange?.(p)}
-            totalCount={totalCount}
-            pageSize={pageSize}
-            setPageSize={(s) => onPageSizeChange?.(s)}
-          />
-        </div>
-      )}
     </>
   );
 };

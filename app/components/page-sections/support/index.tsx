@@ -29,12 +29,15 @@ import CreateButton from "../../ui/button/CreateButton";
 import ConfirmModal from "./SupportConfirmModal";
 import { OAuthButtonsGroup } from "../../auth/OAuthButtons";
 
+// Single-page tickets fetch — the help-and-support page now lists all
+// tickets in one shot rather than paginating. 1000 is a safe ceiling
+// for any realistic user; the backend caps far below this in practice.
+const ALL_TICKETS_LIMIT = 1000;
+
 const Support: React.FC = () => {
   const { oauthSession } = useWalletAuth();
   const createTicketModalRef = useRef<CreateTicketModalRef>(null);
 
-  const [pageSize, setPageSize] = useState(10);
-  const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -56,14 +59,9 @@ const Support: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  // Reset to first page when search term changes
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [debouncedSearchTerm]);
-
   const { data, isLoading, error, refetch, isRefetching } = useSupportTickets({
-    page: currentPage,
-    limit: pageSize,
+    page: 1,
+    limit: ALL_TICKETS_LIMIT,
     search: debouncedSearchTerm,
   });
 
@@ -113,12 +111,6 @@ const Support: React.FC = () => {
       return statusA - statusB;
     });
   }, [data?.results]);
-
-  const totalCount = data?.count ?? 0;
-  const totalPages = useMemo(
-    () => (totalCount ? Math.ceil(totalCount / pageSize) : 1),
-    [totalCount, pageSize]
-  );
 
   const handleCreateTicket = () => {
     setIsModalOpen(true);
@@ -329,15 +321,6 @@ const Support: React.FC = () => {
                       isLoading={isLoading}
                       isError={!!error}
                       isRefreshing={isRefetching}
-                      currentPage={currentPage}
-                      totalPages={totalPages}
-                      totalCount={totalCount}
-                      pageSize={pageSize}
-                      onPageChange={setCurrentPage}
-                      onPageSizeChange={(s) => {
-                        setPageSize(s);
-                        setCurrentPage(1);
-                      }}
                       onViewMessages={handleViewMessages}
                       onCloseTicket={handleCloseTicket}
                       onCreateTicket={handleCreateTicket}
