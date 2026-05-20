@@ -93,10 +93,10 @@ export const ONBOARDING_SCREENS: OnboardingScreen[] = [
   },
   {
     id: 5,
-    badges: [{ text: "Mnemonic Seed" }],
-    heading: "Your mnemonic seed is your master key",
-    subtitle: "This 12 word mnemonic seed is the only way to recover your account.",
-    featureLink: "Lose your mnemonic seed and your files are gone, no exceptions",
+    badges: [{ text: "Access Key" }],
+    heading: "Your access key is your master key",
+    subtitle: "This 12 word access key is the only way to recover your account.",
+    featureLink: "Lose your access key and your files are gone, no exceptions",
     body: "Write it down on paper. Store it somewhere offline and secure. Never share it, not even with Hippius support. Keep copies in at least two different locations.",
     pills: [
       "Only you hold the keys",
