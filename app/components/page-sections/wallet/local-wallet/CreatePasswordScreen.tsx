@@ -22,6 +22,37 @@ const cornerTextureDark = getDiagonalTextureSvgBackgroundImage({
 
 const MIN_LEN = 8;
 
+// Each rule's `test` runs against the entered password; failures are
+// surfaced inline as a single "Password must contain X, Y, Z" message
+// so the user sees exactly what's missing without a list of red dots.
+const PASSWORD_RULES = [
+  { label: "a lowercase letter", test: (p: string) => /[a-z]/.test(p) },
+  { label: "an uppercase letter", test: (p: string) => /[A-Z]/.test(p) },
+  { label: "a number", test: (p: string) => /\d/.test(p) },
+  { label: "a special character", test: (p: string) => /[^A-Za-z0-9]/.test(p) },
+];
+
+function describePasswordIssue(password: string, confirm: string): string | null {
+  if (!password && !confirm) return null;
+  if (password.length < MIN_LEN) {
+    return `Password must be at least ${MIN_LEN} characters`;
+  }
+  const missing = PASSWORD_RULES.filter((r) => !r.test(password)).map(
+    (r) => r.label,
+  );
+  if (missing.length > 0) {
+    return `Password must contain ${missing.join(", ")}`;
+  }
+  if (confirm && password !== confirm) return "Passwords don't match";
+  return null;
+}
+
+function isPasswordStrong(password: string): boolean {
+  return (
+    password.length >= MIN_LEN && PASSWORD_RULES.every((r) => r.test(password))
+  );
+}
+
 // `create` is the default reached from "Create New Wallet" (step 2 of
 // the new-wallet flow). `access` is reached from the welcome screen
 // after the user pastes an existing access key — same underlying form,
@@ -58,19 +89,26 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
   // user back to pick one.
   const name = (initialName ?? "Main Wallet").trim() || "Main Wallet";
 
-  const validationError: string | null = useMemo(() => {
-    if (password.length < MIN_LEN) {
-      return `Passcode must be at least ${MIN_LEN} characters`;
-    }
-    if (password !== confirm) return "Passcodes don't match";
-    return null;
-  }, [password, confirm]);
+  // Inline validation message — recomputed as the user types so the
+  // red-border state and the explanation appear together. Held back
+  // until either field has any content so the form doesn't shout at
+  // the user before they've started.
+  const validationError = useMemo(
+    () => describePasswordIssue(password, confirm),
+    [password, confirm],
+  );
 
-  const canSubmit = !submitting && validationError === null;
+  const canSubmit =
+    !submitting && isPasswordStrong(password) && password === confirm;
+
+  // What the inline error row renders: prefer the IPC failure (carries
+  // server-side context) when present, otherwise the live validation
+  // message. Empty fields → empty row.
+  const displayError = error ?? validationError;
 
   const handleSubmit = async () => {
     if (!canSubmit) {
-      setError(validationError);
+      setError(validationError ?? "Enter your password to continue");
       return;
     }
     setSubmitting(true);
@@ -196,6 +234,7 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
                 type={showPassword ? "text" : "password"}
                 placeholder="Enter your passcode"
                 autoComplete="new-password"
+                aria-invalid={!!password && !isPasswordStrong(password)}
                 startAdornment={<Key className="size-5 sm:size-6" />}
                 endAdornment={
                   <button
@@ -264,8 +303,10 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
               />
             </div>
 
-            {error ? (
-              <p className="text-[12px] font-medium text-error-70">{error}</p>
+            {displayError ? (
+              <p className="text-[12px] font-medium text-error-70">
+                {displayError}
+              </p>
             ) : null}
 
             <Button
