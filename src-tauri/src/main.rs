@@ -27,6 +27,7 @@ pub mod sync;
 #[cfg(test)]
 mod test_helpers;
 mod utils;
+pub mod wallet;
 
 use crate::auth::contacts::{add_contact, delete_contact, get_contacts, update_contact};
 use crate::auth::login::{login_with_mnemonic, validate_mnemonic};
@@ -95,6 +96,11 @@ use crate::utils::support::{
     create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message, update_support_ticket, upload_ticket_attachment,
 };
 use crate::utils::tray_menu::get_tray_menu_data;
+use crate::wallet::commands::{
+    local_wallet_create, local_wallet_delete, local_wallet_derive_address, local_wallet_export_backup, local_wallet_generate_mnemonic,
+    local_wallet_get_active, local_wallet_get_decrypted_mnemonic, local_wallet_has_any, local_wallet_import_encrypted_backup, local_wallet_list,
+    local_wallet_rename, local_wallet_set_active, local_wallet_validate_mnemonic, local_wallet_verify_password,
+};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 use tauri::{Builder, Emitter, Manager, Wry, path::BaseDirectory};
 #[cfg(target_os = "linux")]
@@ -369,6 +375,21 @@ fn main() {
             get_contacts,
             update_contact,
             delete_contact,
+            // Local wallets (password-encrypted Substrate wallets)
+            local_wallet_list,
+            local_wallet_has_any,
+            local_wallet_get_active,
+            local_wallet_generate_mnemonic,
+            local_wallet_validate_mnemonic,
+            local_wallet_derive_address,
+            local_wallet_create,
+            local_wallet_set_active,
+            local_wallet_rename,
+            local_wallet_delete,
+            local_wallet_verify_password,
+            local_wallet_get_decrypted_mnemonic,
+            local_wallet_export_backup,
+            local_wallet_import_encrypted_backup,
             is_onboarding_done,
             set_onboarding_done,
             get_user_preference,

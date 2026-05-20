@@ -35,6 +35,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "share_keystore",
     "share_origin",
     "shared_link_history",
+    "local_wallets",
 ];
 
 /// Read the column names of a table via `PRAGMA table_info(...)`.
@@ -509,6 +510,24 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "CREATE TABLE IF NOT EXISTS onboarding (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             is_done INTEGER DEFAULT 0
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // Local wallets (replaces feature/wallet-updates frontend
+    // localWalletDb.ts + crypto.ts). Stores password-encrypted BIP-39
+    // mnemonics. See src-tauri/src/wallet/{crypto,repo,commands}.rs.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS local_wallets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            address TEXT NOT NULL UNIQUE,
+            encrypted_mnemonic TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
         )",
     )
     .execute(&mut *tx)
