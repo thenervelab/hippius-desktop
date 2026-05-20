@@ -12,6 +12,8 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
+import { HardDriveUpload } from "@/components/ui/icons";
+import { Button } from "@/components/ui/button";
 
 interface ActiveWalletSelectorProps {
   className?: string;
@@ -113,14 +115,14 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
           type="button"
           onClick={() => setIsOpen((o) => !o)}
           className={cn(
-            "inline-flex items-stretch gap-2 rounded-[8px] border bg-grey-light-700 dark:bg-black-primary-bg px-3 py-1.5",
+            "inline-flex items-stretch gap-3 rounded-[8px] border bg-grey-light-700 dark:bg-black-primary-bg px-3 py-1.5",
             "border-grey-dark-100 dark:border-black-300",
             "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
           )}
           aria-haspopup="menu"
           aria-expanded={isOpen}
         >
-          <div className="flex flex-col items-start justify-center gap-[3px] pr-1">
+          <div className="flex flex-col items-start justify-center gap-[3px]">
             <div className="flex items-center gap-1">
               <span className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-primary-40/20">
                 <span className="size-[6.15px] rounded-full bg-primary-40" />
@@ -134,16 +136,31 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
             </span>
           </div>
 
-          <div className="flex items-center gap-2 border-l border-grey-dark-100 dark:border-black-500 pl-3 ml-1">
+          {/* Right slot styled as its own dropdown pill — matches Figma:
+              white bg + rounded border sitting inside the grey wrapper,
+              so the trigger reads as a field, not flat text. */}
+          <div
+            className={cn(
+              "flex items-center gap-2 rounded-[8px] border px-2.5 py-1.5",
+              "border-grey-dark-100 bg-white dark:border-black-300 dark:bg-black-400",
+            )}
+          >
             <span className="font-mono text-[12px] font-medium uppercase text-grey-50 dark:text-grey-dark-600">
               Wallet Needed
             </span>
-            <ChevronDown
+            <span
               className={cn(
-                "size-3.5 text-grey-50 dark:text-grey-dark-600 transition-transform",
-                isOpen && "rotate-180",
+                "flex items-center justify-center size-[17px] rounded border transition-all",
+                "bg-[#EAEAEA] border-[#CECECE] dark:bg-[#3a3a3a] dark:border-[#555]",
               )}
-            />
+            >
+              <ChevronDown
+                className={cn(
+                  "size-2 shrink-0 text-[#8a8a8a] rotate-90 transition-transform dark:text-[#9a9a9a]",
+                  isOpen && "rotate-0",
+                )}
+              />
+            </span>
           </div>
         </button>
 
@@ -166,42 +183,33 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
             </div>
 
             <div className="px-3 pb-3 flex flex-col gap-2">
-              <button
-                type="button"
+              <Button
+                variant="primaryLight"
+                size="auto"
                 onClick={handleCreate}
-                className={cn(
-                  "w-full flex items-center justify-between gap-2 rounded-[6px] px-3 py-2",
-                  "border border-primary-50/30 bg-primary-50/[0.06] hover:bg-primary-50/[0.10]",
-                  "dark:border-primary-brand-dark/30 dark:bg-primary-brand-dark/[0.08] dark:hover:bg-primary-brand-dark/[0.14]",
-                  "transition-colors",
-                )}
                 role="menuitem"
+                className="w-full justify-between gap-2 px-3 py-2 text-[13px] font-semibold"
               >
                 <span className="flex items-center gap-2">
-                  <Plus className="size-3.5 text-primary-50 dark:text-primary-brand-dark" />
-                  <span className="text-[13px] font-semibold text-primary-50 dark:text-primary-brand-dark">
-                    Create New Wallet
-                  </span>
+                  <Plus className="size-3.5" />
+                  Create New Wallet
                 </span>
-                <ArrowRight className="size-3.5 text-primary-50 dark:text-primary-brand-dark" />
-              </button>
+                <ArrowRight className="size-3.5" />
+              </Button>
 
-              <button
-                type="button"
+              <Button
+                variant="defaultStable"
+                size="auto"
                 onClick={handleImport}
-                className={cn(
-                  "w-full flex items-center justify-between gap-2 rounded-[6px] px-3 py-2",
-                  "border border-grey-dark-100 bg-white hover:bg-grey-light-700",
-                  "dark:border-black-300 dark:bg-black-primary-bg dark:hover:bg-black-300",
-                  "transition-colors",
-                )}
                 role="menuitem"
+                className="w-full justify-between gap-2 px-3 py-2 text-[13px] font-semibold"
               >
-                <span className="text-[13px] font-semibold text-grey-10 dark:text-grey-light-100">
+                <span className="flex items-center gap-2">
+                  <HardDriveUpload className="size-3.5" />
                   Import Your Wallet
                 </span>
-                <ArrowRight className="size-3.5 text-grey-50 dark:text-grey-dark-600" />
-              </button>
+                <ArrowRight className="size-3.5" />
+              </Button>
             </div>
           </div>
         )}
@@ -215,14 +223,14 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
         type="button"
         onClick={() => setIsOpen((o) => !o)}
         className={cn(
-          "inline-flex items-stretch gap-2 rounded-[8px] border bg-grey-light-700 dark:bg-black-primary-bg px-3 py-1.5",
+          "inline-flex items-stretch gap-3 rounded-[8px] border bg-grey-light-700 dark:bg-black-primary-bg px-3 py-1.5",
           "border-grey-dark-100 dark:border-black-300",
           "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
         )}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
       >
-        <div className="flex flex-col items-start justify-center gap-[3px] pr-1">
+        <div className="flex flex-col items-start justify-center gap-[3px]">
           <div className="flex items-center gap-1">
             <span className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-primary-40/20">
               <span className="size-[6.15px] rounded-full bg-primary-40" />
@@ -236,16 +244,28 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
           </span>
         </div>
 
-        <div className="flex items-center gap-2 border-l border-grey-dark-100 dark:border-black-500 pl-3 ml-1">
+        <div
+          className={cn(
+            "flex items-center gap-2 rounded-[8px] border px-2.5 py-1.5",
+            "border-grey-dark-100 bg-white dark:border-black-300 dark:bg-black-400",
+          )}
+        >
           <span className="font-mono text-[12px] font-medium uppercase text-black-700 dark:text-grey-light-100">
             {truncateAddress(activeWallet.address, 4, 4).toUpperCase()}
           </span>
-          <ChevronDown
+          <span
             className={cn(
-              "size-3.5 text-grey-50 dark:text-grey-dark-600 transition-transform",
-              isOpen && "rotate-180",
+              "flex items-center justify-center size-[17px] rounded border transition-all",
+              "bg-[#EAEAEA] border-[#CECECE] dark:bg-[#3a3a3a] dark:border-[#555]",
             )}
-          />
+          >
+            <ChevronDown
+              className={cn(
+                "size-2 shrink-0 text-[#8a8a8a] rotate-90 transition-transform dark:text-[#9a9a9a]",
+                isOpen && "rotate-0",
+              )}
+            />
+          </span>
         </div>
       </button>
 
