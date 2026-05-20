@@ -119,30 +119,35 @@ const CreateMnemonicScreen: React.FC<CreateMnemonicScreenProps> = ({
           )}
         >
           <div className="flex flex-col items-center gap-[19px]">
-            <div className="relative size-[60px] flex items-center justify-center shrink-0">
-              {/* Decorative sparkle marks at the 4 corners of the hero,
-                  matching the Figma "create" badge. */}
-              <Plus
+            <div className="relative flex items-center justify-center size-[120px] shrink-0">
+              {/* Localized grid-line pattern behind the hero badge,
+                  radial-masked so it fades to transparent at the edges
+                  — matches the dialog default decoration. */}
+              <div
                 aria-hidden="true"
-                className="absolute -top-0.5 -left-0.5 size-2.5 text-primary-50/70"
-                strokeWidth={2.5}
+                className="pointer-events-none absolute inset-0 dark:hidden"
+                style={{
+                  backgroundImage: `linear-gradient(to right, rgba(49,103,221,0.15) 1px, transparent 1px),\nlinear-gradient(to bottom, rgba(49,103,221,0.15) 1px, transparent 1px)`,
+                  backgroundSize: "20px 20px",
+                  maskImage:
+                    "radial-gradient(circle, black 30%, transparent 75%)",
+                  WebkitMaskImage:
+                    "radial-gradient(circle, black 30%, transparent 75%)",
+                }}
               />
-              <Plus
+              <div
                 aria-hidden="true"
-                className="absolute -top-0.5 -right-0.5 size-2.5 text-primary-50/70"
-                strokeWidth={2.5}
+                className="pointer-events-none absolute inset-0 hidden dark:block"
+                style={{
+                  backgroundImage: `linear-gradient(to right, rgba(149,178,255,0.18) 1px, transparent 1px),\nlinear-gradient(to bottom, rgba(149,178,255,0.18) 1px, transparent 1px)`,
+                  backgroundSize: "20px 20px",
+                  maskImage:
+                    "radial-gradient(circle, black 30%, transparent 75%)",
+                  WebkitMaskImage:
+                    "radial-gradient(circle, black 30%, transparent 75%)",
+                }}
               />
-              <Plus
-                aria-hidden="true"
-                className="absolute -bottom-0.5 -left-0.5 size-2.5 text-primary-50/70"
-                strokeWidth={2.5}
-              />
-              <Plus
-                aria-hidden="true"
-                className="absolute -bottom-0.5 -right-0.5 size-2.5 text-primary-50/70"
-                strokeWidth={2.5}
-              />
-              <div className="flex items-center justify-center size-[48px] rounded-[12px] bg-primary-50">
+              <div className="relative flex items-center justify-center size-[48px] rounded-[12px] bg-primary-50">
                 <Plus className="size-6 text-white" strokeWidth={2.5} />
               </div>
             </div>
