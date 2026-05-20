@@ -72,7 +72,7 @@ const FilesTableSkeleton: React.FC<FilesTableSkeletonProps> = ({
           </colgroup>
           <thead
             className={cn(
-              "bg-table-header",
+              "bg-table-header dark:bg-transparent",
               !isRecentFiles && "!bg-transparent",
             )}
           >

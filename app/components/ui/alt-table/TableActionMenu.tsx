@@ -72,16 +72,24 @@ const TableActionMenu = memo(function TableActionMenu({
 
         {/* Menu items */}
         {filteredItems.map((item, index) => {
+          // Disabled items keep the active variant's text/icon color so they
+          // remain legible (just dimmed via opacity), and lose only the
+          // interactive affordances — hover, cursor, pointer events.
+          const variantTextClass =
+            item.variant === "destructive"
+              ? "!text-error-60 dark:!text-error-70"
+              : "!text-[#52525C] dark:!text-grey-dark-200";
+          const variantHoverClass =
+            item.variant === "destructive"
+              ? "hover:!text-error-70 hover:bg-error-100/40 dark:hover:!text-error-60 dark:hover:bg-error-70/10"
+              : "hover:!text-grey-10 hover:bg-grey-90 dark:hover:!text-grey-light-100 dark:hover:bg-white/5";
+
           const defaultClassName = cn(
             "flex items-center gap-2.5 px-1.5 py-1.5 rounded-md",
+            variantTextClass,
             item.disabled
-              ? "opacity-60 cursor-not-allowed pointer-events-none"
-              : cn(
-                "cursor-pointer",
-                item.variant === "destructive"
-                  ? "!text-error-60 hover:!text-error-70 hover:bg-error-100/40 dark:!text-error-70 dark:hover:!text-error-60 dark:hover:bg-error-70/10"
-                  : "!text-[#52525C] hover:!text-grey-10 hover:bg-grey-90 dark:!text-grey-dark-200 dark:hover:!text-grey-light-100 dark:hover:bg-white/5"
-              )
+              ? "opacity-50 cursor-not-allowed pointer-events-none"
+              : cn("cursor-pointer", variantHoverClass)
           );
 
           const itemContent = (

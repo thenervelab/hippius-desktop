@@ -4,7 +4,9 @@ import { MoreVertical } from "lucide-react";
 import React from "react";
 import StatusCell from "./status-cell";
 import Link from "next/link";
-import TableActionMenu from "../../ui/alt-table/TableActionMenu";
+import TableActionMenu, {
+  type ActionItem,
+} from "../../ui/alt-table/TableActionMenu";
 import { Icons } from "../../ui";
 import { parseImageName } from "@/lib/utils/vmUtils";
 import { formatDate } from "@/app/lib/utils/formatters/formatDate";
@@ -14,6 +16,63 @@ import { VMFlavorResponse } from "@/app/lib/hooks/api/useVMFlavors";
 import { CopyableCell } from "../../ui/alt-table/CopyableCell";
 
 const columnHelper = createColumnHelper<Instance>();
+
+export type InstanceMenuHandlers = {
+  onDelete?: (instance: Instance) => void;
+  onStartStop?: (instance: Instance, status: string) => void;
+  onReboot?: (instance: Instance) => void;
+};
+
+/**
+ * Items shown in BOTH the kebab dropdown and the right-click context
+ * menu for an instance row. Extracted so the two menus stay in lockstep
+ * — every entry added/disabled here automatically shows up in both.
+ */
+export function buildInstanceMenuItems(
+  instance: Instance,
+  handlers: InstanceMenuHandlers,
+): ActionItem[] {
+  const status = instance.status.toLowerCase();
+  const isStopped = status === "stopped";
+  const isRunning = status === "running";
+  const { onDelete, onStartStop, onReboot } = handlers;
+  return [
+    {
+      icon: <Icons.Code className="size-4" />,
+      itemTitle: "Instance Details",
+      isLink: true,
+      href: `/vm/instance-details?instanceId=${instance.id}`,
+    },
+    {
+      icon: <Icons.CodeCircle className="size-4" />,
+      itemTitle: "Access Console",
+      isLink: true,
+      href: `/vm/instance-details?instanceId=${instance.id}&tab=console`,
+    },
+    {
+      icon: isStopped ? (
+        <Icons.PlayCircle className="size-4" />
+      ) : (
+        <Icons.StopCircle className="size-4" />
+      ),
+      itemTitle: isStopped ? "Start Instance" : "Stop Instance",
+      disabled: !isRunning && !isStopped,
+      onItemClick: () => onStartStop && onStartStop(instance, instance.status),
+    },
+    {
+      icon: <Icons.Refresh2 className="size-4" />,
+      itemTitle: "Reboot Instance",
+      disabled: !isRunning,
+      onItemClick: () => onReboot && onReboot(instance),
+    },
+    {
+      icon: <Icons.Trash className="size-4" />,
+      itemTitle: "Delete Instance",
+      onItemClick: () => onDelete && onDelete(instance),
+      variant: "destructive",
+    },
+  ];
+}
 
 // Format instance name for display - truncate long names
 const formatInstanceName = (name: string): string => {
@@ -135,55 +194,11 @@ export const getDesktopColumns = (
         <div className="flex justify-center">
           <TableActionMenu
             dropdownTitle="Instance Options"
-            items={[
-              {
-                icon: <Icons.Code className="size-4" />,
-                itemTitle: "Instance Details",
-                isLink: true,
-                href: `/vm/instance-details?instanceId=${instance.id}`,
-              },
-              {
-                icon: <Icons.CodeCircle className="size-4" />,
-                itemTitle: "Access Console",
-                isLink: true,
-                href: `/vm/instance-details?instanceId=${instance.id}&tab=console`,
-              },
-              // {
-              //   icon: <Icons.CloudConnection className="size-4" />,
-              //   itemTitle: "SSH Connection",
-              //   disabled: true,
-              //   onItemClick: () => console.log("SSH connection"),
-              // },
-              {
-                icon:
-                  instance.status.toLowerCase() === "stopped" ? (
-                    <Icons.PlayCircle className="size-4" />
-                  ) : (
-                    <Icons.StopCircle className="size-4" />
-                  ),
-                itemTitle:
-                  instance.status.toLowerCase() === "stopped"
-                    ? "Start Instance"
-                    : "Stop Instance",
-                disabled:
-                  instance.status.toLowerCase() !== "running" &&
-                  instance.status.toLowerCase() !== "stopped",
-                onItemClick: () =>
-                  onStartStop && onStartStop(instance, instance.status),
-              },
-              {
-                icon: <Icons.Refresh2 className="size-4" />,
-                itemTitle: "Reboot Instance",
-                disabled: instance.status.toLowerCase() !== "running",
-                onItemClick: () => onReboot && onReboot(instance),
-              },
-              {
-                icon: <Icons.Trash className="size-4" />,
-                itemTitle: "Delete Instance",
-                onItemClick: () => onDelete && onDelete(instance),
-                variant: "destructive",
-              },
-            ]}
+            items={buildInstanceMenuItems(instance, {
+              onDelete,
+              onStartStop,
+              onReboot,
+            })}
           >
             <button
               type="button"

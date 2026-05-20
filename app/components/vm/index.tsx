@@ -325,10 +325,10 @@ const VirtualMachines: FC = () => {
         )}
       </div>
 
-      <div className=" mb-3 flex flex-col  bg-grey-light-300 dark:bg-black-primary-bg dark:border-black-300 shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)] overflow-hidden">
+      <div className=" mb-3 flex flex-col  overflow-hidden">
         {/* Tabs row — tab list on the left and search / refresh / mini
             pagination on the right. */}
-        <div className="flex items-center w-full justify-between gap-4 flex-wrap pt-2 pb-4 px-[10px] rounded-t-lg border border-b-0 border-grey-dark-100">
+        <div className="flex items-center w-full justify-between gap-4 flex-wrap pt-2 pb-4 px-[10px] rounded-t-lg border border-b-0 bg-grey-light-300 dark:bg-black-primary-bg shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)] border-grey-dark-100 dark:border-black-300">
           <TabList
             tabs={tabs}
             activeTab={activeTab}
@@ -362,7 +362,7 @@ const VirtualMachines: FC = () => {
         <div
           className={cn(
             "flex flex-col w-full overflow-hidden rounded-lg border border-grey-dark-100 -mt-2 bg-white dark:bg-black-600 dark:border-black-300",
-            isTemplatesTab && "p-4",
+            isTemplatesTab && "p-3",
           )}
         >
           <div className="animate-in fade-in duration-300">
@@ -420,7 +420,7 @@ const VirtualMachines: FC = () => {
                     </div>
                   </NoEntriesFound>
                 ) : flavorsLoading ? (
-                  <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
+                  <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4">
                     {Array.from({ length: 8 }).map((_, index) => (
                       <VMTemplateCardSkeleton key={`skeleton-${index}`} />
                     ))}
@@ -433,7 +433,7 @@ const VirtualMachines: FC = () => {
                   />
                 ) : (
                   <>
-                    <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
+                    <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4">
                       {templates.map((template) => (
                         <VMTemplateCard
                           key={template.id}

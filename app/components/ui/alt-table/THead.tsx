@@ -7,7 +7,7 @@ export const THead: React.FC<THeadProps> = ({
   className,
   ...rest
 }) => (
-  <thead className={cn("bg-table-header", className)} {...rest}>
+  <thead className={cn("bg-table-header dark:bg-transparent", className)} {...rest}>
     {children}
   </thead>
 );

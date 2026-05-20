@@ -9,7 +9,7 @@ import { FC, useMemo } from "react";
 import React from "react";
 import { P } from "../../ui/typography";
 import { cn } from "@/lib/utils";
-import { getDesktopColumns } from "./instances-columns";
+import { getDesktopColumns, buildInstanceMenuItems } from "./instances-columns";
 import { useStartStopInstance } from "../hooks/useStartStopInstance";
 import useVMInstances from "@/app/lib/hooks/api/useVMInstances";
 import { VMFlavorResponse } from "@/app/lib/hooks/api/useVMFlavors";
@@ -17,6 +17,7 @@ import { useRebootInstance } from "../hooks/useRebootInstance";
 import { usePagination } from "@/app/lib/hooks";
 import NoEntriesFound from "../../ui/NoEntriesFound";
 import Skeleton from "../../ui/skeleton";
+import InstanceRowContextMenu from "./InstanceRowContextMenu";
 
 export interface Instance {
   id: number;
@@ -147,6 +148,32 @@ const InstancesTable: FC<InstancesTableProps> = ({
     useStartStopInstance();
   const { handleRebootInstance, RebootConfirmModal } = useRebootInstance();
 
+  // Row right-click menu — mirrors the kebab dropdown but pops up at
+  // the cursor. The kebab button has its own click handler and lives
+  // inside `.action-menu-area`; we skip opening the context menu when
+  // the user right-clicks inside it so the native kebab flow wins.
+  const [rowContextMenu, setRowContextMenu] = React.useState<{
+    instance: Instance;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  const handleRowContextMenu = React.useCallback(
+    (e: React.MouseEvent, instance: Instance) => {
+      // Always suppress the browser's native context menu inside our
+      // rows. If the user right-clicks on the kebab area we still
+      // suppress, but don't open our own menu — that surface is
+      // reserved for the existing left-click flow.
+      e.preventDefault();
+      e.stopPropagation();
+      const target = e.target as HTMLElement;
+      if (target.closest(".action-menu-area")) return;
+      window.getSelection()?.removeAllRanges();
+      setRowContextMenu({ instance, x: e.clientX, y: e.clientY });
+    },
+    [],
+  );
+
   // Get columns with the handlers
   const desktopColumns = getDesktopColumns(
     flavors,
@@ -175,7 +202,7 @@ const InstancesTable: FC<InstancesTableProps> = ({
     "h-[32px] border-b border-r last:border-r-0 px-[10px] py-[8px] " +
     "text-[12px] leading-[16px] font-semibold tracking-[-0.24px] " +
     "text-[#a3a3a3] dark:text-[#a3a3a3] " +
-    "bg-[#fefefe] dark:bg-transparent " +
+    "bg-[#fefefe] dark:bg-black-600 " +
     "border-[#e3e3e3] dark:border-[#313131]";
 
   const bodyTdBaseClassName =
@@ -250,20 +277,33 @@ const InstancesTable: FC<InstancesTableProps> = ({
                       "100px",
                       "100px",
                       "90px",
-                      "16px",
-                    ].map((width, colIndex, cols) => (
-                      <td
-                        key={`skeleton-cell-${rowIndex}-${colIndex}`}
-                        className={cn(
-                          "px-[8px] align-middle border-r last:border-r-0 border-[#e3e3e3] dark:border-[#313131]",
-                          edgeRowHeight,
-                          edgePadding,
-                          colIndex === cols.length - 1 && "w-[35px] px-0",
-                        )}
-                      >
-                        <Skeleton height="0.75rem" width={width} />
-                      </td>
-                    ))}
+                      "actions",
+                    ].map((width, colIndex, cols) => {
+                      const isActions = colIndex === cols.length - 1;
+                      return (
+                        <td
+                          key={`skeleton-cell-${rowIndex}-${colIndex}`}
+                          className={cn(
+                            "px-[8px] align-middle border-r last:border-r-0 border-[#e3e3e3] dark:border-[#313131]",
+                            edgeRowHeight,
+                            edgePadding,
+                            isActions && "w-[35px] min-w-[35px] max-w-[35px] px-0",
+                          )}
+                        >
+                          {isActions ? (
+                            <div className="flex justify-center">
+                              <Skeleton
+                                variant="circle"
+                                height="1.25rem"
+                                width="1.25rem"
+                              />
+                            </div>
+                          ) : (
+                            <Skeleton height="0.75rem" width={width} />
+                          )}
+                        </td>
+                      );
+                    })}
                   </tr>
                 );
               })}
@@ -324,6 +364,9 @@ const InstancesTable: FC<InstancesTableProps> = ({
                       isFirst || isLast ? "h-[32px]" : "h-[26px]",
                       rowBgFor(index),
                     )}
+                    onContextMenu={(e) =>
+                      handleRowContextMenu(e, row.original)
+                    }
                   >
                     {row.getVisibleCells().map((cell) => (
                       <TableModule.Td
@@ -356,6 +399,19 @@ const InstancesTable: FC<InstancesTableProps> = ({
       {/* Instance Control Modals */}
       <StartStopConfirmModal />
       <RebootConfirmModal />
+
+      {rowContextMenu && (
+        <InstanceRowContextMenu
+          x={rowContextMenu.x}
+          y={rowContextMenu.y}
+          items={buildInstanceMenuItems(rowContextMenu.instance, {
+            onDelete: onDeleteInstance,
+            onStartStop: handleStartStopInstance,
+            onReboot: handleRebootInstance,
+          })}
+          onClose={() => setRowContextMenu(null)}
+        />
+      )}
     </div>
   );
 };
