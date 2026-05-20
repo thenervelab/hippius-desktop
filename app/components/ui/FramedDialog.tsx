@@ -4,8 +4,8 @@ import React, { type ReactNode, useEffect, useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import GraphSheetContainer from "@/components/ui/graphsheet";
 import { BackgroundContainer } from "@/components/ui/BackgroundContainer";
+import { Decoration } from "@/components/ui/icons";
 
 export interface FramedDialogProps {
   open: boolean;
@@ -117,41 +117,17 @@ export function FramedDialog({
                   contentClassName,
                 )}
               >
-                {/* Icon badge with WebGL grid background */}
-                <div className="relative flex size-12 sm:size-14 items-center justify-center overflow-hidden rounded-[4px] dark:rounded-full mx-auto mb-3">
-                  {/* Light mode: WebGL canvas grid */}
-                  <GraphSheetContainer
-                    majorCell={{
-                      lineColor: [31, 80, 189, 1.0],
-                      lineWidth: 2,
-                      cellDim: 200,
-                    }}
-                    minorCell={{
-                      lineColor: [49, 103, 211, 1.0],
-                      lineWidth: 1,
-                      cellDim: 20,
-                    }}
-                    className="absolute inset-0 size-full opacity-30 dark:hidden"
+                {/* Icon badge sits on top of the shared Decoration grid.
+                    Decoration handles both modes — radial white-fade in
+                    light, Gaussian-blurred ellipse mask in dark — so we
+                    don't need separate WebGL / CSS-grid backgrounds and
+                    every dialog (stake, unstake, confirm, withdraw,
+                    settings…) gets the same hippius-web-style grid. */}
+                <div className="relative mx-auto mb-3 flex size-12 shrink-0 items-center justify-center sm:size-14">
+                  <Decoration
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 size-full"
                   />
-
-                  {/* Dark mode: CSS grid with radial fade mask */}
-                  <div
-                    className="absolute inset-0 size-full hidden dark:block"
-                    style={{
-                      backgroundImage:
-                        "linear-gradient(to right, rgba(31,80,189,0.85) 1px, transparent 1px), linear-gradient(to bottom, rgba(31,80,189,0.85) 1px, transparent 1px)",
-                      backgroundSize: "17px 17px",
-                      maskImage:
-                        "radial-gradient(55% 70% at 50% 50%, black 0%, transparent 100%)",
-                      WebkitMaskImage:
-                        "radial-gradient(55% 70% at 50% 50%, black 0%, transparent 100%)",
-                    }}
-                  />
-
-                  {/* Light mode gradient wash */}
-                  <div className="bg-gradient-to-b from-white/80 via-white/40 to-transparent absolute inset-0 dark:hidden" />
-
-                  {/* Icon container */}
                   <div
                     className={cn(
                       "relative flex size-8 items-center justify-center rounded-lg",
