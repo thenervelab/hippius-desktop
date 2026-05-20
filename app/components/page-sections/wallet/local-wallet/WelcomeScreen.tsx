@@ -111,7 +111,8 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           shellClassName={cn(
             "w-full min-w-0 max-w-[494px]",
             "bg-white dark:bg-[#1a1a1a]",
-            "p-3 sm:p-3 rounded-[22px] sm:rounded-[22px]",
+            "border border-grey-dark-100 dark:border-[#313131]",
+            "p-3 sm:p-3 rounded-[8px] sm:rounded-[8px]",
           )}
           cardClassName={cn(
             "w-full min-w-0 max-w-full",

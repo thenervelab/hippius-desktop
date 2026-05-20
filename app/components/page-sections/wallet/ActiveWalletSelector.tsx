@@ -1,7 +1,13 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Copy, Plus } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  ChevronDown,
+  Copy,
+  Plus,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -14,8 +20,14 @@ interface ActiveWalletSelectorProps {
 const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
   className,
 }) => {
-  const { wallets, activeWallet, switchWallet, truncateAddress, setSetupStep } =
-    useLocalWallet();
+  const {
+    wallets,
+    activeWallet,
+    switchWallet,
+    truncateAddress,
+    setSetupStep,
+    isLoading,
+  } = useLocalWallet();
 
   const [isOpen, setIsOpen] = useState(false);
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
@@ -68,14 +80,17 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
     }
   };
 
-  const handleAdd = () => {
+  const handleCreate = () => {
     setIsOpen(false);
-    setSetupStep("welcome");
+    setSetupStep("create-mnemonic");
   };
 
-  // Reached only while the wallets list is loading — the gate
-  // component renders the onboarding flow when truly no wallet exists.
-  if (!activeWallet) {
+  const handleImport = () => {
+    setIsOpen(false);
+    setSetupStep("import-wallet");
+  };
+
+  if (isLoading) {
     return (
       <div
         className={cn(
@@ -84,6 +99,112 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
         )}
       >
         <div className="h-3 w-24 rounded bg-grey-light-800 dark:bg-grey-dark-200 animate-pulse" />
+      </div>
+    );
+  }
+
+  // No-wallet variant: same chrome as the wallet-present trigger so
+  // the header doesn't visually jump when a user creates their first
+  // wallet, just different content and a different dropdown payload.
+  if (!activeWallet) {
+    return (
+      <div ref={dropdownRef} className={cn("relative inline-block", className)}>
+        <button
+          type="button"
+          onClick={() => setIsOpen((o) => !o)}
+          className={cn(
+            "inline-flex items-stretch gap-2 rounded-[8px] border bg-grey-light-700 dark:bg-black-primary-bg px-3 py-1.5",
+            "border-grey-dark-100 dark:border-black-300",
+            "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
+          )}
+          aria-haspopup="menu"
+          aria-expanded={isOpen}
+        >
+          <div className="flex flex-col items-start justify-center gap-[3px] pr-1">
+            <div className="flex items-center gap-1">
+              <span className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-primary-40/20">
+                <span className="size-[6.15px] rounded-full bg-primary-40" />
+              </span>
+              <span className="font-mono text-[12px] font-medium uppercase leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark">
+                Active Wallet
+              </span>
+            </div>
+            <span className="text-[12px] font-medium leading-[18px] tracking-[-0.24px] text-black-700 dark:text-grey-light-100">
+              No Active Wallet
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 border-l border-grey-dark-100 dark:border-black-500 pl-3 ml-1">
+            <span className="font-mono text-[12px] font-medium uppercase text-grey-50 dark:text-grey-dark-600">
+              Wallet Needed
+            </span>
+            <ChevronDown
+              className={cn(
+                "size-3.5 text-grey-50 dark:text-grey-dark-600 transition-transform",
+                isOpen && "rotate-180",
+              )}
+            />
+          </div>
+        </button>
+
+        {isOpen && (
+          <div
+            className={cn(
+              "absolute right-0 top-full mt-1 z-50 w-[300px] rounded-[8px] border shadow-lg overflow-hidden",
+              "border-grey-dark-100 bg-white dark:border-black-300 dark:bg-black-primary-bg",
+            )}
+            role="menu"
+          >
+            <div className="px-4 pt-4 pb-3">
+              <h3 className="text-[14px] font-semibold text-grey-10 dark:text-grey-light-100">
+                Wallet Required
+              </h3>
+              <p className="mt-1 text-[12px] leading-[16px] text-grey-50 dark:text-grey-dark-600">
+                Create a new wallet or import an existing recovery
+                phrase to start using Hippius.
+              </p>
+            </div>
+
+            <div className="px-3 pb-3 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleCreate}
+                className={cn(
+                  "w-full flex items-center justify-between gap-2 rounded-[6px] px-3 py-2",
+                  "border border-primary-50/30 bg-primary-50/[0.06] hover:bg-primary-50/[0.10]",
+                  "dark:border-primary-brand-dark/30 dark:bg-primary-brand-dark/[0.08] dark:hover:bg-primary-brand-dark/[0.14]",
+                  "transition-colors",
+                )}
+                role="menuitem"
+              >
+                <span className="flex items-center gap-2">
+                  <Plus className="size-3.5 text-primary-50 dark:text-primary-brand-dark" />
+                  <span className="text-[13px] font-semibold text-primary-50 dark:text-primary-brand-dark">
+                    Create New Wallet
+                  </span>
+                </span>
+                <ArrowRight className="size-3.5 text-primary-50 dark:text-primary-brand-dark" />
+              </button>
+
+              <button
+                type="button"
+                onClick={handleImport}
+                className={cn(
+                  "w-full flex items-center justify-between gap-2 rounded-[6px] px-3 py-2",
+                  "border border-grey-dark-100 bg-white hover:bg-grey-light-700",
+                  "dark:border-black-300 dark:bg-black-primary-bg dark:hover:bg-black-300",
+                  "transition-colors",
+                )}
+                role="menuitem"
+              >
+                <span className="text-[13px] font-semibold text-grey-10 dark:text-grey-light-100">
+                  Import Your Wallet
+                </span>
+                <ArrowRight className="size-3.5 text-grey-50 dark:text-grey-dark-600" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -195,7 +316,7 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
           <div className="border-t border-grey-dark-100 dark:border-black-300">
             <button
               type="button"
-              onClick={handleAdd}
+              onClick={handleCreate}
               className="w-full flex items-center gap-2 px-3 py-2.5 text-[13px] font-medium text-primary-50 dark:text-primary-brand-dark hover:bg-grey-light-700 dark:hover:bg-black-300"
             >
               <Plus className="size-3.5" />
