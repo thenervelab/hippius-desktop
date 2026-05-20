@@ -232,3 +232,4 @@ export { default as OutGoing } from "./OutGoing";
 export { default as LiCoins } from "./LiCoins";
 export { default as GitCompareArrows } from "./GitCompareArrows";
 export { default as WalletWelcomeLogo } from "./WalletWelcomeLogo";
+export { default as ExcludeLogo } from "./ExcludeLogo";
