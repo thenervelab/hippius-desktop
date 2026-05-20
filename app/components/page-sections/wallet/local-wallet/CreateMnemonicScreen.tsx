@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui";
 import { BackgroundContainer } from "@/components/ui/BackgroundContainer";
-import { OctagonAlert, ShieldSecurity } from "@/components/ui/icons";
+import { Decoration, OctagonAlert, ShieldSecurity } from "@/components/ui/icons";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { getDiagonalTextureSvgBackgroundImage } from "@/app/lib/ui-textures";
 
@@ -119,36 +119,16 @@ const CreateMnemonicScreen: React.FC<CreateMnemonicScreenProps> = ({
           )}
         >
           <div className="flex flex-col items-center gap-[19px]">
-            <div className="relative flex items-center justify-center size-[120px] shrink-0">
-              {/* Localized grid-line pattern behind the hero badge,
-                  radial-masked so it fades to transparent at the edges
-                  — matches the dialog default decoration. */}
-              <div
+            <div className="relative flex items-center justify-center size-[56px] shrink-0">
+              {/* Shared brand-blue grid decoration — already mode-aware
+                  (radial white-fade in light, blurred ellipse mask in
+                  dark) — used behind logo badges in other dialogs. */}
+              <Decoration
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-0 dark:hidden"
-                style={{
-                  backgroundImage: `linear-gradient(to right, rgba(49,103,221,0.15) 1px, transparent 1px),\nlinear-gradient(to bottom, rgba(49,103,221,0.15) 1px, transparent 1px)`,
-                  backgroundSize: "20px 20px",
-                  maskImage:
-                    "radial-gradient(circle, black 30%, transparent 75%)",
-                  WebkitMaskImage:
-                    "radial-gradient(circle, black 30%, transparent 75%)",
-                }}
+                className="pointer-events-none absolute inset-0 size-full"
               />
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-0 hidden dark:block"
-                style={{
-                  backgroundImage: `linear-gradient(to right, rgba(149,178,255,0.18) 1px, transparent 1px),\nlinear-gradient(to bottom, rgba(149,178,255,0.18) 1px, transparent 1px)`,
-                  backgroundSize: "20px 20px",
-                  maskImage:
-                    "radial-gradient(circle, black 30%, transparent 75%)",
-                  WebkitMaskImage:
-                    "radial-gradient(circle, black 30%, transparent 75%)",
-                }}
-              />
-              <div className="relative flex items-center justify-center size-[48px] rounded-[12px] bg-primary-50">
-                <Plus className="size-6 text-white" strokeWidth={2.5} />
+              <div className="relative flex items-center justify-center size-[40px] rounded-[10px] bg-primary-50">
+                <Plus className="size-5 text-white" strokeWidth={2.5} />
               </div>
             </div>
 
