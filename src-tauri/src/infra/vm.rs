@@ -37,12 +37,18 @@ pub struct VMImage {
 }
 
 /// Pre-configured application stack that can be layered onto a VM image.
+///
+/// `logo_url` carries the absolute https URL the upstream API returns for the
+/// app's brand icon — without this field, serde silently drops it on the way
+/// through Rust and the dropdown trigger/options render the generic fallback
+/// glyph instead of the real per-app logo.
 #[derive(Serialize, Deserialize)]
 pub struct VMApplication {
     pub id: i64,
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
+    pub logo_url: Option<String>,
 }
 
 /// A running or stopped VM instance with its current status and metadata.

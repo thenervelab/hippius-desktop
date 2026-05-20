@@ -11,7 +11,8 @@ export interface VMApplicationResponse {
   name: string;
   slug: string;
   description: string;
-  logo_url: string;
+  /** Absolute https URL for the app's brand icon — nullable when the upstream API hasn't curated one yet. */
+  logo_url: string | null;
 }
 
 /**

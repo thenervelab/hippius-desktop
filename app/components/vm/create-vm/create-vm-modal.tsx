@@ -1,18 +1,17 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
-import { CloseCircle } from "@/components/ui/icons";
+import React, { useState } from "react";
+import { ArrowRight } from "lucide-react";
 import { toast } from "sonner";
-import { motion, AnimatePresence } from "framer-motion";
 import { VMTemplate } from "./vm-template-card";
 import CreateSSHKeyModal, {
   CreateSSHKeyData,
 } from "../ssh-keys-table/create-ssh-key-modal";
 import Step1Configuration from "./step1-configuration";
 import Step2Summary from "./step2-summary";
+import FramedDialog from "@/components/ui/FramedDialog";
 import { Button } from "@/components/ui/button";
-import { Button as Button2 } from "@/components/ui/button/NewButton";
+import { CpuCharge } from "@/components/ui/icons";
 import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
 import useSSHKeys from "@/app/lib/hooks/api/useSSHKeys";
 import useVMImages from "@/app/lib/hooks/api/useVMImages";
@@ -49,8 +48,7 @@ const CreateVMModal: React.FC<Props> = ({
   template,
   isLoading = false,
 }) => {
-  const [currentStep, setCurrentStep] = useState(1);
-  const [direction, setDirection] = useState(0); // -1 for back, 1 for forward
+  const [currentStep, setCurrentStep] = useState<1 | 2>(1);
 
   const [instanceName, setInstanceName] = useState("");
   const [operatingSystem, setOperatingSystem] = useState("");
@@ -60,10 +58,6 @@ const CreateVMModal: React.FC<Props> = ({
   const [errors, setErrors] = useState<FieldErrors>({});
 
   const [openCreateSSHKeyModal, setOpenCreateSSHKeyModal] = useState(false);
-  const [isStepTransitioning, setIsStepTransitioning] = useState(false);
-  const stepTransitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null
-  );
 
   // Fetch VM images from API
   const { data: vmImages, isLoading: isLoadingImages } = useVMImages();
@@ -96,19 +90,11 @@ const CreateVMModal: React.FC<Props> = ({
   const { mutateAsync: createVM, isPending: isCreatingVM } = useCreateVM();
 
   // Tracks the in-flight `check_action_eligibility` IPC so the submit
-  // button shows a disabled/loading state during the round-trip. Without
-  // this the button would appear instantly clickable while the live
-  // balance check is running, which regressed the legacy
-  // `isCreditsLoading || isCreditsFetching` UX.
+  // button shows a disabled/loading state during the round-trip. The
+  // threshold lives in Rust at `crate::billing::eligibility::thresholds::
+  // VM_CREATION` and `create_vm` enforces it via `require_eligible(...)?`,
+  // so this UX gate is just to avoid the user landing on a failed spawn.
   const [isChecking, setIsChecking] = useState(false);
-
-  // Live credit eligibility check (replaces the legacy hardcoded
-  // `creditsNumber < 10` JSX comparison and the stale-cache
-  // `useUserCredits` read). The threshold lives in Rust at
-  // `crate::billing::eligibility::thresholds::VM_CREATION` and the
-  // `create_vm` IPC also enforces it via `require_eligible(...)?`,
-  // so this gate is purely UX (so we don't navigate the user to the
-  // VM creation flow only to fail at the spawn step).
   const { checkEligibility } = useCreditCheck();
 
   // Extract unique operating systems from VM images
@@ -155,7 +141,9 @@ const CreateVMModal: React.FC<Props> = ({
     return vmApplications.map((app) => ({
       value: app.id.toString(),
       label: app.name,
-      imageUrl: app.logo_url,
+      // SelectOption.imageUrl is `string | undefined`; the backend may now
+      // return `null` for apps without a curated logo, so coalesce.
+      imageUrl: app.logo_url ?? undefined,
     }));
   }, [vmApplications]);
 
@@ -177,39 +165,7 @@ const CreateVMModal: React.FC<Props> = ({
     setImage("");
     setApplicationId("");
     setSshKey("");
-    setDirection(0);
     setErrors({});
-    setIsStepTransitioning(false);
-
-    if (stepTransitionTimeoutRef.current) {
-      clearTimeout(stepTransitionTimeoutRef.current);
-      stepTransitionTimeoutRef.current = null;
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      if (stepTransitionTimeoutRef.current) {
-        clearTimeout(stepTransitionTimeoutRef.current);
-        stepTransitionTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  const goToStep = (nextStep: 1 | 2, nextDirection: number) => {
-    if (stepTransitionTimeoutRef.current) {
-      clearTimeout(stepTransitionTimeoutRef.current);
-      stepTransitionTimeoutRef.current = null;
-    }
-
-    setIsStepTransitioning(true);
-    setDirection(nextDirection);
-    setCurrentStep(nextStep);
-
-    stepTransitionTimeoutRef.current = setTimeout(() => {
-      setIsStepTransitioning(false);
-      stepTransitionTimeoutRef.current = null;
-    }, 350);
   };
 
   const clearFieldError = (field: FieldName) => {
@@ -228,7 +184,7 @@ const CreateVMModal: React.FC<Props> = ({
 
   const handleOSChange = (value: string) => {
     const isCurrentImageValidForOS = vmImages?.some(
-      (img) => img.slug === image && img.name.toLowerCase().startsWith(value)
+      (img) => img.slug === image && img.name.toLowerCase().startsWith(value),
     );
 
     setOperatingSystem(value);
@@ -277,18 +233,18 @@ const CreateVMModal: React.FC<Props> = ({
     }
 
     setErrors({});
-    goToStep(2, 1);
+    setCurrentStep(2);
   };
 
   const handleBack = () => {
-    goToStep(1, -1);
+    setCurrentStep(1);
   };
 
   const handleSubmit = async () => {
     try {
       // Live Rust eligibility check. Threshold (≥ 10 credits) lives in
-      // `crate::billing::eligibility::thresholds::VM_CREATION` — the
-      // only place that number is allowed to live now.
+      // `crate::billing::eligibility::thresholds::VM_CREATION` — the only
+      // place that number is allowed to live now.
       setIsChecking(true);
       let eligible = false;
       try {
@@ -324,7 +280,7 @@ const CreateVMModal: React.FC<Props> = ({
 
       // Find the selected SSH key's public key
       const selectedSSHKey = sshKeysData?.results?.find(
-        (key) => key.id.toString() === sshKey
+        (key) => key.id.toString() === sshKey,
       );
       if (!selectedSSHKey) {
         toast.error("Selected SSH key not found", {
@@ -403,237 +359,138 @@ const CreateVMModal: React.FC<Props> = ({
       }
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to create SSH key"
+        error instanceof Error ? error.message : "Failed to create SSH key",
       );
       throw error; // Re-throw so modal knows it failed
     }
   };
 
-  const variants = {
-    enter: (direction: number) => ({
-      opacity: 0,
-      x: direction > 0 ? 20 : -20,
-    }),
-    center: {
-      opacity: 1,
-      x: 0,
-    },
-    exit: (direction: number) => ({
-      opacity: 0,
-      x: direction > 0 ? -20 : 20,
-    }),
-  };
-
   const getSelectedImageLabel = () => {
-    const selectedImage = filteredImages.find((img) => img.value === image);
-    return selectedImage?.label || "";
+    const selectedImage = vmImages?.find((img) => img.slug === image);
+    return selectedImage?.name || "-";
   };
 
   const getSelectedOSLabel = () => {
     const selectedOS = operatingSystems.find(
-      (os) => os.value === operatingSystem
+      (os) => os.value === operatingSystem,
     );
-    return selectedOS?.label || "";
+    return selectedOS?.label || operatingSystem || "-";
   };
 
   const getSelectedApplicationLabel = () => {
-    if (!applicationId) return "Not selected";
+    if (!applicationId) return "-";
     const selectedApp = applicationOptions.find(
-      (app) => app.value === applicationId
+      (app) => app.value === applicationId,
     );
-    return selectedApp?.label || "Not selected";
+    return selectedApp?.label || "-";
   };
 
   return (
     <>
-      <Dialog.Root
-        open={open}
-        onOpenChange={(o) => !o && !isCreatingVM && handleClose()}
+      <FramedDialog
+        open={open && !openCreateSSHKeyModal}
+        onClose={handleClose}
+        title={template?.name || "Create Virtual Machine"}
+        icon={<CpuCharge className="size-[18px] text-white" />}
+        maxWidth="max-w-[611px]"
+        contentClassName="px-4 pb-4 pt-4 sm:w-full sm:px-4 sm:pb-4 sm:pt-4"
+        titleClassName="mb-0 text-[24px] leading-9 tracking-[-0.48px] sm:text-[28px] sm:leading-9"
       >
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-white/60 z-50" />
-          <Dialog.Content asChild>
-            <div
-              className="
-              fixed left-1/2 top-1/2 z-50
-              w-full max-w-sm sm:max-w-[30.625rem]
-              -translate-x-1/2 -translate-y-1/2
-            "
-            >
-              <motion.div
-                layout={isStepTransitioning ? "size" : false}
-                transition={{
-                  layout: { duration: 0.3, ease: "easeInOut" },
-                }}
-                onLayoutAnimationComplete={() => setIsStepTransitioning(false)}
-                className="
-                w-full
-                max-h-[90vh]
-                bg-white rounded-[0.5rem]
-                shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
-                border border-grey-80
-                overflow-hidden flex flex-col min-h-0
-              "
+        <div className="mt-3 flex flex-col gap-4">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-[18px] font-medium leading-[21px] tracking-[-0.36px] text-black-900 dark:text-white sm:text-base sm:leading-[22px] sm:tracking-[-0.32px]">
+              {currentStep === 1 ? "Model Configuration" : "Summary"}
+            </h3>
+            <span className="inline-flex rounded-full bg-primary-50/[0.12] px-2 py-1 text-xs font-medium leading-[18px] tracking-[-0.24px] text-primary-50 sm:px-3 dark:bg-primary-65/[0.18] dark:text-primary-65">
+              Step {currentStep}/2
+            </span>
+          </div>
+
+          {currentStep === 1 ? (
+            <Step1Configuration
+              instanceName={instanceName}
+              setInstanceName={handleInstanceNameChange}
+              operatingSystem={operatingSystem}
+              handleOSChange={handleOSChange}
+              image={image}
+              setImage={handleImageChange}
+              applicationId={applicationId}
+              setApplicationId={handleApplicationChange}
+              sshKey={sshKey}
+              setSshKey={handleSshKeyChange}
+              operatingSystems={operatingSystems}
+              filteredImages={filteredImages}
+              applicationOptions={applicationOptions}
+              sshKeyOptions={sshKeyOptions}
+              onCreateSSHKey={() => setOpenCreateSSHKeyModal(true)}
+              isLoadingImages={isLoadingImages}
+              isLoadingApplications={isLoadingVMApps}
+              isLoadingSSHKeys={isLoadingSSHKeys}
+              errors={errors}
+            />
+          ) : (
+            <Step2Summary
+              template={template}
+              instanceName={instanceName}
+              operatingSystemLabel={getSelectedOSLabel()}
+              imageLabel={getSelectedImageLabel()}
+              applicationLabel={getSelectedApplicationLabel()}
+            />
+          )}
+
+          <div className="space-y-4 sm:space-y-3">
+            {currentStep === 1 ? (
+              <Button
+                type="button"
+                onClick={handleNext}
+                disabled={isLoading || isLoadingImages || isLoadingSSHKeys}
+                variant="primary"
+                size="auto"
+                className="h-[52px] w-full gap-2 rounded-[6px] px-4 text-[18px] font-medium leading-5 tracking-[-0.36px] shadow-[0px_4px_4px_0px_rgba(4,65,149,0.1)]"
               >
-                {/* Header */}
-                <div className="border-b border-grey-80 flex gap-2 items-center justify-between px-4 py-3">
-                  <Dialog.Title className="flex-1 text-2xl font-medium text-grey-10">
-                    {template?.name || "Create Virtual Machine"}
-                  </Dialog.Title>
-                  <Dialog.Close asChild>
-                    <button
-                      aria-label="Close"
-                      disabled={isCreatingVM}
-                      className="text-grey-10 hover:text-grey-20 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <CloseCircle className="size-6" />
-                    </button>
-                  </Dialog.Close>
-                </div>
-
-                {/* Step Header */}
-                <div className="flex items-center justify-between px-4 py-3">
-                  <h3 className="text-lg font-medium text-grey-10">
-                    {currentStep === 1 ? "Model Configuration" : "Summary"}
-                  </h3>
-                  <div className="bg-primary-100 border border-primary-80 rounded px-2 py-1">
-                    <p className="text-xs font-medium text-primary-40">
-                      Step {currentStep} of 2
-                    </p>
-                  </div>
-                </div>
-
-                {/* Animated Content */}
-                <motion.div
-                  className={[
-                    "relative px-4 flex-1 min-h-0 overflow-x-hidden",
-                    isStepTransitioning
-                      ? "overflow-y-hidden pointer-events-none"
-                      : "overflow-y-auto",
-                    "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:w-0 [&::-webkit-scrollbar]:h-0",
-                  ].join(" ")}
-                  initial={false}
+                <span>Next</span>
+                <ArrowRight className="size-[18px]" strokeWidth={2} />
+              </Button>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  onClick={handleSubmit}
+                  disabled={isLoading || isCreatingVM || isChecking}
+                  variant="primary"
+                  size="auto"
+                  className="h-[52px] w-full gap-2 rounded-[6px] px-4 text-[18px] font-medium leading-5 tracking-[-0.36px] shadow-[0px_4px_4px_0px_rgba(4,65,149,0.1)]"
                 >
-                  <AnimatePresence
-                    initial={false}
-                    custom={direction}
-                    mode="popLayout"
-                  >
-                    {currentStep === 1 ? (
-                      <motion.div
-                        key="step1"
-                        custom={direction}
-                        variants={variants}
-                        initial="enter"
-                        animate="center"
-                        exit="exit"
-                        transition={{
-                          x: {
-                            type: "tween",
-                            duration: 0.3,
-                            ease: "easeInOut",
-                          },
-                          opacity: { duration: 0.25 },
-                        }}
-                      >
-                        <Step1Configuration
-                          instanceName={instanceName}
-                          setInstanceName={handleInstanceNameChange}
-                          operatingSystem={operatingSystem}
-                          handleOSChange={handleOSChange}
-                          image={image}
-                          setImage={handleImageChange}
-                          applicationId={applicationId}
-                          setApplicationId={handleApplicationChange}
-                          sshKey={sshKey}
-                          setSshKey={handleSshKeyChange}
-                          operatingSystems={operatingSystems}
-                          filteredImages={filteredImages}
-                          applicationOptions={applicationOptions}
-                          sshKeyOptions={sshKeyOptions}
-                          onCreateSSHKey={() => setOpenCreateSSHKeyModal(true)}
-                          isLoadingImages={isLoadingImages}
-                          isLoadingApplications={isLoadingVMApps}
-                          isLoadingSSHKeys={isLoadingSSHKeys}
-                          errors={errors}
-                        />
-                      </motion.div>
-                    ) : (
-                      <motion.div
-                        key="step2"
-                        custom={direction}
-                        variants={variants}
-                        initial="enter"
-                        animate="center"
-                        exit="exit"
-                        transition={{
-                          x: {
-                            type: "tween",
-                            duration: 0.3,
-                            ease: "easeInOut",
-                          },
-                          opacity: { duration: 0.25 },
-                        }}
-                      >
-                        <Step2Summary
-                          template={template}
-                          instanceName={instanceName}
-                          operatingSystemLabel={getSelectedOSLabel()}
-                          imageLabel={getSelectedImageLabel()}
-                          applicationLabel={getSelectedApplicationLabel()}
-                        />
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </motion.div>
-
-                {/* Actions */}
-                <div className="px-4 pb-4 pt-2 space-y-3">
-                  {currentStep === 1 ? (
-                    <Button
-                      className={`flex gap-x-2 items-center  h-[3.75rem] w-full`}
-                      onClick={handleNext}
-                      disabled={
-                        isLoading || isLoadingImages || isLoadingSSHKeys
-                      }
-                    >
-                      {" "}
-                      <div className="font-medium text-base leading-[1.375rem] tracking-tight">
-                        Next
-                      </div>
-                    </Button>
+                  {isChecking ? (
+                    <span>Checking credits...</span>
+                  ) : isCreatingVM ? (
+                    <span>Creating...</span>
                   ) : (
                     <>
-                      <Button
-                        className={`flex gap-x-2 items-center  h-[3.75rem] w-full`}
-                        onClick={handleSubmit}
-                        disabled={isLoading || isCreatingVM || isChecking}
-                      >
-                        {" "}
-                        <div className="font-medium text-base leading-[1.375rem] tracking-tight">
-                          {isChecking
-                            ? "Checking credits..."
-                            : isCreatingVM
-                            ? "Creating..."
-                            : "Create Virtual Machine"}
-                        </div>
-                      </Button>
-
-                      <Button2
-                        className="bg-grey-100  border border-grey-80 text-grey-10 w-full my-4 text-lg font-medium h-[3.5rem] hover:bg-grey-80 transition"
-                        onClick={handleBack}
-                        disabled={isLoading || isCreatingVM || isChecking}
-                      >
-                        Go Back
-                      </Button2>
+                      <span className="sm:hidden">Create VM</span>
+                      <span className="hidden sm:inline">
+                        Create Virtual Machine
+                      </span>
+                      <ArrowRight className="size-[18px]" strokeWidth={2} />
                     </>
                   )}
-                </div>
-              </motion.div>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+                </Button>
+
+                <Button
+                  type="button"
+                  onClick={handleBack}
+                  disabled={isLoading || isCreatingVM || isChecking}
+                  size="auto"
+                  dotColor="rgba(0, 0, 0, 0.37)"
+                  className="h-[52px] w-full rounded-[8px] border border-grey-80 bg-white px-4 text-[18px] font-normal leading-5 tracking-[-0.36px] text-grey-10 hover:rounded-[8px] hover:bg-grey-90 dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#373737]"
+                >
+                  Back
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+      </FramedDialog>
 
       {/* SSH Key Creation Modal */}
       <CreateSSHKeyModal

@@ -70,6 +70,7 @@ export { default as Discover } from "./Discover";
 export { default as CloseCircle } from "./CloseCircle";
 export { default as Close } from "./Close";
 export { default as AddCircle } from "./AddCircle";
+export { default as AddSquare } from "./AddSquare";
 export { default as MinusCircle } from "./MinusCircle";
 export { default as Key } from "./Key";
 export { default as Document } from "./Document";

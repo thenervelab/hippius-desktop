@@ -152,7 +152,7 @@ const CreateVM: React.FC = () => {
           4542:50279 (dark) / 4542:49762 (light). Each tab is flex-1 so the
           bar spans the full width on every breakpoint and never overflows. */}
         <div className=" pt-2 pb-4 px-2 rounded-t-lg border border-b-0 bg-grey-light-300 dark:bg-black-primary-bg shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)] border-grey-dark-100 dark:border-black-300">
-          <div className="flex w-full items-center gap-[3.831px] rounded-[6.13px] border-[0.766px] border-grey-dark-100 bg-[#ebebeb] p-1 dark:border-black-300 dark:bg-black-900">
+          <div className="flex w-full items-center gap-[3.831px] rounded-[6.13px] border-[0.766px] border-grey-dark-100 bg-[#ebebeb] p-1 dark:border-black-300 dark:bg-black-900 h-8">
             {categories.map((category) => {
               const isActive = activeCategory === category;
               return (
@@ -162,10 +162,10 @@ const CreateVM: React.FC = () => {
                   onClick={() => setActiveCategory(category)}
                   className={cn(
                     "flex min-w-0 flex-1 items-center justify-center rounded-[3.065px] border-[0.766px] px-[12px] transition-colors",
-                    "font-medium text-[12px] leading-[1.109] tracking-[-0.24px] whitespace-nowrap",
+                    "font-medium text-[12px] leading-[1.109] tracking-[-0.24px] whitespace-nowrap font-geist",
                     isActive
-                      ? "h-[22px] border-grey-dark-100 bg-grey-light-300 text-black-900 shadow-[0px_12.26px_3.831px_0px_rgba(0,0,0,0),0px_8.429px_3.065px_0px_rgba(0,0,0,0.01),0px_4.597px_3.065px_0px_rgba(0,0,0,0.04),0px_2.299px_2.299px_0px_rgba(0,0,0,0.08),0px_0.766px_0.766px_0px_rgba(0,0,0,0.09)] dark:border-black-300 dark:bg-black-primary-bg dark:text-white"
-                      : "h-[28px] border-transparent text-[#4d4d4d] hover:text-black-900 dark:text-grey-light-100 dark:opacity-50 dark:hover:opacity-100",
+                      ? "h-6 border-grey-dark-100 bg-grey-light-300 text-black-900 shadow-[0px_12.26px_3.831px_0px_rgba(0,0,0,0),0px_8.429px_3.065px_0px_rgba(0,0,0,0.01),0px_4.597px_3.065px_0px_rgba(0,0,0,0.04),0px_2.299px_2.299px_0px_rgba(0,0,0,0.08),0px_0.766px_0.766px_0px_rgba(0,0,0,0.09)] dark:border-black-300 dark:bg-black-primary-bg dark:text-white"
+                      : "h-6 border-transparent text-[#4d4d4d] hover:text-black-900 dark:text-grey-light-100 dark:opacity-50 dark:hover:opacity-100",
                   )}
                 >
                   <span className="truncate">{category}</span>
