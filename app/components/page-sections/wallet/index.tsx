@@ -79,8 +79,15 @@ export default function Wallet() {
   return (
     <>
       <DashboardTitleWrapper mainText="Wallet">
-        <WalletWithLocalSupport>
-        <div className="flex flex-col px-4 pb-6">
+        {/* PageHeader sits OUTSIDE the WalletWithLocalSupport gate so the
+            title + subtitle + ACTIVE WALLET selector are visible on every
+            wallet screen — including the no-wallet-yet welcome flow. Only
+            the body content (the 3-card grid + chart + tabs) is gated.
+            `flex-1` lets the welcome screen's inner flex-1 expand to fill
+            the remaining vertical space below the header — without it
+            the diagonal-stripe area would collapse to the card's natural
+            height. */}
+        <div className="flex flex-1 min-h-0 flex-col px-4 pb-6">
           <PageHeader
             title="Wallet"
             subtitle="All uploaded files are private and securely encrypted."
@@ -88,6 +95,7 @@ export default function Wallet() {
             rightSlot={<ActiveWalletSelector />}
           />
 
+          <WalletWithLocalSupport>
           {/* Top 3-column grid: Balance, Stake, Bridge */}
           <div className="mt-4 grid grid-cols-1 @md:grid-cols-2 @3xl:grid-cols-3 gap-4">
             <WalletBalanceCard
@@ -143,8 +151,8 @@ export default function Wallet() {
               )}
             </div>
           </div>
+          </WalletWithLocalSupport>
         </div>
-        </WalletWithLocalSupport>
       </DashboardTitleWrapper>
 
       <AddNewAddressDialog
