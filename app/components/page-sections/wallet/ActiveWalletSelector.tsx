@@ -115,7 +115,7 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
           type="button"
           onClick={() => setIsOpen((o) => !o)}
           className={cn(
-            "inline-flex items-stretch gap-3 rounded-[8px] border bg-grey-light-700 dark:bg-black-primary-bg px-3 py-1.5",
+            "inline-flex items-stretch gap-8 rounded-[8px] border bg-grey-light-700 dark:bg-black-primary-bg px-4 py-2",
             "border-grey-dark-100 dark:border-black-300",
             "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
           )}
@@ -223,7 +223,7 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
         type="button"
         onClick={() => setIsOpen((o) => !o)}
         className={cn(
-          "inline-flex items-stretch gap-3 rounded-[8px] border bg-grey-light-700 dark:bg-black-primary-bg px-3 py-1.5",
+          "inline-flex items-stretch gap-8 rounded-[8px] border bg-grey-light-700 dark:bg-black-primary-bg px-4 py-2",
           "border-grey-dark-100 dark:border-black-300",
           "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
         )}
