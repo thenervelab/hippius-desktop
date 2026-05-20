@@ -44,7 +44,16 @@ const LocalWalletSetup: React.FC = () => {
 
   switch (setupStep) {
     case "welcome":
-      return <WelcomeScreen />;
+      return (
+        <WelcomeScreen
+          onCreateNew={() => setSetupStep("create-mnemonic")}
+          onImport={() => setSetupStep("import-wallet")}
+          onAccessKeyContinue={(mnemonic) => {
+            setPendingMnemonic(mnemonic);
+            setSetupStep("create-password");
+          }}
+        />
+      );
     case "create-mnemonic":
       return (
         <CreateMnemonicScreen
@@ -99,7 +108,16 @@ const LocalWalletSetup: React.FC = () => {
       // a safety net so a transient state never produces a flash.
       return null;
     default:
-      return <WelcomeScreen />;
+      return (
+        <WelcomeScreen
+          onCreateNew={() => setSetupStep("create-mnemonic")}
+          onImport={() => setSetupStep("import-wallet")}
+          onAccessKeyContinue={(mnemonic) => {
+            setPendingMnemonic(mnemonic);
+            setSetupStep("create-password");
+          }}
+        />
+      );
   }
 };
 
