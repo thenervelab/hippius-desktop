@@ -138,24 +138,45 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           fillClassName="fill-[#f9f9f9] dark:fill-[#202020]"
           strokeClassName="stroke-[#b3b3b3] dark:stroke-[#6c6c6c]"
           // Suppress the default blue accent ring per the Figma — the
-          // outer gray ring and the white card stay; the inner colored
+          // outer wrapper and the white card stay; the inner colored
           // border just disappears.
           borderClassName="bg-transparent dark:bg-transparent p-0 sm:p-0"
           contentClassName="flex justify-center"
-          shellClassName="w-full min-w-0 max-w-[494px]"
-          // 16px card padding matches Figma's inner Container p-[16px];
-          // 26px row gap matches the gap between the title-block and
-          // the form-block in the Figma node.
-          cardClassName="w-full min-w-0 max-w-full p-4 gap-[26px] items-stretch"
+          // Outer container per the Figma spec: white background, 12px
+          // padding, 22px radius. Dark-mode swap to #1a1a1a so the
+          // chrome doesn't disappear into the page background while
+          // staying just above the inner card's #161616 surface.
+          shellClassName={cn(
+            "w-full min-w-0 max-w-[494px]",
+            "bg-white dark:bg-[#1a1a1a]",
+            "p-3 sm:p-3 rounded-[22px] sm:rounded-[22px]",
+          )}
+          // Inner card per the Figma spec: 16px padding, 26px gap,
+          // 10px radius, 5-layer drop shadow, white background. The
+          // shadow stack is the exact Figma export. Dark mode: solid
+          // #161616 card, shadow stack stays but reads softer against
+          // the dark surface (its alpha keeps things subtle).
+          cardClassName={cn(
+            "w-full min-w-0 max-w-full",
+            "p-4 gap-[26px] items-stretch",
+            "rounded-[10px] sm:rounded-[10px]",
+            "bg-white dark:bg-[#161616]",
+            "shadow-[0px_350px_98px_0px_rgba(0,0,0,0),0px_224px_90px_0px_rgba(0,0,0,0.01),0px_126px_76px_0px_rgba(0,0,0,0.03),0px_56px_56px_0px_rgba(0,0,0,0.05),0px_14px_31px_0px_rgba(0,0,0,0.06)]",
+          )}
         >
           <div className="flex flex-col items-center gap-[19px]">
             <WalletHero />
 
             <div className="flex flex-col items-center gap-2 text-center">
+              {/* Title — Figma: 24/32 Geist Medium, #0A0A0A. Token
+                  `text-grey-10` resolves to #0A0A0A so the literal
+                  matches; dark mode lifts to grey-light-100 (#fff). */}
               <h1 className="text-[24px] font-medium leading-[32px] text-grey-10 dark:text-grey-light-100">
                 Welcome to Hippius Wallet
               </h1>
-              <p className="max-w-[424px] text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-[#4f4f4f] dark:text-grey-dark-600">
+              {/* Subtitle — Figma: 16/22 Geist Medium, #4F4F4F,
+                  letter-spacing -0.32px, wrapped to 424px. */}
+              <p className="max-w-[424px] text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-50 dark:text-grey-dark-500">
                 Enter your wallet mnemonic to continue or create a new wallet
               </p>
             </div>
@@ -163,6 +184,10 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
 
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2.5">
+              {/* Label — Figma: 14/20 Geist Medium, #A3A3A3 (Body/03),
+                  tracking -0.28px. `text-grey-dark-600` resolves to
+                  #A3A3A3; keep the same value in dark mode since it
+                  reads fine against the #161616 card surface. */}
               <label
                 htmlFor="wallet-access-key"
                 className="text-[14px] font-medium leading-5 tracking-[-0.28px] text-grey-dark-600 dark:text-grey-dark-600"
@@ -211,27 +236,37 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
             </Button>
           </div>
 
+          {/* Footer prompts — Figma:
+                Plain prompt text: 18/24 Geist Medium, #4F4F4F,
+                  tracking -0.36px (Body/01/Medium).
+                Action link:      18/24 Geist Semibold, #0A0A0A,
+                  tracking -0.36px (Body/01/Semibold).
+              Tokens map exactly: text-grey-50 = #4F4F4F,
+              text-grey-10 = #0A0A0A. Hover lifts the action to
+              primary-50 (#3167dd) in light, primary-brand-dark in
+              dark, with an underline so the affordance is obvious
+              regardless of color contrast. */}
           <div className="flex flex-col gap-2 text-center">
             <p className="flex items-center justify-center gap-2 text-[18px] leading-6 tracking-[-0.36px]">
-              <span className="font-medium text-[#4f4f4f] dark:text-grey-dark-500">
+              <span className="font-medium text-grey-50 dark:text-grey-dark-500">
                 Don&apos;t have a wallet?
               </span>
               <button
                 type="button"
                 onClick={onCreateNew}
-                className="font-semibold text-grey-10 dark:text-grey-light-100 hover:text-primary-50 dark:hover:text-primary-brand-dark transition-colors"
+                className="font-semibold text-grey-10 dark:text-grey-light-100 hover:text-primary-50 dark:hover:text-primary-brand-dark hover:underline underline-offset-2 transition-colors"
               >
                 Create New Wallet
               </button>
             </p>
             <p className="flex items-center justify-center gap-2 text-[18px] leading-6 tracking-[-0.36px]">
-              <span className="font-medium text-[#4f4f4f] dark:text-grey-dark-500">
+              <span className="font-medium text-grey-50 dark:text-grey-dark-500">
                 Have an existing wallet?
               </span>
               <button
                 type="button"
                 onClick={onImport}
-                className="font-semibold text-grey-10 dark:text-grey-light-100 hover:text-primary-50 dark:hover:text-primary-brand-dark transition-colors"
+                className="font-semibold text-grey-10 dark:text-grey-light-100 hover:text-primary-50 dark:hover:text-primary-brand-dark hover:underline underline-offset-2 transition-colors"
               >
                 Import Your Wallet
               </button>
