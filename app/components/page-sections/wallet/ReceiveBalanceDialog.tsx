@@ -1,9 +1,25 @@
-import * as Dialog from "@radix-ui/react-dialog";
-import React from "react";
-import DialogContainer from "@/components/ui/DialogContainer";
-import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
+"use client";
+
+import React, { useState } from "react";
+import { Check, Copy } from "lucide-react";
+import { toast } from "sonner";
 import QRCode from "react-qr-code";
-import CopyText from "@/components/ui/copy-text";
+
+import { Button } from "@/components/ui/button";
+import { InGoing } from "@/components/ui/icons";
+import { cn } from "@/lib/utils";
+import { WalletDialogShell } from "./shared/WalletDesign";
+
+/* Receive Balance dialog.
+ *
+ * Phase 2 of the wallet redesign — ported from the hippius-web console
+ * onto WalletDialogShell. Surfaces an info banner explaining the SS58
+ * address, the QR code itself, and a copy-to-clipboard address row.
+ *
+ * Desktop signs locally so there's no extension-vs-mnemonic branching
+ * in this surface — just renders the local account's polkadot address.
+ * The confidentiality masking from console is intentionally dropped:
+ * the desktop confidentiality system isn't wired up yet. */
 
 export interface ReceiveBalanceDialogProps {
   open: boolean;
@@ -11,102 +27,130 @@ export interface ReceiveBalanceDialogProps {
   polkadotAddress: string;
 }
 
+const SUFFIX_LEN = 6;
+
 const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
   open,
   onClose,
   polkadotAddress,
 }) => {
-  // Format the address for display (truncate in the middle)
-  const formatAddress = (address: string) => {
-    if (!address || address.length < 10) return address;
-    return `${address.substring(0, 20)}...${address.substring(address.length - 3)}`;
+  const fullAddress = polkadotAddress || "";
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(fullAddress);
+      toast.success("Address copied to clipboard!");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Failed to copy address");
+    }
   };
 
-  const displayAddress = polkadotAddress ? formatAddress(polkadotAddress) : "";
-  const fullAddress = polkadotAddress || "";
-
   return (
-    <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <DialogContainer
-        className="md:inset-0 md:m-auto
-          md:w-[90vw] md:max-w-[26.75rem] h-fit"
-      >
-        <Dialog.Title className="sr-only">Receive Balance</Dialog.Title>
-        {/* Top accent bar (only mobile) */}
-        <div className="h-4 bg-primary-50 md:hidden block" />
+    <WalletDialogShell
+      open={open}
+      onClose={onClose}
+      title="Receive Balance"
+      description="Deposit Address"
+      icon={<InGoing className="size-3 text-white" />}
+      iconTitleGap="mt-4 mb-4"
+      maxWidth="sm:max-w-[540px] sm:min-w-[540px]"
+      contentClassName="sm:w-full"
+      footer={
+        <div className="flex justify-center">
+          <Button
+            type="button"
+            variant="defaultStable"
+            size="auto"
+            className="h-11 sm:h-[52px] w-full rounded-[8px] border border-grey-80 bg-white px-4 text-base sm:text-[18px] font-normal leading-5 tracking-[-0.36px] text-grey-10 hover:bg-grey-90 dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#373737]"
+            onClick={onClose}
+          >
+            Cancel
+          </Button>
+        </div>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        {/* Info banner explaining the SS58 address. */}
+        <div className="py-2 px-3 rounded-[14px] border border-[#3167DD] bg-[#3167DD33] dark:border-[#4a7aff] dark:bg-[#1e2d50]">
+          <p className="text-[10px] font-bold text-[#3167DD] dark:text-[#6b9aff] mb-1">
+            Info
+          </p>
+          <p className="text-[10px] font-medium leading-relaxed text-[#3167DD] dark:text-[#6b9aff]">
+            Use this address to receive hAlpha tokens on the Hippius network.
+            This is your SS58 encoded Substrate address and is compatible with
+            Polkadot and other Substrate based chains.
+          </p>
+        </div>
 
-        <div className="px-4">
-          {/* Desktop Header */}
-          <div className="hidden md:flex flex-col items-center justify-center pb-4 pt-4 gap-2">
-            <div className="flex items-center mb-2 p-2">
-              <AbstractIconWrapper className="size-8 @sm:size-10">
-                <Icons.RecieveSquare className="absolute size-4 @sm:size-6 text-primary-50" />
-              </AbstractIconWrapper>
-            </div>
-            <span className="text-center text-2xl text-grey-10 font-medium">
-              Receive Balance
-            </span>
-          </div>
+        {/* QR code */}
+        <div className="rounded-[14px] bg-[#f4f4f4] p-5 dark:bg-[#2a2a2a] flex justify-center">
+          <QRCode
+            value={fullAddress || "Unavailable"}
+            size={280}
+            style={{
+              height: "280px",
+              width: "280px",
+              flexShrink: 0,
+              backgroundColor: "transparent",
+              background: "transparent",
+            }}
+            viewBox="0 0 256 256"
+          />
+        </div>
 
-          {/* Mobile Header */}
-          <div className="flex py-4 items-center justify-between text-grey-10 relative w-full md:hidden">
-            <div className="text-lg font-medium relative">
-              <span className="capitalize">Receive Balance</span>
+        {/* Address field with CSS-only center truncation: the prefix
+            truncates via native ellipsis while a fixed-width suffix
+            stays visible, so the address always shows its first chars
+            (which differ between accounts) and its tail (which the
+            user can visually verify against an external source). */}
+        <div>
+          <label className="text-xs sm:text-sm text-grey-70 dark:text-grey-dark-800 font-medium mb-1.5 sm:mb-2 block">
+            Deposit Address
+          </label>
+
+          <div className="flex items-center border border-grey-80 dark:border-[#494949] rounded-[8px] bg-white dark:bg-[#1f1f1f] h-12 sm:h-14 px-3 sm:px-4 gap-2">
+            <div className="flex flex-1 min-w-0 items-center text-[13px] text-grey-60 font-medium dark:text-white leading-[22px]">
+              {fullAddress ? (
+                <>
+                  <span className="truncate min-w-0">
+                    {fullAddress.slice(
+                      0,
+                      Math.max(0, fullAddress.length - SUFFIX_LEN),
+                    )}
+                  </span>
+                  <span className="shrink-0">
+                    {fullAddress.slice(-SUFFIX_LEN)}
+                  </span>
+                </>
+              ) : (
+                "---"
+              )}
             </div>
-            <button onClick={onClose}>
-              <Icons.CloseCircle className="size-6 relative" />
+            <button
+              type="button"
+              onClick={handleCopy}
+              disabled={!fullAddress}
+              className="shrink-0 flex items-center justify-center size-8 disabled:opacity-30"
+              aria-label="Copy deposit address"
+            >
+              {copied ? (
+                <Check className="size-[18px] text-success-30" />
+              ) : (
+                <Copy
+                  className={cn(
+                    "size-[18px] text-grey-10 dark:text-white opacity-60 transition-opacity",
+                    fullAddress && "hover:opacity-100",
+                  )}
+                />
+              )}
             </button>
           </div>
-
-          {/* Deposit Address Label */}
-          <div className="text-sm font-medium text-grey-70 mb-2">
-            Deposit Address
-          </div>
-
-          {/* QR Code */}
-          <div className="w-full flex justify-center mb-4">
-            <div className="border border-grey-80 rounded-lg p-4 bg-white w-full flex items-center justify-center flex-col gap-[1.375rem]">
-              <div className="w-[12.125rem] h-[12.125rem] flex items-center justify-center">
-                <QRCode
-                  value={fullAddress}
-                  size={194}
-                  style={{ height: "auto", maxWidth: "100%", width: "100%" }}
-                  viewBox={`0 0 256 256`}
-                />
-              </div>
-              {/* Address with Copy Button */}
-              <div className="   w-full">
-                <CopyText
-                  text={fullAddress}
-                  title="Copy address"
-                  isJustifyCenter
-                  buttonClass="px-1.5 py-1 border border-grey-80 rounded bg-grey-90 "
-                  toastMessage="Address copied to clipboard"
-                  className="flex items-center justify-between"
-                  copyIconClassName="size-5 text-grey-10"
-                  checkIconClassName="size-5"
-                >
-                  <div className=" text-grey-10 font-semibold text-base">
-                    {displayAddress}
-                  </div>
-                </CopyText>
-              </div>
-            </div>
-          </div>
-
-          {/* Cancel Button */}
-          <div className="mb-6">
-            <CardButton
-              className="w-full text-[1.125rem]"
-              variant="secondary"
-              onClick={onClose}
-            >
-              Close
-            </CardButton>
-          </div>
         </div>
-      </DialogContainer>
-    </Dialog.Root>
+      </div>
+    </WalletDialogShell>
   );
 };
 
