@@ -130,7 +130,9 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
         />
 
         <BackgroundContainer
-          className="relative w-full max-w-[460px]"
+          // Figma form/input is 462px wide; the inner card adds 16px
+          // padding each side, so the outer max needs to be ~494px.
+          className="relative w-full max-w-[494px]"
           fillClassName="fill-[#f9f9f9] dark:fill-[#202020]"
           strokeClassName="stroke-[#b3b3b3] dark:stroke-[#6c6c6c]"
           // Suppress the default blue accent ring per the Figma — the
@@ -138,27 +140,36 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           // border just disappears.
           borderClassName="bg-transparent dark:bg-transparent p-0 sm:p-0"
           contentClassName="flex justify-center"
-          shellClassName="w-full min-w-0 max-w-[460px]"
-          cardClassName="w-full min-w-0 max-w-full p-6 sm:p-8 gap-0 items-stretch"
+          shellClassName="w-full min-w-0 max-w-[494px]"
+          // 16px card padding matches Figma's inner Container p-[16px];
+          // 26px row gap matches the gap between the title-block and
+          // the form-block in the Figma node.
+          cardClassName="w-full min-w-0 max-w-full p-4 gap-[26px] items-stretch"
         >
-          <WalletIllustration />
+          <div className="flex flex-col items-center gap-[19px]">
+            <WalletIllustration />
 
-          <h1 className="text-center text-[24px] font-semibold leading-[32px] text-grey-10 dark:text-grey-light-100">
-            Welcome to Hippius Wallet
-          </h1>
-          <p className="mt-2 text-center text-[14px] font-medium leading-[20px] tracking-[-0.28px] text-grey-60 dark:text-grey-dark-600">
-            Enter your wallet mnemonic to continue or create a new wallet
-          </p>
+            <div className="flex flex-col items-center gap-2 text-center">
+              <h1 className="text-[24px] font-medium leading-[32px] text-grey-10 dark:text-grey-light-100">
+                Welcome to Hippius Wallet
+              </h1>
+              <p className="max-w-[424px] text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-[#4f4f4f] dark:text-grey-dark-600">
+                Enter your wallet mnemonic to continue or create a new wallet
+              </p>
+            </div>
+          </div>
 
-          <div className="mt-6 space-y-2">
-            <label
-              htmlFor="wallet-access-key"
-              className="block text-[13px] font-medium text-grey-70 dark:text-grey-dark-800"
-            >
-              Access Key
-            </label>
-            <div className="relative">
-              <Key className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-grey-60 dark:text-grey-dark-600 pointer-events-none" />
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2.5">
+              <label
+                htmlFor="wallet-access-key"
+                className="text-[14px] font-medium leading-5 tracking-[-0.28px] text-grey-dark-600 dark:text-grey-dark-600"
+              >
+                Access Key
+              </label>
+              {/* Use the project's Input adornment slot rather than an
+                  absolute icon — keeps the shell's min-h-[54px] + p-4
+                  geometry exactly matching the Figma input (462×54). */}
               <Input
                 id="wallet-access-key"
                 type="password"
@@ -167,10 +178,8 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 placeholder="Enter Access Key"
                 autoComplete="off"
                 disabled={verifying}
-                className={cn(
-                  "h-12 pl-10 text-base font-medium",
-                  error && "border-error-50",
-                )}
+                startAdornment={<Key className="size-5 sm:size-6" />}
+                aria-invalid={!!error}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
@@ -178,30 +187,33 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   }
                 }}
               />
+              {error ? (
+                <p className="text-[12px] font-medium text-error-70">{error}</p>
+              ) : null}
             </div>
-            {error ? (
-              <p className="text-[12px] font-medium text-error-70">{error}</p>
-            ) : null}
+
+            <Button
+              type="button"
+              variant="primary"
+              size="auto"
+              className={cn(
+                "h-[52px] w-full rounded-[6px] gap-2.5 px-2.5",
+                "text-[18px] font-normal tracking-[-0.36px] leading-[1.109]",
+                !canContinue && "!bg-primary-50/40 hover:!bg-primary-50/40",
+              )}
+              onClick={handleContinue}
+              disabled={!canContinue}
+            >
+              {verifying ? "Verifying..." : "Continue"}
+              {!verifying ? <ArrowRight className="size-4 shrink-0" /> : null}
+            </Button>
           </div>
 
-          <Button
-            type="button"
-            variant="primary"
-            size="auto"
-            className={cn(
-              "mt-4 h-12 w-full rounded-[8px] text-[15px] font-medium tracking-[-0.3px] gap-2",
-              !canContinue && "!bg-primary-50/40 hover:!bg-primary-50/40",
-            )}
-            onClick={handleContinue}
-            disabled={!canContinue}
-          >
-            {verifying ? "Verifying..." : "Continue"}
-            {!verifying ? <ArrowRight className="size-4 shrink-0" /> : null}
-          </Button>
-
-          <div className="mt-5 space-y-1.5 text-center">
-            <p className="text-[13px] font-medium text-grey-60 dark:text-grey-dark-600">
-              Don&apos;t have a wallet?{" "}
+          <div className="flex flex-col gap-2 text-center">
+            <p className="flex items-center justify-center gap-2 text-[18px] leading-6 tracking-[-0.36px]">
+              <span className="font-medium text-[#4f4f4f] dark:text-grey-dark-500">
+                Don&apos;t have a wallet?
+              </span>
               <button
                 type="button"
                 onClick={onCreateNew}
@@ -210,8 +222,10 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 Create New Wallet
               </button>
             </p>
-            <p className="text-[13px] font-medium text-grey-60 dark:text-grey-dark-600">
-              Have an existing wallet?{" "}
+            <p className="flex items-center justify-center gap-2 text-[18px] leading-6 tracking-[-0.36px]">
+              <span className="font-medium text-[#4f4f4f] dark:text-grey-dark-500">
+                Have an existing wallet?
+              </span>
               <button
                 type="button"
                 onClick={onImport}
