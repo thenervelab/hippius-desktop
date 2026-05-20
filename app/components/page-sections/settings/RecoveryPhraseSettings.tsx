@@ -110,7 +110,7 @@ const RecoveryPhraseSettings: React.FC = () => {
       setMnemonic(result);
       setShowDialog(true);
     } else {
-      toast.error("Mnemonic seed not available yet. Please configure sync first.");
+      toast.error("Access key not available yet. Please configure sync first.");
     }
   };
 
@@ -133,9 +133,9 @@ const RecoveryPhraseSettings: React.FC = () => {
             >
               <SecurityRow
                 Icon={Key}
-                title="Mnemonic Seed"
-                description="Your mnemonic seed is the only way to restore access to your wallet and encrypted files."
-                actionLabel="Backup Mnemonic Seed"
+                title="Access Key"
+                description="Your access key is the only way to restore access to your wallet and encrypted files."
+                actionLabel="Backup Access Key"
                 onAction={handleBackup}
               />
             </div>
@@ -148,8 +148,8 @@ const RecoveryPhraseSettings: React.FC = () => {
               )}
             >
               <SettingsWarningNotice
-                title="Keep your Mnemonic key secure"
-                description="If you lose your mnemonic seed, you will permanently lose access to your encrypted files. There is no way to recover it."
+                title="Keep your Access Key secure"
+                description="If you lose your access key, you will permanently lose access to your encrypted files. There is no way to recover it."
               />
             </div>
 
