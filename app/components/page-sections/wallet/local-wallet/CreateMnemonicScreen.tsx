@@ -127,8 +127,11 @@ const CreateMnemonicScreen: React.FC<CreateMnemonicScreenProps> = ({
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-0 size-full"
               />
-              <div className="relative flex items-center justify-center size-[40px] rounded-[10px] bg-primary-50">
-                <Plus className="size-5 text-white" strokeWidth={2.5} />
+              <div className="relative flex items-center justify-center size-[32px] aspect-square rounded-[8px] bg-primary-50 dark:bg-primary-brand-dark">
+                <Plus
+                  className="size-4 shrink-0 text-white"
+                  strokeWidth={2.5}
+                />
               </div>
             </div>
 
