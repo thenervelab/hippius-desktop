@@ -217,3 +217,10 @@ export { default as Folders } from "./Folders";
 export { default as EllipsisVertical } from "./EllipsisVertical";
 export { default as Grip } from "./Grip";
 export { default as SquareLibrary } from "./SquareLibrary";
+export {
+  default as CornerBracket,
+  CornerBracketFlipped,
+  CornerBracketUp,
+  CornerBracketDown,
+  PlusCrossIcon,
+} from "./CornerBracket";

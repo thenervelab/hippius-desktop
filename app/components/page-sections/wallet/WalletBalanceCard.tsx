@@ -1,0 +1,222 @@
+"use client";
+
+import { FC, useState } from "react";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import {
+  GripIcon,
+  CoinsIcon,
+} from "@/components/ui/icons";
+import Warning from "@/components/ui/icons/Warning";
+import { RefreshCcwDot, ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import TimeAgo from "react-timeago";
+import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import SendBalanceDialog from "./SendBalanceDialog";
+import ReceiveBalanceDialog from "./ReceiveBalanceDialog";
+import { toast } from "sonner";
+
+/* MY BALANCE card. Mirrors the billing-page CreditsWidget chrome:
+ * outer rounded card with a gray header strip + inner white panel.
+ *
+ * The Receive / Send buttons wire to the existing SendBalanceDialog /
+ * ReceiveBalanceDialog implementations during Phase 1 of the wallet
+ * redesign — Phase 2 swaps those dialogs for the new
+ * WalletDialogShell-based versions without changing this surface. */
+
+interface WalletBalanceCardProps {
+  className?: string;
+  refetchTransactions?: () => void;
+  refetchSystemBalance?: () => void;
+}
+
+// Fee constant mirrors Rust's ESTIMATED_TRANSFER_FEE_PLANCK; the check
+// keeps users from trying to send when balance can't cover the fee.
+const ESTIMATED_TRANSFER_FEE_PLANCK = BigInt("270233151");
+
+const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
+  className,
+  refetchTransactions,
+  refetchSystemBalance,
+}) => {
+  const {
+    data: balanceInfo,
+    isLoading,
+    error,
+    refetch,
+    dataUpdatedAt,
+  } = useHippiusBalance();
+  const { polkadotAddress } = useWalletAuth();
+  const [sendDialogOpen, setSendDialogOpen] = useState(false);
+  const [receiveDialogOpen, setReceiveDialogOpen] = useState(false);
+
+  const handleSend = () => {
+    if (!balanceInfo?.data?.free) {
+      toast.error("Balance information not available. Please try again later.");
+      return;
+    }
+    const freePlanck = BigInt(balanceInfo.data.free);
+    if (freePlanck <= BigInt(0)) {
+      toast.error(
+        "Your balance is zero. Please add funds to your account first.",
+      );
+      return;
+    }
+    if (freePlanck <= ESTIMATED_TRANSFER_FEE_PLANCK) {
+      toast.error(
+        `Your balance (${balanceInfo.data.freeHip} hALPHA) is too low to cover the transaction fee. Please add funds to your account first.`,
+      );
+      return;
+    }
+    setSendDialogOpen(true);
+  };
+
+  return (
+    <>
+      <div
+        className={cn(
+          "flex flex-col items-center w-full rounded-[8px] border overflow-hidden",
+          "bg-grey-light-300 border-grey-dark-100",
+          "dark:bg-black-primary-bg dark:border-black-300",
+          "shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]",
+          className,
+        )}
+      >
+        {/* Header */}
+        <div className="flex h-[46px] w-full items-center pl-[14px] pr-[10px]">
+          <div className="flex items-center gap-1">
+            <GripIcon className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
+            <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
+              My Balance
+            </p>
+          </div>
+        </div>
+
+        {/* Inner panel */}
+        <div
+          className={cn(
+            "flex flex-col w-full flex-1 justify-between gap-3",
+            "rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100",
+            "bg-white dark:bg-black-600 dark:border-black-300",
+            "p-3",
+          )}
+        >
+          {/* Headline stat */}
+          <div className="flex items-end justify-start gap-1">
+            {isLoading ? (
+              <div className="h-[30px] w-[140px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
+            ) : error ? (
+              <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-error-80">
+                ERROR
+              </span>
+            ) : (
+              <>
+                <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white">
+                  {balanceInfo?.data?.freeHip ?? "- - - -"}
+                </span>
+                <span className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 pb-[3px]">
+                  hALPHA
+                </span>
+              </>
+            )}
+          </div>
+
+          {/* Refresh / status row */}
+          <div className="flex items-center gap-2">
+            {isLoading ? (
+              <div className="h-4 w-36 rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
+            ) : error ? (
+              <>
+                <Warning className="size-4 text-error-80 shrink-0" />
+                <span className="text-[12px] text-error-80">
+                  Balance not retrieved.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => refetch()}
+                  aria-label="Retry loading balance"
+                  className={cn(
+                    "flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[6px] border",
+                    "bg-grey-light-700 border-grey-dark-100",
+                    "dark:bg-black-primary-bg dark:border-black-300",
+                    "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
+                  )}
+                >
+                  <RefreshCcwDot className="size-3 text-black-700 dark:text-white opacity-40" />
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => refetch()}
+                  aria-label="Refresh balance"
+                  className={cn(
+                    "flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[6px] border",
+                    "bg-grey-light-700 border-grey-dark-100",
+                    "dark:bg-black-primary-bg dark:border-black-300",
+                    "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
+                  )}
+                >
+                  <RefreshCcwDot className="size-3 text-black-700 dark:text-white opacity-40" />
+                </button>
+                <span className="font-mono font-medium text-[12px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 whitespace-nowrap">
+                  Last updated <TimeAgo date={dataUpdatedAt} />
+                </span>
+              </>
+            )}
+          </div>
+
+          {/* Send/Receive actions */}
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              variant="defaultStable"
+              size="auto"
+              className="h-[36px] rounded-[8px] text-[13px] font-medium tracking-[-0.26px] gap-[7px]"
+              onClick={() => setReceiveDialogOpen(true)}
+              disabled={!polkadotAddress}
+            >
+              <ArrowDownLeft className="size-3.5 shrink-0" />
+              Receive
+            </Button>
+            <Button
+              variant="primary"
+              size="auto"
+              className="h-[36px] rounded-[8px] text-[13px] font-medium tracking-[-0.26px] gap-[7px]"
+              onClick={handleSend}
+              disabled={!polkadotAddress || isLoading || !!error}
+            >
+              <ArrowUpRight className="size-3.5 shrink-0" />
+              Send
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <SendBalanceDialog
+        open={sendDialogOpen}
+        onClose={() => setSendDialogOpen(false)}
+        availableBalancePlanck={String(balanceInfo?.data?.free ?? "0")}
+        availableBalanceHip={balanceInfo?.data?.freeHip ?? "0"}
+        refetchBalance={() => {
+          refetch();
+          refetchSystemBalance?.();
+          refetchTransactions?.();
+        }}
+        polkadotAddress={polkadotAddress || ""}
+      />
+
+      <ReceiveBalanceDialog
+        open={receiveDialogOpen}
+        onClose={() => setReceiveDialogOpen(false)}
+        polkadotAddress={polkadotAddress || ""}
+      />
+    </>
+  );
+};
+
+// Silence unused-import lint; CoinsIcon stays as an alternate icon
+// option for design iteration without re-importing.
+void CoinsIcon;
+
+export default WalletBalanceCard;
