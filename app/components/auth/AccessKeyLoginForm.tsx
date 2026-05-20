@@ -61,7 +61,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
       setError(
         error instanceof Error
           ? error.message
-          : "Invalid access key. Please ensure you've entered a valid 12-word access key.",
+          : "Invalid access key. Please ensure you've entered a valid 12-word mnemonic phrase.",
       );
       setLoggingIn(false);
     }

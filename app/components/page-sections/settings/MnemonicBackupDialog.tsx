@@ -211,7 +211,7 @@ export function MnemonicBackupDialog({
     <FramedDialog
       open={open}
       onClose={handleClose}
-      title={step === 1 ? "Secure Your Access Key" : "Your Access Key"}
+      title={step === 1 ? "Secure Your Mnemonic Seed" : "Your Mnemonic Seed"}
       icon={<Icons.ShieldTick className="size-5 text-white" />}
       maxWidth="max-w-[680px]"
       stepIndicator={<StepIndicator current={step} onSelect={goToStep} />}
@@ -261,8 +261,8 @@ function Step1Warning({
   return (
     <>
       <p className="mb-5 text-center text-sm font-medium text-[#4F4F4F] dark:text-grey-dark-300">
-        Your access key is the only way to restore access to your account and
-        encrypted files.
+        Your mnemonic seed is the only way to restore access to your account
+        and encrypted files.
       </p>
 
       <div className="flex flex-col gap-4">
@@ -308,7 +308,7 @@ function Step1Warning({
             "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
           )}
         >
-          I Understand, Show My Access Key
+          I Understand, Show My Mnemonic Seed
         </Button>
       </div>
     </>
@@ -466,7 +466,8 @@ function Step2Reveal({
         {showEncryptForm && (
           <div className="flex flex-col gap-3">
             <p className="text-sm text-[#7D7D7D] dark:text-grey-dark-600">
-              Encrypt your access key with a password and save it as a file.
+              Encrypt your recovery phrase with a password and save it as a
+              file.
             </p>
             <Input
               type="password"
