@@ -1,13 +1,26 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
+import { ArrowRight, Eye, EyeOff, Plus } from "lucide-react";
+import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui";
-import { AlertCircle, Eye, EyeOff } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { toast } from "sonner";
-
+import { BackgroundContainer } from "@/components/ui/BackgroundContainer";
+import { Decoration, Key } from "@/components/ui/icons";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
+import { getDiagonalTextureSvgBackgroundImage } from "@/app/lib/ui-textures";
+
+const cornerTextureLight = getDiagonalTextureSvgBackgroundImage({
+  opacity: 0.21,
+});
+const cornerTextureDark = getDiagonalTextureSvgBackgroundImage({
+  color: "white",
+  opacity: 0.1,
+});
+
+const MIN_LEN = 8;
 
 interface CreatePasswordScreenProps {
   mnemonic: string;
@@ -16,16 +29,13 @@ interface CreatePasswordScreenProps {
   onBack: () => void;
 }
 
-const MIN_LEN = 8;
-
 const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
   mnemonic,
   initialName,
   onCreated,
   onBack,
 }) => {
-  const { createWallet } = useLocalWallet();
-  const [name, setName] = useState(initialName ?? "Main Wallet");
+  const { createWallet, setSetupStep } = useLocalWallet();
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -33,23 +43,31 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Wallet name is captured on the previous step (create-mnemonic). The
+  // welcome→create-password shortcut (existing access key) doesn't set
+  // one, so we fall back to a sensible default instead of forcing the
+  // user back to pick one.
+  const name = (initialName ?? "Main Wallet").trim() || "Main Wallet";
+
   const validationError: string | null = useMemo(() => {
-    if (!name.trim()) return "Wallet name is required";
     if (password.length < MIN_LEN) {
-      return `Password must be at least ${MIN_LEN} characters`;
+      return `Passcode must be at least ${MIN_LEN} characters`;
     }
-    if (password !== confirm) return "Passwords don't match";
+    if (password !== confirm) return "Passcodes don't match";
     return null;
-  }, [name, password, confirm]);
+  }, [password, confirm]);
+
+  const canSubmit = !submitting && validationError === null;
 
   const handleSubmit = async () => {
-    if (validationError) {
+    if (!canSubmit) {
       setError(validationError);
       return;
     }
     setSubmitting(true);
+    setError(null);
     try {
-      const ok = await createWallet(name.trim(), mnemonic, password);
+      const ok = await createWallet(name, mnemonic, password);
       if (ok) {
         toast.success("Wallet created");
         onCreated();
@@ -65,125 +83,207 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
   };
 
   return (
-    <div className="flex flex-col items-center w-full max-w-[460px] mx-auto px-4 pt-12 pb-8">
-      <h1 className="text-2xl font-semibold text-grey-10 dark:text-grey-light-100 mb-2 text-center">
-        Set a Password
-      </h1>
-      <p className="text-base text-grey-60 dark:text-grey-dark-600 text-center mb-6 max-w-[400px]">
-        This password encrypts your wallet on this device. You&apos;ll enter it
-        whenever you sign a transaction.
-      </p>
+    <div className="flex flex-1 w-full items-center justify-center px-4 py-6 mt-[14px] overflow-hidden rounded-[8px] border border-[#E3E3E3] dark:border-[#313131] bg-white dark:bg-[#1a1a1a]">
+      <div className="relative">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute right-full bottom-full w-screen h-screen bg-[rgba(242,242,242,0.42)] dark:hidden"
+          style={{ backgroundImage: cornerTextureLight }}
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute left-full top-full w-screen h-screen bg-[rgba(242,242,242,0.42)] dark:hidden"
+          style={{ backgroundImage: cornerTextureLight }}
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute right-full bottom-full w-screen h-screen bg-[#1A1A1A] hidden dark:block"
+          style={{ backgroundImage: cornerTextureDark }}
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute left-full top-full w-screen h-screen bg-[#1A1A1A] hidden dark:block"
+          style={{ backgroundImage: cornerTextureDark }}
+        />
 
-      <div className="w-full space-y-3.5">
-        <div>
-          <label className="text-[13px] font-medium text-grey-70 dark:text-grey-dark-800 mb-1.5 block">
-            Wallet Name
-          </label>
-          <Input
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value);
-              setError(null);
-            }}
-            placeholder="Main Wallet"
-            className="h-11 text-base font-medium"
-          />
-        </div>
+        <BackgroundContainer
+          className="relative w-full max-w-[594px]"
+          fillClassName="fill-[#f9f9f9] dark:fill-[#202020]"
+          strokeClassName="stroke-[#b3b3b3] dark:stroke-[#6c6c6c]"
+          borderClassName="bg-transparent dark:bg-transparent p-0 sm:p-0"
+          contentClassName="flex justify-center"
+          decorationLineColor="rgba(151, 151, 151, 0.17)"
+          shellClassName={cn(
+            "w-full min-w-0 max-w-[494px]",
+            "bg-white dark:bg-[#1a1a1a]",
+            "p-3 sm:p-3 rounded-[8px] sm:rounded-[8px]",
+          )}
+          cardClassName={cn(
+            "w-full min-w-0 max-w-full",
+            "p-4 gap-[26px] items-stretch",
+            "rounded-[10px] sm:rounded-[10px]",
+            "bg-white dark:bg-[#161616]",
+            "shadow-[0px_350px_98px_0px_rgba(0,0,0,0),0px_224px_90px_0px_rgba(0,0,0,0.01),0px_126px_76px_0px_rgba(0,0,0,0.03),0px_56px_56px_0px_rgba(0,0,0,0.05),0px_14px_31px_0px_rgba(0,0,0,0.06)]",
+          )}
+        >
+          <div className="flex flex-col items-center gap-[19px]">
+            <div className="relative flex items-center justify-center size-[56px] shrink-0">
+              <Decoration
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 size-full"
+              />
+              <div className="relative flex items-center justify-center size-[32px] aspect-square rounded-[8px] bg-primary-50 dark:bg-primary-brand-dark">
+                <Plus
+                  className="size-4 shrink-0 text-white"
+                  strokeWidth={2.5}
+                />
+              </div>
+            </div>
 
-        <div>
-          <label className="text-[13px] font-medium text-grey-70 dark:text-grey-dark-800 mb-1.5 block">
-            Password
-          </label>
-          <div className="relative">
-            <Input
-              value={password}
-              onChange={(e) => {
-                setPassword(e.target.value);
-                setError(null);
-              }}
-              type={showPassword ? "text" : "password"}
-              placeholder="At least 8 characters"
-              autoComplete="new-password"
-              className="h-11 text-base font-medium pr-10"
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword((s) => !s)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-grey-50 dark:text-grey-dark-600"
-              aria-label={showPassword ? "Hide password" : "Show password"}
-            >
-              {showPassword ? (
-                <EyeOff className="size-4" />
-              ) : (
-                <Eye className="size-4" />
-              )}
-            </button>
+            <div className="flex flex-col items-center gap-2 text-center">
+              <h1 className="text-[24px] font-medium leading-[32px] text-grey-10 dark:text-grey-light-100">
+                Create New Wallet
+              </h1>
+              <p className="max-w-[424px] text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-50 dark:text-grey-dark-500">
+                Enter your wallet mnemonic to continue or create a new wallet
+              </p>
+            </div>
           </div>
-        </div>
 
-        <div>
-          <label className="text-[13px] font-medium text-grey-70 dark:text-grey-dark-800 mb-1.5 block">
-            Confirm Password
-          </label>
-          <div className="relative">
-            <Input
-              value={confirm}
-              onChange={(e) => {
-                setConfirm(e.target.value);
-                setError(null);
-              }}
-              type={showConfirm ? "text" : "password"}
-              placeholder="Repeat your password"
-              autoComplete="new-password"
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2.5">
+              <label
+                htmlFor="wallet-passcode"
+                className="text-[14px] font-medium leading-5 tracking-[-0.28px] text-grey-dark-600 dark:text-grey-dark-600"
+              >
+                Passcode
+              </label>
+              <Input
+                id="wallet-passcode"
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setError(null);
+                }}
+                type={showPassword ? "text" : "password"}
+                placeholder="Enter your passcode"
+                autoComplete="new-password"
+                startAdornment={<Key className="size-5 sm:size-6" />}
+                endAdornment={
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((s) => !s)}
+                    className="text-grey-50 dark:text-grey-dark-600 hover:text-grey-10 dark:hover:text-grey-light-100"
+                    aria-label={
+                      showPassword ? "Hide passcode" : "Show passcode"
+                    }
+                  >
+                    {showPassword ? (
+                      <EyeOff className="size-5" />
+                    ) : (
+                      <Eye className="size-5" />
+                    )}
+                  </button>
+                }
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleSubmit();
+                  }
+                }}
+              />
+            </div>
+
+            <div className="flex flex-col gap-2.5">
+              <label
+                htmlFor="wallet-passcode-confirm"
+                className="text-[14px] font-medium leading-5 tracking-[-0.28px] text-grey-dark-600 dark:text-grey-dark-600"
+              >
+                Confirm Passcode
+              </label>
+              <Input
+                id="wallet-passcode-confirm"
+                value={confirm}
+                onChange={(e) => {
+                  setConfirm(e.target.value);
+                  setError(null);
+                }}
+                type={showConfirm ? "text" : "password"}
+                placeholder="Confirm your passcode"
+                autoComplete="new-password"
+                aria-invalid={!!confirm && confirm !== password}
+                startAdornment={<Key className="size-5 sm:size-6" />}
+                endAdornment={
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirm((s) => !s)}
+                    className="text-grey-50 dark:text-grey-dark-600 hover:text-grey-10 dark:hover:text-grey-light-100"
+                    aria-label={showConfirm ? "Hide passcode" : "Show passcode"}
+                  >
+                    {showConfirm ? (
+                      <EyeOff className="size-5" />
+                    ) : (
+                      <Eye className="size-5" />
+                    )}
+                  </button>
+                }
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleSubmit();
+                  }
+                }}
+              />
+            </div>
+
+            {error ? (
+              <p className="text-[12px] font-medium text-error-70">{error}</p>
+            ) : null}
+
+            <Button
+              type="button"
+              variant="primary"
+              size="auto"
               className={cn(
-                "h-11 text-base font-medium pr-10",
-                confirm && password !== confirm && "border-error-50",
+                "h-[52px] w-full rounded-[6px] gap-2.5 px-2.5",
+                "text-[18px] font-normal tracking-[-0.36px] leading-[1.109]",
+                !canSubmit && "!bg-primary-50/40 hover:!bg-primary-50/40",
               )}
-            />
-            <button
-              type="button"
-              onClick={() => setShowConfirm((s) => !s)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-grey-50 dark:text-grey-dark-600"
-              aria-label={showConfirm ? "Hide password" : "Show password"}
+              onClick={handleSubmit}
+              disabled={!canSubmit}
             >
-              {showConfirm ? (
-                <EyeOff className="size-4" />
-              ) : (
-                <Eye className="size-4" />
-              )}
-            </button>
+              {submitting ? "Creating..." : "Create Wallet"}
+              {!submitting ? <ArrowRight className="size-4 shrink-0" /> : null}
+            </Button>
           </div>
-        </div>
-      </div>
 
-      {error ? (
-        <div className="w-full mt-4 flex items-center gap-2 text-error-70 text-sm font-medium">
-          <AlertCircle className="size-4" />
-          <span>{error}</span>
-        </div>
-      ) : null}
-
-      <div className="w-full mt-6 flex gap-3">
-        <Button
-          type="button"
-          variant="defaultStable"
-          size="auto"
-          className="flex-1 h-11 rounded-[6px] border border-grey-80 dark:border-[#494949] bg-white dark:bg-[#2a2a2a] dark:text-white text-[14px] font-medium"
-          onClick={onBack}
-          disabled={submitting}
-        >
-          Back
-        </Button>
-        <Button
-          type="button"
-          variant="primary"
-          size="auto"
-          className="flex-1 h-11 rounded-[6px] text-[14px] font-medium tracking-[-0.28px]"
-          onClick={handleSubmit}
-          disabled={submitting || validationError !== null}
-        >
-          {submitting ? "Creating..." : "Create Wallet"}
-        </Button>
+          <div className="flex flex-col gap-2 text-center">
+            <p className="flex items-center justify-center gap-2 text-[18px] leading-6 tracking-[-0.36px]">
+              <span className="font-medium text-grey-50 dark:text-grey-dark-500">
+                Already have a wallet?
+              </span>
+              <button
+                type="button"
+                onClick={onBack}
+                className="font-semibold text-grey-10 dark:text-grey-light-100 hover:text-primary-50 dark:hover:text-primary-brand-dark hover:underline underline-offset-2 transition-colors"
+              >
+                Access Wallet
+              </button>
+            </p>
+            <p className="flex items-center justify-center gap-2 text-[18px] leading-6 tracking-[-0.36px]">
+              <span className="font-medium text-grey-50 dark:text-grey-dark-500">
+                Have an existing wallet?
+              </span>
+              <button
+                type="button"
+                onClick={() => setSetupStep("import-wallet")}
+                className="font-semibold text-grey-10 dark:text-grey-light-100 hover:text-primary-50 dark:hover:text-primary-brand-dark hover:underline underline-offset-2 transition-colors"
+              >
+                Import Your Wallet
+              </button>
+            </p>
+          </div>
+        </BackgroundContainer>
       </div>
     </div>
   );
