@@ -21,7 +21,8 @@ import { InfoCircle } from "@/app/components/ui/icons";
 import PageHeader from "@/components/ui/page-header";
 import TabList, { TabOption } from "../ui/tabs/TabList";
 import { usePagination } from "@/app/lib/hooks";
-import DeleteConfirmationDialog from "../DeleteConfirmationDialog";
+import ConfirmationDialog from "../ConfirmationDialog";
+import { Trash2 } from "lucide-react";
 import CreateButton from "../ui/button/CreateButton";
 import useDeleteSSHKey from "@/app/lib/hooks/api/useDeleteSSHKey";
 import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
@@ -471,7 +472,7 @@ const VirtualMachines: FC = () => {
         isLoading={isCreatingSSHKey}
       />
       {/* Delete SSH Key Confirmation */}
-      <DeleteConfirmationDialog
+      <ConfirmationDialog
         open={openDeleteSSHKeyModal}
         onClose={() => {
           if (!isDeletingInProgress) {
@@ -485,13 +486,17 @@ const VirtualMachines: FC = () => {
             setSelectedSSHKeyToDelete(null);
           }
         }}
-        onDelete={handleConfirmDeleteSSHKey}
+        onConfirm={handleConfirmDeleteSSHKey}
         button={isDeletingInProgress ? "Deleting..." : "Delete SSH Key"}
         text={`Are you sure you want to delete SSH key "${
           selectedSSHKeyToDelete?.name || "this key"
         }"? This action is permanent.`}
         heading="Delete SSH Key"
+        icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
+        iconBgColor="bg-[#fc7d73]"
+        confirmVariant="destructive"
         disableButton={isDeletingInProgress}
+        disableBackButton={isDeletingInProgress}
       />
     </div>
   );

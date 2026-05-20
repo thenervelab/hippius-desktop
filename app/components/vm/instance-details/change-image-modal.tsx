@@ -1,9 +1,11 @@
 "use client";
 
 import React, { useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
-import { CloseCircle } from "@/components/ui/icons";
-import TicketSelect from "../../page-sections/support/TicketSelect";
+import { ArrowRight } from "lucide-react";
+import FramedDialog from "@/components/ui/FramedDialog";
+import { Button } from "@/components/ui/button";
+import { SelectOptions } from "@/components/ui/select/SelectOptions";
+import { Image as ImageIcon } from "@/components/ui/icons";
 
 export interface ChangeImageData {
   operatingSystem: string;
@@ -24,6 +26,14 @@ type Props = {
   images?: VMImage[];
 };
 
+// Re-uses the form metrics from CreateTicketModal / CreateVMModal so the
+// VM-area dialogs feel like one family.
+const labelClassName =
+  "text-sm font-medium leading-5 tracking-[-0.28px] text-grey-dark-800 dark:text-[#a3a3a3]";
+
+const controlClassName =
+  "mt-1.5 min-h-14 items-center !shadow-none focus-within:!shadow-none dark:!shadow-none dark:focus-within:!shadow-none";
+
 const ChangeImageModal: React.FC<Props> = ({
   open,
   onClose,
@@ -42,16 +52,20 @@ const ChangeImageModal: React.FC<Props> = ({
       const osKey = osName.toLowerCase();
       if (!osMap.has(osKey)) osMap.set(osKey, osName);
     });
-    return Array.from(osMap.entries()).map(([value, label]) => ({ value, label }));
+    return Array.from(osMap.entries()).map(([value, label]) => ({
+      value,
+      label,
+    }));
   }, [images]);
 
-  const allImages = React.useMemo(() =>
-    images.map((img) => ({
-      value: String(img.id),
-      label: img.name,
-      os: img.name.split(" ")[0].toLowerCase(),
-    })),
-    [images]
+  const allImages = React.useMemo(
+    () =>
+      images.map((img) => ({
+        value: String(img.id),
+        label: img.name,
+        os: img.name.split(" ")[0].toLowerCase(),
+      })),
+    [images],
   );
 
   const filteredImages = operatingSystem
@@ -83,100 +97,84 @@ const ChangeImageModal: React.FC<Props> = ({
   };
 
   const handleClose = () => {
+    if (isLoading) return;
     resetForm();
     onClose();
   };
 
   return (
-    <Dialog.Root open={open} onOpenChange={(o) => !o && handleClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-white/60 z-50" />
-        <Dialog.Content
-          className="
-            fixed left-1/2 top-1/2 z-50 
-            w-full max-w-sm sm:max-w-[26.75rem] 
-            max-h-[90vh] overflow-y-auto
-            -translate-x-1/2 -translate-y-1/2
-            bg-white rounded-[0.5rem]
-            shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
-            p-4 border border-grey-80
-          "
-        >
-          <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[0.5rem] sm:hidden" />
-          <Dialog.Close asChild className="sm:hidden">
-            <button
-              aria-label="Close"
-              className="absolute top-[1.875rem] right-4 text-grey-10 hover:text-grey-20"
-            >
-              <CloseCircle className="size-6" />
-            </button>
-          </Dialog.Close>
+    <FramedDialog
+      open={open}
+      onClose={handleClose}
+      title="Change Image"
+      icon={<ImageIcon className="size-[18px] text-white" />}
+      maxWidth="max-w-[405px]"
+      contentClassName="px-4 pb-4 pt-4 sm:w-full sm:px-4 sm:pb-4 sm:pt-4"
+      titleClassName="mb-0 text-[22px] leading-8 tracking-normal sm:text-[28px] sm:leading-9"
+    >
+      <div className="mt-4 flex flex-col gap-4 font-geist">
+        {/* Operating System */}
+        <div>
+          <label className={labelClassName}>Operating System</label>
+          <SelectOptions
+            value={operatingSystem}
+            onValueChange={handleOSChange}
+            options={operatingSystems}
+            placeholder={
+              operatingSystems.length === 0 ? "No OS available" : "Choose an OS"
+            }
+            disabled={operatingSystems.length === 0}
+            triggerClassName={controlClassName}
+            ariaLabel="Operating System"
+          />
+        </div>
 
-          <Dialog.Title className="text-grey-10 text-[1.375rem] sm:text-2xl font-medium text-center max-sm:mt-2.5 mb-4">
-            Change Image
-          </Dialog.Title>
+        {/* Image */}
+        <div>
+          <label className={labelClassName}>Image</label>
+          <SelectOptions
+            value={image}
+            onValueChange={setImage}
+            options={filteredImages}
+            placeholder={
+              filteredImages.length === 0
+                ? "No images available"
+                : "Choose an image"
+            }
+            disabled={filteredImages.length === 0}
+            triggerClassName={controlClassName}
+            ariaLabel="Image"
+          />
+        </div>
 
-          <div className="space-y-4">
-            {/* Operating System */}
-            <div>
-              <label className="text-sm font-medium text-grey-70">
-                Operating System
-              </label>
-              <div className="mt-2">
-                <TicketSelect
-                  value={operatingSystem}
-                  onValueChange={handleOSChange}
-                  options={operatingSystems}
-                  placeholder="Choose an OS"
-                />
-              </div>
-            </div>
+        <div className="space-y-3 pt-1">
+          <Button
+            type="button"
+            onClick={handleSubmit}
+            disabled={isLoading || !operatingSystem || !image}
+            variant="primary"
+            size="auto"
+            className="h-[52px] w-full gap-2 rounded-[6px] px-4 text-[18px] font-medium leading-5 tracking-[-0.36px] shadow-[0px_4px_4px_0px_rgba(4,65,149,0.1)]"
+          >
+            <span>{isLoading ? "Changing..." : "Change Image"}</span>
+            {!isLoading ? (
+              <ArrowRight className="size-[18px]" strokeWidth={2} />
+            ) : null}
+          </Button>
 
-            {/* Image */}
-            <div>
-              <label className="text-sm font-medium text-grey-70">Image</label>
-              <div className="mt-2">
-                <TicketSelect
-                  value={image}
-                  onValueChange={setImage}
-                  options={filteredImages}
-                  placeholder="Choose an image"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-6 space-y-3">
-            <button
-              onClick={handleSubmit}
-              disabled={isLoading || !operatingSystem || !image}
-              className="
-                w-full p-1 bg-primary-50 text-grey-100 rounded shadow border border-primary-40
-                hover:bg-primary-40 transition disabled:opacity-50 disabled:cursor-not-allowed
-              "
-            >
-              <div className="py-2.5 rounded border border-primary-40 text-lg">
-                {isLoading ? "Changing..." : "Change Image"}
-              </div>
-            </button>
-            <Dialog.Close asChild>
-              <button
-                onClick={handleClose}
-                disabled={isLoading}
-                className="
-                  w-full py-3.5 bg-grey-100 border border-grey-80 rounded text-grey-10
-                  hover:bg-grey-80 transition
-                  text-lg font-medium hidden sm:block
-                  disabled:opacity-50 disabled:cursor-not-allowed
-                "
-              >
-                Cancel
-              </button>
-            </Dialog.Close>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+          <Button
+            type="button"
+            onClick={handleClose}
+            disabled={isLoading}
+            size="auto"
+            dotColor="rgba(0, 0, 0, 0.37)"
+            className="h-[52px] w-full rounded-[8px] border border-grey-80 bg-white px-4 text-[18px] font-normal leading-5 tracking-[-0.36px] text-grey-10 hover:rounded-[8px] hover:bg-grey-90 dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#373737]"
+          >
+            Cancel
+          </Button>
+        </div>
+      </div>
+    </FramedDialog>
   );
 };
 

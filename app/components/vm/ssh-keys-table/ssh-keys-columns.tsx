@@ -4,10 +4,32 @@ import { MoreVertical } from "lucide-react";
 import React from "react";
 import { CopyableCell } from "../../ui/alt-table";
 import { formatDate } from "@/app/lib/utils/formatters/formatDate";
-import TableActionMenu from "../../ui/alt-table/TableActionMenu";
+import TableActionMenu, {
+  type ActionItem,
+} from "../../ui/alt-table/TableActionMenu";
 import { Icons } from "../../ui";
 
 const columnHelper = createColumnHelper<SSHKey>();
+
+/**
+ * Items shown in BOTH the kebab dropdown and the right-click context
+ * menu for an SSH key row. Extracted so the two menus stay in lockstep
+ * — every entry added/disabled here automatically shows up in both.
+ */
+export function buildSSHKeyMenuItems(
+  sshKey: SSHKey,
+  handlers: { onDelete?: (sshKey: SSHKey) => void },
+): ActionItem[] {
+  const { onDelete } = handlers;
+  return [
+    {
+      icon: <Icons.Trash className="size-4" />,
+      itemTitle: "Delete SSH Key",
+      onItemClick: () => onDelete && onDelete(sshKey),
+      variant: "destructive",
+    },
+  ];
+}
 
 export const getDesktopColumns = (onDelete?: (sshKey: SSHKey) => void) => [
   columnHelper.accessor("name", {
@@ -120,14 +142,7 @@ export const getDesktopColumns = (onDelete?: (sshKey: SSHKey) => void) => [
         <div className="flex justify-center">
           <TableActionMenu
             dropdownTitle="SSH Key Options"
-            items={[
-              {
-                icon: <Icons.Trash className="size-4" />,
-                itemTitle: "Delete SSH Key",
-                onItemClick: () => onDelete && onDelete(sshKey),
-                variant: "destructive",
-              },
-            ]}
+            items={buildSSHKeyMenuItems(sshKey, { onDelete })}
           >
             <button
               type="button"

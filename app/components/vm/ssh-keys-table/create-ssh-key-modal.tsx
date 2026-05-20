@@ -1,13 +1,21 @@
 "use client";
 
 import React, { useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
-import { CloseCircle } from "@/components/ui/icons";
+import { ArrowRight } from "lucide-react";
 import { toast } from "sonner";
-import { Input } from "@/components/ui/input/Input2";
-import { Textarea } from "../../ui/Textarea";
-import { Icons } from "../../ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import FramedDialog from "@/components/ui/FramedDialog";
+import { Button } from "@/components/ui/button";
+import {
+  Input,
+  inputFieldControlClassName,
+  inputFieldShellClassName,
+} from "@/components/ui/input";
+import { Key } from "@/components/ui/icons";
+import { cn } from "@/lib/utils";
+
+const SSH_KEYGEN_DOCS_URL =
+  "https://docs.hippius.com/use/virtual-machines#generate-an-ssh-key-pair-with-ssh-keygen";
 
 export interface CreateSSHKeyData {
   keyName: string;
@@ -24,6 +32,23 @@ type Props = {
   onSubmit: (data: CreateSSHKeyData) => Promise<void>;
   isLoading?: boolean;
 };
+
+// Mirrors the label/control metrics used by CreateTicketModal and the
+// VM CreateVMModal so the three FramedDialog-based forms stay aligned.
+const labelClassName =
+  "text-sm font-medium leading-5 tracking-[-0.28px] text-grey-dark-800 dark:text-[#a3a3a3]";
+
+const controlClassName =
+  "mt-1.5 min-h-14 items-center !shadow-none focus-within:!shadow-none dark:!shadow-none dark:focus-within:!shadow-none";
+
+const controlTextClassName =
+  "text-base leading-[22px] tracking-[-0.32px] placeholder:text-grey-dark-800 dark:placeholder:text-[#7d7d7d]";
+
+const noticeTitleClassName =
+  "m-0 text-[10px] font-bold leading-4 tracking-[-0.2px] text-primary-50 dark:text-primary-65";
+
+const noticeBodyClassName =
+  "m-0 text-[10px] font-medium leading-[13px] tracking-[-0.2px] text-primary-50 dark:text-primary-65";
 
 const CreateSSHKeyModal: React.FC<Props> = ({
   open,
@@ -67,126 +92,97 @@ const CreateSSHKeyModal: React.FC<Props> = ({
   };
 
   return (
-    <Dialog.Root
+    <FramedDialog
       open={open}
-      onOpenChange={(o) => !o && !isLoading && handleClose()}
+      onClose={handleClose}
+      title="Create SSH Key"
+      icon={<Key className="size-[17px] text-white" />}
+      maxWidth="max-w-[581px]"
+      contentClassName="px-4 pb-4 pt-4 sm:w-full sm:px-4 sm:pb-4 sm:pt-4"
+      titleClassName="mb-0 text-[22px] leading-8 tracking-normal sm:text-[28px] sm:leading-9"
     >
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-white/60 z-50" />
-        <Dialog.Content
-          className="
-            fixed left-1/2 top-1/2 z-50 
-            w-full max-w-sm sm:max-w-[26.75rem] 
-            max-h-[90vh] overflow-y-auto
-            -translate-x-1/2 -translate-y-1/2
-            bg-white rounded-[0.5rem]
-            shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
-            p-4 border border-grey-80
-          "
-        >
-          <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[0.5rem] sm:hidden" />
-          <Dialog.Close asChild className="sm:hidden">
+      <div className="mt-4 flex flex-col gap-4 font-geist">
+        <div>
+          <label className={labelClassName}>Key Name</label>
+          <Input
+            type="text"
+            value={keyName}
+            onChange={(event) => setKeyName(event.target.value)}
+            placeholder="Choose a name for your new key"
+            wrapperClassName={controlClassName}
+            className={controlTextClassName}
+          />
+        </div>
+
+        <div>
+          <label className={labelClassName}>Public Key</label>
+          <div
+            className={cn(
+              inputFieldShellClassName,
+              "mt-1.5 min-h-[91px] items-start gap-0",
+              "!shadow-none focus-within:!shadow-none dark:!shadow-none dark:focus-within:!shadow-none",
+            )}
+          >
+            <textarea
+              value={publicKey}
+              onChange={(event) => setPublicKey(event.target.value)}
+              placeholder="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAA... or ssh-ed25519 AAAAC3..."
+              rows={3}
+              className={cn(
+                inputFieldControlClassName,
+                controlTextClassName,
+                "min-h-[59px] resize-none",
+              )}
+            />
+          </div>
+        </div>
+
+        <div className="rounded-[14px] border border-primary-50 bg-primary-50/[0.2] px-3 py-2 dark:border-primary-65 dark:bg-primary-65/[0.2]">
+          <p className={noticeTitleClassName}>SSH Key Format</p>
+          <div className="mt-1">
+            <p className={noticeBodyClassName}>
+              Enter your public SSH key (e.g., ssh-rsa, ssh-ed25519). You can
+              generate one using ssh-keygen on your local machine. Never share
+              your private key.
+            </p>
             <button
-              aria-label="Close"
-              disabled={isLoading}
-              className="absolute top-[1.875rem] right-4 text-grey-10 hover:text-grey-20 disabled:opacity-50 disabled:cursor-not-allowed"
+              type="button"
+              onClick={() => openUrl(SSH_KEYGEN_DOCS_URL)}
+              className="text-[10px] font-bold leading-[13px] tracking-[-0.2px] text-primary-50 underline transition-colors hover:text-[#2454c4] dark:text-primary-65 dark:hover:text-primary-brand-dark"
             >
-              <CloseCircle className="size-6" />
+              Learn more
             </button>
-          </Dialog.Close>
-
-          <Dialog.Title className="text-grey-10 text-[1.375rem] sm:text-2xl font-medium text-center max-sm:mt-2.5 mb-4">
-            Create SSH Key
-          </Dialog.Title>
-
-          <div className="space-y-4">
-            {/* Key Name */}
-            <div>
-              <label className="text-sm font-medium text-grey-70">
-                Key Name
-              </label>
-              <Input
-                type="text"
-                value={keyName}
-                onChange={(e) => setKeyName(e.target.value)}
-                placeholder="Choose a name for your new key"
-                className="mt-2 w-full"
-              />
-            </div>
-
-            {/* Public Key */}
-            <div>
-              <label className="text-sm font-medium text-grey-70">
-                Public Key
-              </label>
-              <Textarea
-                value={publicKey}
-                onChange={(e) => setPublicKey(e.target.value)}
-                placeholder="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAA... or ssh-ed25519 AAAAC3..."
-                rows={4}
-                className="mt-2 w-full "
-              />
-            </div>
           </div>
-          {/* SSH Key Info Notice */}
-          <div className="mb-2 mt-4 p-3 bg-primary-95 border border-primary-80 rounded-lg">
-            <div className="flex items-start gap-2">
-              <div className="flex-shrink-0 mt-0.5">
-                <Icons.InfoCircle className="size-4 text-primary-50" />
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-medium text-primary-40 mb-1">
-                  SSH Key Format
-                </p>
-                <p className="text-xs text-primary-60">
-                  Enter your public SSH key (e.g., ssh-rsa, ssh-ed25519). You
-                  can generate one using ssh-keygen on your local machine. Never
-                  share your private key.{" "}
-                  <button
-                    onClick={() =>
-                      openUrl(
-                        "https://docs.hippius.com/use/virtual-machines#generate-an-ssh-key-pair-with-ssh-keygen"
-                      )
-                    }
-                    className="text-primary-50 hover:text-primary-40 underline font-medium"
-                  >
-                    Learn more
-                  </button>
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="mt-6 space-y-3">
-            <button
-              onClick={handleSubmit}
-              disabled={isLoading || !keyName || !publicKey}
-              className="
-                w-full p-1 bg-primary-50 text-grey-100 rounded shadow border border-primary-40
-                hover:bg-primary-40 transition disabled:opacity-50 disabled:cursor-not-allowed
-              "
-            >
-              <div className="py-2.5 rounded border border-primary-40 text-lg">
-                {isLoading ? "Creating..." : "Create Key"}
-              </div>
-            </button>
-            <Dialog.Close asChild>
-              <button
-                onClick={handleClose}
-                disabled={isLoading}
-                className="
-                  w-full py-3.5 bg-grey-100 border border-grey-80 rounded text-grey-10
-                  hover:bg-grey-80 transition
-                  text-lg font-medium hidden sm:block
-                  disabled:opacity-50 disabled:cursor-not-allowed
-                "
-              >
-                Cancel
-              </button>
-            </Dialog.Close>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+        </div>
+
+        <div className="space-y-4 pt-1">
+          <Button
+            type="button"
+            onClick={handleSubmit}
+            disabled={isLoading || !keyName || !publicKey}
+            variant="primary"
+            size="auto"
+            className="h-[52px] w-full gap-2 rounded-[6px] px-4 text-[18px] font-medium leading-5 tracking-[-0.36px] shadow-[0px_4px_4px_0px_rgba(4,65,149,0.1)]"
+          >
+            <span>{isLoading ? "Creating..." : "Create Key"}</span>
+            {!isLoading ? (
+              <ArrowRight className="size-[18px]" strokeWidth={2} />
+            ) : null}
+          </Button>
+
+          <Button
+            type="button"
+            onClick={handleClose}
+            disabled={isLoading}
+            size="auto"
+            dotColor="rgba(0, 0, 0, 0.37)"
+            className="h-[52px] w-full rounded-[8px] border border-grey-80 bg-white px-4 text-[18px] font-normal leading-5 tracking-[-0.36px] text-grey-10 hover:rounded-[8px] hover:bg-grey-90 dark:border-[#494949] dark:bg-[#1f1f1f] dark:text-white dark:hover:bg-[#252525]"
+          >
+            Cancel
+          </Button>
+        </div>
+      </div>
+    </FramedDialog>
   );
 };
 

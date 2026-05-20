@@ -5,14 +5,15 @@ import {
   getSortedRowModel,
 } from "@tanstack/react-table";
 import * as TableModule from "@/components/ui/alt-table";
-import { FC, useMemo, useState, useEffect } from "react";
+import { FC, useCallback, useMemo, useState, useEffect } from "react";
 import { P } from "../../ui/typography";
 import { cn } from "@/lib/utils";
-import { getDesktopColumns } from "./ssh-keys-columns";
+import { getDesktopColumns, buildSSHKeyMenuItems } from "./ssh-keys-columns";
 import useSSHKeys from "@/app/lib/hooks/api/useSSHKeys";
 import NoEntriesFound from "../../ui/NoEntriesFound";
 import Skeleton from "../../ui/skeleton";
 import type { VMTablePaginationState } from "../instances-table";
+import InstanceRowContextMenu from "../instances-table/InstanceRowContextMenu";
 
 export interface SSHKey {
   id: number;
@@ -108,6 +109,28 @@ const SSHKeysTable: FC<SSHKeysTableProps> = ({
     error,
     onPaginationChange,
   ]);
+
+  // Row right-click menu — mirrors the kebab dropdown but pops up at
+  // the cursor. The kebab button lives inside `.action-menu-area`; we
+  // skip opening the context menu when the user right-clicks inside it
+  // so the native kebab flow wins.
+  const [rowContextMenu, setRowContextMenu] = useState<{
+    sshKey: SSHKey;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  const handleRowContextMenu = useCallback(
+    (e: React.MouseEvent, sshKey: SSHKey) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const target = e.target as HTMLElement;
+      if (target.closest(".action-menu-area")) return;
+      window.getSelection()?.removeAllRanges();
+      setRowContextMenu({ sshKey, x: e.clientX, y: e.clientY });
+    },
+    [],
+  );
 
   // Get columns with the deletion handler
   const desktopColumns = getDesktopColumns(onDeleteKey);
@@ -293,6 +316,9 @@ const SSHKeysTable: FC<SSHKeysTableProps> = ({
                       isFirst || isLast ? "h-[32px]" : "h-[26px]",
                       rowBgFor(index),
                     )}
+                    onContextMenu={(e) =>
+                      handleRowContextMenu(e, row.original)
+                    }
                   >
                     {row.getVisibleCells().map((cell) => (
                       <TableModule.Td
@@ -319,6 +345,17 @@ const SSHKeysTable: FC<SSHKeysTableProps> = ({
           currentPage={currentPage}
           totalPages={safeTotalPages}
           setPage={setCurrentPage}
+        />
+      )}
+
+      {rowContextMenu && (
+        <InstanceRowContextMenu
+          x={rowContextMenu.x}
+          y={rowContextMenu.y}
+          items={buildSSHKeyMenuItems(rowContextMenu.sshKey, {
+            onDelete: onDeleteKey,
+          })}
+          onClose={() => setRowContextMenu(null)}
         />
       )}
     </div>

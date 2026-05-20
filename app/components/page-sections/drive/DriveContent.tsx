@@ -9,7 +9,8 @@ import CardView from "./card-view";
 import FilesNoEntriesFound from "./files-table/FilesNoEntriesFound";
 import UploadStatusWidget from "./UploadStatusWidget";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
-import DeleteConfirmationDialog from "@/app/components/DeleteConfirmationDialog";
+import ConfirmationDialog from "@/app/components/ConfirmationDialog";
+import { Trash2 } from "lucide-react";
 import VideoDialog from "./files-table/VideoDialog";
 import ImageDialog from "./files-table/ImageDialog";
 import PdfDialog from "./files-table/PdfDialog";
@@ -428,7 +429,7 @@ const DriveContent: FC<DriveContentProps> = ({
         {renderContent()}
       </div>
 
-      <DeleteConfirmationDialog
+      <ConfirmationDialog
         open={openDeleteModal}
         onClose={() => {
           setOpenDeleteModal(false);
@@ -438,7 +439,7 @@ const DriveContent: FC<DriveContentProps> = ({
           setOpenDeleteModal(false);
           setFileToDelete(null);
         }}
-        onDelete={() => {
+        onConfirm={() => {
           setOpenDeleteModal(false);
 
           // Format the filename using the same logic as NameCell
@@ -472,11 +473,24 @@ const DriveContent: FC<DriveContentProps> = ({
             ? "Deleting..."
             : `Delete ${fileToDelete?.isFolder ? "Folder" : "File"}`
         }
-        text={`Are you sure you want to delete\n${
-          fileToDelete?.name ? "\n" + fileToDelete.name : ""
-        }`}
+        text={
+          <>
+            Are you sure you want to delete
+            {fileToDelete?.name ? (
+              <>
+                <br />
+                {fileToDelete.name}
+              </>
+            ) : null}
+            ?
+          </>
+        }
         heading={`Delete ${fileToDelete?.isFolder ? "Folder" : "File"}`}
+        icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
+        iconBgColor="bg-[#fc7d73]"
+        confirmVariant="destructive"
         disableButton={isDeleting}
+        disableBackButton={isDeleting}
       />
 
       {contextMenu && (
