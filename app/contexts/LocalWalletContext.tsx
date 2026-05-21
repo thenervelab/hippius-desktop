@@ -9,6 +9,7 @@ import React, {
   useMemo,
   useState,
 } from "react";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 /** Mirrors `PublicLocalWallet` in `src-tauri/src/wallet/repo.rs`. */
 export interface LocalWallet {
@@ -93,6 +94,11 @@ export function LocalWalletProvider({
 }: {
   children: React.ReactNode;
 }) {
+  // Wallets are scoped to the logged-in account in Rust (`local_wallets.owner`
+  // mirrors `sync_paths.owner`). Subscribing to `polkadotAddress` here lets
+  // the FE swap the visible wallet list when the user logs in/out or signs
+  // in as a different account on the same machine.
+  const { polkadotAddress } = useWalletAuth();
   const [wallets, setWallets] = useState<LocalWallet[]>([]);
   const [activeWallet, setActiveWallet] = useState<LocalWallet | null>(null);
   const [isUnlocked, setIsUnlocked] = useState(false);
@@ -112,6 +118,14 @@ export function LocalWalletProvider({
   );
 
   const refreshWallets = useCallback(async () => {
+    // Skip the IPC roundtrip when nobody is logged in — the Rust commands
+    // would reject with "Log in to manage local wallets" and we'd log a
+    // useless error every time anything bumped the dep.
+    if (!polkadotAddress) {
+      setWallets([]);
+      setActiveWallet(null);
+      return;
+    }
     try {
       const [all, active] = await Promise.all([
         invoke<LocalWallet[]>("local_wallet_list"),
@@ -122,11 +136,25 @@ export function LocalWalletProvider({
     } catch (e) {
       console.error("Failed to refresh local wallets:", e);
     }
-  }, []);
+  }, [polkadotAddress]);
 
   useEffect(() => {
     let cancelled = false;
     const init = async () => {
+      // Logged-out state: wipe the FE mirror immediately so a previous
+      // account's wallets don't flash visible during the next login.
+      // Unlock state must reset too — a stale `isUnlocked=true` from the
+      // previous session would otherwise bypass the password prompt on
+      // the next signing action.
+      if (!polkadotAddress) {
+        if (cancelled) return;
+        setWallets([]);
+        setActiveWallet(null);
+        setIsUnlocked(false);
+        setSetupStep("welcome");
+        setIsLoading(false);
+        return;
+      }
       setIsLoading(true);
       try {
         const any = await invoke<boolean>("local_wallet_has_any");
@@ -145,7 +173,7 @@ export function LocalWalletProvider({
     return () => {
       cancelled = true;
     };
-  }, [refreshWallets]);
+  }, [polkadotAddress, refreshWallets]);
 
   /* ── Mnemonic helpers ──────────────────────────────────────────────── */
 

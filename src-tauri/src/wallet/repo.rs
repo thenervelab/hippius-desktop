@@ -5,10 +5,21 @@
 //! and a SHA-256 password hash for fast verification before attempting the
 //! AEAD decrypt.
 //!
-//! Only one row at a time has `is_active = 1` — the constraint is enforced in
-//! [`set_active`] (clear all → set one) rather than via a partial unique
-//! index, which would conflict with the legacy `feature/wallet-updates`
-//! schema we're migrating from.
+//! Rows are scoped to the logged-in account via the `owner` column
+//! (`account_key(substrate_address)`), mirroring `sync_paths`. Every CRUD
+//! function takes an `owner` argument and all queries filter on it — a
+//! wallet created under account A is invisible to (and unmodifiable from)
+//! account B, even if both know its `id`.
+//!
+//! Only one row at a time has `is_active = 1` PER OWNER — the constraint is
+//! enforced in [`set_active`] (clear all owner rows → set one), not via a
+//! partial unique index, so multiple accounts can each have their own
+//! active wallet without colliding.
+//!
+//! `UNIQUE(owner, address)` is enforced in the DDL (see
+//! `utils/schema::ensure_table_schema`); duplicate-address inserts under
+//! the same owner are rejected pre-insert by [`insert`] with a friendlier
+//! error than the raw SQLite UNIQUE-violation string.
 
 use crate::error::AppError;
 use serde::Serialize;
@@ -90,34 +101,39 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Insert a wallet row. Returns the newly-created row.
+/// Insert a wallet row under `owner`. Returns the newly-created row.
 ///
-/// The first wallet ever inserted is automatically marked active so
-/// callers don't need to follow up with `set_active`.
+/// The first wallet ever inserted FOR THIS OWNER is automatically marked
+/// active so callers don't need to follow up with `set_active`. Other
+/// owners' active wallets are unaffected — the "exactly one active per
+/// owner" invariant is owner-scoped.
 pub async fn insert(
     pool: &SqlitePool,
+    owner: &str,
     name: &str,
     address: &str,
     encrypted_mnemonic: &str,
     password_hash: &str,
 ) -> Result<LocalWallet, AppError> {
-    // Reject duplicates before insert so the error message is friendlier
-    // than the raw "UNIQUE constraint failed: ..." SQLite would give.
-    if let Some(_existing) = get_by_address(pool, address).await? {
+    if let Some(_existing) = get_by_address(pool, owner, address).await? {
         return Err(AppError::Other("A wallet with this address already exists".into()));
     }
 
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM local_wallets").fetch_one(pool).await?;
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM local_wallets WHERE owner = ?")
+        .bind(owner)
+        .fetch_one(pool)
+        .await?;
     let is_first = count == 0;
     let now = now_ms();
 
     sqlx::query(
         r#"
         INSERT INTO local_wallets
-            (name, address, encrypted_mnemonic, password_hash, is_active, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (owner, name, address, encrypted_mnemonic, password_hash, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
+    .bind(owner)
     .bind(name)
     .bind(address)
     .bind(encrypted_mnemonic)
@@ -128,81 +144,100 @@ pub async fn insert(
     .execute(pool)
     .await?;
 
-    // Re-fetch so we return the row Sqlite actually persisted (including the
-    // auto-assigned id and any default-clamp surprises).
-    get_by_address(pool, address)
+    get_by_address(pool, owner, address)
         .await?
         .ok_or_else(|| AppError::Other("inserted wallet missing on re-read".into()))
 }
 
-pub async fn list_all(pool: &SqlitePool) -> Result<Vec<LocalWallet>, AppError> {
-    let sql = format!("SELECT {SELECT_COLS} FROM local_wallets ORDER BY created_at ASC");
-    let rows = sqlx::query_as::<_, WalletRow>(&sql).fetch_all(pool).await?;
+pub async fn list_all(pool: &SqlitePool, owner: &str) -> Result<Vec<LocalWallet>, AppError> {
+    let sql = format!("SELECT {SELECT_COLS} FROM local_wallets WHERE owner = ? ORDER BY created_at ASC");
+    let rows = sqlx::query_as::<_, WalletRow>(&sql).bind(owner).fetch_all(pool).await?;
     Ok(rows.into_iter().map(LocalWallet::from).collect())
 }
 
-pub async fn get_active(pool: &SqlitePool) -> Result<Option<LocalWallet>, AppError> {
-    let sql = format!("SELECT {SELECT_COLS} FROM local_wallets WHERE is_active = 1 LIMIT 1");
-    let row = sqlx::query_as::<_, WalletRow>(&sql).fetch_optional(pool).await?;
+pub async fn count_for_owner(pool: &SqlitePool, owner: &str) -> Result<i64, AppError> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM local_wallets WHERE owner = ?")
+        .bind(owner)
+        .fetch_one(pool)
+        .await?;
+    Ok(count)
+}
+
+pub async fn get_active(pool: &SqlitePool, owner: &str) -> Result<Option<LocalWallet>, AppError> {
+    let sql = format!("SELECT {SELECT_COLS} FROM local_wallets WHERE owner = ? AND is_active = 1 LIMIT 1");
+    let row = sqlx::query_as::<_, WalletRow>(&sql).bind(owner).fetch_optional(pool).await?;
     Ok(row.map(LocalWallet::from))
 }
 
-pub async fn get_by_id(pool: &SqlitePool, id: i64) -> Result<Option<LocalWallet>, AppError> {
-    let sql = format!("SELECT {SELECT_COLS} FROM local_wallets WHERE id = ?");
-    let row = sqlx::query_as::<_, WalletRow>(&sql).bind(id).fetch_optional(pool).await?;
+/// Look up a wallet by id, but only if it belongs to `owner`. Returning
+/// `None` for cross-owner ids is intentional: it makes a stale wallet id
+/// from another account behave identically to a deleted wallet, so the
+/// IPC layer doesn't have to distinguish "missing" from "not yours".
+pub async fn get_by_id(pool: &SqlitePool, owner: &str, id: i64) -> Result<Option<LocalWallet>, AppError> {
+    let sql = format!("SELECT {SELECT_COLS} FROM local_wallets WHERE id = ? AND owner = ?");
+    let row = sqlx::query_as::<_, WalletRow>(&sql).bind(id).bind(owner).fetch_optional(pool).await?;
     Ok(row.map(LocalWallet::from))
 }
 
-pub async fn get_by_address(pool: &SqlitePool, address: &str) -> Result<Option<LocalWallet>, AppError> {
-    let sql = format!("SELECT {SELECT_COLS} FROM local_wallets WHERE address = ?");
-    let row = sqlx::query_as::<_, WalletRow>(&sql).bind(address).fetch_optional(pool).await?;
+pub async fn get_by_address(pool: &SqlitePool, owner: &str, address: &str) -> Result<Option<LocalWallet>, AppError> {
+    let sql = format!("SELECT {SELECT_COLS} FROM local_wallets WHERE owner = ? AND address = ?");
+    let row = sqlx::query_as::<_, WalletRow>(&sql).bind(owner).bind(address).fetch_optional(pool).await?;
     Ok(row.map(LocalWallet::from))
 }
 
-/// Mark `id` as the single active wallet. Atomically clears `is_active` on
-/// every other row first to satisfy the "only one active" invariant.
-pub async fn set_active(pool: &SqlitePool, id: i64) -> Result<(), AppError> {
+/// Mark `id` as the single active wallet for `owner`. Other owners' active
+/// wallets are not touched — the UPDATE is scoped via `WHERE owner = ?` so
+/// switching wallets under one account never affects another logged-in
+/// account on the same machine.
+pub async fn set_active(pool: &SqlitePool, owner: &str, id: i64) -> Result<(), AppError> {
     let now = now_ms();
     let mut tx = pool.begin().await?;
-    sqlx::query("UPDATE local_wallets SET is_active = 0, updated_at = ?")
+    sqlx::query("UPDATE local_wallets SET is_active = 0, updated_at = ? WHERE owner = ?")
         .bind(now)
+        .bind(owner)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("UPDATE local_wallets SET is_active = 1, updated_at = ? WHERE id = ?")
+    sqlx::query("UPDATE local_wallets SET is_active = 1, updated_at = ? WHERE id = ? AND owner = ?")
         .bind(now)
         .bind(id)
+        .bind(owner)
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
     Ok(())
 }
 
-pub async fn rename(pool: &SqlitePool, id: i64, name: &str) -> Result<(), AppError> {
+pub async fn rename(pool: &SqlitePool, owner: &str, id: i64, name: &str) -> Result<(), AppError> {
     let now = now_ms();
-    sqlx::query("UPDATE local_wallets SET name = ?, updated_at = ? WHERE id = ?")
+    sqlx::query("UPDATE local_wallets SET name = ?, updated_at = ? WHERE id = ? AND owner = ?")
         .bind(name)
         .bind(now)
         .bind(id)
+        .bind(owner)
         .execute(pool)
         .await?;
     Ok(())
 }
 
 /// Delete a wallet. If the deleted wallet was active, promotes the first
-/// remaining wallet (by creation order) to active so the UI never has
-/// zero-active-and-non-empty state.
-pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), AppError> {
-    let target = match get_by_id(pool, id).await? {
+/// remaining wallet under the same owner (by creation order) to active so
+/// the UI never has zero-active-and-non-empty state for that account.
+pub async fn delete(pool: &SqlitePool, owner: &str, id: i64) -> Result<(), AppError> {
+    let target = match get_by_id(pool, owner, id).await? {
         Some(w) => w,
         None => return Ok(()),
     };
 
-    sqlx::query("DELETE FROM local_wallets WHERE id = ?").bind(id).execute(pool).await?;
+    sqlx::query("DELETE FROM local_wallets WHERE id = ? AND owner = ?")
+        .bind(id)
+        .bind(owner)
+        .execute(pool)
+        .await?;
 
     if target.is_active {
-        let remaining = list_all(pool).await?;
+        let remaining = list_all(pool, owner).await?;
         if let Some(next) = remaining.first() {
-            set_active(pool, next.id).await?;
+            set_active(pool, owner, next.id).await?;
         }
     }
     Ok(())

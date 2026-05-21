@@ -19,12 +19,24 @@
 //! callers can recover the same way (prompt the user to create or
 //! unlock a wallet).
 
+use crate::auth::account_key::account_key;
 use crate::error::{AppError, NotReadyKind};
 use crate::wallet::{crypto, repo};
 use subxt_signer::{
     bip39::Mnemonic as SubxtMnemonic,
     sr25519::Keypair,
 };
+
+/// Resolve the current account's owner key, returning the unified
+/// `NotReady(SigningKeyUnavailable)` when nobody is logged in. The FE
+/// already drops the user into the onboarding flow on that variant, so
+/// "no session" and "no active wallet" share a recovery path.
+fn require_owner(app_state: &crate::app_state::AppState) -> Result<String, AppError> {
+    let account_id = app_state
+        .current_account_id()
+        .map_err(|_| AppError::NotReady(NotReadyKind::SigningKeyUnavailable))?;
+    Ok(account_key(&account_id))
+}
 
 /// Read the active local wallet's SS58 address. Used by every
 /// blockchain query (`get_account_balance`, `get_staking_info`,
@@ -36,8 +48,9 @@ use subxt_signer::{
 /// been created yet. The FE drops the user into the onboarding flow on
 /// that error.
 pub(crate) async fn get_substrate_address(app_state: &crate::app_state::AppState) -> Result<String, AppError> {
+    let owner = require_owner(app_state)?;
     let pool = app_state.pool()?;
-    let active = repo::get_active(pool).await?;
+    let active = repo::get_active(pool, &owner).await?;
     match active {
         Some(w) => Ok(w.address),
         None => Err(AppError::NotReady(NotReadyKind::SigningKeyUnavailable)),
@@ -61,8 +74,9 @@ pub(crate) async fn get_signer_and_address(
     app_state: &crate::app_state::AppState,
     password: &str,
 ) -> Result<(Keypair, String), AppError> {
+    let owner = require_owner(app_state)?;
     let pool = app_state.pool()?;
-    let active = repo::get_active(pool).await?.ok_or(AppError::NotReady(NotReadyKind::SigningKeyUnavailable))?;
+    let active = repo::get_active(pool, &owner).await?.ok_or(AppError::NotReady(NotReadyKind::SigningKeyUnavailable))?;
 
     // Cheap hash check first — gives a clear wrong-password error rather
     // than the indistinguishable AEAD-tag-failed message.

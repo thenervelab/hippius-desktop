@@ -515,19 +515,33 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(&mut *tx)
     .await?;
 
-    // Local wallets (replaces feature/wallet-updates frontend
-    // localWalletDb.ts + crypto.ts). Stores password-encrypted BIP-39
-    // mnemonics. See src-tauri/src/wallet/{crypto,repo,commands}.rs.
+    // Local wallets — per-logged-in-account scope via `owner`, mirroring
+    // sync_paths. See src-tauri/src/wallet/{crypto,repo,commands}.rs.
+    //
+    // Migration policy: legacy installs had a global `local_wallets` table
+    // with no `owner` column. We drop those rows wholesale on first boot of
+    // this build rather than silently attributing them to whichever account
+    // logs in first — the wallet password is the only thing that decrypts
+    // the mnemonic and we cannot prove who that mnemonic belongs to. Users
+    // must re-create or re-import after upgrading.
+    let local_wallets_cols = table_columns(&mut *tx, "local_wallets").await?;
+    if !local_wallets_cols.is_empty() && !local_wallets_cols.contains("owner") {
+        info!("Dropping legacy unscoped local_wallets table; wallets must be re-created per-account");
+        sqlx::query("DROP TABLE local_wallets").execute(&mut *tx).await?;
+    }
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS local_wallets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL,
             name TEXT NOT NULL,
-            address TEXT NOT NULL UNIQUE,
+            address TEXT NOT NULL,
             encrypted_mnemonic TEXT NOT NULL,
             password_hash TEXT NOT NULL,
             is_active INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
-            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+            UNIQUE(owner, address)
         )",
     )
     .execute(&mut *tx)
