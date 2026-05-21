@@ -3,16 +3,35 @@
 import React, { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { InView } from "react-intersection-observer";
-import { Check, Copy, Download, ExternalLink, Plus } from "lucide-react";
+import { Check, Copy, MoreVertical, Plus } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { open as openShell } from "@tauri-apps/plugin-shell";
+import {
+  createColumnHelper,
+  getCoreRowModel,
+  getSortedRowModel,
+  useReactTable,
+} from "@tanstack/react-table";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui";
 import FramedDialog from "@/components/ui/FramedDialog";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
 import { Pencil, Trash } from "@/components/ui/icons";
+import { Download, ExternalLink } from "lucide-react";
+import TableActionMenu, {
+  type ActionItem,
+} from "@/components/ui/alt-table/TableActionMenu";
+import {
+  Table,
+  TableWrapper,
+  THead,
+  TBody,
+  Tr,
+  Th,
+  Td,
+} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
 import { SettingsCard } from "./SettingsCard";
@@ -38,60 +57,16 @@ function formatRelativeTime(timestamp: number): string {
   return `${diffYr} yr ago`;
 }
 
-/* ── inline icon-button used in the actions column ────────────────── */
-function RowIconButton({
-  onClick,
-  ariaLabel,
-  title,
-  variant = "default",
-  children,
-}: {
-  onClick: (e: React.MouseEvent) => void;
-  ariaLabel: string;
-  title: string;
-  variant?: "default" | "destructive";
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={ariaLabel}
-      title={title}
-      className={cn(
-        "flex size-7 items-center justify-center rounded-[6px] border bg-white text-grey-50 transition-colors",
-        "border-grey-dark-100 hover:bg-grey-light-700 hover:text-grey-10",
-        "dark:border-black-300 dark:bg-black-400 dark:text-grey-dark-600 dark:hover:bg-black-300 dark:hover:text-grey-light-100",
-        variant === "destructive" &&
-          "hover:border-error-70 hover:bg-error-50/10 hover:text-error-70",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-/* ── table row for a single local wallet ──────────────────────────── */
-function WalletTableRow({
-  wallet,
-  onMakeActive,
-  onExport,
-  onRename,
-  onDelete,
-}: {
-  wallet: LocalWallet;
-  onMakeActive: () => void;
-  onExport: () => void;
-  onRename: () => void;
-  onDelete: () => void;
-}) {
+/* ── address cell — mono truncated + copy ─────────────────────────── */
+function AddressCell({ fullAddress }: { fullAddress: string }) {
   const { truncateAddress } = useLocalWallet();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async (e: React.MouseEvent) => {
+    e.preventDefault();
     e.stopPropagation();
     try {
-      await navigator.clipboard.writeText(wallet.address);
+      await navigator.clipboard.writeText(fullAddress);
       setCopied(true);
       toast.success("Address copied");
       setTimeout(() => setCopied(false), 1500);
@@ -100,112 +75,29 @@ function WalletTableRow({
     }
   };
 
-  const handleExplorer = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    void openShell(`https://hipstats.com/accounts/${wallet.address}`);
-  };
-
   return (
-    <tr
-      className={cn(
-        "border-t border-grey-dark-100 transition-colors dark:border-black-300",
-        wallet.isActive
-          ? "bg-[#3167dd]/[0.04] dark:bg-primary-brand-dark/[0.06]"
-          : "hover:bg-grey-light-300 dark:hover:bg-black-500/40",
-      )}
-    >
-      {/* Wallet (name + active badge) */}
-      <td className="px-3 py-3 align-middle">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-[13px] font-medium text-grey-10 dark:text-grey-light-100">
-            {wallet.name || "Unnamed"}
-          </span>
-          {wallet.isActive ? (
-            <span className="flex h-[18px] items-center rounded-[4px] border border-[#3167dd] bg-[#3167dd]/15 px-1.5 text-[10px] font-medium text-[#3167dd] dark:border-primary-brand-dark dark:bg-primary-brand-dark/15 dark:text-primary-brand-dark">
-              Active
-            </span>
-          ) : null}
-        </div>
-      </td>
-
-      {/* Address (mono truncated + copy) */}
-      <td className="px-3 py-3 align-middle">
-        <div className="flex items-center gap-1.5">
-          <span className="font-mono text-[12px] text-grey-50 dark:text-grey-dark-600">
-            {truncateAddress(wallet.address, 8, 6)}
-          </span>
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="shrink-0 rounded p-0.5 text-grey-50 hover:bg-grey-light-700 hover:text-grey-10 dark:text-grey-dark-600 dark:hover:bg-black-400 dark:hover:text-grey-light-100"
-            aria-label="Copy address"
-          >
-            {copied ? (
-              <Check className="size-3 text-success-50" />
-            ) : (
-              <Copy className="size-3" />
-            )}
-          </button>
-        </div>
-      </td>
-
-      {/* Added (relative) */}
-      <td className="px-3 py-3 align-middle">
-        <span className="text-[12px] text-grey-50 dark:text-grey-dark-600">
-          {formatRelativeTime(wallet.createdAt)}
-        </span>
-      </td>
-
-      {/* Actions */}
-      <td className="px-3 py-3 align-middle">
-        <div className="flex items-center justify-end gap-1.5">
-          {!wallet.isActive ? (
-            <Button
-              type="button"
-              variant="defaultStable"
-              size="auto"
-              onClick={onMakeActive}
-              className="h-7 rounded-[6px] px-2.5 text-[12px] font-medium"
-            >
-              Set Active
-            </Button>
-          ) : null}
-          <RowIconButton
-            onClick={handleExplorer}
-            ariaLabel="View on hipstats explorer"
-            title="View on hipstats explorer"
-          >
-            <ExternalLink className="size-3.5" />
-          </RowIconButton>
-          <RowIconButton
-            onClick={onExport}
-            ariaLabel="Export wallet backup"
-            title="Export wallet backup"
-          >
-            <Download className="size-3.5" />
-          </RowIconButton>
-          <RowIconButton
-            onClick={onRename}
-            ariaLabel="Rename wallet"
-            title="Rename wallet"
-          >
-            <Pencil className="size-3.5" />
-          </RowIconButton>
-          <RowIconButton
-            onClick={onDelete}
-            ariaLabel="Delete wallet"
-            title="Delete wallet"
-            variant="destructive"
-          >
-            <Trash className="size-3.5" />
-          </RowIconButton>
-        </div>
-      </td>
-    </tr>
+    <div className="flex items-center gap-1.5 min-w-0">
+      <span className="font-mono text-[12px] text-grey-20 dark:text-grey-dark-200 truncate">
+        {truncateAddress(fullAddress, 8, 6)}
+      </span>
+      <button
+        type="button"
+        onClick={handleCopy}
+        className="shrink-0 rounded p-0.5 text-grey-60 transition-colors hover:text-grey-10 dark:text-grey-dark-500 dark:hover:text-grey-light-100"
+        aria-label="Copy address"
+        title="Copy full address"
+      >
+        {copied ? (
+          <Check className="size-3.5 text-success-50" />
+        ) : (
+          <Copy className="size-3.5" />
+        )}
+      </button>
+    </div>
   );
 }
 
-/* ── rename dialog (one input, native FramedDialog chrome) ───────── */
+/* ── rename dialog ───────────────────────────────────────────────── */
 function RenameWalletDialog({
   open,
   initialName,
@@ -282,6 +174,8 @@ function RenameWalletDialog({
 }
 
 /* ── main panel ──────────────────────────────────────────────────── */
+const col = createColumnHelper<LocalWallet>();
+
 const WalletSettings: React.FC = () => {
   const {
     wallets,
@@ -300,8 +194,9 @@ const WalletSettings: React.FC = () => {
     null,
   );
   const [busyWalletId, setBusyWalletId] = useState<number | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<number | null>(null);
 
-  // Active wallet pinned first, then newest createdAt.
+  // Active first, then newest createdAt.
   const orderedWallets = useMemo(() => {
     return [...wallets].sort((a, b) => {
       if (a.isActive && !b.isActive) return -1;
@@ -371,12 +266,143 @@ const WalletSettings: React.FC = () => {
     }
   };
 
-  // The header CTAs sit inside `SettingsCard`'s headerAction slot — same
-  // visual rhythm as the "+ Add Folder" row on Sync & Storage. Plain
-  // <button> here so they read as inline header chips rather than full
-  // primary CTAs (the standalone primary button visually competes with
-  // the table). They route into the existing setupStep flow so the
-  // create/import surfaces stay the same as elsewhere in the app.
+  /* ── action items for both the 3-dot menu and the right-click
+        context menu (both surfaces share the same callbacks). */
+  const buildMenuItems = (wallet: LocalWallet): ActionItem[] => [
+    {
+      icon: (
+        <span className="inline-flex size-4 items-center justify-center rounded-full bg-success-50/15 text-success-50">
+          <span className="size-1.5 rounded-full bg-success-50" />
+        </span>
+      ),
+      itemTitle: wallet.isActive ? "Active wallet" : "Set as active",
+      disabled: wallet.isActive,
+      onItemClick: () => {
+        setOpenMenuId(null);
+        void handleSetActive(wallet);
+      },
+    },
+    {
+      icon: <Copy className="size-4" />,
+      itemTitle: "Copy address",
+      onItemClick: async () => {
+        setOpenMenuId(null);
+        try {
+          await navigator.clipboard.writeText(wallet.address);
+          toast.success("Address copied");
+        } catch {
+          toast.error("Failed to copy address");
+        }
+      },
+    },
+    {
+      icon: <ExternalLink className="size-4" />,
+      itemTitle: "View on Hipstats",
+      onItemClick: () => {
+        setOpenMenuId(null);
+        void openShell(`https://hipstats.com/accounts/${wallet.address}`);
+      },
+    },
+    {
+      icon: <Download className="size-4" />,
+      itemTitle: "Export backup",
+      onItemClick: () => {
+        setOpenMenuId(null);
+        void handleExport(wallet);
+      },
+    },
+    {
+      icon: <Pencil className="size-4" />,
+      itemTitle: "Rename",
+      onItemClick: () => {
+        setOpenMenuId(null);
+        setWalletToRename(wallet);
+      },
+    },
+    {
+      icon: <Trash className="size-4" />,
+      itemTitle: "Delete",
+      variant: "destructive",
+      onItemClick: () => {
+        setOpenMenuId(null);
+        setWalletToDelete(wallet);
+      },
+    },
+  ];
+
+  /* ── TanStack columns ─────────────────────────────────────────── */
+  const columns = useMemo(
+    () => [
+      col.accessor("name", {
+        header: "WALLET",
+        cell: (d) => (
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="truncate font-medium text-grey-20 dark:text-grey-dark-200">
+              {d.getValue() || "Unnamed"}
+            </span>
+            {d.row.original.isActive ? (
+              <span className="flex h-[18px] shrink-0 items-center rounded-[4px] border border-[#3167dd] bg-[#3167dd]/15 px-1.5 text-[10px] font-medium text-[#3167dd] dark:border-primary-brand-dark dark:bg-primary-brand-dark/15 dark:text-primary-brand-dark">
+                Active
+              </span>
+            ) : null}
+          </div>
+        ),
+      }),
+      col.accessor("address", {
+        header: "ADDRESS",
+        cell: (d) => <AddressCell fullAddress={d.getValue()} />,
+      }),
+      col.accessor("createdAt", {
+        header: "ADDED",
+        enableSorting: true,
+        cell: (d) => (
+          <span className="font-medium text-grey-dark-800 dark:text-grey-dark-800">
+            {formatRelativeTime(d.getValue())}
+          </span>
+        ),
+      }),
+      col.display({
+        id: "actions",
+        header: () => <span className="sr-only">Actions</span>,
+        cell: (d) => {
+          const wallet = d.row.original;
+          return (
+            <div className="flex justify-end">
+              <TableActionMenu
+                dropdownTitle=""
+                items={buildMenuItems(wallet)}
+                open={openMenuId === wallet.id}
+                onOpenChange={(o) =>
+                  setOpenMenuId(o ? wallet.id : null)
+                }
+              >
+                <button
+                  type="button"
+                  className="flex size-7 items-center justify-center rounded-[6px] text-grey-60 transition-colors hover:bg-grey-light-700 hover:text-grey-10 dark:text-grey-dark-500 dark:hover:bg-black-400 dark:hover:text-grey-light-100"
+                  aria-label="Wallet actions"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <MoreVertical className="size-4" />
+                </button>
+              </TableActionMenu>
+            </div>
+          );
+        },
+      }),
+    ],
+    // buildMenuItems closes over current handlers; safe to omit from deps
+    // since they don't change references on every render that matters here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [openMenuId, busyWalletId],
+  );
+
+  const table = useReactTable({
+    columns,
+    data: orderedWallets,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
+
   const headerActions = (
     <div className="flex items-center gap-2">
       <button
@@ -428,38 +454,49 @@ const WalletSettings: React.FC = () => {
                   </p>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="text-left">
-                        <th className="px-3 py-2.5 text-[11px] font-medium uppercase tracking-[0.5px] text-grey-50 dark:text-grey-dark-600">
-                          Wallet
-                        </th>
-                        <th className="px-3 py-2.5 text-[11px] font-medium uppercase tracking-[0.5px] text-grey-50 dark:text-grey-dark-600">
-                          Address
-                        </th>
-                        <th className="px-3 py-2.5 text-[11px] font-medium uppercase tracking-[0.5px] text-grey-50 dark:text-grey-dark-600">
-                          Added
-                        </th>
-                        <th className="px-3 py-2.5 text-right text-[11px] font-medium uppercase tracking-[0.5px] text-grey-50 dark:text-grey-dark-600">
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {orderedWallets.map((wallet) => (
-                        <WalletTableRow
-                          key={wallet.id}
-                          wallet={wallet}
-                          onMakeActive={() => handleSetActive(wallet)}
-                          onExport={() => handleExport(wallet)}
-                          onRename={() => setWalletToRename(wallet)}
-                          onDelete={() => setWalletToDelete(wallet)}
-                        />
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
+                  <div className="overflow-x-auto custom-scrollbar-thin">
+                    <Table className="min-w-[560px]">
+                      <THead>
+                        {table.getHeaderGroups().map((hg) => (
+                          <Tr key={hg.id}>
+                            {hg.headers.map((h) => (
+                              <Th
+                                key={h.id}
+                                header={h}
+                                className="bg-white dark:!bg-[#111111] !border-[#E3E3E3] dark:!border-[#313131]"
+                              />
+                            ))}
+                          </Tr>
+                        ))}
+                      </THead>
+                      <TBody>
+                        {table.getRowModel().rows.map((row) => (
+                          <Tr
+                            key={row.id}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              setOpenMenuId(row.original.id);
+                            }}
+                          >
+                            {row.getVisibleCells().map((cell) => (
+                              <Td
+                                key={cell.id}
+                                cell={cell}
+                                className={cn(
+                                  "!border-[#E3E3E3] dark:!border-[#313131]",
+                                  row.index % 2 === 0
+                                    ? "bg-[#fbfbfb] dark:bg-[#161616]"
+                                    : "bg-[#f5f5f5] dark:bg-[#1e1e1e]",
+                                )}
+                              />
+                            ))}
+                          </Tr>
+                        ))}
+                      </TBody>
+                    </Table>
+                  </div>
+                </TableWrapper>
               )}
             </SettingsCard>
           </div>
