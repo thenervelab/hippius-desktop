@@ -3,7 +3,7 @@
 import React, { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { InView } from "react-intersection-observer";
-import { Check, Copy, MoreVertical, Plus } from "lucide-react";
+import { Copy, MoreVertical, Plus } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { open as openShell } from "@tauri-apps/plugin-shell";
@@ -23,6 +23,7 @@ import { Download, ExternalLink } from "lucide-react";
 import TableActionMenu, {
   type ActionItem,
 } from "@/components/ui/alt-table/TableActionMenu";
+import { CopyableCell } from "@/components/ui/alt-table";
 import {
   Table,
   TableWrapper,
@@ -40,61 +41,20 @@ import {
   type LocalWallet,
 } from "@/app/contexts/LocalWalletContext";
 
-/* ── relative-time helper ─────────────────────────────────────────── */
-function formatRelativeTime(timestamp: number): string {
-  const now = Date.now();
-  const diffMs = now - timestamp * 1000;
-  if (diffMs < 60_000) return "just now";
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 60) return `${diffMin} min ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr} hr ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  if (diffDay < 30) return `${diffDay} day${diffDay === 1 ? "" : "s"} ago`;
-  const diffMon = Math.floor(diffDay / 30);
-  if (diffMon < 12) return `${diffMon} mo ago`;
-  const diffYr = Math.floor(diffMon / 12);
-  return `${diffYr} yr ago`;
-}
-
-/* ── address cell — mono truncated + copy ─────────────────────────── */
-function AddressCell({ fullAddress }: { fullAddress: string }) {
-  const { truncateAddress } = useLocalWallet();
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(fullAddress);
-      setCopied(true);
-      toast.success("Address copied");
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      toast.error("Failed to copy address");
-    }
-  };
-
-  return (
-    <div className="flex items-center gap-1.5 min-w-0">
-      <span className="font-mono text-[12px] text-grey-20 dark:text-grey-dark-200 truncate">
-        {truncateAddress(fullAddress, 8, 6)}
-      </span>
-      <button
-        type="button"
-        onClick={handleCopy}
-        className="shrink-0 rounded p-0.5 text-grey-60 transition-colors hover:text-grey-10 dark:text-grey-dark-500 dark:hover:text-grey-light-100"
-        aria-label="Copy address"
-        title="Copy full address"
-      >
-        {copied ? (
-          <Check className="size-3.5 text-success-50" />
-        ) : (
-          <Copy className="size-3.5" />
-        )}
-      </button>
-    </div>
-  );
+/* ── date helper — mirrors billing/transaction tables for consistency.
+   "long" form looks like "September 02, 2025 at 07:33 pm". */
+function formatDate(date: Date): string {
+  return date
+    .toLocaleString("en-US", {
+      month: "long",
+      day: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    })
+    .replace("AM", "am")
+    .replace("PM", "pm");
 }
 
 /* ── rename dialog ───────────────────────────────────────────────── */
@@ -350,14 +310,21 @@ const WalletSettings: React.FC = () => {
       }),
       col.accessor("address", {
         header: "ADDRESS",
-        cell: (d) => <AddressCell fullAddress={d.getValue()} />,
+        cell: (d) => (
+          <CopyableCell
+            copyAbleText={d.getValue()}
+            title="Copy address"
+            toastMessage="Address copied"
+            isTable
+          />
+        ),
       }),
       col.accessor("createdAt", {
         header: "ADDED",
         enableSorting: true,
         cell: (d) => (
           <span className="font-medium text-grey-dark-800 dark:text-grey-dark-800">
-            {formatRelativeTime(d.getValue())}
+            {formatDate(new Date(d.getValue() * 1000))}
           </span>
         ),
       }),
@@ -464,7 +431,14 @@ const WalletSettings: React.FC = () => {
                               <Th
                                 key={h.id}
                                 header={h}
-                                className="bg-white dark:!bg-[#111111] !border-[#E3E3E3] dark:!border-[#313131]"
+                                className={cn(
+                                  "bg-white dark:!bg-[#111111] !border-[#E3E3E3] dark:!border-[#313131]",
+                                  // Actions column is just the 3-dot
+                                  // trigger — same narrow footprint
+                                  // the Drive table uses.
+                                  h.column.id === "actions" &&
+                                    "w-[48px] !px-1",
+                                )}
                               />
                             ))}
                           </Tr>
@@ -488,6 +462,8 @@ const WalletSettings: React.FC = () => {
                                   row.index % 2 === 0
                                     ? "bg-[#fbfbfb] dark:bg-[#161616]"
                                     : "bg-[#f5f5f5] dark:bg-[#1e1e1e]",
+                                  cell.column.id === "actions" &&
+                                    "w-[48px] !px-1",
                                 )}
                               />
                             ))}
