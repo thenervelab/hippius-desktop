@@ -2,7 +2,8 @@
 
 import React, { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Check, Copy, Download, ExternalLink, Plus, X } from "lucide-react";
+import { InView } from "react-intersection-observer";
+import { Check, Copy, Download, ExternalLink, Plus } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { open as openShell } from "@tauri-apps/plugin-shell";
@@ -11,9 +12,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui";
 import FramedDialog from "@/components/ui/FramedDialog";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
-import { Pencil, Trash, Wallet as WalletIcon } from "@/components/ui/icons";
+import { Pencil, Trash } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 
+import { SettingsCard } from "./SettingsCard";
 import {
   useLocalWallet,
   type LocalWallet,
@@ -36,8 +38,41 @@ function formatRelativeTime(timestamp: number): string {
   return `${diffYr} yr ago`;
 }
 
-/* ── per-wallet row ──────────────────────────────────────────────── */
-function WalletManagementRow({
+/* ── inline icon-button used in the actions column ────────────────── */
+function RowIconButton({
+  onClick,
+  ariaLabel,
+  title,
+  variant = "default",
+  children,
+}: {
+  onClick: (e: React.MouseEvent) => void;
+  ariaLabel: string;
+  title: string;
+  variant?: "default" | "destructive";
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={ariaLabel}
+      title={title}
+      className={cn(
+        "flex size-7 items-center justify-center rounded-[6px] border bg-white text-grey-50 transition-colors",
+        "border-grey-dark-100 hover:bg-grey-light-700 hover:text-grey-10",
+        "dark:border-black-300 dark:bg-black-400 dark:text-grey-dark-600 dark:hover:bg-black-300 dark:hover:text-grey-light-100",
+        variant === "destructive" &&
+          "hover:border-error-70 hover:bg-error-50/10 hover:text-error-70",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ── table row for a single local wallet ──────────────────────────── */
+function WalletTableRow({
   wallet,
   onMakeActive,
   onExport,
@@ -71,113 +106,106 @@ function WalletManagementRow({
   };
 
   return (
-    <div
+    <tr
       className={cn(
-        "flex items-center justify-between gap-4 rounded-[8px] border px-4 py-3 transition-colors",
+        "border-t border-grey-dark-100 transition-colors dark:border-black-300",
         wallet.isActive
-          ? "border-[#3167dd] bg-[#3167dd]/[0.06] dark:border-primary-brand-dark dark:bg-primary-brand-dark/[0.06]"
-          : "border-grey-dark-100 bg-white dark:border-black-300 dark:bg-black-600",
+          ? "bg-[#3167dd]/[0.04] dark:bg-primary-brand-dark/[0.06]"
+          : "hover:bg-grey-light-300 dark:hover:bg-black-500/40",
       )}
     >
-      <div className="flex min-w-0 flex-1 items-start gap-3">
-        <span
-          className={cn(
-            "flex size-9 shrink-0 items-center justify-center rounded-[8px]",
-            wallet.isActive
-              ? "bg-[#3167dd]/15 text-[#3167dd] dark:bg-primary-brand-dark/20 dark:text-primary-brand-dark"
-              : "bg-grey-light-700 text-grey-50 dark:bg-black-400 dark:text-grey-dark-600",
-          )}
-        >
-          <WalletIcon className="size-4" />
-        </span>
-        <div className="flex min-w-0 flex-col">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-[14px] font-medium text-grey-10 dark:text-grey-light-100">
-              {wallet.name || "Unnamed"}
+      {/* Wallet (name + active badge) */}
+      <td className="px-3 py-3 align-middle">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-[13px] font-medium text-grey-10 dark:text-grey-light-100">
+            {wallet.name || "Unnamed"}
+          </span>
+          {wallet.isActive ? (
+            <span className="flex h-[18px] items-center rounded-[4px] border border-[#3167dd] bg-[#3167dd]/15 px-1.5 text-[10px] font-medium text-[#3167dd] dark:border-primary-brand-dark dark:bg-primary-brand-dark/15 dark:text-primary-brand-dark">
+              Active
             </span>
-            {wallet.isActive ? (
-              <span className="flex h-[18px] items-center rounded-[4px] border border-[#3167dd] bg-[#3167dd]/15 px-1.5 text-[10px] font-medium text-[#3167dd] dark:border-primary-brand-dark dark:bg-primary-brand-dark/15 dark:text-primary-brand-dark">
-                Active
-              </span>
-            ) : null}
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="truncate font-mono text-[11px] text-grey-50 dark:text-grey-dark-600">
-              {truncateAddress(wallet.address, 10, 8)}
-            </span>
-            <button
-              type="button"
-              onClick={handleCopy}
-              className="shrink-0 rounded p-0.5 text-grey-50 hover:bg-grey-light-700 hover:text-grey-10 dark:text-grey-dark-600 dark:hover:bg-black-400 dark:hover:text-grey-light-100"
-              aria-label="Copy address"
-            >
-              {copied ? (
-                <Check className="size-3 text-success-50" />
-              ) : (
-                <Copy className="size-3" />
-              )}
-            </button>
-            <span className="text-[11px] text-grey-50 dark:text-grey-dark-600">
-              · Added {formatRelativeTime(wallet.createdAt)}
-            </span>
-          </div>
+          ) : null}
         </div>
-      </div>
+      </td>
 
-      <div className="flex shrink-0 items-center gap-1.5">
-        {!wallet.isActive ? (
-          <Button
+      {/* Address (mono truncated + copy) */}
+      <td className="px-3 py-3 align-middle">
+        <div className="flex items-center gap-1.5">
+          <span className="font-mono text-[12px] text-grey-50 dark:text-grey-dark-600">
+            {truncateAddress(wallet.address, 8, 6)}
+          </span>
+          <button
             type="button"
-            variant="defaultStable"
-            size="auto"
-            onClick={onMakeActive}
-            className="h-[28px] rounded-[6px] px-2.5 text-[12px] font-medium"
+            onClick={handleCopy}
+            className="shrink-0 rounded p-0.5 text-grey-50 hover:bg-grey-light-700 hover:text-grey-10 dark:text-grey-dark-600 dark:hover:bg-black-400 dark:hover:text-grey-light-100"
+            aria-label="Copy address"
           >
-            Set Active
-          </Button>
-        ) : null}
-        <button
-          type="button"
-          onClick={handleExplorer}
-          className="flex size-7 items-center justify-center rounded-[6px] border border-grey-dark-100 bg-white text-grey-50 transition-colors hover:bg-grey-light-700 hover:text-grey-10 dark:border-black-300 dark:bg-black-400 dark:text-grey-dark-600 dark:hover:bg-black-300 dark:hover:text-grey-light-100"
-          aria-label="View on hipstats explorer"
-          title="View on hipstats explorer"
-        >
-          <ExternalLink className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={onExport}
-          className="flex size-7 items-center justify-center rounded-[6px] border border-grey-dark-100 bg-white text-grey-50 transition-colors hover:bg-grey-light-700 hover:text-grey-10 dark:border-black-300 dark:bg-black-400 dark:text-grey-dark-600 dark:hover:bg-black-300 dark:hover:text-grey-light-100"
-          aria-label="Export wallet backup"
-          title="Export wallet backup"
-        >
-          <Download className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={onRename}
-          className="flex size-7 items-center justify-center rounded-[6px] border border-grey-dark-100 bg-white text-grey-50 transition-colors hover:bg-grey-light-700 hover:text-grey-10 dark:border-black-300 dark:bg-black-400 dark:text-grey-dark-600 dark:hover:bg-black-300 dark:hover:text-grey-light-100"
-          aria-label="Rename wallet"
-          title="Rename wallet"
-        >
-          <Pencil className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={onDelete}
-          className="flex size-7 items-center justify-center rounded-[6px] border border-grey-dark-100 bg-white text-grey-50 transition-colors hover:border-error-70 hover:bg-error-50/10 hover:text-error-70 dark:border-black-300 dark:bg-black-400 dark:text-grey-dark-600"
-          aria-label="Delete wallet"
-          title="Delete wallet"
-        >
-          <Trash className="size-3.5" />
-        </button>
-      </div>
-    </div>
+            {copied ? (
+              <Check className="size-3 text-success-50" />
+            ) : (
+              <Copy className="size-3" />
+            )}
+          </button>
+        </div>
+      </td>
+
+      {/* Added (relative) */}
+      <td className="px-3 py-3 align-middle">
+        <span className="text-[12px] text-grey-50 dark:text-grey-dark-600">
+          {formatRelativeTime(wallet.createdAt)}
+        </span>
+      </td>
+
+      {/* Actions */}
+      <td className="px-3 py-3 align-middle">
+        <div className="flex items-center justify-end gap-1.5">
+          {!wallet.isActive ? (
+            <Button
+              type="button"
+              variant="defaultStable"
+              size="auto"
+              onClick={onMakeActive}
+              className="h-7 rounded-[6px] px-2.5 text-[12px] font-medium"
+            >
+              Set Active
+            </Button>
+          ) : null}
+          <RowIconButton
+            onClick={handleExplorer}
+            ariaLabel="View on hipstats explorer"
+            title="View on hipstats explorer"
+          >
+            <ExternalLink className="size-3.5" />
+          </RowIconButton>
+          <RowIconButton
+            onClick={onExport}
+            ariaLabel="Export wallet backup"
+            title="Export wallet backup"
+          >
+            <Download className="size-3.5" />
+          </RowIconButton>
+          <RowIconButton
+            onClick={onRename}
+            ariaLabel="Rename wallet"
+            title="Rename wallet"
+          >
+            <Pencil className="size-3.5" />
+          </RowIconButton>
+          <RowIconButton
+            onClick={onDelete}
+            ariaLabel="Delete wallet"
+            title="Delete wallet"
+            variant="destructive"
+          >
+            <Trash className="size-3.5" />
+          </RowIconButton>
+        </div>
+      </td>
+    </tr>
   );
 }
 
-/* ── rename dialog (small FramedDialog with one input) ──────────── */
+/* ── rename dialog (one input, native FramedDialog chrome) ───────── */
 function RenameWalletDialog({
   open,
   initialName,
@@ -190,7 +218,6 @@ function RenameWalletDialog({
   onSubmit: (name: string) => void;
 }) {
   const [name, setName] = useState(initialName);
-  // Keep the input synced when the dialog is re-opened for a different wallet.
   React.useEffect(() => {
     if (open) setName(initialName);
   }, [open, initialName]);
@@ -254,7 +281,7 @@ function RenameWalletDialog({
   );
 }
 
-/* ── main settings panel ──────────────────────────────────────────── */
+/* ── main panel ──────────────────────────────────────────────────── */
 const WalletSettings: React.FC = () => {
   const {
     wallets,
@@ -274,8 +301,7 @@ const WalletSettings: React.FC = () => {
   );
   const [busyWalletId, setBusyWalletId] = useState<number | null>(null);
 
-  // Active wallet first so it's the easiest to scan, then by createdAt
-  // descending (newest first) for everything else.
+  // Active wallet pinned first, then newest createdAt.
   const orderedWallets = useMemo(() => {
     return [...wallets].sort((a, b) => {
       if (a.isActive && !b.isActive) return -1;
@@ -345,96 +371,136 @@ const WalletSettings: React.FC = () => {
     }
   };
 
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-4 rounded-lg bg-white p-4 shadow-menu dark:bg-black-600">
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button
-            type="button"
-            variant="primary"
-            size="auto"
-            className="h-[34px] rounded-[6px] px-3 text-[13px] font-medium"
-            onClick={() => setSetupStep("create-mnemonic")}
-          >
-            <Plus className="mr-1.5 size-3.5" /> Create wallet
-          </Button>
-          <Button
-            type="button"
-            variant="defaultStable"
-            size="auto"
-            className="h-[34px] rounded-[6px] px-3 text-[13px] font-medium"
-            onClick={() => setSetupStep("import-wallet")}
-          >
-            Import wallet
-          </Button>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          {isLoading ? (
-            <p className="py-6 text-center text-sm text-grey-50 dark:text-grey-dark-600">
-              Loading wallets…
-            </p>
-          ) : orderedWallets.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 rounded-[8px] border border-dashed border-grey-dark-100 bg-grey-light-300 px-4 py-8 text-center dark:border-black-300 dark:bg-black-primary-bg">
-              <WalletIcon className="size-6 text-grey-50 dark:text-grey-dark-600" />
-              <p className="text-sm font-medium text-grey-10 dark:text-grey-light-100">
-                No local wallets yet
-              </p>
-              <p className="max-w-[320px] text-xs text-grey-50 dark:text-grey-dark-600">
-                Create a new wallet or import an existing one to start
-                signing transactions on this device.
-              </p>
-            </div>
-          ) : (
-            orderedWallets.map((wallet) => (
-              <WalletManagementRow
-                key={wallet.id}
-                wallet={wallet}
-                onMakeActive={() => handleSetActive(wallet)}
-                onExport={() => handleExport(wallet)}
-                onRename={() => setWalletToRename(wallet)}
-                onDelete={() => setWalletToDelete(wallet)}
-              />
-            ))
-          )}
-        </div>
-      </div>
-
-      <RenameWalletDialog
-        open={walletToRename !== null}
-        initialName={walletToRename?.name ?? ""}
-        onClose={() => setWalletToRename(null)}
-        onSubmit={handleRenameSubmit}
-      />
-
-      <ConfirmationDialog
-        open={walletToDelete !== null}
-        heading="Delete Wallet"
-        text={
-          walletToDelete ? (
-            <>
-              You are about to remove{" "}
-              <span className="font-semibold text-grey-10 dark:text-grey-light-100">
-                {walletToDelete.name}
-              </span>{" "}
-              from this device. Make sure you have a backup of its access
-              key — without it the wallet cannot be recovered.
-            </>
-          ) : (
-            ""
-          )
-        }
-        button="Delete"
-        icon={<Trash className="size-4 text-white" />}
-        iconBgColor="bg-[#fc7d73]"
-        borderClassName="bg-[#fc7d73]"
-        confirmVariant="destructive"
-        disableButton={busyWalletId === walletToDelete?.id}
-        onConfirm={() => void handleDeleteConfirm()}
-        onBack={() => setWalletToDelete(null)}
-        onClose={() => setWalletToDelete(null)}
-      />
+  // The header CTAs sit inside `SettingsCard`'s headerAction slot — same
+  // visual rhythm as the "+ Add Folder" row on Sync & Storage. Plain
+  // <button> here so they read as inline header chips rather than full
+  // primary CTAs (the standalone primary button visually competes with
+  // the table). They route into the existing setupStep flow so the
+  // create/import surfaces stay the same as elsewhere in the app.
+  const headerActions = (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => setSetupStep("create-mnemonic")}
+        className="inline-flex h-7 items-center gap-1 rounded-[6px] border border-grey-dark-100 bg-white px-2.5 text-[12px] font-medium text-grey-10 transition-colors hover:bg-grey-light-700 dark:border-black-300 dark:bg-black-600 dark:text-grey-light-100 dark:hover:bg-black-500"
+      >
+        <Plus className="size-3" />
+        Create wallet
+      </button>
+      <button
+        type="button"
+        onClick={() => setSetupStep("import-wallet")}
+        className="inline-flex h-7 items-center rounded-[6px] border border-grey-dark-100 bg-white px-2.5 text-[12px] font-medium text-grey-10 transition-colors hover:bg-grey-light-700 dark:border-black-300 dark:bg-black-600 dark:text-grey-light-100 dark:hover:bg-black-500"
+      >
+        Import
+      </button>
     </div>
+  );
+
+  return (
+    <InView triggerOnce>
+      {({ inView, ref }) => (
+        <div ref={ref} className="flex flex-col gap-4">
+          <div
+            className={cn(
+              "transition-all duration-500 ease-out",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3",
+            )}
+          >
+            <SettingsCard label="Wallets" headerAction={headerActions}>
+              {isLoading ? (
+                <div className="flex flex-col gap-2 px-4 py-4">
+                  {[1, 2, 3].map((i) => (
+                    <div
+                      key={i}
+                      className="h-10 rounded-md bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
+                    />
+                  ))}
+                </div>
+              ) : orderedWallets.length === 0 ? (
+                <div className="flex flex-col items-center gap-1.5 px-4 py-10 text-center">
+                  <p className="text-sm font-medium text-grey-10 dark:text-grey-light-100">
+                    No local wallets yet
+                  </p>
+                  <p className="max-w-[360px] text-xs text-grey-50 dark:text-grey-dark-600">
+                    Create a new wallet or import an existing one to start
+                    signing transactions on this device.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="text-left">
+                        <th className="px-3 py-2.5 text-[11px] font-medium uppercase tracking-[0.5px] text-grey-50 dark:text-grey-dark-600">
+                          Wallet
+                        </th>
+                        <th className="px-3 py-2.5 text-[11px] font-medium uppercase tracking-[0.5px] text-grey-50 dark:text-grey-dark-600">
+                          Address
+                        </th>
+                        <th className="px-3 py-2.5 text-[11px] font-medium uppercase tracking-[0.5px] text-grey-50 dark:text-grey-dark-600">
+                          Added
+                        </th>
+                        <th className="px-3 py-2.5 text-right text-[11px] font-medium uppercase tracking-[0.5px] text-grey-50 dark:text-grey-dark-600">
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orderedWallets.map((wallet) => (
+                        <WalletTableRow
+                          key={wallet.id}
+                          wallet={wallet}
+                          onMakeActive={() => handleSetActive(wallet)}
+                          onExport={() => handleExport(wallet)}
+                          onRename={() => setWalletToRename(wallet)}
+                          onDelete={() => setWalletToDelete(wallet)}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </SettingsCard>
+          </div>
+
+          <RenameWalletDialog
+            open={walletToRename !== null}
+            initialName={walletToRename?.name ?? ""}
+            onClose={() => setWalletToRename(null)}
+            onSubmit={handleRenameSubmit}
+          />
+
+          <ConfirmationDialog
+            open={walletToDelete !== null}
+            heading="Delete Wallet"
+            text={
+              walletToDelete ? (
+                <>
+                  You are about to remove{" "}
+                  <span className="font-semibold text-grey-10 dark:text-grey-light-100">
+                    {walletToDelete.name}
+                  </span>{" "}
+                  from this device. Make sure you have a backup of its
+                  access key — without it the wallet cannot be recovered.
+                </>
+              ) : (
+                ""
+              )
+            }
+            button="Delete"
+            icon={<Trash className="size-4 text-white" />}
+            iconBgColor="bg-[#fc7d73]"
+            borderClassName="bg-[#fc7d73]"
+            confirmVariant="destructive"
+            disableButton={busyWalletId === walletToDelete?.id}
+            onConfirm={() => void handleDeleteConfirm()}
+            onBack={() => setWalletToDelete(null)}
+            onClose={() => setWalletToDelete(null)}
+          />
+        </div>
+      )}
+    </InView>
   );
 };
 
