@@ -14,6 +14,7 @@ import { ApiTokenCard, ApiTokenUsageCard } from "./ApiTokenSection";
 import EmailNotificationSection from "./EmailNotificationSection";
 import RecoveryPhraseSettings from "./RecoveryPhraseSettings";
 import DeviceNameSetting from "./DeviceNameSetting";
+import WalletSettings from "./WalletSettings";
 
 const SETTINGS_COLLAPSE_WIDTH = 900;
 
@@ -64,6 +65,10 @@ const SettingsDialogContent: React.FC = () => {
     {
       tabName: "Sync & Storage",
       icon: <Icons.Folder className="size-4" />,
+    },
+    {
+      tabName: "Wallets",
+      icon: <Icons.Wallet className="size-4" />,
     },
     {
       tabName: "Security",
@@ -133,6 +138,19 @@ const SettingsDialogContent: React.FC = () => {
                     <EmailNotificationSection />
                   </RevealTextLine>
                 </div>
+              </div>
+            )}
+
+            {activeTab === "Wallets" && (
+              <div className="flex flex-col gap-4 w-full">
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                  parentClassName="w-full"
+                >
+                  <WalletSettings />
+                </RevealTextLine>
               </div>
             )}
 
