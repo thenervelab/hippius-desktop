@@ -6,12 +6,15 @@ import {
   Check,
   ChevronDown,
   Copy,
+  Download,
   ExternalLink,
   Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { open as openShell } from "@tauri-apps/plugin-shell";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
 
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { HardDriveUpload } from "@/components/ui/icons";
@@ -66,6 +69,7 @@ function WalletRow({
   isActive,
   onSelect,
   onExplorer,
+  onExport,
 }: {
   name: string;
   address: string;
@@ -73,6 +77,7 @@ function WalletRow({
   isActive: boolean;
   onSelect: () => void;
   onExplorer: (e: React.MouseEvent) => void;
+  onExport: (e: React.MouseEvent) => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -187,6 +192,19 @@ function WalletRow({
           </button>
         )}
         <button
+          onClick={onExport}
+          className={cn(
+            "flex size-[21px] items-center justify-center rounded-[4px] border transition-colors",
+            isActive
+              ? "border-[#3167dd] bg-[#3167dd]/[0.14] text-[#3167dd] opacity-70 hover:opacity-100 dark:border-primary-brand-dark dark:bg-primary-brand-dark/[0.14] dark:text-primary-brand-dark"
+              : "border-[#cecece] bg-[#eaeaea] text-[#0a0a0a]/60 opacity-90 hover:bg-[#e0e0e0] dark:border-black-300 dark:bg-black-400 dark:text-white/60 dark:hover:bg-black-300",
+          )}
+          aria-label="Export backup"
+          title="Export wallet backup"
+        >
+          <Download className="size-[11px]" />
+        </button>
+        <button
           onClick={onExplorer}
           className={cn(
             "flex size-[21px] items-center justify-center rounded-[4px] border transition-colors",
@@ -195,6 +213,7 @@ function WalletRow({
               : "border-[#cecece] bg-[#eaeaea] text-[#0a0a0a]/60 opacity-90 hover:bg-[#e0e0e0] dark:border-black-300 dark:bg-black-400 dark:text-white/60 dark:hover:bg-black-300",
           )}
           aria-label="Open in explorer"
+          title="View on hipstats explorer"
         >
           <ExternalLink className="size-[11px]" />
         </button>
@@ -215,6 +234,7 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
     truncateAddress,
     setSetupStep,
     isLoading,
+    exportBackup,
   } = useLocalWallet();
 
   const [isOpen, setIsOpen] = useState(false);
@@ -263,6 +283,31 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
   const handleImport = () => {
     setIsOpen(false);
     setSetupStep("import-wallet");
+  };
+
+  const handleExport = async (walletId: number, walletName: string) => {
+    try {
+      const backup = await exportBackup(walletId);
+      if (!backup) {
+        toast.error("Failed to export wallet");
+        return;
+      }
+      const safeName = walletName.trim().replace(/\s+/g, "-") || "wallet";
+      const filePath = await save({
+        filters: [{ name: "Wallet backup", extensions: ["json"] }],
+        defaultPath: `hippius-wallet-${safeName}-backup.json`,
+      });
+      if (!filePath) return;
+      const payload = {
+        version: 2,
+        ...backup,
+      };
+      await writeTextFile(filePath, JSON.stringify(payload, null, 2));
+      toast.success("Wallet backup saved");
+    } catch (e) {
+      console.error("[ActiveWalletSelector] export failed:", e);
+      toast.error("Failed to export wallet");
+    }
   };
 
   if (isLoading) {
@@ -474,6 +519,10 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
                     void openShell(
                       `https://hipstats.com/accounts/${wallet.address}`,
                     );
+                  }}
+                  onExport={(e) => {
+                    e.stopPropagation();
+                    void handleExport(wallet.id, wallet.name);
                   }}
                 />
               );
