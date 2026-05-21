@@ -40,10 +40,9 @@ import {
   type LocalWallet,
 } from "@/app/contexts/LocalWalletContext";
 
-/* ── address cell — full address with CSS truncation so it fills the
-   column instead of being truncated at a fixed breakpoint-based char
-   count. Pairs with `max-w-0` on the td so the cell shrinks to its
-   share of the table width and text-ellipsis kicks in at the boundary. */
+/* ── address cell — renders the SS58 in full with no truncation. The
+   td sizes to fit the address; any leftover width in the row is parked
+   on the WALLET column instead so the Added column stays adjacent. */
 function AddressCell({ address }: { address: string }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = async (e: React.MouseEvent) => {
@@ -59,9 +58,9 @@ function AddressCell({ address }: { address: string }) {
     }
   };
   return (
-    <div className="flex w-full items-center gap-2 min-w-0">
+    <div className="flex w-full items-center gap-2">
       <span
-        className="flex-1 min-w-0 truncate font-mono text-[12px] text-grey-20 dark:text-grey-dark-200"
+        className="whitespace-nowrap font-mono text-[12px] text-grey-20 dark:text-grey-dark-200"
         title={address}
       >
         {address}
@@ -69,7 +68,7 @@ function AddressCell({ address }: { address: string }) {
       <button
         type="button"
         onClick={handleCopy}
-        className="shrink-0 rounded p-0.5 text-grey-60 transition-colors hover:text-grey-10 dark:text-grey-dark-500 dark:hover:text-grey-light-100"
+        className="ml-auto shrink-0 rounded p-0.5 text-grey-60 transition-colors hover:text-grey-10 dark:text-grey-dark-500 dark:hover:text-grey-light-100"
         aria-label="Copy address"
         title="Copy full address"
       >
@@ -500,13 +499,12 @@ const WalletSettings: React.FC = () => {
                                   row.index % 2 === 0
                                     ? "bg-[#fbfbfb] dark:bg-[#161616]"
                                     : "bg-[#f5f5f5] dark:bg-[#1e1e1e]",
-                                  // The address td gets `w-full` +
-                                  // `max-w-0` so the column claims the
-                                  // remaining table width and the inner
-                                  // truncated span fills it with
-                                  // text-ellipsis at the boundary.
-                                  cell.column.id === "address" &&
-                                    "w-full max-w-0",
+                                  // Cap the wallet column so the leftover
+                                  // row width flows back into the address
+                                  // and added columns instead of bloating
+                                  // the (usually short) wallet name cell.
+                                  cell.column.id === "name" &&
+                                    "max-w-[220px]",
                                   cell.column.id === "actions" &&
                                     "w-[48px] !px-1",
                                 )}
