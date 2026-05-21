@@ -11,6 +11,7 @@ import { BackgroundContainer } from "@/components/ui/BackgroundContainer";
 import { Decoration, Key, WalletAsterisk } from "@/components/ui/icons";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { getDiagonalTextureSvgBackgroundImage } from "@/app/lib/ui-textures";
+import RecoveryWarningDialog from "./RecoveryWarningDialog";
 
 const cornerTextureLight = getDiagonalTextureSvgBackgroundImage({
   opacity: 0.21,
@@ -82,6 +83,11 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Two-step submit: clicking the primary button validates the password
+  // then opens the recovery warning. The actual createWallet IPC only
+  // fires after the user explicitly acks they have saved their password
+  // and access key — losing either is unrecoverable.
+  const [warningOpen, setWarningOpen] = useState(false);
 
   // Wallet name is captured on the previous step (create-mnemonic). The
   // welcome→create-password shortcut (existing access key) doesn't set
@@ -106,30 +112,41 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
   // message. Empty fields → empty row.
   const displayError = error ?? validationError;
 
-  const handleSubmit = async () => {
+  const handlePrimaryClick = () => {
     if (!canSubmit) {
       setError(validationError ?? "Enter your password to continue");
       return;
     }
+    setError(null);
+    setWarningOpen(true);
+  };
+
+  const handleConfirmed = async () => {
     setSubmitting(true);
     setError(null);
     try {
       const ok = await createWallet(name, mnemonic, password);
       if (ok) {
-        toast.success("Wallet created");
+        setWarningOpen(false);
+        toast.success(
+          variant === "access" ? "Wallet unlocked" : "Wallet created",
+        );
         onCreated();
       } else {
         setError("Failed to create wallet. Please try again.");
+        setWarningOpen(false);
       }
     } catch (e) {
       console.error("Failed to create wallet:", e);
       setError(e instanceof Error ? e.message : "Failed to create wallet");
+      setWarningOpen(false);
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
+    <>
     <div className="flex flex-1 w-full items-center justify-center px-4 py-6 mt-[14px] overflow-hidden rounded-[8px] border border-[#E3E3E3] dark:border-[#313131] bg-white dark:bg-[#1a1a1a]">
       <div className="relative">
         <div
@@ -255,7 +272,7 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    void handleSubmit();
+                    handlePrimaryClick();
                   }
                 }}
               />
@@ -297,7 +314,7 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    void handleSubmit();
+                    handlePrimaryClick();
                   }
                 }}
               />
@@ -318,7 +335,7 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
                 "text-[18px] font-normal tracking-[-0.36px] leading-[1.109]",
                 !canSubmit && "!bg-primary-50/40 hover:!bg-primary-50/40",
               )}
-              onClick={handleSubmit}
+              onClick={handlePrimaryClick}
               disabled={!canSubmit}
             >
               {submitting
@@ -367,6 +384,18 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
         </BackgroundContainer>
       </div>
     </div>
+
+    <RecoveryWarningDialog
+      open={warningOpen}
+      variant={variant}
+      submitting={submitting}
+      onConfirm={() => void handleConfirmed()}
+      onCancel={() => {
+        if (submitting) return;
+        setWarningOpen(false);
+      }}
+    />
+    </>
   );
 };
 

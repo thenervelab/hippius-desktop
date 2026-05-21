@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/icons";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { getDiagonalTextureSvgBackgroundImage } from "@/app/lib/ui-textures";
+import RecoveryWarningDialog from "./RecoveryWarningDialog";
 
 const cornerTextureLight = getDiagonalTextureSvgBackgroundImage({
   opacity: 0.21,
@@ -81,6 +82,11 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  // Two-step submit: clicking Import opens the recovery warning. The
+  // actual importEncryptedWallet IPC only fires after the user acks
+  // they have saved the wallet password and access key themselves —
+  // losing either is unrecoverable.
+  const [warningOpen, setWarningOpen] = useState(false);
 
   const loadFile = useCallback(async (path: string) => {
     try {
@@ -175,8 +181,14 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
     [parsed, password, submitting],
   );
 
-  const handleSubmit = async () => {
+  const handlePrimaryClick = () => {
     if (!parsed || !canSubmit) return;
+    setError(null);
+    setWarningOpen(true);
+  };
+
+  const handleConfirmed = async () => {
+    if (!parsed) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -187,20 +199,24 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
         passwordHash: parsed.passwordHash,
       });
       if (ok) {
+        setWarningOpen(false);
         toast.success("Wallet imported");
         onImported();
       } else {
         setError("Failed to import wallet. Check the file and password.");
+        setWarningOpen(false);
       }
     } catch (e) {
       console.error("[ImportWalletScreen] import failed:", e);
       setError(e instanceof Error ? e.message : "Failed to import wallet");
+      setWarningOpen(false);
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
+    <>
     <div className="flex flex-1 w-full items-center justify-center px-4 py-6 mt-[14px] overflow-hidden rounded-[8px] border border-[#E3E3E3] dark:border-[#313131] bg-white dark:bg-[#1a1a1a]">
       <div className="relative">
         <div
@@ -371,7 +387,7 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    void handleSubmit();
+                    handlePrimaryClick();
                   }
                 }}
               />
@@ -390,7 +406,7 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
                 "text-[18px] font-normal tracking-[-0.36px] leading-[1.109]",
                 !canSubmit && "!bg-primary-50/40 hover:!bg-primary-50/40",
               )}
-              onClick={handleSubmit}
+              onClick={handlePrimaryClick}
               disabled={!canSubmit}
             >
               {submitting ? "Importing..." : "Import Wallet"}
@@ -428,6 +444,18 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
         </BackgroundContainer>
       </div>
     </div>
+
+    <RecoveryWarningDialog
+      open={warningOpen}
+      variant="import"
+      submitting={submitting}
+      onConfirm={() => void handleConfirmed()}
+      onCancel={() => {
+        if (submitting) return;
+        setWarningOpen(false);
+      }}
+    />
+    </>
   );
 };
 
