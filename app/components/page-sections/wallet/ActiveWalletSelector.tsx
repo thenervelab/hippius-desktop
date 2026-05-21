@@ -9,7 +9,9 @@ import {
   Download,
   ExternalLink,
   Plus,
+  Settings,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { open as openShell } from "@tauri-apps/plugin-shell";
@@ -239,6 +241,12 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
 
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
+
+  const goToWalletSettings = () => {
+    setIsOpen(false);
+    router.push("/settings?section=wallets");
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -500,6 +508,15 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
             <span className="font-geist text-[14px] font-semibold text-[#0a0a0a] dark:text-grey-light-100">
               Your Wallets
             </span>
+            <button
+              type="button"
+              onClick={goToWalletSettings}
+              className="flex size-7 items-center justify-center rounded-[6px] text-grey-50 transition-colors hover:bg-grey-light-700 hover:text-grey-10 dark:text-grey-dark-600 dark:hover:bg-black-400 dark:hover:text-grey-light-100"
+              aria-label="Open wallet settings"
+              title="Wallet settings"
+            >
+              <Settings className="size-4" />
+            </button>
           </div>
 
           {/* Wallet rows */}
