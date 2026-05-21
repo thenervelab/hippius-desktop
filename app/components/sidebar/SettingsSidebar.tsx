@@ -19,6 +19,11 @@ const settingsNavItems = [
     icon: <Icons.Folder className={ICON_CLASS} />,
   },
   {
+    label: "Wallets",
+    section: "wallets",
+    icon: <Icons.Wallet className={ICON_CLASS} />,
+  },
+  {
     label: "Security",
     section: "security",
     icon: <Icons.KeySquare className={ICON_CLASS} />,

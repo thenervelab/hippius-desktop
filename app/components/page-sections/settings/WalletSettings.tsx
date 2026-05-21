@@ -14,7 +14,6 @@ import ConfirmationDialog from "@/components/ConfirmationDialog";
 import { Pencil, Trash, Wallet as WalletIcon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 
-import SectionHeader from "./SectionHeader";
 import {
   useLocalWallet,
   type LocalWallet,
@@ -349,32 +348,25 @@ const WalletSettings: React.FC = () => {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-4 rounded-lg bg-white p-4 shadow-menu dark:bg-black-600">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <SectionHeader
-            Icon={WalletIcon}
-            title="Wallets"
-            subtitle="Switch between local wallets, rename them, back them up, or remove ones you no longer use."
-          />
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              variant="primary"
-              size="auto"
-              className="h-[34px] rounded-[6px] px-3 text-[13px] font-medium"
-              onClick={() => setSetupStep("create-mnemonic")}
-            >
-              <Plus className="mr-1.5 size-3.5" /> Create wallet
-            </Button>
-            <Button
-              type="button"
-              variant="defaultStable"
-              size="auto"
-              className="h-[34px] rounded-[6px] px-3 text-[13px] font-medium"
-              onClick={() => setSetupStep("import-wallet")}
-            >
-              Import wallet
-            </Button>
-          </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            type="button"
+            variant="primary"
+            size="auto"
+            className="h-[34px] rounded-[6px] px-3 text-[13px] font-medium"
+            onClick={() => setSetupStep("create-mnemonic")}
+          >
+            <Plus className="mr-1.5 size-3.5" /> Create wallet
+          </Button>
+          <Button
+            type="button"
+            variant="defaultStable"
+            size="auto"
+            className="h-[34px] rounded-[6px] px-3 text-[13px] font-medium"
+            onClick={() => setSetupStep("import-wallet")}
+          >
+            Import wallet
+          </Button>
         </div>
 
         <div className="flex flex-col gap-2">
