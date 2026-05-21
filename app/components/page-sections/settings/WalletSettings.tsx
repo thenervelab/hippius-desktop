@@ -3,7 +3,7 @@
 import React, { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { InView } from "react-intersection-observer";
-import { Copy, MoreVertical, Plus } from "lucide-react";
+import { Check, Copy, MoreVertical, Plus } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { open as openShell } from "@tauri-apps/plugin-shell";
@@ -18,12 +18,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui";
 import FramedDialog from "@/components/ui/FramedDialog";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
-import { Pencil, Trash } from "@/components/ui/icons";
+import { HardDriveUpload, Pencil, Trash } from "@/components/ui/icons";
 import { Download, ExternalLink } from "lucide-react";
 import TableActionMenu, {
   type ActionItem,
 } from "@/components/ui/alt-table/TableActionMenu";
-import { CopyableCell } from "@/components/ui/alt-table";
 import {
   Table,
   TableWrapper,
@@ -40,6 +39,49 @@ import {
   useLocalWallet,
   type LocalWallet,
 } from "@/app/contexts/LocalWalletContext";
+
+/* ── address cell — full address with CSS truncation so it fills the
+   column instead of being truncated at a fixed breakpoint-based char
+   count. Pairs with `max-w-0` on the td so the cell shrinks to its
+   share of the table width and text-ellipsis kicks in at the boundary. */
+function AddressCell({ address }: { address: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(true);
+      toast.success("Address copied");
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("Failed to copy address");
+    }
+  };
+  return (
+    <div className="flex w-full items-center gap-2 min-w-0">
+      <span
+        className="flex-1 min-w-0 truncate font-mono text-[12px] text-grey-20 dark:text-grey-dark-200"
+        title={address}
+      >
+        {address}
+      </span>
+      <button
+        type="button"
+        onClick={handleCopy}
+        className="shrink-0 rounded p-0.5 text-grey-60 transition-colors hover:text-grey-10 dark:text-grey-dark-500 dark:hover:text-grey-light-100"
+        aria-label="Copy address"
+        title="Copy full address"
+      >
+        {copied ? (
+          <Check className="size-3.5 text-success-50" />
+        ) : (
+          <Copy className="size-3.5" />
+        )}
+      </button>
+    </div>
+  );
+}
 
 /* ── date helper — mirrors billing/transaction tables for consistency.
    "long" form looks like "September 02, 2025 at 07:33 pm". */
@@ -310,21 +352,16 @@ const WalletSettings: React.FC = () => {
       }),
       col.accessor("address", {
         header: "ADDRESS",
-        cell: (d) => (
-          <CopyableCell
-            copyAbleText={d.getValue()}
-            title="Copy address"
-            toastMessage="Address copied"
-            isTable
-          />
-        ),
+        cell: (d) => <AddressCell address={d.getValue()} />,
       }),
       col.accessor("createdAt", {
         header: "ADDED",
         enableSorting: true,
+        // `createdAt` is already milliseconds from the Rust IPC — no
+        // *1000 here, otherwise Date overflows to year ~58354.
         cell: (d) => (
           <span className="font-medium text-grey-dark-800 dark:text-grey-dark-800">
-            {formatDate(new Date(d.getValue() * 1000))}
+            {formatDate(new Date(d.getValue()))}
           </span>
         ),
       }),
@@ -383,8 +420,9 @@ const WalletSettings: React.FC = () => {
       <button
         type="button"
         onClick={() => setSetupStep("import-wallet")}
-        className="inline-flex h-7 items-center rounded-[6px] border border-grey-dark-100 bg-white px-2.5 text-[12px] font-medium text-grey-10 transition-colors hover:bg-grey-light-700 dark:border-black-300 dark:bg-black-600 dark:text-grey-light-100 dark:hover:bg-black-500"
+        className="inline-flex h-7 items-center gap-1 rounded-[6px] border border-grey-dark-100 bg-white px-2.5 text-[12px] font-medium text-grey-10 transition-colors hover:bg-grey-light-700 dark:border-black-300 dark:bg-black-600 dark:text-grey-light-100 dark:hover:bg-black-500"
       >
+        <HardDriveUpload className="size-3" />
         Import
       </button>
     </div>
@@ -462,6 +500,13 @@ const WalletSettings: React.FC = () => {
                                   row.index % 2 === 0
                                     ? "bg-[#fbfbfb] dark:bg-[#161616]"
                                     : "bg-[#f5f5f5] dark:bg-[#1e1e1e]",
+                                  // The address td gets `w-full` +
+                                  // `max-w-0` so the column claims the
+                                  // remaining table width and the inner
+                                  // truncated span fills it with
+                                  // text-ellipsis at the boundary.
+                                  cell.column.id === "address" &&
+                                    "w-full max-w-0",
                                   cell.column.id === "actions" &&
                                     "w-[48px] !px-1",
                                 )}
