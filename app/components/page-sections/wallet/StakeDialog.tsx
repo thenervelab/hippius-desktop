@@ -15,9 +15,18 @@ import {
 import TransactionFlowToast, {
   type TransactionFlowState,
 } from "./shared/TransactionFlowToast";
-import WalletPasswordPrompt from "./WalletPasswordPrompt";
+import WalletPasswordField from "./shared/WalletPasswordField";
+import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { useStaking } from "@/lib/hooks/useStaking";
 import { useHippiusBalance } from "@/lib/hooks/api/useHippiusBalance";
+
+/**
+ * 0.01 hAlpha (= 10^16 planck) reserved on MAX so the user always has
+ * enough free balance left to pay for the bond extrinsic *and* the
+ * eventual unbond/withdraw. Mirrors `MAX_GAS_FEE_BUFFER_PLANCK` in
+ * `src-tauri/src/blockchain/transfers.rs` — keep the two in sync.
+ */
+const MAX_GAS_FEE_BUFFER_PLANCK = 10_000_000_000_000_000n;
 
 interface StakeDialogProps {
   open: boolean;
@@ -53,16 +62,34 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
     }
   }, [open, refetch, refetchBalance]);
 
-  // Available HIP to bond = free balance from useHippiusBalance.
-  // The Rust transfer_balance estimator reserves the gas buffer, but
-  // stake_bond doesn't expose the same helper — fall back to the
-  // already-formatted freeHip string for display + parse it for the
-  // % shortcuts. That matches what the user sees in the balance card.
+  // Available HIP to bond. Matches hippius-web's formula:
+  //   available = free − bonded − unbonding − withdrawable − gas buffer
+  //
+  // Subtracting bonded/unbonding/withdrawable is required because those
+  // plancks are already locked by the staking pallet — the chain
+  // rejects a `bond` for amounts that include them, so MAX would have
+  // silently produced a transaction the user couldn't actually submit.
   const availableHip = useMemo(() => {
-    const s = balanceInfo?.data?.freeHip ?? "0";
-    const n = Number.parseFloat(s);
-    return Number.isFinite(n) && n > 0 ? n : 0;
-  }, [balanceInfo]);
+    const freeBI = balanceInfo?.data?.free;
+    if (!freeBI) return 0;
+    try {
+      const free = typeof freeBI === "bigint" ? freeBI : BigInt(String(freeBI));
+      const bonded = BigInt(stakingInfo.bonded || "0");
+      const unbonding = BigInt(stakingInfo.unbonding || "0");
+      const withdrawable = BigInt(stakingInfo.withdrawable || "0");
+      const locked = bonded + unbonding + withdrawable;
+      const remaining = free - locked - MAX_GAS_FEE_BUFFER_PLANCK;
+      if (remaining <= 0n) return 0;
+      return Number(remaining) / 1e18;
+    } catch {
+      return 0;
+    }
+  }, [
+    balanceInfo,
+    stakingInfo.bonded,
+    stakingInfo.unbonding,
+    stakingInfo.withdrawable,
+  ]);
 
   const formattedAvailable = useMemo(() => {
     if (availableHip === 0) return "0";
@@ -128,41 +155,68 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
     setShowConfirmation(true);
   };
 
-  // Held outside `amount` so the value survives the input being
-  // wiped between confirm and the eventual password-prompt resolve.
-  const [pendingAmount, setPendingAmount] = useState<string | null>(null);
-  const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
+  // Password verification + the actual stake call happen back-to-back
+  // — the confirmation dialog now collects the password inline, so
+  // there's no separate password modal between confirm and submit.
+  const { verifyPassword } = useLocalWallet();
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [verifyingPassword, setVerifyingPassword] = useState(false);
 
-  const handleConfirmStake = () => {
+  // Reset password / error when the confirm step opens so a stale
+  // value from a previous flow doesn't leak across confirmations.
+  useEffect(() => {
+    if (!showConfirmation) return;
+    setConfirmPassword("");
+    setConfirmError(null);
+    setVerifyingPassword(false);
+  }, [showConfirmation]);
+
+  const handleConfirmStake = async () => {
     if (!isAmountValid) {
       setShowConfirmation(false);
       return;
     }
-    setPendingAmount(amount);
-    setShowConfirmation(false);
-    setShowPasswordPrompt(true);
+    if (!confirmPassword) {
+      setConfirmError("Enter your wallet password");
+      return;
+    }
+    setVerifyingPassword(true);
+    setConfirmError(null);
+    try {
+      const ok = await verifyPassword(confirmPassword);
+      if (!ok) {
+        setConfirmError("Incorrect password");
+        return;
+      }
+      const submitted = amount;
+      const password = confirmPassword;
+      setConfirmPassword("");
+      setAmount("");
+      setActiveButton(null);
+      setShowConfirmation(false);
+      onClose();
+      setIsMinimized(true);
+      await runStakeFlow(submitted, password);
+    } catch (e) {
+      setConfirmError(e instanceof Error ? e.message : "Failed to verify password");
+    } finally {
+      setVerifyingPassword(false);
+    }
   };
 
-  const handlePasswordConfirmed = async (password: string) => {
-    const submitted = pendingAmount ?? amount;
-    setPendingAmount(null);
-    setAmount("");
-    setActiveButton(null);
-    onClose();
-    setIsMinimized(true);
-    await runStakeFlow(submitted, password);
-  };
-
-  // Retry from the error-state toast re-prompts for the password —
-  // the original prompt's value is long gone by then.
+  // Retry from the error toast brings the confirmation dialog back so
+  // the user re-enters the password before re-firing the stake.
   const handleRetryStake = () => {
     if (!submittedAmount) {
       setFlowState("idle");
       setIsMinimized(false);
       return;
     }
-    setPendingAmount(submittedAmount);
-    setShowPasswordPrompt(true);
+    setAmount(submittedAmount);
+    setIsMinimized(false);
+    setFlowState("idle");
+    setShowConfirmation(true);
   };
 
   const closeFlowToast = () => {
@@ -182,10 +236,8 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
         title="Stake"
         description="Stake your hAlpha tokens on Hippius"
         icon={<HippiusLogo className="size-4 text-white" />}
-        iconTitleGap="mt-4 mb-0"
-        titleDescriptionGap="mt-0"
-        maxWidth="max-w-[550px]"
-        contentClassName="px-4 pb-4 pt-5 sm:w-[420px] sm:px-5 sm:pb-5"
+        maxWidth="max-w-[600px]"
+        titleDescriptionGap="mt-2"
         footer={
           <Button
             type="button"
@@ -266,40 +318,57 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
         title="Confirm Staking"
         description="Stake your hAlpha tokens on Hippius"
         icon={<HippiusLogo className="size-4 text-white" />}
-        iconTitleGap="mt-4 mb-0"
-        titleDescriptionGap="mt-0"
-        maxWidth="max-w-[550px]"
+        maxWidth="max-w-[600px]"
+        titleDescriptionGap="mt-2"
         footer={
           <WalletDialogFooter
-            primaryLabel="Confirm Stake"
+            primaryLabel={verifyingPassword ? "Confirming..." : "Confirm Stake"}
             secondaryLabel="Cancel"
             onPrimaryClick={handleConfirmStake}
             onSecondaryClick={() => setShowConfirmation(false)}
+            primaryLoading={verifyingPassword}
+            primaryDisabled={!confirmPassword.trim()}
+            secondaryDisabled={verifyingPassword}
           />
         }
       >
-        <div className="rounded-[14px] bg-[#f4f4f4] px-4 py-4 dark:bg-[#2a2a2a]">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[14px] font-medium leading-[16.8px] text-[#a6a6ab]">
-              Action
-            </span>
-            <span className="rounded-[6px] bg-[#dce7ff] px-2 py-0.5 text-[13px] font-medium leading-5 tracking-[-0.26px] text-[#3167dd] dark:bg-[#1e3a7a] dark:text-[#6b9aff]">
-              Stake Tokens
-            </span>
-          </div>
-          <div className="mt-2.5 flex items-center justify-between gap-3">
-            <span className="text-[14px] font-medium leading-[16.8px] text-[#a6a6ab]">
-              Amount
-            </span>
-            <div className="flex items-center gap-[7px]">
-              <span className="text-[14px] font-medium leading-[16.8px] text-[#0a0a0a] dark:text-white">
-                {amount} hALPHA
+        <div className="space-y-4">
+          <div className="rounded-[14px] bg-[#f4f4f4] px-4 py-4 dark:bg-[#2a2a2a]">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[14px] font-medium leading-[16.8px] text-[#a6a6ab]">
+                Action
               </span>
-              <span className="flex size-4 items-center justify-center rounded-full border border-[#d0d0d0] bg-white">
-                <HippiusLogo className="size-2.5 text-[#3167dd]" />
+              <span className="rounded-[6px] bg-[#dce7ff] px-2 py-0.5 text-[13px] font-medium leading-5 tracking-[-0.26px] text-[#3167dd] dark:bg-[#1e3a7a] dark:text-[#6b9aff]">
+                Stake Tokens
               </span>
             </div>
+            <div className="mt-2.5 flex items-center justify-between gap-3">
+              <span className="text-[14px] font-medium leading-[16.8px] text-[#a6a6ab]">
+                Amount
+              </span>
+              <div className="flex items-center gap-[7px]">
+                <span className="text-[14px] font-medium leading-[16.8px] text-[#0a0a0a] dark:text-white">
+                  {amount} hALPHA
+                </span>
+                <span className="flex size-4 items-center justify-center rounded-full border border-[#d0d0d0] bg-white">
+                  <HippiusLogo className="size-2.5 text-[#3167dd]" />
+                </span>
+              </div>
+            </div>
           </div>
+
+          <WalletPasswordField
+            id="stake-confirm-password"
+            value={confirmPassword}
+            onChange={(v) => {
+              setConfirmPassword(v);
+              if (confirmError) setConfirmError(null);
+            }}
+            error={confirmError}
+            disabled={verifyingPassword}
+            autoFocusOnOpen={showConfirmation}
+            onSubmit={handleConfirmStake}
+          />
         </div>
       </WalletDialogShell>
 
@@ -325,17 +394,6 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
         />
       )}
 
-      <WalletPasswordPrompt
-        open={showPasswordPrompt}
-        onClose={() => setShowPasswordPrompt(false)}
-        onConfirm={handlePasswordConfirmed}
-        title="Confirm Stake"
-        description={
-          pendingAmount
-            ? `Staking ${pendingAmount} hALPHA on Hippius`
-            : "Confirm with your wallet password"
-        }
-      />
     </>
   );
 };

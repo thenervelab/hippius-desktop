@@ -12,8 +12,9 @@ import {
 import TransactionFlowToast, {
   type TransactionFlowState,
 } from "./shared/TransactionFlowToast";
-import WalletPasswordPrompt from "./WalletPasswordPrompt";
+import WalletPasswordField from "./shared/WalletPasswordField";
 import { useStaking } from "@/lib/hooks/useStaking";
+import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 
 interface WithdrawDialogProps {
   open: boolean;
@@ -21,12 +22,18 @@ interface WithdrawDialogProps {
   onSuccess?: () => void;
 }
 
+/**
+ * Withdraw dialog — a single-step dialog (unlike Send/Stake/Unstake
+ * which use a separate confirmation). The password field lives directly
+ * on this dialog: enter password, click Confirm Withdraw, done.
+ */
 const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
   open,
   onClose,
   onSuccess,
 }) => {
   const { stakingInfo, operations, refetch } = useStaking();
+  const { verifyPassword } = useLocalWallet();
   const withdrawableHip = stakingInfo?.withdrawableHip ?? "0";
   const hasWithdrawable =
     !!withdrawableHip && Number.parseFloat(withdrawableHip) > 0;
@@ -36,18 +43,28 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
   const [submittedAmount, setSubmittedAmount] = useState("");
   const isProcessingRef = useRef(false);
 
+  const [password, setPassword] = useState("");
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [verifyingPassword, setVerifyingPassword] = useState(false);
+
+  // Reset password / error when the dialog reopens so a stale value
+  // from a previous flow doesn't leak across confirmations.
   useEffect(() => {
-    if (open) refetch();
+    if (!open) return;
+    refetch();
+    setPassword("");
+    setPasswordError(null);
+    setVerifyingPassword(false);
   }, [open, refetch]);
 
   const runWithdrawFlow = useCallback(
-    async (password: string) => {
+    async (signingPassword: string) => {
       if (isProcessingRef.current) return;
       isProcessingRef.current = true;
       setFlowState("pending");
       setSubmittedAmount(withdrawableHip);
       try {
-        await operations.withdrawUnbonded(password);
+        await operations.withdrawUnbonded(signingPassword);
         setFlowState("success");
         await refetch();
         onSuccess?.();
@@ -62,21 +79,38 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
     [operations, refetch, withdrawableHip, onSuccess],
   );
 
-  const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
-
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!hasWithdrawable) return;
-    setShowPasswordPrompt(true);
-  };
-
-  const handlePasswordConfirmed = async (password: string) => {
-    onClose();
-    setIsMinimized(true);
-    await runWithdrawFlow(password);
+    if (!password) {
+      setPasswordError("Enter your wallet password");
+      return;
+    }
+    setVerifyingPassword(true);
+    setPasswordError(null);
+    try {
+      const ok = await verifyPassword(password);
+      if (!ok) {
+        setPasswordError("Incorrect password");
+        return;
+      }
+      const signingPassword = password;
+      setPassword("");
+      onClose();
+      setIsMinimized(true);
+      await runWithdrawFlow(signingPassword);
+    } catch (e) {
+      setPasswordError(
+        e instanceof Error ? e.message : "Failed to verify password",
+      );
+    } finally {
+      setVerifyingPassword(false);
+    }
   };
 
   const handleRetry = () => {
-    setShowPasswordPrompt(true);
+    // Bring the dialog back open so the user re-enters the password.
+    setIsMinimized(false);
+    setFlowState("idle");
   };
 
   const closeFlowToast = () => {
@@ -87,6 +121,8 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
 
   const showFlowToast = flowState !== "idle" && isMinimized;
   const showMainDialog = open && flowState === "idle";
+  const confirmDisabled =
+    !hasWithdrawable || !password.trim() || verifyingPassword;
 
   return (
     <>
@@ -96,37 +132,53 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
         title="Withdraw hALPHA"
         description="Withdraw your redeemable hAlpha tokens on Hippius."
         icon={<HippiusLogo className="size-4 text-white" />}
-        iconTitleGap="mt-4 mb-0"
-        titleDescriptionGap="mt-0"
-        maxWidth="max-w-[550px]"
+        maxWidth="max-w-[600px]"
+        titleDescriptionGap="mt-2"
         footer={
           <WalletDialogFooter
-            primaryLabel="Confirm Withdraw"
+            primaryLabel={verifyingPassword ? "Confirming..." : "Confirm Withdraw"}
             secondaryLabel="Cancel"
             onPrimaryClick={handleConfirm}
             onSecondaryClick={onClose}
-            primaryDisabled={!hasWithdrawable}
+            primaryDisabled={confirmDisabled}
+            primaryLoading={verifyingPassword}
+            secondaryDisabled={verifyingPassword}
           />
         }
       >
-        <div className="rounded-[14px] bg-[#f4f4f4] px-4 py-4 dark:bg-[#2a2a2a]">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[14px] font-medium leading-[16.8px] text-[#a6a6ab]">
-              Withdrawable
-            </span>
-            <div className="flex items-center gap-[7px]">
-              <span className="text-[14px] font-medium leading-[16.8px] text-[#0a0a0a] dark:text-white">
-                {withdrawableHip} hALPHA
+        <div className="space-y-4">
+          <div className="rounded-[14px] bg-[#f4f4f4] px-4 py-4 dark:bg-[#2a2a2a]">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[14px] font-medium leading-[16.8px] text-[#a6a6ab]">
+                Withdrawable
               </span>
-              <span className="flex size-4 items-center justify-center rounded-full border border-[#d0d0d0] bg-white">
-                <HippiusLogo className="size-2.5 text-[#3167dd]" />
-              </span>
+              <div className="flex items-center gap-[7px]">
+                <span className="text-[14px] font-medium leading-[16.8px] text-[#0a0a0a] dark:text-white">
+                  {withdrawableHip} hALPHA
+                </span>
+                <span className="flex size-4 items-center justify-center rounded-full border border-[#d0d0d0] bg-white">
+                  <HippiusLogo className="size-2.5 text-[#3167dd]" />
+                </span>
+              </div>
             </div>
+            <p className="mt-3 text-[12px] font-medium leading-relaxed text-[#a6a6ab]">
+              Tokens will be transferred to your wallet immediately after
+              confirmation.
+            </p>
           </div>
-          <p className="mt-3 text-[12px] font-medium leading-relaxed text-[#a6a6ab]">
-            Tokens will be transferred to your wallet immediately after
-            confirmation.
-          </p>
+
+          <WalletPasswordField
+            id="withdraw-password"
+            value={password}
+            onChange={(v) => {
+              setPassword(v);
+              if (passwordError) setPasswordError(null);
+            }}
+            error={passwordError}
+            disabled={verifyingPassword || !hasWithdrawable}
+            autoFocusOnOpen={open && hasWithdrawable}
+            onSubmit={handleConfirm}
+          />
         </div>
       </WalletDialogShell>
 
@@ -151,14 +203,6 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
           onDismiss={closeFlowToast}
         />
       )}
-
-      <WalletPasswordPrompt
-        open={showPasswordPrompt}
-        onClose={() => setShowPasswordPrompt(false)}
-        onConfirm={handlePasswordConfirmed}
-        title="Confirm Withdraw"
-        description={`Withdrawing ${withdrawableHip} hALPHA to your wallet`}
-      />
     </>
   );
 };

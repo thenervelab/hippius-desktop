@@ -15,7 +15,8 @@ import {
 import TransactionFlowToast, {
   type TransactionFlowState,
 } from "./shared/TransactionFlowToast";
-import WalletPasswordPrompt from "./WalletPasswordPrompt";
+import WalletPasswordField from "./shared/WalletPasswordField";
+import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { useStaking } from "@/lib/hooks/useStaking";
 
 interface UnstakeDialogProps {
@@ -113,27 +114,55 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
     setShowConfirmation(true);
   };
 
-  const [pendingAmount, setPendingAmount] = useState<string | null>(null);
-  const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
+  // Inline password verification on the Confirm Unstaking dialog —
+  // the separate WalletPasswordPrompt step has been collapsed into the
+  // confirmation dialog so the user enters the password right where
+  // they're confirming the action.
+  const { verifyPassword } = useLocalWallet();
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [verifyingPassword, setVerifyingPassword] = useState(false);
 
-  const handleConfirmUnstake = () => {
+  useEffect(() => {
+    if (!showConfirmation) return;
+    setConfirmPassword("");
+    setConfirmError(null);
+    setVerifyingPassword(false);
+  }, [showConfirmation]);
+
+  const handleConfirmUnstake = async () => {
     if (!isAmountValid) {
       setShowConfirmation(false);
       return;
     }
-    setPendingAmount(amount);
-    setShowConfirmation(false);
-    setShowPasswordPrompt(true);
-  };
-
-  const handlePasswordConfirmed = async (password: string) => {
-    const submitted = pendingAmount ?? amount;
-    setPendingAmount(null);
-    setAmount("");
-    setActiveButton(null);
-    onClose();
-    setIsMinimized(true);
-    await runUnstakeFlow(submitted, password);
+    if (!confirmPassword) {
+      setConfirmError("Enter your wallet password");
+      return;
+    }
+    setVerifyingPassword(true);
+    setConfirmError(null);
+    try {
+      const ok = await verifyPassword(confirmPassword);
+      if (!ok) {
+        setConfirmError("Incorrect password");
+        return;
+      }
+      const submitted = amount;
+      const password = confirmPassword;
+      setConfirmPassword("");
+      setAmount("");
+      setActiveButton(null);
+      setShowConfirmation(false);
+      onClose();
+      setIsMinimized(true);
+      await runUnstakeFlow(submitted, password);
+    } catch (e) {
+      setConfirmError(
+        e instanceof Error ? e.message : "Failed to verify password",
+      );
+    } finally {
+      setVerifyingPassword(false);
+    }
   };
 
   const handleRetryUnstake = () => {
@@ -142,8 +171,10 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
       setIsMinimized(false);
       return;
     }
-    setPendingAmount(submittedAmount);
-    setShowPasswordPrompt(true);
+    setAmount(submittedAmount);
+    setIsMinimized(false);
+    setFlowState("idle");
+    setShowConfirmation(true);
   };
 
   const closeFlowToast = () => {
@@ -163,10 +194,8 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
         title="Unstake hALPHA"
         description="Redeem your staked hAlpha tokens on Hippius"
         icon={<HippiusLogo className="size-4 text-white" />}
-        iconTitleGap="mt-4 mb-0"
-        titleDescriptionGap="mt-0"
-        maxWidth="max-w-[550px]"
-        contentClassName="px-4 pb-4 pt-5 sm:w-[420px] sm:px-5 sm:pb-5"
+        maxWidth="max-w-[600px]"
+        titleDescriptionGap="mt-2"
         footer={
           <Button
             type="button"
@@ -247,15 +276,17 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
         title="Confirm Unstaking"
         description="Redeem your staked hAlpha tokens"
         icon={<HippiusLogo className="size-4 text-white" />}
-        iconTitleGap="mt-4 mb-0"
-        titleDescriptionGap="mt-0"
-        maxWidth="max-w-[550px]"
+        maxWidth="max-w-[600px]"
+        titleDescriptionGap="mt-2"
         footer={
           <WalletDialogFooter
-            primaryLabel="Confirm Unstake"
+            primaryLabel={verifyingPassword ? "Confirming..." : "Confirm Unstake"}
             secondaryLabel="Cancel"
             onPrimaryClick={handleConfirmUnstake}
             onSecondaryClick={() => setShowConfirmation(false)}
+            primaryLoading={verifyingPassword}
+            primaryDisabled={!confirmPassword.trim()}
+            secondaryDisabled={verifyingPassword}
           />
         }
       >
@@ -294,6 +325,19 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
               confirmed.
             </p>
           </div>
+
+          <WalletPasswordField
+            id="unstake-confirm-password"
+            value={confirmPassword}
+            onChange={(v) => {
+              setConfirmPassword(v);
+              if (confirmError) setConfirmError(null);
+            }}
+            error={confirmError}
+            disabled={verifyingPassword}
+            autoFocusOnOpen={showConfirmation}
+            onSubmit={handleConfirmUnstake}
+          />
         </div>
       </WalletDialogShell>
 
@@ -319,17 +363,6 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
         />
       )}
 
-      <WalletPasswordPrompt
-        open={showPasswordPrompt}
-        onClose={() => setShowPasswordPrompt(false)}
-        onConfirm={handlePasswordConfirmed}
-        title="Confirm Unstake"
-        description={
-          pendingAmount
-            ? `Unstaking ${pendingAmount} hALPHA`
-            : "Confirm with your wallet password"
-        }
-      />
     </>
   );
 };
