@@ -56,6 +56,12 @@ interface LocalWalletContextValue {
     address: string;
     encryptedMnemonic: string;
     passwordHash: string;
+    /** User-typed password. The Rust IPC verifies it against the
+     *  backup's `passwordHash` (constant-time SHA-256 compare) and
+     *  refuses the import on mismatch — guards against importing a
+     *  wallet under the wrong password, which would only surface as
+     *  a confusing "Incorrect password" on the next signing attempt. */
+    password: string;
   }) => Promise<boolean>;
   switchWallet: (walletId: number) => Promise<boolean>;
   renameWallet: (walletId: number, name: string) => Promise<boolean>;
@@ -88,6 +94,10 @@ interface LocalWalletContextValue {
   importEncryptedWalletFromZip: (data: {
     name: string;
     zipBytes: Uint8Array;
+    /** User-typed password. Verified Rust-side against the hash
+     *  carried inside the zip (same constant-time check as the
+     *  JSON path). Import is rejected on mismatch. */
+    password: string;
   }) => Promise<boolean>;
 
   setSetupStep: (step: WalletSetupStep) => void;
@@ -255,6 +265,7 @@ export function LocalWalletProvider({
       address: string;
       encryptedMnemonic: string;
       passwordHash: string;
+      password: string;
     }): Promise<boolean> => {
       try {
         await invoke<LocalWallet>("local_wallet_import_encrypted_backup", {
@@ -262,12 +273,15 @@ export function LocalWalletProvider({
           address: data.address,
           encryptedMnemonic: data.encryptedMnemonic,
           passwordHash: data.passwordHash,
+          password: data.password,
         });
         await refreshWallets();
         return true;
       } catch (e) {
+        // Rethrow so the import screen can surface "Incorrect password"
+        // from Rust instead of swallowing it into a generic failure.
         console.error("Failed to import encrypted local wallet:", e);
-        return false;
+        throw e;
       }
     },
     [refreshWallets],
@@ -454,6 +468,7 @@ export function LocalWalletProvider({
     async (data: {
       name: string;
       zipBytes: Uint8Array;
+      password: string;
     }): Promise<boolean> => {
       try {
         // Tauri's IPC serialiser accepts `number[]` for Vec<u8>; the
@@ -463,13 +478,17 @@ export function LocalWalletProvider({
           {
             name: data.name,
             zipBytes: Array.from(data.zipBytes),
+            password: data.password,
           },
         );
         await refreshWallets();
         return true;
       } catch (e) {
+        // Rethrow so the import screen can surface "Incorrect password"
+        // (or whatever the Rust error says) instead of a generic
+        // "Failed to import wallet" toast.
         console.error("Failed to import wallet from zip:", e);
-        return false;
+        throw e;
       }
     },
     [refreshWallets],

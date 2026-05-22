@@ -245,12 +245,14 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
           ? await importEncryptedWalletFromZip({
               name: parsed.suggestedName,
               zipBytes: parsed.bytes,
+              password,
             })
           : await importEncryptedWallet({
               name: parsed.payload.name,
               address: parsed.payload.address,
               encryptedMnemonic: parsed.payload.encryptedMnemonic,
               passwordHash: parsed.payload.passwordHash,
+              password,
             });
       if (ok) {
         setWarningOpen(false);
@@ -262,7 +264,12 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
       }
     } catch (e) {
       console.error("[ImportWalletScreen] import failed:", e);
-      setError(e instanceof Error ? e.message : "Failed to import wallet");
+      // Rust returns "Incorrect password for this backup" when the
+      // typed password doesn't match the hash inside the backup; pass
+      // that straight through so the user knows to retry the password
+      // instead of suspecting a corrupt file.
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message || "Failed to import wallet");
       setWarningOpen(false);
     } finally {
       setSubmitting(false);

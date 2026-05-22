@@ -247,12 +247,22 @@ pub async fn local_wallet_import_encrypted_backup(
     address: String,
     encrypted_mnemonic: String,
     password_hash: String,
+    password: String,
 ) -> Result<PublicLocalWallet, AppError> {
     if name.trim().is_empty() {
         return Err(AppError::Other("Wallet name is required".into()));
     }
     if address.trim().is_empty() {
         return Err(AppError::Other("Address is required".into()));
+    }
+    // Verify the user typed the correct password by recomputing the
+    // address-salted SHA-256 hash and constant-time-comparing it to
+    // the hash from the backup. Without this we'd happily import the
+    // wallet regardless of what the user typed — and they'd then hit
+    // "Incorrect password" on the next sign attempt with no clue why.
+    let expected = crypto::password_hash(&password, address.trim());
+    if !constant_time_eq(expected.as_bytes(), password_hash.as_bytes()) {
+        return Err(AppError::Other("Incorrect password for this backup".into()));
     }
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
@@ -321,6 +331,7 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
     state: State<'_, AppState>,
     name: String,
     zip_bytes: Vec<u8>,
+    password: String,
 ) -> Result<PublicLocalWallet, AppError> {
     use std::io::{Cursor, Read};
 
@@ -363,6 +374,14 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
         .to_owned();
     if address.is_empty() {
         return Err(AppError::Other("Backup `address` is empty".into()));
+    }
+
+    // Same verification as the JSON path: the user's typed password
+    // must match the hash baked into the backup, otherwise we'd
+    // store a wallet they can't actually sign with.
+    let expected = crypto::password_hash(&password, &address);
+    if !constant_time_eq(expected.as_bytes(), password_hash.as_bytes()) {
+        return Err(AppError::Other("Incorrect password for this backup".into()));
     }
 
     let owner = require_owner(&state)?;
