@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Plus } from "lucide-react";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
+import { Info, Plus } from "lucide-react";
 
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import PageHeader from "@/components/page-sections/home/PageHeader";
@@ -32,7 +33,18 @@ const TAB_OPTIONS = [
 type WalletTab = (typeof TAB_OPTIONS)[number]["value"];
 
 export default function Wallet() {
-  const { data: transactions, isPending, refetch } = useBalanceTransactions();
+  const {
+    data: transactions,
+    isPending,
+    isPlaceholderData: isTransactionsPlaceholder,
+    refetch,
+  } = useBalanceTransactions();
+  // `isPending` is false on subsequent renders that show the previous
+  // wallet's data via `keepPreviousData`. `isPlaceholderData` flips
+  // true during a wallet switch until the new wallet's transactions
+  // arrive — combine the two so the skeleton fires for both
+  // "first load" and "wallet just switched".
+  const transactionsLoading = isPending || isTransactionsPlaceholder;
   const { refetch: refetchSystemBalance } = useSystemBalance();
 
   const [activeTab, setActiveTab] = useState<WalletTab>("Transaction History");
@@ -77,6 +89,36 @@ export default function Wallet() {
             subtitle="All uploaded files are private and securely encrypted."
             showTopUpCredits={false}
             rightSlot={<ActiveWalletSelector />}
+            infoButton={
+              <TooltipPrimitive.Provider delayDuration={300}>
+                <TooltipPrimitive.Root>
+                  <TooltipPrimitive.Trigger asChild>
+                    <button
+                      type="button"
+                      aria-label="Wallet information"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400"
+                    >
+                      <Info className="size-3.5" />
+                    </button>
+                  </TooltipPrimitive.Trigger>
+                  <TooltipPrimitive.Portal>
+                    <TooltipPrimitive.Content
+                      side="bottom"
+                      align="center"
+                      sideOffset={8}
+                      avoidCollisions
+                      collisionPadding={8}
+                      className="z-[9999] max-w-[280px] rounded-[8px] border border-grey-dark-100 bg-white px-3 py-[10px] text-[12px] font-medium leading-4 tracking-[-0.24px] text-[#52525c] shadow-[0px_4px_24px_0px_rgba(0,0,0,0.08)] dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-[#a3a3a3] dark:shadow-black/25"
+                    >
+                      Send and receive hAlpha, stake or unstake your tokens,
+                      bridge between alpha and TAO, and manage saved
+                      recipient addresses — all from this page.
+                      <TooltipPrimitive.Arrow className="fill-white dark:fill-[#2c2c2c]" />
+                    </TooltipPrimitive.Content>
+                  </TooltipPrimitive.Portal>
+                </TooltipPrimitive.Root>
+              </TooltipPrimitive.Provider>
+            }
           />
 
           <WalletWithLocalSupport>
@@ -121,7 +163,7 @@ export default function Wallet() {
               {activeTab === "Transaction History" && (
                 <TransactionHistoryTable
                   transactions={transactions}
-                  isPending={isPending}
+                  isPending={transactionsLoading}
                 />
               )}
               {activeTab === "Bridge Transactions" && (
