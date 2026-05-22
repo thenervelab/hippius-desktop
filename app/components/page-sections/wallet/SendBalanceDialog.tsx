@@ -17,8 +17,6 @@ import { WalletDialogShell } from "./shared/WalletDesign";
 import TransactionFlowToast, {
   type TransactionFlowState,
 } from "./shared/TransactionFlowToast";
-import WalletPasswordPrompt from "./WalletPasswordPrompt";
-
 import { useAddressValidation } from "@/lib/hooks/useAddressValidation";
 
 export interface SendBalanceDialogProps {
@@ -170,19 +168,15 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
     [refetchBalance, resetForm],
   );
 
-  const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
-
-  const handleTransfer = () => {
-    if (!validatedPlanck) return;
-    setShowConfirmation(false);
-    setShowPasswordPrompt(true);
-  };
-
-  const handlePasswordConfirmed = async (password: string) => {
+  // The confirmation dialog now collects the password inline, so there's
+  // no separate password-prompt step here. Retry surfaces the
+  // confirmation dialog again instead of a dedicated password modal.
+  const handleConfirmTransfer = async (password: string) => {
     if (!validatedPlanck) return;
     const amountForToast = amount;
     const addrForToast = address;
     const planckForRetry = validatedPlanck;
+    setShowConfirmation(false);
     onClose();
     setIsMinimized(true);
     await runTransferFlow(
@@ -199,8 +193,11 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
       setIsMinimized(false);
       return;
     }
-    // Retry has to re-prompt — the original password is long gone.
-    setShowPasswordPrompt(true);
+    // Retry brings the confirmation dialog back so the user re-enters
+    // the password before re-firing the transfer.
+    setIsMinimized(false);
+    setFlowState("idle");
+    setShowConfirmation(true);
   };
 
   const closeFlowToast = () => {
@@ -220,8 +217,8 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
         onClose={onClose}
         title="Send hALPHA"
         icon={<OutGoing className="size-3 text-white" />}
-        maxWidth="max-w-[500px]"
-        contentClassName="px-4 pb-4 pt-5 sm:w-[420px] sm:px-5 sm:pb-5"
+        maxWidth="max-w-[600px]"
+        contentClassName="px-4 pb-4 pt-5 sm:px-5 sm:pb-5"
         footer={
           <div className="flex gap-4">
             <Button
@@ -260,6 +257,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
               error={addressError}
               disabled={loading}
               placeholder="Enter or choose from address book"
+              wrapperClassName="!shadow-none focus-within:!shadow-none dark:!shadow-none dark:focus-within:!shadow-none"
             />
             {addressError ? (
               <div className="flex items-center gap-2 text-error-70 text-sm font-medium">
@@ -277,45 +275,43 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
             >
               Amount
             </Label>
-            <div className="relative flex items-center">
-              <Input
-                id="amount"
-                placeholder="Enter Amount"
-                type="text"
-                inputMode="decimal"
-                value={amount}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  // Only digits and one decimal point — guards the
-                  // Rust planck conversion from malformed input.
-                  if (value === "" || /^\d*\.?\d*$/.test(value)) {
-                    handleAmountChange(e);
-                  }
-                }}
-                aria-invalid={!!amountError}
-                disabled={loading}
-                className={cn(
-                  "pr-28 h-12 text-base font-medium",
-                  amountError && "border-error-50",
-                )}
-              />
-              <div className="absolute right-3 flex items-center gap-2 text-[13px] font-medium tracking-[-0.26px] text-[#171717] dark:text-white">
-                <span>hALPHA</span>
-                <button
-                  type="button"
-                  onClick={handleSetMax}
-                  disabled={loading}
-                  className={cn(
-                    "rounded-full border px-2 py-0.5 text-[13px] font-medium leading-5 tracking-[-0.26px] transition-colors disabled:opacity-60",
-                    activeButton === "max"
-                      ? "border-transparent bg-[#b7cbff] text-[#3167dd] dark:border-transparent dark:bg-[#1e3a7a] dark:text-[#6b9aff]"
-                      : "border-[#dfdfdf] bg-[#e9e9e9] text-[#9a9a9a] hover:border-transparent hover:bg-[#b7cbff] hover:text-[#3167dd] dark:border-[#494949] dark:bg-[#363636] dark:text-[#808080] dark:hover:border-transparent dark:hover:bg-[#1e3a7a] dark:hover:text-[#6b9aff]",
-                  )}
-                >
-                  MAX
-                </button>
-              </div>
-            </div>
+            <Input
+              id="amount"
+              placeholder="Enter Amount"
+              type="text"
+              inputMode="decimal"
+              value={amount}
+              wrapperClassName="!shadow-none focus-within:!shadow-none dark:!shadow-none dark:focus-within:!shadow-none"
+              onChange={(e) => {
+                const value = e.target.value;
+                // Only digits and one decimal point — guards the
+                // Rust planck conversion from malformed input.
+                if (value === "" || /^\d*\.?\d*$/.test(value)) {
+                  handleAmountChange(e);
+                }
+              }}
+              aria-invalid={!!amountError}
+              disabled={loading}
+              className={cn(amountError && "border-error-50")}
+              endAdornment={
+                <div className="flex items-center gap-2 pr-1 text-[13px] font-medium tracking-[-0.26px] text-[#171717] dark:text-white sm:text-[14px] sm:tracking-[-0.28px]">
+                  <span>hALPHA</span>
+                  <button
+                    type="button"
+                    onClick={handleSetMax}
+                    disabled={loading}
+                    className={cn(
+                      "rounded-full border px-2 py-0.5 text-[14px] font-medium leading-5 tracking-[-0.28px] transition-colors disabled:opacity-60",
+                      activeButton === "max"
+                        ? "border-transparent bg-[#b7cbff] text-[#3167dd] dark:border-transparent dark:bg-[#1e3a7a] dark:text-[#6b9aff]"
+                        : "border-[#dfdfdf] bg-[#e9e9e9] text-[#9a9a9a] hover:border-transparent hover:bg-[#b7cbff] hover:text-[#3167dd] dark:border-[#494949] dark:bg-[#363636] dark:text-[#808080] dark:hover:border-transparent dark:hover:bg-[#1e3a7a] dark:hover:text-[#6b9aff]",
+                    )}
+                  >
+                    MAX
+                  </button>
+                </div>
+              }
+            />
             {amountError ? (
               <div className="flex items-center gap-2 text-error-70 text-sm font-medium">
                 <AlertCircle className="size-4" />
@@ -337,7 +333,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
       <SendBalanceConfirmationDialog
         open={showConfirmation}
         onClose={handleCloseConfirmation}
-        onConfirm={handleTransfer}
+        onConfirm={handleConfirmTransfer}
         loading={loading}
         recipientAddress={address}
         amount={amount}
@@ -365,17 +361,6 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
         />
       )}
 
-      <WalletPasswordPrompt
-        open={showPasswordPrompt}
-        onClose={() => setShowPasswordPrompt(false)}
-        onConfirm={handlePasswordConfirmed}
-        title="Confirm Transfer"
-        description={
-          amount && address
-            ? `Sending ${amount} hALPHA`
-            : "Confirm with your wallet password"
-        }
-      />
     </>
   );
 };

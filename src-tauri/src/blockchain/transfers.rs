@@ -9,16 +9,28 @@ use crate::blockchain::types::{TxResult, ValidatedTransfer};
 use std::str::FromStr;
 use tracing::info;
 
-/// Estimated transaction fee in planck.
+/// Estimated transaction fee in planck — used by `validate_send_balance`
+/// for the "can the user afford this transfer at all" check.
 const ESTIMATED_TRANSFER_FEE_PLANCK: u128 = 270_233_151;
+
+/// Headroom subtracted from the MAX button so the resulting transfer
+/// always leaves enough free balance for follow-up extrinsics (e.g. an
+/// unstake or a credit top-up) without forcing the user to top up gas.
+///
+/// 0.01 hAlpha (= 10^16 planck) is much larger than any single Polkadot
+/// extrinsic fee on this chain (~10^-10 hAlpha) but small enough that the
+/// user doesn't notice it being held back. Mirrors hippius-web's
+/// `GAS_FEE_BUFFER_PLANCKS = PLANCKS_PER_TOKEN / 100` so the two clients
+/// behave identically when the user presses MAX.
+const MAX_GAS_FEE_BUFFER_PLANCK: u128 = 10_000_000_000_000_000;
 
 /// Max-transferable amount for the "Send Max" UX on the balance page.
 ///
-/// Pure function — takes a planck balance string, subtracts the fee, and
-/// returns both the remaining planck and the formatted HIP string. Lives
-/// in Rust so the fee constant, the BigInt subtraction, and the planck→HIP
-/// conversion are all owned by the backend (the same places the actual
-/// transfer logic lives).
+/// Pure function — takes a planck balance string, subtracts the gas
+/// buffer, and returns both the remaining planck and the formatted HIP
+/// string. Lives in Rust so the buffer constant, the BigInt subtraction,
+/// and the planck→HIP conversion are all owned by the backend (the same
+/// places the actual transfer logic lives).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MaxTransferable {
@@ -29,7 +41,7 @@ pub struct MaxTransferable {
 #[tauri::command]
 pub fn compute_max_transferable(balance_planck: String) -> MaxTransferable {
     let balance = balance_planck.parse::<u128>().unwrap_or(0);
-    let max_planck = balance.saturating_sub(ESTIMATED_TRANSFER_FEE_PLANCK);
+    let max_planck = balance.saturating_sub(MAX_GAS_FEE_BUFFER_PLANCK);
     let planck = max_planck.to_string();
     let hip = crate::blockchain::convert::planck_to_hip_full(planck.clone());
     MaxTransferable { planck, hip }

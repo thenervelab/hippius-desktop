@@ -1,12 +1,12 @@
 "use client";
 
-import { FC, useState } from "react";
+import { FC, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   BarChart,
-  ArrowReceive,
-  ArrowSend,
+  InGoing,
+  OutGoing,
 } from "@/components/ui/icons";
 import Warning from "@/components/ui/icons/Warning";
 import { RefreshCcwDot } from "lucide-react";
@@ -28,6 +28,23 @@ interface WalletBalanceCardProps {
 // keeps users from trying to send when balance can't cover the fee.
 const ESTIMATED_TRANSFER_FEE_PLANCK = BigInt("270233151");
 
+/**
+ * Format a planck BigInt as a HIP display string the way hippius-web
+ * does: divide by 1e18, floor to 6 decimals (never round up), strip
+ * trailing zeros. Matches the "Available" line web shows in its Send
+ * dialog so the two clients display identical numbers for the same
+ * account.
+ */
+const formatPlanckToHip = (planck: bigint): string => {
+  if (planck <= BigInt(0)) return "0";
+  // Divide once to a Number and floor to 6 decimals — same loss tolerated
+  // by web for display values. (Planck math elsewhere stays in BigInt.)
+  const asNumber = Number(planck) / 1e18;
+  if (!Number.isFinite(asNumber)) return "0";
+  const truncated = (Math.floor(asNumber * 1e6) / 1e6).toFixed(6);
+  return truncated.replace(/\.?0+$/, "");
+};
+
 const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
   className,
   refetchTransactions,
@@ -35,7 +52,7 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
 }) => {
   const {
     data: balanceInfo,
-    isLoading,
+    isFetching,
     error,
     refetch,
     dataUpdatedAt,
@@ -51,21 +68,38 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [receiveDialogOpen, setReceiveDialogOpen] = useState(false);
 
+  // Transferable = free − frozen. On Substrate, `free` covers the
+  // tokens a user "owns" but `frozen` covers whatever staking has
+  // locked (bonded + unbonding + withdrawable). The amount that can
+  // actually be sent is the difference between them. Without this
+  // subtraction the Send dialog's "Available" reads the full balance
+  // and MAX produces an amount the chain will reject. Mirrors
+  // hippius-web's `getTransferable`.
+  const transferablePlanck = useMemo(() => {
+    if (!balanceInfo?.data) return BigInt(0);
+    const t = balanceInfo.data.free - balanceInfo.data.frozen;
+    return t > BigInt(0) ? t : BigInt(0);
+  }, [balanceInfo]);
+
+  const transferableHip = useMemo(
+    () => formatPlanckToHip(transferablePlanck),
+    [transferablePlanck],
+  );
+
   const handleSend = () => {
-    if (!balanceInfo?.data?.free) {
+    if (!balanceInfo?.data) {
       toast.error("Balance information not available. Please try again later.");
       return;
     }
-    const freePlanck = BigInt(balanceInfo.data.free);
-    if (freePlanck <= BigInt(0)) {
+    if (transferablePlanck <= BigInt(0)) {
       toast.error(
-        "Your balance is zero. Please add funds to your account first.",
+        "Your transferable balance is zero. Unstake or withdraw locked funds to free balance for sending.",
       );
       return;
     }
-    if (freePlanck <= ESTIMATED_TRANSFER_FEE_PLANCK) {
+    if (transferablePlanck <= ESTIMATED_TRANSFER_FEE_PLANCK) {
       toast.error(
-        `Your balance (${balanceInfo.data.freeHip} hALPHA) is too low to cover the transaction fee. Please add funds to your account first.`,
+        `Your transferable balance (${transferableHip} hALPHA) is too low to cover the transaction fee. Please add funds to your account first.`,
       );
       return;
     }
@@ -93,10 +127,14 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
           </div>
         </div>
 
-        {/* Inner panel */}
+        {/* Inner panel — content stacks tightly at the top with a small
+            gap between the headline and the "Last updated" row; the
+            buttons get `mt-auto` to anchor at the bottom. (`justify-between`
+            here would push the headline and status row apart with a
+            huge mid-card gap that read as unintentional whitespace.) */}
         <div
           className={cn(
-            "flex flex-col w-full flex-1 justify-between gap-3",
+            "flex flex-col w-full flex-1 gap-1.5",
             "rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100",
             "bg-white dark:bg-black-600 dark:border-black-300",
             "p-3",
@@ -109,7 +147,7 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
               communicated through the status row below (small warning +
               retry) instead of a blocky red ERROR. */}
           <div className="flex items-end justify-start gap-1">
-            {isLoading ? (
+            {isFetching ? (
               <div className="h-[30px] w-[140px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
             ) : (
               <>
@@ -125,7 +163,7 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
 
           {/* Refresh / status row */}
           <div className="flex items-center gap-2">
-            {isLoading ? (
+            {isFetching ? (
               <div className="h-4 w-36 rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
             ) : (
               <>
@@ -160,26 +198,26 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
             )}
           </div>
 
-          {/* Send/Receive actions */}
-          <div className="grid grid-cols-2 gap-2">
+          {/* Send/Receive actions — `mt-auto` snaps to bottom. */}
+          <div className="grid grid-cols-2 gap-2 mt-auto">
             <Button
-              variant="defaultStable"
+              variant="primary"
               size="auto"
               className="h-[36px] rounded-[8px] text-[13px] font-medium tracking-[-0.26px] gap-[7px]"
               onClick={() => setReceiveDialogOpen(true)}
               disabled={!walletAddress}
             >
-              <ArrowReceive className="size-[5.004px] shrink-0" />
+              <InGoing className="size-2 shrink-0" />
               Receive
             </Button>
             <Button
-              variant="primary"
+              variant="defaultStable"
               size="auto"
               className="h-[36px] rounded-[8px] text-[13px] font-medium tracking-[-0.26px] gap-[7px]"
               onClick={handleSend}
-              disabled={!walletAddress || isLoading || !!error}
+              disabled={!walletAddress || isFetching || !!error}
             >
-              <ArrowSend className="size-[5.004px] shrink-0" />
+              <OutGoing className="size-2 shrink-0" />
               Send
             </Button>
           </div>
@@ -189,8 +227,8 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
       <SendBalanceDialog
         open={sendDialogOpen}
         onClose={() => setSendDialogOpen(false)}
-        availableBalancePlanck={String(balanceInfo?.data?.free ?? "0")}
-        availableBalanceHip={balanceInfo?.data?.freeHip ?? "0"}
+        availableBalancePlanck={transferablePlanck.toString()}
+        availableBalanceHip={transferableHip}
         refetchBalance={() => {
           refetch();
           refetchSystemBalance?.();
