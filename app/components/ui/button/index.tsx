@@ -123,7 +123,7 @@ const buttonVariants = cva(
         default:
           "bg-grey-90 text-grey-10 rounded hover:bg-[#D6D6D6] hover:rounded-[52px] dark:border dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#2e2e2e]",
         defaultStable:
-          "bg-grey-90 text-grey-10 rounded-md hover:bg-[#D6D6D6] hover:rounded-md dark:border dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#2e2e2e]",
+          "bg-grey-90 text-grey-10 rounded-md hover:bg-[#D6D6D6] dark:border dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#2e2e2e]",
         primary:
           "bg-primary-50 text-white rounded-md hover:bg-[#2454c4] dark:hover:bg-[#2a5ad0]",
         warning: "bg-warning-200 text-white rounded-md hover:bg-warning-300 ",
