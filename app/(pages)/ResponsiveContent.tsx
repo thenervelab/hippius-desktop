@@ -7,6 +7,7 @@ import MigrationBanner from "@/components/ui/MigrationBanner";
 import CreditsExhaustedBanner from "@/components/billing/CreditsExhaustedBanner";
 import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert";
 import FileDetailsPanel from "../components/page-sections/drive/FileDetailsPanel";
+// import SyncWidgetPlayground2 from "@/app/(pages)/SyncWidgetPlayground2";
 
 export default function ResponsiveContent({
   children,
@@ -35,6 +36,7 @@ export default function ResponsiveContent({
               route — the previous FilesContainer-only mount missed
               users whose last-visited page was /wallet, /billing, etc. */}
           <SyncReauthRequiredAlert className="mt-2" />
+          {/* <SyncWidgetPlayground2 /> */}
         </div>
 
         {/* Scrollable content area — serves as container query context */}

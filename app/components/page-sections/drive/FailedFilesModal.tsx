@@ -3,35 +3,28 @@
 // user is offered three escape hatches per file: retry now, skip for
 // this session, or permanently exclude from sync.
 //
-// Design notes:
-// - Uses the shared `DialogContainer` with the center-on-desktop /
-//   bottom-sheet-on-mobile pattern, matching ShareFileModal and
-//   ConfirmDialog. The original implementation was bottom-pinned
-//   even on desktop, which read as a notification toast rather than
-//   a modal action surface.
-// - Sticky header and footer so a long failure list (50+ files) stays
-//   navigable without losing the page-level context or the Dismiss
-//   button. The list itself scrolls inside a fixed max-height.
-// - Bulk actions appear once there are 2+ items — most users with a
-//   storm of failures want all-or-nothing, and per-row buttons alone
-//   force them to click N times. Bulk Retry/Skip fire immediately
-//   (non-destructive); bulk Exclude routes through ConfirmDialog
-//   because it's both destructive and irreversible from this surface.
-// - Per-row buttons remain inline (rather than a 3-dot menu) because
-//   triage is the common case here — hiding actions behind an extra
-//   click defeats the dialog's purpose. Compact text labels with
-//   destructive-styled Exclude keep the visual hierarchy clear.
+// Chrome is the shared `FramedDialog` (decoration grid + icon badge +
+// centered title + close button), so light/dark theming, padding,
+// and the close-on-outside-click semantics match every other dialog
+// in the app. Buttons are the shared `Button` UI primitive so the
+// hover / active / corner-dot motion is consistent app-wide.
+//
+// Bulk actions appear once there are 2+ items — most users with a
+// storm of failures want all-or-nothing, and per-row buttons alone
+// force them to click N times. Bulk Retry/Skip fire immediately
+// (non-destructive); bulk Exclude routes through ConfirmDialog
+// because it's both destructive and irreversible from this surface.
 
 "use client";
 
 import { useCallback, useState } from "react";
 import { useAtom } from "jotai";
-import * as Dialog from "@radix-ui/react-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { AlertTriangle, X } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 
-import DialogContainer from "@/components/ui/DialogContainer";
+import { Button } from "@/components/ui/button";
+import FramedDialog from "@/components/ui/FramedDialog";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
 import { failedFilesAtom, type FailedFileInfo } from "@/lib/store/syncAtoms";
@@ -54,11 +47,9 @@ const ACTION_TO_TOAST: Record<Action, string> = {
   exclude: "File permanently excluded from sync",
 };
 
-/**
- * Stable identity key for a failed file. (label, path) is the unique
- * pair the Rust IPC keys on, and we use the same shape locally so
- * optimistic-remove and per-row "in flight" tracking stay aligned.
- */
+// (label, path) is the unique pair the Rust IPC keys on; mirror it
+// locally so optimistic-remove and per-row "in flight" tracking stay
+// aligned across re-renders.
 function rowKey(file: FailedFileInfo): string {
   return `${file.label}/${file.path}`;
 }
@@ -67,9 +58,9 @@ export default function FailedFilesModal() {
   const [failedFiles, setFailedFiles] = useAtom(failedFilesAtom);
   const open = failedFiles !== null && failedFiles.length > 0;
   // Per-row action in flight — keys are `rowKey(file)`. Disables that
-  // row's buttons and shows a subtle pending state so a double-click
-  // can't fire the same IPC twice and a slow IPC can't leave the user
-  // wondering whether their click registered.
+  // row's buttons so a double-click can't fire the same IPC twice and
+  // a slow IPC can't leave the user wondering whether their click
+  // registered.
   const [inFlight, setInFlight] = useState<Set<string>>(new Set());
   const [excludeAllOpen, setExcludeAllOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -88,9 +79,6 @@ export default function FailedFilesModal() {
   const runAction = useCallback(
     async (file: FailedFileInfo, action: Action) => {
       const key = rowKey(file);
-      // Bail if this row already has an action in flight — prevents the
-      // "click Retry, then click Skip a beat later" race that would
-      // double-IPC and double-toast.
       if (inFlight.has(key)) return;
       setInFlight((prev) => new Set(prev).add(key));
       try {
@@ -118,11 +106,9 @@ export default function FailedFilesModal() {
       const targets = failedFiles ?? [];
       if (targets.length === 0) return;
       setBulkBusy(true);
-      // Fire all IPC calls in parallel — each one is independent, and
-      // sequential awaits on a 50-file storm would feel laggy. We use
       // allSettled so a single Rust failure (e.g. file already removed
-      // upstream) doesn't drop the rest. Any failures get rolled into
-      // a single error toast at the end so the user isn't spammed.
+      // upstream) doesn't drop the rest. Failures get rolled into a
+      // single error toast so the user isn't spammed.
       const results = await Promise.allSettled(
         targets.map((file) =>
           invoke(ACTION_TO_COMMAND[action], {
@@ -173,112 +159,88 @@ export default function FailedFilesModal() {
   const showBulkActions = count >= 2;
 
   return (
-    <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && handleDismiss()}>
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[36rem] h-fit">
-        <Dialog.Title className="sr-only">Sync Issues</Dialog.Title>
-        <Dialog.Description className="sr-only">
-          Files that have failed to sync after multiple attempts. Choose
-          to retry, skip, or permanently exclude each.
-        </Dialog.Description>
+    <>
+      <FramedDialog
+        open={open}
+        onClose={handleDismiss}
+        title="Sync Issues"
+        icon={<AlertTriangle className="size-5 text-white" />}
+        iconBgClassName="bg-warning-50"
+        borderClassName="bg-warning-50"
+        maxWidth="max-w-[685px]"
+        cardClassName="bg-white dark:bg-[#161616]"
+      >
+        <p className="mb-5 text-center text-sm font-medium leading-5 text-grey-50 dark:text-grey-dark-700">
+          {count === 1
+            ? "1 file failed to sync after multiple attempts. Choose to retry, skip, or permanently exclude it."
+            : `${count} files failed to sync after multiple attempts. Choose to retry, skip, or permanently exclude each.`}
+        </p>
 
-        {/* Mobile accent bar — matches ShareFileModal / ConfirmDialog */}
-        <div className="h-2 bg-warning-50 md:hidden" />
-
-        {/* Header. items-center pairs the icon with the title+subtitle
-            block as a single vertically-centered unit, instead of
-            top-aligning the icon and leaving a visual jog when the
-            subtitle wraps. Tight `leading-tight` + `mt-0.5` keeps the
-            two text lines visually paired rather than reading as two
-            separate paragraphs. */}
-        <div className="flex items-center gap-3 px-5 py-4 border-b border-grey-80">
-          <div className="size-10 rounded-lg bg-warning-90 flex items-center justify-center shrink-0">
-            <AlertTriangle className="size-5 text-warning-50" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="text-base font-semibold text-grey-10 leading-tight">
-              Sync Issues
-            </h2>
-            <p className="text-xs text-grey-50 leading-tight mt-0.5">
-              {count === 1
-                ? "1 file failed to sync after multiple attempts."
-                : `${count} files failed to sync after multiple attempts.`}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={handleDismiss}
-            aria-label="Close"
-            className="shrink-0 p-1 rounded text-grey-50 hover:text-grey-10 hover:bg-grey-90 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-50"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-
-        {/* Bulk actions — only when triaging more than one file is
-            actually faster than per-row clicks. */}
         {showBulkActions && (
-          <div className="flex items-center justify-between gap-2 px-5 py-3 bg-grey-90 border-b border-grey-80">
-            <span className="text-xs text-grey-50">Apply to all {count} files:</span>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-grey-80 bg-grey-95/40 px-3 py-2 dark:border-[#2c2c2c] dark:bg-[#1f1f1f]/60">
+            <span className="text-xs font-medium text-grey-50 dark:text-grey-dark-700">
+              Apply to all {count} files:
+            </span>
             <div className="flex items-center gap-2">
-              <BulkButton
+              <Button
+                variant="defaultStable"
+                size="sm"
                 onClick={() => runBulk("retry")}
                 disabled={bulkBusy}
-                tone="default"
               >
                 Retry all
-              </BulkButton>
-              <BulkButton
+              </Button>
+              <Button
+                variant="defaultStable"
+                size="sm"
                 onClick={() => runBulk("skip")}
                 disabled={bulkBusy}
-                tone="default"
               >
                 Skip all
-              </BulkButton>
-              <BulkButton
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="text-white"
                 onClick={() => setExcludeAllOpen(true)}
                 disabled={bulkBusy}
-                tone="danger"
               >
                 Exclude all
-              </BulkButton>
+              </Button>
             </div>
           </div>
         )}
 
-        {/* Scrollable list. Cap the list (not the whole dialog) so the
-            header and footer always stay visible — the alternative
-            (flex + min-h-0) requires the parent to have a defined
-            height, which `h-fit` doesn't provide.
-
-            `scrollbar-gutter: stable` reserves space for the scrollbar
-            even when the content fits without scrolling, so the file
-            rows' right edge always lines up with the bulk-actions row
-            and the footer. Without it the scrollbar consumes ~14px on
-            the right of overflowing rows, pushing per-row buttons left
-            of the bulk Exclude all / Dismiss buttons stacked above and
-            below them. */}
-        <div className="max-h-[24rem] overflow-y-auto custom-scrollbar-thin [scrollbar-gutter:stable]">
-          {failedFiles?.map((file) => (
+        {/* File list. Cap inside the dialog so the FramedDialog scrollable
+            content area never has to scroll for the chrome — only the
+            file list itself scrolls when there are many failures. */}
+        <div className="mb-5 max-h-[22rem] overflow-y-auto rounded-md border border-grey-80 bg-grey-95/40 dark:border-[#2c2c2c] dark:bg-[#1f1f1f]/60 [scrollbar-gutter:stable]">
+          {failedFiles?.map((file, idx) => (
             <FileRow
               key={rowKey(file)}
               file={file}
               busy={inFlight.has(rowKey(file))}
               onAction={runAction}
+              isLast={idx === count - 1}
             />
           ))}
         </div>
 
-        {/* Footer */}
-        <div className="flex justify-end gap-2 px-5 py-3 border-t border-grey-80">
-          <button
-            type="button"
-            onClick={handleDismiss}
-            className="px-4 py-2 text-sm font-medium rounded border border-grey-80 bg-grey-100 text-grey-10 hover:bg-grey-90 active:bg-grey-80 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-50"
-          >
-            Dismiss
-          </button>
-        </div>
-      </DialogContainer>
+        <Button
+          // `defaultStable` keeps the rounded-md shape on hover — the
+          // `default` variant morphs to a pill, which reads wrong on
+          // a full-width footer button.
+          variant="defaultStable"
+          className={cn(
+            "h-[52px] w-full border border-[#e3e3e3] !bg-transparent text-grey-10",
+            "hover:!bg-grey-90",
+            "dark:border-[#494949] dark:!bg-transparent dark:text-white dark:hover:!bg-[#2c2c2c]",
+          )}
+          onClick={handleDismiss}
+        >
+          Dismiss
+        </Button>
+      </FramedDialog>
 
       <ConfirmDialog
         open={excludeAllOpen}
@@ -291,7 +253,7 @@ export default function FailedFilesModal() {
         onConfirm={() => runBulk("exclude")}
         isLoading={bulkBusy}
       />
-    </Dialog.Root>
+    </>
   );
 }
 
@@ -299,9 +261,10 @@ interface FileRowProps {
   file: FailedFileInfo;
   busy: boolean;
   onAction: (file: FailedFileInfo, action: Action) => void;
+  isLast: boolean;
 }
 
-function FileRow({ file, busy, onAction }: FileRowProps) {
+function FileRow({ file, busy, onAction, isLast }: FileRowProps) {
   const { fileFormat } = getFilePartsFromFileName(file.fileName);
   const fileType = getFileTypeFromExtension(fileFormat || null) ?? undefined;
   const { icon: Icon, color } = getFileIcon(fileType, false);
@@ -309,109 +272,57 @@ function FileRow({ file, busy, onAction }: FileRowProps) {
   return (
     <div
       className={cn(
-        "flex items-center gap-3 px-5 py-3 border-b border-grey-80 last:border-b-0 transition-opacity",
+        "flex items-center gap-3 px-3 py-3 transition-opacity",
+        !isLast && "border-b border-grey-80 dark:border-[#2c2c2c]",
         busy && "opacity-60",
       )}
     >
-      {/* Icon flush-left so its visual left edge lines up with the
-          "Apply to all" label and the page header above. The previous
-          size-8 centering wrapper added a 6px offset because a size-5
-          icon centered inside a size-8 box leaves 6px on each side. */}
       <Icon className={cn("size-5 shrink-0", color)} />
 
       <div className="flex-1 min-w-0">
         <MiddleTruncatedName
           name={file.fileName}
-          className="text-sm font-medium text-grey-10"
+          className="text-sm font-medium text-grey-10 dark:text-white"
         />
-        <div className="flex items-center gap-1.5 mt-0.5 text-xs text-grey-50 min-w-0">
+        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-grey-50 dark:text-grey-dark-600">
           <span className="truncate">{file.error || "Sync failed"}</span>
-          <span className="text-grey-70">·</span>
-          <span className="shrink-0 px-1.5 py-0.5 rounded bg-grey-90 text-grey-30 font-medium">
+          <span className="text-grey-70 dark:text-grey-dark-400">·</span>
+          <span className="shrink-0 rounded bg-grey-90 px-1.5 py-0.5 font-medium text-grey-30 dark:bg-[#2c2c2c] dark:text-grey-dark-800">
             {file.label}
           </span>
         </div>
       </div>
 
-      <div className="shrink-0 flex items-center gap-1.5">
-        <RowButton
+      <div className="flex shrink-0 items-center gap-1.5">
+        <Button
+          variant="defaultStable"
+          size="sm"
           onClick={() => onAction(file, "retry")}
           disabled={busy}
-          tone="default"
         >
           Retry
-        </RowButton>
-        <RowButton
+        </Button>
+        <Button
+          variant="defaultStable"
+          size="sm"
           onClick={() => onAction(file, "skip")}
           disabled={busy}
-          tone="default"
         >
           Skip
-        </RowButton>
-        <RowButton
+        </Button>
+        <Button
+          variant="destructive"
+          size="sm"
+          className="text-white"
           onClick={() => onAction(file, "exclude")}
-          disabled={busy}
-          tone="danger"
+          // Title is the only signal that Exclude is irreversible — bulk
+          // exclude routes through ConfirmDialog, per-row does not.
           title="Permanently exclude this file from sync"
+          disabled={busy}
         >
           Exclude
-        </RowButton>
+        </Button>
       </div>
     </div>
-  );
-}
-
-interface ButtonProps {
-  onClick: () => void;
-  disabled?: boolean;
-  tone: "default" | "danger";
-  title?: string;
-  children: React.ReactNode;
-}
-
-/**
- * Per-row action button. `tone="danger"` swaps the hover state to a
- * destructive red so the user has a clear visual distinction between
- * the safe Retry/Skip and the irreversible Exclude.
- */
-function RowButton({ onClick, disabled, tone, title, children }: ButtonProps) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      className={cn(
-        "px-2.5 py-1 text-xs font-medium rounded border transition-colors focus:outline-none focus-visible:ring-2 disabled:opacity-50 disabled:cursor-not-allowed",
-        tone === "danger"
-          ? "border-error-90 text-error-50 hover:bg-error-50 hover:text-white hover:border-error-50 active:bg-error-60 focus-visible:ring-error-50"
-          : "border-grey-80 bg-grey-90 text-grey-10 hover:bg-primary-50 hover:text-white hover:border-primary-50 active:bg-primary-70 focus-visible:ring-primary-50",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-/**
- * Bulk action button. Same visual contract as `RowButton` but slightly
- * larger so the bulk row reads as the "primary path" when there are
- * many failures.
- */
-function BulkButton({ onClick, disabled, tone, children }: ButtonProps) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        "px-3 py-1.5 text-xs font-medium rounded border transition-colors focus:outline-none focus-visible:ring-2 disabled:opacity-50 disabled:cursor-not-allowed",
-        tone === "danger"
-          ? "border-error-90 text-error-50 bg-grey-100 hover:bg-error-50 hover:text-white hover:border-error-50 active:bg-error-60 focus-visible:ring-error-50"
-          : "border-grey-80 bg-grey-100 text-grey-10 hover:bg-primary-50 hover:text-white hover:border-primary-50 active:bg-primary-70 focus-visible:ring-primary-50",
-      )}
-    >
-      {children}
-    </button>
   );
 }
