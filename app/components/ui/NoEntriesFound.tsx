@@ -255,18 +255,23 @@ const NoEntriesFound = ({
                 // tailwind-merge pass collapses the override, so we
                 // bypass the variant indirection and write the warning
                 // colour directly.
-                <button
-                  type="button"
+
+                <Button
+                  variant="warning"
+                  size="auto"
                   onClick={handlePrimaryClick}
                   disabled={isLoading}
-                  className="flex-1 h-9 rounded-[10px] flex items-center justify-center gap-1 px-3 bg-warning-200 hover:bg-warning-300 text-white text-[14px] font-medium tracking-[-0.28px] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className={cn(
+                    "h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px]",
+                    "font-geist  leading-[1.109] flex-1 h-9 rounded-[10px] px-3 text-[14px] font-medium tracking-[-0.28px]",
+                  )}
                 >
                   {isLoading ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : (
                     <span>{buttonText}</span>
                   )}
-                </button>
+                </Button>
               ) : (
                 <CreateButton
                   text={buttonText}

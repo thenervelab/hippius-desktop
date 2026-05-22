@@ -119,14 +119,44 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
     return () => ro.disconnect();
   }, []);
 
-  const values = useMemo(() => data.map((d) => d.balance || 0), [data]);
+  // Empty-data fallback: substitute 7 zero-valued points for the past 7 days
+  // so a flat line + area still render at the baseline instead of a blank
+  // chart. Real ISO dates let the parent's `formatTooltipValue` produce
+  // normal-looking "Monday, Nov 17 / 0" tooltips on hover.
+  const isEmpty = !data.length;
+  const displayData: ChartPoint[] = useMemo(() => {
+    if (data.length) return data;
+    const now = new Date();
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(now);
+      d.setDate(d.getDate() - (6 - i));
+      const iso = d.toISOString();
+      return {
+        x: iso,
+        balance: 0,
+        formattedBalance: "0",
+        timestamp: iso,
+        dayLabel: d
+          .toLocaleDateString("en-US", { weekday: "short" })
+          .toUpperCase(),
+      };
+    });
+  }, [data]);
+
+  const values = useMemo(
+    () => displayData.map((d) => d.balance || 0),
+    [displayData],
+  );
   const maxValue = useMemo(
     () => (values.length ? Math.max(...values, 0.01) : 1),
     [values],
   );
 
   const yTicks = useMemo(() => {
-    if (!values.length) return [0, 25, 50, 75, 100];
+    // Treat "no real data" or "all zero" the same: show a sensible 0–100 axis
+    // instead of niceYTicks(0.01) producing tiny fractional ticks.
+    if (isEmpty || values.every((v) => v === 0))
+      return [0, 25, 50, 75, 100];
     if (maxValue <= 0) return [0, 25, 50, 75, 100];
 
     const rawStep = maxValue / (Y_TICK_COUNT - 1);
@@ -147,7 +177,7 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
       ticks.push(Math.round(v * 1e6) / 1e6);
     }
     return ticks;
-  }, [maxValue, values.length]);
+  }, [isEmpty, maxValue, values]);
 
   const yMax = yTicks[yTicks.length - 1] || 1;
   const yLabelPrecision = useMemo(() => {
@@ -157,14 +187,14 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
   }, [yTicks, yMax]);
 
   const points = useMemo(() => {
-    if (!data.length) return [];
-    const len = data.length;
-    return data.map((_, i) => {
+    if (!displayData.length) return [];
+    const len = displayData.length;
+    return displayData.map((_, i) => {
       const x = len === 1 ? VB_W / 2 : (i / (len - 1)) * VB_W;
       const y = CHART_PAD_TOP + CHART_H - ((values[i] || 0) / yMax) * CHART_H;
       return { x, y };
     });
-  }, [data, values, yMax]);
+  }, [displayData, values, yMax]);
 
   const linePath = useMemo(
     () =>
@@ -185,11 +215,7 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
   const gradientId = "available-credits-grad";
 
   const xLabels = useMemo(() => {
-    if (!data.length) {
-      const days = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
-      return days.map((d, i) => ({ pct: (i / 6) * 100, label: d }));
-    }
-    const len = data.length;
+    const len = displayData.length;
 
     // Truncate single-word day names ("WEDNESDAY") to 3 chars ("WED") so they
     // fit without overlap. Multi-token labels ("MAR 5") are left untouched.
@@ -202,7 +228,7 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
     };
 
     const isSmallScreen = containerWidth > 0 && containerWidth < 480;
-    const longestLabel = data.reduce((max, d) => {
+    const longestLabel = displayData.reduce((max, d) => {
       const l = shortenLabel(d.dayLabel ?? "").length;
       return l > max ? l : max;
     }, 3);
@@ -228,11 +254,11 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
       const dataIdx =
         count === 1 ? 0 : Math.round((i * (len - 1)) / (count - 1));
       const pct = len === 1 ? 50 : (dataIdx / (len - 1)) * 100;
-      const raw = data[dataIdx]?.dayLabel ?? "";
+      const raw = displayData[dataIdx]?.dayLabel ?? "";
       labels.push({ pct, label: shortenLabel(raw) });
     }
     return labels;
-  }, [data, containerWidth]);
+  }, [displayData, containerWidth]);
 
   const yGridLines = useMemo(() => {
     return yTicks.map((tick) => {
@@ -258,7 +284,7 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
 
       let closest = 0;
       let minDist = Infinity;
-      const len = data.length;
+      const len = displayData.length;
       for (let i = 0; i < len; i++) {
         const ptFrac = len === 1 ? 0.5 : i / (len - 1);
         const d = Math.abs(frac - ptFrac);
@@ -275,23 +301,23 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
         y: (points[closest].y / VB_H) * chartHeight,
       });
     },
-    [points, data.length, Y_AXIS_W],
+    [points, displayData.length, Y_AXIS_W],
   );
 
   const handleMouseLeave = useCallback(() => setHoverIndex(null), []);
 
   const tooltipContent = useMemo(() => {
-    if (hoverIndex === null || !data[hoverIndex]) return null;
-    const point = data[hoverIndex];
+    if (hoverIndex === null || !displayData[hoverIndex]) return null;
+    const point = displayData[hoverIndex];
     if (formatTooltipValue) return formatTooltipValue(point);
     return `${point.formattedBalance ?? point.balance}`;
-  }, [hoverIndex, data, formatTooltipValue]);
+  }, [hoverIndex, displayData, formatTooltipValue]);
 
   const hoverPct = useMemo(() => {
-    if (hoverIndex === null || !data.length) return null;
-    const len = data.length;
+    if (hoverIndex === null || !displayData.length) return null;
+    const len = displayData.length;
     return len === 1 ? 50 : (hoverIndex / (len - 1)) * 100;
-  }, [hoverIndex, data.length]);
+  }, [hoverIndex, displayData.length]);
 
   // The outer wrapper always renders with `containerRef` attached so the
   // ResizeObserver fires on first paint and stays bound across loading →
