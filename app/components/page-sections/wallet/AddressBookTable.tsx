@@ -23,10 +23,11 @@ import { CopyableCell } from "@/components/ui/alt-table";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
 import { Button } from "@/components/ui/button";
 import NoEntriesFound from "@/components/ui/NoEntriesFound";
-import { Edit, Loader2, MoreVertical, Trash } from "lucide-react";
+import { Edit, Loader2, MoreVertical, Plus, Trash, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { deleteContact } from "@/app/lib/helpers/addressBookDb";
+import ConfirmationDialog from "@/app/components/ConfirmationDialog";
 import EditAddressDialog from "./EditAddressDialog";
 import { formatDate } from "./TransactionHistoryTable";
 
@@ -64,6 +65,7 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
 }) => {
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [showEditDialog, setShowEditDialog] = useState(false);
+  const [contactToDelete, setContactToDelete] = useState<Contact | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
@@ -81,26 +83,29 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
     setShowEditDialog(true);
   }, []);
 
-  const handleDelete = useCallback(
-    async (contact: Contact) => {
-      try {
-        setIsDeleting(true);
-        const success = await deleteContact(contact.id);
-        if (success) {
-          toast.success("Address deleted successfully");
-          onContactChanged();
-        } else {
-          toast.error("Failed to delete address");
-        }
-      } catch (error) {
-        toast.error("An error occurred while deleting the address");
-        console.error("Error deleting address:", error);
-      } finally {
-        setIsDeleting(false);
+  const requestDelete = useCallback((contact: Contact) => {
+    setContactToDelete(contact);
+  }, []);
+
+  const confirmDelete = useCallback(async () => {
+    if (!contactToDelete) return;
+    try {
+      setIsDeleting(true);
+      const success = await deleteContact(contactToDelete.id);
+      if (success) {
+        toast.success("Address deleted successfully");
+        onContactChanged();
+      } else {
+        toast.error("Failed to delete address");
       }
-    },
-    [onContactChanged],
-  );
+    } catch (error) {
+      toast.error("An error occurred while deleting the address");
+      console.error("Error deleting address:", error);
+    } finally {
+      setIsDeleting(false);
+      setContactToDelete(null);
+    }
+  }, [contactToDelete, onContactChanged]);
 
   const columns = useMemo(
     () => [
@@ -120,15 +125,27 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
             copyAbleText={info.getValue()}
             title="Copy Address"
             toastMessage="Address Copied Successfully!"
-            isTable
+            textColor="text-grey-20 dark:text-grey-dark-200"
+            // No `isTable` / `numberOfCharactersFromStartAndEnd` here:
+            // FROM/TO in the transaction history share a row 50/50
+            // and need fixed truncation, but the address book has one
+            // address column with plenty of room. With both props
+            // omitted, CopyableCell falls through to its breakpoint
+            // path — which returns the full SS58 address on
+            // laptop/desktop/large-desktop (≥ 1024px) so the user
+            // can see the whole value.
           />
         ),
       }),
       col.accessor("dateAdded", {
         header: "DATE ADDED",
         enableSorting: true,
+        meta: {
+          headerClassName: "w-[20%]",
+          cellClassName: "w-[20%]",
+        },
         cell: (info) => (
-          <span className="font-medium text-grey-dark-800 dark:text-grey-dark-800">
+          <span className="font-medium whitespace-nowrap text-grey-dark-800 dark:text-grey-dark-500">
             {formatDate(new Date(info.getValue()), "long")}
           </span>
         ),
@@ -136,6 +153,10 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
       col.display({
         id: "actions",
         header: "",
+        meta: {
+          headerClassName: "w-[36px] px-0",
+          cellClassName: "w-[36px] px-0",
+        },
         cell: ({ row }) => {
           const contact = row.original;
           const items = [
@@ -147,7 +168,7 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
             {
               icon: <Trash className="size-4" />,
               itemTitle: "Delete",
-              onItemClick: () => handleDelete(contact),
+              onItemClick: () => requestDelete(contact),
               variant: "destructive" as const,
             },
           ];
@@ -157,7 +178,7 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
                 <Button
                   variant="ghost"
                   size="auto"
-                  className="h-8 w-8 p-0 text-grey-70"
+                  className="h-8 w-8 p-0 text-grey-70 dark:text-grey-dark-500"
                 >
                   <MoreVertical className="size-4" />
                 </Button>
@@ -167,7 +188,7 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
         },
       }),
     ],
-    [handleEdit, handleDelete],
+    [handleEdit, requestDelete],
   );
 
   const table = useReactTable({
@@ -220,6 +241,7 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
           title="No saved addresses yet"
           description="Save the addresses you send to most often so you don't have to paste an SS58 every time."
           buttonText={onAddAddress ? "Add Address" : undefined}
+          buttonIcon={<Plus className="size-4" />}
           onButtonClick={onAddAddress}
           cardView={false}
           className="p-6 sm:p-10 rounded-[8px]"
@@ -314,6 +336,25 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
           }}
         />
       )}
+
+      <ConfirmationDialog
+        open={!!contactToDelete}
+        onClose={() => !isDeleting && setContactToDelete(null)}
+        onConfirm={confirmDelete}
+        onBack={() => setContactToDelete(null)}
+        heading="Delete Address"
+        text={
+          contactToDelete
+            ? `Are you sure you want to delete "${contactToDelete.name}" from your address book? This action cannot be undone.`
+            : ""
+        }
+        button={isDeleting ? "Deleting..." : "Delete Address"}
+        icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
+        iconBgColor="bg-[#fc7d73]"
+        confirmVariant="destructive"
+        disableButton={isDeleting}
+        disableBackButton={isDeleting}
+      />
     </>
   );
 };

@@ -4,7 +4,14 @@ use crate::app_state::AppState;
 use crate::error::AppError;
 use tracing::info;
 
+/// Address-book row sent to the frontend.
+///
+/// `camelCase` rename matches the TS interface in `addressBookDb.ts`; without
+/// it the frontend reads `walletAddress`/`dateAdded` as `undefined`, which
+/// silently rendered an empty WALLET ADDRESS cell and an "Invalid Date" in
+/// DATE ADDED — same convention `BalanceObject` uses (`billing/queries.rs`).
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Contact {
     pub id: i64,
     pub name: String,

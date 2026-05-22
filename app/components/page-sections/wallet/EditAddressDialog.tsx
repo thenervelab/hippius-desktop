@@ -106,15 +106,13 @@ const EditAddressDialog: React.FC<EditAddressDialogProps> = ({
       open={open}
       onClose={handleClose}
       title="Edit Address"
-      description="Update the name or wallet address for this contact."
+      description="Update a saved contact in your wallet address book."
       icon={<Icons.DocumentText className="size-4 text-white" />}
-      iconTitleGap="mt-4 mb-0"
-      titleDescriptionGap="mt-0"
-      maxWidth="max-w-[500px]"
-      contentClassName="px-4 pb-4 pt-5 sm:w-[420px] sm:px-5 sm:pb-5"
+      maxWidth="max-w-[600px]"
+      titleDescriptionGap="mt-2"
       footer={
         <WalletDialogFooter
-          primaryLabel={loading ? "Saving..." : "Save Changes"}
+          primaryLabel={loading ? "Saving..." : "Update Address"}
           secondaryLabel="Cancel"
           onPrimaryClick={handleSave}
           onSecondaryClick={handleClose}
@@ -123,11 +121,11 @@ const EditAddressDialog: React.FC<EditAddressDialogProps> = ({
         />
       }
     >
-      <div className="space-y-3.5">
+      <div className="space-y-4">
         <div className="space-y-2">
           <Label
             htmlFor="edit-contact-name"
-            className="text-[14px] font-medium leading-[normal] tracking-[-0.28px] text-[#7d7d7d]"
+            className="text-sm font-medium text-[#6c6c6c] dark:text-grey-dark-700"
           >
             Name
           </Label>
@@ -139,10 +137,7 @@ const EditAddressDialog: React.FC<EditAddressDialogProps> = ({
             onChange={handleNameChange}
             aria-invalid={!!nameError}
             disabled={loading}
-            className={cn(
-              "h-12 text-base font-medium",
-              nameError && "border-error-50",
-            )}
+            className={cn(nameError && "border-error-50")}
           />
           {nameError ? (
             <div className="flex items-center gap-2 text-error-70 text-sm font-medium">
@@ -155,7 +150,7 @@ const EditAddressDialog: React.FC<EditAddressDialogProps> = ({
         <div className="space-y-2">
           <Label
             htmlFor="edit-contact-address"
-            className="text-[14px] font-medium leading-[normal] tracking-[-0.28px] text-[#7d7d7d]"
+            className="text-sm font-medium text-[#6c6c6c] dark:text-grey-dark-700"
           >
             Address
           </Label>
@@ -167,10 +162,7 @@ const EditAddressDialog: React.FC<EditAddressDialogProps> = ({
             onChange={(e) => handleAddressChange(e.target.value)}
             aria-invalid={!!addressError}
             disabled={loading}
-            className={cn(
-              "h-12 text-base font-medium",
-              addressError && "border-error-50",
-            )}
+            className={cn(addressError && "border-error-50")}
           />
           {addressError ? (
             <div className="flex items-center gap-2 text-error-70 text-sm font-medium">
