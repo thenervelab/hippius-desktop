@@ -15,13 +15,13 @@ const VncConsole: React.FC<VncConsoleProps> = ({
 }) => {
   return (
     <div className=" relative w-full border border-grey-80 rounded-lg overflow-hidden r">
-      <ComingSoon
+      {/* <ComingSoon
         variant="white"
         overlay={true}
         blurIntensity="extraLight"
         position="top-right"
         size="small"
-      />
+      /> */}
       {/* Status Bar */}
       <div className=" w-full bg-white border-b border-grey-80 py-3.5 flex items-center justify-center">
         {isLoading ? (

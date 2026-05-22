@@ -1,21 +1,11 @@
-import React, { useState } from "react";
+import React from "react";
+import { cn } from "@/lib/utils";
 import InfoPanel from "./info-panel";
-import LabelWithIcon from "./label-with-icon";
 import ImageCell from "../instances-table/image-cell";
-import StatusCell from "../instances-table/status-cell";
 import { parseImageName } from "@/lib/utils/vmUtils";
 import TemplateItem from "@/components/vm/instance-details/template-item";
-import { Button as NewButton } from "@/components/ui/button/NewButton";
-import { MoreVertical } from "lucide-react";
-import { toast } from "sonner";
-import ChangeImageModal, { ChangeImageData } from "./change-image-modal";
-import useVMImages from "@/app/lib/hooks/api/useVMImages";
-import { useDeleteInstance } from "../hooks/useDeleteInstance";
+import { Button, Icons } from "../../ui";
 import { useStartStopInstance } from "../hooks/useStartStopInstance";
-import { useRebootInstance } from "../hooks/useRebootInstance";
-import { Icons } from "../../ui";
-import { ConfirmDialog } from "../../ui/ConfirmDialog";
-import TableActionMenu from "../../ui/alt-table/TableActionMenu";
 import { VMInstanceDetailsResponse } from "@/app/lib/hooks/api/useVMInstanceDetails";
 import Skeleton from "@/components/ui/skeleton";
 
@@ -25,296 +15,196 @@ interface VirtualMachineInfoProps {
   onRefresh?: () => void;
 }
 
+const STATUS_DOT_COLOR: Record<string, string> = {
+  running: "bg-success-40",
+  connected: "bg-success-40",
+  stopped: "bg-warning-50",
+  starting: "bg-primary-50",
+  stopping: "bg-[#BA66FF]",
+  pending: "bg-grey-dark-600",
+  spawning: "bg-grey-dark-600",
+  failed: "bg-error-50",
+  error: "bg-error-50",
+};
+
+const StatusBadge: React.FC<{ value: string }> = ({ value }) => {
+  const normalized = value.toLowerCase();
+  const dotColor = STATUS_DOT_COLOR[normalized] ?? "bg-grey-dark-600";
+  const label = value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+  return (
+    <div className="inline-flex items-center gap-[6px] rounded-[4px] bg-grey-light-500 px-[8px] py-[4px] dark:bg-black-500">
+      <span className={cn("size-[8px] rounded-full", dotColor)} />
+      <span className="text-[12px] font-medium leading-[18px] tracking-[-0.24px] text-black-700 dark:text-grey-light-300">
+        {label}
+      </span>
+    </div>
+  );
+};
+
+const ACTION_BUTTON_CLASS =
+  "h-[30px] gap-[6px] rounded-[7px] border border-grey-dark-100 bg-grey-light-100 px-[10px] text-[14px] font-medium leading-[20px] tracking-[-0.28px] text-black-700 hover:bg-grey-90 dark:border-black-300 dark:bg-black-500 dark:text-grey-light-300 dark:hover:bg-black-400";
+
 const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
   instanceData,
   isLoading,
   onRefresh,
 }) => {
-  const [openChangeImageModal, setOpenChangeImageModal] = useState(false);
-  const [openChangeInstanceModal, setOpenChangeInstanceModal] = useState(false);
-  const { data: vmImages } = useVMImages();
-
-  // Use delete instance hook with redirect
-  const { handleDeleteInstance, DeleteInstanceModal } = useDeleteInstance({
-    redirectOnDelete: true,
-  });
-
-  // Use start/stop instance hook with refresh callback
   const { handleStartStopInstance, StartStopConfirmModal } =
     useStartStopInstance({
       onSuccess: onRefresh,
     });
 
-  // Use reboot instance hook with refresh callback
-  const { handleRebootInstance, RebootConfirmModal } = useRebootInstance({
-    onSuccess: onRefresh,
-  });
+  const statusLower = instanceData?.status.toLowerCase();
+  const isStopped = statusLower === "stopped";
+  const canToggle = statusLower === "running" || statusLower === "stopped";
 
-  // Parse image name for ImageCell
-
-  const handleChangeImage = (data: ChangeImageData) => {
-    console.log("Change Image Data:", data);
-    setOpenChangeImageModal(false);
-    setOpenChangeInstanceModal(true);
+  const handleToggle = () => {
+    if (!instanceData) return;
+    handleStartStopInstance(
+      {
+        id: instanceData.id,
+        uuid: instanceData.uuid,
+        name: instanceData.name,
+        status: instanceData.status,
+        flavor: instanceData.flavor.name,
+        image: instanceData.image,
+        public_ip: instanceData.public_ip,
+        nebula_ip: instanceData.nebula_ip || null,
+        created_at: instanceData.created_at,
+      },
+      instanceData.status,
+    );
   };
 
-  const handleConfirmChangeInstance = () => {
-    setOpenChangeInstanceModal(false);
-    toast.success("Instance Image Changed Successfully");
-  };
-
-  const vmControlsMenu = instanceData ? (
-    <TableActionMenu
-      dropdownTitle="VM Controls"
-      disabled={isLoading}
-      items={[
-        {
-          icon:
-            instanceData.status.toLowerCase() === "stopped" ? (
-              <Icons.PlayCircle className="size-4" />
-            ) : (
-              <Icons.StopCircle className="size-4" />
-            ),
-          disabled:
-            instanceData.status.toLowerCase() !== "running" &&
-            instanceData.status.toLowerCase() !== "stopped",
-          itemTitle:
-            instanceData.status.toLowerCase() === "stopped"
-              ? "Start Instance"
-              : "Stop Instance",
-          onItemClick: () =>
-            handleStartStopInstance(
-              {
-                id: instanceData.id,
-                uuid: instanceData.uuid,
-                name: instanceData.name,
-                status: instanceData.status,
-                flavor: instanceData.flavor.name,
-                image: instanceData.image,
-                public_ip: instanceData.public_ip,
-                nebula_ip: instanceData.nebula_ip || null,
-                created_at: instanceData.created_at,
-              },
-              instanceData.status,
-            ),
-        },
-        {
-          icon: <Icons.Refresh2 className="size-4" />,
-          itemTitle: "Reboot Instance",
-          disabled: instanceData.status.toLowerCase() !== "running",
-          onItemClick: () =>
-            handleRebootInstance({
-              id: instanceData.id,
-              uuid: instanceData.uuid,
-              name: instanceData.name,
-              status: instanceData.status,
-              flavor: instanceData.flavor.name,
-              image: instanceData.image,
-              public_ip: instanceData.public_ip,
-              nebula_ip: instanceData.nebula_ip || null,
-              created_at: instanceData.created_at,
-            }),
-        },
-        {
-          icon: <Icons.Trash className="size-4" />,
-          itemTitle: "Delete Instance",
-          onItemClick: () =>
-            handleDeleteInstance({
-              id: instanceData.id,
-              uuid: instanceData.uuid,
-              name: instanceData.name,
-              status: instanceData.status,
-              flavor: instanceData.flavor.name,
-              image: instanceData.image,
-              public_ip: instanceData.public_ip,
-              nebula_ip: instanceData.nebula_ip || null,
-              created_at: instanceData.created_at,
-            }),
-          variant: "destructive",
-        },
-      ]}
+  const statusAction = instanceData ? (
+    <Button
+      variant="defaultStable"
+      size="noStyle"
+      className={ACTION_BUTTON_CLASS}
+      disabled={!canToggle || isLoading}
+      onClick={handleToggle}
     >
-      <NewButton
-        variant="ghost"
-        size="noStyle"
-        className="px-1.5 py-1 flex gap-1 text-grey-10 border border-grey-80"
-      >
-        <span className="text-sm">VM Controls</span>
-        <MoreVertical className="size-4" />
-      </NewButton>
-    </TableActionMenu>
+      {isStopped ? (
+        <Icons.PlayCircle className="size-4" />
+      ) : (
+        <Icons.StopCircle className="size-4" />
+      )}
+      {isStopped ? "Start" : "Stop"}
+    </Button>
   ) : null;
 
   return (
-    <>
-      <InfoPanel
-        title="Virtual Machine Information"
-        icon={
-          <Icons.Driver className="size-[1.125rem] relative text-primary-50" />
-        }
-        headerAction={vmControlsMenu}
-      >
-        {/* Miner ID
-        <div className="mb-6">
-          <LabelWithIcon
-            icon={<Icons.UserSquare className="size-4" />}
-            label="Miner ID"
-          />
-          <div className="mt-1">
-            <CopyableText
-              value={instance.minerId}
-              displayMode="truncate"
-              textClassName="text-grey-10 font-medium text-base"
-              iconClassName="text-grey-50 p-1 bg-grey-90 rounded w-6 h-6"
-              maxWidth="w-full"
-            />
-          </div>
-        </div> */}
+    <div className="flex flex-col gap-[10px]">
+      <h2 className="text-[18px] font-medium leading-normal text-black-700 dark:text-grey-light-100">
+        Virtual Machine Information
+      </h2>
 
-        {/* Image */}
-        <div className="mb-6">
-          <LabelWithIcon
-            icon={<Icons.CpuCharge className="size-4" />}
+      <div className="flex flex-col gap-[10px]">
+        <div className="grid grid-cols-1 @sm:grid-cols-2 gap-[10px]">
+          <InfoPanel
             label="Image"
-          />
-          <div className="mt-1 flex justify-between gap-2">
+            icon={<Icons.Microchip className="size-[18px]" />}
+            bodyClassName="h-[44px] py-0 flex items-center"
+          >
             {isLoading ? (
-              <Skeleton className="!h-[1.625rem] !w-[9.375rem]" />
+              <Skeleton className="!h-[20px] !w-[150px] dark:!bg-black-300" />
             ) : instanceData ? (
-              <ImageCell
-                iconClass="bg-[#F7F7F7] p-[0.3125rem] size-[1.625rem]"
-                value={parseImageName(instanceData.image)}
-              />
+              <ImageCell value={parseImageName(instanceData.image)} />
             ) : null}
-            {/* <NewButton
-              variant="ghost"
-              size="noStyle"
-              className="px-1.5 py-1 flex gap-1 text-grey-50 border border-grey-80"
-              onClick={() => setOpenChangeImageModal(true)}
-            >
-              <Icons.Refresh2 className="size-4" />
-              <span className="text-sm">Change Image</span>
-            </NewButton> */}
-          </div>
-        </div>
+          </InfoPanel>
 
-        {/* Status */}
-        <div className="mb-6">
-          <LabelWithIcon
-            icon={<Icons.Status className="size-4" />}
+          <InfoPanel
             label="Status"
-          />
-          <div className="mt-1">
+            icon={<Icons.DashedCircle className="size-[18px]" />}
+            action={statusAction}
+            bodyClassName="h-[44px] py-0 flex items-center"
+          >
             {isLoading ? (
-              <Skeleton className="!h-[1.5625rem] !w-[9.375rem]" />
+              <Skeleton className="!h-[20px] !w-[80px] dark:!bg-black-300" />
             ) : instanceData ? (
-              <StatusCell
-                className="p-2 bg-[#F7F7F7] w-min"
-                value={instanceData.status}
+              <StatusBadge value={instanceData.status} />
+            ) : null}
+          </InfoPanel>
+        </div>
+
+        <InfoPanel
+          label="Model"
+          icon={<Icons.GripTriple className="size-[18px]" />}
+          bodyClassName="h-[161px] py-0 flex flex-col justify-center"
+        >
+          <div className="flex flex-col gap-[12px]">
+            <div className="flex gap-[8px]">
+              <TemplateItem
+                label="Model"
+                value={
+                  isLoading ? (
+                    <Skeleton className="!h-[20px] !w-[80px] dark:!bg-black-300" />
+                  ) : (
+                    (instanceData?.flavor.name ?? "—")
+                  )
+                }
               />
-            ) : null}
+              <TemplateItem
+                label="RAM"
+                value={
+                  isLoading ? (
+                    <Skeleton className="!h-[20px] !w-[60px] dark:!bg-black-300" />
+                  ) : instanceData ? (
+                    `${(instanceData.flavor.memory_mb / 1024).toFixed(0)} GB`
+                  ) : (
+                    "—"
+                  )
+                }
+              />
+            </div>
+            <div className="flex gap-[8px]">
+              <TemplateItem
+                label="Processor"
+                value={
+                  isLoading ? (
+                    <Skeleton className="!h-[20px] !w-[80px] dark:!bg-black-300" />
+                  ) : instanceData ? (
+                    `${instanceData.flavor.cpu_cores} vCore${
+                      instanceData.flavor.cpu_cores > 1 ? "s" : ""
+                    }`
+                  ) : (
+                    "—"
+                  )
+                }
+              />
+              <TemplateItem
+                label="Storage"
+                value={
+                  isLoading ? (
+                    <Skeleton className="!h-[20px] !w-[60px] dark:!bg-black-300" />
+                  ) : instanceData ? (
+                    `${instanceData.flavor.disk_gb} GB`
+                  ) : (
+                    "—"
+                  )
+                }
+              />
+            </div>
           </div>
-        </div>
+        </InfoPanel>
 
-        {/* Template */}
-        <div className="mb-6">
-          <LabelWithIcon
-            icon={<Icons.Setting className="size-4" />}
-            label="Template"
-          />
-          <div className="grid grid-cols-2 gap-2 ">
-            {isLoading ? (
-              <>
-                <div className="bg-[#F7F7F7] p-2 rounded">
-                  <div className="text-grey-50 font-medium text-base">
-                    Model
-                  </div>
-                  <Skeleton className="!h-[1.25rem] !w-[5rem] mt-2" />
-                </div>
-                <div className="bg-[#F7F7F7] p-2 rounded">
-                  <div className="text-grey-50 font-medium text-base">RAM</div>
-                  <Skeleton className="!h-[1.25rem] !w-[5rem] mt-2" />
-                </div>
-                <div className="bg-[#F7F7F7] p-2 rounded">
-                  <div className="text-grey-50 font-medium text-base">
-                    Processor
-                  </div>
-                  <Skeleton className="!h-[1.25rem] !w-[5rem] mt-2" />
-                </div>
-                <div className="bg-[#F7F7F7] p-2 rounded">
-                  <div className="text-grey-50 font-medium text-base">
-                    Storage
-                  </div>
-                  <Skeleton className="!h-[1.25rem] !w-[5rem] mt-2" />
-                </div>
-              </>
-            ) : instanceData ? (
-              <>
-                <TemplateItem label="Model" value={instanceData.flavor.name} />
-                <TemplateItem
-                  label="RAM"
-                  value={`${(instanceData.flavor.memory_mb / 1024).toFixed(
-                    0,
-                  )} GB`}
-                />
-                <TemplateItem
-                  label="Processor"
-                  value={`${instanceData.flavor.cpu_cores} vCore${
-                    instanceData.flavor.cpu_cores > 1 ? "s" : ""
-                  }`}
-                />
-                <TemplateItem
-                  label="Storage"
-                  value={`${instanceData.flavor.disk_gb} GB`}
-                />
-              </>
-            ) : null}
-          </div>
-        </div>
-
-        {/* Created At */}
-        <div>
-          <LabelWithIcon
-            icon={<Icons.Calendar className="size-4" />}
-            label="Created At"
-          />
-          <div className="mt-1">
-            {isLoading ? (
-              <Skeleton className="!h-[1.25rem] !w-[12.5rem]" />
-            ) : instanceData ? (
-              <div className="text-grey-10 font-medium text-base">
-                {new Date(instanceData.created_at).toLocaleString()}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </InfoPanel>
-      <ChangeImageModal
-        open={openChangeImageModal}
-        onClose={() => setOpenChangeImageModal(false)}
-        onSubmit={handleChangeImage}
-        images={vmImages}
-      />
-
-      <ConfirmDialog
-        mode="branded"
-        open={openChangeInstanceModal}
-        onCancel={() => setOpenChangeInstanceModal(false)}
-        onBack={() => setOpenChangeInstanceModal(false)}
-        onConfirm={handleConfirmChangeInstance}
-        confirmText="Change Instance"
-        description="Are you sure you want to change this instance? This action will overwrite the instance"
-        title="Change Instance"
-        icon={<Icons.Refresh2 className="size-6 text-grey-100" />}
-        iconBgColor="bg-primary-50"
-      />
-
-      <DeleteInstanceModal />
+        <InfoPanel
+          label="Created At"
+          icon={<Icons.CalendarRange className="size-[18px]" />}
+          bodyClassName="h-[44px] py-0 flex items-center"
+        >
+          {isLoading ? (
+            <Skeleton className="!h-[20px] !w-[180px] dark:!bg-black-300" />
+          ) : instanceData ? (
+            <span className="text-[14px] font-medium leading-[22px] tracking-[-0.28px] text-black-700 dark:text-grey-light-300">
+              {new Date(instanceData.created_at).toLocaleString()}
+            </span>
+          ) : null}
+        </InfoPanel>
+      </div>
 
       <StartStopConfirmModal />
-
-      <RebootConfirmModal />
-    </>
+    </div>
   );
 };
 

@@ -69,13 +69,17 @@ const InstanceDetails: React.FC = () => {
       {/* Display content based on activeTab */}
       <div className="animate-in fade-in duration-300">
         {activeTab === "Dashboard" ? (
-          <div className="grid grid-cols-1 @md:grid-cols-2 gap-4 items-start">
+          <div className="grid grid-cols-1 @md:grid-cols-2 gap-[24px] items-start">
             <VirtualMachineInfo
               instanceData={instanceData}
               isLoading={loading}
               onRefresh={() => refetch()}
             />
-            <NetworksInfo instanceData={instanceData} isLoading={loading} />
+            <NetworksInfo
+              instanceData={instanceData}
+              isLoading={loading}
+              onRefresh={() => refetch()}
+            />
           </div>
         ) : activeTab === "Console" ? (
           <VncConsole

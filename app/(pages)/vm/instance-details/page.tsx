@@ -14,7 +14,7 @@ export default function InstanceDetailsPage() {
       mainText="Virtual Machines"
       subText="All virtual machines run in isolated enclaves with hardware-level encryption"
     >
-      <div className="mt-6">
+      <div className="m-3">
         <InstanceDetails />
       </div>
     </DashboardTitleWrapper>
