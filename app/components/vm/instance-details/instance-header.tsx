@@ -40,9 +40,10 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
         <div className="flex items-center gap-2 text-base @sm:text-[1.375rem] font-medium  text-black-700 dark:text-grey-light-100">
           <Link
             href="/vm"
-            className="text-black-700 hover:text-grey-40 dark:text-grey-light-100 dark:hover:text-grey-dark-400"
+            aria-label="Go back"
+            className="text-black-600/50 hover:text-grey-40 dark:text-grey-light-100 dark:hover:text-grey-dark-400"
           >
-            <Icons.ArrowLeft className="size-6" />
+            <Icons.ArrowLeft className="size-5" />
           </Link>
           <h1 className="text-nowrap">Instance Details</h1>
           <span className="text-grey-60">-</span>
@@ -53,12 +54,12 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
           )}
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2">
           {onRefresh && (
             <RefreshButton
               refetching={isRefetching}
               onClick={onRefresh}
-              className="!w-[30px] !h-[30px]"
+              className="!w-[26px] !h-[26px]"
               iconClassName="!size-[14px]"
             />
           )}

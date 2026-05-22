@@ -3,7 +3,6 @@
 import React, { useState } from "react";
 import { getFlavorCategory } from "@/lib/utils/vmUtils";
 import { useRouter } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
 import VMTemplateCard, { VMTemplate } from "./vm-template-card";
 import VMTemplateCardSkeleton from "./vm-template-card-skeleton";
 import * as TableModule from "@/components/ui/alt-table";
@@ -11,12 +10,13 @@ import * as TableModule from "@/components/ui/alt-table";
 import CreateVMModal, { VMConfigurationData } from "./create-vm-modal";
 import { usePagination } from "@/app/lib/hooks";
 import CustomTooltip2 from "../../ui/CustomTooltip2";
-import { Button } from "../../ui";
+import { Button, Icons } from "../../ui";
 import { InfoCircle } from "@/app/components/ui/icons";
 import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
 import NoEntriesFound from "../../ui/NoEntriesFound";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "@/lib/utils";
+import Link from "next/link";
 const VM_DOCS_URL =
   "https://docs.hippius.com/use/virtual-machines#create-a-virtual-machine";
 
@@ -106,10 +106,6 @@ const CreateVM: React.FC = () => {
     router.push("/vm");
   };
 
-  const handleBack = () => {
-    router.back();
-  };
-
   return (
     <div className="w-full">
       {/* Header — single row mirrors the console layout: back button +
@@ -118,14 +114,13 @@ const CreateVM: React.FC = () => {
           ask. */}
       <div className="flex items-center w-full justify-between gap-4 flex-wrap pb-3">
         <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
-          <button
-            type="button"
-            onClick={handleBack}
+          <Link
+            href="/vm"
             aria-label="Go back"
-            className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-grey-10/50 transition-colors hover:text-grey-10 dark:text-grey-light-100/60 dark:hover:text-grey-light-100"
+            className="text-black-600/50 hover:text-grey-40 dark:text-grey-light-100 dark:hover:text-grey-dark-400"
           >
-            <ArrowLeft className="size-[19px]" strokeWidth={1.75} />
-          </button>
+            <Icons.ArrowLeft className="size-5" />
+          </Link>
           <h1 className="text-[22px] @sm:text-[24px] font-medium leading-8 text-grey-10 dark:text-grey-light-100">
             Create New Virtual Machine
           </h1>
@@ -133,8 +128,8 @@ const CreateVM: React.FC = () => {
             side="bottom"
             tooltipContent="Choose a VM model that fits your workload requirements. Different models are optimized for specific use cases like general purpose computing, memory-intensive tasks, or storage operations."
           >
-            <span className="hidden @sm:inline-flex size-[30px] shrink-0 items-center justify-center rounded-[5.455px] border-[0.909px] border-grey-dark-100 bg-grey-light-700 shadow-[0px_0.909px_0px_0px_white,inset_0px_1.818px_0px_0px_white] dark:border-[#494949] dark:bg-black-300/70 dark:shadow-none">
-              <InfoCircle className="size-4 text-grey-50 opacity-40 dark:text-grey-light-100" />
+            <span className="hidden @sm:inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-grey-dark-100 bg-grey-light-700 text-black transition-colors hover:bg-grey-90 hover:text-primary-50 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400 dark:hover:border-black-100 dark:hover:bg-black-300 dark:hover:text-primary-50">
+              <InfoCircle className="size-4" />
             </span>
           </CustomTooltip2>
         </div>
