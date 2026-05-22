@@ -28,10 +28,14 @@ interface NoEntriesFoundProps {
   dragDescription?: string;
   /** Primary CTA button label – footer is hidden when both button labels are omitted */
   buttonText?: string;
+  /** Optional element rendered left of the primary CTA label (e.g. a Plus icon). */
+  buttonIcon?: React.ReactNode;
   /** Callback fired when the primary CTA button is clicked */
   onButtonClick?: () => void;
   /** Secondary CTA button label – appears to the left of the primary button */
   secondaryButtonText?: string;
+  /** Optional element rendered left of the secondary CTA label (e.g. an upload icon). */
+  secondaryButtonIcon?: React.ReactNode;
   /** Callback fired when the secondary CTA button is clicked */
   onSecondaryButtonClick?: () => void;
   /** Optional close (X) handler – shows a compact close button in the header when provided */
@@ -71,8 +75,10 @@ const NoEntriesFound = ({
   description = "Get started by creating your first entry.",
   dragDescription = "Drop files here to upload",
   buttonText,
+  buttonIcon,
   onButtonClick,
   secondaryButtonText,
+  secondaryButtonIcon,
   onSecondaryButtonClick,
   onClose,
   onFileDrop,
@@ -227,7 +233,10 @@ const NoEntriesFound = ({
                 {isSecondaryLoading ? (
                   <Loader2 className="size-4 animate-spin" />
                 ) : (
-                  <span className="px-1">{secondaryButtonText}</span>
+                  <span className="flex items-center gap-2 px-1">
+                    {secondaryButtonIcon}
+                    <span>{secondaryButtonText}</span>
+                  </span>
                 )}
               </Button>
             )}
@@ -277,6 +286,7 @@ const NoEntriesFound = ({
                   text={buttonText}
                   isLoading={isLoading}
                   onClick={handlePrimaryClick}
+                  icon={buttonIcon}
                   className="flex-1 h-9 rounded-[10px] px-3 text-[14px] font-medium tracking-[-0.28px]"
                 />
               ))}

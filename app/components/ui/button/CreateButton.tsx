@@ -1,5 +1,5 @@
 import { Loader2 } from "lucide-react";
-import React, { FC } from "react";
+import React, { FC, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import Button from ".";
 
@@ -8,6 +8,8 @@ interface CreateButtonProps {
   isLoading: boolean;
   onClick: () => void;
   className?: string;
+  /** Optional element rendered left of the label (e.g. a Plus icon). */
+  icon?: ReactNode;
 }
 
 const CreateButton: FC<CreateButtonProps> = ({
@@ -15,6 +17,7 @@ const CreateButton: FC<CreateButtonProps> = ({
   isLoading,
   onClick,
   className = "w-fit",
+  icon,
 }) => {
   return (
     <Button
@@ -31,6 +34,7 @@ const CreateButton: FC<CreateButtonProps> = ({
         <Loader2 className="size-4 animate-spin" />
       ) : (
         <span className="flex items-center gap-2">
+          {icon}
           <span>{text}</span>
         </span>
       )}
