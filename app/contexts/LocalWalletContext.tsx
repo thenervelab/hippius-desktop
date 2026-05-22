@@ -122,8 +122,13 @@ export function LocalWalletProvider({
   const truncateAddress = useCallback(
     (address: string, start = 6, end = 4): string => {
       if (!address) return "";
-      if (address.length <= start + end + 3) return address;
-      return `${address.slice(0, start)}...${address.slice(-end)}`;
+      if (address.length <= start + end + 1) return address;
+      // Unicode horizontal ellipsis renders as one clean glyph instead
+      // of three ASCII periods, which crush together in narrow / mono /
+      // uppercase contexts (the active-wallet pill shows "5HKT.WWDB"
+      // instead of "5HKT...WWDB" because Geist Mono kerns "..." tightly
+      // at 12px).
+      return `${address.slice(0, start)}…${address.slice(-end)}`;
     },
     [],
   );
