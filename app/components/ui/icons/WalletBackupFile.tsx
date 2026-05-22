@@ -6,11 +6,14 @@ import { IconComponent } from "@/app/lib/types";
  * backup file in the import drop zone. Mirrors the source Figma
  * export (`Group 2087327826.svg`) — main file body, gradient stroke
  * border, folded corner, three placeholder text bars, and the small
- * blue "csv" badge. The Figma drop-shadow filter and the backdrop-
- * blur foreignObject were dropped (filter IDs need to be unique per
- * instance and `backdrop-filter` inside SVG is Chrome-only); the
- * shadow can be reapplied with a Tailwind `shadow-*` class on the
- * wrapper if desired.
+ * blue badge. The badge originally read "csv" (Figma boilerplate);
+ * we now render "ZIP" via an SVG `<text>` element instead of the
+ * baked-in glyph paths so the label tracks the actual export
+ * format and is trivial to retheme later. The Figma drop-shadow
+ * filter and the backdrop-blur foreignObject were dropped (filter
+ * IDs need to be unique per instance and `backdrop-filter` inside
+ * SVG is Chrome-only); the shadow can be reapplied with a Tailwind
+ * `shadow-*` class on the wrapper if desired.
  *
  * Dark mode is handled by mode-specific class overrides on the
  * caller's wrapper — the icon itself paints the Figma light-mode
@@ -73,10 +76,18 @@ const WalletBackupFile: IconComponent = (props) => {
         fill="#3167DD"
         fillOpacity="0.1"
       />
-      <path
-        d="M34.6255 78.8881C34.1328 78.8881 33.6992 78.7732 33.3248 78.5432C32.9569 78.3133 32.6711 77.9947 32.4675 77.5874C32.2704 77.1801 32.1718 76.7202 32.1718 76.2078C32.1718 75.6954 32.2704 75.2355 32.4675 74.8282C32.6711 74.4209 32.9569 74.1023 33.3248 73.8724C33.6992 73.6424 34.1328 73.5275 34.6255 73.5275C35.2759 73.5275 35.7981 73.7016 36.1923 74.0497C36.593 74.3914 36.8328 74.8512 36.9117 75.4293H35.8573C35.7916 75.114 35.6503 74.8676 35.4335 74.6903C35.2233 74.5063 34.954 74.4143 34.6255 74.4143C34.1788 74.4143 33.8339 74.5786 33.5908 74.9071C33.3543 75.229 33.2361 75.6625 33.2361 76.2078C33.2361 76.7531 33.3543 77.1899 33.5908 77.5184C33.8339 77.8403 34.1788 78.0012 34.6255 78.0012C34.954 78.0012 35.2266 77.9093 35.4434 77.7253C35.6602 77.5348 35.7981 77.2753 35.8573 76.9469H36.9117C36.8328 77.5315 36.5865 78.0012 36.1726 78.356C35.7653 78.7107 35.2496 78.8881 34.6255 78.8881ZM39.6696 78.8881C38.9929 78.8881 38.4542 78.7436 38.0535 78.4545C37.6528 78.1589 37.436 77.7056 37.4031 77.0947H38.4181C38.4575 77.4494 38.5791 77.7023 38.7827 77.8534C38.9929 78.0045 39.2951 78.0801 39.6893 78.0801C40.0309 78.0801 40.297 78.021 40.4875 77.9027C40.6846 77.7779 40.7831 77.6071 40.7831 77.3903C40.7831 77.2458 40.7535 77.1308 40.6944 77.0454C40.6353 76.9534 40.517 76.8746 40.3397 76.8089C40.1689 76.7432 39.9028 76.6808 39.5415 76.6217C39.0225 76.5363 38.6185 76.4213 38.3294 76.2768C38.0404 76.1322 37.8367 75.9614 37.7185 75.7644C37.6002 75.5607 37.5411 75.3144 37.5411 75.0253C37.5411 74.5654 37.7217 74.2008 38.0831 73.9315C38.451 73.6621 38.9338 73.5275 39.5316 73.5275C40.2214 73.5275 40.7535 73.6786 41.128 73.9808C41.5024 74.283 41.6962 74.7034 41.7094 75.2421H40.7141C40.7075 74.9071 40.5992 74.6738 40.3889 74.5425C40.1787 74.4045 39.8929 74.3355 39.5316 74.3355C39.2491 74.3355 39.0159 74.3946 38.832 74.5129C38.648 74.6311 38.5561 74.7921 38.5561 74.9957C38.5561 75.1403 38.5922 75.2585 38.6645 75.3505C38.7367 75.4359 38.8615 75.5114 39.0389 75.5771C39.2229 75.6363 39.4955 75.6954 39.8568 75.7545C40.3627 75.8399 40.7568 75.9516 41.0393 76.0895C41.3284 76.2209 41.5287 76.3885 41.6404 76.5921C41.7587 76.7892 41.8178 77.0355 41.8178 77.3312C41.8178 77.8239 41.6174 78.2082 41.2167 78.4841C40.8225 78.7534 40.3068 78.8881 39.6696 78.8881ZM42.1054 73.6457H43.2189L44.6773 77.7253L46.116 73.6457H47.2295L45.2291 78.7699H44.1058L42.1054 73.6457Z"
+      <text
+        x="39.55"
+        y="78.85"
+        textAnchor="middle"
         fill="#3167DD"
-      />
+        fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+        fontWeight="700"
+        fontSize="7.2"
+        letterSpacing="0.4"
+      >
+        ZIP
+      </text>
       <defs>
         <linearGradient
           id={gradId}

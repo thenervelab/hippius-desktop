@@ -14,9 +14,9 @@ import {
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { open as openShell } from "@tauri-apps/plugin-shell";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { save } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { writeFile } from "@tauri-apps/plugin-fs";
 
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { HardDriveUpload } from "@/components/ui/icons";
@@ -236,7 +236,7 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
     truncateAddress,
     setSetupStep,
     isLoading,
-    exportBackup,
+    exportBackupZip,
   } = useLocalWallet();
 
   const [isOpen, setIsOpen] = useState(false);
@@ -295,22 +295,18 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
 
   const handleExport = async (walletId: number, walletName: string) => {
     try {
-      const backup = await exportBackup(walletId);
-      if (!backup) {
+      const bytes = await exportBackupZip(walletId);
+      if (!bytes) {
         toast.error("Failed to export wallet");
         return;
       }
       const safeName = walletName.trim().replace(/\s+/g, "-") || "wallet";
       const filePath = await save({
-        filters: [{ name: "Wallet backup", extensions: ["json"] }],
-        defaultPath: `hippius-wallet-${safeName}-backup.json`,
+        filters: [{ name: "Wallet backup", extensions: ["zip"] }],
+        defaultPath: `hippius-wallet-${safeName}-backup.zip`,
       });
       if (!filePath) return;
-      const payload = {
-        version: 2,
-        ...backup,
-      };
-      await writeTextFile(filePath, JSON.stringify(payload, null, 2));
+      await writeFile(filePath, bytes);
       toast.success("Wallet backup saved");
     } catch (e) {
       console.error("[ActiveWalletSelector] export failed:", e);
@@ -533,7 +529,7 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
                   onSelect={() => handleSwitch(wallet.id)}
                   onExplorer={(e) => {
                     e.stopPropagation();
-                    void openShell(
+                    void openUrl(
                       `https://hipstats.com/accounts/${wallet.address}`,
                     );
                   }}

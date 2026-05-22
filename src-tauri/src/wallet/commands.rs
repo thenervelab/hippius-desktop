@@ -260,6 +260,125 @@ pub async fn local_wallet_import_encrypted_backup(
     Ok(PublicLocalWallet::from(&row))
 }
 
+/// Name of the JSON entry inside the wallet backup `.zip`. Kept as a
+/// const so the writer and the reader can't drift apart silently.
+const BACKUP_ZIP_ENTRY: &str = "wallet-backup.json";
+
+/// Export the active account's wallet `id` as a `.zip` archive whose
+/// only entry is `wallet-backup.json` (the same `WalletBackup` payload
+/// `local_wallet_export_backup` returns, serialised pretty-printed).
+///
+/// The archive is **not** zip-encrypted: the JSON inside is already
+/// ChaCha20-Poly1305-encrypted under the wallet password (the
+/// `encryptedMnemonic` ciphertext), and the password is never escrowed
+/// in either the file or the archive. The zip is purely a container
+/// chosen to (a) mirror `feature/wallet-updates` for cross-compat with
+/// the v1 frontend, and (b) give the FE a single binary blob to write
+/// instead of pretty-printed JSON.
+#[tauri::command]
+pub async fn local_wallet_export_backup_zip(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<Vec<u8>, AppError> {
+    use std::io::{Cursor, Write};
+
+    let backup = local_wallet_export_backup(state, id).await?;
+    let json = serde_json::to_vec_pretty(&serde_json::json!({
+        "version": 2,
+        "name": backup.name,
+        "address": backup.address,
+        "encryptedMnemonic": backup.encrypted_mnemonic,
+        "passwordHash": backup.password_hash,
+        "exportedAt": backup.exported_at,
+    }))
+    .map_err(|e| AppError::Other(format!("failed to serialise backup json: {e}")))?;
+
+    let buf = Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(buf);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    zip.start_file(BACKUP_ZIP_ENTRY, options)
+        .map_err(|e| AppError::Other(format!("zip start_file: {e}")))?;
+    zip.write_all(&json)
+        .map_err(|e| AppError::Other(format!("zip write_all: {e}")))?;
+    let cursor = zip
+        .finish()
+        .map_err(|e| AppError::Other(format!("zip finish: {e}")))?;
+    Ok(cursor.into_inner())
+}
+
+/// Import a wallet from a `.zip` archive produced by
+/// [`local_wallet_export_backup_zip`]. Pulls `wallet-backup.json` out of
+/// the archive, validates its shape, and persists the row under the
+/// currently-logged-in account.
+///
+/// `name` is the user-supplied label from the import screen — the
+/// backup file carries a "name" hint but the FE always lets the user
+/// rename on import, and treating the FE-supplied name as authoritative
+/// matches the existing JSON-path command (`local_wallet_import_encrypted_backup`).
+#[tauri::command]
+pub async fn local_wallet_import_encrypted_backup_from_zip(
+    state: State<'_, AppState>,
+    name: String,
+    zip_bytes: Vec<u8>,
+) -> Result<PublicLocalWallet, AppError> {
+    use std::io::{Cursor, Read};
+
+    if name.trim().is_empty() {
+        return Err(AppError::Other("Wallet name is required".into()));
+    }
+
+    let reader = Cursor::new(zip_bytes);
+    let mut archive = zip::ZipArchive::new(reader)
+        .map_err(|e| AppError::Other(format!("Couldn't open backup zip: {e}")))?;
+
+    let mut entry = archive
+        .by_name(BACKUP_ZIP_ENTRY)
+        .map_err(|_| AppError::Other(format!("Backup zip is missing `{BACKUP_ZIP_ENTRY}`")))?;
+    let mut json_bytes = Vec::with_capacity(entry.size() as usize);
+    entry
+        .read_to_end(&mut json_bytes)
+        .map_err(|e| AppError::Other(format!("Couldn't read backup entry: {e}")))?;
+    drop(entry);
+
+    let parsed: serde_json::Value = serde_json::from_slice(&json_bytes)
+        .map_err(|e| AppError::Other(format!("Backup file isn't valid JSON: {e}")))?;
+    let address = parsed
+        .get("address")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::Other("Backup is missing `address`".into()))?
+        .trim()
+        .to_owned();
+    let encrypted_mnemonic = parsed
+        .get("encryptedMnemonic")
+        .or_else(|| parsed.get("encrypted_mnemonic"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::Other("Backup is missing `encryptedMnemonic`".into()))?
+        .to_owned();
+    let password_hash = parsed
+        .get("passwordHash")
+        .or_else(|| parsed.get("password_hash"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::Other("Backup is missing `passwordHash`".into()))?
+        .to_owned();
+    if address.is_empty() {
+        return Err(AppError::Other("Backup `address` is empty".into()));
+    }
+
+    let owner = require_owner(&state)?;
+    let pool = state.pool()?;
+    let row = repo::insert(
+        pool,
+        &owner,
+        name.trim(),
+        &address,
+        &encrypted_mnemonic,
+        &password_hash,
+    )
+    .await?;
+    Ok(PublicLocalWallet::from(&row))
+}
+
 /// Constant-time equality for two byte slices. SHA-256 hex strings are
 /// fixed length so the timing channel from `==` is small in practice, but
 /// using constant-time eq makes that explicit.

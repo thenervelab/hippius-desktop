@@ -1,11 +1,11 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowRight, Eye, EyeOff, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Eye, EyeOff, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { open } from "@tauri-apps/plugin-dialog";
-import { readTextFile } from "@tauri-apps/plugin-fs";
+import { readFile, readTextFile } from "@tauri-apps/plugin-fs";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui";
@@ -32,19 +32,45 @@ const cornerTextureDark = getDiagonalTextureSvgBackgroundImage({
 interface ImportWalletScreenProps {
   onImported: () => void;
   onBack: () => void;
+  /** Optional escape hatch back to the wallet dashboard. Only provided
+      by the orchestrator when the user already has at least one wallet. */
+  onExit?: () => void;
 }
 
-interface ParsedBackup {
+interface ParsedJsonBackup {
   name: string;
   address: string;
   encryptedMnemonic: string;
   passwordHash: string;
 }
 
+/* Tagged union for what the user picked. `.zip` is the canonical
+   modern format (Rust unzips + validates server-side, so the FE never
+   peeks inside); `.json` is kept for backward compat with backups
+   produced before the zip switch. */
+type PickedBackup =
+  | { kind: "json"; payload: ParsedJsonBackup }
+  | { kind: "zip"; bytes: Uint8Array; suggestedName: string };
+
+/* Strip the conventional `hippius-wallet-…-backup` wrapper from an
+   export filename and return what's left as a human-readable wallet
+   name. Falls back to a safe default if the file was renamed beyond
+   recognition — the user can always rename after import. */
+function deriveWalletNameFromPath(path: string): string {
+  const base = path.split(/[\\/]/).pop() ?? "";
+  const stem = base.replace(/\.(zip|json)$/i, "");
+  const cleaned = stem
+    .replace(/^hippius-wallet-/i, "")
+    .replace(/-backup$/i, "")
+    .replace(/[-_]+/g, " ")
+    .trim();
+  return cleaned || "Imported Wallet";
+}
+
 // Normalise the snake_case keys Rust uses in `local_wallet_export_backup`
 // into the camelCase shape `importEncryptedWallet` expects, falling
 // back to camelCase keys if the file was already saved that way.
-function parseBackupFile(text: string): ParsedBackup | null {
+function parseBackupFile(text: string): ParsedJsonBackup | null {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -73,10 +99,15 @@ function parseBackupFile(text: string): ParsedBackup | null {
 const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
   onImported,
   onBack,
+  onExit,
 }) => {
-  const { importEncryptedWallet, setSetupStep } = useLocalWallet();
+  const {
+    importEncryptedWallet,
+    importEncryptedWalletFromZip,
+    setSetupStep,
+  } = useLocalWallet();
   const [fileName, setFileName] = useState<string | null>(null);
-  const [parsed, setParsed] = useState<ParsedBackup | null>(null);
+  const [parsed, setParsed] = useState<PickedBackup | null>(null);
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,7 +120,22 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
   const [warningOpen, setWarningOpen] = useState(false);
 
   const loadFile = useCallback(async (path: string) => {
+    const isZip = /\.zip$/i.test(path);
     try {
+      if (isZip) {
+        // Don't peek inside the zip on the FE — Rust does the unzip +
+        // shape validation when the user submits. Just capture the
+        // bytes and surface the filename for the dropzone preview.
+        const bytes = await readFile(path);
+        setFileName(path.split(/[\\/]/).pop() ?? path);
+        setParsed({
+          kind: "zip",
+          bytes,
+          suggestedName: deriveWalletNameFromPath(path),
+        });
+        setError(null);
+        return;
+      }
       const text = await readTextFile(path);
       const result = parseBackupFile(text);
       if (!result) {
@@ -99,10 +145,10 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
         return;
       }
       setFileName(path.split(/[\\/]/).pop() ?? path);
-      setParsed(result);
+      setParsed({ kind: "json", payload: result });
       setError(null);
     } catch (e) {
-      console.error("[ImportWalletScreen] readTextFile failed:", e);
+      console.error("[ImportWalletScreen] readFile failed:", e);
       setError("Couldn't open that file. Check that it's still in place.");
     }
   }, []);
@@ -112,7 +158,9 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
       const selected = await open({
         multiple: false,
         directory: false,
-        filters: [{ name: "Wallet backup", extensions: ["json", "csv"] }],
+        // `.zip` is the modern export; `.json` stays in the filter for
+        // anyone restoring a backup made before the zip switch.
+        filters: [{ name: "Wallet backup", extensions: ["zip", "json"] }],
       });
       if (typeof selected === "string") {
         await loadFile(selected);
@@ -192,12 +240,18 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
     setSubmitting(true);
     setError(null);
     try {
-      const ok = await importEncryptedWallet({
-        name: parsed.name,
-        address: parsed.address,
-        encryptedMnemonic: parsed.encryptedMnemonic,
-        passwordHash: parsed.passwordHash,
-      });
+      const ok =
+        parsed.kind === "zip"
+          ? await importEncryptedWalletFromZip({
+              name: parsed.suggestedName,
+              zipBytes: parsed.bytes,
+            })
+          : await importEncryptedWallet({
+              name: parsed.payload.name,
+              address: parsed.payload.address,
+              encryptedMnemonic: parsed.payload.encryptedMnemonic,
+              passwordHash: parsed.payload.passwordHash,
+            });
       if (ok) {
         setWarningOpen(false);
         toast.success("Wallet imported");
@@ -217,7 +271,7 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
 
   return (
     <>
-    <div className="flex flex-1 w-full items-center justify-center px-4 py-6 mt-[14px] overflow-hidden rounded-[8px] border border-[#E3E3E3] dark:border-[#313131] bg-white dark:bg-[#1a1a1a]">
+    <div className="relative flex flex-1 w-full items-center justify-center px-4 py-6 mt-[14px] overflow-hidden rounded-[8px] border border-[#E3E3E3] dark:border-[#313131] bg-white dark:bg-[#1a1a1a]">
       <div className="relative">
         <div
           aria-hidden="true"
@@ -253,13 +307,27 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
             "p-3 sm:p-3 rounded-[8px] sm:rounded-[8px]",
           )}
           cardClassName={cn(
-            "w-full min-w-0 max-w-full",
+            "relative w-full min-w-0 max-w-full",
             "p-4 gap-[26px] items-stretch",
             "rounded-[10px] sm:rounded-[10px]",
             "bg-white dark:bg-[#161616]",
             "shadow-[0px_350px_98px_0px_rgba(0,0,0,0),0px_224px_90px_0px_rgba(0,0,0,0.01),0px_126px_76px_0px_rgba(0,0,0,0.03),0px_56px_56px_0px_rgba(0,0,0,0.05),0px_14px_31px_0px_rgba(0,0,0,0.06)]",
           )}
         >
+          {onExit ? (
+            <Button
+              type="button"
+              variant="defaultStable"
+              size="auto"
+              onClick={onExit}
+              aria-label="Back to wallet"
+              className="absolute left-3 top-3 z-10 h-7 gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium tracking-[-0.24px]"
+            >
+              <ArrowLeft className="size-3.5" />
+              Back
+            </Button>
+          ) : null}
+
           <div className="flex flex-col items-center gap-[19px]">
             <div className="relative flex items-center justify-center size-[56px] shrink-0">
               <Decoration

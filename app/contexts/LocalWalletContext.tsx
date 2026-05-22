@@ -78,6 +78,17 @@ interface LocalWalletContextValue {
     passwordHash: string;
     exportedAt: string;
   } | null>;
+  /** Returns the raw bytes of a `.zip` archive containing the
+      wallet's encrypted backup JSON. Caller is responsible for
+      saving to disk; null on IPC failure. */
+  exportBackupZip: (walletId: number) => Promise<Uint8Array | null>;
+  /** Import a wallet from a `.zip` archive produced by
+      `exportBackupZip`. The user-supplied `name` overrides whatever
+      label the file carries, matching the JSON import path. */
+  importEncryptedWalletFromZip: (data: {
+    name: string;
+    zipBytes: Uint8Array;
+  }) => Promise<boolean>;
 
   setSetupStep: (step: WalletSetupStep) => void;
   refreshWallets: () => Promise<void>;
@@ -413,6 +424,52 @@ export function LocalWalletProvider({
     [],
   );
 
+  const exportBackupZip = useCallback(
+    async (walletId: number): Promise<Uint8Array | null> => {
+      try {
+        // Tauri serialises Vec<u8> as `number[]` over IPC; we normalise
+        // to Uint8Array here so the caller can hand it straight to
+        // `writeFile`. The zip-bytes branch is opted into by callers
+        // that need the binary archive (export-as-zip flow) — the
+        // existing struct-returning `exportBackup` stays as-is so the
+        // tests + any FE code that wants the parsed payload still work.
+        const bytes = await invoke<number[]>("local_wallet_export_backup_zip", {
+          id: walletId,
+        });
+        return new Uint8Array(bytes);
+      } catch (e) {
+        console.error("Failed to export wallet backup zip:", e);
+        return null;
+      }
+    },
+    [],
+  );
+
+  const importEncryptedWalletFromZip = useCallback(
+    async (data: {
+      name: string;
+      zipBytes: Uint8Array;
+    }): Promise<boolean> => {
+      try {
+        // Tauri's IPC serialiser accepts `number[]` for Vec<u8>; the
+        // Array.from copy keeps the existing buffer untouched.
+        await invoke<LocalWallet>(
+          "local_wallet_import_encrypted_backup_from_zip",
+          {
+            name: data.name,
+            zipBytes: Array.from(data.zipBytes),
+          },
+        );
+        await refreshWallets();
+        return true;
+      } catch (e) {
+        console.error("Failed to import wallet from zip:", e);
+        return false;
+      }
+    },
+    [refreshWallets],
+  );
+
   const value = useMemo(
     () => ({
       wallets,
@@ -437,6 +494,8 @@ export function LocalWalletProvider({
       getDecryptedMnemonic,
       getDecryptedMnemonicById,
       exportBackup,
+      exportBackupZip,
+      importEncryptedWalletFromZip,
       setSetupStep,
       refreshWallets,
       truncateAddress,
@@ -464,6 +523,8 @@ export function LocalWalletProvider({
       getDecryptedMnemonic,
       getDecryptedMnemonicById,
       exportBackup,
+      exportBackupZip,
+      importEncryptedWalletFromZip,
       refreshWallets,
       truncateAddress,
     ],
