@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
@@ -22,7 +22,9 @@ const cornerTextureDark = getDiagonalTextureSvgBackgroundImage({
 interface WelcomeScreenProps {
   onCreateNew: () => void;
   onImport: () => void;
-  onAccessKeyContinue: (mnemonic: string) => void;
+  /** Called after the user has supplied both a name for the wallet and
+      a valid access key. Name is always non-empty (trimmed). */
+  onAccessKeyContinue: (mnemonic: string, name: string) => void;
 }
 
 // The exported wallet artwork uses dark grays that flatten against the
@@ -44,6 +46,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   onAccessKeyContinue,
 }) => {
   const { validateMnemonic } = useLocalWallet();
+  const [name, setName] = useState("");
   const [mnemonic, setMnemonic] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
@@ -51,28 +54,34 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   useEffect(() => {
     if (error) setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mnemonic]);
+  }, [mnemonic, name]);
 
   const handleContinue = async () => {
-    const trimmed = mnemonic.trim();
-    if (!trimmed) {
+    const trimmedName = name.trim();
+    const trimmedKey = mnemonic.trim();
+    if (!trimmedName) {
+      setError("Give this wallet a name to continue");
+      return;
+    }
+    if (!trimmedKey) {
       setError("Enter your access key to continue");
       return;
     }
     setVerifying(true);
     try {
-      const ok = await validateMnemonic(trimmed);
+      const ok = await validateMnemonic(trimmedKey);
       if (!ok) {
         setError("Invalid access key. Check the words and order.");
         return;
       }
-      onAccessKeyContinue(trimmed);
+      onAccessKeyContinue(trimmedKey, trimmedName);
     } finally {
       setVerifying(false);
     }
   };
 
-  const canContinue = mnemonic.trim().length > 0 && !verifying;
+  const canContinue =
+    name.trim().length > 0 && mnemonic.trim().length > 0 && !verifying;
 
   return (
     <div className="flex flex-1 w-full items-center justify-center px-4 py-6 mt-[14px] overflow-hidden rounded-[8px] border border-[#E3E3E3] dark:border-[#313131] bg-white dark:bg-[#1a1a1a]">
@@ -138,6 +147,30 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           </div>
 
           <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2.5">
+              <label
+                htmlFor="wallet-name"
+                className="text-[14px] font-medium leading-5 tracking-[-0.28px] text-grey-dark-600 dark:text-grey-dark-600"
+              >
+                Wallet Name
+              </label>
+              <Input
+                id="wallet-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Choose a name for your wallet"
+                autoComplete="off"
+                disabled={verifying}
+                startAdornment={<User className="size-5 sm:size-6" />}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleContinue();
+                  }
+                }}
+              />
+            </div>
+
             <div className="flex flex-col gap-2.5">
               <label
                 htmlFor="wallet-access-key"

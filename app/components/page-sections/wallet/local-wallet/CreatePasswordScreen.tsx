@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { ArrowRight, Eye, EyeOff, Plus } from "lucide-react";
+import { ArrowLeft, ArrowRight, Eye, EyeOff, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -67,6 +67,9 @@ interface CreatePasswordScreenProps {
   variant?: CreatePasswordVariant;
   onCreated: () => void;
   onBack: () => void;
+  /** Optional escape hatch back to the wallet dashboard. Only provided
+      by the orchestrator when the user already has at least one wallet. */
+  onExit?: () => void;
 }
 
 const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
@@ -75,6 +78,7 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
   variant = "create",
   onCreated,
   onBack,
+  onExit,
 }) => {
   const { createWallet, setSetupStep } = useLocalWallet();
   const [password, setPassword] = useState("");
@@ -89,10 +93,10 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
   // and access key — losing either is unrecoverable.
   const [warningOpen, setWarningOpen] = useState(false);
 
-  // Wallet name is captured on the previous step (create-mnemonic). The
-  // welcome→create-password shortcut (existing access key) doesn't set
-  // one, so we fall back to a sensible default instead of forcing the
-  // user back to pick one.
+  // Wallet name is always captured on the previous step — create-mnemonic
+  // for the create flow, welcome for the access flow. The "Main Wallet"
+  // fallback is defensive only: a stale step landing without a name
+  // shouldn't crash the IPC.
   const name = (initialName ?? "Main Wallet").trim() || "Main Wallet";
 
   // Inline validation message — recomputed as the user types so the
@@ -147,7 +151,7 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
 
   return (
     <>
-    <div className="flex flex-1 w-full items-center justify-center px-4 py-6 mt-[14px] overflow-hidden rounded-[8px] border border-[#E3E3E3] dark:border-[#313131] bg-white dark:bg-[#1a1a1a]">
+    <div className="relative flex flex-1 w-full items-center justify-center px-4 py-6 mt-[14px] overflow-hidden rounded-[8px] border border-[#E3E3E3] dark:border-[#313131] bg-white dark:bg-[#1a1a1a]">
       <div className="relative">
         <div
           aria-hidden="true"
@@ -183,13 +187,27 @@ const CreatePasswordScreen: React.FC<CreatePasswordScreenProps> = ({
             "p-3 sm:p-3 rounded-[8px] sm:rounded-[8px]",
           )}
           cardClassName={cn(
-            "w-full min-w-0 max-w-full",
+            "relative w-full min-w-0 max-w-full",
             "p-4 gap-[26px] items-stretch",
             "rounded-[10px] sm:rounded-[10px]",
             "bg-white dark:bg-[#161616]",
             "shadow-[0px_350px_98px_0px_rgba(0,0,0,0),0px_224px_90px_0px_rgba(0,0,0,0.01),0px_126px_76px_0px_rgba(0,0,0,0.03),0px_56px_56px_0px_rgba(0,0,0,0.05),0px_14px_31px_0px_rgba(0,0,0,0.06)]",
           )}
         >
+          {onExit ? (
+            <Button
+              type="button"
+              variant="defaultStable"
+              size="auto"
+              onClick={onExit}
+              aria-label="Back to wallet"
+              className="absolute left-3 top-3 z-10 h-7 gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium tracking-[-0.24px]"
+            >
+              <ArrowLeft className="size-3.5" />
+              Back
+            </Button>
+          ) : null}
+
           <div className="flex flex-col items-center gap-[19px]">
             {variant === "access" ? (
               <div className="flex items-center justify-center gap-2 shrink-0">

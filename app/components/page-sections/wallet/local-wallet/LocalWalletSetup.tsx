@@ -41,8 +41,17 @@ const slideTransition: Transition = {
 };
 
 const LocalWalletSetup: React.FC = () => {
-  const { setupStep, setSetupStep, isLoading, refreshWallets } =
+  const { setupStep, setSetupStep, isLoading, refreshWallets, hasWallets } =
     useLocalWallet();
+
+  // Only surface the Back button on setup screens once the user already
+  // has wallets — for fresh installs there's nothing to return to and a
+  // dead button would just confuse. Setting the step to "ready" hands
+  // control back to `WalletWithLocalSupport`, which then renders the
+  // wallet dashboard children instead of this orchestrator.
+  const onExitToDashboard = hasWallets
+    ? () => setSetupStep("ready")
+    : undefined;
 
   // Owned here (not in context) so the mnemonic and the name picked on
   // the create-mnemonic step are scoped to this orchestrator and get
@@ -93,8 +102,9 @@ const LocalWalletSetup: React.FC = () => {
           <WelcomeScreen
             onCreateNew={() => setSetupStep("create-mnemonic")}
             onImport={() => setSetupStep("import-wallet")}
-            onAccessKeyContinue={(mnemonic) => {
+            onAccessKeyContinue={(mnemonic, name) => {
               setPendingMnemonic(mnemonic);
+              setPendingName(name);
               setPasswordFlow("access");
               setSetupStep("create-password");
             }}
@@ -110,6 +120,7 @@ const LocalWalletSetup: React.FC = () => {
               setSetupStep("create-password");
             }}
             onBack={() => setSetupStep("welcome")}
+            onExit={onExitToDashboard}
           />
         );
       case "import-wallet":
@@ -126,6 +137,7 @@ const LocalWalletSetup: React.FC = () => {
               setSetupStep("welcome");
             }}
             onBack={() => setSetupStep("welcome")}
+            onExit={onExitToDashboard}
           />
         );
       case "create-password":
@@ -146,6 +158,7 @@ const LocalWalletSetup: React.FC = () => {
               void refreshWallets();
             }}
             onBack={() => setSetupStep("welcome")}
+            onExit={onExitToDashboard}
           />
         );
       case "enter-password":
@@ -159,8 +172,9 @@ const LocalWalletSetup: React.FC = () => {
           <WelcomeScreen
             onCreateNew={() => setSetupStep("create-mnemonic")}
             onImport={() => setSetupStep("import-wallet")}
-            onAccessKeyContinue={(mnemonic) => {
+            onAccessKeyContinue={(mnemonic, name) => {
               setPendingMnemonic(mnemonic);
+              setPendingName(name);
               setPasswordFlow("access");
               setSetupStep("create-password");
             }}
