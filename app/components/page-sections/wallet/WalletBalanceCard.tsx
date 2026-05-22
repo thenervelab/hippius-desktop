@@ -4,9 +4,9 @@ import { FC, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
-  GripIcon,
-  ArrowDownToLine,
-  ArrowUpToLine,
+  BarChart,
+  ArrowReceive,
+  ArrowSend,
 } from "@/components/ui/icons";
 import Warning from "@/components/ui/icons/Warning";
 import { RefreshCcwDot } from "lucide-react";
@@ -76,7 +76,7 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
     <>
       <div
         className={cn(
-          "flex flex-col items-center w-full rounded-[8px] border overflow-hidden",
+          "flex flex-col items-center w-full h-[205px] rounded-[8px] border overflow-hidden",
           "bg-grey-light-300 border-grey-dark-100",
           "dark:bg-black-primary-bg dark:border-black-300",
           "shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]",
@@ -84,9 +84,9 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
         )}
       >
         {/* Header */}
-        <div className="flex h-[46px] w-full items-center pl-[14px] pr-[10px]">
+        <div className="flex h-[38px] w-full items-center pl-[14px] pr-[10px]">
           <div className="flex items-center gap-1">
-            <GripIcon className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
+            <BarChart className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
             <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
               My Balance
             </p>
@@ -169,7 +169,7 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
               onClick={() => setReceiveDialogOpen(true)}
               disabled={!walletAddress}
             >
-              <ArrowDownToLine className="size-3.5 shrink-0" />
+              <ArrowReceive className="size-[5.004px] shrink-0" />
               Receive
             </Button>
             <Button
@@ -179,7 +179,7 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
               onClick={handleSend}
               disabled={!walletAddress || isLoading || !!error}
             >
-              <ArrowUpToLine className="size-3.5 shrink-0" />
+              <ArrowSend className="size-[5.004px] shrink-0" />
               Send
             </Button>
           </div>
