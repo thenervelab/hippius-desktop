@@ -29,6 +29,15 @@ pub struct AccountBalance {
 }
 
 /// A single unbonding chunk with its target era and remaining wait time.
+///
+/// `remaining_blocks` is the chain-precise block count until the chunk
+/// becomes withdrawable — computed from era length × sessions per era
+/// minus the current era progress. The frontend multiplies by the 6s
+/// block time to render an "Nd Nh" countdown, matching hippius-web.
+///
+/// `None` when the runtime didn't surface enough data to compute it
+/// (older chain spec, pallet rename, RPC hiccup). The frontend falls
+/// back to a coarse "~N era(s)" label in that case.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct UnbondingPeriod {
@@ -36,6 +45,7 @@ pub struct UnbondingPeriod {
     pub amount_hip: String,
     pub era: u32,
     pub remaining_eras: u32,
+    pub remaining_blocks: Option<u64>,
 }
 
 /// Full staking state for the authenticated user.
