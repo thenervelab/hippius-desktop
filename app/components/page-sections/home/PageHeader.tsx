@@ -192,7 +192,7 @@ const PageHeader: FC<PageHeaderProps> = ({
           <div className="flex shrink-0 items-center py-[11px]">
             <Button
               asLink
-              href="/billing/plans"
+              href="/billing"
               variant="defaultStable"
               size="auto"
               className={cn(
