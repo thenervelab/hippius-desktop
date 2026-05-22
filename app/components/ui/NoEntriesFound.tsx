@@ -13,6 +13,7 @@ import {
   NoEntriesIllustrationDark,
 } from "@/components/ui/icons";
 import CreateButton from "./button/CreateButton";
+import Button from "./button";
 
 interface NoEntriesFoundProps {
   /** Main heading text */
@@ -183,18 +184,32 @@ const NoEntriesFound = ({
         {hasFooter && (
           <div className="bg-white border-t border-[#ebebeb] px-3 sm:px-5 py-[14px] rounded-b-[12px] dark:bg-[#161616] dark:border-[#313131] flex gap-4 items-center justify-end">
             {secondaryButtonText && (
-              <button
+              <Button
                 type="button"
+                variant="defaultStable"
+                size="auto"
                 onClick={handleSecondaryClick}
                 disabled={isSecondaryLoading}
-                className="flex-1 h-9 rounded-[10px] flex items-center justify-center gap-1 px-3 py-2 bg-white border border-[#ebebeb] text-[#5c5c5c] text-[14px] font-medium tracking-[-0.28px] shadow-[0px_1px_2px_0px_rgba(10,13,20,0.03)] dark:bg-[rgba(255,255,255,0.03)] dark:border-[#313131] dark:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                // The card body sits on bg-grey-light-600, which is the
+                // same tone as defaultStable's bg-grey-90 — the button
+                // would vanish without an explicit surface. White + a
+                // neutral border restores contrast while keeping the
+                // secondary read; the !-overrides win over the variant's
+                // baked-in bg/hover so the chip stays legible in both
+                // themes and picks up the variant's hover/active animations.
+                className={cn(
+                  "flex-1 h-9 rounded-[10px] gap-1 px-3 py-2",
+                  "text-[14px] font-medium tracking-[-0.28px]",
+                  "!bg-white !text-[#5c5c5c] border border-[#ebebeb] shadow-[0px_1px_2px_0px_rgba(10,13,20,0.03)] hover:!bg-grey-light-700",
+                  "dark:!bg-[rgba(255,255,255,0.03)] dark:!text-white dark:border-[#313131] dark:hover:!bg-[#2c2c2c]",
+                )}
               >
                 {isSecondaryLoading ? (
                   <Loader2 className="size-4 animate-spin" />
                 ) : (
                   <span className="px-1">{secondaryButtonText}</span>
                 )}
-              </button>
+              </Button>
             )}
             {buttonText &&
               (disabled ? (

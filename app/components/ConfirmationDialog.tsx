@@ -130,10 +130,14 @@ const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
         </Button>
 
         <Button
+          // `defaultStable` keeps the rounded-md shape on hover — the
+          // `default` variant morphs to a pill (hover:rounded-[52px])
+          // which reads as a bug on a full-width cancel button.
+          variant="defaultStable"
           className={cn(
-            "mt-3 h-[52px] w-full border border-[#e3e3e3] bg-transparent text-grey-10",
-            "hover:bg-grey-90",
-            "dark:border-[#494949] dark:bg-transparent dark:text-white dark:hover:bg-[#2c2c2c]",
+            "mt-3 h-[52px] w-full border border-[#e3e3e3] !bg-transparent text-grey-10",
+            "hover:!bg-grey-90",
+            "dark:border-[#494949] dark:!bg-transparent dark:text-white dark:hover:!bg-[#2c2c2c]",
             cancelButtonClassName,
           )}
           onClick={onBack}
