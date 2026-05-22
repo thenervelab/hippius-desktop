@@ -4,17 +4,11 @@ import { usePathname } from "next/navigation";
 import cn from "@/app/lib/utils/cn";
 import NavItem from "./NavItem";
 import { navSections } from "./NavData";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import {
-  settingsDialogOpenAtom,
-  sidebarCollapsedAtom,
-} from "@/app/components/sidebar/sideBarAtoms";
+import { useAtom, useAtomValue } from "jotai";
+import { sidebarCollapsedAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { InView } from "react-intersection-observer";
-import SettingsWidthDialog from "@/components/page-sections/settings/SettingsDialog";
-import SettingsDialogContent from "@/components/page-sections/settings/SettingsDialogContent";
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { useEffect, useMemo, useRef } from "react";
 import SidebarSearch from "./SidebarSearch";
 import SidebarFooter from "./SidebarFooter";
 
@@ -62,10 +56,6 @@ const Sidebar: React.FC = () => {
     };
   }, [setCollapsed]);
 
-  const [settingsDialogOpen, setSettingsDialogOpen] = useAtom(
-    settingsDialogOpenAtom,
-  );
-  const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
 
   const visibleSections = useMemo(
@@ -82,37 +72,18 @@ const Sidebar: React.FC = () => {
     [shareEnabled],
   );
 
-  const handleSettingsOpenChange = useCallback(
-    (isOpen: boolean) => {
-      setSettingsDialogOpen(isOpen);
-      if (!isOpen) {
-        triggerSyncPathRefresh((prev) => prev + 1);
-      }
-    },
-    [setSettingsDialogOpen, triggerSyncPathRefresh],
-  );
-
   if (pathname.startsWith("/settings")) return null;
 
   return (
-    <>
-      <SettingsWidthDialog
-        open={settingsDialogOpen}
-        onOpenChange={handleSettingsOpenChange}
-        heading="Settings"
-      >
-        <SettingsDialogContent />
-      </SettingsWidthDialog>
-
-      <InView triggerOnce>
-        {({ ref, inView }) => (
-          <div
-            ref={ref}
-            className={cn(
-              "fixed top-[54px] left-0 bottom-0 bg-transparent  flex flex-col overflow-hidden transition-all duration-300 ease-in-out z-50",
-              collapsed ? "w-[3.8125rem]" : "w-[16.4375rem]",
-            )}
-          >
+    <InView triggerOnce>
+      {({ ref, inView }) => (
+        <div
+          ref={ref}
+          className={cn(
+            "fixed top-[54px] left-0 bottom-0 bg-transparent  flex flex-col overflow-hidden transition-all duration-300 ease-in-out z-50",
+            collapsed ? "w-[3.8125rem]" : "w-[16.4375rem]",
+          )}
+        >
             <div className="flex flex-col flex-1 min-h-0 overflow-y-auto px-3 pt-0.5 pb-2 overflow-x-hidden">
               <SidebarSearch collapsed={collapsed} />
 
@@ -178,11 +149,10 @@ const Sidebar: React.FC = () => {
               ))}
             </div>
 
-            <SidebarFooter collapsed={collapsed} />
-          </div>
-        )}
-      </InView>
-    </>
+          <SidebarFooter collapsed={collapsed} />
+        </div>
+      )}
+    </InView>
   );
 };
 

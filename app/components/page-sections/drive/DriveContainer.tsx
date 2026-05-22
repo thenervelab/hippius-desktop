@@ -37,10 +37,6 @@ import { downloadFolder } from "@/app/lib/utils/downloadFolder";
 import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
-  settingsDialogOpenAtom,
-  activeSettingsTabAtom,
-} from "@/app/components/sidebar/sideBarAtoms";
-import {
   getViewModePreference,
   saveViewModePreference,
   getActiveSyncFolderLabel,
@@ -180,8 +176,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
   const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
-  const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
-  const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
   const isSyncConfigured = useAtomValue(hasConfiguredDrivesAtom);
 
   // Live credit-eligibility check for the "file-upload" action. Drives
@@ -786,9 +780,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   // Navigation to settings
   const handleNavigateToSettings = useCallback(() => {
-    setActiveSettingsTab("Sync & Storage");
-    setSettingsDialogOpen(true);
-  }, [setActiveSettingsTab, setSettingsDialogOpen]);
+    router.push("/settings?section=sync");
+  }, [router]);
 
   // Handle start syncing button click
   const handleStartSyncing = useCallback(() => {
@@ -813,9 +806,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   }, []);
 
   const handleContextAddSyncFolder = useCallback(() => {
-    setActiveSettingsTab("Sync & Storage");
-    setSettingsDialogOpen(true);
-  }, [setActiveSettingsTab, setSettingsDialogOpen]);
+    router.push("/settings?section=sync");
+  }, [router]);
 
   // Breadcrumb / Local-view navigation handlers.
   //

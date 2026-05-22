@@ -13,10 +13,6 @@ import {
 import NoNotificationsFound from "@/components/page-sections/notifications/NoNotificationsFound";
 import NoNotificationsEnabled from "@/components/page-sections/notifications/NoNotificationsEnabled";
 import NotificationMenuFooter from "./NotificationMenuFooter";
-import {
-  settingsDialogOpenAtom,
-  activeSettingsTabAtom,
-} from "@/app/components/sidebar/sideBarAtoms";
 
 const CATEGORY_DISPLAY: Record<string, string> = {
   Files: "Storage",
@@ -32,8 +28,6 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
   const [activeCategory, setActiveCategory] = useState("All");
   const router = useRouter();
-  const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
-  const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
 
   const { notifications, refresh, markRead, markUnread } = useNotifications();
 
@@ -83,8 +77,7 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
 
   const handleOpenSettings = () => {
     onClose?.();
-    setActiveSettingsTab("Notifications");
-    setSettingsDialogOpen(true);
+    router.push("/settings?section=notifications");
   };
 
   return (
