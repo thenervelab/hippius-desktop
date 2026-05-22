@@ -2,11 +2,12 @@
 
 import React, { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useRouter } from "next/navigation";
 import { InView } from "react-intersection-observer";
 import { Check, Copy, MoreVertical, Plus } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
-import { open as openShell } from "@tauri-apps/plugin-shell";
+import { writeFile } from "@tauri-apps/plugin-fs";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   createColumnHelper,
   getCoreRowModel,
@@ -18,7 +19,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui";
 import FramedDialog from "@/components/ui/FramedDialog";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
-import { HardDriveUpload, Pencil, Trash } from "@/components/ui/icons";
+import NoEntriesFound from "@/components/ui/NoEntriesFound";
+import {
+  HardDriveUpload,
+  Pencil,
+  Trash,
+  WalletWelcomeLogo,
+} from "@/components/ui/icons";
 import { Download, ExternalLink } from "lucide-react";
 import TableActionMenu, {
   type ActionItem,
@@ -60,7 +67,11 @@ function AddressCell({ address }: { address: string }) {
   return (
     <div className="flex w-full items-center gap-2">
       <span
-        className="whitespace-nowrap font-mono text-[12px] text-grey-20 dark:text-grey-dark-200"
+        // Figma spec: 1-line clamp w/ ellipsis, Geist 12 / 500 / -0.24
+        // tracking, grey-dark-800 in both themes. `flex:1 0 0` lets the
+        // text claim available row width and clip cleanly when the
+        // column is narrower than the SS58.
+        className="[flex:1_0_0] line-clamp-1 overflow-hidden text-ellipsis text-[12px] font-medium leading-[normal] tracking-[-0.24px] text-grey-dark-800 dark:text-grey-dark-800"
         title={address}
       >
         {address}
@@ -79,6 +90,35 @@ function AddressCell({ address }: { address: string }) {
         )}
       </button>
     </div>
+  );
+}
+
+/* ── middle-truncate the wallet name, CSS-style. Pure char-count loses
+   when the column gets wider — it'd still ellipsize even though the
+   full label fits. This component instead lets the head soak up the
+   cell's natural width via `truncate`, while always keeping the tail
+   visible so users can still tell two long, similarly-prefixed labels
+   apart. The `flex` container claims `min-w-0` so the truncate inside
+   actually fires when the head overflows. */
+function MiddleTruncatedName({
+  name,
+  tailLength = 6,
+  className,
+}: {
+  name: string;
+  tailLength?: number;
+  className?: string;
+}) {
+  if (name.length <= tailLength + 1) {
+    return <span className={className}>{name}</span>;
+  }
+  const head = name.slice(0, name.length - tailLength);
+  const tail = name.slice(-tailLength);
+  return (
+    <span className={cn("flex min-w-0 items-baseline", className)}>
+      <span className="min-w-0 truncate">{head}</span>
+      <span className="shrink-0 whitespace-nowrap">{tail}</span>
+    </span>
   );
 }
 
@@ -124,11 +164,11 @@ function RenameWalletDialog({
       onClose={onClose}
       title="Rename Wallet"
       icon={<Pencil className="size-4 text-white" />}
-      maxWidth="max-w-[480px]"
+      maxWidth="max-w-[600px]"
     >
-      <p className="-mt-4 mb-4 text-center text-sm text-[#7d7d7d] dark:text-grey-dark-600">
-        Pick a new label for this wallet. The address and recovery
-        material are unchanged.
+      <p className="mt-2 mb-4 text-center text-sm text-[#7d7d7d] dark:text-grey-dark-600">
+        Pick a new label for this wallet. The address and access key
+        are unchanged.
       </p>
       <div className="flex flex-col gap-2">
         <label
@@ -184,9 +224,20 @@ const WalletSettings: React.FC = () => {
     switchWallet,
     renameWallet,
     removeWallet,
-    exportBackup,
+    exportBackupZip,
     setSetupStep,
   } = useLocalWallet();
+  const router = useRouter();
+
+  // The Create / Import flows live on /wallet — `setupStep` only drives
+  // visible UI when `LocalWalletSetup` is mounted, and that orchestrator
+  // is gated by `WalletWithLocalSupport` on the wallet route. Flipping
+  // setupStep from Settings without navigating would silently set state
+  // and look broken, so we always push to /wallet first.
+  const startWalletFlow = (step: "create-mnemonic" | "import-wallet") => {
+    setSetupStep(step);
+    router.push("/wallet");
+  };
 
   const [walletToDelete, setWalletToDelete] = useState<LocalWallet | null>(
     null,
@@ -220,19 +271,18 @@ const WalletSettings: React.FC = () => {
 
   const handleExport = async (wallet: LocalWallet) => {
     try {
-      const backup = await exportBackup(wallet.id);
-      if (!backup) {
+      const bytes = await exportBackupZip(wallet.id);
+      if (!bytes) {
         toast.error("Failed to export wallet");
         return;
       }
       const safeName = wallet.name.trim().replace(/\s+/g, "-") || "wallet";
       const filePath = await save({
-        filters: [{ name: "Wallet backup", extensions: ["json"] }],
-        defaultPath: `hippius-wallet-${safeName}-backup.json`,
+        filters: [{ name: "Wallet backup", extensions: ["zip"] }],
+        defaultPath: `hippius-wallet-${safeName}-backup.zip`,
       });
       if (!filePath) return;
-      const payload = { version: 2, ...backup };
-      await writeTextFile(filePath, JSON.stringify(payload, null, 2));
+      await writeFile(filePath, bytes);
       toast.success("Wallet backup saved");
     } catch (e) {
       console.error("[WalletSettings] export failed:", e);
@@ -271,11 +321,7 @@ const WalletSettings: React.FC = () => {
         context menu (both surfaces share the same callbacks). */
   const buildMenuItems = (wallet: LocalWallet): ActionItem[] => [
     {
-      icon: (
-        <span className="inline-flex size-4 items-center justify-center rounded-full bg-success-50/15 text-success-50">
-          <span className="size-1.5 rounded-full bg-success-50" />
-        </span>
-      ),
+      icon: <Check className="size-4" />,
       itemTitle: wallet.isActive ? "Active wallet" : "Set as active",
       disabled: wallet.isActive,
       onItemClick: () => {
@@ -301,7 +347,7 @@ const WalletSettings: React.FC = () => {
       itemTitle: "View on Hipstats",
       onItemClick: () => {
         setOpenMenuId(null);
-        void openShell(`https://hipstats.com/accounts/${wallet.address}`);
+        void openUrl(`https://hipstats.com/accounts/${wallet.address}`);
       },
     },
     {
@@ -336,18 +382,22 @@ const WalletSettings: React.FC = () => {
     () => [
       col.accessor("name", {
         header: "WALLET",
-        cell: (d) => (
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="truncate font-medium text-grey-20 dark:text-grey-dark-200">
-              {d.getValue() || "Unnamed"}
-            </span>
-            {d.row.original.isActive ? (
-              <span className="flex h-[18px] shrink-0 items-center rounded-[4px] border border-[#3167dd] bg-[#3167dd]/15 px-1.5 text-[10px] font-medium text-[#3167dd] dark:border-primary-brand-dark dark:bg-primary-brand-dark/15 dark:text-primary-brand-dark">
-                Active
-              </span>
-            ) : null}
-          </div>
-        ),
+        cell: (d) => {
+          const fullName = d.getValue() || "Unnamed";
+          return (
+            <div className="flex items-center gap-2 min-w-0" title={fullName}>
+              <MiddleTruncatedName
+                name={fullName}
+                className="text-[12px] font-medium leading-[normal] tracking-[-0.24px] text-grey-20 dark:text-grey-dark-200"
+              />
+              {d.row.original.isActive ? (
+                <span className="flex h-[18px] shrink-0 items-center rounded-[4px] border border-[#3167dd] bg-[#3167dd]/15 px-1.5 text-[10px] font-medium text-[#3167dd] dark:border-primary-brand-dark dark:bg-primary-brand-dark/15 dark:text-primary-brand-dark">
+                  Active
+                </span>
+              ) : null}
+            </div>
+          );
+        },
       }),
       col.accessor("address", {
         header: "ADDRESS",
@@ -358,8 +408,13 @@ const WalletSettings: React.FC = () => {
         enableSorting: true,
         // `createdAt` is already milliseconds from the Rust IPC — no
         // *1000 here, otherwise Date overflows to year ~58354.
+        //
+        // Figma spec matches the Address column: 1-line clamp w/
+        // ellipsis, Geist 12 / 500 / -0.24 tracking, grey-dark-800.
+        // `flex:1 0 0` keeps the date taking the column width so the
+        // ellipsis kicks in when the column is squeezed.
         cell: (d) => (
-          <span className="font-medium text-grey-dark-800 dark:text-grey-dark-800">
+          <span className="block [flex:1_0_0] line-clamp-1 overflow-hidden text-ellipsis text-[12px] font-medium leading-[normal] tracking-[-0.24px] text-grey-dark-800 dark:text-grey-dark-800">
             {formatDate(new Date(d.getValue()))}
           </span>
         ),
@@ -370,7 +425,7 @@ const WalletSettings: React.FC = () => {
         cell: (d) => {
           const wallet = d.row.original;
           return (
-            <div className="flex justify-end">
+            <div className="flex items-center justify-center">
               <TableActionMenu
                 dropdownTitle=""
                 items={buildMenuItems(wallet)}
@@ -408,22 +463,34 @@ const WalletSettings: React.FC = () => {
 
   const headerActions = (
     <div className="flex items-center gap-2">
-      <button
+      <Button
         type="button"
-        onClick={() => setSetupStep("create-mnemonic")}
-        className="inline-flex h-7 items-center gap-1 rounded-[6px] border border-grey-dark-100 bg-white px-2.5 text-[12px] font-medium text-grey-10 transition-colors hover:bg-grey-light-700 dark:border-black-300 dark:bg-black-600 dark:text-grey-light-100 dark:hover:bg-black-500"
+        variant="primary"
+        size="auto"
+        className="h-7 gap-1 rounded-[6px] px-2.5 text-[12px] font-medium tracking-[-0.24px]"
+        onClick={() => startWalletFlow("create-mnemonic")}
       >
         <Plus className="size-3" />
         Create wallet
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
-        onClick={() => setSetupStep("import-wallet")}
-        className="inline-flex h-7 items-center gap-1 rounded-[6px] border border-grey-dark-100 bg-white px-2.5 text-[12px] font-medium text-grey-10 transition-colors hover:bg-grey-light-700 dark:border-black-300 dark:bg-black-600 dark:text-grey-light-100 dark:hover:bg-black-500"
+        variant="defaultStable"
+        size="auto"
+        // The card body sits on bg-grey-light-300, which is the same
+        // tone as defaultStable's bg-grey-90 → the button vanishes
+        // without a visible surface. White + neutral border restores
+        // contrast while keeping the secondary read.
+        className={cn(
+          "h-7 gap-1 rounded-[6px] px-2.5 text-[12px] font-medium tracking-[-0.24px]",
+          "!bg-white !text-grey-10 border border-grey-dark-100 hover:!bg-grey-light-700",
+          "dark:!bg-black-600 dark:!text-grey-light-100 dark:border-black-300 dark:hover:!bg-black-500",
+        )}
+        onClick={() => startWalletFlow("import-wallet")}
       >
         <HardDriveUpload className="size-3" />
         Import
-      </button>
+      </Button>
     </div>
   );
 
@@ -448,14 +515,45 @@ const WalletSettings: React.FC = () => {
                   ))}
                 </div>
               ) : orderedWallets.length === 0 ? (
-                <div className="flex flex-col items-center gap-1.5 px-4 py-10 text-center">
-                  <p className="text-sm font-medium text-grey-10 dark:text-grey-light-100">
-                    No local wallets yet
-                  </p>
-                  <p className="max-w-[360px] text-xs text-grey-50 dark:text-grey-dark-600">
-                    Create a new wallet or import an existing one to start
-                    signing transactions on this device.
-                  </p>
+                // Match the Files page empty state — illustration, copy,
+                // and a primary CTA so the user can act without going back
+                // up to the header chips. `cardView={false}` drops the
+                // outer border (we're already inside SettingsCard).
+                // `children` swaps the default illustration for the
+                // WalletWelcomeLogo so this surface matches the visual
+                // language of the wallet welcome flow.
+                <div className="p-3">
+                  <NoEntriesFound
+                    buttonText="Create Wallet"
+                    onButtonClick={() => startWalletFlow("create-mnemonic")}
+                    secondaryButtonText="Import"
+                    onSecondaryButtonClick={() =>
+                      startWalletFlow("import-wallet")
+                    }
+                    cardView={false}
+                    className="p-6 sm:p-10 rounded-[8px]"
+                  >
+                    <div className="flex items-center gap-5">
+                      <div className="shrink-0">
+                        <WalletWelcomeLogo
+                          aria-hidden="true"
+                          className={cn(
+                            "block h-[92px] w-[120px] shrink-0",
+                            "dark:[filter:brightness(1.55)_contrast(0.92)]",
+                          )}
+                        />
+                      </div>
+                      <div className="flex flex-1 min-w-0 flex-col gap-[6px]">
+                        <h3 className="text-[18px] font-medium leading-6 tracking-[-0.54px] text-[#171717] dark:text-white">
+                          No local wallets yet
+                        </h3>
+                        <p className="text-[16px] font-medium leading-6 tracking-[-0.48px] text-[#52525c] dark:text-white dark:opacity-50">
+                          Create a new wallet or import an existing one to
+                          start signing transactions on this device.
+                        </p>
+                      </div>
+                    </div>
+                  </NoEntriesFound>
                 </div>
               ) : (
                 <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
@@ -499,10 +597,12 @@ const WalletSettings: React.FC = () => {
                                   row.index % 2 === 0
                                     ? "bg-[#fbfbfb] dark:bg-[#161616]"
                                     : "bg-[#f5f5f5] dark:bg-[#1e1e1e]",
-                                  // Cap the wallet column so the leftover
-                                  // row width flows back into the address
-                                  // and added columns instead of bloating
-                                  // the (usually short) wallet name cell.
+                                  // Cap the wallet column at the original
+                                  // 220px. The CSS middle-truncate inside
+                                  // (MiddleTruncatedName) uses that width
+                                  // for the head; very long names ellipsize
+                                  // at the cell boundary while the tail
+                                  // stays visible.
                                   cell.column.id === "name" &&
                                     "max-w-[220px]",
                                   cell.column.id === "actions" &&
