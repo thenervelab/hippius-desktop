@@ -74,6 +74,11 @@ interface DriveHeaderProps {
   isSyncPathEmpty?: boolean;
   onStartSyncing?: () => void;
   hasNoSyncPaths?: boolean;
+  /** When true, the header "Start Syncing" button is dimmed and its
+   *  click is rerouted to the billing plans page — without credits the
+   *  sync flow can't succeed anyway, so the button doubles as the
+   *  top-up entry point. */
+  hasNoCredits?: boolean;
   onNavigateToSettings?: () => void;
   // Filter props — single-select extension + date-range match console UX.
   selectedFileExtension?: FileExtension;
@@ -137,6 +142,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   isSyncPathEmpty = false,
   onStartSyncing,
   hasNoSyncPaths = false,
+  hasNoCredits = false,
   onNavigateToSettings,
   // Filter props
   selectedFileExtension,
@@ -264,14 +270,20 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         )
       )}
 
-      {/* Start Syncing button - show for empty sync paths or no sync paths */}
+      {/* Start Syncing button - show for empty sync paths or no sync paths.
+          When the user is out of credits the sync flow is a dead-end (every
+          upload would 402), so the button dims and reroutes to the plans
+          page — same destination as the no-credits empty-state CTA. */}
       {(isSyncPathEmpty || (isRecentFiles && hasNoSyncPaths)) && (
         <StartSyncingButton
           onClick={
-            isRecentFiles && hasNoSyncPaths
-              ? onNavigateToSettings
-              : onStartSyncing
+            hasNoCredits
+              ? () => push("/billing/plans")
+              : isRecentFiles && hasNoSyncPaths
+                ? onNavigateToSettings
+                : onStartSyncing
           }
+          className={hasNoCredits ? "opacity-50" : undefined}
         />
       )}
 

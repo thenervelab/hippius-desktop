@@ -201,6 +201,8 @@ export { default as QuestionCircle } from "./QuestionCircle";
 export { default as WalletMinimal } from "./WalletMinimal";
 export { default as NoEntriesIllustration } from "./NoEntriesIllustration";
 export { default as NoEntriesIllustrationDark } from "./NoEntriesIllustrationDark";
+export { default as NoCreditsIllustration } from "./NoCreditsIllustration";
+export { default as NoCreditsIllustrationDark } from "./NoCreditsIllustrationDark";
 export { default as CoinsIcon } from "./CoinsIcon";
 export { default as WalletMinimalIcon } from "./WalletMinimalIcon";
 export { default as GripIcon } from "./GripIcon";

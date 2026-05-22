@@ -44,6 +44,9 @@ interface DriveContentProps {
   hasMore: boolean;
   loadMore: () => void;
   isSyncPathEmpty?: boolean;
+  /** True when the user has insufficient credits to upload files.
+   *  Swaps the empty-state into the "Add Credits" variant. */
+  hasNoCredits?: boolean;
   onSyncPathConfigured?: () => void;
   onUploadFile?: () => void;
   onAddFolder?: () => void;
@@ -73,6 +76,7 @@ const DriveContent: FC<DriveContentProps> = ({
   hasMore,
   loadMore,
   isSyncPathEmpty = false,
+  hasNoCredits = false,
   onSyncPathConfigured,
   onUploadFile,
   onAddFolder,
@@ -335,6 +339,7 @@ const DriveContent: FC<DriveContentProps> = ({
         <FilesNoEntriesFound
           isRecentFiles={isRecentFiles}
           isSyncPathConfigured={!isSyncPathEmpty}
+          hasNoCredits={hasNoCredits}
           onStartSyncing={onSyncPathConfigured}
         />
       );

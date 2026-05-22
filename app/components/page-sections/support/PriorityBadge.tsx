@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 
 /* Priority pill — matches the Figma "Miner Pill" tokens (node 4045:155478):
  *   Low     → bg #f0f0f0, border #e4e4e4, text #8f8f8f (grey-light-800)
- *   Normal  → bg #fff2cc, border #fec134, text #e89702 (warning-100/300)
+ *   Normal  → bg #fff2cc, border #fec134, text #e89702
  *             — same as legacy "medium" so older tickets still render.
  *   High    → bg rgba(252,125,115,0.14), border rgba(252,125,115,0.59),
  *             text #fc7d73 (declined-100 / error-70 — coral)
@@ -30,7 +30,7 @@ const badgeVariants = cva(
           "bg-[rgba(245,26,10,0.10)] border-[rgba(245,26,10,0.59)] text-[#F51A0A] dark:bg-[rgba(245,26,10,0.2)] dark:border-[rgba(245,26,10,0.55)] dark:text-[#FB4337]",
       },
     },
-  }
+  },
 );
 
 type PriorityType = NonNullable<VariantProps<typeof badgeVariants>["type"]>;
@@ -52,9 +52,9 @@ const PriorityBadge: React.FC<Props> = ({ priority, className }) => {
   const normalized = String(priority ?? "")
     .toLowerCase()
     .trim();
-  const variant = (VALID.has(normalized as PriorityType)
-    ? (normalized as PriorityType)
-    : null) as PriorityType | null;
+  const variant = (
+    VALID.has(normalized as PriorityType) ? (normalized as PriorityType) : null
+  ) as PriorityType | null;
 
   const label = normalized
     ? normalized.charAt(0).toUpperCase() + normalized.slice(1)
@@ -66,7 +66,7 @@ const PriorityBadge: React.FC<Props> = ({ priority, className }) => {
         badgeVariants({ type: variant }),
         !variant &&
           "bg-[#f0f0f0] border-[#e4e4e4] text-[#8f8f8f] dark:bg-white/10 dark:border-white/15 dark:text-[#a3a3a3]",
-        className
+        className,
       )}
     >
       <span>{label}</span>

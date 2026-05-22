@@ -11,9 +11,13 @@ import { Loader2, Upload, X } from "lucide-react";
 import {
   NoEntriesIllustration,
   NoEntriesIllustrationDark,
+  NoCreditsIllustration,
+  NoCreditsIllustrationDark,
 } from "@/components/ui/icons";
 import CreateButton from "./button/CreateButton";
 import Button from "./button";
+
+export type NoEntriesVariant = "default" | "noCredits";
 
 interface NoEntriesFoundProps {
   /** Main heading text */
@@ -52,6 +56,14 @@ interface NoEntriesFoundProps {
   containerClassName?: string;
   /** When provided, replaces the entire default header content block (illustration + texts) */
   children?: React.ReactNode;
+  /**
+   * Visual variant.
+   * - `"default"`: standard empty-state look.
+   * - `"noCredits"`: swaps the illustration to the no-credit graphic and
+   *   paints the primary CTA in `warning-200` (used when a gated action
+   *   is blocked because the user has insufficient credits).
+   */
+  variant?: NoEntriesVariant;
 }
 
 const NoEntriesFound = ({
@@ -74,7 +86,15 @@ const NoEntriesFound = ({
   fillHeight = false,
   containerClassName,
   children,
+  variant = "default",
 }: NoEntriesFoundProps) => {
+  const isNoCredits = variant === "noCredits";
+  const LightIllustration = isNoCredits
+    ? NoCreditsIllustration
+    : NoEntriesIllustration;
+  const DarkIllustration = isNoCredits
+    ? NoCreditsIllustrationDark
+    : NoEntriesIllustrationDark;
   const [isDragging, setIsDragging] = useState(false);
 
   const handleDrop = useCallback(
@@ -152,8 +172,8 @@ const NoEntriesFound = ({
             <div className="flex gap-5 items-center">
               {!hideIllustration && (
                 <div className="shrink-0">
-                  <NoEntriesIllustration className="block dark:hidden" />
-                  <NoEntriesIllustrationDark className="hidden dark:block" />
+                  <LightIllustration className="block dark:hidden" />
+                  <DarkIllustration className="hidden dark:block" />
                 </div>
               )}
               <div className="flex-1 min-w-0 flex flex-col gap-[6px]">
@@ -229,6 +249,24 @@ const NoEntriesFound = ({
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
+              ) : isNoCredits ? (
+                // Plain button instead of CreateButton — CreateButton is
+                // pinned to variant="primary" (bg-primary-50) and the
+                // tailwind-merge pass collapses the override, so we
+                // bypass the variant indirection and write the warning
+                // colour directly.
+                <button
+                  type="button"
+                  onClick={handlePrimaryClick}
+                  disabled={isLoading}
+                  className="flex-1 h-9 rounded-[10px] flex items-center justify-center gap-1 px-3 bg-warning-200 hover:bg-warning-300 text-white text-[14px] font-medium tracking-[-0.28px] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <span>{buttonText}</span>
+                  )}
+                </button>
               ) : (
                 <CreateButton
                   text={buttonText}

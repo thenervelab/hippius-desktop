@@ -48,6 +48,7 @@ import {
 } from "@/lib/utils/userPreferencesDb";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { useInvokeQuery } from "@/app/lib/hooks/api/useInvokeQuery";
 import {
   triggerSyncPathRefreshAtom,
   hasConfiguredDrivesAtom,
@@ -182,6 +183,25 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
   const isSyncConfigured = useAtomValue(hasConfiguredDrivesAtom);
+
+  // Live credit-eligibility check for the "file-upload" action. Drives
+  // the no-credits variant of FilesNoEntriesFound shown when the user's
+  // sync folder is empty AND they can't afford to upload anything.
+  // Action enum mirrors Rust's `BillableAction` (see
+  // `src-tauri/src/billing/eligibility.rs`). We refetch on window focus
+  // so a top-up in another window flips the gate without a manual refresh.
+  const { data: fileUploadEligibility } = useInvokeQuery<{
+    eligible: boolean;
+  }>({
+    command: "check_action_eligibility",
+    queryKey: (addr) => ["action-eligibility", "file-upload", addr],
+    params: (addr) => ({ accountId: addr, action: "file-upload" }),
+    options: {
+      staleTime: 30_000,
+      refetchOnWindowFocus: true,
+    },
+  });
+  const hasNoCredits = fileUploadEligibility?.eligible === false;
 
   // Per-drive sync status is owned by Rust and pushed via the
   // `useDriveStatuses` hook mounted in `SyncEventLogger`. The previous
@@ -359,8 +379,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // `isFetching` would never settle to `false` (the symptom: picking a
   // file-type filter pinned the page in a permanent loading state).
   const fileExtensionsCriteria = useMemo(
-    () =>
-      filterState.fileExtension ? [filterState.fileExtension] : undefined,
+    () => (filterState.fileExtension ? [filterState.fileExtension] : undefined),
     [filterState.fileExtension],
   );
 
@@ -389,9 +408,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const recursiveSearchLabel = isRecentFiles
     ? null
     : isNested
-      ? nestedDrive?.label ?? null
+      ? (nestedDrive?.label ?? null)
       : activeSyncFolderLabel;
-  const recursiveSearchSubfolder = isNested ? urlSubFolderPath ?? null : null;
+  const recursiveSearchSubfolder = isNested ? (urlSubFolderPath ?? null) : null;
   const hasActiveSearchOrFilter =
     Boolean(searchTerm.trim()) ||
     Boolean(filterState.fileExtension) ||
@@ -432,7 +451,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // folder instead of stopping at the rows currently loaded in memory.
   const useRecursiveResults =
     hasActiveSearchOrFilter && Boolean(recursiveSearchLabel) && !isRecentFiles;
-  const filteredData = useRecursiveResults ? recursiveResults : inMemoryFilteredData;
+  const filteredData = useRecursiveResults
+    ? recursiveResults
+    : inMemoryFilteredData;
 
   // Folded into `isLoading` so transitions where the underlying dataset
   // swaps — nested→root navigation, switching `activeSyncFolderLabel`
@@ -1019,11 +1040,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     }
 
     return 0;
-  }, [
-    activeSyncFolderLabel,
-    remoteFileCount,
-    regularFilesData?.labelStats,
-  ]);
+  }, [activeSyncFolderLabel, remoteFileCount, regularFilesData?.labelStats]);
 
   // Handle file drop events
   useEffect(() => {
@@ -1276,6 +1293,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 hasMore={hasMore}
                 loadMore={loadMore}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
+                hasNoCredits={hasNoCredits}
                 onSyncPathConfigured={
                   isRecentFiles ? handleNavigateToSettings : handleStartSyncing
                 }
@@ -1316,6 +1334,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 isSyncPathEmpty={effectiveSyncPathEmpty}
                 onStartSyncing={handleStartSyncing}
                 hasNoSyncPaths={hasNoSyncPaths}
+                hasNoCredits={hasNoCredits}
                 onNavigateToSettings={handleNavigateToSettings}
                 selectedFileExtension={filterState.fileExtension}
                 selectedDateRange={filterState.dateRange}

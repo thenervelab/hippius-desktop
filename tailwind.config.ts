@@ -134,6 +134,8 @@ export default {
         },
         warning: {
           100: "rgb(var(--warning-100) / <alpha-value>)",
+          200: "rgb(var(--warning-200) / <alpha-value>)",
+          300: "rgb(var(--warning-300) / <alpha-value>)",
           90: "rgb(var(--warning-90) / <alpha-value>)",
           80: "rgb(var(--warning-80) / <alpha-value>)",
           70: "rgb(var(--warning-70) / <alpha-value>)",
