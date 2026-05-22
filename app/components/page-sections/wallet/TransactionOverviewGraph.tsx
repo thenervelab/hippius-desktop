@@ -65,55 +65,115 @@ interface TransactionOverviewGraphProps {
 
 // Trims the balance feed to the requested window and emits the
 // canonical ChartPoint shape consumed by AvailableCreditsChart.
-// Returns oldest-first so the chart paints left-to-right.
+//
+// Mirrors hippius-web's formatAccountsForChartByRange so both clients
+// render the same balance trend:
+//   - planck → HIP (divide by 1e18) so the y-axis is in human units;
+//   - carry-forward fill: every day in the requested range emits a
+//     point, defaulting to the most recent prior balance (or 0). This
+//     is why a freshly funded wallet shows a flat zero line up until
+//     the funding day instead of a blank 0-100 axis.
 function formatBalanceForChart(
   rows: BalanceObject[],
   range: TimeRange,
 ): ChartPoint[] {
   if (!rows.length) return [];
-  const now = Date.now();
-  const cutoff = (() => {
+
+  // Oldest-first so the carry-forward walk picks up the prior balance
+  // correctly.
+  const sorted = [...rows].sort(
+    (a, b) =>
+      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+  );
+
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  const addDays = (base: Date, n: number) => {
+    const d = new Date(base);
+    d.setDate(d.getDate() + n);
+    return d;
+  };
+
+  const earliestRow = new Date(sorted[0].timestamp);
+  earliestRow.setHours(0, 0, 0, 0);
+
+  const isLongRange = range === "last30days" ||
+    range === "last60days" ||
+    range === "year" ||
+    range === "max";
+
+  const rangeStart = (() => {
     switch (range) {
       case "last7days":
-        return now - 7 * 24 * 60 * 60 * 1000;
+        return addDays(now, -6);
       case "last30days":
-        return now - 30 * 24 * 60 * 60 * 1000;
+        return addDays(now, -29);
       case "last60days":
-        return now - 60 * 24 * 60 * 60 * 1000;
-      case "year":
-        return now - 365 * 24 * 60 * 60 * 1000;
+        return addDays(now, -59);
+      case "year": {
+        const d = new Date(now);
+        d.setFullYear(d.getFullYear() - 1);
+        return d;
+      }
       case "max":
       default:
-        return 0;
+        // No hard "Hippius creation date" constant on desktop; the
+        // earliest known row is the natural floor for the max range.
+        return earliestRow;
     }
   })();
-  // Pick the day-last reading so a noisy intra-day series collapses
-  // to one point per day — matches the credit chart's daily cadence.
+
+  const getLabel = (d: Date) =>
+    isLongRange
+      ? `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`
+      : WEEKDAYS_SHORT[d.getDay()];
+
+  // Bucket the day-last reading per local day. Rust's IPC already
+  // dedupes per UTC day, but bucketing here on local time keeps the
+  // chart axis aligned with the user's clock — same as hippius-web.
   const byDay = new Map<string, { ts: number; balance: number }>();
-  for (const row of rows) {
+  for (const row of sorted) {
     const ts = new Date(row.timestamp).getTime();
-    if (!Number.isFinite(ts) || ts < cutoff) continue;
+    if (!Number.isFinite(ts)) continue;
     const key = normalizeDate(new Date(ts));
     const prev = byDay.get(key);
     if (!prev || ts > prev.ts) {
-      byDay.set(key, { ts, balance: Number(row.totalBalance) });
+      byDay.set(key, { ts, balance: Number(row.totalBalance) / 1e18 });
     }
   }
-  return Array.from(byDay.entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([key, point]) => {
-      const date = new Date(point.ts);
-      const isLongRange = range === "year" || range === "max";
-      return {
-        x: key,
-        balance: point.balance,
-        formattedBalance: formatBalanceLabel(point.balance),
-        timestamp: new Date(point.ts).toISOString(),
-        dayLabel: isLongRange
-          ? MONTHS_SHORT[date.getMonth()]
-          : WEEKDAYS_SHORT[date.getDay()],
-      };
+
+  // Seed the carry-forward with the latest reading before rangeStart so
+  // a chart that opens "in the middle" of the user's history starts at
+  // the right baseline instead of zero.
+  let last: { ts: number; balance: number } | null = null;
+  for (const row of sorted) {
+    const ts = new Date(row.timestamp).getTime();
+    const day = new Date(ts);
+    day.setHours(0, 0, 0, 0);
+    if (day < rangeStart && (!last || ts > last.ts)) {
+      last = { ts, balance: Number(row.totalBalance) / 1e18 };
+    }
+  }
+
+  const points: ChartPoint[] = [];
+  for (
+    let date = new Date(rangeStart);
+    date <= now;
+    date = addDays(date, 1)
+  ) {
+    const key = normalizeDate(date);
+    const today = byDay.get(key);
+    if (today) last = today;
+    const balance = last?.balance ?? 0;
+    points.push({
+      x: key,
+      balance,
+      formattedBalance: formatBalanceLabel(balance),
+      timestamp: last ? new Date(last.ts).toISOString() : "",
+      dayLabel: getLabel(date),
     });
+  }
+  return points;
 }
 
 const TransactionOverviewGraph: FC<TransactionOverviewGraphProps> = ({
@@ -123,6 +183,7 @@ const TransactionOverviewGraph: FC<TransactionOverviewGraphProps> = ({
   const {
     data: balances,
     isLoading,
+    isPlaceholderData,
     refetch,
   } = useSystemBalance(undefined, { refetchInterval: false });
 
@@ -147,8 +208,14 @@ const TransactionOverviewGraph: FC<TransactionOverviewGraphProps> = ({
     return chartData[chartData.length - 1]?.balance ?? 0;
   }, [chartData]);
 
+  // Skeleton triggers on: initial load (isLoading + no data), explicit
+  // refresh click (isRefreshing), or a wallet switch — the latter is
+  // surfaced via `isPlaceholderData` because `useSystemBalance` uses
+  // `keepPreviousData`, so `isLoading` stays false while the new
+  // wallet's series is being fetched.
   const hasData = Array.isArray(balances);
-  const showSkeleton = (isLoading && !hasData) || isRefreshing;
+  const showSkeleton =
+    (isLoading && !hasData) || isRefreshing || isPlaceholderData;
 
   return (
     <div
