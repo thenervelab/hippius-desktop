@@ -40,8 +40,11 @@ export interface FrameSystemAccountInfo {
 export function useHippiusBalance() {
   return useInvokeQuery<AccountBalance, FrameSystemAccountInfo | undefined>({
     command: "get_account_balance",
+    // Wallet page is per-active-local-wallet; switching wallets in the
+    // header swaps the cache key and refetches under the new address.
+    addressSource: "activeWallet",
     queryKey: (addr) => ["hippius-balance", addr],
-    params: (polkadotAddress) => ({ address: polkadotAddress }),
+    params: (address) => ({ address }),
     options: {
       // Balance changes every block (transfers, staking, fees); poll at
       // block cadence so the wallet header tracks the chain.

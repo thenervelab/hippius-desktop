@@ -28,9 +28,12 @@ export default function useBalanceTransactions(
 
   return useInvokeQuery<TransactionObject[], TransactionObject[]>({
     command: "get_balance_transfers",
+    // Transfers are per-active-local-wallet so the table reflects the
+    // wallet the user has selected in the wallet header.
+    addressSource: "activeWallet",
     queryKey: (addr) => ["transfers", addr, page, limit],
-    params: (polkadotAddress) => ({
-      accountId: polkadotAddress,
+    params: (address) => ({
+      accountId: address,
       page,
       limit,
     }),

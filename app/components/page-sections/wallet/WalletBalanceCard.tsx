@@ -13,6 +13,7 @@ import { RefreshCcwDot } from "lucide-react";
 import TimeAgo from "react-timeago";
 import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import SendBalanceDialog from "./SendBalanceDialog";
 import ReceiveBalanceDialog from "./ReceiveBalanceDialog";
 import { toast } from "sonner";
@@ -40,6 +41,13 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
     dataUpdatedAt,
   } = useHippiusBalance();
   const { polkadotAddress } = useWalletAuth();
+  const { activeWallet } = useLocalWallet();
+  // Send/Receive must operate on the wallet the user has selected in
+  // the header, not the auth-session identity — otherwise the receive
+  // QR shows the wrong address and Send signs with the wrong key.
+  // Fall back to the auth address only while the local-wallet context
+  // is still hydrating.
+  const walletAddress = activeWallet?.address ?? polkadotAddress ?? "";
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [receiveDialogOpen, setReceiveDialogOpen] = useState(false);
 
@@ -94,18 +102,19 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
             "p-3",
           )}
         >
-          {/* Headline stat */}
+          {/* Headline stat. Fresh / unfunded accounts read as 0 hALPHA
+              even when the underlying RPC call errored — the chain has
+              no row for the account so there's nothing to surface beyond
+              "no funds yet". A transient connectivity failure is
+              communicated through the status row below (small warning +
+              retry) instead of a blocky red ERROR. */}
           <div className="flex items-end justify-start gap-1">
             {isLoading ? (
               <div className="h-[30px] w-[140px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
-            ) : error ? (
-              <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-error-80">
-                ERROR
-              </span>
             ) : (
               <>
                 <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white">
-                  {balanceInfo?.data?.freeHip ?? "- - - -"}
+                  {balanceInfo?.data?.freeHip ?? "0"}
                 </span>
                 <span className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 pb-[3px]">
                   hALPHA
@@ -118,32 +127,14 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
           <div className="flex items-center gap-2">
             {isLoading ? (
               <div className="h-4 w-36 rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
-            ) : error ? (
-              <>
-                <Warning className="size-4 text-error-80 shrink-0" />
-                <span className="text-[12px] text-error-80">
-                  Balance not retrieved.
-                </span>
-                <button
-                  type="button"
-                  onClick={() => refetch()}
-                  aria-label="Retry loading balance"
-                  className={cn(
-                    "flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[6px] border",
-                    "bg-grey-light-700 border-grey-dark-100",
-                    "dark:bg-black-primary-bg dark:border-black-300",
-                    "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
-                  )}
-                >
-                  <RefreshCcwDot className="size-3 text-black-700 dark:text-white opacity-40" />
-                </button>
-              </>
             ) : (
               <>
                 <button
                   type="button"
                   onClick={() => refetch()}
-                  aria-label="Refresh balance"
+                  aria-label={
+                    error ? "Retry loading balance" : "Refresh balance"
+                  }
                   className={cn(
                     "flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[6px] border",
                     "bg-grey-light-700 border-grey-dark-100",
@@ -153,9 +144,18 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
                 >
                   <RefreshCcwDot className="size-3 text-black-700 dark:text-white opacity-40" />
                 </button>
-                <span className="font-mono font-medium text-[12px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 whitespace-nowrap">
-                  Last updated <TimeAgo date={dataUpdatedAt} />
-                </span>
+                {error ? (
+                  <>
+                    <Warning className="size-4 text-warning-70 shrink-0" />
+                    <span className="text-[12px] text-warning-70 whitespace-nowrap">
+                      Couldn&apos;t refresh balance
+                    </span>
+                  </>
+                ) : (
+                  <span className="font-mono font-medium text-[12px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 whitespace-nowrap">
+                    Last updated <TimeAgo date={dataUpdatedAt} />
+                  </span>
+                )}
               </>
             )}
           </div>
@@ -167,7 +167,7 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
               size="auto"
               className="h-[36px] rounded-[8px] text-[13px] font-medium tracking-[-0.26px] gap-[7px]"
               onClick={() => setReceiveDialogOpen(true)}
-              disabled={!polkadotAddress}
+              disabled={!walletAddress}
             >
               <ArrowDownToLine className="size-3.5 shrink-0" />
               Receive
@@ -177,7 +177,7 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
               size="auto"
               className="h-[36px] rounded-[8px] text-[13px] font-medium tracking-[-0.26px] gap-[7px]"
               onClick={handleSend}
-              disabled={!polkadotAddress || isLoading || !!error}
+              disabled={!walletAddress || isLoading || !!error}
             >
               <ArrowUpToLine className="size-3.5 shrink-0" />
               Send
@@ -196,13 +196,13 @@ const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
           refetchSystemBalance?.();
           refetchTransactions?.();
         }}
-        polkadotAddress={polkadotAddress || ""}
+        polkadotAddress={walletAddress}
       />
 
       <ReceiveBalanceDialog
         open={receiveDialogOpen}
         onClose={() => setReceiveDialogOpen(false)}
-        polkadotAddress={polkadotAddress || ""}
+        polkadotAddress={walletAddress}
       />
     </>
   );
