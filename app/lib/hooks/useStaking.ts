@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { useWalletAuth } from '@/app/lib/wallet-auth-context';
+import { useLocalWallet } from '@/app/contexts/LocalWalletContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { invoke } from '@tauri-apps/api/core';
 import { LIVE_DATA_REFRESH_MS } from '@/lib/constants';
@@ -11,6 +12,11 @@ interface UnbondingPeriod {
     amountHip: string;
     era: number;
     remainingEras: number;
+    /** Chain-precise block count until this chunk becomes withdrawable.
+     *  Multiply by 6 (BABE block time) to render an "Nd Nh" countdown,
+     *  matching hippius-web. `null` if the runtime didn't surface enough
+     *  data to compute it; callers fall back to era count. */
+    remainingBlocks?: number | null;
 }
 
 /**
@@ -37,6 +43,12 @@ interface StakingInfoResult {
 
 interface StakingInfo extends StakingInfoResult {
     isLoading: boolean;
+    /** True any time a fetch is in flight (initial load, manual refetch,
+     *  or after a wallet switch invalidates the queryKey). Use this for
+     *  card / table skeletons so the user sees a loading state when
+     *  they swap wallets, instead of stale data lingering until the
+     *  next tick. */
+    isFetching: boolean;
     error: string | null;
 }
 
@@ -53,20 +65,43 @@ interface StakingOperations {
     claimRewards: (password: string) => Promise<void>;
 }
 
-export const useStaking = () => {
+/**
+ * Which account's staking state to fetch.
+ *
+ * - `"activeWallet"` (default): the active local wallet. Used by the
+ *   wallet-page Stake/Unstake/Withdraw cards & dialogs so the figures
+ *   reflect whichever wallet the user has selected in the header.
+ * - `"auth"`: the auth/login account. Used by the global page header
+ *   (Overview / Drive / Billing / etc.) so the stake figure stays
+ *   stable as the user moves around the app and only changes wallet
+ *   context inside `/wallet` itself.
+ */
+export type StakingAddressSource = "activeWallet" | "auth";
+
+export const useStaking = (addressSource: StakingAddressSource = "activeWallet") => {
     const { polkadotAddress } = useWalletAuth();
+    const { activeWallet } = useLocalWallet();
     const queryClient = useQueryClient();
 
-    const { data, isLoading, error, refetch } = useQuery<StakingInfoResult>({
-        queryKey: ['staking-info', polkadotAddress],
-        enabled: !!polkadotAddress,
+    // Pick the address per the caller's intent. The auth address falls
+    // back is intentional: while the local-wallet context is still
+    // hydrating, "activeWallet" callers degrade to the auth address so
+    // the card has *something* to show instead of "0".
+    const address =
+        addressSource === "auth"
+            ? polkadotAddress
+            : activeWallet?.address ?? polkadotAddress;
+
+    const { data, isLoading, isFetching, error, refetch } = useQuery<StakingInfoResult>({
+        queryKey: ['staking-info', addressSource, address],
+        enabled: !!address,
         // Bonded/rewards/unbonding move every block; poll at block
         // cadence so stake screens track the chain in step with the
         // wallet balance (which shares the same constant).
         staleTime: 0,
         refetchOnWindowFocus: true,
         refetchInterval: LIVE_DATA_REFRESH_MS,
-        queryFn: () => invoke<StakingInfoResult>('get_staking_info'),
+        queryFn: () => invoke<StakingInfoResult>('get_staking_info', { accountId: address }),
     });
 
     const stakingInfo: StakingInfo = {
@@ -83,6 +118,7 @@ export const useStaking = () => {
         availableBalance: data?.availableBalance ?? '0',
         availableBalanceHip: data?.availableBalanceHip ?? '0',
         isLoading,
+        isFetching,
         error: error ? (error instanceof Error ? error.message : 'Failed to fetch staking info') : null,
         unbondingPeriods: data?.unbondingPeriods ?? [],
     };

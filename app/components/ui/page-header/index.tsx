@@ -23,7 +23,10 @@ const PageHeader: React.FC<PageHeaderProps> = ({
   hideStats = false,
   infoTooltip,
 }) => {
-  const { stakingInfo, isLoading: isStakingLoading } = useStaking();
+  // The global page header reads the auth account's stake so the
+  // number stays stable across pages. Per-active-wallet stake belongs
+  // on the wallet page itself, not on Overview / Drive / Billing.
+  const { stakingInfo, isLoading: isStakingLoading } = useStaking("auth");
 
   const { activeSubscription, isLoading: isSubLoading } = useSubscriptionData();
 

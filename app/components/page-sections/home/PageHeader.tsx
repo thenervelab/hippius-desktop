@@ -49,7 +49,10 @@ const PageHeader: FC<PageHeaderProps> = ({
   showTopUpCredits = true,
   rightSlot,
 }) => {
-  const { stakingInfo } = useStaking();
+  // Auth-account stake — see the comment in `useStaking` on why the
+  // home / billing / overview headers read the auth account rather
+  // than the active local wallet.
+  const { stakingInfo } = useStaking("auth");
   const { activeSubscription, isLoadingActive } = useSubscriptionData();
 
   const hasActiveSubscription = !!activeSubscription?.has_subscription;
@@ -140,7 +143,7 @@ const PageHeader: FC<PageHeaderProps> = ({
             </div>
             <Button
               asLink
-              href="/stake"
+              href="/wallet"
               variant="primaryLight"
               size="auto"
               className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
