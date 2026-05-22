@@ -222,32 +222,29 @@ const TransactionOverviewGraph: FC<TransactionOverviewGraphProps> = ({
         </div>
 
         <div className="relative w-full h-[180px] px-4 py-3">
-          {!showSkeleton && chartData.length === 0 ? (
-            <div className="h-full flex items-center justify-center">
-              <span className="text-[13px] text-grey-dark-600 font-medium">
-                No balance data available
-              </span>
-            </div>
-          ) : (
-            <AvailableCreditsChart
-              data={chartData}
-              color="#3167DD"
-              height="100%"
-              isLoading={showSkeleton}
-              tooltipValueLabel="Balance"
-              formatTooltipValue={(point) => {
-                const date = new Date(point.x);
-                const dayName = date.toLocaleDateString("en-US", {
-                  weekday: "long",
-                });
-                const monthDay = date.toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                });
-                return `${dayName}, ${monthDay}\n${point.formattedBalance ?? point.balance}`;
-              }}
-            />
-          )}
+          {/* Empty state is handled by AvailableCreditsChart itself —
+              it paints axis labels, day ticks and dashed grid lines
+              against an empty series, matching the home-page Available
+              Credits card. Don't intercept with a "no data" message —
+              that hides the chart chrome the user expects. */}
+          <AvailableCreditsChart
+            data={chartData}
+            color="#3167DD"
+            height="100%"
+            isLoading={showSkeleton}
+            tooltipValueLabel="Balance"
+            formatTooltipValue={(point) => {
+              const date = new Date(point.x);
+              const dayName = date.toLocaleDateString("en-US", {
+                weekday: "long",
+              });
+              const monthDay = date.toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+              });
+              return `${dayName}, ${monthDay}\n${point.formattedBalance ?? point.balance}`;
+            }}
+          />
         </div>
       </div>
     </div>
