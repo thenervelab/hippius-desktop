@@ -108,6 +108,7 @@ const LocalWalletSetup: React.FC = () => {
               setPasswordFlow("access");
               setSetupStep("create-password");
             }}
+            onExit={onExitToDashboard}
           />
         );
       case "create-mnemonic":

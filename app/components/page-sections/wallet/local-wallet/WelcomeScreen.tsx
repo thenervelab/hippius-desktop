@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { ArrowRight, User } from "lucide-react";
+import { ArrowLeft, ArrowRight, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,10 @@ interface WelcomeScreenProps {
   /** Called after the user has supplied both a name for the wallet and
       a valid access key. Name is always non-empty (trimmed). */
   onAccessKeyContinue: (mnemonic: string, name: string) => void;
+  /** Escape hatch back to the wallet dashboard. Only passed by the
+      orchestrator when the user already has at least one wallet —
+      same contract the Create / Import screens use. */
+  onExit?: () => void;
 }
 
 // The exported wallet artwork uses dark grays that flatten against the
@@ -44,6 +48,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   onCreateNew,
   onImport,
   onAccessKeyContinue,
+  onExit,
 }) => {
   const { validateMnemonic } = useLocalWallet();
   const [name, setName] = useState("");
@@ -126,13 +131,32 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
             "p-3 sm:p-3 rounded-[8px] sm:rounded-[8px]",
           )}
           cardClassName={cn(
-            "w-full min-w-0 max-w-full",
+            "relative w-full min-w-0 max-w-full",
             "p-4 gap-[26px] items-stretch",
             "rounded-[10px] sm:rounded-[10px]",
             "bg-white dark:bg-[#161616]",
             "shadow-[0px_350px_98px_0px_rgba(0,0,0,0),0px_224px_90px_0px_rgba(0,0,0,0.01),0px_126px_76px_0px_rgba(0,0,0,0.03),0px_56px_56px_0px_rgba(0,0,0,0.05),0px_14px_31px_0px_rgba(0,0,0,0.06)]",
           )}
         >
+          {/* Back-to-dashboard escape hatch — matches the Create /
+              Import screens. Only rendered when the orchestrator
+              passed `onExit`, i.e. the user already has at least one
+              wallet, so the access-wallet flow isn't the only way
+              out of this screen. */}
+          {onExit ? (
+            <Button
+              type="button"
+              variant="defaultStable"
+              size="auto"
+              onClick={onExit}
+              aria-label="Back to wallet"
+              className="absolute left-3 top-3 z-10 h-7 gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium tracking-[-0.24px]"
+            >
+              <ArrowLeft className="size-3.5" />
+              Back
+            </Button>
+          ) : null}
+
           <div className="flex flex-col items-center gap-[19px]">
             <WalletHero />
 
