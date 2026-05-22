@@ -31,19 +31,19 @@ const COPY: Record<
   create: {
     heading: "Save Your Password & Access Key",
     intro:
-      "Before we create this wallet, make sure you have saved both your password and your 12-word access key somewhere safe.",
+      "Before you move forward with this wallet, make sure you have saved both your password and your 12-word access key somewhere safe.",
     confirmLabel: "I Understand, Create Wallet",
   },
   access: {
     heading: "Save Your Password & Access Key",
     intro:
-      "Before we unlock this wallet, make sure you have saved both your password and your 12-word access key somewhere safe.",
+      "Before you move forward with this wallet, make sure you have saved both your password and your 12-word access key somewhere safe.",
     confirmLabel: "I Understand, Continue",
   },
   import: {
     heading: "Save Your Password & Access Key",
     intro:
-      "Before we import this wallet, make sure you have saved both the wallet's password and its 12-word access key somewhere safe.",
+      "Before you move forward with this wallet, make sure you have saved both the wallet's password and its 12-word access key somewhere safe.",
     confirmLabel: "I Understand, Import",
   },
 };
@@ -62,8 +62,14 @@ const RecoveryWarningDialog: React.FC<RecoveryWarningDialogProps> = ({
       open={open}
       heading={heading}
       icon={<OctagonAlert className="size-4 text-white" />}
-      iconBgColor="bg-[#F5A623]"
-      borderClassName="bg-[#F5A623]"
+      // Frame stays in the brand-blue family — the amber lives inside on
+      // the checklist where it's pulling weight as a warning. A coloured
+      // frame around an already-coloured checklist makes the dialog feel
+      // alarmed rather than informational.
+      iconBgColor="bg-primary-50"
+      borderClassName="bg-primary-50"
+      maxWidth="max-w-[680px]"
+      contentClassName="sm:w-[500px]"
       text={intro}
       button={confirmLabel}
       disableButton={submitting}
