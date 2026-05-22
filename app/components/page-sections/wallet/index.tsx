@@ -131,6 +131,7 @@ export default function Wallet() {
                 <AddressBookTable
                   contacts={contacts}
                   onContactChanged={handleContactChanged}
+                  onAddAddress={() => setShowAddDialog(true)}
                 />
               )}
             </div>

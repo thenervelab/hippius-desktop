@@ -1,9 +1,7 @@
 "use client";
 
 import React from "react";
-import { TableWrapper } from "@/components/ui/table";
-import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
-import { GitCompareArrows } from "@/components/ui/icons";
+import NoEntriesFound from "@/components/ui/NoEntriesFound";
 
 /* Bridge Transactions tab — placeholder.
  *
@@ -15,18 +13,14 @@ import { GitCompareArrows } from "@/components/ui/icons";
  * TransactionHistoryTable. */
 const BridgeTransactionHistoryTable: React.FC = () => {
   return (
-    <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
-      <div className="flex h-[21.875rem] w-full items-center justify-center p-6">
-        <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
-          <AbstractIconWrapper className="size-10 rounded-2xl bg-grey-40/20 mb-2">
-            <GitCompareArrows className="absolute size-5 text-grey-50" />
-          </AbstractIconWrapper>
-          <span className="text-grey-60 dark:text-grey-dark-600 text-sm font-medium max-w-[18.75rem] text-center">
-            Bridge transactions will appear here once bridging is enabled.
-          </span>
-        </div>
-      </div>
-    </TableWrapper>
+    <div className="p-3">
+      <NoEntriesFound
+        title="No bridge transactions yet"
+        description="Bridge transactions will appear here once bridging is enabled. The Bridge Tokens action above is the entry point when it ships."
+        cardView={false}
+        className="p-6 sm:p-10 rounded-[8px]"
+      />
+    </div>
   );
 };
 

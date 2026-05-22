@@ -20,8 +20,7 @@ import {
   SkeletonTableRow,
 } from "@/components/ui/table";
 import { CopyableCell } from "@/components/ui/alt-table";
-import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
-import { Dollar } from "@/components/ui/icons";
+import NoEntriesFound from "@/components/ui/NoEntriesFound";
 import { cn } from "@/lib/utils";
 import { TransactionObject } from "@/app/lib/hooks/api/useBalanceTransactions";
 
@@ -209,21 +208,20 @@ const TransactionHistoryTable: React.FC<TransactionHistoryTableProps> = ({
     );
   }
 
-  // Empty state
+  // Empty state — mirrors the Files page empty state via the shared
+  // NoEntriesFound primitive. Transactions are read-only (the user
+  // can't "create" a transaction directly from this surface), so no
+  // CTA — the Send/Receive actions live in WalletBalanceCard above.
   if (transactions && !transactions.length) {
     return (
-      <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
-        <div className="flex h-[21.875rem] w-full items-center justify-center p-6">
-          <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
-            <AbstractIconWrapper className="size-10 rounded-2xl bg-grey-40/20 mb-2">
-              <Dollar className="absolute size-6" />
-            </AbstractIconWrapper>
-            <span className="text-grey-60 text-sm font-medium max-w-[16.25rem] text-center">
-              You have not received any transactions yet
-            </span>
-          </div>
-        </div>
-      </TableWrapper>
+      <div className="p-3">
+        <NoEntriesFound
+          title="No transactions yet"
+          description="When you send or receive hALPHA on this wallet, the transfers will show up here."
+          cardView={false}
+          className="p-6 sm:p-10 rounded-[8px]"
+        />
+      </div>
     );
   }
 

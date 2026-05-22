@@ -22,7 +22,7 @@ import {
 import { CopyableCell } from "@/components/ui/alt-table";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
 import { Button } from "@/components/ui/button";
-import { Icons } from "@/components/ui";
+import NoEntriesFound from "@/components/ui/NoEntriesFound";
 import { Edit, Loader2, MoreVertical, Trash } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -40,6 +40,10 @@ interface Contact {
 interface AddressBookTableProps {
   contacts: Contact[];
   onContactChanged: () => void;
+  /** Opens the Add Address dialog. Used by the empty-state CTA so the
+      user can start populating the address book without scrolling back
+      up to the page-level "New Address" header chip. */
+  onAddAddress?: () => void;
   /** When true the loading skeleton renders even if `contacts` is
    * empty (e.g. while the initial IndexedDB read resolves). */
   isLoading?: boolean;
@@ -55,6 +59,7 @@ const col = createColumnHelper<Contact>();
 const AddressBookTable: React.FC<AddressBookTableProps> = ({
   contacts,
   onContactChanged,
+  onAddAddress,
   isLoading,
 }) => {
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
@@ -205,21 +210,21 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
     );
   }
 
-  // Empty state
+  // Empty state — mirrors Files page via NoEntriesFound. CTA wires
+  // through to the parent's AddNewAddressDialog so the user can act
+  // without scrolling back up to the page header.
   if (totalCount === 0) {
     return (
-      <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
-        <div className="flex h-[21.875rem] w-full items-center justify-center p-6">
-          <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
-            <div className="size-10 rounded-full bg-primary-90 flex items-center justify-center mb-2">
-              <Icons.DocumentText className="size-6 text-primary-50" />
-            </div>
-            <span className="text-grey-60 dark:text-grey-dark-600 text-sm font-medium max-w-[16.25rem] text-center">
-              No saved addresses. Add a new address to get started.
-            </span>
-          </div>
-        </div>
-      </TableWrapper>
+      <div className="p-3">
+        <NoEntriesFound
+          title="No saved addresses yet"
+          description="Save the addresses you send to most often so you don't have to paste an SS58 every time."
+          buttonText={onAddAddress ? "Add Address" : undefined}
+          onButtonClick={onAddAddress}
+          cardView={false}
+          className="p-6 sm:p-10 rounded-[8px]"
+        />
+      </div>
     );
   }
 
