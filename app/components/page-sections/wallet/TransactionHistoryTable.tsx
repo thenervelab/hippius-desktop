@@ -111,6 +111,7 @@ const columns = [
         copyAbleText={info.getValue()}
         title="Copy Account"
         toastMessage="Account Copied Successfully!"
+        textColor="text-grey-20 dark:text-grey-dark-200"
         isTable
       />
     ),
@@ -123,6 +124,7 @@ const columns = [
         copyAbleText={info.getValue()}
         title="Copy Account"
         toastMessage="Account Copied Successfully!"
+        textColor="text-grey-20 dark:text-grey-dark-200"
         isTable
       />
     ),
@@ -130,11 +132,21 @@ const columns = [
   col.accessor("direction", {
     id: "transactionType",
     header: "TRANSACTION TYPE",
-    cell: (info) => (
-      <span className="inline-block px-2 py-[3px] bg-grey-90 border border-grey-80 text-grey-40 dark:bg-black-300 dark:border-[#494949] dark:text-grey-light-100 rounded text-[11px]">
-        {info.getValue()}
-      </span>
-    ),
+    cell: (info) => {
+      const direction = info.getValue();
+      return (
+        <span
+          className={cn(
+            "inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium",
+            direction === "Sent"
+              ? "border-[#FEC134] bg-[#FFF2CC] text-[#E89702] dark:border-[#793902] dark:bg-[#793902] dark:text-[#E89702]"
+              : "border-[#6CE9A6] bg-[#DAFBE8] text-[#04C870] dark:border-[#03301E] dark:bg-[#03301E] dark:text-[#6CE9A6]",
+          )}
+        >
+          {direction}
+        </span>
+      );
+    },
   }),
   col.accessor("date", {
     id: "date",
