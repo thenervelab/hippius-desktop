@@ -525,8 +525,10 @@ const WalletSettings: React.FC = () => {
                 <div className="p-3">
                   <NoEntriesFound
                     buttonText="Create Wallet"
+                    buttonIcon={<Plus className="size-4" />}
                     onButtonClick={() => startWalletFlow("create-mnemonic")}
                     secondaryButtonText="Import"
+                    secondaryButtonIcon={<HardDriveUpload className="size-4" />}
                     onSecondaryButtonClick={() =>
                       startWalletFlow("import-wallet")
                     }
