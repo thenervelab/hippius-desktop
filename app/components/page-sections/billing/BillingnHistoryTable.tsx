@@ -24,11 +24,11 @@ import TransactionTypeBadge from "./TransactionTypeBadge";
 import useBillingTransactions, {
   TransactionObject,
 } from "@/app/lib/hooks/api/useBillingTransactions";
-import { TaoLogo, Dollar } from "@/components/ui/icons";
+import { TaoLogo } from "@/components/ui/icons";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
+import NoEntriesFound from "@/components/ui/NoEntriesFound";
 
 function BillingIdCell({ id }: { id: string }) {
   const [copied, setCopied] = useState(false);
@@ -204,7 +204,10 @@ const BillingHistoryTable: React.FC = () => {
     );
   }
 
-  // Empty / error state
+  // Empty / error state — mirrors the wallet TransactionHistoryTable
+  // empty pattern via NoEntriesFound. Subscription plans live on the
+  // same /billing page above this table, so the copy points the user
+  // there instead of carrying a CTA that scrolls or routes away.
   if (((transactions && !transactions.length) || error) && !isPending) {
     const errorMessage = (() => {
       if (!error) return null;
@@ -216,20 +219,20 @@ const BillingHistoryTable: React.FC = () => {
     })();
 
     return (
-      <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
-        <div className="flex h-[21.875rem] w-full items-center justify-center p-6">
-          <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
-            <AbstractIconWrapper className="size-10 rounded-2xl bg-grey-40/20 mb-2">
-              <Dollar className="absolute size-6" />
-            </AbstractIconWrapper>
-            <span className="text-grey-60 text-sm font-medium max-w-[16.25rem] text-center">
-              {errorMessage
-                ? `Unable to load billing history: ${errorMessage}`
-                : "You do not have any billing history yet"}
-            </span>
-          </div>
-        </div>
-      </TableWrapper>
+      <div className="p-3">
+        <NoEntriesFound
+          title={
+            errorMessage ? "Couldn't load billing history" : "No billing history yet"
+          }
+          description={
+            errorMessage
+              ? errorMessage
+              : "Subscribe to a plan above or top up credits to get started. Your invoices and credit purchases will show up here."
+          }
+          cardView={false}
+          className="p-6 sm:p-10 rounded-[8px]"
+        />
+      </div>
     );
   }
 
