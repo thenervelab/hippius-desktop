@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { HippiusLogo } from "@/components/ui/icons";
+import { HAlphaCoinLogo, HippiusLogo } from "@/components/ui/icons";
 import {
   WalletDialogShell,
   WalletDialogFooter,
@@ -109,7 +109,7 @@ const SendBalanceConfirmationDialog: React.FC<
                 {amount} hALPHA
               </span>
               <span className="flex justify-center items-center w-4 h-4 rounded-full border border-[#d0d0d0] bg-white">
-                <HippiusLogo className="size-2.5 text-[#3167dd]" />
+                <HAlphaCoinLogo className="size-2.5" />
               </span>
             </div>
           </div>

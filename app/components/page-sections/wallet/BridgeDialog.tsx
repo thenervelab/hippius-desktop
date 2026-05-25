@@ -11,7 +11,12 @@ import { ArrowDown, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { GasStation, HippiusLogo } from "@/components/ui/icons";
+import {
+  AlphaCoinLogo,
+  GasStation,
+  HAlphaCoinLogo,
+  HippiusLogo,
+} from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 
 import { WalletDialogShell } from "./shared/WalletDesign";
@@ -89,12 +94,11 @@ const TokenBadge: React.FC<{
             : "border border-[#d0d0d0] bg-white",
         )}
       >
-        <HippiusLogo
-          className={cn(
-            logoSize,
-            token === "ALPHA" ? "text-white" : "text-[#3167dd]",
-          )}
-        />
+        {token === "ALPHA" ? (
+          <AlphaCoinLogo className={logoSize} />
+        ) : (
+          <HAlphaCoinLogo className={logoSize} />
+        )}
       </span>
       <span
         className={cn(
