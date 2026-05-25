@@ -15,8 +15,6 @@
 import React, { useMemo, useState } from "react";
 import { Provider as JotaiProvider, createStore } from "jotai";
 
-import SyncStatusDialog from "./SyncStatusDialog";
-import SyncStatusHandler from "./SyncStatusHandler";
 import {
   type SyncSnapshot,
   type FileProgress,

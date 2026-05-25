@@ -3,7 +3,6 @@
 import React, { useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-import SyncStatusDialog from "./SyncStatusDialog";
 import { useSyncSnapshot } from "../lib/hooks/useSyncSnapshot";
 import { registerTauriListeners } from "../lib/utils/tauriListeners";
 import SyncStatusDialog2 from "./SyncStatusDialog2";
