@@ -1,4 +1,6 @@
 export { default as HippiusLogo } from "./HippiusLogo";
+export { default as AlphaCoinLogo } from "./AlphaCoinLogo";
+export { default as HAlphaCoinLogo } from "./HAlphaCoinLogo";
 export { default as SquareDashedKanban } from "./SquareDashedKanban";
 export { default as Lock } from "./Lock";
 export { default as CircularBittensor } from "./CircularBittensor";
