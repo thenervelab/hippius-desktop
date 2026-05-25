@@ -18,7 +18,7 @@
       "windows": {
         "installMode": "passive"
       },
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0MTFGQjM3MDcyRjIzNEYKUldSUEl5OEhOL3NSNUdYMmxpUG1WUWtiTWd1TDRjMkt6aXBveFdmYmx3TjJTd01UUW1IMmJGZUgK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJGQ0E5QjkwRDU3OUMyNkUKUldSdXdublZrSnZLTDQyMmN3bjdOV3MvTDJ6aTNsTFVMNlRraWhCZkFhWHl3czljMjRWcGVJa1YK",
       "endpoints": [
         "https://github.com/thenervelab/hippius-desktop/releases/latest/download/latest.json"
       ],
