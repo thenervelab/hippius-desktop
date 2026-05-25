@@ -179,12 +179,10 @@ const CreateVM: React.FC = () => {
             {isBetaError ? (
               <NoEntriesFound className="h-[31.25rem]">
                 <div className="text-center">
-                  <p className="text-grey-30 font-semibold mb-1 text-base">
+                  <p className="text-grey-30 font-semibold mb-1 text-base dark:text-white">
                     Feature Not Available
                   </p>
-                  <p className="text-grey-50 text-sm max-w-md">
-                    {betaAccessMessage}
-                  </p>
+                  <p className="text-grey-50 text-sm">{betaAccessMessage}</p>
                 </div>
               </NoEntriesFound>
             ) : isFlavorsLoading ? (
