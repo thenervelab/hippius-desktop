@@ -29,23 +29,23 @@ export const preserveClosestScrollPosition = (
   mutate: () => void,
 ) => {
   const target = getScrollTarget(start);
-  const isWindowTarget = target === window;
-  const x = isWindowTarget ? window.scrollX : target.scrollLeft;
-  const y = isWindowTarget ? window.scrollY : target.scrollTop;
+  const elementTarget = target instanceof HTMLElement ? target : null;
+  const x = elementTarget ? elementTarget.scrollLeft : window.scrollX;
+  const y = elementTarget ? elementTarget.scrollTop : window.scrollY;
 
   mutate();
 
   window.requestAnimationFrame(() => {
-    if (isWindowTarget) {
+    if (!elementTarget) {
       if (window.scrollX !== x || window.scrollY !== y) {
         window.scrollTo(x, y);
       }
       return;
     }
 
-    if (target.scrollLeft !== x || target.scrollTop !== y) {
-      target.scrollLeft = x;
-      target.scrollTop = y;
+    if (elementTarget.scrollLeft !== x || elementTarget.scrollTop !== y) {
+      elementTarget.scrollLeft = x;
+      elementTarget.scrollTop = y;
     }
   });
 };
