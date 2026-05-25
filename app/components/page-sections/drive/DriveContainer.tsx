@@ -41,6 +41,8 @@ import {
   saveViewModePreference,
   getActiveSyncFolderLabel,
   saveActiveSyncFolderLabel,
+  getDriveOnLocalView,
+  saveDriveOnLocalView,
 } from "@/lib/utils/userPreferencesDb";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -136,9 +138,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // - `activeSyncFolderLabel`: persisted in user prefs. `null` means we
   //   haven't picked a folder yet (first launch or saved label removed);
   //   the bootstrap effect below resolves it to the first available label.
-  // - `isOnLocalView`: ephemeral UI flag set to true only when the user
-  //   clicks the "Local" breadcrumb segment. NOT persisted — next session
-  //   resumes at the last active folder, never on the Local cards view.
+  // - `isOnLocalView`: also persisted in user prefs so leaving Drive and
+  //   coming back restores the same section. True when the user is on the
+  //   "Local" cards view (the section picker showing Local Sync Folders +
+  //   Sync From Other Devices); false when inside a specific folder.
   const [activeSyncFolderLabel, setActiveSyncFolderLabel] = useState<
     string | null
   >(null);
@@ -715,6 +718,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         setActiveSyncFolderLabel(newLabel);
         setIsOnLocalView(false);
         void saveActiveSyncFolderLabel(newLabel);
+        void saveDriveOnLocalView(false);
       }
       triggerSyncPathRefresh((prev) => prev + 1);
       refetchUserFiles();
@@ -823,6 +827,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // and the deeper nested-segment jumps below.
   const handleNavigateToLocalView = useCallback(() => {
     setIsOnLocalView(true);
+    void saveDriveOnLocalView(true);
     if (isNested) {
       router.push("/files");
     }
@@ -836,6 +841,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       setActiveSyncFolderLabel(label);
       setIsOnLocalView(false);
       void saveActiveSyncFolderLabel(label);
+      void saveDriveOnLocalView(false);
       router.push("/files");
     },
     [router],
@@ -865,6 +871,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setActiveSyncFolderLabel(label);
     setIsOnLocalView(false);
     void saveActiveSyncFolderLabel(label);
+    void saveDriveOnLocalView(false);
   }, []);
 
   // Build the breadcrumb path that lives in the drive header. Empty when
@@ -1068,10 +1075,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     saveViewModePreference(mode);
   }, []);
 
-  // Hydrate active sync folder from user preferences on mount. This is the
-  // breadcrumb's "remember me here" — picks up where the user left off in
-  // a previous session. Runs once and toggles `activeFolderHydrated` so
-  // the fallback effect below knows when it's safe to fill in a default.
+  // Hydrate active sync folder + Local-view flag from user preferences on
+  // mount. This is the breadcrumb's "remember me here" — picks up where the
+  // user left off in a previous session, including whether they were on the
+  // Local cards view (section picker) vs. inside a specific folder. Runs
+  // once and toggles `activeFolderHydrated` so the fallback effect below
+  // knows when it's safe to fill in a default.
   useEffect(() => {
     if (isRecentFiles) {
       setActiveFolderHydrated(true);
@@ -1080,9 +1089,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     let cancelled = false;
     (async () => {
       try {
-        const saved = await getActiveSyncFolderLabel();
-        if (!cancelled && saved) {
+        const [saved, savedOnLocalView] = await Promise.all([
+          getActiveSyncFolderLabel(),
+          getDriveOnLocalView(),
+        ]);
+        if (cancelled) return;
+        if (saved) {
           setActiveSyncFolderLabel(saved);
+        }
+        if (savedOnLocalView) {
+          setIsOnLocalView(true);
         }
       } finally {
         if (!cancelled) setActiveFolderHydrated(true);
@@ -1227,8 +1243,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     // User clicked the "Local" breadcrumb segment. Reuses DriveOnboarding
     // for the cards view, but here we also pass `onSelectFolder` so a
     // card click switches the active folder instead of just opening the
-    // action menu. NOT persisted — next session resumes at the last
-    // active folder via the bootstrap effect.
+    // action menu. Persisted via `saveDriveOnLocalView` so next session
+    // resumes on the same section the user last viewed.
     content = (
       <DriveOnboarding
         onSyncStarted={handleOnboardingSyncStarted}

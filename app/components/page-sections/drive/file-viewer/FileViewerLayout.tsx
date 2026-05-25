@@ -274,7 +274,7 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
                   always ends 60px above the thumbnail strip, while
                   preserving the 40px gap from the side nav buttons and the
                   30px gap below the top actions. */}
-              <div className="flex-1 min-h-0 px-[24px] pt-[30px] pb-[60px]">
+              <div className="flex-1 min-h-0 px-[24px] pt-[34px] pb-[60px]">
                 <div className="flex h-full min-h-0 items-stretch gap-x-[40px]">
                   <div className="flex w-[44px] shrink-0 items-center justify-center">
                     {prevFile ? (

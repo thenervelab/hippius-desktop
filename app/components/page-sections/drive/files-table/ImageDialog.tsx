@@ -96,66 +96,59 @@ const ImageDialog: React.FC<{
       onNavigate={onNavigate}
       handleFileDownload={handleFileDownload}
     >
-      <div
-        className={cn(
-          "h-full min-h-0 w-full max-w-full max-h-full",
-          "flex items-center justify-center",
+      <div className="relative w-full h-full min-h-0 min-w-0 flex items-center justify-center">
+        {!imageLoaded && !imageError && resolvedUrl && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <Loader2 className="size-6 text-primary-50 animate-spin" />
+          </div>
         )}
-      >
-        <div className="relative min-h-0 min-w-0 max-w-full max-h-full flex items-center justify-center">
-          {!imageLoaded && !imageError && resolvedUrl && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <Loader2 className="size-6 text-primary-50 animate-spin" />
-            </div>
-          )}
 
-          {!imageError && resolvedUrl && (
-            <motion.div
-              key={file.actualFileName || file.name}
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{
-                opacity: imageLoaded ? 1 : 0,
-                scale: imageLoaded ? 1 : 1.0,
+        {!imageError && resolvedUrl && (
+          <motion.div
+            key={file.actualFileName || file.name}
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{
+              opacity: imageLoaded ? 1 : 0,
+              scale: imageLoaded ? 1 : 1.0,
+            }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+            className="relative w-full h-full min-h-0 min-w-0 flex items-center justify-center"
+          >
+            <img
+              key={resolvedUrl}
+              onLoad={() => {
+                setImageLoaded(true);
+                setImageError(null);
               }}
-              transition={{ duration: 0.3, ease: "easeInOut" }}
-              className="relative w-full h-full flex items-center justify-center"
-            >
-              <img
-                key={resolvedUrl}
-                onLoad={() => {
-                  setImageLoaded(true);
-                  setImageError(null);
-                }}
-                onError={() => {
-                  setImageLoaded(false);
-                  setImageError("Failed to load image");
-                }}
-                src={resolvedUrl}
-                alt={file.name}
-                className={cn(
-                  "max-h-full max-w-full w-auto h-auto object-contain rounded-[8px]",
-                  "shadow-[0_14px_31px_rgba(0,0,0,0.06),0_56px_56px_rgba(0,0,0,0.05)]",
-                  "duration-300 opacity-0",
-                  imageLoaded && "opacity-100",
-                )}
-              />
-            </motion.div>
-          )}
+              onError={() => {
+                setImageLoaded(false);
+                setImageError("Failed to load image");
+              }}
+              src={resolvedUrl}
+              alt={file.name}
+              className={cn(
+                "max-h-full max-w-full w-auto h-auto object-contain rounded-[8px]",
+                "shadow-[0_14px_31px_rgba(0,0,0,0.06),0_56px_56px_rgba(0,0,0,0.05)]",
+                "duration-300 opacity-0",
+                imageLoaded && "opacity-100",
+              )}
+            />
+          </motion.div>
+        )}
 
-          {imageError && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.3, ease: "easeInOut" }}
-            >
-              <ImageError
-                handleFileDownload={handleFileDownload}
-                message={imageError}
-                file={file}
-              />
-            </motion.div>
-          )}
-        </div>
+        {imageError && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+          >
+            <ImageError
+              handleFileDownload={handleFileDownload}
+              message={imageError}
+              file={file}
+            />
+          </motion.div>
+        )}
       </div>
     </FileViewerLayout>
   );
