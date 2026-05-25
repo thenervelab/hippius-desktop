@@ -1,68 +1,34 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import {
+  initializeBridge,
+  disconnectBridge,
+  getBalances,
+  bridgeAlphaToHAlpha as serviceBridgeAlphaToHAlpha,
+  bridgeHAlphaToAlpha as serviceBridgeHAlphaToAlpha,
+  getAllTransactions as serviceGetAllTransactions,
+  subscribeToTransactionUpdates,
+  getStakedHotkeys as serviceGetStakedHotkeys,
+  type BridgeStep,
+  type StakedHotkey,
+} from "@/lib/bridge/service";
+import { BRIDGE_CONFIG } from "@/lib/bridge/config";
+import type {
+  BridgeResult,
+  TrackedTransaction,
+} from "@/lib/bridge/types";
+import { deriveBridgeKeypair } from "@/lib/bridge/local-keypair";
 
-/** Wire-format constants that mirror Rust's `bridge::commands` event
- *  names. Keep both sides in lock-step — drift here silently loses
- *  progress updates. */
-const BRIDGE_STEP_EVENT = "hippius_bridge_step";
-const BRIDGE_TX_UPDATED_EVENT = "hippius_bridge_tx_updated";
+import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 
-export type BridgeDirection = "alpha-to-halpha" | "halpha-to-alpha";
-
-export type BridgeStatus =
-  | "pending"
-  | "confirmed"
-  | "processing"
-  | "completed"
-  | "failed"
-  | "unknown";
-
-export type BridgeStepState = "pending" | "active" | "done" | "error";
-
-export interface BridgeStep {
-  step: number;
-  label: string;
-  detail: string;
-  state: BridgeStepState;
-}
-
-export interface BridgeTransactionEvent {
-  type: string;
-  timestamp: number;
-  message: string;
-  data?: unknown;
-}
-
-export interface TrackedBridgeTransaction {
-  id: string;
-  direction: BridgeDirection;
-  status: BridgeStatus;
-  /** Amount in smallest unit, as a string (BigInt-safe). */
-  amount: string;
-  /** Decimals for `amount` — 9 for Alpha, 18 for hAlpha. */
-  amountDecimals: number;
-  senderAddress: string;
-  recipientAddress: string;
-  sourceTxHash?: string;
-  destinationTxHash?: string;
-  depositId?: string;
-  withdrawalId?: string;
-  createdAt: number;
-  updatedAt: number;
-  error?: string;
-  attestations: number;
-  requiredAttestations: number;
-  events: BridgeTransactionEvent[];
-  denialReason?: string;
-  refunded: boolean;
-}
-
+/**
+ * Mirror of the Rust `BridgeConfig` shape the legacy dialog code reads.
+ * Sourced from {@link BRIDGE_CONFIG} so the FE has a single source of
+ * truth and we don't need a round-trip to Rust just to render config.
+ */
 export interface BridgeConfig {
   bittensorWsUrl: string;
   bittensorName: string;
@@ -73,13 +39,48 @@ export interface BridgeConfig {
   defaultNetuid: number;
   alphaDecimals: number;
   halphaDecimals: number;
-  /** Basis-points (e.g. 10 = 0.10%). Divide by `feeDenominator`. */
   feeNumerator: number;
   feeDenominator: number;
-  /** Smallest-unit minimums, as strings (BigInt-safe). */
   minAlphaPlanck: string;
   minHalphaPlanck: string;
   minBufferBps: number;
+}
+
+function buildFeConfig(): BridgeConfig {
+  return {
+    bittensorWsUrl: BRIDGE_CONFIG.bittensor.wsUrl,
+    bittensorName: BRIDGE_CONFIG.bittensor.name,
+    hippiusWsUrl: BRIDGE_CONFIG.hippius.wsUrl,
+    hippiusName: BRIDGE_CONFIG.hippius.name,
+    bridgeContractAddress: BRIDGE_CONFIG.contract.address,
+    defaultValidatorHotkey: BRIDGE_CONFIG.defaultValidator.hotkey,
+    defaultNetuid: BRIDGE_CONFIG.defaultValidator.netuid,
+    alphaDecimals: BRIDGE_CONFIG.tokens.alpha.decimals,
+    halphaDecimals: BRIDGE_CONFIG.tokens.hAlpha.decimals,
+    feeNumerator: Math.round(BRIDGE_CONFIG.fees.feePercentage * 10000),
+    feeDenominator: 10000,
+    minAlphaPlanck: BRIDGE_CONFIG.minimumTransfer.alpha.toString(),
+    minHalphaPlanck: BRIDGE_CONFIG.minimumTransfer.hAlpha.toString(),
+    minBufferBps: Math.round(BRIDGE_CONFIG.fees.minimumBufferPercentage * 10000),
+  };
+}
+
+export type { BridgeDirection } from "@/lib/bridge/types";
+/**
+ * Re-export of the bridge-service tracked-transaction type under the
+ * name the desktop dialog + history table already use. Saves churn in
+ * every consumer file.
+ */
+export type TrackedBridgeTransaction = TrackedTransaction;
+
+export interface BridgeBalances {
+  /** Free TAO on Bittensor, smallest unit (BigInt). */
+  alpha: bigint;
+  /** Staked Alpha on the configured subnet (BigInt). The bridge source
+   *  for the Alpha → hAlpha direction; the destination for the reverse. */
+  alphaStake: bigint;
+  /** Free hAlpha on Hippius testnet, smallest unit (BigInt). */
+  hAlpha: bigint;
 }
 
 export interface BridgeSubmitResult {
@@ -87,107 +88,129 @@ export interface BridgeSubmitResult {
   txHash: string;
 }
 
-/** Cached query keys so external invalidation matches the hook's. */
-export const BRIDGE_TRANSACTIONS_QUERY_KEY = ["bridge", "transactions"] as const;
-export const BRIDGE_CONFIG_QUERY_KEY = ["bridge", "config"] as const;
+const BALANCES_KEY = "bridge-balances";
 
 /**
- * Top-level bridge hook used by the dialog + history table.
+ * Top-level bridge hook used by the wallet dialog + history table.
  *
- * - `config`: returns the testnet endpoints, fees and minimums fetched
- *   from Rust on mount (stable after first load).
- * - `transactions`: returns every tracked bridge tx for the auth user,
- *   newest first. Live-updates via `hippius_bridge_tx_updated` events
- *   so a successful submit refreshes the history table without a manual
- *   refetch.
- * - `wizardSteps`: latest steps payload pushed by Rust during a submit
- *   so the dialog can render a per-step progress timeline. Cleared by
- *   `clearWizardSteps()` when the dialog closes / the flow is reset.
- * - `submitHalphaToAlpha`: runs the live hAlpha → Alpha flow against
- *   the AlphaBridge pallet. Returns the new `bridgeTransactionId` +
- *   on-chain extrinsic hash so callers can correlate with the tracked
- *   row.
- * - `submitAlphaToHalpha`: stubbed in the desktop build — invokes the
- *   IPC so the structured error from Rust (see commands.rs) reaches the
- *   FE unchanged, letting the dialog render its "not yet wired"
- *   explanation.
+ * Mirrors the architecture in hippius-web's `useBridge`: live chain
+ * queries via polkadot-api against the testnet endpoints, balances +
+ * staked-hotkey lookups for the active wallet, and direct calls to
+ * `bridgeAlphaToHAlpha` / `bridgeHAlphaToAlpha` for submissions.
+ *
+ * The desktop difference is signing — we never use a Polkadot.js
+ * extension. Instead, the FE submits the user's password through
+ * `local_wallet_get_decrypted_mnemonic`, derives an Sr25519 keypair
+ * via `@polkadot/util-crypto`, and hands it to the existing
+ * `keypair`-aware code path on the service.
  */
 export function useBridge() {
-  const { polkadotAddress } = useWalletAuth();
+  const { activeWallet } = useLocalWallet();
   const queryClient = useQueryClient();
 
-  const configQuery = useQuery<BridgeConfig>({
-    queryKey: BRIDGE_CONFIG_QUERY_KEY,
-    queryFn: () => invoke<BridgeConfig>("bridge_get_config"),
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-  });
+  const address = activeWallet?.address ?? null;
 
-  const transactionsQuery = useQuery<TrackedBridgeTransaction[]>({
-    // Key on the auth address so logout/login flushes any prior user's
-    // history out of the cache before the next query runs.
-    queryKey: [...BRIDGE_TRANSACTIONS_QUERY_KEY, polkadotAddress ?? "anon"],
-    queryFn: () => invoke<TrackedBridgeTransaction[]>("bridge_get_transactions"),
-    enabled: !!polkadotAddress,
-    staleTime: 10_000,
-    refetchOnWindowFocus: false,
-  });
-
-  // Wizard step state lives in the hook so the dialog (or any other
-  // listener) renders the same payload Rust emitted, without each
-  // consumer re-subscribing to events independently. `useRef` for the
-  // unsub fns so a quick re-mount can't double-register.
+  const [isInitialized, setIsInitialized] = useState(false);
   const [wizardSteps, setWizardSteps] = useState<BridgeStep[]>([]);
-  const unlistenStepRef = useRef<UnlistenFn | null>(null);
-  const unlistenTxRef = useRef<UnlistenFn | null>(null);
+  const [transactions, setTransactions] =
+    useState<TrackedTransaction[]>(() => serviceGetAllTransactions());
+
+  const config = useMemo(buildFeConfig, []);
+
+  /* ── Initialise bridge connections once an address is known ───────── */
 
   useEffect(() => {
+    if (!address) return;
     let cancelled = false;
 
-    void listen<BridgeStep[]>(BRIDGE_STEP_EVENT, (event) => {
-      if (cancelled) return;
-      setWizardSteps(event.payload ?? []);
-    }).then((unsub) => {
-      if (cancelled) {
-        unsub();
-        return;
+    (async () => {
+      try {
+        await initializeBridge();
+        if (!cancelled) setIsInitialized(true);
+      } catch (e) {
+        console.error("[useBridge] initializeBridge failed:", e);
       }
-      unlistenStepRef.current = unsub;
-    });
-
-    void listen<TrackedBridgeTransaction>(BRIDGE_TX_UPDATED_EVENT, (event) => {
-      if (cancelled) return;
-      const incoming = event.payload;
-      if (!incoming) return;
-      queryClient.setQueryData<TrackedBridgeTransaction[]>(
-        [...BRIDGE_TRANSACTIONS_QUERY_KEY, polkadotAddress ?? "anon"],
-        (prev) => {
-          if (!prev) return [incoming];
-          const idx = prev.findIndex((t) => t.id === incoming.id);
-          if (idx < 0) return [incoming, ...prev];
-          const next = prev.slice();
-          next[idx] = incoming;
-          return next;
-        },
-      );
-    }).then((unsub) => {
-      if (cancelled) {
-        unsub();
-        return;
-      }
-      unlistenTxRef.current = unsub;
-    });
+    })();
 
     return () => {
       cancelled = true;
-      unlistenStepRef.current?.();
-      unlistenTxRef.current?.();
-      unlistenStepRef.current = null;
-      unlistenTxRef.current = null;
+      // Keep the connection open across dialog open/close — only
+      // disconnect on the address-change unmount path, not on every
+      // dialog teardown.
     };
-  }, [polkadotAddress, queryClient]);
+  }, [address]);
+
+  /* Disconnect when the address goes away (logout / wallet wiped). */
+  useEffect(() => {
+    if (address) return;
+    void disconnectBridge();
+    setIsInitialized(false);
+  }, [address]);
+
+  /* ── Balances ─────────────────────────────────────────────────────── */
+
+  const balancesQuery = useQuery<BridgeBalances>({
+    queryKey: [BALANCES_KEY, address],
+    queryFn: async () => {
+      if (!address) {
+        return { alpha: BigInt(0), alphaStake: BigInt(0), hAlpha: BigInt(0) };
+      }
+      return getBalances(address);
+    },
+    enabled: !!address && isInitialized,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    retry: 2,
+  });
+
+  /* ── Staked hotkeys (for the Alpha → hAlpha direction picker) ─────── */
+
+  const stakedHotkeysQuery = useQuery<StakedHotkey[]>({
+    queryKey: ["bridge-staked-hotkeys", address],
+    queryFn: async () => {
+      if (!address) return [];
+      return serviceGetStakedHotkeys(address);
+    },
+    enabled: !!address && isInitialized,
+    staleTime: 30_000,
+  });
+
+  /* ── Transactions (localStorage-backed, live updates) ─────────────── */
+
+  useEffect(() => {
+    let cancelled = false;
+    let unsubscribe: (() => void) | null = null;
+
+    (async () => {
+      const unsub = await subscribeToTransactionUpdates(() => {
+        if (cancelled) return;
+        setTransactions(serviceGetAllTransactions());
+      });
+      if (cancelled) {
+        unsub();
+        return;
+      }
+      unsubscribe = unsub;
+    })();
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, []);
+
+  const refetchTransactions = useCallback(async () => {
+    setTransactions(serviceGetAllTransactions());
+  }, []);
+
+  /* ── Wizard steps ────────────────────────────────────────────────── */
+
+  const wizardStepsRef = useRef<BridgeStep[]>([]);
+  wizardStepsRef.current = wizardSteps;
 
   const clearWizardSteps = useCallback(() => setWizardSteps([]), []);
+
+  /* ── Submit: hAlpha → Alpha ──────────────────────────────────────── */
 
   const submitHalphaToAlpha = useCallback(
     async (params: {
@@ -195,22 +218,42 @@ export function useBridge() {
       recipientAddress: string;
       password: string;
     }): Promise<BridgeSubmitResult> => {
-      const result = await invoke<BridgeSubmitResult>(
-        "bridge_submit_halpha_to_alpha",
-        {
-          amount: params.amount,
-          recipientAddress: params.recipientAddress,
-          password: params.password,
-        },
+      if (!activeWallet) {
+        throw new Error("No active wallet — create or unlock one first.");
+      }
+
+      const keypair = await deriveBridgeKeypair(
+        activeWallet.id,
+        params.password,
       );
-      // Belt-and-braces refetch — the tx-updated event already keeps
-      // the cache fresh, but the live refetch covers cases where the
-      // listener hadn't subscribed in time (e.g. immediate close).
-      void transactionsQuery.refetch();
-      return result;
+
+      const result: BridgeResult = await serviceBridgeHAlphaToAlpha(
+        {
+          direction: "halpha-to-alpha",
+          amount: BigInt(params.amount),
+          senderAddress: activeWallet.address,
+          recipientAddress: params.recipientAddress,
+          keypair,
+        },
+        setWizardSteps,
+      );
+
+      if (!result.success) {
+        throw new Error(result.error || "Bridge submission failed");
+      }
+
+      void queryClient.invalidateQueries({ queryKey: [BALANCES_KEY] });
+      void refetchTransactions();
+
+      return {
+        bridgeTransactionId: result.bridgeTransactionId ?? "",
+        txHash: result.txHash ?? "",
+      };
     },
-    [transactionsQuery],
+    [activeWallet, queryClient, refetchTransactions],
   );
+
+  /* ── Submit: Alpha → hAlpha ──────────────────────────────────────── */
 
   const submitAlphaToHalpha = useCallback(
     async (params: {
@@ -218,59 +261,110 @@ export function useBridge() {
       hotkey?: string;
       password: string;
     }): Promise<BridgeSubmitResult> => {
-      return invoke<BridgeSubmitResult>("bridge_submit_alpha_to_halpha", {
-        amount: params.amount,
-        hotkey: params.hotkey ?? null,
-        password: params.password,
-      });
+      if (!activeWallet) {
+        throw new Error("No active wallet — create or unlock one first.");
+      }
+
+      const keypair = await deriveBridgeKeypair(
+        activeWallet.id,
+        params.password,
+      );
+
+      const result: BridgeResult = await serviceBridgeAlphaToHAlpha(
+        {
+          direction: "alpha-to-halpha",
+          amount: BigInt(params.amount),
+          senderAddress: activeWallet.address,
+          hotkey: params.hotkey,
+          keypair,
+        },
+        setWizardSteps,
+      );
+
+      if (!result.success) {
+        throw new Error(result.error || "Bridge submission failed");
+      }
+
+      void queryClient.invalidateQueries({ queryKey: [BALANCES_KEY] });
+      void refetchTransactions();
+
+      return {
+        bridgeTransactionId: result.bridgeTransactionId ?? "",
+        txHash: result.txHash ?? "",
+      };
     },
-    [],
+    [activeWallet, queryClient, refetchTransactions],
   );
 
   return useMemo(
     () => ({
-      config: configQuery.data,
-      configLoading: configQuery.isLoading,
-      transactions: transactionsQuery.data ?? [],
-      transactionsLoading: transactionsQuery.isLoading,
-      transactionsError: transactionsQuery.error,
-      refetchTransactions: transactionsQuery.refetch,
+      // Config + readiness
+      config,
+      configLoading: false,
+      isInitialized,
+
+      // Balances
+      balances: balancesQuery.data,
+      balancesLoading:
+        balancesQuery.isLoading || (!balancesQuery.data && !!address && isInitialized),
+      balancesFetching: balancesQuery.isFetching,
+      refetchBalances: balancesQuery.refetch,
+
+      // Hotkeys (Alpha → hAlpha picker)
+      stakedHotkeys: stakedHotkeysQuery.data ?? [],
+      stakedHotkeysLoading: stakedHotkeysQuery.isLoading,
+      refetchStakedHotkeys: stakedHotkeysQuery.refetch,
+
+      // Transactions
+      transactions,
+      transactionsLoading: false,
+      refetchTransactions,
+
+      // Wizard steps
       wizardSteps,
       clearWizardSteps,
+
+      // Operations
       submitHalphaToAlpha,
       submitAlphaToHalpha,
     }),
     [
-      configQuery.data,
-      configQuery.isLoading,
-      transactionsQuery.data,
-      transactionsQuery.isLoading,
-      transactionsQuery.error,
-      transactionsQuery.refetch,
+      config,
+      isInitialized,
+      balancesQuery.data,
+      balancesQuery.isLoading,
+      balancesQuery.isFetching,
+      balancesQuery.refetch,
+      stakedHotkeysQuery.data,
+      stakedHotkeysQuery.isLoading,
+      stakedHotkeysQuery.refetch,
+      transactions,
+      refetchTransactions,
       wizardSteps,
       clearWizardSteps,
       submitHalphaToAlpha,
       submitAlphaToHalpha,
+      address,
     ],
   );
 }
 
 /**
- * Format a smallest-unit string as a display number using the supplied
- * `decimals`. Used by every bridge UI surface so balances and history
- * rows render the same regardless of direction.
+ * Format a smallest-unit BigInt-ish value as a display number using
+ * `decimals`. Truncates (never rounds up) to `displayDecimals` so the
+ * displayed value never appears to exceed the underlying balance.
  *
- * Truncates (never rounds up) to `displayDecimals` so the value never
- * appears to exceed the underlying balance.
+ * Accepts string | bigint | undefined so old call sites that passed
+ * `planck` strings keep working.
  */
 export function formatBridgeAmount(
-  planck: string | undefined,
+  planck: string | bigint | undefined,
   decimals: number,
   displayDecimals = 6,
 ): string {
-  if (!planck) return "0";
+  if (planck === undefined || planck === null) return "0";
   try {
-    const value = BigInt(planck);
+    const value = typeof planck === "bigint" ? planck : BigInt(String(planck));
     if (value <= BigInt(0)) return "0";
     const divisor = BigInt(10) ** BigInt(decimals);
     const whole = value / divisor;
