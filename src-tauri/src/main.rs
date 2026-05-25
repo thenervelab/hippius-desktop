@@ -15,6 +15,7 @@ mod app_state;
 pub mod auth;
 pub mod billing;
 pub mod blockchain;
+pub mod bridge;
 pub mod console_access;
 pub mod crypto;
 pub mod error;
@@ -54,6 +55,9 @@ use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, 
 use crate::blockchain::subscription::start_block_subscription;
 use crate::blockchain::transfers::compute_max_transferable;
 use crate::blockchain::transfers::{transfer_balance, validate_send_balance};
+use crate::bridge::commands::{
+    bridge_get_config, bridge_get_transactions, bridge_submit_alpha_to_halpha, bridge_submit_halpha_to_alpha,
+};
 use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
@@ -278,6 +282,11 @@ fn main() {
             to_plancks,
             planck_to_hip_full,
             compute_max_transferable,
+            // Alpha ⇆ hAlpha bridge
+            bridge_get_config,
+            bridge_get_transactions,
+            bridge_submit_halpha_to_alpha,
+            bridge_submit_alpha_to_halpha,
             // Console access
             // Account recovery (OAuth-based)
             validate_recovery_password,
