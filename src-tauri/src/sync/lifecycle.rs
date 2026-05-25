@@ -123,10 +123,22 @@ pub async fn add_local_sync_folder(
     let state = app.state::<crate::app_state::AppState>();
     let pool = state.pool()?;
 
-    // Enforce credit eligibility at the IPC boundary. Refuses to add a
-    // new sync folder if the user has zero marketplace credits — see
-    // `crate::billing::eligibility::thresholds::FOLDER_SYNC`.
-    crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FolderSync).await?;
+    // Enforce credit eligibility at the IPC boundary, priced by the
+    // recursive byte sum of the folder's CURRENT contents — those bytes
+    // are about to be uploaded by the sync engine on first init.
+    // A user setting up sync on a 100 GB folder with $0.10 of credits
+    // would silently 402 every file otherwise. The byte-sum walk
+    // ignores permission-denied subdirs so the gate under-charges
+    // rather than rejecting a legitimate "I have access to most of
+    // this" setup. See `crate::billing::eligibility::thresholds`.
+    let bytes = crate::sync::files::sum_regular_file_bytes(std::path::Path::new(&path)).await;
+    crate::billing::eligibility::require_eligible(
+        &state,
+        &account_id,
+        crate::billing::eligibility::InsufficientCreditsAction::FolderSync,
+        bytes,
+    )
+    .await?;
 
     // 1. Generate unique label — single source of truth in
     // `crate::sync::paths::generate_unique_label_internal`.
@@ -289,6 +301,24 @@ async fn remove_drive_inmemory(sync: &SyncRunner, label: &str) -> (usize, Option
 
     sync.remove_state(label);
     sync.discard_pending_activity_for_label(label);
+    // Wipe the synced-paths timestamp cache for this label so a
+    // future re-registration under the same label starts from a
+    // clean slate (otherwise a stale entry survives across
+    // remove/re-add cycles, briefly showing the previous drive's
+    // upload dates in the UI until the first reconcile refreshes).
+    if let Ok(mut cache) = sync.synced_paths_cache.lock() {
+        cache.remove(label);
+    }
+    // Drop the producer-side first-reconcile gate so the next
+    // `register_drive` for this label installs a fresh gate. Any
+    // in-flight `wait_for_first_reconcile` from a still-running
+    // spawned reconcile task is unaffected — that task holds its
+    // own `Arc<ReconcileGate>` clone and will settle on its Arc
+    // independently. See the upstream `SyncRunner::remove_drive`
+    // comment for the full invariant.
+    if let Ok(mut gates) = sync.first_reconcile.lock() {
+        gates.remove(label);
+    }
     let _ = crate::sync::progress::remove_files_for_label(sync, label.to_string());
 
     (remaining, removed_path)
@@ -341,39 +371,137 @@ async fn register_drive(app: &AppHandle, sync: &Arc<SyncRunner>, manager: DriveM
     spawn_reconcile_timestamps(app, sync.clone(), reconcile_arc, label.to_string());
 }
 
-/// Background one-shot task: fetch the server manifest and refresh
-/// `remote_timestamps` on disk when the drive's local state is missing
-/// authoritative values. On success, reloads state from disk, rebuilds
-/// the in-memory synced-paths cache, and emits `hcfs_activity_updated`
-/// so the Files page re-queries and renders the freshly-populated
-/// "DATE UPLOADED" column. Silently fails open — drive init must stay
-/// usable even when the server is unreachable.
+/// Background task: drive a bounded-retry reconcile of the server
+/// manifest and settle the drive's first-reconcile readiness gate so
+/// consumers reading `synced_paths_cache` (e.g. `get_user_files`) can
+/// await it.
+///
+/// Compared to the prior fire-and-forget version, this:
+///
+/// - Retries transient failures (network / 5xx / timeout) up to the
+///   policy's budget (default 3 attempts at 0s / 2s / 5s) inside
+///   hcfs-client, so a brief server hiccup at cold start no longer
+///   leaves the FE looking at zero-timestamp entries until the next
+///   sync cycle.
+/// - Settles a per-label `ReconcileGate` regardless of outcome so the
+///   FE's `wait_for_first_reconcile` budget is correctly released.
+///   Without this, `get_user_files` would wait the full 6s on every
+///   cold start before reading a cache that's already fresh from
+///   disk (when reconcile is skipped).
+/// - On terminal failure (every attempt failed), emits
+///   `hcfs_metadata_stale` so the FE can show a per-drive banner.
+///   The banner self-clears when the next `ACTIVITY_UPDATED` fires
+///   for the same label (e.g. on the first successful sync cycle).
 fn spawn_reconcile_timestamps(app: &AppHandle, sync: Arc<SyncRunner>, manager_arc: Arc<TokioMutex<DriveManager>>, label: String) {
+    // Acquire the gate handle BEFORE spawning the task. This way,
+    // even if the spawn task is delayed (Tokio scheduler under
+    // load), any FE call to `wait_for_first_reconcile` already
+    // sees the gate as registered (returns Timeout, not
+    // NotRegistered) — keeping the readiness contract consistent.
+    let gate = sync.first_reconcile_gate(&label);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        use hcfs_client::drive::{FailureReason, ReconcileOutcome, RetryPolicy};
+
+        // Hold the per-drive manager lock across the ENTIRE
+        // `reconcile_with_retry` await.
+        //
+        // The reviewer flagged this lock window as wasteful (up to
+        // ~7s with 0s / 2s / 5s backoffs and HTTP latency), and the
+        // hcfs-client API was changed so the returned future is
+        // `'static` precisely to allow a lock-free await. However,
+        // releasing the lock around the network call opened a
+        // concurrent file-write race: both `reconcile_with_retry`
+        // (on success) and `run_sync_cycle` (end of every cycle)
+        // persist `sync_state.json`. With the lock released, a sync
+        // cycle triggered by a user `add_files` IPC right after
+        // login could interleave its plan-and-save with the
+        // reconcile's save, dropping the upload entry from the
+        // baseline. Observed symptom: the "Adding ... to sync
+        // folder…" toast sat on the 60s `upload_processing`
+        // watchdog timeout because no first-chunk event ever fired.
+        //
+        // The cold-start reconcile is a one-shot per drive — once
+        // the cache is populated the gate stays settled for the
+        // rest of the session, so this lock window is paid at most
+        // once per drive per login. Restoring concurrency safety
+        // beats saving 7s on cold start.
+        //
+        // The hcfs-client `'static` future shape is preserved so
+        // that a future revision can move the file-write
+        // coordination into hcfs-client (e.g. an internal
+        // per-drive write mutex) and reclaim the lock-window
+        // optimization without another desktop change.
+        //
+        // Lock hygiene: `manager_arc` is a `tokio::sync::Mutex` so
+        // its guard is `Send` and safely held across `.await`
+        // points (Async Lock Hygiene axiom applies to
+        // `std::sync::Mutex` guards, not Tokio's).
         let manager = manager_arc.lock().await;
-        match manager.reconcile_remote_timestamps().await {
-            Ok(true) => match manager.load_sync_state().await {
+        let outcome = manager.reconcile_with_retry(RetryPolicy::first_reconcile_default()).await;
+
+        match &outcome {
+            ReconcileOutcome::Reconciled { duration_ms } => match manager.load_sync_state().await {
                 Ok(state) => {
                     let paths = build_synced_paths_from_state(&state);
                     sync.update_synced_paths_cache(&label, paths);
                     drop(manager);
                     let _ = app.emit(crate::sync::events::ACTIVITY_UPDATED, ());
-                    info!(label = %label, "reconcile_remote_timestamps: cache refreshed");
+                    info!(label = %label, duration_ms = duration_ms, "reconcile: cache refreshed");
                 }
                 Err(e) => {
-                    warn!(label = %label, error = %e, "reconcile_remote_timestamps: post-fetch state reload failed");
+                    warn!(label = %label, error = %e, "reconcile: post-fetch state reload failed");
                 }
             },
-            Ok(false) => {
-                debug!(label = %label, "reconcile_remote_timestamps: skipped (fresh)");
+            ReconcileOutcome::Fresh => {
+                debug!(label = %label, "reconcile: skipped (fresh)");
             }
-            Err(e) => {
-                // Fail open — drive stays usable, the next sync cycle's
-                // own `fetch_remote_state` will pick up the slack.
-                warn!(label = %label, error = %e, "reconcile_remote_timestamps: failed");
+            ReconcileOutcome::Failed { reason, attempts } => {
+                let reason_str = match reason {
+                    FailureReason::Retryable { last_error } => {
+                        // `last_error` is `Arc<SyncError>`; Display
+                        // delegates through the Arc. Downstream
+                        // consumers wanting typed dispatch (e.g.
+                        // `SyncError::RateLimited`'s retry_after_secs)
+                        // can match on `last_error.as_ref()` from the
+                        // outcome variant.
+                        format!("transient error after {attempts} attempts: {last_error}")
+                    }
+                    FailureReason::Terminal { error } => {
+                        format!("non-retryable error: {error}")
+                    }
+                    // `FailureReason` is `#[non_exhaustive]` so an
+                    // hcfs-client bump can add new variants without
+                    // breaking the build. Render unknowns as a
+                    // generic transient failure — better than
+                    // hiding them entirely.
+                    _ => format!("reconcile failed after {attempts} attempts"),
+                };
+                warn!(label = %label, attempts = attempts, reason = %reason_str, "reconcile: failed, emitting metadata-stale");
+                let _ = app.emit(
+                    crate::sync::events::METADATA_STALE,
+                    crate::sync::events::MetadataStalePayload {
+                        label: label.clone(),
+                        reason: reason_str,
+                    },
+                );
+            }
+            // `ReconcileOutcome` is `#[non_exhaustive]`; tolerate
+            // unknown future variants by logging and falling
+            // through to the gate settle below (which guarantees
+            // awaiters never hang forever).
+            _ => {
+                warn!(label = %label, "reconcile: unknown outcome variant from hcfs-client (likely needs FE wiring)");
             }
         }
+
+        // Settle the gate AFTER all I/O so a consumer that wakes
+        // on the settle sees a fully-coherent cache. The gate is
+        // first-write-wins; settling here on every code path is
+        // safe and required (the readiness signal must be set even
+        // when the outcome is `Failed`, so awaiters don't hang
+        // until the timeout).
+        gate.settle(outcome);
     });
 }
 
@@ -1005,11 +1133,12 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
         cache.clear();
     }
 
-    // 0c. Reset the upload-processing banner state so a logout / account
-    //     switch doesn't leave a stale "Processing N files…" banner up
-    //     for the next user. The reset is unconditional (clears even if
-    //     no upload was active) to make this path idempotent.
-    app_state.upload_processing.reset(&app);
+    // 0c. Reset the upload-processing banner state for EVERY label so a
+    //     logout / account switch doesn't leave a stale "Processing N files…"
+    //     banner up for the next user. `reset_all` is unconditional (clears
+    //     even if no upload was active) and emits one cleared payload per
+    //     previously-active label so the FE per-drive banners all clear.
+    app_state.upload_processing.reset_all(&app);
 
     // 1. Cancel every drive's cancellation token FIRST so the sync loop
     //    sees a clean shutdown signal and can persist state before exiting.
@@ -1053,6 +1182,13 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     sync.discard_all_pending_activity();
     sync.clear_label_roots();
 
+    // Clear the per-label preparing overrides so a logout / account
+    // switch cannot leak a "Preparing sync…" widget into the next
+    // session. Mirrors the unconditional `upload_processing.reset`
+    // pattern — both are transient UI-affordance state that must
+    // not survive across accounts.
+    app_state.preparing.clear_all();
+
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
     let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
 
@@ -1080,18 +1216,50 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
 
     let (remaining, _removed_path) = remove_drive_inmemory(sync, &label).await;
 
+    // Drop the preparing override for this label so a remove during
+    // the SyncStarted → plan_ready window cannot leave a stuck
+    // "Preparing sync…" badge tied to a drive that no longer exists.
+    //
+    // Belt-and-suspenders with the `SyncError::Cancelled` arm in
+    // `tauri_bridge.rs` — that arm also clears preparing for the
+    // cancelled label, but the cancel SyncEvent is dispatched
+    // asynchronously relative to this synchronous IPC and may not
+    // have landed yet. Calling `clear` here is idempotent (second
+    // call returns `false` and skips the `emit_snapshot`), so the
+    // dual-path is cheap and covers the race where the IPC returns
+    // before the bridge has seen the cancel.
+    if app_state.preparing.clear(&label) {
+        sync.emit_snapshot(true);
+    }
+
     // Wake any waiters in remove_drive_and_wait so they can re-check without
     // sleeping through the full polling interval.
     app_state.drive_removed_notify.notify_waiters();
 
-    // Delete the DB row so the drive isn't resurrected on app restart.
-    // Best-effort: if the account or pool isn't available, the in-memory
-    // cleanup above still takes effect for this session.
+    // Delete the DB row so the drive isn't resurrected on app restart, and
+    // drop the intent-manifest rows for this drive so the snapshot overlay
+    // doesn't keep showing stale "X of Y" totals for a folder the user just
+    // removed.
+    //
+    // Both calls share the same prerequisites (pool + account known) and
+    // both are best-effort — failure here doesn't break sync correctness.
+    // The intent manifest is a UX overlay; stale rows will be cleaned up by
+    // the next manifest GC pass even if this call fails. `pause_drive`
+    // deliberately does NOT clear intent because pause is reversible and the
+    // in-flight totals must survive a resume.
     let acct = app_state.current_account_id().ok();
-    if let (Ok(pool), Some(acct)) = (app_state.pool(), acct.as_deref())
-        && let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, acct, &label).await
-    {
-        warn!("Failed to remove sync path for '{}' from DB: {e}", label);
+    if let (Ok(pool), Some(acct)) = (app_state.pool(), acct.as_deref()) {
+        if let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, acct, &label).await {
+            warn!("Failed to remove sync path for '{}' from DB: {e}", label);
+        }
+
+        // `IntentRepo::new` takes `SqlitePool` by value; the pool is internally
+        // `Arc`-shaped so `.clone()` is just an `Arc` bump — no connection
+        // pool duplication.
+        let repo = crate::sync::intent::IntentRepo::new(pool.clone());
+        if let Err(e) = repo.clear_drive(acct, &label).await {
+            warn!("Failed to clear intent rows for drive '{}': {e}", label);
+        }
     }
 
     // Drop the on-disk sync baseline. Without this, a re-add (whether at the
@@ -1713,14 +1881,20 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
             use tauri::Manager;
             let app_state = ctx.app.state::<crate::app_state::AppState>();
             let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-            app_state.upload_processing.clear_if_session_advanced(&ctx.app, epoch);
+            app_state.upload_processing.clear_if_session_advanced(&ctx.app, &ctx.label, epoch);
         }
 
         if crate::sync::logic::is_file_completion_tick(bytes, total) {
-            let action = match ctx.direction {
-                TransferDirection::Upload => SyncActivityAction::Uploaded,
-                TransferDirection::Download => SyncActivityAction::Downloaded,
-            };
+            // Byte-progress completion is "the request body finished
+            // leaving our socket" — the HTTP response status (200 / 402
+            // / 5xx) has not been parsed yet. We log + emit the
+            // transfer-complete UI event here because both are
+            // best-effort progress signals, but we deliberately do NOT
+            // enqueue a `SyncActivityItem` from this point: that would
+            // record a server-rejected upload as a successful one.
+            // The enqueue lives in `build_file_synced_callback`, which
+            // hcfs-client fires only on per-file `Ok` (server-confirmed
+            // 2xx). See docs/plans/2026-05-13-sync-402-data-integrity.md.
             info!("{} complete [{}]: {} ({} bytes)", dir_name, ctx.label, file_name, total);
             let _ = ctx.app.emit(
                 crate::sync::events::FILE_TRANSFER_COMPLETE,
@@ -1728,25 +1902,132 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
                     label: ctx.label.to_string(),
                 },
             );
-            ctx.sync.add_pending_activity(SyncActivityItem {
-                file_name: std::sync::Arc::from(path_str),
-                action,
-                timestamp: chrono::Utc::now().timestamp(),
-                size_bytes: total,
-                label: Arc::clone(&ctx.label),
-            });
         }
     }
     debug!("{} [{}]: {}/{} bytes, path: {:?}", dir_name, ctx.label, bytes, total, path);
 }
 
+/// Fire-and-forget: persist the planner's view of pending uploads to the
+/// `sync_intent` table.
+///
+/// Called from `build_plan_ready_callback` once per sync cycle. The intent
+/// manifest is a pure UX overlay used by the sync widget to render
+/// "5 GB of 10 GB" across app restarts — it is NOT load-bearing for sync
+/// correctness. Failures (no logged-in user, missing pool, SQLite error)
+/// are logged and dropped; the next plan-ready call will replay the same
+/// uploads.
+///
+/// Ownership: all captures are owned (`AppHandle` is `Clone` and cheap;
+/// `label` and `plan_uploads` are moved in). The spawned future is
+/// `'static + Send`, satisfying `tauri::async_runtime::spawn`'s bound.
+///
+/// Uses `tauri::async_runtime::spawn`, NOT bare `tokio::spawn`: this runs
+/// from the hcfs `on_sync_plan_ready` callback, whose calling thread is
+/// not contractually guaranteed to be inside a Tokio runtime. Bare
+/// `tokio::spawn` panics ("there is no reactor running") off-runtime —
+/// the same crash class fixed in `tauri_bridge::spawn_snapshot_emit`.
+/// Tauri's runtime handle is global and thread-context-independent.
+fn spawn_record_intent_plan<R: tauri::Runtime>(app: AppHandle<R>, label: String, plan_uploads: Vec<(String, u64)>) {
+    tauri::async_runtime::spawn(async move {
+        use tauri::Manager;
+        let state: tauri::State<'_, crate::app_state::AppState> = app.state();
+        let account_id = match state.current_account_id() {
+            Ok(id) => id,
+            Err(e) => {
+                // Not logged in (or auth mutex poisoned). The widget overlay
+                // is a UX nicety, not load-bearing — drop rather than emit a
+                // noisy error. Next plan-ready after login replays uploads.
+                debug!(label = %label, error = %e, "skipping intent record_plan: no active account");
+                return;
+            }
+        };
+        let pool = match state.pool() {
+            Ok(p) => p.clone(),
+            Err(e) => {
+                warn!(label = %label, error = %e, "skipping intent record_plan: pool unavailable");
+                return;
+            }
+        };
+        let repo = crate::sync::intent::IntentRepo::new(pool);
+        if let Err(e) = repo.record_plan(&account_id, &label, &plan_uploads).await {
+            warn!(label = %label, error = %e, "intent record_plan failed");
+        }
+    });
+}
+
+/// Fire-and-forget: mark a single file as completed in the desktop-side
+/// `sync_intent` manifest.
+///
+/// Called from inside `build_file_synced_callback` only when hcfs-client's
+/// per-file callback reports `action == "uploaded"`. Downloads, deletes,
+/// and conflict events do NOT touch the intent manifest — the manifest
+/// counts user-initiated uploads, which is the only category the
+/// "X of Y uploaded across restarts" widget overlay needs.
+///
+/// Spawned because `FileSyncedFn` is a sync `Fn(...)` and
+/// [`crate::sync::intent::IntentRepo::mark_completed`] is async. The
+/// manifest is a pure UX overlay, NOT load-bearing for sync correctness,
+/// so on auth / pool / SQL failure we log and drop. Idempotence is
+/// enforced at the SQL layer (`AND completed_at_ms IS NULL`), so a
+/// duplicate fire — e.g. hcfs-client retrying a callback after a
+/// transient widget event drop — preserves the first completion
+/// timestamp.
+///
+/// Ownership: every capture is owned. `AppHandle<R>` is `Clone` and cheap
+/// (internally `Arc`); `label` and `rel_path` are moved in. The spawned
+/// future is `'static + Send`, satisfying `tauri::async_runtime::spawn`'s
+/// bound.
+///
+/// Uses `tauri::async_runtime::spawn`, NOT bare `tokio::spawn`: this runs
+/// from the hcfs `on_file_synced` callback, whose calling thread is not
+/// contractually guaranteed to be inside a Tokio runtime. Bare
+/// `tokio::spawn` panics ("there is no reactor running") off-runtime —
+/// the same crash class fixed in `tauri_bridge::spawn_snapshot_emit`.
+fn spawn_mark_intent_completed<R: tauri::Runtime>(app: AppHandle<R>, label: String, rel_path: String) {
+    tauri::async_runtime::spawn(async move {
+        use tauri::Manager;
+        let state: tauri::State<'_, crate::app_state::AppState> = app.state();
+        let account_id = match state.current_account_id() {
+            Ok(id) => id,
+            Err(e) => {
+                // Not logged in (or auth mutex poisoned). Treat like the
+                // plan-ready path: drop quietly, the next plan-ready will
+                // replay this row as pending until it gets uploaded again.
+                debug!(label = %label, path = %rel_path, error = %e, "skipping intent mark_completed: no active account");
+                return;
+            }
+        };
+        let pool = match state.pool() {
+            Ok(p) => p.clone(),
+            Err(e) => {
+                warn!(label = %label, path = %rel_path, error = %e, "skipping intent mark_completed: pool unavailable");
+                return;
+            }
+        };
+        let repo = crate::sync::intent::IntentRepo::new(pool);
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if let Err(e) = repo.mark_completed(&account_id, &label, &rel_path, now_ms).await {
+            warn!(label = %label, path = %rel_path, error = %e, "intent mark_completed failed");
+        }
+    });
+}
+
 /// Build the `on_sync_plan_ready` callback that merges the sync plan into the
 /// progress session and emits the `SYNC_PLAN_READY` event.
-fn build_plan_ready_callback(app: &AppHandle, label: Arc<str>, sync: &Arc<SyncRunner>) -> hcfs_client::sync::SyncPlanReadyFn {
+fn build_plan_ready_callback<R: tauri::Runtime>(app: &AppHandle<R>, label: Arc<str>, sync: &Arc<SyncRunner>) -> hcfs_client::sync::SyncPlanReadyFn {
     let app = app.clone();
     let sync = sync.clone();
     Arc::new(move |uploads, downloads, local_deletes, remote_deletes, renames| {
         sync.touch_progress_time();
+        // Persist the planner's view to the desktop-side intent manifest.
+        // Runs UNCONDITIONALLY — above the `total == 0` early-return —
+        // because an empty plan must still flush stale pending rows (see
+        // `IntentRepo::record_plan`'s "Empty input semantics" docstring).
+        // Logic is delegated to `spawn_record_intent_plan` so this closure
+        // stays under the project's 100-line per-function ceiling.
+        let plan_uploads: Vec<(String, u64)> = uploads.iter().map(|f| (f.path.clone(), f.size_bytes)).collect();
+        spawn_record_intent_plan(app.clone(), label.to_string(), plan_uploads);
+
         let total = uploads.len() + downloads.len() + local_deletes.len() + remote_deletes.len() + renames.len();
         if total == 0 {
             return;
@@ -1902,7 +2183,16 @@ fn build_fetch_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) 
 /// soon as its individual AEAD verification has succeeded — instead of
 /// waiting for the entire sync cycle to finish. See
 /// [`crate::sync::progress::mark_file_synced`] for the full reasoning.
-fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_client::sync::FileSyncedFn {
+pub fn build_file_synced_callback<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    sync: Arc<SyncRunner>,
+    label: Arc<str>,
+) -> hcfs_client::sync::FileSyncedFn {
+    // Clone once at construction time; the closure (`Arc<dyn Fn(...)>`)
+    // captures the owned `AppHandle<R>`. Per-fire we `.clone()` again to
+    // hand an owned handle to the `'static`-bound spawn future. Both
+    // clones are cheap (`AppHandle` is internally `Arc`).
+    let app = app.clone();
     Arc::new(move |rel_path, path_hash_hex, arion_cid, action, timestamps| {
         debug!("File synced [{label}]: {rel_path} ({action}) cid={arion_cid}");
         if rel_path.is_empty() {
@@ -1918,8 +2208,110 @@ fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_cl
         // `complete_pending_files`. Without this, a small decrypted file
         // gets stuck on "Decrypting" until the largest in-flight file
         // also finishes.
-        if let Err(e) = crate::sync::progress::mark_file_synced(&sync, rel_path) {
-            warn!(label = %label, path = %rel_path, error = %e, "Failed to mark file synced in progress tracker");
+        //
+        // `mark_file_synced` also returns the file's `total_bytes` from
+        // the in-memory progress tracker — that's the byte count we
+        // thread into the activity row below. `FileSyncedFn`'s upstream
+        // signature still doesn't carry the size, but the progress
+        // tracker holds it from per-chunk telemetry and the transition
+        // here reads it BEFORE flipping the row to `Completed`. The
+        // fallback (no session / no file entry / already-Completed) is
+        // `0`, matching the prior hardcoded value for those edge cases.
+        let size_bytes = match crate::sync::progress::mark_file_synced(&sync, rel_path) {
+            Ok(n) => n,
+            Err(e) => {
+                warn!(label = %label, path = %rel_path, error = %e, "Failed to mark file synced in progress tracker");
+                0
+            }
+        };
+
+        // Activity items must reflect SERVER-CONFIRMED success, not just
+        // "the request body finished sending". hcfs-client's per-file
+        // upload/download tasks invoke this callback only after the
+        // task returns `Ok` (2xx response parsed for uploads, full
+        // chunked download + AEAD verification for downloads), so this
+        // is the earliest point a "Uploaded" / "Downloaded" row is true.
+        //
+        // The enqueue ran inside the byte-progress completion-tick
+        // before fix `2026-05-13-sync-402-data-integrity`. That site
+        // fires when the local TCP socket has drained, so a 402 /
+        // 5xx-rejected upload would still appear as "Uploaded" in the
+        // activity log. See docs/plans/2026-05-13-sync-402-data-integrity.md.
+        //
+        // Action mapping: hcfs-client passes `action` as one of
+        // `"uploaded"` / `"downloaded"` / `"deleted"` / `"conflict"`
+        // (mirroring `SyncActivityAction::as_str()`). Unknown values
+        // produce `None`, which skips the activity enqueue entirely —
+        // recording nothing is the truthful choice when we don't know
+        // how to categorize the event. Fabricating an `Uploaded` row
+        // for a future hcfs-client variant (e.g. Phase 2's `"failed"`)
+        // is the exact category of lie this task exists to eliminate.
+        //
+        // `size_bytes` comes from `mark_file_synced`'s return value —
+        // the in-memory progress tracker's `file.total_bytes` read
+        // before the row transitions to Completed. The Recent-Files
+        // view (`get_recent_files` in `sync/files.rs`) reads
+        // `item.size_bytes` directly, so without this thread-through
+        // every newly-synced file would render with size 0 / "unknown".
+        // The byte-progress callback used to supply the size; we no
+        // longer trust it for activity rows (see the 402 plan), so the
+        // progress tracker is the authoritative source. The 0 fallback
+        // covers the documented edge cases of `mark_file_synced` —
+        // no session, no file entry, or the file was already Completed
+        // — where the size isn't observable from this call.
+        //
+        // `ActivityDedupKey = (file_name, action, label, size_bytes)`
+        // (`hcfs_client::engine::runner::ActivityDedupKey`) regains
+        // full entropy now that `size_bytes` is non-zero on the common
+        // path.
+        let activity_action: Option<SyncActivityAction> = match action {
+            "uploaded" => Some(SyncActivityAction::Uploaded),
+            "downloaded" => Some(SyncActivityAction::Downloaded),
+            "deleted" => Some(SyncActivityAction::Deleted),
+            "conflict" => Some(SyncActivityAction::Conflict),
+            other => {
+                warn!(
+                    label = %label,
+                    path = %rel_path,
+                    action = other,
+                    "unknown FileSyncedFn action; skipping activity-item enqueue to preserve activity-log truth"
+                );
+                None
+            }
+        };
+        // Skip ONLY the activity enqueue on unknown actions —
+        // `upsert_synced_path` below still runs because the file did
+        // sync successfully (hcfs-client only fires this callback on
+        // per-file `Ok`); we just decline to categorize the event for
+        // the activity log.
+        if let Some(activity_action) = activity_action {
+            sync.add_pending_activity(SyncActivityItem {
+                file_name: Arc::from(rel_path),
+                action: activity_action,
+                timestamp: chrono::Utc::now().timestamp(),
+                size_bytes,
+                label: Arc::clone(&label),
+            });
+        }
+
+        // Mark the file complete in the desktop-side intent manifest so
+        // the sync widget can show "X of Y" totals across app restarts.
+        // We mark intent complete ONLY on "uploaded":
+        //   - "downloaded": pulling someone else's file, not user upload intent.
+        //   - "deleted":    deletion is out of scope for the upload manifest.
+        //   - "conflict":   when a conflict resolves via upload, hcfs-client
+        //                   already arrives here with action="uploaded" (see
+        //                   `Drive::resolve_upload_conflict`), so the
+        //                   resolution is counted; the bare "conflict" event
+        //                   reports a non-upload outcome (kept-remote /
+        //                   manual-deferred) and must not advance totals.
+        //
+        // Spawned for the same async-Fn reason as `spawn_record_intent_plan`
+        // — `FileSyncedFn` is sync; `IntentRepo::mark_completed` is async.
+        // The manifest is a pure UX overlay, NOT load-bearing for sync
+        // correctness, so failures inside the spawn log and drop.
+        if action == "uploaded" {
+            spawn_mark_intent_completed(app.clone(), label.to_string(), rel_path.to_string());
         }
 
         // hcfs's `FileSyncedFn` callback passes `path_hash_hex` as a hex
@@ -1957,6 +2349,57 @@ fn build_file_synced_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_cl
             None => SyncedFileInfo::new(path_hash_bytes, Arc::from(arion_cid)),
         };
         sync.upsert_synced_path(&label, rel_path.to_string(), info);
+    })
+}
+
+/// Build the `on_file_failed` callback that flips the file's progress
+/// status to terminal `FileStatus::Error` synchronously at the failure
+/// site (does NOT emit any Tauri event — the bridge handles that via
+/// [`hcfs_client::engine::events::SyncEvent::FileFailed`]).
+///
+/// Visibility is intentionally module-private (`pub(super)` would also
+/// suffice, but neither is needed by integration tests because tests
+/// reach the same outcome through `mark_file_failed` directly — the
+/// callback is purely glue between hcfs-client's `FileFailedFn` shape and
+/// our progress tracker).
+///
+/// The split-of-responsibilities mirrors `build_file_synced_callback` and
+/// the existing bridge: bridge → Tauri event emit; this callback →
+/// progress-tracker mutation. hcfs-client guarantees both fire for the
+/// same per-file error, so we don't lose either signal.
+fn build_file_failed_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_client::sync::FileFailedFn {
+    Arc::new(move |rel_path, file_id_hex, kind, http_status| {
+        // Mirror `on_file_synced` shape: empty rel_path means the planner
+        // never recorded a path for this file (shouldn't happen, but the
+        // upstream doc on `FileFailedFn` allows it). No-op rather than
+        // mark a phantom entry.
+        if rel_path.is_empty() {
+            return;
+        }
+        debug!(
+            label = %label,
+            path = %rel_path,
+            file_id = %file_id_hex,
+            ?kind,
+            http_status = ?http_status,
+            "per-file sync failure reported by hcfs-client"
+        );
+
+        // Best-effort display string for the snapshot row's `error` field.
+        // The frontend already discriminates failure CATEGORY via the
+        // separate `hcfs_file_failed` Tauri event (typed
+        // `FileFailureKindPayload`); this string is only used as a
+        // tooltip/details fallback in the file list, so a `Debug` render
+        // is acceptable.
+        let error_msg = format!("{kind:?}");
+        if let Err(e) = crate::sync::progress::mark_file_failed(&sync, rel_path, &error_msg) {
+            warn!(
+                label = %label,
+                path = %rel_path,
+                error = %e,
+                "failed to mark file failed in progress tracker"
+            );
+        }
     })
 }
 
@@ -2004,7 +2447,12 @@ pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManage
         )),
         on_scan_progress: Some(build_scan_callback(sync.clone(), app.clone(), Arc::clone(&label))),
         on_fetch_state_progress: Some(build_fetch_callback(sync.clone(), app.clone(), Arc::clone(&label))),
-        on_file_synced: Some(build_file_synced_callback(sync.clone(), Arc::clone(&label))),
+        on_file_synced: Some(build_file_synced_callback(app, sync.clone(), Arc::clone(&label))),
+        // Phase 2 / Task 2.7: per-file failure callback fired synchronously
+        // by hcfs-client at the error site. We mutate the in-memory
+        // progress tracker here; the bridge's `SyncEvent::FileFailed` arm
+        // is the user-visible side (Tauri event emit).
+        on_file_failed: Some(build_file_failed_callback(sync.clone(), Arc::clone(&label))),
     });
 }
 
@@ -2166,6 +2614,66 @@ mod tests {
         assert!(!sync.drives.lock().await.contains_key(label), "drive should no longer be in the map");
     }
 
+    /// Regression test for fix 3 in the date-uploaded readiness PR.
+    ///
+    /// `remove_drive_inmemory` used to leave two per-label side maps
+    /// untouched on each remove/re-add cycle: the synced-paths
+    /// timestamp cache and the first-reconcile gate registry. Both
+    /// leaks were silent (no functional bug surfaced) but they
+    /// accumulated per label until process exit AND they could
+    /// briefly surface stale upload dates after a remove-then-re-add
+    /// because the cache entry survived. This test pins the cleanup.
+    #[tokio::test]
+    async fn remove_drive_inmemory_clears_synced_paths_cache_and_first_reconcile_gate() {
+        use hcfs_client::engine::types::SyncedFileInfo;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let sync = test_sync_runner();
+        let label = "leak-test";
+
+        // Seed both side maps directly — `remove_drive_inmemory`
+        // doesn't depend on the drive actually being registered for
+        // the cleanup invariant to hold, and seeding lets the test
+        // stay focused on the cleanup itself.
+        sync.update_synced_paths_cache(
+            label,
+            HashMap::from([(
+                "file.txt".to_string(),
+                SyncedFileInfo {
+                    path_hash: [0u8; 32],
+                    arion_cid: Arc::from("cid-1"),
+                    uploaded_at: 1_700_000_000,
+                    updated_at: 1_700_000_100,
+                },
+            )]),
+        );
+        // Register the gate via the public API so we exercise the
+        // production code path that `register_drive` uses.
+        let _ = sync.first_reconcile_gate(label);
+
+        // Pre-conditions: both side maps have an entry for the label.
+        assert!(
+            sync.get_cached_synced_paths(label).is_some(),
+            "synced_paths_cache should have a pre-removal entry"
+        );
+        assert!(
+            sync.first_reconcile.lock().expect("lock").contains_key(label),
+            "first_reconcile gate map should have a pre-removal entry"
+        );
+
+        let _ = remove_drive_inmemory(&sync, label).await;
+
+        assert!(
+            sync.get_cached_synced_paths(label).is_none(),
+            "synced_paths_cache must be cleared by remove_drive_inmemory"
+        );
+        assert!(
+            !sync.first_reconcile.lock().expect("lock").contains_key(label),
+            "first_reconcile gate map must be cleared by remove_drive_inmemory"
+        );
+    }
+
     #[tokio::test]
     async fn remove_drive_inmemory_cancels_token() {
         let sync = test_sync_runner();
@@ -2274,11 +2782,26 @@ mod tests {
         }
     }
 
+    /// Build a `tauri::test::MockRuntime` app handle for callbacks that
+    /// now take `&AppHandle<R>` (Task 6 — intent-manifest wiring). The
+    /// handle's only role in these tests is to satisfy the type system
+    /// and the closure's per-fire `app.clone()`; the spawned
+    /// `mark_intent_completed` lookup falls through the
+    /// "no `AppState` managed" branch silently because the mock app
+    /// hasn't called `manage()` on `AppState`. That's the exact
+    /// fire-and-forget contract — the surrounding cache write +
+    /// activity enqueue keep being the only behavior these tests assert
+    /// on. The `test` feature on `tauri` is enabled via dev-deps only.
+    fn mock_app_handle() -> tauri::AppHandle<tauri::test::MockRuntime> {
+        tauri::test::mock_app().handle().clone()
+    }
+
     #[tokio::test]
     async fn build_file_synced_callback_writes_timestamps_to_cache() {
         let sync = test_sync_runner();
         let label: Arc<str> = Arc::from("test-drive");
-        let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+        let app = mock_app_handle();
+        let callback = build_file_synced_callback(&app, sync.clone(), Arc::clone(&label));
 
         // 32-byte hash keyed by 'a' so the hex decode succeeds.
         let fid = [0xAAu8; 32];
@@ -2315,7 +2838,8 @@ mod tests {
         );
         sync.update_synced_paths_cache(&label, prior);
 
-        let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+        let app = mock_app_handle();
+        let callback = build_file_synced_callback(&app, sync.clone(), Arc::clone(&label));
         // Same file re-uploaded against a legacy server that omits
         // timestamps — callback receives `None`.
         callback("doc.txt", &hex::encode(fid), "cid-new", "uploaded", None);
@@ -2335,7 +2859,8 @@ mod tests {
         // just with zero timestamps. Reconcile will backfill them.
         let sync = test_sync_runner();
         let label: Arc<str> = Arc::from("fresh-legacy-drive");
-        let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+        let app = mock_app_handle();
+        let callback = build_file_synced_callback(&app, sync.clone(), Arc::clone(&label));
 
         let fid = [0xCCu8; 32];
         callback("new.txt", &hex::encode(fid), "cid-a", "uploaded", None);
@@ -2355,7 +2880,8 @@ mod tests {
         // Empty rel_path is the early-exit guard — don't touch the cache.
         let sync = test_sync_runner();
         let label: Arc<str> = Arc::from("guard-drive");
-        let callback = build_file_synced_callback(sync.clone(), Arc::clone(&label));
+        let app = mock_app_handle();
+        let callback = build_file_synced_callback(&app, sync.clone(), Arc::clone(&label));
 
         let fid = [0xDDu8; 32];
         let ts = make_timestamps(123, 456);

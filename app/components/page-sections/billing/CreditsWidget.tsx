@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import TimeAgo from "react-timeago";
 import { openLinkByKey } from "@/app/lib/utils/links";
-import Warning from "@/components/ui/icons/Warning";
 import { CoinsIcon, AddCreditsArrow } from "@/components/ui/icons";
 import { RefreshCcwDot } from "lucide-react";
 
@@ -18,7 +17,6 @@ const CreditsWidget: FC<CreditsWidgetProps> = ({ className }) => {
   const {
     data: credits,
     isLoading,
-    error,
     refetch,
     dataUpdatedAt,
   } = useUserCredits();
@@ -52,18 +50,19 @@ const CreditsWidget: FC<CreditsWidgetProps> = ({ className }) => {
           "p-3",
         )}
       >
-        {/* 1. Headline stat — left-aligned, label bottom-anchored */}
+        {/* 1. Headline stat — fresh / unfunded accounts read as 0
+            credits even when the underlying RPC call errored (the
+            backend has no row for the account yet, so there's nothing
+            to surface beyond "no credits yet"). A transient indexer
+            failure is communicated through the status row below
+            (amber warning + retry) instead of a blocky red ERROR. */}
         <div className="flex items-end justify-start gap-1">
           {isLoading ? (
             <div className="h-[30px] w-[140px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
-          ) : error ? (
-            <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-error-80">
-              ERROR
-            </span>
           ) : (
             <>
               <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white">
-                {credits?.hip ?? "- - - -"}
+                {credits?.hip ?? "0"}
               </span>
               <span className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 pb-[3px]">
                 Credits
@@ -72,30 +71,17 @@ const CreditsWidget: FC<CreditsWidgetProps> = ({ className }) => {
           )}
         </div>
 
-        {/* 2. Refresh row */}
+        {/* 2. Refresh row — the credits IPC returns 0 for accounts that
+            haven't set up billing yet, but historically threw on
+            unrelated transient failures (OAuth refresh, indexer blip)
+            that left the user reading "0 Credits" next to a red-tinted
+            "Couldn't refresh credits" warning. Net effect was noise:
+            the displayed value already handles the missing-data case,
+            so we just always show "Last updated" + the refresh button
+            and trust the user to retry if they think the number is off. */}
         <div className="flex items-center gap-2">
           {isLoading ? (
             <div className="h-4 w-36 rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
-          ) : error ? (
-            <>
-              <Warning className="size-4 text-error-80 shrink-0" />
-              <span className="text-[12px] text-error-80">
-                Credits not retrieved.
-              </span>
-              <button
-                type="button"
-                onClick={() => refetch()}
-                aria-label="Retry loading credits"
-                className={cn(
-                  "flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[6px] border",
-                  "bg-grey-light-700 border-grey-dark-100",
-                  "dark:bg-black-primary-bg dark:border-black-300",
-                  "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
-                )}
-              >
-                <RefreshCcwDot className="size-3 text-black-700 dark:text-white opacity-40" />
-              </button>
-            </>
           ) : (
             <>
               <button

@@ -116,13 +116,39 @@ pub async fn add_file(
     sync_path: String,
     file_path: String,
 ) -> Result<String> {
-    // Enforce credit eligibility at the IPC boundary. Even if a stale
-    // FE cache let the user click the upload button, this fails the
-    // operation here so we never copy the file into the sync folder
-    // (and thus never trigger an upload that would silently fail
-    // server-side for billing reasons).
+    // Enforce credit eligibility at the IPC boundary, priced by actual
+    // file size. The FE may still hit a 402 from hcfs-server if the
+    // balance drops between gate and upload (concurrent device or
+    // billing tick), but this gate prevents the common case where the
+    // user obviously cannot afford the upload — addresses sync-402
+    // plan Task 3.1.
+    //
+    // A `metadata` failure (file removed between picker and IPC,
+    // permission denied, broken symlink) gates with `bytes = 0` so the
+    // legacy `> 0` floor still applies — the subsequent `copy_dir_recursive`
+    // / `tokio::fs::copy` will surface the I/O error to the user with
+    // its native message. Don't `?`-bail here: a missing-file diagnostic
+    // is clearer than "insufficient credits because we couldn't size it".
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
-    crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FileUpload).await?;
+    let bytes = tokio::fs::metadata(Path::new(&file_path)).await.map_or(0, |m| m.len());
+    crate::billing::eligibility::require_eligible(
+        &state,
+        &account_id,
+        crate::billing::eligibility::InsufficientCreditsAction::FileUpload,
+        bytes,
+    )
+    .await?;
+
+    // Resolve the local sync-root path to its drive label. The
+    // banner state is per-label (Task 4.1) so an active banner on
+    // drive A no longer suppresses drive B's preparing widget. If
+    // the row is gone (race with a drive removal) `label_opt` is
+    // `None` and every banner write becomes a no-op for this IPC.
+    let pool = state.pool()?;
+    let label_opt = crate::sync::paths::label_for_sync_path(pool, &account_id, &sync_path)
+        .await
+        .ok()
+        .flatten();
 
     // Mark the processing window. Released either by the first upload
     // chunk of the NEXT sync cycle (success path, gated by
@@ -130,7 +156,9 @@ pub async fn add_file(
     // error guard below (failure path — IPC failed before any cycle
     // ran, so unconditional `reset` is correct).
     let epoch = state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-    state.upload_processing.begin(&app, 1, epoch);
+    if let Some(label) = label_opt.as_deref() {
+        state.upload_processing.begin(&app, label, 1, epoch);
+    }
 
     // Canonicalize the sync path once and pass it to the internal helper
     // so the helper can be cheap when called per-file from the batch path.
@@ -142,14 +170,18 @@ pub async fn add_file(
     let canonical_parent = match tokio::fs::canonicalize(Path::new(&sync_path)).await {
         Ok(p) => p,
         Err(e) => {
-            state.upload_processing.reset(&app);
+            if let Some(label) = label_opt.as_deref() {
+                state.upload_processing.reset(&app, label);
+            }
             return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
         }
     };
     match add_file_internal(&canonical_parent, &file_path).await {
         Ok(name) => Ok(name),
         Err(e) => {
-            state.upload_processing.reset(&app);
+            if let Some(label) = label_opt.as_deref() {
+                state.upload_processing.reset(&app, label);
+            }
             Err(e)
         }
     }
@@ -165,9 +197,29 @@ pub async fn add_folder(
     subfolder: Option<String>,
 ) -> Result<String> {
     // Enforce credit eligibility at the IPC boundary — same rationale
-    // as `add_file`.
+    // as `add_file`, but priced by the recursive byte total of the
+    // source folder. A folder with permission-denied subdirectories
+    // returns a best-effort lower bound (see `sum_regular_file_bytes`),
+    // which under-charges rather than over-charging the user — the
+    // server's 402 path is still the last line of defense.
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
-    crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::FolderUpload).await?;
+    let bytes = sum_regular_file_bytes(Path::new(&folder_path)).await;
+    crate::billing::eligibility::require_eligible(
+        &state,
+        &account_id,
+        crate::billing::eligibility::InsufficientCreditsAction::FolderUpload,
+        bytes,
+    )
+    .await?;
+
+    // Resolve `sync_path` → drive label so the banner state can be
+    // scoped per-label (Task 4.1). Banner writes degrade to no-op
+    // when the row is absent (drive removed mid-IPC race).
+    let pool = state.pool()?;
+    let label_opt = crate::sync::paths::label_for_sync_path(pool, &account_id, &sync_path)
+        .await
+        .ok()
+        .flatten();
 
     // Pre-walk the source tree so the banner shows an accurate count.
     // Cheap relative to the full copy (no file-content reads).
@@ -180,9 +232,11 @@ pub async fn add_folder(
     // can complete without firing `SyncCompleted` in some hcfs-client
     // configurations).
     let count = count_regular_files(Path::new(&folder_path)).await;
-    if count > 0 {
+    if count > 0
+        && let Some(label) = label_opt.as_deref()
+    {
         let epoch = state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-        state.upload_processing.begin(&app, count, epoch);
+        state.upload_processing.begin(&app, label, count, epoch);
     }
 
     let result = add_folder_with_app_inner(&sync_path, &folder_path, subfolder.as_deref()).await;
@@ -196,8 +250,11 @@ pub async fn add_folder(
         }
         Err(e) => {
             // IPC failed before any sync cycle ran — unconditional
-            // reset is correct (no cycle epoch to gate on).
-            state.upload_processing.reset(&app);
+            // reset is correct (no cycle epoch to gate on). No-op
+            // when no label resolved or when `begin` was skipped.
+            if let Some(label) = label_opt.as_deref() {
+                state.upload_processing.reset(&app, label);
+            }
             Err(e)
         }
     }
@@ -306,6 +363,90 @@ async fn count_regular_files(root: &std::path::Path) -> u64 {
         }
     }
     count
+}
+
+/// Sum the byte size of regular files (non-directory, non-symlink) under
+/// `root`, recursively. Used by the credit-eligibility gate in
+/// `add_folder`, `add_files`, and `add_local_sync_folder` to compute the
+/// total upload payload BEFORE invoking
+/// `crate::billing::eligibility::require_eligible`.
+///
+/// Same invariants as [`count_regular_files`]:
+/// - Iterative depth-first walk via explicit stack (no recursive async
+///   boxing); cap depth at [`FOLDER_BYTE_WALK_MAX_DEPTH`] entries on the
+///   stack to defend against symlink-cycle pathological cases. The cap
+///   bounds the stack, not the total file count; the walk reads only
+///   directory entries (no file content), so the I/O cost is the same
+///   as `copy_dir_recursive` is already about to pay.
+/// - Per-subdirectory I/O errors (permission denied, hardware faults)
+///   are silently skipped via `continue` so the gate doesn't fail an
+///   upload because ONE unreadable subdir made the byte-sum
+///   undercount — the legitimate uploads still get gated on the
+///   surviving bytes. A wholly-unreadable root returns `0`, which
+///   correctly falls back to the static `> 0` threshold floor.
+/// - Symlinks are NOT followed (`DirEntry::file_type` is lstat-shaped),
+///   matching `count_regular_files` and avoiding loops.
+/// - Each per-file size comes from `DirEntry::metadata`, which calls
+///   `stat` on the entry itself (NOT the symlink target, since `ft`
+///   already classified it as a regular file). Sizes are summed via
+///   `saturating_add` so a malicious sparse file or `u64::MAX` length
+///   can't panic.
+pub(super) async fn sum_regular_file_bytes(root: &std::path::Path) -> u64 {
+    use tokio::fs;
+
+    let mut bytes: u64 = 0;
+    let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        // Defense in depth: a symlink cycle could push entries forever
+        // even though we don't follow symlinks at the entry level — a
+        // legitimate `mount --bind` cycle, hardlinked directories on
+        // non-POSIX filesystems, or an attacker pre-seeding the
+        // directory tree could push the stack arbitrarily. The cap
+        // matches the recursion depth used elsewhere in this module
+        // (`copy_dir_recursive`).
+        if stack.len() > FOLDER_BYTE_WALK_MAX_DEPTH {
+            break;
+        }
+        let Ok(mut entries) = fs::read_dir(&dir).await else { continue };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let Ok(ft) = entry.file_type().await else { continue };
+            if ft.is_dir() {
+                stack.push(entry.path());
+            } else if ft.is_file()
+                && let Ok(meta) = entry.metadata().await
+            {
+                bytes = bytes.saturating_add(meta.len());
+            }
+        }
+    }
+    bytes
+}
+
+/// Stack-depth cap for [`sum_regular_file_bytes`]. Sized to match the
+/// 64-level cap that `copy_dir_recursive` already enforces — a folder
+/// deeper than this would fail the subsequent copy anyway, so refusing
+/// to walk further is consistent with the rest of the module.
+const FOLDER_BYTE_WALK_MAX_DEPTH: usize = 4096;
+
+/// Recursively sum the byte size of a heterogeneous batch of paths
+/// (a mix of regular files and directories). Used by `add_files` to
+/// compute the credit-eligibility byte total. Each direct file path is
+/// sized via `tokio::fs::metadata`; each directory is walked through
+/// [`sum_regular_file_bytes`]. Per-path metadata failures degrade to
+/// zero so a missing or unreadable entry doesn't reject the rest of
+/// the batch — the subsequent copy loop surfaces the real I/O error.
+async fn sum_batch_bytes(paths: &[String]) -> u64 {
+    let mut total: u64 = 0;
+    for fp in paths {
+        let p = std::path::Path::new(fp);
+        let add = if p.is_dir() {
+            sum_regular_file_bytes(p).await
+        } else {
+            tokio::fs::metadata(p).await.map_or(0, |m| m.len())
+        };
+        total = total.saturating_add(add);
+    }
+    total
 }
 
 /// Internal folder copy — no sync trigger (caller handles it).
@@ -492,6 +633,10 @@ pub struct AddFilesResult {
 /// would silently use the wrong threshold if the FE classified
 /// incorrectly.
 #[tauri::command]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Linear early-return flow with per-step banner reset (Task 4.1); splitting into helpers would either re-route the banner reset through trait/closure plumbing or fragment the canonicalize-then-validate sequence."
+)]
 pub async fn add_files(
     app: AppHandle,
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -504,13 +649,20 @@ pub async fn add_files(
     // boundary. The per-file `add_file_internal` calls inside the loop
     // below do NOT re-check — there's no point hammering the billing
     // API once per file when the batch is treated as a single unit.
+    //
+    // The byte sum drives the price: each direct file path is sized via
+    // `tokio::fs::metadata`, each directory path is walked recursively
+    // via `sum_regular_file_bytes`. Per-path metadata failures degrade
+    // to 0 so a missing file in the input list doesn't reject the rest
+    // of the batch — the subsequent copy loop surfaces the I/O error.
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
     let action = if for_folder {
         crate::billing::eligibility::InsufficientCreditsAction::FolderUpload
     } else {
         crate::billing::eligibility::InsufficientCreditsAction::FileUpload
     };
-    crate::billing::eligibility::require_eligible(&state, &account_id, action).await?;
+    let total_bytes = sum_batch_bytes(&file_paths).await;
+    crate::billing::eligibility::require_eligible(&state, &account_id, action, total_bytes).await?;
 
     // Sum the file count for the banner. Each direct file path counts
     // as 1; each directory path gets a recursive walk via
@@ -533,49 +685,67 @@ pub async fn add_files(
             total_count = total_count.saturating_add(1);
         }
     }
-    if total_count > 0 {
+    // Resolve `sync_path` → drive label once before any banner write
+    // so the per-label state (Task 4.1) can route every `begin`/`reset`
+    // for this IPC to the right drive. Banner writes degrade to no-op
+    // when the row is absent.
+    let pool = state.pool()?;
+    let label_opt = crate::sync::paths::label_for_sync_path(pool, &account_id, &sync_path)
+        .await
+        .ok()
+        .flatten();
+
+    if total_count > 0
+        && let Some(label) = label_opt.as_deref()
+    {
         let epoch = state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-        state.upload_processing.begin(&app, total_count, epoch);
+        state.upload_processing.begin(&app, label, total_count, epoch);
     }
+
+    // Reset helper: scoped to the resolved label, no-op when none.
+    // Each fallible early-return path below calls this before
+    // returning so the banner doesn't sit until the watchdog timeout.
+    // Unconditional reset is correct here because the IPC failed
+    // before any sync cycle could run.
+    let reset_banner = |app: &AppHandle, state: &crate::app_state::AppState| {
+        if let Some(label) = label_opt.as_deref() {
+            state.upload_processing.reset(app, label);
+        }
+    };
 
     // When a subfolder is specified, resolve the effective target directory.
     // This replaces the path-join logic that was previously in TypeScript.
     // Async canonicalize so a slow filesystem doesn't block the tokio worker.
-    //
-    // After `begin` above, every fallible early-return path here MUST call
-    // `reset` first — otherwise the banner sits there until the watchdog
-    // timeout while the IPC has already failed. Unconditional `reset` is
-    // correct because the IPC failed before any sync cycle could run.
     let target_path = if let Some(ref sub) = subfolder {
         // Reject traversal components
         if sub.contains("..") {
-            state.upload_processing.reset(&app);
+            reset_banner(&app, &state);
             return Err(crate::error::AppError::Other("Subfolder path contains traversal component".into()));
         }
         let target = Path::new(&sync_path).join(sub);
         if !target.exists()
             && let Err(e) = std::fs::create_dir_all(&target)
         {
-            state.upload_processing.reset(&app);
+            reset_banner(&app, &state);
             return Err(crate::error::AppError::Other(format!("Failed to create subfolder: {e}")));
         }
         // Verify resolved path stays within sync root.
         let canonical_root = match tokio::fs::canonicalize(Path::new(&sync_path)).await {
             Ok(p) => p,
             Err(e) => {
-                state.upload_processing.reset(&app);
+                reset_banner(&app, &state);
                 return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
             }
         };
         let canonical_target = match tokio::fs::canonicalize(&target).await {
             Ok(p) => p,
             Err(e) => {
-                state.upload_processing.reset(&app);
+                reset_banner(&app, &state);
                 return Err(crate::error::AppError::Other(format!("Invalid subfolder path: {e}")));
             }
         };
         if !canonical_target.starts_with(&canonical_root) {
-            state.upload_processing.reset(&app);
+            reset_banner(&app, &state);
             return Err(crate::error::AppError::Other("Subfolder escapes sync folder".into()));
         }
         target.to_string_lossy().to_string()
@@ -589,7 +759,7 @@ pub async fn add_files(
     let canonical_target = match tokio::fs::canonicalize(Path::new(&target_path)).await {
         Ok(p) => p,
         Err(e) => {
-            state.upload_processing.reset(&app);
+            reset_banner(&app, &state);
             return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
         }
     };
@@ -637,10 +807,10 @@ pub async fn add_files(
     // Unconditional `reset` is correct: the batch never produced any
     // upload work, so there is no future cycle whose epoch we need
     // to gate against. `reset` is safe even if `begin` was never
-    // called (e.g. `total_count` was 0 above): it short-circuits when
-    // state is already inactive.
+    // called (e.g. `total_count` was 0 above): the per-label `remove`
+    // short-circuits when no entry exists.
     if added.is_empty() {
-        state.upload_processing.reset(&app);
+        reset_banner(&app, &state);
     }
 
     // Always trigger sync so successfully added files get uploaded
@@ -665,7 +835,15 @@ use hcfs_client::engine::types::{SyncedFileInfo, build_synced_paths_from_state};
 /// is also refreshed. When the lock is unavailable (sync in progress),
 /// falls back to the last cached snapshot so the file browser still
 /// shows accurate sync status instead of "unknown".
+///
+/// Waits up to [`FIRST_RECONCILE_WAIT_BUDGET`] for the per-drive
+/// reconcile readiness gate so the cache contains authoritative
+/// timestamps on cold start. See
+/// [`synced_paths_and_excludes_for_label`] for the full rationale.
 async fn synced_paths_for_label(sync: &SyncRunner, label: &str) -> Option<HashMap<String, SyncedFileInfo>> {
+    let _ = sync
+        .wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET)
+        .await;
     let arc = match acquire_drive_arc(sync, label) {
         DriveArcOutcome::Acquired(arc) => arc,
         DriveArcOutcome::CacheFallback => return sync.get_cached_synced_paths(label),
@@ -691,11 +869,29 @@ async fn synced_paths_for_label(sync: &SyncRunner, label: &str) -> Option<HashMa
 /// Read both the synced-paths map and the exclusion patterns for `label`
 /// behind a single outer-drives lock acquisition.
 ///
-/// Eliminates the two-acquire pattern flagged by the perf audit: callers
-/// like `list_sync_folder_inner` previously locked `sync.drives` once for
-/// synced paths and again for exclude patterns. Both values are produced
-/// from the same `manager` borrow in a single per-drive lock window.
+/// Before reading the cache, wait up to [`FIRST_RECONCILE_WAIT_BUDGET`]
+/// for the per-drive readiness gate to settle. This closes the cold-
+/// start race where `get_user_files` would observe a stale cache
+/// (with `uploaded_at = 0` for any file the local `sync_state.json`
+/// is missing timestamps for) before the background reconcile
+/// finished its first attempt. Net effect: first Files-page render
+/// after login shows correct upload dates instead of "—" until the
+/// user logs out and back in. Per-drive wait, parallel across
+/// drives because `get_user_files` fans out via `join_all`, so the
+/// worst-case latency is bounded by the budget itself, not by drive
+/// count.
 async fn synced_paths_and_excludes_for_label(sync: &SyncRunner, label: &str) -> (Option<HashMap<String, SyncedFileInfo>>, Vec<String>) {
+    // Block reads until the first reconcile has settled (or the
+    // budget elapses). We discard the outcome here — the cache
+    // contents are what we read below; this wait only serves to
+    // delay the read until those contents are trustworthy. A
+    // `Timeout` / `NotRegistered` falls through to whatever stale
+    // state we have, matching the existing graceful-degradation
+    // contract.
+    let _ = sync
+        .wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET)
+        .await;
+
     let arc = match acquire_drive_arc(sync, label) {
         DriveArcOutcome::Acquired(arc) => arc,
         DriveArcOutcome::CacheFallback => return (sync.get_cached_synced_paths(label), Vec::new()),
@@ -717,6 +913,16 @@ async fn synced_paths_and_excludes_for_label(sync: &SyncRunner, label: &str) -> 
         Err(_) => (sync.get_cached_synced_paths(label), Vec::new()),
     }
 }
+
+/// Maximum time `synced_paths_and_excludes_for_label` is willing to
+/// wait for a drive's first reconcile to settle before reading the
+/// cache. Sized to comfortably cover the production retry schedule
+/// (0s / 2s / 5s = up to ~7s for the third attempt to start) with a
+/// small margin: at 6s we accept that an extremely slow third
+/// attempt may finish after we've returned and let the
+/// `ACTIVITY_UPDATED` event refresh the FE — the worst case is
+/// one extra refetch, not a stale forever read.
+const FIRST_RECONCILE_WAIT_BUDGET: std::time::Duration = std::time::Duration::from_secs(6);
 
 /// Outcome of locating a per-drive `DriveManager` Arc behind the outer
 /// drives map. Either we got the Arc, or the outer/inner lookup failed and
@@ -1459,13 +1665,41 @@ pub async fn list_sync_folder_grouped_inner(
     })
 }
 
+/// Inclusive [from, to] date window for the files page Date filter.
+///
+/// Both fields are `YYYY-MM-DD` strings (local-date). The filter rule
+/// expands `from` to 00:00:00 local and `to` to 23:59:59.999 local so a
+/// single-day pick (`from == to`) still matches every file uploaded
+/// during that day. Mirrors the web console's `DateRange` shape so the
+/// frontend can hand the same payload to both clients unchanged.
+#[derive(serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DateRangeFilter {
+    pub from: String,
+    pub to: String,
+}
+
 /// Filter criteria for the files page, matching the frontend `FilterCriteria`.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FileFilterCriteria {
     pub search_term: Option<String>,
     pub file_types: Option<Vec<String>>,
+    /// Explicit file extensions to match (e.g. ["mp4", "jpg"]). Independent
+    /// from `file_types` (coarse categories) — present so the web-console
+    /// style "specific extension" dropdown can request exact matches without
+    /// re-encoding into category groups. Matched case-insensitively against
+    /// the trailing extension of the entry name.
+    pub file_extensions: Option<Vec<String>>,
+    /// Legacy single-date / preset string filter (`"YYYY-MM-DD"`, `"today"`,
+    /// `"last7days"`, `"last30days"`, `"thisyear"`, `"lastyear"`). Retained
+    /// for backward-compat with older IPC callers. The desktop UI no
+    /// longer sets this — it sends `date_range` instead.
     pub date_filter: Option<String>,
+    /// Console-style date-range window. When `Some`, `date_filter` is
+    /// ignored and only files whose `created_at` falls inside the
+    /// inclusive `[from, to]` window are kept.
+    pub date_range: Option<DateRangeFilter>,
     pub file_sizes: Option<Vec<u64>>,
     pub folder_tab: Option<String>,
 }
@@ -1478,7 +1712,12 @@ impl FileFilterCriteria {
     pub fn is_empty(&self) -> bool {
         self.search_term.as_deref().is_none_or(str::is_empty)
             && self.file_types.as_ref().is_none_or(std::vec::Vec::is_empty)
+            && self
+                .file_extensions
+                .as_ref()
+                .is_none_or(std::vec::Vec::is_empty)
             && self.date_filter.as_deref().is_none_or(str::is_empty)
+            && self.date_range.is_none()
             && self.file_sizes.as_ref().is_none_or(std::vec::Vec::is_empty)
             && self.folder_tab.is_none()
     }
@@ -1739,6 +1978,278 @@ pub async fn get_user_files(
     })
 }
 
+/// Recursively walk a sync drive's on-disk subtree and emit one
+/// [`UserFileEntry`] per file (folders are excluded — this is the
+/// recursive-search path, which returns leaves only).
+///
+/// `actual_file_name` carries the full relative path inside the drive
+/// (e.g. `"Photos/2024/IMG_001.jpg"`), so the frontend can show users
+/// where a deep match lives. `name` carries just the basename for
+/// display in the existing table columns.
+///
+/// `prefix` is the rel-path of the directory we're descending into
+/// (`""` for the drive root, `"sub"` for a one-level descent, etc.).
+/// Hidden files (`.`-prefixed) and failed-download / encrypted-name
+/// stubs are skipped to match `list_sync_folder_inner`'s rules.
+async fn walk_disk_files_recursive(
+    base: &Path,
+    rel_prefix: &str,
+    label: &str,
+    folder_path: &str,
+    synced: Option<&HashMap<String, hcfs_client::engine::types::SyncedFileInfo>>,
+    excluded: &[String],
+    out: &mut Vec<UserFileEntry>,
+) {
+    let dir_path = if rel_prefix.is_empty() {
+        base.to_path_buf()
+    } else {
+        base.join(rel_prefix)
+    };
+
+    let Ok(mut dir) = tokio::fs::read_dir(&dir_path).await else {
+        return;
+    };
+
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let Ok(meta) = entry.metadata().await else {
+            continue;
+        };
+        let rel_path = if rel_prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{rel_prefix}/{name}")
+        };
+
+        if meta.is_dir() {
+            // Recurse — folders themselves are never emitted.
+            Box::pin(walk_disk_files_recursive(
+                base,
+                &rel_path,
+                label,
+                folder_path,
+                synced,
+                excluded,
+                out,
+            ))
+            .await;
+            continue;
+        }
+
+        // Skip failed-download artifacts and 0-byte encrypted-name stubs
+        // (mirror `list_sync_folder_inner` — these aren't user files).
+        if hcfs_client::engine::classify::is_failed_download_artifact(&name).is_some() {
+            continue;
+        }
+        if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some()
+            && meta.len() == 0
+        {
+            continue;
+        }
+
+        let is_excluded = !excluded.is_empty() && excluded.iter().any(|p| p == &rel_path);
+        let (sync_status, info) = if is_excluded {
+            ("excluded", None)
+        } else {
+            match synced {
+                Some(map) => match map.get(&rel_path) {
+                    Some(i) => ("synced", Some(i)),
+                    None => ("pending", None),
+                },
+                None => ("unknown", None),
+            }
+        };
+
+        // Match the timestamp rules used by `get_user_files` so the UI's
+        // "Date Uploaded" column lines up regardless of which path
+        // produced the entry. Fall back to the file's local mtime when
+        // the server's `uploaded_at` isn't yet populated (common for
+        // freshly uploaded files where hcfs-client hasn't completed a
+        // reconcile cycle with timestamps yet) — without this fallback
+        // the date-range filter excludes the file silently because
+        // `created_at == 0` short-circuits the filter to "drop".
+        let uploaded_at_ms = info.map_or(0_i64, |i| if i.uploaded_at != 0 { i.uploaded_at * 1000 } else { 0 });
+        let updated_at_ms = info.map_or(0_i64, |i| if i.updated_at != 0 { i.updated_at * 1000 } else { 0 });
+        let local_modified_ms = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| i64::try_from(d.as_millis()).unwrap_or(0))
+            .unwrap_or(0);
+        let created_at_ms = if uploaded_at_ms != 0 {
+            uploaded_at_ms
+        } else {
+            local_modified_ms
+        };
+        let last_charged_at_ms = if updated_at_ms != 0 { updated_at_ms } else { uploaded_at_ms };
+
+        let display_name = if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some()
+            || (name.len() >= 16 && !name.contains('.') && name.chars().all(|c| c.is_ascii_hexdigit()))
+        {
+            "Encrypted file".to_string()
+        } else {
+            name.clone()
+        };
+
+        out.push(UserFileEntry {
+            name: display_name,
+            actual_file_name: rel_path.clone(),
+            size: meta.len(),
+            created_at: created_at_ms,
+            arion_hash: info.map_or_else(String::new, hcfs_client::engine::types::SyncedFileInfo::path_hash_hex),
+            arion_cid: info.map_or_else(String::new, |i| i.arion_cid.to_string()),
+            source: format!("{folder_path}/{rel_path}"),
+            miner_ids: Vec::new(),
+            is_assigned: true,
+            last_charged_at: last_charged_at_ms,
+            is_folder: false,
+            file_type: "private".to_string(),
+            is_erasure_coded: false,
+            main_req_hash: String::new(),
+            sync_status: sync_status.to_string(),
+            label: label.to_string(),
+            file_count: None,
+            deleted: false,
+        });
+    }
+}
+
+/// Recursively search a single sync drive for files matching `filters`.
+///
+/// Returns a flat list of [`UserFileEntry`] across every nested folder in
+/// the drive (or only under `subfolder` when set). Mirrors the web
+/// console's `/search_files` API: when the user has an active search or
+/// filter, the UI shows matches from anywhere in the drive — not just the
+/// rows it already had in memory.
+///
+/// The walk combines two sources so files synced from other devices show
+/// up before they've downloaded locally:
+///   1. The on-disk tree under `sync_path[/subfolder]`.
+///   2. The drive's server-known rel-path index (`synced_paths_for_label`),
+///      filtered to entries whose key starts with the subfolder prefix.
+///      Entries already produced by the disk walk are skipped via a
+///      `seen` set keyed on the relative path.
+///
+/// Filter application is delegated to [`apply_file_filters`] so the same
+/// search/type/extension/date/size rules used everywhere else apply here
+/// unchanged.
+#[tauri::command]
+pub async fn search_user_files_recursive(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    label: String,
+    subfolder: Option<String>,
+    filters: FileFilterCriteria,
+) -> Result<Vec<UserFileEntry>> {
+    let pool = state.pool()?;
+    let owner = account_key(&account_id);
+    let sync_paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
+        .await
+        .unwrap_or_default();
+    // Drive must be a real registered sync path for this user. Defends
+    // against a caller-supplied label that points at a different account's
+    // drive (the synced_paths_for_label lookup itself is in-memory keyed
+    // by label and doesn't enforce ownership).
+    let Some(sp) = sync_paths.iter().find(|sp| sp.label == label && !sp.path.is_empty()) else {
+        // Unknown label / not yet initialised — surface as empty rather
+        // than failing the IPC. Matches `get_user_files` which silently
+        // skips drives that fail to list.
+        let _ = owner; // suppress unused-var warning when the branch is taken
+        return Ok(Vec::new());
+    };
+
+    let base = PathBuf::from(&sp.path);
+    // Normalise the optional subfolder to a `rel_prefix` and validate
+    // that, if provided, it stays inside the sync root.
+    let rel_prefix = match subfolder.as_deref() {
+        Some(s) if !s.is_empty() => {
+            let target = base.join(s);
+            ensure_within(&base, &target)?;
+            s.trim_matches('/').to_string()
+        }
+        _ => String::new(),
+    };
+
+    // Snapshot of synced paths + excludes under a single per-drive lock
+    // (matches `list_sync_folder_inner`). `synced` may be `None` if the
+    // drive isn't currently mounted; in that case we still walk the disk.
+    let (synced, excluded) = synced_paths_and_excludes_for_label(&state.sync, &label).await;
+
+    let mut out: Vec<UserFileEntry> = Vec::new();
+
+    // 1. On-disk walk — collects everything physically present locally.
+    walk_disk_files_recursive(
+        &base,
+        &rel_prefix,
+        &label,
+        &sp.path,
+        synced.as_ref(),
+        &excluded,
+        &mut out,
+    )
+    .await;
+
+    // 2. Server-only overlay — files known on the server that haven't
+    // downloaded to this device yet. We surface them as `sync_status =
+    // "pending"` so the UI can render the same arrow it does at the root
+    // listing for not-yet-local files.
+    let prefix = if rel_prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{rel_prefix}/")
+    };
+    if let Some(map) = &synced {
+        // Owned-string set so the loop body can `out.push(...)` (mutable
+        // borrow) while we still need the set to dedupe further iterations.
+        // Borrowing from `out.iter().map(...)` would keep an immutable
+        // borrow alive across the push and fail the borrow checker.
+        let seen: std::collections::HashSet<String> = out.iter().map(|e| e.actual_file_name.clone()).collect();
+        for (rel, info) in map {
+            if !prefix.is_empty() && !rel.starts_with(&prefix) {
+                continue;
+            }
+            if seen.contains(rel) {
+                continue;
+            }
+            let basename = rel.rsplit('/').next().unwrap_or(rel).to_string();
+            let uploaded_at_ms = if info.uploaded_at != 0 { info.uploaded_at * 1000 } else { 0 };
+            let updated_at_ms = if info.updated_at != 0 { info.updated_at * 1000 } else { 0 };
+            let last_charged_at_ms = if updated_at_ms != 0 { updated_at_ms } else { uploaded_at_ms };
+            out.push(UserFileEntry {
+                name: basename.clone(),
+                actual_file_name: rel.clone(),
+                size: 0,
+                created_at: uploaded_at_ms,
+                arion_hash: info.path_hash_hex(),
+                arion_cid: info.arion_cid.to_string(),
+                source: format!("{}/{}", sp.path, rel),
+                miner_ids: Vec::new(),
+                is_assigned: true,
+                last_charged_at: last_charged_at_ms,
+                is_folder: false,
+                file_type: "private".to_string(),
+                is_erasure_coded: false,
+                main_req_hash: String::new(),
+                sync_status: "pending".to_string(),
+                label: label.clone(),
+                file_count: None,
+                deleted: false,
+            });
+        }
+    }
+
+    apply_file_filters(&mut out, &filters);
+
+    // Newest-first by upload/charge timestamp — mirrors `get_user_files`'s
+    // default ordering so the UI sees the same shape across both paths.
+    out.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
+
+    Ok(out)
+}
+
 /// Apply the full filter chain to a mutable file list in place.
 ///
 /// Shared between [`get_user_files`] (initial fetch with filters) and
@@ -1782,7 +2293,68 @@ fn apply_file_filters(files: &mut Vec<UserFileEntry>, f: &FileFilterCriteria) {
             }
         }
 
-        if let Some(ref date) = f.date_filter
+        // Explicit extension match (case-insensitive). Folders are always
+        // excluded by an active extension filter since extensions apply to
+        // files only — same shape as the console's File Type dropdown.
+        if let Some(ref exts) = f.file_extensions
+            && !exts.is_empty()
+        {
+            if file.is_folder {
+                return false;
+            }
+            let ext = file.name.rsplit('.').next().unwrap_or("").to_lowercase();
+            let matches = exts.iter().any(|e| e.trim_start_matches('.').to_lowercase() == ext);
+            if !matches {
+                return false;
+            }
+        }
+
+        // Console-style date-range window. Mirrors hippius-console:
+        //   from = local midnight on `range.from`
+        //   to   = local 23:59:59.999 on `range.to`
+        // The comparison is in absolute timestamps (UTC ms) so files
+        // uploaded near local midnight aren't dropped just because their
+        // UTC *date* lands on a neighbouring day — that was the bug the
+        // user reported (console returned hits, desktop returned none).
+        if let Some(ref range) = f.date_range {
+            if file.created_at == 0 {
+                return false;
+            }
+            let file_ms = if file.created_at > 946_684_800_000 {
+                file.created_at
+            } else {
+                file.created_at * 1000
+            };
+            use chrono::TimeZone;
+            let parse_local_start = |s: &str| -> Option<i64> {
+                chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                    .ok()
+                    .and_then(|d| d.and_hms_opt(0, 0, 0))
+                    .and_then(|dt| chrono::Local.from_local_datetime(&dt).single())
+                    .map(|dt| dt.timestamp_millis())
+            };
+            let parse_local_end = |s: &str| -> Option<i64> {
+                chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                    .ok()
+                    .and_then(|d| d.and_hms_milli_opt(23, 59, 59, 999))
+                    .and_then(|dt| chrono::Local.from_local_datetime(&dt).single())
+                    .map(|dt| dt.timestamp_millis())
+            };
+            let from_ms = parse_local_start(&range.from);
+            // Allow "from only" / "to only" partial ranges by treating an
+            // unparseable bound on either side as "no constraint there".
+            let to_ms = parse_local_end(&range.to);
+            if let Some(f_ms) = from_ms
+                && file_ms < f_ms
+            {
+                return false;
+            }
+            if let Some(t_ms) = to_ms
+                && file_ms > t_ms
+            {
+                return false;
+            }
+        } else if let Some(ref date) = f.date_filter
             && !date.is_empty()
         {
             if file.created_at == 0 {
@@ -2145,14 +2717,9 @@ mod tests {
             .await
             .expect_err("must reject sync root as source");
         let msg = err.to_string();
-        assert!(
-            msg.contains("Cannot add the sync folder"),
-            "unexpected error message: {msg}"
-        );
+        assert!(msg.contains("Cannot add the sync folder"), "unexpected error message: {msg}");
 
-        let nested = sync_dir
-            .path()
-            .join(sync_dir.path().file_name().unwrap());
+        let nested = sync_dir.path().join(sync_dir.path().file_name().unwrap());
         assert!(!nested.exists(), "no recursive child must be created");
     }
 
@@ -2168,10 +2735,7 @@ mod tests {
             .await
             .expect_err("must reject ancestor as source");
         let msg = err.to_string();
-        assert!(
-            msg.contains("Cannot add the sync folder"),
-            "unexpected error message: {msg}"
-        );
+        assert!(msg.contains("Cannot add the sync folder"), "unexpected error message: {msg}");
 
         let outer_name = outer.path().file_name().unwrap();
         assert!(!sync_dir.join(outer_name).exists());
@@ -2187,10 +2751,7 @@ mod tests {
             .await
             .expect_err("must reject sync root as source");
         let msg = err.to_string();
-        assert!(
-            msg.contains("Cannot add the sync folder"),
-            "unexpected error message: {msg}"
-        );
+        assert!(msg.contains("Cannot add the sync folder"), "unexpected error message: {msg}");
     }
 
     // --- filter_file_entries / apply_file_filters ---
@@ -2452,5 +3013,106 @@ mod tests {
         assert_eq!(count, 2, "fresh walk must count files");
 
         dir_stats_cache().lock().expect("lock").remove(dir);
+    }
+
+    // ── first-reconcile readiness wait ────────────────────────────────
+
+    /// Regression test for the cold-start race: a `wait_for_first_reconcile`
+    /// call against a registered-but-unsettled gate must block until the
+    /// gate settles, NOT return immediately. Without this guard,
+    /// `synced_paths_and_excludes_for_label` would observe an empty cache
+    /// and `get_user_files` would return rows with `uploaded_at = 0`,
+    /// rendering "—" in the UI until the user logged out and back in.
+    #[tokio::test]
+    async fn wait_for_first_reconcile_blocks_until_settle() {
+        use hcfs_client::drive::ReconcileOutcome;
+        use hcfs_client::engine::events::{NoopCallbacks, NoopEventHandler};
+        use hcfs_client::engine::runner::{SyncRunner, WaitOutcome};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let sync = Arc::new(SyncRunner::new(
+            Arc::new(NoopEventHandler),
+            Arc::new(NoopCallbacks),
+            reqwest::Client::new(),
+        ));
+
+        // Producer side: pre-register the gate (mirrors what
+        // `spawn_reconcile_timestamps` does the moment the drive is
+        // registered, before its background task starts running).
+        let label = "drive-cold-start";
+        let _gate = sync.first_reconcile_gate(label);
+
+        // Settle the gate after a delay shorter than the wait budget.
+        // The consumer must observe the outcome via the `changed()`
+        // path on `watch::Receiver`, not the initial `borrow()`
+        // fast path.
+        let sync_settle = Arc::clone(&sync);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            sync_settle
+                .first_reconcile_gate("drive-cold-start")
+                .settle(ReconcileOutcome::Reconciled { duration_ms: 5 });
+        });
+
+        let start = Instant::now();
+        let outcome = sync
+            .wait_for_first_reconcile(label, Duration::from_millis(500))
+            .await;
+        let elapsed = start.elapsed();
+
+        match outcome {
+            WaitOutcome::Ready(ReconcileOutcome::Reconciled { duration_ms }) => {
+                assert_eq!(duration_ms, 5);
+            }
+            other => panic!("expected Ready(Reconciled), got {other:?}"),
+        }
+        // The wait must have BLOCKED at least until the settle fired
+        // (~40ms) — proving the cache-read isn't racing the producer.
+        // Generous lower bound to absorb scheduler jitter.
+        assert!(
+            elapsed >= Duration::from_millis(20),
+            "wait returned too quickly ({}ms) — the readiness gate is not actually blocking",
+            elapsed.as_millis(),
+        );
+        // And the wait must NOT have run the full budget. If we hit
+        // the budget, the settle didn't reach the awaiter.
+        assert!(
+            elapsed < Duration::from_millis(450),
+            "wait exhausted budget ({}ms) — settle was missed",
+            elapsed.as_millis(),
+        );
+    }
+
+    /// When no gate is registered for a label (e.g. drive not in the
+    /// registry yet, or already torn down), `wait_for_first_reconcile`
+    /// must return `NotRegistered` immediately — never block on a
+    /// missing producer. The desktop's read paths interpret this as
+    /// "fall through to cache", same as `Timeout`.
+    #[tokio::test]
+    async fn wait_for_first_reconcile_does_not_block_on_missing_label() {
+        use hcfs_client::engine::events::{NoopCallbacks, NoopEventHandler};
+        use hcfs_client::engine::runner::{SyncRunner, WaitOutcome};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let sync = Arc::new(SyncRunner::new(
+            Arc::new(NoopEventHandler),
+            Arc::new(NoopCallbacks),
+            reqwest::Client::new(),
+        ));
+
+        let start = Instant::now();
+        let outcome = sync
+            .wait_for_first_reconcile("does-not-exist", Duration::from_secs(5))
+            .await;
+        let elapsed = start.elapsed();
+
+        assert!(matches!(outcome, WaitOutcome::NotRegistered), "got {outcome:?}");
+        assert!(
+            elapsed < Duration::from_millis(50),
+            "NotRegistered must return immediately, took {}ms",
+            elapsed.as_millis(),
+        );
     }
 }

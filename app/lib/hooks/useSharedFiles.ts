@@ -28,11 +28,9 @@ import { useAtomValue } from "jotai";
 import { listShares, type ShareSummary } from "@/app/lib/tauri/shares";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
 
 const SHARES_QUERY_KEY = "shares-list";
-// Match the /shares page so the cache is genuinely shared. Bumping
-// either side without the other risks two parallel polls.
-const REFRESH_INTERVAL_MS = 30_000;
 
 type SharedIndex = Map<string, Map<string, ShareSummary[]>>;
 
@@ -73,7 +71,12 @@ export function useSharedFiles(): UseSharedFilesResult {
     queryKey: [SHARES_QUERY_KEY, polkadotAddress],
     queryFn: () => listShares(),
     enabled: Boolean(polkadotAddress) && shareEnabled,
-    refetchInterval: REFRESH_INTERVAL_MS,
+    // Shares the cache key with the /shares page. Both read the one
+    // LIVE_DATA_REFRESH_MS constant, so they can no longer drift onto
+    // two parallel polls the way two hand-kept copies could.
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    refetchInterval: LIVE_DATA_REFRESH_MS,
     select: buildIndex,
   });
 

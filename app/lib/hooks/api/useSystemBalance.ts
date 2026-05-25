@@ -23,9 +23,12 @@ export default function useSystemBalance(
 
   return useInvokeQuery<BalanceObject[], BalanceObject[]>({
     command: "get_system_balance",
+    // Daily balance chart on the wallet page tracks the active local
+    // wallet, not the login identity.
+    addressSource: "activeWallet",
     queryKey: (addr) => ["balance-daily", addr, page, limit],
-    params: (polkadotAddress) => ({
-      accountId: polkadotAddress,
+    params: (address) => ({
+      accountId: address,
       page,
       limit,
     }),

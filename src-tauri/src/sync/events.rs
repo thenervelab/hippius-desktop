@@ -55,12 +55,55 @@ pub const DRIVE_STATUS_CHANGED: &str = "hcfs_drive_status_changed";
 pub const DRIVE_REMOVED: &str = "hcfs_drive_removed";
 /// Emitted when files have repeatedly failed to sync (threshold reached).
 pub const FILES_FAILED_REPEATEDLY: &str = "hcfs_files_failed_repeatedly";
+/// Emitted the moment hcfs-client classifies a per-file upload or download
+/// as failed (e.g. server returned 402 InsufficientBalance, 5xx, network
+/// error). Carries a typed [`FileFailureKindPayload`] so the FE can switch
+/// on the failure category without parsing display strings.
+///
+/// Per-file failures are NOT cycle failures — the existing
+/// `hcfs_sync_error` channel is reserved for cycle-level errors (cancel,
+/// auth, etc.). A single 402'd file inside an otherwise-healthy cycle
+/// surfaces here and through the snapshot's `FileProgressStatus::Error`
+/// row; cycle-level `SyncCompleted` still fires with the survivors.
+pub const FILE_FAILED: &str = "hcfs_file_failed";
 /// Emitted when a user-initiated upload (`add_file` / `add_files` /
 /// `add_folder`) is in its disk-copy + encryption window before any
 /// byte of network transfer fires. The frontend renders a top-of-page
 /// banner while `active = true`. State is owned by
 /// `crate::sync::upload_processing::UploadProcessingState`.
 pub const UPLOAD_PROCESSING: &str = "hcfs_upload_processing";
+/// Emitted when an `InsufficientBalance` (HTTP 402) per-file failure
+/// arrives at the bridge. Carries the latest `balance_cents` /
+/// `required_cents` from the server response plus a running
+/// `file_count` of 402'd files in the current cycle. The FE renders a
+/// dedicated "Out of credits" banner — distinct from the generic
+/// `hcfs_file_failed` per-file detail event so the banner can show a
+/// "Top up" CTA and survive across multiple 402'd files without
+/// flickering. State is owned by
+/// `crate::sync::credits_exhausted::CreditsExhaustedState`.
+pub const CREDITS_EXHAUSTED: &str = "hcfs_credits_exhausted";
+/// Emitted when the per-drive first-reconcile retry budget is
+/// exhausted (every attempt failed with either retryable or
+/// terminal errors). Tells the frontend to surface a per-drive
+/// "couldn't refresh upload dates" banner so the user knows the
+/// "DATE UPLOADED" column may be sparse for this drive. Cleared
+/// when the same drive next emits `ACTIVITY_UPDATED` (e.g. after a
+/// successful sync cycle backfills the missing timestamps).
+///
+/// Payload is [`MetadataStalePayload`]: `{ label, reason }` where
+/// `reason` is a short human-readable string. Distinct from the
+/// per-cycle `SYNC_ERROR` channel because reconcile failure is a
+/// metadata-only condition — the drive itself is still usable.
+pub const METADATA_STALE: &str = "hcfs_metadata_stale";
+
+/// Wire payload for [`METADATA_STALE`]. `label` is the drive's
+/// stable label string; `reason` is for display only (the FE
+/// renders it under the banner heading).
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct MetadataStalePayload {
+    pub label: String,
+    pub reason: String,
+}
 
 /// Exact stringification of [`hcfs_client::sync::SyncError::Cancelled`].
 ///
@@ -291,4 +334,118 @@ pub struct AuthRequiredPayload {
 #[serde(rename_all = "camelCase")]
 pub struct FilesFailedRepeatedlyPayload {
     pub files: Vec<crate::sync::failure_tracking::FailedFileInfo>,
+}
+
+/// Desktop-side serializable mirror of [`hcfs_client::engine::events::FileFailureKind`].
+///
+/// The upstream enum does NOT derive `Serialize` (verified at
+/// `hcfs-client/src/engine/events.rs:33`), so we cannot forward it as-is
+/// through Tauri's JSON IPC. Translating to a local enum is the right
+/// boundary: it (a) gives us a `Serialize` impl without forking
+/// hcfs-client, (b) pins the wire format the FE consumes independently of
+/// upstream variant additions (the upstream type is `#[non_exhaustive]`),
+/// and (c) keeps the FE's `kind` discriminant stable in `camelCase` per
+/// existing convention. The `#[non_exhaustive]` annotation matches the
+/// upstream's stability contract — future upstream variants will be
+/// surfaced as `Other` until we extend the translation map.
+///
+/// Wire shape (tagged union, internally discriminated by `kind`):
+/// ```json
+/// {"kind":"insufficientBalance","balanceCents":12,"requiredCents":100}
+/// {"kind":"serverError","status":500}
+/// {"kind":"network"}
+/// {"kind":"other","message":"unrecognised upload failure"}
+/// ```
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum FileFailureKindPayload {
+    /// Server returned HTTP 402 — account credit balance is below the
+    /// storage cost. Mirrors `FileFailureKind::InsufficientBalance`.
+    #[serde(rename_all = "camelCase")]
+    InsufficientBalance { balance_cents: u64, required_cents: u64 },
+    /// Server returned a non-402 HTTP error code (5xx, 416, 429, …).
+    /// `status` is the wire status the FE may dispatch on.
+    ServerError { status: u16 },
+    /// Transport-layer failure — connection refused, DNS, TLS, timeout.
+    /// No HTTP status because no response was received.
+    Network,
+    /// Fallback for failures we have not categorised. `message` is for
+    /// display only — the FE MUST NOT parse it as a stable contract.
+    Other { message: String },
+}
+
+impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayload {
+    fn from(kind: &hcfs_client::engine::events::FileFailureKind) -> Self {
+        use hcfs_client::engine::events::FileFailureKind as K;
+        match kind {
+            K::InsufficientBalance {
+                balance_cents,
+                required_cents,
+            } => Self::InsufficientBalance {
+                balance_cents: *balance_cents,
+                required_cents: *required_cents,
+            },
+            K::ServerError { status } => Self::ServerError { status: *status },
+            K::Network => Self::Network,
+            // Upstream `Other(String)` carries display text. Clone-on-translate is
+            // unavoidable (we own the wire payload); the alternative would be borrowing
+            // and the bridge needs an owned struct for `app.emit`.
+            K::Other(msg) => Self::Other { message: msg.clone() },
+            // `#[non_exhaustive]` upstream: future variants render as `Other` with
+            // their debug form. The translation map should be extended when a new
+            // upstream variant ships — until then, the FE's `other` branch
+            // keeps the wire contract intact.
+            other => Self::Other {
+                message: format!("{other:?}"),
+            },
+        }
+    }
+}
+
+/// Payload for [`FILE_FAILED`] — emitted once per per-file failure inside
+/// a sync cycle (in addition to, not in place of, the per-cycle
+/// `SyncCompleted.files_failed` counter and the per-file snapshot row).
+///
+/// `path` is the **plan-time** snapshot from
+/// `hcfs_client::engine::events::SyncEvent::FileFailed::path`, not the
+/// live filesystem path. If the local file was renamed between plan and
+/// failure, this is the pre-rename path — the FE may need to reconcile
+/// against the live filesystem (see upstream doc comment on
+/// `SyncEvent::FileFailed::path`).
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FileFailedPayload {
+    pub label: String,
+    pub path: String,
+    pub file_id: String,
+    pub kind: FileFailureKindPayload,
+    pub http_status: Option<u16>,
+}
+
+/// Payload for [`CREDITS_EXHAUSTED`] — emitted alongside (not in place of)
+/// `FILE_FAILED` whenever a per-file failure carries the
+/// `InsufficientBalance` kind.
+///
+/// `balance_cents` / `required_cents` reflect the **latest** server
+/// response — concurrent failures inside the same cycle may report
+/// different values if the user partially tops up mid-cycle; the FE
+/// banner shows the most recent values, matching server truth at the
+/// last observed failure. `file_count` is the running total of 402'd
+/// files for `label` in the current sync cycle, sourced from
+/// [`crate::sync::credits_exhausted::CreditsExhaustedState::record_failure`].
+/// It resets to zero on the next `SyncStarted` for that label.
+///
+/// Note: this event is NOT a substitute for `FILE_FAILED`. The bridge
+/// emits both — the FE row icon listens to `FILE_FAILED`, the banner
+/// listens to this. Routing them through one event would force the
+/// banner to filter by kind and would make Task 2.7's per-file-row
+/// invariant fragile.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CreditsExhaustedPayload {
+    pub label: String,
+    pub balance_cents: u64,
+    pub required_cents: u64,
+    pub file_count: u32,
 }

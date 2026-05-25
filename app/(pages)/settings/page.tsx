@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import MultiFolderSyncManager from "@/components/page-sections/settings/MultiFolderSyncManager";
 import DeviceNameSetting from "@/components/page-sections/settings/DeviceNameSetting";
 import RecoveryPhraseSettings from "@/components/page-sections/settings/RecoveryPhraseSettings";
+import WalletSettings from "@/components/page-sections/settings/WalletSettings";
 import ApiTokenSection from "@/components/page-sections/settings/ApiTokenSection";
 import VPNSettings from "@/components/page-sections/settings/VPNSettings";
 import CustomizeRPC from "@/components/page-sections/settings/CustomizeRPC";
@@ -24,6 +25,14 @@ const SECTION_META: Record<
   sync: {
     title: "Sync & Storage",
     description: "Configure your sync folders and storage options.",
+  },
+  wallets: {
+    title: "Wallets",
+    description:
+      "Manage the local wallets stored on this device. Switch between them, rename, export a backup, or remove ones you no longer use.",
+    tooltip:
+      "Each local wallet is an encrypted copy of an access key on this device. Renaming and deleting only affects what's stored here — the underlying account on Hippius is unchanged. Always export a backup before deleting.",
+    showDescription: true,
   },
   security: {
     title: "Security",
@@ -100,6 +109,8 @@ function SettingsContent() {
             <MultiFolderSyncManager />
           </>
         )}
+
+        {section === "wallets" && <WalletSettings />}
 
         {section === "security" && <RecoveryPhraseSettings />}
 

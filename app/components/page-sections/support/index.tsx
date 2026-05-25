@@ -29,12 +29,15 @@ import CreateButton from "../../ui/button/CreateButton";
 import ConfirmModal from "./SupportConfirmModal";
 import { OAuthButtonsGroup } from "../../auth/OAuthButtons";
 
+// Single-page tickets fetch — the help-and-support page now lists all
+// tickets in one shot rather than paginating. 1000 is a safe ceiling
+// for any realistic user; the backend caps far below this in practice.
+const ALL_TICKETS_LIMIT = 1000;
+
 const Support: React.FC = () => {
   const { oauthSession } = useWalletAuth();
   const createTicketModalRef = useRef<CreateTicketModalRef>(null);
 
-  const [pageSize, setPageSize] = useState(10);
-  const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -56,14 +59,9 @@ const Support: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  // Reset to first page when search term changes
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [debouncedSearchTerm]);
-
   const { data, isLoading, error, refetch, isRefetching } = useSupportTickets({
-    page: currentPage,
-    limit: pageSize,
+    page: 1,
+    limit: ALL_TICKETS_LIMIT,
     search: debouncedSearchTerm,
   });
 
@@ -113,12 +111,6 @@ const Support: React.FC = () => {
       return statusA - statusB;
     });
   }, [data?.results]);
-
-  const totalCount = data?.count ?? 0;
-  const totalPages = useMemo(
-    () => (totalCount ? Math.ceil(totalCount / pageSize) : 1),
-    [totalCount, pageSize]
-  );
 
   const handleCreateTicket = () => {
     setIsModalOpen(true);
@@ -329,15 +321,6 @@ const Support: React.FC = () => {
                       isLoading={isLoading}
                       isError={!!error}
                       isRefreshing={isRefetching}
-                      currentPage={currentPage}
-                      totalPages={totalPages}
-                      totalCount={totalCount}
-                      pageSize={pageSize}
-                      onPageChange={setCurrentPage}
-                      onPageSizeChange={(s) => {
-                        setPageSize(s);
-                        setCurrentPage(1);
-                      }}
                       onViewMessages={handleViewMessages}
                       onCloseTicket={handleCloseTicket}
                       onCreateTicket={handleCreateTicket}
@@ -422,29 +405,32 @@ const AccessKeyLoginGate: React.FC = () => {
     <div className="flex flex-1 w-full items-center justify-center px-4 py-6 overflow-hidden">
       <div className="relative">
         {/* Diagonal-texture backdrop tiles sitting OUTSIDE the dialog
-            at the top-left and bottom-right corners. Each tile is
-            sized w-full h-full of the card and shifted via right-full
-            bottom-full (top-left) / left-full top-full (bottom-right)
-            so the diagonal stripes flow out of those two corners —
-            matching the hippius-web VM beta-access pattern. */}
+            at the top-left and bottom-right corners. The tiles are
+            sized to the viewport (w-screen h-screen) — not to the
+            card — so on very wide displays the texture still reaches
+            the viewport edges instead of leaving large blank
+            quadrants beside a relatively small card. Positioning is
+            anchored to the card via right-full bottom-full (top-left)
+            and left-full top-full (bottom-right), and the parent flex
+            container's overflow-hidden clips any overflow. */}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute right-full bottom-full w-full h-full bg-[rgba(242,242,242,0.42)] dark:hidden"
+          className="pointer-events-none absolute right-full bottom-full w-screen h-screen bg-[rgba(242,242,242,0.42)] dark:hidden"
           style={{ backgroundImage: cornerTextureLight }}
         />
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute left-full top-full w-full h-full bg-[rgba(242,242,242,0.42)] dark:hidden"
+          className="pointer-events-none absolute left-full top-full w-screen h-screen bg-[rgba(242,242,242,0.42)] dark:hidden"
           style={{ backgroundImage: cornerTextureLight }}
         />
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute right-full bottom-full w-full h-full bg-[#1A1A1A] hidden dark:block"
+          className="pointer-events-none absolute right-full bottom-full w-screen h-screen bg-[#1A1A1A] hidden dark:block"
           style={{ backgroundImage: cornerTextureDark }}
         />
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute left-full top-full w-full h-full bg-[#1A1A1A] hidden dark:block"
+          className="pointer-events-none absolute left-full top-full w-screen h-screen bg-[#1A1A1A] hidden dark:block"
           style={{ backgroundImage: cornerTextureDark }}
         />
 

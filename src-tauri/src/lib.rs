@@ -19,6 +19,7 @@ pub mod recovery;
 pub mod shares;
 pub mod sync;
 pub mod utils;
+pub mod wallet;
 
 #[cfg(test)]
 mod test_helpers;

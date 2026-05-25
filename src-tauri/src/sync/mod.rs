@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod control;
+pub mod credits_exhausted;
 pub mod device;
 pub mod drive_status;
 pub mod events;
@@ -12,11 +13,13 @@ pub mod failure_commands;
 pub mod failure_tracking;
 pub mod files;
 pub mod folders;
+pub mod intent;
 pub mod lifecycle;
 pub mod logic;
 pub mod migration;
 pub mod mnemonic;
 pub mod paths;
+pub mod preparing;
 pub mod progress;
 pub mod region;
 pub mod relative_path_backfill;

@@ -1,143 +1,103 @@
-import React from 'react';
-import { useFileSelection } from '@/app/contexts/FileSelectionContext';
-import { FormattedUserFile } from '@/app/lib/hooks/use-user-files';
-import * as Dialog from '@radix-ui/react-dialog';
-import { ArrowLeft } from 'lucide-react';
-import DialogContainer from '@/components/ui/DialogContainer';
-import { CardButton, Graphsheet, Icons } from '@/components/ui';
+import React from "react";
+import { Trash2 } from "lucide-react";
+
+import ConfirmationDialog from "@/app/components/ConfirmationDialog";
+import { useFileSelection } from "@/app/contexts/FileSelectionContext";
+import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 
 interface DeleteConfirmationDialogProps {
-    open: boolean;
-    onOpenChange: (open: boolean) => void;
-    onConfirm: (filesToDelete: FormattedUserFile[]) => void;
-    isLoading?: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (filesToDelete: FormattedUserFile[]) => void;
+  isLoading?: boolean;
 }
 
+/**
+ * Drive-specific delete confirm.
+ *
+ * Owns the FileSelection -> filesToDelete mapping and the multi-file
+ * bullet-list rendering; defers all chrome (FramedDialog frame, coral
+ * destructive pill, ghost cancel) to the canonical `ConfirmationDialog`
+ * so style fixes propagate everywhere from one component.
+ */
+const DESTRUCTIVE_BG = "bg-[#fc7d73]";
+
 const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
-    open,
-    onOpenChange,
-    onConfirm,
-    isLoading = false
+  open,
+  onOpenChange,
+  onConfirm,
+  isLoading = false,
 }) => {
-    const { selectedFiles, clearSelection } = useFileSelection();
+  const { selectedFiles, clearSelection } = useFileSelection();
 
-    const handleCancel = () => {
-        onOpenChange(false);
-        clearSelection();
-    };
+  const handleCancel = () => {
+    if (isLoading) return;
+    onOpenChange(false);
+    clearSelection();
+  };
 
-    const handleConfirm = () => {
-        // Capture the files before clearing selection
-        const filesToDelete = [...selectedFiles];
+  const handleConfirm = () => {
+    const filesToDelete = [...selectedFiles];
+    clearSelection();
+    onOpenChange(false);
+    onConfirm(filesToDelete);
+  };
 
-        // Clear selection immediately for good UX
-        clearSelection();
-        onOpenChange(false);
+  const fileCount = selectedFiles.length;
+  const isMultiple = fileCount > 1;
+  const heading = isMultiple ? "Delete Files" : "Delete File";
+  const confirmLabel = isLoading
+    ? "Deleting..."
+    : `Delete ${isMultiple ? "Files" : "File"}`;
 
-        // Pass the captured files to the delete operation
-        onConfirm(filesToDelete);
-    };
-
-    const fileCount = selectedFiles.length;
-    const isMultiple = fileCount > 1;
-
-    return (
-        <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && handleCancel()}>
-            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit">
-                <Dialog.Title className="sr-only">Delete {isMultiple ? 'Files' : 'File'}</Dialog.Title>
-
-                {/* Top accent bar (mobile only) */}
-                <div className="h-4 bg-error-50 md:hidden block" />
-
-                <div className="px-4">
-                    {/* Desktop Header */}
-                    <div className="text-2xl font-medium text-grey-10 hidden md:flex flex-col items-center justify-center pb-2 pt-4 gap-4">
-                        <div className="size-14 flex justify-center items-center relative">
-                            <Graphsheet
-                                majorCell={{
-                                    lineColor: [31, 80, 189, 1.0],
-                                    lineWidth: 2,
-                                    cellDim: 200
-                                }}
-                                minorCell={{
-                                    lineColor: [49, 103, 211, 1.0],
-                                    lineWidth: 1,
-                                    cellDim: 20
-                                }}
-                                className="absolute w-full h-full duration-500 opacity-30 z-0"
-                            />
-                            <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
-                            <div className="h-8 w-8 bg-error-50 rounded-lg flex items-center justify-center z-20">
-                                <Icons.Trash className="size-6 text-grey-100" />
-                            </div>
-                        </div>
-                        <span className="text-center text-2xl text-grey-10 font-medium">
-                            Delete {isMultiple ? 'files' : 'file'}?
-                        </span>
-                    </div>
-
-                    {/* Mobile Header */}
-                    <div className="flex py-4 items-center justify-between text-grey-10 relative w-full md:hidden">
-                        <button onClick={handleCancel} className="mr-2">
-                            <ArrowLeft className="size-6 text-grey-10" />
-                        </button>
-                        <div className="text-lg font-medium relative">
-                            <span className="capitalize">Delete {isMultiple ? 'Files' : 'File'}</span>
-                        </div>
-                        <button onClick={handleCancel}>
-                            <Icons.CloseCircle className="size-6 relative" />
-                        </button>
-                    </div>
-
-                    {/* Message */}
-                    <div className="font-medium text-base text-grey-20 mb-4">
-                        Are you sure you want to delete {isMultiple ? `these ${fileCount} files` : 'this file'}?
-                        This action cannot be undone.
-                    </div>
-
-                    {selectedFiles.length > 0 && (
-                        <div className="mb-4 max-h-32 overflow-y-auto">
-                            <div className="text-xs text-grey-50 mb-2">Files to delete:</div>
-                            <ul className="text-sm space-y-1">
-                                {selectedFiles.slice(0, 5).map((file, index) => (
-                                    <li key={file.arionHash || `${file.actualFileName || file.name}-${index}`} className="text-grey-20 truncate">
-                                        • {file.actualFileName || file.name}
-                                    </li>
-                                ))}
-                                {selectedFiles.length > 5 && (
-                                    <li className="text-grey-50 text-xs">
-                                        ... and {selectedFiles.length - 5} more
-                                    </li>
-                                )}
-                            </ul>
-                        </div>
-                    )}
-
-                    {/* Action Buttons */}
-                    <div className="flex gap-4 mb-6">
-                        <CardButton
-                            className="w-full"
-                            variant="secondary"
-                            onClick={handleCancel}
-                            disabled={isLoading}
-                        >
-                            Cancel
-                        </CardButton>
-
-                        <CardButton
-                            className="text-base w-full"
-                            variant="error"
-                            onClick={handleConfirm}
-                            disabled={isLoading}
-                            loading={isLoading}
-                        >
-                            {isLoading ? 'Deleting...' : `Delete ${isMultiple ? 'Files' : 'File'}`}
-                        </CardButton>
-                    </div>
-                </div>
-            </DialogContainer>
-        </Dialog.Root>
-    );
+  return (
+    <ConfirmationDialog
+      open={open}
+      onClose={handleCancel}
+      onBack={handleCancel}
+      onConfirm={handleConfirm}
+      heading={heading}
+      text={
+        <>
+          Are you sure you want to delete{" "}
+          {isMultiple ? `these ${fileCount} files` : "this file"}? This action
+          cannot be undone.
+        </>
+      }
+      button={confirmLabel}
+      icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
+      iconBgColor={DESTRUCTIVE_BG}
+      confirmVariant="destructive"
+      disableButton={isLoading || fileCount === 0}
+      disableBackButton={isLoading}
+    >
+      {selectedFiles.length > 0 && (
+        <div className="mb-6 max-h-32 overflow-y-auto rounded-md border border-grey-80 bg-grey-95/40 px-3 py-2 dark:border-[#2c2c2c] dark:bg-[#1f1f1f]/60">
+          <div className="mb-1.5 text-xs font-medium text-grey-50 dark:text-grey-dark-600">
+            Files to delete:
+          </div>
+          <ul className="space-y-1 text-sm">
+            {selectedFiles.slice(0, 5).map((file, index) => (
+              <li
+                key={
+                  file.arionHash ||
+                  `${file.actualFileName || file.name}-${index}`
+                }
+                className="truncate text-grey-20 dark:text-grey-dark-800"
+              >
+                • {file.actualFileName || file.name}
+              </li>
+            ))}
+            {selectedFiles.length > 5 && (
+              <li className="text-xs text-grey-50 dark:text-grey-dark-600">
+                ... and {selectedFiles.length - 5} more
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
+    </ConfirmationDialog>
+  );
 };
 
 export default DeleteConfirmationDialog;

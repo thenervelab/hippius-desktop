@@ -31,9 +31,23 @@ export type FormattedUserFile = {
   parentFolderId?: string;
   parentFolderName?: string;
   mainReqHash: string;
-  syncStatus?: "synced" | "pending" | "uploading" | "downloading" | "unknown" | "excluded";
+  // `failed` is set by the files-table row enricher when the live sync
+  // snapshot reports `status === "error"` for the matching file (e.g. 402
+  // Payment Required during upload). It keeps the row visually distinct from
+  // an in-flight upload so a stuck failure can't keep masquerading as progress.
+  syncStatus?: "synced" | "pending" | "uploading" | "downloading" | "failed" | "unknown" | "excluded";
   label?: string;
   fileCount?: number;
+  /**
+   * For folder rows whose `actualFileName` is only the basename (the
+   * inline-expanded tree never embeds the path in the folder name), this
+   * carries the sync-root-relative path of the containing folder. Stored
+   * at selection time and used by `FileSelectionContext` and the cascade
+   * logic to disambiguate two folders with the same name at different
+   * tree locations. Files don't need this because their `actualFileName`
+   * already contains the full relative path.
+   */
+  parentRelativePath?: string;
 };
 
 export interface LabelStats {

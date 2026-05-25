@@ -22,23 +22,33 @@ interface CreditGraphProps {
 
 const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
   const [timeRange, setTimeRange] = useState<CreditChartRange>("last7days");
+  // Billing page only: opt out of the hook's default 6 s refetchInterval
+  // so the chart doesn't silently re-poll. Manual refresh via the
+  // RefreshButton still works through refetch().
   const {
     data: credits,
     isLoading,
-    isFetching,
     refetch,
-  } = useMarketplaceCredits();
+  } = useMarketplaceCredits(undefined, { refetchInterval: false });
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const handleRefresh = useCallback(async () => {
-    if (isRefreshing || isFetching) return;
+    if (isRefreshing) return;
     setIsRefreshing(true);
     try {
       await refetch();
     } finally {
       setIsRefreshing(false);
     }
-  }, [isRefreshing, isFetching, refetch]);
+  }, [isRefreshing, refetch]);
+
+  // Skeleton shows on (1) the first fetch when no data is cached yet, and
+  // (2) while the user-triggered refresh is in flight. Background
+  // isFetching is intentionally ignored — there's no automatic polling on
+  // this page anymore, and any other refetch source (window focus, etc.)
+  // should keep the existing data via keepPreviousData rather than flash.
+  const hasData = Array.isArray(credits);
+  const showSkeleton = (isLoading && !hasData) || isRefreshing;
 
   const chartData = useMemo(
     () => formatCreditsForChart(credits ?? [], timeRange),
@@ -46,8 +56,6 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
   );
 
   const usedTotal = useMemo(() => totalCreditsUsed(credits ?? []), [credits]);
-
-  const showSkeleton = isLoading || isFetching;
 
   return (
     <div
@@ -70,7 +78,7 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
         <div className="flex items-center gap-2.5">
           <RefreshButton
             onClick={handleRefresh}
-            refetching={isRefreshing || isFetching}
+            refetching={isRefreshing}
             ariaLabel="Refresh credit overview"
           />
           <Select

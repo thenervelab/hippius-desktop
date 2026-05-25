@@ -1,6 +1,5 @@
 "use client";
 
-import AbstractIconWrapper from "../ui/abstract-icon-wrapper";
 import { getFlavorCategory } from "@/lib/utils/vmUtils";
 import { FC, useEffect, useState } from "react";
 import React from "react";
@@ -8,7 +7,7 @@ import React from "react";
 import { toast } from "sonner";
 import RefreshButton from "../ui/refresh-button";
 import { useRouter } from "next/navigation";
-import InstancesTable from "./instances-table";
+import InstancesTable, { VMTablePaginationState } from "./instances-table";
 import SSHKeysTable, { SSHKey } from "./ssh-keys-table";
 import CreateSSHKeyModal, {
   CreateSSHKeyData,
@@ -18,16 +17,20 @@ import VMTemplateCardSkeleton from "./create-vm/vm-template-card-skeleton";
 import * as TableModule from "@/components/ui/alt-table";
 import { useDeleteInstance } from "./hooks/useDeleteInstance";
 import { Icons, SearchInput } from "../ui";
+import { InfoCircle } from "@/app/components/ui/icons";
+import PageHeader from "@/components/ui/page-header";
 import TabList, { TabOption } from "../ui/tabs/TabList";
 import { usePagination } from "@/app/lib/hooks";
-import DeleteConfirmationDialog from "../DeleteConfirmationDialog";
+import ConfirmationDialog from "../ConfirmationDialog";
+import { Trash2 } from "lucide-react";
 import CreateButton from "../ui/button/CreateButton";
 import useDeleteSSHKey from "@/app/lib/hooks/api/useDeleteSSHKey";
 import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
 import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
 import NoEntriesFound from "../ui/NoEntriesFound";
-import { HelpCircle } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { cn } from "@/lib/utils";
+import SidebarVm from "../ui/icons/SidebarVm";
 const VM_DOCS_URL = "https://docs.hippius.com/use/virtual-machines";
 const VM_SSH_DOCS_URL =
   "https://docs.hippius.com/use/virtual-machines#ssh-keys";
@@ -53,6 +56,10 @@ const VirtualMachines: FC = () => {
     useState<SSHKey | null>(null);
   const [isDeletingInProgress, setIsDeletingInProgress] = useState(false);
   const [instancesError, setInstancesError] = useState<Error | null>(null);
+  const [instancesPagination, setInstancesPagination] =
+    useState<VMTablePaginationState | null>(null);
+  const [sshKeysPagination, setSSHKeysPagination] =
+    useState<VMTablePaginationState | null>(null);
   const refetchInstancesRef = React.useRef<() => void>(() => {});
   const [isInstancesFetching, setIsInstancesFetching] = useState(false);
 
@@ -152,15 +159,15 @@ const VirtualMachines: FC = () => {
   const tabs: TabOption[] = [
     {
       tabName: "Instances",
-      icon: <Icons.DriverRefresh />,
+      icon: <SidebarVm className="size-3.5" />,
     },
     {
       tabName: "Templates",
-      icon: <Icons.Note />,
+      icon: <Icons.Note className="size-3.5" />,
     },
     {
       tabName: "SSH Keys",
-      icon: <Icons.Key />,
+      icon: <Icons.Key className="size-3.5" />,
     },
   ];
 
@@ -188,7 +195,7 @@ const VirtualMachines: FC = () => {
       setSSHKeyRefreshTrigger((prev) => prev + 1);
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to create SSH key"
+        error instanceof Error ? error.message : "Failed to create SSH key",
       );
       throw error; // Re-throw so modal knows it failed
     }
@@ -217,137 +224,155 @@ const VirtualMachines: FC = () => {
     }
   };
 
+  const isInstancesTab = activeTab === "Instances";
+  const isTemplatesTab = activeTab === "Templates";
+  const isSSHKeysTab = activeTab === "SSH Keys";
+  const showToolbarControls = isInstancesTab || isSSHKeysTab;
+
+  const toolbarSearchTerm = isInstancesTab
+    ? instanceSearchTerm
+    : sshKeySearchTerm;
+  const setToolbarSearchTerm = isInstancesTab
+    ? setInstanceSearchTerm
+    : setSSHKeySearchTerm;
+  const toolbarSearchPlaceholder = isInstancesTab
+    ? "Search for an instance"
+    : "Search for a key";
+  const isToolbarRefetching = isInstancesTab
+    ? isInstancesFetching
+    : isSSHKeyRefetching;
+  const createButtonText = isInstancesTab ? "+ New VM" : "+ New SSH Key";
+
+  const activePagination = isInstancesTab
+    ? instancesPagination
+    : isSSHKeysTab
+      ? sshKeysPagination
+      : null;
+
+  const handleToolbarRefresh = () => {
+    if (isInstancesTab) {
+      handleRefetchInstances();
+      return;
+    }
+    setSSHKeyRefreshTrigger((prev) => prev + 1);
+  };
+
+  const showMiniPagination =
+    !!activePagination &&
+    !activePagination.isError &&
+    !activePagination.isLoading &&
+    !activePagination.isRefetching &&
+    activePagination.hasData &&
+    activePagination.totalPages > 1;
+
+  const miniPagination = showMiniPagination ? (
+    <TableModule.MiniPaginationControl
+      currentPage={activePagination.currentPage}
+      totalPages={activePagination.totalPages}
+      pageSize={activePagination.pageSize}
+      totalCount={activePagination.totalCount}
+      onPrev={() =>
+        activePagination.setPage(Math.max(1, activePagination.currentPage - 1))
+      }
+      onNext={() =>
+        activePagination.setPage(
+          Math.min(
+            activePagination.totalPages,
+            activePagination.currentPage + 1,
+          ),
+        )
+      }
+    />
+  ) : null;
+
   return (
-    <div className="w-full">
-      <div className="flex items-center w-full justify-between gap-4 flex-wrap mb-4">
-        <div className="flex flex-col w-full @sm:w-auto @sm:flex-row gap-4 items-center">
-          <div className="flex items-center jusityfy-between w-full @sm:w-auto">
-            <div className="flex flex-nowrap items-center gap-x-2">
-              <AbstractIconWrapper className="size-10 flex items-center justify-center">
-                {activeTab === "SSH Keys" ? (
-                  <Icons.Key className="size-6 relative text-primary-50" />
-                ) : (
-                  <Icons.Driver2 className="size-6 relative text-primary-50" />
-                )}
-              </AbstractIconWrapper>
-              <p className="font-medium text-base @md:text-lg @xl:text-xl">
-                {getHeaderTitle()}
-              </p>
-              <button
-                onClick={() =>
-                  openUrl(
-                    activeTab === "SSH Keys" ? VM_SSH_DOCS_URL : VM_DOCS_URL
-                  )
-                }
-                aria-label={
-                  activeTab === "SSH Keys"
-                    ? "SSH keys documentation"
-                    : "Virtual machine documentation"
-                }
-                title={
-                  activeTab === "SSH Keys"
-                    ? "SSH keys documentation"
-                    : "Virtual machine documentation"
-                }
-                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50"
-              >
-                <HelpCircle className="size-4" />
-              </button>
-            </div>
-          </div>
-          {/* Tab navigation */}
-          <div className="border border-grey-80 rounded p-1 bg-grey-100">
-            <TabList
-              tabs={tabs}
-              activeTab={activeTab}
-              onTabChange={handleTabChange}
-              className="w-full "
-              gap="gap-1"
-              width="w-full @sm:min-w-[9.25rem]"
-            />
-          </div>
-        </div>
-        <div className="flex items-center gap-x-4">
-          {activeTab === "Instances" && (
-            <>
-              <SearchInput
-                placeholder="Search for an instance"
-                className="h-9"
-                value={instanceSearchTerm}
-                onChange={(value) => setInstanceSearchTerm(value)}
-              />
-              <RefreshButton
-                refetching={isInstancesFetching}
-                onClick={handleRefetchInstances}
-              />
-              <CreateButton
-                text="Create VM"
-                isLoading={false}
-                onClick={handleModalOpen}
-              />
-            </>
-          )}
-          {activeTab === "SSH Keys" && (
-            <>
-              <SearchInput
-                placeholder="Search for a key"
-                className="h-9"
-                value={sshKeySearchTerm}
-                onChange={(value) => setSSHKeySearchTerm(value)}
-              />
-              <RefreshButton
-                refetching={isSSHKeyRefetching}
-                onClick={() => setSSHKeyRefreshTrigger((prev) => prev + 1)}
-              />
-              <CreateButton
-                text="New SSH Key"
-                isLoading={false}
-                onClick={handleModalOpen}
-              />
-            </>
-          )}
-        </div>
+    <div className="w-full px-3">
+      {/* Top section header — PageHeader (title + info button) on the left,
+          contextual Create button on the right. Mirrors the Files page
+          treatment so VM / SSH Keys / Templates share the same header
+          language as the rest of the app. */}
+      <div className="flex items-center w-full justify-between gap-4 flex-wrap py-3">
+        <PageHeader
+          hideStats
+          title={getHeaderTitle()}
+          infoTooltip={
+            <button
+              onClick={() =>
+                openUrl(isSSHKeysTab ? VM_SSH_DOCS_URL : VM_DOCS_URL)
+              }
+              aria-label={
+                isSSHKeysTab
+                  ? "SSH keys documentation"
+                  : "Virtual machine documentation"
+              }
+              title={
+                isSSHKeysTab
+                  ? "SSH keys documentation"
+                  : "Virtual machine documentation"
+              }
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-grey-dark-100 bg-grey-light-700 text-black transition-colors hover:bg-grey-90 hover:text-primary-50 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400 dark:hover:border-black-100 dark:hover:bg-black-300 dark:hover:text-primary-50"
+            >
+              <InfoCircle className="size-4" />
+            </button>
+          }
+          className="!shadow-none !p-0 flex-1 min-w-0"
+        />
+        {!isTemplatesTab && (
+          <CreateButton
+            text={createButtonText}
+            isLoading={false}
+            onClick={handleModalOpen}
+          />
+        )}
       </div>
 
-      {/* Display content based on activeTab */}
-      <div className="mt-6">
-        <div className="animate-in fade-in duration-300">
-          {activeTab === "Instances" ? (
-            isBetaError(instancesError) ? (
-              <NoEntriesFound className="h-[31.25rem]">
-                <div className="text-center">
-                  <p className="text-grey-30 font-semibold mb-1 text-base">
-                    Feature Not Available
-                  </p>
-                  <p className="text-grey-50 text-sm max-w-md">
-                    {betaAccessMessage}
-                  </p>
-                </div>
-              </NoEntriesFound>
-            ) : (
-              <InstancesTable
-                onDeleteInstance={handleDeleteInstance}
-                onCreateNew={handleModalOpen}
-                flavors={flavors}
-                isFlavorsLoading={isFlavorsLoading}
-                searchTerm={debouncedInstanceSearchTerm}
-                onError={setInstancesError}
-                onRefetchChange={setRefetchInstances}
-                onFetchingChange={setIsInstancesFetching}
+      <div className=" mb-3 flex flex-col  overflow-hidden">
+        {/* Tabs row — tab list on the left and search / refresh / mini
+            pagination on the right. */}
+        <div className="flex items-center w-full justify-between gap-4 flex-wrap pt-2 pb-4 px-[10px] rounded-t-lg border border-b-0 bg-grey-light-300 dark:bg-black-primary-bg shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)] border-grey-dark-100 dark:border-black-300">
+          <TabList
+            tabs={tabs}
+            activeTab={activeTab}
+            onTabChange={handleTabChange}
+            gap="gap-[3.831px]"
+            width="w-auto"
+            height="h-6"
+            tabItemPaddingX="px-[6.13px]"
+            textClassName="font-medium text-[12px] tracking-[-0.24px] leading-[1.109]"
+            className="p-[3.065px]"
+          />
+          {showToolbarControls && (
+            <div className="flex items-center gap-x-3 flex-wrap">
+              <SearchInput
+                placeholder={toolbarSearchPlaceholder}
+                className="h-8 w-[207px]"
+                value={toolbarSearchTerm}
+                onChange={(value) => setToolbarSearchTerm(value)}
               />
-            )
-          ) : activeTab === "SSH Keys" ? (
-            <SSHKeysTable
-              onDeleteKey={handleDeleteSSHKey}
-              searchTerm={debouncedSSHKeySearchTerm}
-              refreshTrigger={sshKeyRefreshTrigger}
-              onRefetchingChange={setIsSSHKeyRefetching}
-              onCreateNew={handleModalOpen}
-            />
-          ) : activeTab === "Templates" ? (
-            <>
-              {isBetaError(flavorsError) ? (
-                <NoEntriesFound className="h-[31.25rem]">
+              <RefreshButton
+                refetching={isToolbarRefetching}
+                onClick={handleToolbarRefresh}
+                className="!w-[30px] !h-[30px]"
+                iconClassName="!size-[14px]"
+              />
+              {miniPagination}
+            </div>
+          )}
+        </div>
+
+        <div
+          className={cn(
+            "flex flex-col w-full overflow-hidden rounded-lg border border-grey-dark-100 -mt-2 bg-white dark:bg-black-600 dark:border-black-300",
+            isTemplatesTab && "p-3",
+          )}
+        >
+          <div className="animate-in fade-in duration-300">
+            {isInstancesTab ? (
+              isBetaError(instancesError) ? (
+                <NoEntriesFound
+                  cardView={false}
+                  className="!bg-white dark:!bg-black-600 h-[31.25rem]"
+                >
                   <div className="text-center">
                     <p className="text-grey-30 font-semibold mb-1 text-base">
                       Feature Not Available
@@ -357,41 +382,84 @@ const VirtualMachines: FC = () => {
                     </p>
                   </div>
                 </NoEntriesFound>
-              ) : flavorsLoading ? (
-                <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
-                  {Array.from({ length: 8 }).map((_, index) => (
-                    <VMTemplateCardSkeleton key={`skeleton-${index}`} />
-                  ))}
-                </div>
-              ) : templates.length === 0 ? (
-                <NoEntriesFound title="No templates available" />
               ) : (
-                <>
-                  <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
-                    {templates.map((template) => (
-                      <VMTemplateCard
-                        key={template.id}
-                        template={template}
-                        showSetupButton={false}
-                        hideMenu={true}
-                      />
+                <InstancesTable
+                  onDeleteInstance={handleDeleteInstance}
+                  onCreateNew={handleModalOpen}
+                  flavors={flavors}
+                  isFlavorsLoading={isFlavorsLoading}
+                  searchTerm={debouncedInstanceSearchTerm}
+                  onError={setInstancesError}
+                  onRefetchChange={setRefetchInstances}
+                  onFetchingChange={setIsInstancesFetching}
+                  onPaginationChange={setInstancesPagination}
+                />
+              )
+            ) : isSSHKeysTab ? (
+              <SSHKeysTable
+                onDeleteKey={handleDeleteSSHKey}
+                searchTerm={debouncedSSHKeySearchTerm}
+                refreshTrigger={sshKeyRefreshTrigger}
+                onRefetchingChange={setIsSSHKeyRefetching}
+                onCreateNew={handleModalOpen}
+                onPaginationChange={setSSHKeysPagination}
+              />
+            ) : isTemplatesTab ? (
+              <>
+                {isBetaError(flavorsError) ? (
+                  <NoEntriesFound
+                    cardView={false}
+                    className="!bg-white dark:!bg-black-600 h-[31.25rem]"
+                  >
+                    <div className="text-center">
+                      <p className="text-grey-30 font-semibold mb-1 text-base">
+                        Feature Not Available
+                      </p>
+                      <p className="text-grey-50 text-sm max-w-md">
+                        {betaAccessMessage}
+                      </p>
+                    </div>
+                  </NoEntriesFound>
+                ) : flavorsLoading ? (
+                  <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4">
+                    {Array.from({ length: 8 }).map((_, index) => (
+                      <VMTemplateCardSkeleton key={`skeleton-${index}`} />
                     ))}
                   </div>
-                  {templatesTotalPages > 1 && (
-                    <TableModule.Pagination
-                      currentPage={templatesCurrentPage}
-                      totalPages={templatesTotalPages}
-                      setPage={setTemplatesPage}
-                    />
-                  )}
-                </>
-              )}
-            </>
-          ) : (
-            <div className="p-6 text-center text-grey-50">
-              {activeTab} content will appear here
-            </div>
-          )}
+                ) : templates.length === 0 ? (
+                  <NoEntriesFound
+                    title="No templates available"
+                    cardView={false}
+                    className="!bg-white dark:!bg-black-600"
+                  />
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4">
+                      {templates.map((template) => (
+                        <VMTemplateCard
+                          key={template.id}
+                          template={template}
+                          showSetupButton={false}
+                          hideMenu={true}
+                        />
+                      ))}
+                    </div>
+                    {templatesTotalPages > 1 && (
+                      <TableModule.Pagination
+                        currentPage={templatesCurrentPage}
+                        totalPages={templatesTotalPages}
+                        setPage={setTemplatesPage}
+                      />
+                    )}
+                  </>
+                )}
+              </>
+            ) : (
+              <div className="p-6 text-center text-grey-50">
+                {activeTab} content will appear here
+              </div>
+            )}
+          </div>
         </div>
       </div>
       {/* Delete Instance Confirmation */}
@@ -404,7 +472,7 @@ const VirtualMachines: FC = () => {
         isLoading={isCreatingSSHKey}
       />
       {/* Delete SSH Key Confirmation */}
-      <DeleteConfirmationDialog
+      <ConfirmationDialog
         open={openDeleteSSHKeyModal}
         onClose={() => {
           if (!isDeletingInProgress) {
@@ -418,13 +486,17 @@ const VirtualMachines: FC = () => {
             setSelectedSSHKeyToDelete(null);
           }
         }}
-        onDelete={handleConfirmDeleteSSHKey}
+        onConfirm={handleConfirmDeleteSSHKey}
         button={isDeletingInProgress ? "Deleting..." : "Delete SSH Key"}
         text={`Are you sure you want to delete SSH key "${
           selectedSSHKeyToDelete?.name || "this key"
         }"? This action is permanent.`}
         heading="Delete SSH Key"
+        icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
+        iconBgColor="bg-[#fc7d73]"
+        confirmVariant="destructive"
         disableButton={isDeletingInProgress}
+        disableBackButton={isDeletingInProgress}
       />
     </div>
   );

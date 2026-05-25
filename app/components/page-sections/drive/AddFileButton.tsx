@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui";
-import { Loader2 } from "lucide-react";
+import { FilePlus2, Loader2 } from "lucide-react";
 
 import {
   useState,
@@ -10,13 +10,11 @@ import {
   useCallback,
 } from "react";
 
-import * as Dialog from "@radix-ui/react-dialog";
-
 import UploadFilesFlow from "./upload-files-flow";
-import { Icons } from "@/components/ui";
 import { uploadToIpfsAndSubmitToBlockcahinRequestStateAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import { useAtomValue } from "jotai";
 import PrivacyBadge from "@/components/ui/PrivacyBadge";
+import { FramedDialog } from "@/components/ui/FramedDialog";
 
 import { cn } from "@/lib/utils";
 import {
@@ -114,7 +112,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
 
     // Memoize title to prevent recalculation
     const title = useMemo(() => {
-      return "Upload Your Files";
+      return "Upload File";
     }, []);
 
     // Close and reset everything - use useCallback to prevent re-renders
@@ -222,62 +220,41 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           )}
         </Button>
 
-        <Dialog.Root
+        <FramedDialog
           open={isOpen}
-          onOpenChange={(open) => {
-            if (!open) closeDialog();
-            else setIsOpen(true);
-          }}
+          onClose={closeDialog}
+          title={title}
+          icon={<FilePlus2 className="size-4 text-white" />}
+          maxWidth="max-w-[653px]"
         >
-          <Dialog.Portal>
-            <Dialog.Overlay className="bg-white/60 fixed p-4 z-30 top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
-              <Dialog.Content className="border shadow-dialog bg-white flex flex-col max-w-[26.75rem] border-grey-80 bg-background-1 rounded-[0.5rem] overflow-hidden w-full relative data-[state=open]:animate-scale-in-95-0.2">
-                <Dialog.Title className="hidden">{title}</Dialog.Title>
+          {/* Section label row — matches Figma layout */}
+          <div className="mb-2.5 flex items-center justify-between gap-2">
+            <span className="font-geist text-sm font-medium text-grey-60 dark:text-grey-dark-600 tracking-[-0.28px]">
+              {title}
+            </span>
+            <PrivacyBadge variant="file" />
+          </div>
 
-                {/* Header */}
-                <div className="flex p-4 items-center text-grey-10 relative">
-                  <div className="lg:text-xl flex w-full items-center gap-2 2xl:text-2xl font-medium relative">
-                    <span className="capitalize">{title}</span>
-                    <PrivacyBadge variant="file" />
-                  </div>
-                  <button
-                    type="button"
-                    className="ml-auto"
-                    onClick={closeDialog}
-                  >
-                    <Icons.CloseCircle
-                      className="size-6 relative"
-                      strokeWidth={2.5}
-                    />
-                  </button>
-                </div>
+          {/* Sync Paused Alert */}
+          {IS_SYNC_PAUSED && (
+            <div className="mb-3">
+              <SyncPausedAlert variant="inline" />
+            </div>
+          )}
 
-                {/* Sync Paused Alert */}
-                {IS_SYNC_PAUSED && (
-                  <div className="px-4">
-                    <SyncPausedAlert variant="inline" />
-                  </div>
-                )}
-
-                {/* Content */}
-                <div className="grow max-h-[calc(85vh-120px)] p-4 pt-2 overflow-y-auto">
-                  {!IS_SYNC_PAUSED && renderStepContent}
-                  {IS_SYNC_PAUSED && (
-                    <div className="text-center py-8 text-grey-60">
-                      <p>
-                        File uploads are temporarily paused while we transition
-                        to our new sync engine.
-                      </p>
-                      <p className="mt-2 text-sm">
-                        This will be available again in the coming days.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </Dialog.Content>
-            </Dialog.Overlay>
-          </Dialog.Portal>
-        </Dialog.Root>
+          {!IS_SYNC_PAUSED && renderStepContent}
+          {IS_SYNC_PAUSED && (
+            <div className="text-center py-6 text-grey-60 dark:text-grey-dark-600">
+              <p>
+                File uploads are temporarily paused while we transition to our
+                new sync engine.
+              </p>
+              <p className="mt-2 text-sm">
+                This will be available again in the coming days.
+              </p>
+            </div>
+          )}
+        </FramedDialog>
       </>
     );
   },

@@ -92,12 +92,12 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
   } = useDriveStorageStats();
   const isNarrow = useIsNarrow();
 
-  // Show the skeleton on every fetch (initial AND refetches) so the chart
-  // and headline stay in sync with what the API is doing — same UX pattern
-  // as the console dashboard.
-  const isLoading = chartLoading || statsLoading;
+  // Skeleton only on the very first load (no cached data yet). On refetches
+  // the previous data stays rendered via TanStack Query's cache, and the
+  // RefreshButton spinner is the only indicator that work is in flight —
+  // chart/headline update in place when the new data arrives.
   const isFetchingAny = chartFetching || statsFetching;
-  const showSkeleton = isLoading || isFetchingAny;
+  const showSkeleton = chartLoading || statsLoading;
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const handleRefresh = useCallback(async () => {

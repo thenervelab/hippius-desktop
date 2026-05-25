@@ -26,43 +26,54 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
   const tabs: TabOption[] = [
     {
       tabName: "Dashboard",
-      icon: <Icons.Dashboard className="size-4" />,
+      icon: <Icons.Dashboard className="size-3.5" />,
     },
     {
       tabName: "Console",
-      icon: <Icons.DocumentCode className="size-4" />,
+      icon: <Icons.DocumentCode className="size-3.5" />,
     },
   ];
 
   return (
     <div className="w-full">
-      <div className="flex @sm:justify-between @sm:items-center mb-4 @sm:mb-6 flex-col gap-2 @sm:flex-row">
-        <div className="flex items-center gap-2 text-base @sm:text-[1.375rem] font-medium text-grey-10">
-          <Link href="/vm" className="text-grey-10 hover:text-grey-40">
-            <Icons.ArrowLeft className="size-6" />
+      <div className="flex @sm:justify-between @sm:items-center mb-3 flex-col gap-2 @sm:flex-row">
+        <div className="flex items-center gap-2 text-base @sm:text-[1.375rem] font-medium  text-black-700 dark:text-grey-light-100">
+          <Link
+            href="/vm"
+            aria-label="Go back"
+            className="text-black-600/50 hover:text-grey-40 dark:text-grey-light-100 dark:hover:text-grey-dark-400"
+          >
+            <Icons.ArrowLeft className="size-5" />
           </Link>
           <h1 className="text-nowrap">Instance Details</h1>
           <span className="text-grey-60">-</span>
           {isLoading ? (
-            <Skeleton className="!h-[1.75rem] !w-[9.375rem]" />
+            <Skeleton className="!h-[1.75rem] !w-[9.375rem] dark:!bg-black-300" />
           ) : (
             <span className="text-grey-60 truncate">{instanceName}</span>
           )}
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2">
           {onRefresh && (
-            <RefreshButton refetching={isRefetching} onClick={onRefresh} />
-          )}
-          <div className="border border-grey-80 rounded p-1 bg-grey-100">
-            <TabList
-              tabs={tabs}
-              activeTab={activeTab}
-              onTabChange={onTabChange}
-              className="w-full "
-              width="w-full @sm:min-w-[9.25rem]"
+            <RefreshButton
+              refetching={isRefetching}
+              onClick={onRefresh}
+              className="!w-[26px] !h-[26px]"
+              iconClassName="!size-[14px]"
             />
-          </div>
+          )}
+          <TabList
+            tabs={tabs}
+            activeTab={activeTab}
+            onTabChange={onTabChange}
+            gap="gap-[3.831px]"
+            width="w-auto"
+            height="h-6"
+            tabItemPaddingX="px-[6.13px]"
+            textClassName="font-medium text-[12px] tracking-[-0.24px] leading-[1.109]"
+            className="p-[3.065px] dark:!bg-black-600"
+          />
         </div>
       </div>
     </div>

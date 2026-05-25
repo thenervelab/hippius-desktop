@@ -274,8 +274,15 @@ pub async fn hcfs_create_share(state: tauri::State<'_, AppState>, folder_label: 
     // anonymous HTTP request; we accept the round-trip so that an old
     // server hides the feature instead of failing create_share with a
     // 404 several KB into a multipart upload.
+    //
+    // Sharing's bytes-priced layer is intentionally `0`: the file
+    // already exists in paid storage (the user paid to upload it), and
+    // minting a share token serves anonymous reads from the SAME
+    // ciphertext, not a new upload. The static `Sharing` threshold
+    // (any positive balance) is the right gate here — keeps the
+    // pre-Task-3.1 behavior unchanged for shares.
     require_shares_supported(&state, &account_id).await?;
-    require_eligible(&state, &account_id, InsufficientCreditsAction::Sharing).await?;
+    require_eligible(&state, &account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
     create_share_inner(&state, &account_id, &folder_label, &relative_path).await
 }
@@ -304,7 +311,10 @@ pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String
     let account_id = state.current_account_id().map_err(AppError::Other)?;
 
     require_shares_supported(&state, &account_id).await?;
-    require_eligible(&state, &account_id, InsufficientCreditsAction::Sharing).await?;
+    // Sharing's bytes-priced layer is `0` — same rationale as
+    // `hcfs_create_share`: the file already exists in paid storage; a
+    // reshare mints a new token over the same ciphertext.
+    require_eligible(&state, &account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
     let pool = state.pool()?;
 

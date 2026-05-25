@@ -1,19 +1,38 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import type { FileTypes } from "@/lib/types/fileTypes";
+import type { FileExtension } from "@/app/lib/utils/fileTypeMapper";
+import type { DateRange } from "@/app/lib/types/dateRange";
 
 /**
  * Shape of the filter criteria passed to the Rust `filter_file_entries`
  * IPC. Mirrors `FileFilterCriteria` in `src-tauri/src/sync/files.rs`
  * (all fields optional, camelCase via serde rename_all).
+ *
+ * `fileExtensions` and `dateRange` line up with the new console-style
+ * filter dropdowns. The legacy `fileTypes` (coarse categories) and
+ * `dateFilter` (preset string) fields are still accepted by Rust for
+ * backward-compat but the desktop UI no longer sets them.
  */
 export interface FileFilterRequest {
     searchTerm?: string;
-    fileTypes?: FileTypes[];
-    dateFilter?: string;
+    fileExtensions?: FileExtension[];
+    dateRange?: DateRange;
     fileSizes?: number[];
     folderTab?: string | null;
+}
+
+export interface UseFilteredFilesResult<T> {
+    /** Latest filter output. Stale during a pending IPC — see `isFiltering`. */
+    data: T[];
+    /**
+     * True while the inputs (files reference or any criteria field) don't
+     * match the inputs that produced the current `data` — i.e. a fresh IPC
+     * is still on its way. Callers use this to show a loading skeleton
+     * during transitions like nested→root navigation or sync-folder
+     * switches, instead of briefly rendering the previous result.
+     */
+    isFiltering: boolean;
 }
 
 /**
@@ -35,7 +54,7 @@ export function useFilteredFiles<T extends FormattedUserFile>(
     files: T[],
     criteria: FileFilterRequest,
     debounceMs = 150,
-): T[] {
+): UseFilteredFilesResult<T> {
     const [result, setResult] = useState<T[]>(files);
     // Track the latest invocation so an out-of-order late response can't
     // overwrite a newer one (user types quickly, older IPC resolves after).
@@ -43,10 +62,39 @@ export function useFilteredFiles<T extends FormattedUserFile>(
 
     const isNoopCriteria =
         !criteria.searchTerm &&
-        (!criteria.fileTypes || criteria.fileTypes.length === 0) &&
-        !criteria.dateFilter &&
+        (!criteria.fileExtensions || criteria.fileExtensions.length === 0) &&
+        !criteria.dateRange &&
         (!criteria.fileSizes || criteria.fileSizes.length === 0) &&
         !criteria.folderTab;
+
+    // Identity of the inputs that should produce the current `data`. When
+    // any field (or the `files` reference) changes, this object changes
+    // and `loadedInputsRef` no longer matches — that mismatch is what
+    // surfaces `isFiltering: true` to the caller so it can show a
+    // skeleton instead of stale rows.
+    const currentInputs = useMemo(
+        () => ({
+            files,
+            searchTerm: criteria.searchTerm,
+            fileExtensions: criteria.fileExtensions,
+            dateRange: criteria.dateRange,
+            fileSizes: criteria.fileSizes,
+            folderTab: criteria.folderTab,
+        }),
+        [
+            files,
+            criteria.searchTerm,
+            criteria.fileExtensions,
+            criteria.dateRange,
+            criteria.fileSizes,
+            criteria.folderTab,
+        ],
+    );
+    const loadedInputsRef = useRef<typeof currentInputs | null>(null);
+    // Bumped after every settled fetch so the render-time `isFiltering`
+    // derivation re-evaluates against the updated `loadedInputsRef`. A
+    // bare ref mutation wouldn't trigger a re-render on its own.
+    const [, forceRender] = useState(0);
 
     useEffect(() => {
         if (isNoopCriteria) {
@@ -54,6 +102,8 @@ export function useFilteredFiles<T extends FormattedUserFile>(
             // the return value already short-circuits to `files` directly
             // below — so there's no one-frame lag when files changes.
             setResult(files);
+            loadedInputsRef.current = currentInputs;
+            forceRender((tick) => tick + 1);
             return;
         }
 
@@ -64,19 +114,23 @@ export function useFilteredFiles<T extends FormattedUserFile>(
                     files,
                     filters: {
                         searchTerm: criteria.searchTerm ?? null,
-                        fileTypes: criteria.fileTypes ?? null,
-                        dateFilter: criteria.dateFilter ?? null,
+                        fileExtensions: criteria.fileExtensions ?? null,
+                        dateRange: criteria.dateRange ?? null,
                         fileSizes: criteria.fileSizes ?? null,
                         folderTab: criteria.folderTab ?? null,
                     },
                 });
                 if (callId === latestCallIdRef.current) {
                     setResult(filtered);
+                    loadedInputsRef.current = currentInputs;
+                    forceRender((tick) => tick + 1);
                 }
             } catch (err) {
                 console.error("filter_file_entries failed:", err);
                 if (callId === latestCallIdRef.current) {
                     setResult(files);
+                    loadedInputsRef.current = currentInputs;
+                    forceRender((tick) => tick + 1);
                 }
             }
         }, debounceMs);
@@ -85,12 +139,13 @@ export function useFilteredFiles<T extends FormattedUserFile>(
     }, [
         files,
         criteria.searchTerm,
-        criteria.fileTypes,
-        criteria.dateFilter,
+        criteria.fileExtensions,
+        criteria.dateRange,
         criteria.fileSizes,
         criteria.folderTab,
         debounceMs,
         isNoopCriteria,
+        currentInputs,
     ]);
 
     // When there are no filters at all, skip the result-state roundtrip and
@@ -101,5 +156,9 @@ export function useFilteredFiles<T extends FormattedUserFile>(
     // but `useFilteredFiles` still returned the previous `[]` until
     // render N+1, so DriveContent briefly saw an empty list with
     // isLoading=false and rendered the empty-state UI.
-    return isNoopCriteria ? files : result;
+    if (isNoopCriteria) {
+        return { data: files, isFiltering: false };
+    }
+    const isFiltering = loadedInputsRef.current !== currentInputs;
+    return { data: result, isFiltering };
 }

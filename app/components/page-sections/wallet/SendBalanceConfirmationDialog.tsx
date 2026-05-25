@@ -1,92 +1,142 @@
-import * as Dialog from "@radix-ui/react-dialog";
-import React from "react";
-import { Icons } from "@/components/ui";
-import { ShieldCheck } from "lucide-react";
+"use client";
+
+import React, { useEffect, useState } from "react";
+import { HippiusLogo } from "@/components/ui/icons";
+import {
+  WalletDialogShell,
+  WalletDialogFooter,
+} from "./shared/WalletDesign";
+import WalletPasswordField from "./shared/WalletPasswordField";
+import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 
 interface SendBalanceConfirmationDialogProps {
   open: boolean;
   onClose: () => void;
-  onConfirm: () => void;
+  /** Called once the password verifies. Parent should run the actual
+   *  transfer IPC with this password. */
+  onConfirm: (password: string) => void | Promise<void>;
+  /** Parent IPC in flight — drives the primary button's spinner. */
   loading: boolean;
   recipientAddress: string;
   amount: string;
 }
 
+/**
+ * Confirm Transaction dialog. Previously this dialog only summarised the
+ * transfer and a follow-up `WalletPasswordPrompt` collected the password;
+ * the prompt has been collapsed into this dialog so the user enters the
+ * password right where they confirm the action. Confirm button is gated
+ * on a non-empty password so the user can't fire an empty submit.
+ */
 const SendBalanceConfirmationDialog: React.FC<
   SendBalanceConfirmationDialogProps
 > = ({ open, onClose, onConfirm, loading, recipientAddress, amount }) => {
+  const { verifyPassword } = useLocalWallet();
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
+
+  // Reset password / error every time the dialog re-opens so a stale
+  // value from a previous flow doesn't leak across confirmations.
+  useEffect(() => {
+    if (!open) return;
+    setPassword("");
+    setError(null);
+    setVerifying(false);
+  }, [open]);
+
+  const truncatedRecipient =
+    recipientAddress.length > 14
+      ? `${recipientAddress.substring(0, 6)}...${recipientAddress.substring(
+          recipientAddress.length - 4,
+        )}`
+      : recipientAddress;
+
+  const busy = loading || verifying;
+
+  const handleConfirm = async () => {
+    if (!password) {
+      setError("Enter your wallet password");
+      return;
+    }
+    setVerifying(true);
+    setError(null);
+    try {
+      const ok = await verifyPassword(password);
+      if (!ok) {
+        setError("Incorrect password");
+        return;
+      }
+      const submitted = password;
+      setPassword("");
+      await onConfirm(submitted);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to verify password");
+    } finally {
+      setVerifying(false);
+    }
+  };
+
   return (
-    <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="bg-black/40 fixed inset-0 flex items-center justify-center data-[state=open]:animate-fade-in-0.3 z-[60]" />
-        <Dialog.Content className="fixed top-1/2 left-1/2 w-[90%] max-w-md max-h-[85vh] overflow-y-auto -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 shadow-xl z-[70] animate-fade-in-0.2">
-          <div className="flex justify-between items-center mb-5">
-            <Dialog.Title className="text-xl font-semibold text-grey-10 flex items-center gap-2">
-              <ShieldCheck className="text-primary-50 size-6" />
-              Confirm Transaction
-            </Dialog.Title>
-            <Dialog.Close asChild>
-              <button
-                onClick={onClose}
-                disabled={loading}
-                className="text-grey-50 hover:text-grey-30"
-              >
-                <Icons.CloseCircle className="size-6" />
-              </button>
-            </Dialog.Close>
-          </div>
-
-          <div className="mb-6 text-grey-10">
-            <p className="mb-4">
-              This transaction cannot be reversed once confirmed. Please review
-              your transaction details carefully before confirming:
-            </p>
-
-            <div className="bg-grey-90  rounded-lg mb-4 border border-grey-80 p-4">
-              <div className="flex justify-between mb-3">
-                <span className="text-grey-50 font-semibold">Amount:</span>
-                <span className=" text-grey-10">{amount} hALPHA</span>
-              </div>
-
-              <div className="flex justify-between items-start">
-                <span className="text-grey-50 font-semibold">Recipient:</span>
-                <span className=" text-grey-10 text-right max-w-[15.625rem] break-all">
-                  {`${recipientAddress.substring(
-                    0,
-                    12
-                  )}...${recipientAddress.substring(
-                    recipientAddress.length - 12
-                  )}`}
-                </span>
-              </div>
+    <WalletDialogShell
+      open={open}
+      onClose={onClose}
+      title="Confirm Transaction"
+      description="Sending hAlpha tokens."
+      icon={<HippiusLogo className="size-4 text-white" />}
+      maxWidth="max-w-[600px]"
+      titleDescriptionGap="mt-2"
+      footer={
+        <WalletDialogFooter
+          primaryLabel={busy ? "Confirming..." : "Confirm Transfer"}
+          secondaryLabel="Cancel"
+          onPrimaryClick={handleConfirm}
+          onSecondaryClick={onClose}
+          primaryLoading={busy}
+          primaryDisabled={!password.trim()}
+          secondaryDisabled={busy}
+        />
+      }
+    >
+      <div className="space-y-4">
+        <div className="rounded-[14px] bg-[#f4f4f4] px-4 py-4 dark:bg-[#2a2a2a]">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[14px] font-medium leading-[16.8px] text-[#a6a6ab]">
+              Amount
+            </span>
+            <div className="flex items-center gap-[7px]">
+              <span className="text-[14px] font-medium leading-[16.8px] text-[#0a0a0a] dark:text-white">
+                {amount} hALPHA
+              </span>
+              <span className="flex justify-center items-center w-4 h-4 rounded-full border border-[#d0d0d0] bg-white">
+                <HippiusLogo className="size-2.5 text-[#3167dd]" />
+              </span>
             </div>
           </div>
-
-          <div className="flex justify-end gap-3">
-            <button
-              onClick={onClose}
-              disabled={loading}
-              className="px-5 py-2.5 border border-grey-80 rounded-lg text-grey-10 hover:bg-grey-95 transition"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={onConfirm}
-              disabled={loading}
-              className="px-5 py-2.5 bg-primary-50 text-white rounded-lg hover:bg-primary-40 transition disabled:opacity-50 flex items-center gap-2"
-            >
-              {loading ? (
-                <>
-                  <span>Sending...</span>
-                </>
-              ) : (
-                "Confirm Transfer"
-              )}
-            </button>
+          <div className="mt-2.5 flex items-center justify-between gap-3">
+            <span className="text-[14px] font-medium leading-[16.8px] text-[#a6a6ab]">
+              Recipient
+            </span>
+            <span className="text-[14px] font-medium leading-[16.8px] text-[#0a0a0a] dark:text-white">
+              {truncatedRecipient}
+            </span>
           </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+        </div>
+
+        <WalletPasswordField
+          id="send-confirm-password"
+          value={password}
+          onChange={(v) => {
+            setPassword(v);
+            if (error) setError(null);
+          }}
+          error={error}
+          disabled={busy}
+          autoFocusOnOpen={open}
+          onSubmit={handleConfirm}
+        />
+      </div>
+    </WalletDialogShell>
   );
 };
 

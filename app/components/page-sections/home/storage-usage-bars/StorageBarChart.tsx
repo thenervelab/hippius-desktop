@@ -149,7 +149,34 @@ const StorageBarChart: React.FC<StorageBarChartProps> = ({
     return () => ro.disconnect();
   }, []);
 
-  const values = useMemo(() => data.map((d) => d.balance || 0), [data]);
+  // Empty-data fallback: render 7 zero-valued bars for the past 7 days so the
+  // chart still shows a baseline with grid + axis labels, matching the
+  // Available Credits chart's empty state. Real ISO dates let the parent's
+  // `formatTooltipValue` produce normal-looking "Monday, Nov 17 / 0 B"
+  // tooltips on hover instead of "Invalid Date / 0 B".
+  const displayData: ChartPoint[] = useMemo(() => {
+    if (data.length) return data;
+    const now = new Date();
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(now);
+      d.setDate(d.getDate() - (6 - i));
+      const iso = d.toISOString();
+      return {
+        x: iso,
+        balance: 0,
+        formattedBalance: "0 B",
+        timestamp: iso,
+        dayLabel: d
+          .toLocaleDateString("en-US", { weekday: "short" })
+          .toUpperCase(),
+      };
+    });
+  }, [data]);
+
+  const values = useMemo(
+    () => displayData.map((d) => d.balance || 0),
+    [displayData],
+  );
   // When every bar is zero (or there's no data yet) we still want a readable
   // Y-axis. Falling back to a tiny number like 0.0001 makes every tick format
   // to "0 B"; using 1 KB instead gives a sensible empty-state scale
@@ -174,7 +201,7 @@ const StorageBarChart: React.FC<StorageBarChartProps> = ({
   // center of an evenly-divided slot. Bars and labels share the same
   // percentage so they line up pixel-perfectly even as data length and
   // chart width change.
-  const numBars = data.length;
+  const numBars = displayData.length;
   const slotW = numBars > 0 && chartWidth > 0 ? chartWidth / numBars : 0;
   const slotX = useCallback(
     (i: number) => (numBars > 0 ? ((i + 0.5) / numBars) * chartWidth : 0),
@@ -194,8 +221,6 @@ const StorageBarChart: React.FC<StorageBarChartProps> = ({
   );
 
   const xLabels = useMemo(() => {
-    if (!data.length) return [];
-
     const shorten = (raw: string) => {
       const trimmed = (raw ?? "").trim();
       if (/^[A-Za-z]+$/.test(trimmed) && trimmed.length > 3) {
@@ -204,14 +229,15 @@ const StorageBarChart: React.FC<StorageBarChartProps> = ({
       return trimmed.toUpperCase();
     };
 
-    const longest = data.reduce(
+    const longest = displayData.reduce(
       (m, d) => Math.max(m, shorten(d.dayLabel ?? "").length),
       3,
     );
     const estLabelWidth = longest * 7.2 + 14;
-    const fitsAll = chartWidth > 0 && data.length * estLabelWidth <= chartWidth;
+    const fitsAll =
+      chartWidth > 0 && displayData.length * estLabelWidth <= chartWidth;
     const maxLabels = fitsAll
-      ? data.length
+      ? displayData.length
       : Math.max(
           3,
           Math.min(
@@ -220,24 +246,24 @@ const StorageBarChart: React.FC<StorageBarChartProps> = ({
           ),
         );
 
-    const count = Math.min(data.length, maxLabels);
+    const count = Math.min(displayData.length, maxLabels);
     const out: { pct: number; label: string }[] = [];
     for (let i = 0; i < count; i++) {
       const dataIdx =
         count === 1
-          ? Math.floor(data.length / 2)
-          : Math.round((i * (data.length - 1)) / (count - 1));
+          ? Math.floor(displayData.length / 2)
+          : Math.round((i * (displayData.length - 1)) / (count - 1));
       // Slot-center percentage so the label lines up with its bar.
-      const pct = ((dataIdx + 0.5) / data.length) * 100;
-      out.push({ pct, label: shorten(data[dataIdx]?.dayLabel ?? "") });
+      const pct = ((dataIdx + 0.5) / displayData.length) * 100;
+      out.push({ pct, label: shorten(displayData[dataIdx]?.dayLabel ?? "") });
     }
     return out;
-  }, [data, chartWidth]);
+  }, [displayData, chartWidth]);
 
   const handleBarHover = useCallback((i: number) => setHoveredIndex(i), []);
   const handleLeave = useCallback(() => setHoveredIndex(null), []);
 
-  const hovered = hoveredIndex !== null ? data[hoveredIndex] : null;
+  const hovered = hoveredIndex !== null ? displayData[hoveredIndex] : null;
   const tooltipText = hovered
     ? formatTooltipValue
       ? formatTooltipValue(hovered)
@@ -248,7 +274,8 @@ const StorageBarChart: React.FC<StorageBarChartProps> = ({
   const hoveredBarCenterInContainer = chartLeft + hoveredBarCenterInChart;
   const hoveredBarTopY =
     hoveredIndex !== null
-      ? baselineY - ((data[hoveredIndex].balance || 0) / yMax) * chartHeight
+      ? baselineY - ((displayData[hoveredIndex].balance || 0) / yMax) *
+        chartHeight
       : 0;
 
   // The outer container ALWAYS renders with `containerRef` attached so the
@@ -345,10 +372,6 @@ const StorageBarChart: React.FC<StorageBarChartProps> = ({
             </>
           );
         })()
-      ) : !data.length ? (
-        <div className="absolute inset-0 flex items-center justify-center text-[12px] text-grey-50 dark:text-grey-dark-500">
-          No storage data
-        </div>
       ) : (
         <>
           {/* Y-axis labels */}
@@ -389,7 +412,7 @@ const StorageBarChart: React.FC<StorageBarChartProps> = ({
             height={chartHeight}
             className="absolute left-0 top-0 overflow-visible block"
           >
-            {data.map((point, i) => {
+            {displayData.map((point, i) => {
               const cx = slotX(i);
               const barX = cx - BAR_WIDTH / 2;
               const fullBarHeight = ((point.balance || 0) / yMax) * chartHeight;

@@ -35,10 +35,14 @@ export function LoginForm({
     // hit "Inject", and the app routes through exactly the same Rust logic a
     // real deep link would trigger.
     //
-    // TODO: remove this panel before shipping to production. It's an active-
-    // debugging aid for OAuth recovery. Tracked with the `DEV_OAUTH_INJECTOR`
-    // comment — grep for it when cleaning up.
-    const showDevOAuthInjector = false; // DEV_OAUTH_INJECTOR
+    // Env-gated so a production build can never ship the panel enabled:
+    // the flag is unset in normal builds, so this resolves to `false`.
+    // Enable it for an OAuth/recovery debugging session with
+    //     NEXT_PUBLIC_DEV_OAUTH_INJECTOR=1 pnpm tauri:dev   (or tauri:static)
+    // Next.js inlines NEXT_PUBLIC_* at `next build`, so the comparison is
+    // a compile-time constant — no runtime env access in the static export.
+    // Tracked with the `DEV_OAUTH_INJECTOR` comment — grep for it when cleaning up.
+    const showDevOAuthInjector = process.env.NEXT_PUBLIC_DEV_OAUTH_INJECTOR === "1"; // DEV_OAUTH_INJECTOR
     const [devOAuthUrl, setDevOAuthUrl] = useState("");
     const [devOAuthStatus, setDevOAuthStatus] = useState<string | null>(null);
 

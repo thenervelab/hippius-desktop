@@ -37,8 +37,13 @@ export function Th<TData, TValue>({
         "leading-[var(--table-header-line-height,14px)] font-semibold uppercase",
         "last:border-r-0 dark:border-black-300",
         canSort && "cursor-pointer select-none",
+        // Sorted column gets an emphasized color; unsorted columns stay dim.
+        // The default is applied even when `activeSortClassName` is omitted so
+        // a sorted header is never invisible in dark mode against the
+        // #111111 thead surface. Callers can still override via the prop —
+        // tailwind-merge dedupes when the override repeats the default.
         sortOrder && canSort
-          ? activeSortClassName
+          ? cn("text-grey-10 dark:text-grey-light-100", activeSortClassName)
           : "text-grey-dark-600 dark:text-grey-dark-700",
         headerClassName,
         className,

@@ -3,19 +3,20 @@
 import React, { useState } from "react";
 import { getFlavorCategory } from "@/lib/utils/vmUtils";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ExternalLink } from "lucide-react";
 import VMTemplateCard, { VMTemplate } from "./vm-template-card";
 import VMTemplateCardSkeleton from "./vm-template-card-skeleton";
 import * as TableModule from "@/components/ui/alt-table";
 
 import CreateVMModal, { VMConfigurationData } from "./create-vm-modal";
-import TabList, { TabOption } from "../../ui/tabs/TabList";
 import { usePagination } from "@/app/lib/hooks";
 import CustomTooltip2 from "../../ui/CustomTooltip2";
-import { Select } from "../../ui";
+import { Button, Icons } from "../../ui";
+import { InfoCircle } from "@/app/components/ui/icons";
 import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
 import NoEntriesFound from "../../ui/NoEntriesFound";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { cn } from "@/lib/utils";
+import Link from "next/link";
 const VM_DOCS_URL =
   "https://docs.hippius.com/use/virtual-machines#create-a-virtual-machine";
 
@@ -24,7 +25,7 @@ const CreateVM: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState<string>("All Models");
   const [openCreateVMModal, setOpenCreateVMModal] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<VMTemplate | null>(
-    null
+    null,
   );
   const {
     data: flavors,
@@ -61,12 +62,12 @@ const CreateVM: React.FC = () => {
       };
     }) || [];
 
-  const categories: TabOption[] = [
-    { tabName: "All Models" },
-    { tabName: "Starter" },
-    { tabName: "Standard" },
-    { tabName: "High Capacity" },
-  ];
+  const categories = [
+    "All Models",
+    "Starter",
+    "Standard",
+    "High Capacity",
+  ] as const;
 
   const getCategoryKey = (tabName: string): string => {
     const categoryMap: Record<string, string> = {
@@ -82,7 +83,7 @@ const CreateVM: React.FC = () => {
     activeCategory === "All Models"
       ? categorizedTemplates
       : categorizedTemplates.filter(
-          (template) => template.category === getCategoryKey(activeCategory)
+          (template) => template.category === getCategoryKey(activeCategory),
         );
 
   const {
@@ -105,116 +106,120 @@ const CreateVM: React.FC = () => {
     router.push("/vm");
   };
 
-  const handleBack = () => {
-    router.back();
-  };
-
   return (
     <div className="w-full">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2 mb-6">
-        <div className="flex items-center gap-2 mb-6">
-          <button
-            onClick={handleBack}
-            className="p-1 hover:bg-grey-90 rounded transition"
+      {/* Header — single row mirrors the console layout: back button +
+          title + info tooltip on the left, "Help me create?" on the right.
+          Intentionally omits the console's bottom border/shadow per design
+          ask. */}
+      <div className="flex items-center w-full justify-between gap-4 flex-wrap pb-3">
+        <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
+          <Link
+            href="/vm"
+            aria-label="Go back"
+            className="text-black-600/50 hover:text-grey-40 dark:text-grey-light-100 dark:hover:text-grey-dark-400"
           >
-            <ArrowLeft className="size-6 text-grey-10" />
-          </button>
-          <h1 className="text-[1.375rem] font-medium text-grey-10">
+            <Icons.ArrowLeft className="size-5" />
+          </Link>
+          <h1 className="text-[22px] @sm:text-[24px] font-medium leading-8 text-grey-10 dark:text-grey-light-100">
             Create New Virtual Machine
           </h1>
-        </div>
-        <button
-          onClick={() => openUrl(VM_DOCS_URL)}
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary-50 hover:text-primary-40 transition-colors"
-        >
-          Help me Create
-          <ExternalLink className="size-4" />
-        </button>
-      </div>
-
-      {/* Select a Model Section */}
-      <div className="mb-6">
-        <div className="flex items-center gap-2 mb-4">
-          <h2 className="text-[1.375rem] font-medium text-grey-10">
-            Select a Model
-          </h2>
           <CustomTooltip2
-            showInfo={true}
+            side="bottom"
             tooltipContent="Choose a VM model that fits your workload requirements. Different models are optimized for specific use cases like general purpose computing, memory-intensive tasks, or storage operations."
-          />
+          >
+            <span className="hidden @sm:inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-grey-dark-100 bg-grey-light-700 text-black transition-colors hover:bg-grey-90 hover:text-primary-50 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400 dark:hover:border-black-100 dark:hover:bg-black-300 dark:hover:text-primary-50">
+              <InfoCircle className="size-4" />
+            </span>
+          </CustomTooltip2>
         </div>
-        <div className="flex @sm:hidden justify-between items-center p-1 border border-grey-80 rounded z-20">
-          <div className="w-full text-lg font-medium text-grey-10">
-            Currently Viewing
+        <Button
+          onClick={() => openUrl(VM_DOCS_URL)}
+          variant="primaryLight"
+          size="auto"
+          className="gap-[10px] px-[16px] py-[8px] text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
+        >
+          Help me create?
+        </Button>
+      </div>
+      <div className=" flex flex-col  overflow-hidden">
+        {/* Category tabs — full-width inline buttons matching Figma
+          4542:50279 (dark) / 4542:49762 (light). Each tab is flex-1 so the
+          bar spans the full width on every breakpoint and never overflows. */}
+        <div className=" pt-2 pb-4 px-2 rounded-t-lg border border-b-0 bg-grey-light-300 dark:bg-black-primary-bg shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)] border-grey-dark-100 dark:border-black-300">
+          <div className="flex w-full items-center gap-[3.831px] rounded-[6.13px] border-[0.766px] border-grey-dark-100 bg-[#ebebeb] p-1 dark:border-black-300 dark:bg-black-900 h-8">
+            {categories.map((category) => {
+              const isActive = activeCategory === category;
+              return (
+                <button
+                  key={category}
+                  type="button"
+                  onClick={() => setActiveCategory(category)}
+                  className={cn(
+                    "flex min-w-0 flex-1 items-center justify-center rounded-[3.065px] border-[0.766px] px-[12px] transition-colors",
+                    "font-medium text-[12px] leading-[1.109] tracking-[-0.24px] whitespace-nowrap font-geist",
+                    isActive
+                      ? "h-6 border-grey-dark-100 bg-grey-light-300 text-black-900 shadow-[0px_12.26px_3.831px_0px_rgba(0,0,0,0),0px_8.429px_3.065px_0px_rgba(0,0,0,0.01),0px_4.597px_3.065px_0px_rgba(0,0,0,0.04),0px_2.299px_2.299px_0px_rgba(0,0,0,0.08),0px_0.766px_0.766px_0px_rgba(0,0,0,0.09)] dark:border-black-300 dark:bg-black-primary-bg dark:text-white"
+                      : "h-6 border-transparent text-[#4d4d4d] hover:text-black-900 dark:text-grey-light-100 dark:opacity-50 dark:hover:opacity-100",
+                  )}
+                >
+                  <span className="truncate">{category}</span>
+                </button>
+              );
+            })}
           </div>
-          <Select
-            options={categories.map((cat) => ({
-              label: cat.tabName,
-              value: cat.tabName,
-            }))}
-            value={activeCategory}
-            onValueChange={setActiveCategory}
-            placeholder="Select a tab"
-            className="w-[12.5rem] h-[2.375rem] z-20"
-            triggerClassName="w-full justify-between"
-          />
         </div>
-        {/* Category Tabs */}
-        <div className="hidden @sm:block">
-          <div className="border border-grey-80 rounded p-1 bg-grey-100">
-            <TabList
-              tabs={categories}
-              activeTab={activeCategory}
-              onTabChange={setActiveCategory}
-              className="w-full"
-              width="w-full"
-            />
+        <div
+          className={cn(
+            "flex flex-col w-full overflow-hidden rounded-lg border border-grey-dark-100 -mt-2 bg-white dark:bg-black-600 dark:border-black-300 p-2",
+          )}
+        >
+          <div className="animate-in fade-in duration-300">
+            {/* Templates Grid */}
+            {isBetaError ? (
+              <NoEntriesFound className="h-[31.25rem]">
+                <div className="text-center">
+                  <p className="text-grey-30 font-semibold mb-1 text-base">
+                    Feature Not Available
+                  </p>
+                  <p className="text-grey-50 text-sm max-w-md">
+                    {betaAccessMessage}
+                  </p>
+                </div>
+              </NoEntriesFound>
+            ) : isFlavorsLoading ? (
+              <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4">
+                {Array.from({ length: 8 }).map((_, index) => (
+                  <VMTemplateCardSkeleton key={`skeleton-${index}`} />
+                ))}
+              </div>
+            ) : templates.length === 0 ? (
+              <NoEntriesFound title="No templates available" />
+            ) : (
+              <>
+                <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4">
+                  {templates.map((template) => (
+                    <VMTemplateCard
+                      key={template.id}
+                      template={template}
+                      onSelect={handleTemplateSelect}
+                    />
+                  ))}
+                </div>
+
+                {/* Pagination */}
+                {totalPages > 1 && (
+                  <TableModule.Pagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    setPage={setCurrentPage}
+                  />
+                )}
+              </>
+            )}
           </div>
         </div>
       </div>
-
-      {/* Templates Grid */}
-      {isBetaError ? (
-        <NoEntriesFound className="h-[31.25rem]">
-          <div className="text-center">
-            <p className="text-grey-30 font-semibold mb-1 text-base">
-              Feature Not Available
-            </p>
-            <p className="text-grey-50 text-sm max-w-md">{betaAccessMessage}</p>
-          </div>
-        </NoEntriesFound>
-      ) : isFlavorsLoading ? (
-        <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
-          {Array.from({ length: 8 }).map((_, index) => (
-            <VMTemplateCardSkeleton key={`skeleton-${index}`} />
-          ))}
-        </div>
-      ) : templates.length === 0 ? (
-        <NoEntriesFound title="No templates available" />
-      ) : (
-        <>
-          <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4 mb-8">
-            {templates.map((template) => (
-              <VMTemplateCard
-                key={template.id}
-                template={template}
-                onSelect={handleTemplateSelect}
-              />
-            ))}
-          </div>
-
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <TableModule.Pagination
-              currentPage={currentPage}
-              totalPages={totalPages}
-              setPage={setCurrentPage}
-            />
-          )}
-        </>
-      )}
-
       {/* Create VM Modal */}
       <CreateVMModal
         open={openCreateVMModal}

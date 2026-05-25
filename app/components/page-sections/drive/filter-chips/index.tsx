@@ -2,7 +2,7 @@ import React from "react";
 import { Icons } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
-type FilterType = "fileType" | "date" | "fileSize";
+type FilterType = "fileExtension" | "dateRange" | "fileSize";
 
 const CHIP_CLASSES = cn(
   "relative inline-flex items-center gap-[4px] px-[6px] py-[4px]",
@@ -12,7 +12,7 @@ const CHIP_CLASSES = cn(
   "font-mono text-[10px] font-medium uppercase tracking-[-0.2px] leading-none",
   "text-black-700",
   "dark:bg-black-primary-bg dark:border-black-300",
-  "dark:shadow-[0px_0.727px_0px_0px_rgba(0,0,0,1),inset_0px_1.455px_0px_0px_rgba(0,0,0,1)]",
+  "dark:shadow-[0px_0px_0px_1px_rgba(0,0,0,1)]",
   "dark:text-grey-light-300",
 );
 

@@ -4,7 +4,10 @@ import { sidebarCollapsedAtom } from "@/components/sidebar/sideBarAtoms";
 import cn from "@/app/lib/utils/cn";
 import ConflictsBanner from "@/components/ui/ConflictsBanner";
 import MigrationBanner from "@/components/ui/MigrationBanner";
+import CreditsExhaustedBanner from "@/components/billing/CreditsExhaustedBanner";
 import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert";
+import FileDetailsPanel from "../components/page-sections/drive/FileDetailsPanel";
+// import SyncWidgetPlayground2 from "@/app/(pages)/SyncWidgetPlayground2";
 
 export default function ResponsiveContent({
   children,
@@ -14,10 +17,10 @@ export default function ResponsiveContent({
   const [collapsed] = useAtom(sidebarCollapsedAtom);
 
   return (
-    <div className="grid w-full overflow-hidden">
+    <div className="flex  w-full overflow-hidden">
       <main
         className={cn(
-          "flex flex-col h-[calc(100%-0.25rem)] transition-all duration-300 ease-in-out overflow-hidden bg-grey-light-200 rounded-[11px] dark:bg-black-900 mr-1 mb-1",
+          "flex w-full flex-col h-[calc(100%-0.25rem)] transition-all duration-300 ease-in-out overflow-hidden bg-grey-light-200 rounded-[11px] dark:bg-black-900 mr-1 mb-1",
           collapsed ? "ml-[3.8125rem]" : "ml-[16.4375rem]",
         )}
       >
@@ -25,7 +28,15 @@ export default function ResponsiveContent({
         <div className="sticky top-0 z-30 px-4">
           <ConflictsBanner />
           <MigrationBanner />
+          <CreditsExhaustedBanner />
+          {/* `SyncReauthRequiredAlert` auto-renders null unless Rust's
+              `restore_session` flagged `sync_requires_reauth = true`
+              (keychain-miss for a mnemonic user). Mounting it here in
+              the sticky toolbar makes it visible on every authenticated
+              route — the previous FilesContainer-only mount missed
+              users whose last-visited page was /wallet, /billing, etc. */}
           <SyncReauthRequiredAlert className="mt-2" />
+          {/* <SyncWidgetPlayground2 /> */}
         </div>
 
         {/* Scrollable content area — serves as container query context */}
@@ -35,6 +46,7 @@ export default function ResponsiveContent({
           </div>
         </div>
       </main>
+      <FileDetailsPanel />
     </div>
   );
 }

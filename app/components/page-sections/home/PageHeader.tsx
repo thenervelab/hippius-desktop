@@ -36,6 +36,10 @@ interface PageHeaderProps {
   subtitle?: string;
   infoButton?: ReactNode;
   showTopUpCredits?: boolean;
+  /** When provided, replaces the default right-side block (Wallet +
+   * Active Plan chips + Top-up button) with the supplied node. Used by
+   * the wallet page to slot in the ActiveWalletSelector instead. */
+  rightSlot?: ReactNode;
 }
 
 const PageHeader: FC<PageHeaderProps> = ({
@@ -43,8 +47,12 @@ const PageHeader: FC<PageHeaderProps> = ({
   subtitle = "Store. Compute. Own your infrastructure.",
   infoButton,
   showTopUpCredits = true,
+  rightSlot,
 }) => {
-  const { stakingInfo } = useStaking();
+  // Auth-account stake — see the comment in `useStaking` on why the
+  // home / billing / overview headers read the auth account rather
+  // than the active local wallet.
+  const { stakingInfo } = useStaking("auth");
   const { activeSubscription, isLoadingActive } = useSubscriptionData();
 
   const hasActiveSubscription = !!activeSubscription?.has_subscription;
@@ -96,6 +104,9 @@ const PageHeader: FC<PageHeaderProps> = ({
         </p>
       </div>
 
+      {rightSlot ? (
+        <div className="flex items-center justify-end">{rightSlot}</div>
+      ) : (
       <div
         className={cn(
           "flex items-stretch rounded-[8px]",
@@ -132,7 +143,7 @@ const PageHeader: FC<PageHeaderProps> = ({
             </div>
             <Button
               asLink
-              href="/stake"
+              href="/wallet"
               variant="primaryLight"
               size="auto"
               className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
@@ -184,7 +195,7 @@ const PageHeader: FC<PageHeaderProps> = ({
           <div className="flex shrink-0 items-center py-[11px]">
             <Button
               asLink
-              href="/billing/plans"
+              href="/billing"
               variant="defaultStable"
               size="auto"
               className={cn(
@@ -200,6 +211,7 @@ const PageHeader: FC<PageHeaderProps> = ({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 };

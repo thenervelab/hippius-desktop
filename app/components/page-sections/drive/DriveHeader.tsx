@@ -19,7 +19,8 @@ import useNavigationLoader from "@/app/lib/hooks/useNavigationLoader";
 import { List } from "lucide-react";
 import StartSyncingButton from "@/app/components/StartSyncingButton";
 import FilterPills from "./FilterPills";
-import { FileTypes } from "@/lib/types/fileTypes";
+import type { FileExtension } from "@/app/lib/utils/fileTypeMapper";
+import type { DateRange } from "@/app/lib/types/dateRange";
 import { IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import { useAtomValue } from "jotai";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
@@ -73,17 +74,26 @@ interface DriveHeaderProps {
   isSyncPathEmpty?: boolean;
   onStartSyncing?: () => void;
   hasNoSyncPaths?: boolean;
+  /** When true, the header "Start Syncing" button is dimmed and its
+   *  click is rerouted to the billing plans page — without credits the
+   *  sync flow can't succeed anyway, so the button doubles as the
+   *  top-up entry point. */
+  hasNoCredits?: boolean;
   onNavigateToSettings?: () => void;
-  // New filter props
-  selectedFileTypes: FileTypes[];
-  selectedDate: string;
+  // Filter props — single-select extension + date-range match console UX.
+  selectedFileExtension?: FileExtension;
+  selectedDateRange?: DateRange;
   selectedFileSizes: number[];
-  onFileTypesChange: (types: FileTypes[]) => void;
-  onDateChange: (date: string) => void;
+  onFileExtensionChange: (extension: FileExtension | undefined) => void;
+  onDateRangeChange: (range: DateRange | undefined) => void;
   onFileSizesChange: (sizes: number[]) => void;
   defaultFolderLabel?: string | null;
   isFolderUploadOpen?: boolean;
   onSetFolderUploadOpen?: (open: boolean) => void;
+  /** Pre-populates the FolderUploadDialog's path field — used when a
+   *  folder is dropped onto the files table and the dialog is opened
+   *  with that folder already selected. */
+  folderUploadInitialPath?: string;
   // Breadcrumb props — rendered as the first line of the drive (non-recent) header.
   // The breadcrumb lives inside DriveHeader so line 1 (breadcrumb + action buttons)
   // and line 2 (filter pills + stats/search/view-mode) can share one flex column.
@@ -132,17 +142,19 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   isSyncPathEmpty = false,
   onStartSyncing,
   hasNoSyncPaths = false,
+  hasNoCredits = false,
   onNavigateToSettings,
-  // New filter props
-  selectedFileTypes,
-  selectedDate,
+  // Filter props
+  selectedFileExtension,
+  selectedDateRange,
   selectedFileSizes,
-  onFileTypesChange,
-  onDateChange,
+  onFileExtensionChange,
+  onDateRangeChange,
   onFileSizesChange,
   defaultFolderLabel,
   isFolderUploadOpen: isFolderUploadOpenProp,
   onSetFolderUploadOpen,
+  folderUploadInitialPath,
   breadcrumbSegments = [],
   onBreadcrumbLocalClick,
   isNested = false,
@@ -258,14 +270,20 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         )
       )}
 
-      {/* Start Syncing button - show for empty sync paths or no sync paths */}
+      {/* Start Syncing button - show for empty sync paths or no sync paths.
+          When the user is out of credits the sync flow is a dead-end (every
+          upload would 402), so the button dims and reroutes to the plans
+          page — same destination as the no-credits empty-state CTA. */}
       {(isSyncPathEmpty || (isRecentFiles && hasNoSyncPaths)) && (
         <StartSyncingButton
           onClick={
-            isRecentFiles && hasNoSyncPaths
-              ? onNavigateToSettings
-              : onStartSyncing
+            hasNoCredits
+              ? () => push("/billing/plans")
+              : isRecentFiles && hasNoSyncPaths
+                ? onNavigateToSettings
+                : onStartSyncing
           }
+          className={hasNoCredits ? "opacity-50" : undefined}
         />
       )}
 
@@ -356,7 +374,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         // the file content (passed in as children).
         <div
           className={cn(
-            "w-full flex flex-col items-stretch",
+            "w-full flex flex-col items-stretch mb-2.5",
             "bg-grey-light-300 border border-grey-dark-100 rounded-[8px]",
             "shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.04)]",
             "dark:bg-black-primary-bg dark:border-black-300",
@@ -379,11 +397,16 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             </div>
           </div>
 
-          {/* Inner white card — wraps the filter row, chips, and file content. */}
+          {/* Inner white card — wraps the filter row, chips, and file content.
+              Only the top edge needs its own border (acts as the horizontal
+              divider between the breadcrumb row and the filter row). The
+              left/right/bottom borders are intentionally omitted: the outer
+              grey card already paints those sides, and stacking a second 1px
+              border right next to it produced a visible doubled line. */}
           <div
             className={cn(
-              "w-full flex flex-col pb-2.5",
-              "bg-white border border-grey-dark-100 rounded-[8px]",
+              "w-full flex flex-col",
+              "bg-white border-t border-grey-dark-100 rounded-[12px]",
               "dark:bg-black-primary-bg dark:border-black-300",
             )}
           >
@@ -395,11 +418,11 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               {/* Line 2 — Filter pills (left) | stats + search + view-mode (right). */}
               <div className="flex items-center justify-between w-full gap-3 flex-wrap">
                 <FilterPills
-                  selectedFileTypes={selectedFileTypes}
-                  selectedDate={selectedDate}
+                  selectedFileExtension={selectedFileExtension}
+                  selectedDateRange={selectedDateRange}
                   selectedFileSizes={selectedFileSizes}
-                  onFileTypesChange={onFileTypesChange}
-                  onDateChange={onDateChange}
+                  onFileExtensionChange={onFileExtensionChange}
+                  onDateRangeChange={onDateRangeChange}
                   onFileSizesChange={onFileSizesChange}
                 />
                 <div className="flex items-center gap-3 shrink-0">
@@ -463,6 +486,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           onClose={() => setIsFolderUploadOpen(false)}
           onRefresh={refetchUserFiles}
           defaultFolderLabel={defaultFolderLabel}
+          initialFolderPath={folderUploadInitialPath}
         />
       )}
     </>

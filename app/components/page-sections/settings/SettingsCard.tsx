@@ -37,7 +37,14 @@ export function SettingsCard({
           </div>
         )}
       </div>
-      <div className="rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100 bg-white dark:bg-black-600 dark:border-black-300">
+      {/* `overflow-hidden` here clips child surfaces (table headers, row
+          backgrounds, etc.) to the rounded top corners — without it,
+          edge-to-edge cell fills paint square through the radius. The
+          outer card already has `overflow-hidden` for the same reason
+          on the header strip; this keeps the body's curvature
+          consistent. Radix-portaled menus (dropdowns / tooltips) are
+          unaffected since they escape this subtree. */}
+      <div className="rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100 bg-white dark:bg-black-600 dark:border-black-300 overflow-hidden">
         {children}
       </div>
     </div>

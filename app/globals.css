@@ -94,8 +94,10 @@ html {
   --error-20: 92 20 15;
   --error-10: 42 13 9;
 
-  /* Warning Shades */
-  --warning-100: 255 247 229;
+  /* Warning Shades — R G B channels for rgba(var() / a) */
+  --warning-100: 255 242 204; /* #FFF2CC */
+  --warning-200: 254 177 1; /* #618CE8 */
+  --warning-300: 232 151 2; /* #E89702 */
   --warning-90: 255 242 204;
   --warning-80: 253 227 155;
   --warning-70: 254 214 103;

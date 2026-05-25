@@ -11,8 +11,13 @@ import { Loader2, Upload, X } from "lucide-react";
 import {
   NoEntriesIllustration,
   NoEntriesIllustrationDark,
+  NoCreditsIllustration,
+  NoCreditsIllustrationDark,
 } from "@/components/ui/icons";
 import CreateButton from "./button/CreateButton";
+import Button from "./button";
+
+export type NoEntriesVariant = "default" | "noCredits";
 
 interface NoEntriesFoundProps {
   /** Main heading text */
@@ -23,10 +28,14 @@ interface NoEntriesFoundProps {
   dragDescription?: string;
   /** Primary CTA button label – footer is hidden when both button labels are omitted */
   buttonText?: string;
+  /** Optional element rendered left of the primary CTA label (e.g. a Plus icon). */
+  buttonIcon?: React.ReactNode;
   /** Callback fired when the primary CTA button is clicked */
   onButtonClick?: () => void;
   /** Secondary CTA button label – appears to the left of the primary button */
   secondaryButtonText?: string;
+  /** Optional element rendered left of the secondary CTA label (e.g. an upload icon). */
+  secondaryButtonIcon?: React.ReactNode;
   /** Callback fired when the secondary CTA button is clicked */
   onSecondaryButtonClick?: () => void;
   /** Optional close (X) handler – shows a compact close button in the header when provided */
@@ -51,6 +60,14 @@ interface NoEntriesFoundProps {
   containerClassName?: string;
   /** When provided, replaces the entire default header content block (illustration + texts) */
   children?: React.ReactNode;
+  /**
+   * Visual variant.
+   * - `"default"`: standard empty-state look.
+   * - `"noCredits"`: swaps the illustration to the no-credit graphic and
+   *   paints the primary CTA in `warning-200` (used when a gated action
+   *   is blocked because the user has insufficient credits).
+   */
+  variant?: NoEntriesVariant;
 }
 
 const NoEntriesFound = ({
@@ -58,8 +75,10 @@ const NoEntriesFound = ({
   description = "Get started by creating your first entry.",
   dragDescription = "Drop files here to upload",
   buttonText,
+  buttonIcon,
   onButtonClick,
   secondaryButtonText,
+  secondaryButtonIcon,
   onSecondaryButtonClick,
   onClose,
   onFileDrop,
@@ -73,7 +92,15 @@ const NoEntriesFound = ({
   fillHeight = false,
   containerClassName,
   children,
+  variant = "default",
 }: NoEntriesFoundProps) => {
+  const isNoCredits = variant === "noCredits";
+  const LightIllustration = isNoCredits
+    ? NoCreditsIllustration
+    : NoEntriesIllustration;
+  const DarkIllustration = isNoCredits
+    ? NoCreditsIllustrationDark
+    : NoEntriesIllustrationDark;
   const [isDragging, setIsDragging] = useState(false);
 
   const handleDrop = useCallback(
@@ -151,8 +178,8 @@ const NoEntriesFound = ({
             <div className="flex gap-5 items-center">
               {!hideIllustration && (
                 <div className="shrink-0">
-                  <NoEntriesIllustration className="block dark:hidden" />
-                  <NoEntriesIllustrationDark className="hidden dark:block" />
+                  <LightIllustration className="block dark:hidden" />
+                  <DarkIllustration className="hidden dark:block" />
                 </div>
               )}
               <div className="flex-1 min-w-0 flex flex-col gap-[6px]">
@@ -183,18 +210,35 @@ const NoEntriesFound = ({
         {hasFooter && (
           <div className="bg-white border-t border-[#ebebeb] px-3 sm:px-5 py-[14px] rounded-b-[12px] dark:bg-[#161616] dark:border-[#313131] flex gap-4 items-center justify-end">
             {secondaryButtonText && (
-              <button
+              <Button
                 type="button"
+                variant="defaultStable"
+                size="auto"
                 onClick={handleSecondaryClick}
                 disabled={isSecondaryLoading}
-                className="flex-1 h-9 rounded-[10px] flex items-center justify-center gap-1 px-3 py-2 bg-white border border-[#ebebeb] text-[#5c5c5c] text-[14px] font-medium tracking-[-0.28px] shadow-[0px_1px_2px_0px_rgba(10,13,20,0.03)] dark:bg-[rgba(255,255,255,0.03)] dark:border-[#313131] dark:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                // The card body sits on bg-grey-light-600, which is the
+                // same tone as defaultStable's bg-grey-90 — the button
+                // would vanish without an explicit surface. White + a
+                // neutral border restores contrast while keeping the
+                // secondary read; the !-overrides win over the variant's
+                // baked-in bg/hover so the chip stays legible in both
+                // themes and picks up the variant's hover/active animations.
+                className={cn(
+                  "flex-1 h-9 rounded-[10px] gap-1 px-3 py-2",
+                  "text-[14px] font-medium tracking-[-0.28px]",
+                  "!bg-white !text-[#5c5c5c] border border-[#ebebeb] shadow-[0px_1px_2px_0px_rgba(10,13,20,0.03)] hover:!bg-grey-light-700",
+                  "dark:!bg-[rgba(255,255,255,0.03)] dark:!text-white dark:border-[#313131] dark:hover:!bg-[#2c2c2c]",
+                )}
               >
                 {isSecondaryLoading ? (
                   <Loader2 className="size-4 animate-spin" />
                 ) : (
-                  <span className="px-1">{secondaryButtonText}</span>
+                  <span className="flex items-center gap-2 px-1">
+                    {secondaryButtonIcon}
+                    <span>{secondaryButtonText}</span>
+                  </span>
                 )}
-              </button>
+              </Button>
             )}
             {buttonText &&
               (disabled ? (
@@ -214,11 +258,35 @@ const NoEntriesFound = ({
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
+              ) : isNoCredits ? (
+                // Plain button instead of CreateButton — CreateButton is
+                // pinned to variant="primary" (bg-primary-50) and the
+                // tailwind-merge pass collapses the override, so we
+                // bypass the variant indirection and write the warning
+                // colour directly.
+
+                <Button
+                  variant="warning"
+                  size="auto"
+                  onClick={handlePrimaryClick}
+                  disabled={isLoading}
+                  className={cn(
+                    "h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px]",
+                    "font-geist  leading-[1.109] flex-1 h-9 rounded-[10px] px-3 text-[14px] font-medium tracking-[-0.28px]",
+                  )}
+                >
+                  {isLoading ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <span>{buttonText}</span>
+                  )}
+                </Button>
               ) : (
                 <CreateButton
                   text={buttonText}
                   isLoading={isLoading}
                   onClick={handlePrimaryClick}
+                  icon={buttonIcon}
                   className="flex-1 h-9 rounded-[10px] px-3 text-[14px] font-medium tracking-[-0.28px]"
                 />
               ))}

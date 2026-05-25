@@ -3,13 +3,8 @@
 import { useState } from "react";
 import { useAtomValue } from "jotai";
 import { useRouter } from "next/navigation";
-import {
-  HippiusLogo,
-  ChevronDown,
-  Setting,
-  Logout,
-  TrendUp,
-} from "@/components/ui/icons";
+import { ChevronDown, Setting, Logout, TrendUp } from "@/components/ui/icons";
+import { HippiusBrandMark } from "@/components/ui/HippiusBrandMark";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,7 +14,10 @@ import {
 import { sidebarCollapsedAtom } from "@/components/sidebar/sideBarAtoms";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/app/lib/utils";
-import CheckForUpdateDialog from "@/components/updater/CheckForUpdateDialog";
+import {
+  updateDialogOpenAtom,
+  updateStore,
+} from "@/app/components/updater/updateStore";
 
 const TopBarLogoMenu = () => {
   const [isMac] = useState(() => {
@@ -31,14 +29,17 @@ const TopBarLogoMenu = () => {
   const collapsed = useAtomValue(sidebarCollapsedAtom);
   const router = useRouter();
   const { logout } = useWalletAuth();
-  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
 
   const handleOpenSettings = () => {
     router.push("/settings?section=sync");
   };
 
+  // Manual "Check for Updates" — route through the same store atom the
+  // auto-trigger uses. UpdateDialogWrapper (mounted in UpdateChecker)
+  // observes the atom and renders the unified dialog. The dialog runs
+  // tauri's check() itself on open and handles all six states.
   const handleOpenUpdate = () => {
-    setUpdateDialogOpen(true);
+    updateStore.set(updateDialogOpenAtom, true);
   };
 
   const handleSignOut = () => {
@@ -67,18 +68,15 @@ const TopBarLogoMenu = () => {
               "dark:hover:bg-white/10 dark:data-[state=open]:bg-white/10",
             )}
           >
-            <HippiusLogo className="size-[28px] shrink-0 text-primary-50" />
-            <span
-              className={cn(
-                "font-[557] text-[18px] leading-[18px] text-primary-50 tracking-[0px]",
+            <HippiusBrandMark
+              logoClassName="shrink-0"
+              textClassName={cn(
                 "overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out",
                 collapsed
                   ? "max-w-0 opacity-0 -ml-[8px]"
                   : "max-w-[120px] opacity-100",
               )}
-            >
-              Hippius
-            </span>
+            />
             <span className="flex items-center justify-center w-[25px] h-[24px] shrink-0">
               <ChevronDown className="size-[12px] text-black-700/60 dark:text-grey-light-300/60" />
             </span>
@@ -90,7 +88,7 @@ const TopBarLogoMenu = () => {
           side="bottom"
           sideOffset={8}
           className={cn(
-            "w-[222px] rounded-[8px] border border-grey-dark-100 bg-white p-1",
+            "w-[222px] rounded-[8px] border border-grey-dark-100 bg-white p-1 z-[1100]",
             "shadow-[0_4px_24px_0_rgba(0,0,0,0.08)]",
             "dark:border-[#313131] dark:bg-[#161616]",
           )}
@@ -135,12 +133,6 @@ const TopBarLogoMenu = () => {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-
-      <CheckForUpdateDialog
-        open={updateDialogOpen}
-        onOpenChange={setUpdateDialogOpen}
-        onClose={() => setUpdateDialogOpen(false)}
-      />
     </div>
   );
 };

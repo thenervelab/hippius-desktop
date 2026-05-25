@@ -15,8 +15,9 @@ use tracing::{debug, info, warn};
 const EXPECTED_TABLES: &[&str] = &[
     // Declarative TABLE_SCHEMAS block (1 table)
     "sub_accounts",
-    // Imperative CREATE TABLE statements (16 tables)
+    // Imperative CREATE TABLE statements (17 tables)
     "sync_paths",
+    "sync_intent",
     "wss_endpoint",
     "security_scoped_bookmarks",
     "auth_session",
@@ -34,6 +35,8 @@ const EXPECTED_TABLES: &[&str] = &[
     "share_keystore",
     "share_origin",
     "shared_link_history",
+    "local_wallets",
+    "bridge_transactions",
 ];
 
 /// Read the column names of a table via `PRAGMA table_info(...)`.
@@ -239,6 +242,45 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             info!("sync_paths constraint migration completed");
         }
     }
+
+    // sync_intent — persistent upload-intent manifest for the sync widget.
+    //
+    // The sync widget previously reset progress on app restart after a partial
+    // bulk upload (drag 10 GB → close at 5 GB → reopen shows "0 / 5 GB" instead
+    // of "5 / 10 GB") because the in-memory snapshot was the only source of
+    // truth. This table is the durable shadow: every queued file is recorded
+    // here when its plan lands, and `completed_at_ms` is set when the file
+    // finishes uploading. The composite primary key `(account_id, drive_label,
+    // relative_path)` makes "same file enqueued twice for the same drive"
+    // unrepresentable at the storage layer; subsequent tasks decide the
+    // ON CONFLICT policy when wiring `record_plan`.
+    //
+    // `completed_at_ms` is NULLABLE on purpose: NULL is the canonical "still
+    // pending" marker. The covering index `(account_id, drive_label,
+    // completed_at_ms)` keeps the per-drive "pending count" and totals queries
+    // (Task 2) off a full table scan as the table grows across long-running
+    // sync sessions. `added_at_ms` is non-NULL so age-based prune policies have
+    // a deterministic ordering key.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_intent (
+            account_id      TEXT    NOT NULL,
+            drive_label     TEXT    NOT NULL,
+            relative_path   TEXT    NOT NULL,
+            size_bytes      INTEGER NOT NULL,
+            added_at_ms     INTEGER NOT NULL,
+            completed_at_ms INTEGER,
+            PRIMARY KEY (account_id, drive_label, relative_path)
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_sync_intent_drive
+            ON sync_intent (account_id, drive_label, completed_at_ms)",
+    )
+    .execute(&mut *tx)
+    .await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS wss_endpoint (
@@ -474,6 +516,38 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(&mut *tx)
     .await?;
 
+    // Local wallets — per-logged-in-account scope via `owner`, mirroring
+    // sync_paths. See src-tauri/src/wallet/{crypto,repo,commands}.rs.
+    //
+    // Migration policy: legacy installs had a global `local_wallets` table
+    // with no `owner` column. We drop those rows wholesale on first boot of
+    // this build rather than silently attributing them to whichever account
+    // logs in first — the wallet password is the only thing that decrypts
+    // the mnemonic and we cannot prove who that mnemonic belongs to. Users
+    // must re-create or re-import after upgrading.
+    let local_wallets_cols = table_columns(&mut *tx, "local_wallets").await?;
+    if !local_wallets_cols.is_empty() && !local_wallets_cols.contains("owner") {
+        info!("Dropping legacy unscoped local_wallets table; wallets must be re-created per-account");
+        sqlx::query("DROP TABLE local_wallets").execute(&mut *tx).await?;
+    }
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS local_wallets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL,
+            name TEXT NOT NULL,
+            address TEXT NOT NULL,
+            encrypted_mnemonic TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+            UNIQUE(owner, address)
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+
     sqlx::query("INSERT OR IGNORE INTO onboarding (id, is_done) VALUES (1, 0)")
         .execute(&mut *tx)
         .await?;
@@ -557,6 +631,44 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(&mut *tx)
     .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS shared_link_history_account_ended_idx ON shared_link_history (account_id, ended_at DESC)")
+        .execute(&mut *tx)
+        .await?;
+
+    // Bridge transactions — replaces hippius-web's `localStorage`-backed
+    // tracking map (`lib/bridge/service.ts`). Per-account scoping via
+    // `owner` mirrors `sync_paths` / `local_wallets`: a logged-out
+    // user must never see another account's history. The full event
+    // timeline is stored as JSON in `events_json` so the FE can render
+    // the per-row timeline without a JOIN; the row itself is the source
+    // of truth for the high-level status + the latest tx hashes.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS bridge_transactions (
+            id TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            status TEXT NOT NULL,
+            amount_planck TEXT NOT NULL,
+            amount_decimals INTEGER NOT NULL,
+            sender_address TEXT NOT NULL,
+            recipient_address TEXT NOT NULL,
+            source_tx_hash TEXT,
+            destination_tx_hash TEXT,
+            deposit_id TEXT,
+            withdrawal_id TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            error TEXT,
+            attestations INTEGER NOT NULL DEFAULT 0,
+            required_attestations INTEGER NOT NULL DEFAULT 3,
+            events_json TEXT NOT NULL DEFAULT '[]',
+            denial_reason TEXT,
+            refunded INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_bridge_transactions_owner ON bridge_transactions(owner, created_at DESC)")
         .execute(&mut *tx)
         .await?;
 

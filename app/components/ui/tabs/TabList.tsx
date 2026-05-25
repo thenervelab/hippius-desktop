@@ -25,6 +25,8 @@ interface TabListProps {
   gap?: string;
   className?: string;
   tabItemClassName?: string;
+  /** Tailwind classes used for the tab label's typography. Defaults to the standard 13px Geist Medium style. */
+  textClassName?: string;
   isJustifyStart?: boolean;
   showTooltip?: boolean;
   iconOnly?: boolean;
@@ -41,6 +43,7 @@ const TabList: React.FC<TabListProps> = ({
   gap = "gap-1",
   className,
   tabItemClassName,
+  textClassName,
   isJustifyStart = false,
   showTooltip = true,
   iconOnly = false,
@@ -48,7 +51,7 @@ const TabList: React.FC<TabListProps> = ({
   return (
     <div
       className={cn(
-        "inline-flex rounded-[6px] bg-[#ebebeb] p-1 dark:bg-[#1e1e1e]",
+        "inline-flex rounded-[6px] bg-[#ebebeb] p-1 dark:bg-black-900",
         gap,
         className,
       )}
@@ -67,6 +70,7 @@ const TabList: React.FC<TabListProps> = ({
             height={height}
             paddingX={tabItemPaddingX}
             paddingY={tabItemPaddingY}
+            textClassName={textClassName}
             isJustifyStart={isJustifyStart}
             showTooltip={showTooltip}
             iconOnly={iconOnly}

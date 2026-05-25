@@ -1,31 +1,44 @@
-import { IconComponent } from "@/app/lib/types";
+import React from "react";
 
-export const IconGrid: IconComponent = (props) => (
+type IconGridProps = React.SVGProps<SVGSVGElement> & {
+  /** Skip the inner white fill rect so the parent background shows through. */
+  transparent?: boolean;
+  /** Override the clip-path fill (defaults to white). */
+  fillColor?: string;
+};
+
+export const IconGrid: React.FC<IconGridProps> = ({
+  transparent,
+  fillColor,
+  ...rest
+}) => (
   <svg
     viewBox="0 0 40 40"
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
-    {...props}
+    {...rest}
   >
     <g clipPath="url(#clip0_18404_77381)">
-      <rect
-        width="40"
-        height="40"
-        fill="white"
-        stroke="#B4C8F3"
-        strokeWidth="0.4"
-      />
-      <path d="M0 0L40 40" stroke="#B4C8F3" strokeWidth="0.4" />
-      <path d="M0 40L40 2.06624e-06" stroke="#B4C8F3" strokeWidth="0.4" />
-      <path d="M20 0V40" stroke="#B4C8F3" strokeWidth="0.4" />
-      <path d="M0 20H40" stroke="#B4C8F3" strokeWidth="0.4" />
+      {!transparent && (
+        <rect
+          width="40"
+          height="40"
+          fill="white"
+          stroke="currentColor"
+          strokeWidth="0.4"
+        />
+      )}
+      <path d="M0 0L40 40" stroke="currentColor" strokeWidth="0.4" />
+      <path d="M0 40L40 2.06624e-06" stroke="currentColor" strokeWidth="0.4" />
+      <path d="M20 0V40" stroke="currentColor" strokeWidth="0.4" />
+      <path d="M0 20H40" stroke="currentColor" strokeWidth="0.4" />
       <rect
         x="2.5"
         y="7.5"
         width="35"
         height="25"
         rx="1"
-        stroke="#B4C8F3"
+        stroke="currentColor"
         strokeWidth="0.4"
       />
       <rect
@@ -34,7 +47,7 @@ export const IconGrid: IconComponent = (props) => (
         width="30"
         height="30"
         rx="1"
-        stroke="#B4C8F3"
+        stroke="currentColor"
         strokeWidth="0.4"
       />
       <rect
@@ -44,15 +57,15 @@ export const IconGrid: IconComponent = (props) => (
         height="25"
         rx="1"
         transform="rotate(-90 7.5 37.5)"
-        stroke="#B4C8F3"
+        stroke="currentColor"
         strokeWidth="0.4"
       />
-      <circle cx="20" cy="20" r="17.5" stroke="#B4C8F3" strokeWidth="0.4" />
-      <circle cx="20" cy="20" r="7.5" stroke="#B4C8F3" strokeWidth="0.4" />
+      <circle cx="20" cy="20" r="17.5" stroke="currentColor" strokeWidth="0.4" />
+      <circle cx="20" cy="20" r="7.5" stroke="currentColor" strokeWidth="0.4" />
     </g>
     <defs>
       <clipPath id="clip0_18404_77381">
-        <rect width="40" height="40" fill="white" />
+        <rect width="40" height="40" fill={fillColor || "white"} />
       </clipPath>
     </defs>
   </svg>

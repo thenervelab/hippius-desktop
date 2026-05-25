@@ -39,9 +39,24 @@ pub async fn get_account_balance(
 }
 
 /// Query staking state for the current authenticated user.
+/// Fetch staking state.
+///
+/// `account_id` is optional: callers that want the active local wallet's
+/// stake (the wallet-page cards & dialogs) pass `None` and we fall back
+/// to `get_substrate_address` which already reads the active wallet.
+/// Callers that want the auth/login account's stake (the global page
+/// header, which shouldn't jump every time the user switches local
+/// wallets in `/wallet`) pass the auth SS58 explicitly. Same data
+/// shape returned either way.
 #[tauri::command]
-pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState>) -> Result<StakingInfo, crate::error::AppError> {
-    let address = get_substrate_address(&state)?;
+pub async fn get_staking_info(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: Option<String>,
+) -> Result<StakingInfo, crate::error::AppError> {
+    let address = match account_id {
+        Some(a) => a,
+        None => get_substrate_address(&state).await?,
+    };
     let client = get_substrate_client(&state).await?;
     let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| format!("Invalid SS58 address: {address}"))?;
 
@@ -71,6 +86,75 @@ pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState
         .map_err(|e| crate::error::AppError::Other(format!("Era query failed: {e}")))?
         .unwrap_or(0);
 
+    // Block-precise countdown data for unbonding chunks. Mirrors the
+    // values hippius-web reads from `derive.session.progress`:
+    //   era_length    = sessions_per_era × epoch_duration   (blocks)
+    //   era_progress  = sessions_into_era × epoch_duration  + slot_in_epoch
+    //   remaining_blocks(chunk) = (remaining_eras - 1) × era_length
+    //                           + (era_length - era_progress)
+    //
+    // Every query is wrapped in `.ok().flatten()` so a single missing
+    // entry (older runtime, RPC error) leaves the chunk's
+    // `remaining_blocks = None` and the frontend falls back to era
+    // count — the staking info request as a whole still succeeds.
+    // `client.constants().at(&addr)` reads a runtime constant; both
+    // queries return `Result` so we collapse to `Option<u64>` and skip
+    // the rest of the era-progress math if either is missing.
+    let epoch_duration_blocks: Option<u64> = client
+        .constants()
+        .at(&custom_runtime::constants().babe().epoch_duration())
+        .ok();
+    let sessions_per_era: Option<u32> = client
+        .constants()
+        .at(&custom_runtime::constants().staking().sessions_per_era())
+        .ok();
+    let era_length: Option<u64> = match (epoch_duration_blocks, sessions_per_era) {
+        (Some(ed), Some(spe)) => Some(ed.saturating_mul(spe as u64)),
+        _ => None,
+    };
+
+    let era_progress: Option<u64> = match (era_length, epoch_duration_blocks) {
+        (Some(era_len), Some(epoch_duration)) if era_len > 0 && epoch_duration > 0 => {
+            let era_start_session_query = custom_runtime::storage()
+                .staking()
+                .eras_start_session_index(current_era);
+            let era_start_session = storage.fetch(&era_start_session_query).await.ok().flatten();
+
+            let current_session_query = custom_runtime::storage().session().current_index();
+            let current_session = storage.fetch(&current_session_query).await.ok().flatten();
+
+            let current_slot_query = custom_runtime::storage().babe().current_slot();
+            let current_slot = storage.fetch(&current_slot_query).await.ok().flatten();
+            let genesis_slot_query = custom_runtime::storage().babe().genesis_slot();
+            let genesis_slot = storage.fetch(&genesis_slot_query).await.ok().flatten();
+
+            match (era_start_session, current_session, current_slot, genesis_slot) {
+                (Some(ess), Some(cs), Some(slot), Some(gen_slot)) => {
+                    let sessions_into_era = (cs as u64).saturating_sub(ess as u64);
+                    let slot_in_epoch =
+                        (slot.0.saturating_sub(gen_slot.0)) % epoch_duration;
+                    let progress = sessions_into_era
+                        .saturating_mul(epoch_duration)
+                        .saturating_add(slot_in_epoch);
+                    Some(progress.min(era_len))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+
+    let compute_remaining_blocks = |remaining_eras: u32| -> Option<u64> {
+        let era_len = era_length?;
+        let progress = era_progress?;
+        if remaining_eras == 0 {
+            return Some(0);
+        }
+        let preceding = (remaining_eras as u64).saturating_sub(1).saturating_mul(era_len);
+        let current = era_len.saturating_sub(progress);
+        Some(preceding.saturating_add(current))
+    };
+
     let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
     if let Ok(Some(ledger)) = storage.fetch(&ledger_query).await {
         bonded = ledger.active.to_string();
@@ -88,6 +172,7 @@ pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState
                     amount: amount_str,
                     era: unlock_era,
                     remaining_eras: remaining,
+                    remaining_blocks: compute_remaining_blocks(remaining),
                 });
             }
         }

@@ -19,6 +19,11 @@ const settingsNavItems = [
     icon: <Icons.Folder className={ICON_CLASS} />,
   },
   {
+    label: "Wallets",
+    section: "wallets",
+    icon: <Icons.Wallet className={ICON_CLASS} />,
+  },
+  {
     label: "Security",
     section: "security",
     icon: <Icons.KeySquare className={ICON_CLASS} />,
@@ -76,7 +81,7 @@ const SettingsSidebar: React.FC = () => {
               onClick={() => router.back()}
               className={cn(
                 "flex items-center gap-2 p-[10px] w-full rounded-[12px]",
-                "bg-[#0000000F] dark:bg-white/[0.06]",
+                "bg-[#0000000F] dark:bg-[#0000000F]",
                 "hover:bg-[#00000014] dark:hover:bg-white/10 transition-colors duration-200",
               )}
             >

@@ -29,10 +29,8 @@ const OnboardingLeftPanel = ({
     // No background or width here — the parent column in index.tsx owns those
     <div className="flex-1 overflow-y-auto no-scrollbar">
       <div className="flex flex-col h-full px-20 pt-14 pb-20 min-h-0">
-
         {/* ── Top content ── */}
         <div className="flex flex-col gap-8">
-
           {/* Badges */}
           <div className="flex items-center gap-2 flex-wrap">
             {screen.badges.map((badge) => (
@@ -130,7 +128,7 @@ const OnboardingLeftPanel = ({
               onClick={handleOnBoardingDone}
               className="w-full h-[52px] rounded-[6px] text-[18px] font-normal
                          border border-grey-80
-                         dark:bg-white/[0.03] dark:hover:bg-white/[0.06]
+                         dark:bg-white/[0.03] dark:hover:bg-[#0000000F]
                          dark:border-[#313131] dark:text-[#EBEBEB]"
               style={{ letterSpacing: "-0.36px" }}
             >
@@ -142,7 +140,7 @@ const OnboardingLeftPanel = ({
               onClick={handlePrevious}
               className="w-full h-[52px] rounded-[6px] text-[18px] font-normal
                          border border-grey-80
-                         dark:bg-white/[0.03] dark:hover:bg-white/[0.06]
+                         dark:bg-white/[0.03] dark:hover:bg-[#0000000F]
                          dark:border-[#313131] dark:text-[#EBEBEB]"
               style={{ letterSpacing: "-0.36px" }}
             >

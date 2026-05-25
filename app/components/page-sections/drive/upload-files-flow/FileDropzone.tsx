@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { cn } from "@/lib/utils";
-import { Icons, AbstractIconWrapper, P } from "@/components/ui";
+import { Icons, AbstractIconWrapper } from "@/components/ui";
 import { getLastBrowseDirectory, saveLastBrowseDirectory } from "@/lib/utils/userPreferencesDb";
 
 // Type for handling both file paths (from dialog) and browser Files (from drop)
@@ -46,13 +46,26 @@ const FileDropzone: FC<{
     }
   }, [setFiles]);
 
-  // Listen to Tauri native drag-drop events for the dropzone
+  // Listen to Tauri native drag-drop events for the dropzone.
+  // `cancelled` guards against the async-await + effect-cleanup race
+  // where an `await listen(...)` resolves after cleanup ran, leaking a
+  // stale listener bound to a previous `setFiles` reference.
   useEffect(() => {
+    let cancelled = false;
     const unlisteners: Array<() => void> = [];
+
+    const safePush = (un: () => void) => {
+      if (cancelled) {
+        un();
+        return;
+      }
+      unlisteners.push(un);
+    };
 
     (async () => {
       try {
         const { listen } = await import("@tauri-apps/api/event");
+        if (cancelled) return;
 
         const unDragEnter = await listen<{ paths: string[] }>(
           "tauri://drag-enter",
@@ -60,7 +73,8 @@ const FileDropzone: FC<{
             setIsDragging(true);
           }
         );
-        unlisteners.push(unDragEnter);
+        safePush(unDragEnter);
+        if (cancelled) return;
 
         const unDragOver = await listen(
           "tauri://drag-over",
@@ -68,7 +82,8 @@ const FileDropzone: FC<{
             // Keep showing drag state
           }
         );
-        unlisteners.push(unDragOver);
+        safePush(unDragOver);
+        if (cancelled) return;
 
         const unDragDrop = await listen<{ paths: string[] }>(
           "tauri://drag-drop",
@@ -77,21 +92,35 @@ const FileDropzone: FC<{
             const paths = event.payload.paths;
             if (!paths || paths.length === 0) return;
 
-            // Filter out directories (shows toast if any dropped)
             try {
               const { filterDroppedPaths } = await import("@/lib/utils/filterDroppedPaths");
-              const filePaths = await filterDroppedPaths(paths);
-              if (filePaths.length > 0) {
-                setFiles(filePaths);
+              const { files, folders } = await filterDroppedPaths(paths);
+              if (folders.length > 0 && files.length === 0) {
+                // Files-only zone — surface the mismatch.
+                toast.error(
+                  "Folders cannot be uploaded here. Use \"+ New Folder\" instead.",
+                  { duration: 5000 },
+                );
+                return;
+              }
+              if (folders.length > 0) {
+                toast.info(
+                  "Folders were skipped. Use \"+ New Folder\" to upload a folder.",
+                );
+              }
+              if (files.length > 0) {
+                setFiles(files);
               }
             } catch (err) {
               console.error("[FileDropzone] Error checking paths:", err);
-              // Fallback: pass all paths through
+              // Fallback: pass all paths through — uploader will surface
+              // per-path errors itself.
               setFiles(paths);
             }
           }
         );
-        unlisteners.push(unDragDrop);
+        safePush(unDragDrop);
+        if (cancelled) return;
 
         const unDragLeave = await listen(
           "tauri://drag-leave",
@@ -99,13 +128,14 @@ const FileDropzone: FC<{
             setIsDragging(false);
           }
         );
-        unlisteners.push(unDragLeave);
+        safePush(unDragLeave);
       } catch (err) {
         console.error("[FileDropzone] Failed to register drag listeners:", err);
       }
     })();
 
     return () => {
+      cancelled = true;
       unlisteners.forEach((fn) => fn());
     };
   }, [setFiles]);
@@ -113,37 +143,39 @@ const FileDropzone: FC<{
   return (
     <div
       className={cn(
-        "w-full h-full border rounded-[0.5rem] p-2 transition-colors duration-200",
-        isDragging
-          ? "border-primary-50 border-2 bg-primary-50/5"
-          : "border-grey-80"
+        "w-full h-full rounded-[8px] border p-2 transition-colors duration-200",
+        "border-grey-80 bg-white",
+        "dark:border-[#333] dark:bg-[#171717]",
+        isDragging &&
+          "border-primary-50 dark:border-primary-50 bg-primary-50/5 dark:bg-primary-50/10"
       )}
     >
       <button
+        type="button"
         onClick={handleSelectFiles}
         className={cn(
-          "h-full w-full flex border border-dashed justify-center py-10 px-10 bg-white cursor-pointer hover:bg-grey-90 duration-300 rounded-[0.5rem]",
-          isDragging
-            ? "border-primary-50 bg-primary-50/10"
-            : "border-grey-80"
+          "h-full w-full flex flex-col items-center justify-center gap-3 rounded-[8px] border border-dashed px-6 py-6 cursor-pointer transition-colors duration-200",
+          "border-grey-80 bg-white hover:bg-grey-light-300",
+          "dark:border-[#444] dark:bg-[#1e1e1e] dark:hover:bg-[#252525]",
+          isDragging &&
+            "border-primary-50 dark:border-primary-50 bg-primary-50/10"
         )}
       >
-        <div className="flex flex-col items-center">
-          <AbstractIconWrapper className="size-8">
-            <Icons.Box className="relative" />
-          </AbstractIconWrapper>
+        <AbstractIconWrapper
+          transparent
+          className="size-10 text-primary-50"
+          iconGridClassName="text-[#d4e0fb] dark:text-[#2a3a5c]"
+        >
+          <Icons.Box className="relative size-4" />
+        </AbstractIconWrapper>
 
-          <div className="mt-2 flex flex-col">
-            <P className="font-semibold text-grey-10" size="md">
-              Upload a File Here
-            </P>
-            <P
-              size="sm"
-              className="mt-2 text-center text-grey-60 max-w-[16.5rem]"
-            >
-              Drag and drop or click to add one or more files here to upload
-            </P>
-          </div>
+        <div className="flex flex-col items-center gap-1">
+          <span className="font-geist text-base font-medium leading-[22px] tracking-[-0.32px] text-grey-10 dark:text-white">
+            Upload a File Here
+          </span>
+          <span className="font-geist text-sm font-medium leading-5 tracking-[-0.28px] text-center text-grey-60 dark:text-grey-dark-600 max-w-[262px]">
+            Drag and drop or click to add one or more files here to upload
+          </span>
         </div>
       </button>
     </div>

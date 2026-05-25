@@ -12,30 +12,36 @@
 // hcfs-client's share API does not expose a progress callback in v1
 // (see `docs/plans/2026-04-28-file-sharing-design.md`). Faking smooth
 // percentages would be a UX trap.
-//
-// The visual layout mirrors the wallet dialogs (`SendBalanceDialog`,
-// `ReceiveBalanceDialog`): centered `AbstractIconWrapper` header on
-// desktop, mobile accent bar + close button on small screens, and
-// stacked `CardButton`s for primary/secondary actions. Revoke is
-// rendered as a small de-emphasized red link below the action stack
-// because revoking is rare and shouldn't compete with Copy/Open.
 
 "use client";
 
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { useAtom } from "jotai";
-import { AlertCircle, Check } from "lucide-react";
+import { AlertCircle, Check, Loader2 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 
-import DialogContainer from "@/components/ui/DialogContainer";
-import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
+import { Button, Icons } from "@/components/ui";
+import { FramedDialog } from "@/components/ui/FramedDialog";
+import { cn } from "@/lib/utils";
 import { shareModalFileAtom } from "@/app/lib/global-atoms/sharesAtoms";
-import { createShare, revokeShare, type ShareLink } from "@/app/lib/tauri/shares";
+import {
+  createShare,
+  revokeShare,
+  type ShareLink,
+} from "@/app/lib/tauri/shares";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 
-type ModalState = { kind: "running" } | { kind: "done"; link: ShareLink } | { kind: "error"; message: string };
+type ModalState =
+  | { kind: "running" }
+  | { kind: "done"; link: ShareLink }
+  | { kind: "error"; message: string };
 
 export default function ShareFileModal() {
   const [file, setFile] = useAtom(shareModalFileAtom);
@@ -121,126 +127,139 @@ export default function ShareFileModal() {
   };
 
   return (
-    <Dialog.Root open onOpenChange={(o) => (!o ? close() : undefined)}>
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit">
-        <Dialog.Title className="sr-only">Share via link</Dialog.Title>
-        {/* Mobile accent line */}
-        <div className="h-4 bg-primary-50 md:hidden" />
+    <FramedDialog
+      open
+      onClose={close}
+      title="Share via link"
+      icon={<Icons.Link className="size-4 text-white" />}
+      maxWidth="max-w-[585px]"
+    >
+      {state.kind === "running" && (
+        <RunningBody filename={filename} onCancel={close} />
+      )}
 
-        <div className="px-4">
-          {/* Desktop Header */}
-          <div className="hidden md:flex flex-col items-center justify-center pb-4 pt-4 gap-2">
-            <div className="flex items-center mb-2 p-2">
-              <AbstractIconWrapper className="size-8 sm:size-10">
-                <Icons.Link className="absolute size-4 sm:size-6 text-primary-50" />
-              </AbstractIconWrapper>
-            </div>
-            <span className="text-center text-2xl text-grey-10 font-medium">
-              Share via link
-            </span>
-          </div>
+      {state.kind === "done" && (
+        <DoneBody
+          link={state.link}
+          onCopy={onCopy}
+          onOpen={onOpenInBrowser}
+          onClose={close}
+          onRevoke={onRevoke}
+        />
+      )}
 
-          {/* Mobile Header */}
-          <div className="flex py-4 items-center justify-between text-grey-10 md:hidden">
-            <span className="text-lg font-medium">Share via link</span>
-            <button onClick={close} aria-label="Close">
-              <Icons.CloseCircle className="size-6" />
-            </button>
-          </div>
-
-          {/* Body — one branch per state. */}
-          {state.kind === "running" && (
-            <div className="flex items-start gap-3 mb-2">
-              <Icons.Loader className="size-5 animate-spin text-primary-60 shrink-0 mt-0.5" />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-grey-10">Encrypting and uploading…</p>
-                <p className="text-xs text-grey-50 truncate mt-0.5" title={filename}>
-                  {filename}
-                </p>
-              </div>
-            </div>
-          )}
-
-          {state.kind === "done" && <DoneBody link={state.link} onCopy={onCopy} />}
-
-          {state.kind === "error" && (
-            <div className="flex items-start gap-2 text-error-70 mb-2">
-              <AlertCircle className="size-4 mt-0.5 shrink-0" />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium">Couldn&apos;t create share link</p>
-                <p className="text-xs text-grey-50 mt-1 break-words">{state.message}</p>
-              </div>
-            </div>
-          )}
-
-          {/* Footer — stacked `CardButton`s, full-width, mirroring the
-              wallet dialogs. Revoke is rendered as a small de-emphasized
-              red link below the stack so it doesn't compete with the
-              Copy/Open primary actions. */}
-          {state.kind === "running" && (
-            <div className="flex flex-col gap-4 my-4">
-              <CardButton className="w-full text-[1.125rem]" variant="secondary" onClick={close}>
-                Cancel
-              </CardButton>
-            </div>
-          )}
-
-          {state.kind === "error" && (
-            <div className="flex flex-col gap-4 my-4">
-              <CardButton
-                className="bg-primary-50 text-[1.125rem] hover:bg-primary-40 transition text-white w-full font-medium"
-                variant="dialog"
-                onClick={startShare}
-              >
-                Try again
-              </CardButton>
-              <CardButton className="w-full text-[1.125rem]" variant="secondary" onClick={close}>
-                Close
-              </CardButton>
-            </div>
-          )}
-
-          {state.kind === "done" && (
-            <div className="flex flex-col gap-4 my-4">
-              <CardButton
-                className="bg-primary-50 text-[1.125rem] hover:bg-primary-40 transition text-white w-full font-medium"
-                variant="dialog"
-                onClick={onOpenInBrowser}
-              >
-                Open in browser
-              </CardButton>
-              <CardButton className="w-full text-[1.125rem]" variant="secondary" onClick={close}>
-                Done
-              </CardButton>
-              <button
-                type="button"
-                onClick={onRevoke}
-                className="self-center flex items-center gap-1.5 text-xs font-medium text-error-70 hover:text-error-60 transition-colors"
-              >
-                <Icons.Trash className="size-3.5" />
-                Revoke share
-              </button>
-            </div>
-          )}
-        </div>
-      </DialogContainer>
-    </Dialog.Root>
+      {state.kind === "error" && (
+        <ErrorBody
+          message={state.message}
+          onRetry={startShare}
+          onClose={close}
+        />
+      )}
+    </FramedDialog>
   );
 }
 
-// The URL card matches the bordered white address card in
-// `ReceiveBalanceDialog`. We deliberately re-implement the
-// "value + copy button" pattern inline instead of reusing `CopyText`:
-// `CopyText` wraps the value in a `<div>`, which would (a) break the
-// `findByDisplayValue` test seam in `ShareFileModal.test.tsx`, and
-// (b) lose select-all-and-Cmd-C on a long URL. Don't "simplify" this
-// to `CopyText` without porting the test queries first.
+function RunningBody({
+  filename,
+  onCancel,
+}: {
+  filename: string;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="font-geist">
+      <div className="mb-6 flex flex-col items-center gap-3">
+        <Loader2 className="size-6 animate-spin text-primary-50" />
+        <div className="flex flex-col items-center gap-1 px-2 text-center">
+          <p className="text-sm font-medium text-grey-20 dark:text-grey-dark-800">
+            Encrypting and uploading…
+          </p>
+          <p
+            className="font-mono text-xs text-grey-50 dark:text-grey-dark-600 break-all"
+            title={filename}
+          >
+            {filename}
+          </p>
+        </div>
+      </div>
+
+      <Button
+        type="button"
+        variant="defaultStable"
+        size="auto"
+        onClick={onCancel}
+        className="h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]"
+      >
+        Cancel
+      </Button>
+    </div>
+  );
+}
+
+function ErrorBody({
+  message,
+  onRetry,
+  onClose,
+}: {
+  message: string;
+  onRetry: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="font-geist">
+      <div className="mb-6 flex items-start gap-2 rounded-md border border-error-90 bg-error-100/40 px-3 py-2.5 dark:border-error-30/60 dark:bg-error-30/10">
+        <AlertCircle className="mt-0.5 size-4 shrink-0 text-error-70" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-error-70">
+            Couldn&apos;t create share link
+          </p>
+          <p className="mt-1 break-words text-xs text-grey-50 dark:text-grey-dark-600">
+            {message}
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <Button
+          type="button"
+          variant="primary"
+          size="auto"
+          onClick={onRetry}
+          className={cn(
+            "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
+            "border-[#3167DD] bg-[#3167DD] text-white",
+            "hover:bg-[#2454c4] hover:border-[#2454c4]",
+            "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
+          )}
+        >
+          Try again
+        </Button>
+        <Button
+          type="button"
+          variant="defaultStable"
+          size="auto"
+          onClick={onClose}
+          className="h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]"
+        >
+          Close
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function DoneBody({
   link,
   onCopy,
+  onOpen,
+  onClose,
+  onRevoke,
 }: {
   link: ShareLink;
   onCopy: () => void | Promise<void>;
+  onOpen: () => void | Promise<void>;
+  onClose: () => void;
+  onRevoke: () => void | Promise<void>;
 }) {
   const [copied, setCopied] = useState(false);
   const expiresAtPretty = formatExpiresAt(link.expiresAt);
@@ -259,33 +278,93 @@ function DoneBody({
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // The URL is rendered inside a textarea (not a div) so that:
+  //   (1) `findByDisplayValue` keeps working in the test suite, and
+  //   (2) users can select-all + Cmd-C on a long URL on browsers
+  //       where the inline copy button isn't reachable.
   return (
-    <div>
-      {expiresAtPretty && <p className="text-xs text-grey-50 mb-3">Expires {expiresAtPretty}.</p>}
-      <div className="border border-grey-80 rounded-lg bg-white p-3 flex items-start gap-2">
+    <div className="font-geist">
+      {expiresAtPretty && (
+        <p className="mb-3 text-center text-xs text-grey-50 dark:text-grey-dark-600">
+          Expires {expiresAtPretty}.
+        </p>
+      )}
+
+      <div
+        className={cn(
+          "mb-6 flex items-start gap-2 rounded-[8px] border p-3",
+          "border-grey-80 bg-white",
+          "dark:border-[#494949] dark:bg-[#1f1f1f]",
+        )}
+      >
         <textarea
           ref={urlRef}
           readOnly
           value={link.shareUrl}
           onFocus={(e) => e.currentTarget.select()}
           rows={1}
-          className="flex-1 text-xs font-mono bg-transparent resize-none outline-none overflow-hidden break-all text-grey-10"
+          className={cn(
+            "flex-1 resize-none overflow-hidden break-all bg-transparent font-mono text-xs outline-none",
+            "text-grey-10 dark:text-grey-dark-800",
+          )}
         />
         <button
           type="button"
           onClick={handleCopy}
           title={copied ? "Copied!" : "Copy link"}
           aria-label="Copy link"
-          className={`px-1.5 py-1 border rounded transition-colors shrink-0 ${
+          className={cn(
+            "shrink-0 rounded-md border px-1.5 py-1 transition-colors",
             copied
-              ? "border-success-90 bg-success-100 text-success-50"
-              : "border-grey-80 bg-grey-90 hover:bg-grey-80 text-grey-10"
-          }`}
+              ? "border-success-90 bg-success-100 text-success-50 dark:border-success-50/60 dark:bg-success-50/10 dark:text-success-50"
+              : cn(
+                  "border-grey-80 bg-grey-90 text-grey-10 hover:bg-grey-80",
+                  "dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#363636]",
+                ),
+          )}
         >
-          {copied
-            ? <Check className="size-4" />
-            : <Icons.Copy className="size-4" />
-          }
+          {copied ? (
+            <Check className="size-4" />
+          ) : (
+            <Icons.Copy className="size-4" />
+          )}
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <Button
+          type="button"
+          variant="primary"
+          size="auto"
+          onClick={onOpen}
+          className={cn(
+            "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
+            "border-[#3167DD] bg-[#3167DD] text-white",
+            "hover:bg-[#2454c4] hover:border-[#2454c4]",
+            "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
+          )}
+        >
+          Open in browser
+        </Button>
+        <Button
+          type="button"
+          variant="defaultStable"
+          size="auto"
+          onClick={onClose}
+          className="h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]"
+        >
+          Done
+        </Button>
+        <button
+          type="button"
+          onClick={onRevoke}
+          className={cn(
+            "mx-auto mt-1 flex items-center gap-1.5 text-xs font-medium transition-colors",
+            "text-error-70 hover:text-error-60",
+          )}
+        >
+          <Icons.Trash className="size-3.5" />
+          Revoke share
         </button>
       </div>
     </div>

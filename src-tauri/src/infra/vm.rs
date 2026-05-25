@@ -9,14 +9,21 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 /// Hardware configuration template for VM provisioning (vCPUs, RAM, disk).
+///
+/// `name` is the short flavor identifier (e.g. "spark", "vault") used by the
+/// frontend to match flavors and assign UI categories. `credits_per_hour`
+/// is forwarded as JSON to preserve whichever shape the upstream API uses
+/// (number or string) — both the Templates tab and instance-row lookup
+/// just stringify it for display.
 #[derive(Serialize, Deserialize)]
 pub struct VMFlavor {
     pub id: i64,
+    pub name: String,
     pub display_name: String,
     pub cpu_cores: i64,
     pub memory_mb: i64,
     pub data_disk_gb: i64,
-    pub credits_per_hour: String,
+    pub credits_per_hour: serde_json::Value,
     pub description: Option<String>,
 }
 
@@ -30,12 +37,18 @@ pub struct VMImage {
 }
 
 /// Pre-configured application stack that can be layered onto a VM image.
+///
+/// `logo_url` carries the absolute https URL the upstream API returns for the
+/// app's brand icon — without this field, serde silently drops it on the way
+/// through Rust and the dropdown trigger/options render the generic fallback
+/// glyph instead of the real per-app logo.
 #[derive(Serialize, Deserialize)]
 pub struct VMApplication {
     pub id: i64,
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
+    pub logo_url: Option<String>,
 }
 
 /// A running or stopped VM instance with its current status and metadata.
@@ -126,7 +139,10 @@ pub async fn create_vm(
     // Enforce credit eligibility at the IPC boundary. Refuses to call
     // the spawn endpoint if the user has fewer than 10 credits OR a zero
     // chain balance — see `crate::billing::eligibility::thresholds`.
-    crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::VmCreation).await?;
+    // VM creation has no upload payload; pass `bytes = 0` so the
+    // bytes-priced layer is a no-op and the gate falls back to the
+    // static `VM_CREATION` threshold (10 credits).
+    crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::VmCreation, 0).await?;
 
     info!(
         name = %params.name,

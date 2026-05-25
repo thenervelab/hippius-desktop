@@ -1,24 +1,16 @@
 "use client";
 
-import {
-  FC,
-  useState,
-  useRef,
-  useEffect,
-  useMemo,
-  useCallback,
-  memo,
-} from "react";
+import { FC, useState, useRef, useEffect, useCallback, memo } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { WaitAMoment } from "@/components/ui";
 import FilesTable from "./files-table";
+import FilesTableSkeleton from "./files-table/FilesTableSkeleton";
+import CardViewSkeleton from "./card-view/CardViewSkeleton";
 import CardView from "./card-view";
-import IPFSNoEntriesFound from "./files-table/FilesNoEntriesFound";
+import FilesNoEntriesFound from "./files-table/FilesNoEntriesFound";
 import UploadStatusWidget from "./UploadStatusWidget";
-import SidebarDialog from "@/app/components/ui/SidebarDialog";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
-import DeleteConfirmationDialog from "@/app/components/DeleteConfirmationDialog";
-import SidebarDialogContent from "./file-details-dialog-content";
+import ConfirmationDialog from "@/app/components/ConfirmationDialog";
+import { Trash2 } from "lucide-react";
 import VideoDialog from "./files-table/VideoDialog";
 import ImageDialog from "./files-table/ImageDialog";
 import PdfDialog from "./files-table/PdfDialog";
@@ -52,10 +44,23 @@ interface DriveContentProps {
   hasMore: boolean;
   loadMore: () => void;
   isSyncPathEmpty?: boolean;
+  /** True when the user has insufficient credits to upload files.
+   *  Swaps the empty-state into the "Add Credits" variant. */
+  hasNoCredits?: boolean;
   onSyncPathConfigured?: () => void;
   onUploadFile?: () => void;
   onAddFolder?: () => void;
   onAddSyncFolder?: () => void;
+  /** Routes a folder dropped on the files table into the
+   *  FolderUploadDialog with its path pre-filled. Pure files keep
+   *  flowing through `addButtonRef.openWithPaths`. */
+  onAddFolderFromDrop?: (folderPath: string) => void;
+  /** True while the FolderUploadDialog is open. Used to suppress the
+   *  table-level drag-drop handler so a drop onto the dialog isn't
+   *  also processed by the table behind it. */
+  isFolderUploadOpen?: boolean;
+  drivePathsByLabel?: Record<string, string>;
+  currentSubfolderPath?: string | null;
 }
 
 const DriveContent: FC<DriveContentProps> = ({
@@ -71,10 +76,15 @@ const DriveContent: FC<DriveContentProps> = ({
   hasMore,
   loadMore,
   isSyncPathEmpty = false,
+  hasNoCredits = false,
   onSyncPathConfigured,
   onUploadFile,
   onAddFolder,
   onAddSyncFolder,
+  onAddFolderFromDrop,
+  isFolderUploadOpen = false,
+  drivePathsByLabel,
+  currentSubfolderPath,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
@@ -103,8 +113,6 @@ const DriveContent: FC<DriveContentProps> = ({
     setSelectedFile,
     fileDetailsFile,
     setFileDetailsFile,
-    isFileDetailsOpen,
-    setIsFileDetailsOpen,
     deleteFile,
     isDeleting,
     getFileType,
@@ -114,27 +122,47 @@ const DriveContent: FC<DriveContentProps> = ({
 
   const selectedFileType = selectedFile ? getFileType(selectedFile) : null;
 
-  // Look up the latest version of the file details from live query data.
-  // The captured snapshot in fileDetailsFile may have stale arion hashes
-  // if it was opened before sync completed.
-  const liveFileDetailsFile = useMemo(() => {
-    if (!fileDetailsFile) return null;
-    return (
-      filteredData.find(
-        (f) =>
-          f.actualFileName === fileDetailsFile.actualFileName &&
-          f.label === fileDetailsFile.label,
-      ) ?? fileDetailsFile
-    );
-  }, [fileDetailsFile, filteredData]);
-
-  // Tauri native drag-and-drop via global event listeners
+  // Re-sync the panel atom with the freshest copy from `filteredData`.
+  // The atom snapshot can get stale (e.g. arion hash arrives after the panel
+  // opens), so when filteredData updates we push the live row back in.
   useEffect(() => {
+    if (!fileDetailsFile) return;
+    const live = filteredData.find(
+      (f) =>
+        f.actualFileName === fileDetailsFile.actualFileName &&
+        f.label === fileDetailsFile.label,
+    );
+    if (live && live !== fileDetailsFile) {
+      setFileDetailsFile(live);
+    }
+  }, [filteredData, fileDetailsFile, setFileDetailsFile]);
+
+  // Tauri native drag-and-drop via global event listeners.
+  //
+  // `cancelled` + the per-await guard exist because the effect's deps
+  // include `isSyncPathEmpty` / `isRecentFiles`. When those change while
+  // an `await listen(...)` is still in flight, the synchronous cleanup
+  // runs against an empty `unlisteners` array, then the awaited listener
+  // resolves and registers itself with the now-stale captured value.
+  // Without the guard, a "set up sync folder" toast leaks from the stale
+  // listener even after the real listener correctly opens the upload
+  // dialog.
+  useEffect(() => {
+    let cancelled = false;
     const unlisteners: Array<() => void> = [];
+
+    const safePush = (un: () => void) => {
+      if (cancelled) {
+        un();
+        return;
+      }
+      unlisteners.push(un);
+    };
 
     (async () => {
       try {
         const { listen } = await import("@tauri-apps/api/event");
+        if (cancelled) return;
 
         console.log("[DragDrop] Registering global Tauri drag-drop listeners");
 
@@ -144,14 +172,17 @@ const DriveContent: FC<DriveContentProps> = ({
         }>("tauri://drag-enter", (event) => {
           console.log("[DragDrop] drag-enter event received", event.payload);
           if (isSyncPathEmpty && !isRecentFiles) return;
-          // Don't show background overlay if upload dialog is already open
+          // Don't show background overlay if either upload dialog is open —
+          // both have their own dropzone visuals.
           if (addButtonRef?.current?.isDialogOpen()) return;
+          if (isFolderUploadOpen) return;
           setIsDragging(true);
           dragTimeoutRef.current = setTimeout(() => {
             setAnimateCloud(true);
           }, 200);
         });
-        unlisteners.push(unDragEnter);
+        safePush(unDragEnter);
+        if (cancelled) return;
 
         const unDragOver = await listen<{ position: { x: number; y: number } }>(
           "tauri://drag-over",
@@ -159,7 +190,8 @@ const DriveContent: FC<DriveContentProps> = ({
             // Keep showing drag state
           },
         );
-        unlisteners.push(unDragOver);
+        safePush(unDragOver);
+        if (cancelled) return;
 
         const unDragDrop = await listen<{
           paths: string[];
@@ -173,8 +205,12 @@ const DriveContent: FC<DriveContentProps> = ({
             dragTimeoutRef.current = null;
           }
 
-          // If upload dialog is already open, don't handle here (FileDropzone handles it)
+          // If either upload dialog is already open, the dialog's own
+          // drag-drop listener handles the drop. Skipping here prevents
+          // the table from also showing a "folders not allowed" toast on
+          // a folder drop that the open FolderUploadDialog accepted.
           if (addButtonRef?.current?.isDialogOpen()) return;
+          if (isFolderUploadOpen) return;
 
           if (isSyncPathEmpty && !isRecentFiles) {
             toast.info("Please set up sync folder first to upload files.");
@@ -184,21 +220,45 @@ const DriveContent: FC<DriveContentProps> = ({
           const paths = event.payload.paths;
           if (!paths || paths.length === 0 || !addButtonRef?.current) return;
 
-          // Filter out directories (shows toast if any dropped)
+          // Classify the drop. Files flow into the AddFile dialog;
+          // a folder drop opens the FolderUploadDialog with the path
+          // pre-filled (one folder at a time — FolderUploadDialog
+          // accepts a single root). Mixed drops upload the files and
+          // surface a single toast about the dropped folders.
           try {
             const { filterDroppedPaths } =
               await import("@/lib/utils/filterDroppedPaths");
-            const filePaths = await filterDroppedPaths(paths);
-            if (filePaths.length > 0) {
-              addButtonRef.current.openWithPaths(filePaths);
+            const { files, folders } = await filterDroppedPaths(paths);
+
+            if (files.length === 0 && folders.length > 0) {
+              if (onAddFolderFromDrop) {
+                if (folders.length > 1) {
+                  toast.info("Only the first dropped folder will be used.");
+                }
+                onAddFolderFromDrop(folders[0]);
+              } else {
+                toast.error("Folder uploads aren't available in this view.");
+              }
+              return;
+            }
+
+            if (files.length > 0) {
+              if (folders.length > 0) {
+                toast.info(
+                  'Folders were skipped. Use "+ New Folder" to upload a folder.',
+                );
+              }
+              addButtonRef.current.openWithPaths(files);
             }
           } catch (err) {
             console.error("[DragDrop] Error checking paths:", err);
-            // Fallback: pass all paths through
+            // Fallback: pass all paths through — uploader will surface
+            // per-path errors itself.
             addButtonRef.current.openWithPaths(paths);
           }
         });
-        unlisteners.push(unDragDrop);
+        safePush(unDragDrop);
+        if (cancelled) return;
 
         const unDragLeave = await listen("tauri://drag-leave", () => {
           console.log("[DragDrop] drag-leave event received");
@@ -209,7 +269,7 @@ const DriveContent: FC<DriveContentProps> = ({
             dragTimeoutRef.current = null;
           }
         });
-        unlisteners.push(unDragLeave);
+        safePush(unDragLeave);
 
         console.log("[DragDrop] All listeners registered successfully");
       } catch (err) {
@@ -221,13 +281,20 @@ const DriveContent: FC<DriveContentProps> = ({
     })();
 
     return () => {
+      cancelled = true;
       unlisteners.forEach((fn) => fn());
       if (dragTimeoutRef.current) {
         clearTimeout(dragTimeoutRef.current);
         dragTimeoutRef.current = null;
       }
     };
-  }, [addButtonRef, isSyncPathEmpty, isRecentFiles]);
+  }, [
+    addButtonRef,
+    isSyncPathEmpty,
+    isRecentFiles,
+    isFolderUploadOpen,
+    onAddFolderFromDrop,
+  ]);
 
   const handleFileDownload = (
     file: FormattedUserFile,
@@ -251,7 +318,17 @@ const DriveContent: FC<DriveContentProps> = ({
     // Only show full loading state on initial load (no data yet).
     // During background refetches (isFetching), keep showing existing data.
     if (isLoading) {
-      return <WaitAMoment isRecentFiles={isRecentFiles} />;
+      return viewMode === "card" ? (
+        <CardViewSkeleton
+          isRecentFiles={isRecentFiles}
+          cards={isRecentFiles ? 4 : 8}
+        />
+      ) : (
+        <FilesTableSkeleton
+          isRecentFiles={isRecentFiles}
+          rows={isRecentFiles ? 5 : 8}
+        />
+      );
     }
 
     if (
@@ -259,9 +336,10 @@ const DriveContent: FC<DriveContentProps> = ({
       error
     ) {
       return (
-        <IPFSNoEntriesFound
+        <FilesNoEntriesFound
           isRecentFiles={isRecentFiles}
           isSyncPathConfigured={!isSyncPathEmpty}
+          hasNoCredits={hasNoCredits}
           onStartSyncing={onSyncPathConfigured}
         />
       );
@@ -290,6 +368,10 @@ const DriveContent: FC<DriveContentProps> = ({
           hasMore={hasMore}
           loadMore={loadMore}
           onHeaderContextMenu={handleHeaderContextMenu}
+          drivePathsByLabel={drivePathsByLabel}
+          currentSubfolderPath={currentSubfolderPath}
+          searchTerm={searchTerm}
+          activeFilterCount={activeFilters.length}
         />
       );
     } else {
@@ -352,7 +434,7 @@ const DriveContent: FC<DriveContentProps> = ({
         {renderContent()}
       </div>
 
-      <DeleteConfirmationDialog
+      <ConfirmationDialog
         open={openDeleteModal}
         onClose={() => {
           setOpenDeleteModal(false);
@@ -362,7 +444,7 @@ const DriveContent: FC<DriveContentProps> = ({
           setOpenDeleteModal(false);
           setFileToDelete(null);
         }}
-        onDelete={() => {
+        onConfirm={() => {
           setOpenDeleteModal(false);
 
           // Format the filename using the same logic as NameCell
@@ -396,11 +478,24 @@ const DriveContent: FC<DriveContentProps> = ({
             ? "Deleting..."
             : `Delete ${fileToDelete?.isFolder ? "Folder" : "File"}`
         }
-        text={`Are you sure you want to delete\n${
-          fileToDelete?.name ? "\n" + fileToDelete.name : ""
-        }`}
+        text={
+          <>
+            Are you sure you want to delete
+            {fileToDelete?.name ? (
+              <>
+                <br />
+                {fileToDelete.name}
+              </>
+            ) : null}
+            ?
+          </>
+        }
         heading={`Delete ${fileToDelete?.isFolder ? "Folder" : "File"}`}
+        icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
+        iconBgColor="bg-[#fc7d73]"
+        confirmVariant="destructive"
         disableButton={isDeleting}
+        disableBackButton={isDeleting}
       />
 
       {contextMenu && (
@@ -421,7 +516,6 @@ const DriveContent: FC<DriveContentProps> = ({
           }}
           onShowFileDetails={(file) => {
             setFileDetailsFile(file);
-            setIsFileDetailsOpen(true);
             setContextMenu(null);
           }}
           onShareFile={(file) => {
@@ -471,14 +565,6 @@ const DriveContent: FC<DriveContentProps> = ({
       )}
 
       <UploadStatusWidget />
-
-      <SidebarDialog
-        heading={`${fileDetailsFile?.isFolder ? "Folder" : "File"} Details`}
-        open={isFileDetailsOpen}
-        onOpenChange={setIsFileDetailsOpen}
-      >
-        <SidebarDialogContent file={liveFileDetailsFile ?? undefined} />
-      </SidebarDialog>
     </>
   );
 };

@@ -19,6 +19,11 @@ interface Props {
   addDotWithBlurryEffect?: boolean;
   isDialog?: boolean;
   borderClassName?: string;
+  // When set, the four edge guide lines render as a solid 1px stroke of
+  // this color in both light and dark mode (the gradient fade-in/out is
+  // bypassed). Used by the wallet welcome screen — Figma spec there is
+  // `border: 1px solid rgba(151,151,151,0.17)`.
+  decorationLineColor?: string;
 }
 
 function gradientLine(
@@ -31,10 +36,45 @@ function gradientLine(
   return `linear-gradient(${axis}, rgba(255,255,255,0) 0%, ${color} ${fadeStart}%, ${color} ${fadeEnd}%, rgba(255,255,255,0) 100%)`;
 }
 
-function DecorationLines({ isDialog = false }: { isDialog?: boolean }) {
+function DecorationLines({
+  isDialog = false,
+  solidColor,
+}: {
+  isDialog?: boolean;
+  solidColor?: string;
+}) {
   const lightColor = "#dcdcdc";
   const darkColor = "#2c2c2c";
   const vLen = isDialog ? "100vh" : "200vh";
+
+  // Solid-color branch: single stroke in both themes (the rgba alpha
+  // does the heavy lifting on dark surfaces). Skips the gradient mask
+  // entirely so callers can hit the Figma "1px solid" spec.
+  if (solidColor) {
+    return (
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 -z-10 overflow-visible block"
+      >
+        <div
+          className="absolute top-0 left-1/2 h-px -translate-x-1/2"
+          style={{ width: "100vw", background: solidColor }}
+        />
+        <div
+          className="absolute bottom-0 left-1/2 h-px -translate-x-1/2"
+          style={{ width: "100vw", background: solidColor }}
+        />
+        <div
+          className="absolute top-1/2 left-0 w-px -translate-y-1/2"
+          style={{ height: vLen, background: solidColor }}
+        />
+        <div
+          className="absolute top-1/2 right-0 w-px -translate-y-1/2"
+          style={{ height: vLen, background: solidColor }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -94,6 +134,7 @@ export function BackgroundContainer({
   addDotWithBlurryEffect = false,
   isDialog = false,
   borderClassName,
+  decorationLineColor,
 }: Props) {
   return (
     <div
@@ -103,7 +144,12 @@ export function BackgroundContainer({
       <div className="relative isolate overflow-visible">
 
         {/* Guide lines */}
-        {!hideBackgroundDecorations && <DecorationLines isDialog={isDialog} />}
+        {!hideBackgroundDecorations && (
+          <DecorationLines
+            isDialog={isDialog}
+            solidColor={decorationLineColor}
+          />
+        )}
 
         {/* Corner hippo logos */}
         <BackgroundHippo fillClassName={fillClassName} strokeClassName={strokeClassName}

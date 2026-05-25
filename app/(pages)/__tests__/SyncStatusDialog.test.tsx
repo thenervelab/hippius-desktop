@@ -18,22 +18,6 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-// Mock heavy UI components that have complex dependencies
-vi.mock("@/components/ui", () => ({
-  Graphsheet: ({ className }: { className?: string }) => (
-    <div data-testid="graphsheet" className={className} />
-  ),
-}));
-vi.mock("@/components/ui/abstract-icon-wrapper", () => ({
-  default: ({ children, className }: {
-    children?: React.ReactNode;
-    className?: string;
-  }) => (
-    <div data-testid="icon-wrapper" className={className}>
-      {children}
-    </div>
-  ),
-}));
 vi.mock("@/components/ui/icons", () => ({
   Close: ({ className }: { className?: string }) => (
     <span data-testid="icon-close" className={className} />
@@ -52,6 +36,9 @@ vi.mock("@/components/ui/info-tooltip", () => ({
   default: ({ children }: { children?: React.ReactNode }) => (
     <span data-testid="info-tooltip">{children}</span>
   ),
+}));
+vi.mock("@/components/ui/CustomTooltip2", () => ({
+  default: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock("@/components/ui/MiddleTruncatedName", () => ({
@@ -130,13 +117,7 @@ describe("SyncStatusDialog", () => {
       <SyncStatusDialog snapshot={snapshot} open={true} />,
     );
 
-    // Before expanding, file items exist in DOM but are hidden
-    // via max-height: 0px on the body container.
-    // Click the header to expand.
-    const chevrons = document.querySelectorAll("svg");
-    const header = chevrons[1]?.closest("[class*='cursor-pointer']");
-    expect(header).toBeTruthy();
-    fireEvent.click(header!);
+    fireEvent.click(screen.getByTestId("sync-status-toggle"));
 
     const fileItems = screen.getAllByTestId("file-item");
     expect(fileItems).toHaveLength(3);
@@ -157,9 +138,7 @@ describe("SyncStatusDialog", () => {
       <SyncStatusDialog snapshot={snapshot} open={true} />,
     );
 
-    // In collapsed state, the header shows "Syncing 60%" as status text.
-    const statusText = screen.getByText("Syncing 60%");
-    expect(statusText).toBeInTheDocument();
+    expect(screen.getByTestId("overall-progress-label")).toHaveTextContent("60%");
   });
 
   it("preserves file order from snapshot", () => {
@@ -187,11 +166,7 @@ describe("SyncStatusDialog", () => {
       <SyncStatusDialog snapshot={snapshot} open={true} />,
     );
 
-    // Expand to see file list
-    const header = document.querySelector(
-      "[class*='cursor-pointer']",
-    );
-    fireEvent.click(header!);
+    fireEvent.click(screen.getByTestId("sync-status-toggle"));
 
     const fileItems = screen.getAllByTestId("file-item");
     expect(fileItems[0]).toHaveTextContent("alpha.txt");
@@ -238,7 +213,6 @@ describe("SyncStatusDialog", () => {
       </Provider>,
     );
 
-    // Rust fixes the stalled state, so the widget shows "Complete"
     expect(screen.getByText("Complete")).toBeInTheDocument();
 
     // Now add a 5th file (deferred completion merged it in)
@@ -255,10 +229,108 @@ describe("SyncStatusDialog", () => {
       </Provider>,
     );
 
-    // After new file added, percentage should adjust to ~80% (4000/5000),
-    // NOT stay locked at 100%.
-    const percentText = screen.getByText("Syncing 80%");
-    expect(percentText).toBeInTheDocument();
+    expect(screen.getByTestId("overall-progress-label")).toHaveTextContent("80%");
+  });
+
+  function compactSummaryTexts(container: HTMLElement): string[] {
+    return Array.from(container.querySelectorAll("span")).map(
+      (element) => element.textContent ?? "",
+    );
+  }
+
+  it("renders 'X of Y' intent line when intentActive is true", () => {
+    // Multi-file in-progress snapshot — required for the "Overall progress"
+    // section to render (gated by !isSingleFile && effectiveInProgress).
+    const files = [
+      makeFileProgress("a.bin", {
+        status: "inProgress",
+        progressPercent: 50,
+        bytesTransferred: 2_500_000,
+        totalBytes: 5_000_000,
+      }),
+      makeFileProgress("b.bin", {
+        status: "pending",
+        totalBytes: 2_500_000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files, {
+      intentTotalFiles: 100,
+      intentCompletedFiles: 50,
+      intentTotalBytes: 10_000_000_000,
+      intentCompletedBytes: 5_000_000_000,
+      intentActive: true,
+    });
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    const summaryTexts = compactSummaryTexts(container);
+    expect(summaryTexts).toContain("5GB/10GB");
+    expect(summaryTexts).not.toContain("2.5MB/7.5MB");
+  });
+
+  it("falls back to per-cycle line when intent fields are undefined", () => {
+    // Legacy / pre-login snapshot shape: no intent overlay. The size row
+    // must keep showing the per-cycle "progressBytes / bytesExpected".
+    const files = [
+      makeFileProgress("a.bin", {
+        status: "inProgress",
+        progressPercent: 50,
+        bytesTransferred: 2_500_000,
+        totalBytes: 5_000_000,
+      }),
+      makeFileProgress("b.bin", {
+        status: "pending",
+        totalBytes: 2_500_000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files);
+    // Sanity check: factory did not silently populate intent fields.
+    expect(snapshot.intentActive).toBeUndefined();
+    expect(snapshot.intentTotalBytes).toBeUndefined();
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    const summaryTexts = compactSummaryTexts(container);
+    expect(summaryTexts).toContain("2.5MB/7.5MB");
+    expect(summaryTexts).not.toContain("5GB/10GB");
+  });
+
+  it("falls back to per-cycle line when intentActive is true but intentTotalBytes is 0", () => {
+    // Manifest exists but is empty — the `> 0` guard on intentTotalBytes
+    // catches this so we do not render "0 B of 0 B". The `??` operator
+    // (not `||`) lets us distinguish absent (undefined) from explicit 0
+    // in the type, even though both fail the guard here.
+    const files = [
+      makeFileProgress("a.bin", {
+        status: "inProgress",
+        progressPercent: 50,
+        bytesTransferred: 2_500_000,
+        totalBytes: 5_000_000,
+      }),
+      makeFileProgress("b.bin", {
+        status: "pending",
+        totalBytes: 2_500_000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files, {
+      intentTotalFiles: 0,
+      intentCompletedFiles: 0,
+      intentTotalBytes: 0,
+      intentCompletedBytes: 0,
+      intentActive: true,
+    });
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    const summaryTexts = compactSummaryTexts(container);
+    expect(summaryTexts).toContain("2.5MB/7.5MB");
+    expect(summaryTexts).not.toContain("0B/0B");
   });
 
   it("shows Complete when Rust fixes stalled active session at 100%", () => {

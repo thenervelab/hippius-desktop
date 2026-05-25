@@ -136,6 +136,7 @@ pub(crate) async fn list_remote_folders_internal(pool: &SqlitePool, account_id: 
         billing_bypass_token: None,
         ss58_address: account_id.to_string(),
         folder_hash: String::new(),
+        read_timeout_ms: None,
     };
 
     let client = hcfs_client::client::HcfsClient::new(client_config).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
@@ -179,6 +180,7 @@ pub async fn list_remote_folders(state: tauri::State<'_, crate::app_state::AppSt
         billing_bypass_token: None,
         ss58_address: account_id.clone(),
         folder_hash: String::new(),
+        read_timeout_ms: None,
     };
 
     let client = hcfs_client::client::HcfsClient::new(client_config).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
@@ -384,6 +386,7 @@ pub async fn delete_remote_folder(
         billing_bypass_token: None,
         ss58_address: account_id.clone(),
         folder_hash: fhash.clone(),
+        read_timeout_ms: None,
     };
 
     let client = hcfs_client::client::HcfsClient::new(client_config).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;

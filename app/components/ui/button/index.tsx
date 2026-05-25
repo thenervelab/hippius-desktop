@@ -19,6 +19,7 @@ const CornerDots = ({
     | "primary"
     | "primaryLight"
     | "destructive"
+    | "warning"
     | null;
 }) => {
   const offset = -(dotSize - 0.5);
@@ -35,7 +36,9 @@ const CornerDots = ({
       ? "border-primary-50 dark:border-primary-50"
       : variant === "destructive"
         ? "border-[#fc7d73] dark:border-[#fc7d73]"
-        : "border-grey-dark-400 dark:border-grey-50";
+        : variant === "warning"
+          ? "border-[#fbbd59] dark:border-[#fbbd59]"
+          : "border-grey-dark-400 dark:border-grey-50";
 
   const borderWidthClassName =
     variant === "primary" || variant === "primaryLight"
@@ -120,9 +123,10 @@ const buttonVariants = cva(
         default:
           "bg-grey-90 text-grey-10 rounded hover:bg-[#D6D6D6] hover:rounded-[52px] dark:border dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#2e2e2e]",
         defaultStable:
-          "bg-grey-90 text-grey-10 rounded-md hover:bg-[#D6D6D6] hover:rounded-md dark:border dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#2e2e2e]",
+          "bg-grey-90 text-grey-10 rounded-md hover:bg-[#D6D6D6] dark:border dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#2e2e2e]",
         primary:
           "bg-primary-50 text-white rounded-md hover:bg-[#2454c4] dark:hover:bg-[#2a5ad0]",
+        warning: "bg-warning-200 text-white rounded-md hover:bg-warning-300 ",
         primaryLight:
           "border border-primary-50 bg-primary-50/[0.21] text-primary-50 rounded-[6px] hover:bg-primary-50/[0.25] dark:border-primary-brand-dark dark:bg-primary-65/[0.21] dark:text-primary-brand-dark dark:hover:bg-primary-50/[0.18]",
         destructive: "bg-[#fc7d73] hover:bg-[#fb695e] rounded-md",

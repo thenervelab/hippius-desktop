@@ -1,6 +1,7 @@
 import { Icons } from "@/components/ui";
-import { Monitor, Server, Share2Icon } from "lucide-react";
+import { Monitor, Share2Icon } from "lucide-react";
 import Support from "../ui/icons/Support";
+import SidebarVm from "../ui/icons/SidebarVm";
 
 export interface SubMenuItemData {
   label: string;
@@ -58,7 +59,7 @@ export const navSections: NavSection[] = [
           {
             label: "Virtual Machines",
             path: "/vm",
-            icon: <Server className={ICON_CLASS} strokeWidth={1.5} />,
+            icon: <SidebarVm className={ICON_CLASS} strokeWidth={1.5} />,
           },
         ],
       },

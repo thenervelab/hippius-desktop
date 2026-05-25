@@ -1,47 +1,54 @@
 "use client";
 
 import React from "react";
-import { FileTypes } from "@/lib/types/fileTypes";
-import FileTypeSelector from "./filter-dialog-content/FileTypeSelector";
-import DateSelector from "./filter-dialog-content/DateSelector";
+import FileExtensionSelector from "./filter-dialog-content/FileExtensionSelector";
+import DateRangeSelector from "./filter-dialog-content/DateRangeSelector";
 import EnhancedFileSizeSelector from "./filter-dialog-content/EnhancedFileSizeSelector";
 import { cn } from "@/app/lib/utils";
+import type { FileExtension } from "@/app/lib/utils/fileTypeMapper";
+import type { DateRange } from "@/app/lib/types/dateRange";
 
 interface FilterPillsProps {
-  selectedFileTypes: FileTypes[];
-  selectedDate: string;
+  selectedFileExtension?: FileExtension;
+  selectedDateRange?: DateRange;
   selectedFileSizes: number[];
-  onFileTypesChange: (types: FileTypes[]) => void;
-  onDateChange: (date: string) => void;
+  onFileExtensionChange: (extension: FileExtension | undefined) => void;
+  onDateRangeChange: (range: DateRange | undefined) => void;
   onFileSizesChange: (sizes: number[]) => void;
   className?: string;
 }
 
+/**
+ * Filter pills row above the files table. Hosts the three console-style
+ * selectors: File Type (specific extension), File Size (range buckets),
+ * Date Range. Each selector owns its own dropdown — this component is
+ * just a layout wrapper.
+ */
 const FilterPills: React.FC<FilterPillsProps> = ({
-  selectedFileTypes,
-  selectedDate,
+  selectedFileExtension,
+  selectedDateRange,
   selectedFileSizes,
-  onFileTypesChange,
-  onDateChange,
+  onFileExtensionChange,
+  onDateRangeChange,
   onFileSizesChange,
   className = "",
 }) => {
   return (
     <div className={cn("flex items-center gap-2 flex-wrap h-8", className)}>
-      {/* File Type Filter Pill */}
-      <FileTypeSelector
-        selectedTypes={selectedFileTypes}
-        onTypesSelect={onFileTypesChange}
+      <FileExtensionSelector
+        selectedExtension={selectedFileExtension}
+        onExtensionSelect={onFileExtensionChange}
       />
 
-      {/* File Size Filter Pill */}
       <EnhancedFileSizeSelector
         selectedSizes={selectedFileSizes}
         onSizesSelect={onFileSizesChange}
       />
 
-      {/* Date Filter Pill */}
-      <DateSelector selectedDate={selectedDate} onDateSelect={onDateChange} />
+      <DateRangeSelector
+        selectedRange={selectedDateRange}
+        onRangeSelect={onDateRangeChange}
+      />
     </div>
   );
 };

@@ -15,6 +15,7 @@ mod app_state;
 pub mod auth;
 pub mod billing;
 pub mod blockchain;
+pub mod bridge;
 pub mod console_access;
 pub mod crypto;
 pub mod error;
@@ -27,6 +28,7 @@ pub mod sync;
 #[cfg(test)]
 mod test_helpers;
 mod utils;
+pub mod wallet;
 
 use crate::auth::contacts::{add_contact, delete_contact, get_contacts, update_contact};
 use crate::auth::login::{login_with_mnemonic, validate_mnemonic};
@@ -53,6 +55,9 @@ use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, 
 use crate::blockchain::subscription::start_block_subscription;
 use crate::blockchain::transfers::compute_max_transferable;
 use crate::blockchain::transfers::{transfer_balance, validate_send_balance};
+use crate::bridge::commands::{
+    bridge_get_config, bridge_get_transactions, bridge_submit_alpha_to_halpha, bridge_submit_halpha_to_alpha,
+};
 use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
@@ -77,7 +82,7 @@ use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::files::{
     add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, filter_file_entries, get_recent_files, get_user_files,
-    list_sync_folder, list_sync_folder_grouped, resolve_file_info, resolve_file_path,
+    list_sync_folder, list_sync_folder_grouped, resolve_file_info, resolve_file_path, search_user_files_recursive,
 };
 use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
 use crate::sync::lifecycle::{
@@ -95,6 +100,13 @@ use crate::utils::support::{
     create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message, update_support_ticket, upload_ticket_attachment,
 };
 use crate::utils::tray_menu::get_tray_menu_data;
+use crate::wallet::commands::{
+    local_wallet_create, local_wallet_delete, local_wallet_derive_address, local_wallet_export_backup,
+    local_wallet_export_backup_zip, local_wallet_generate_mnemonic, local_wallet_get_active,
+    local_wallet_get_decrypted_mnemonic, local_wallet_has_any, local_wallet_import_encrypted_backup,
+    local_wallet_import_encrypted_backup_from_zip, local_wallet_list, local_wallet_rename,
+    local_wallet_set_active, local_wallet_validate_mnemonic, local_wallet_verify_password,
+};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 use tauri::{Builder, Emitter, Manager, Wry, path::BaseDirectory};
 #[cfg(target_os = "linux")]
@@ -187,6 +199,7 @@ fn main() {
             get_recent_files,
             get_user_files,
             filter_file_entries,
+            search_user_files_recursive,
             export_file,
             resolve_file_path,
             resolve_file_info,
@@ -269,6 +282,11 @@ fn main() {
             to_plancks,
             planck_to_hip_full,
             compute_max_transferable,
+            // Alpha ⇆ hAlpha bridge
+            bridge_get_config,
+            bridge_get_transactions,
+            bridge_submit_halpha_to_alpha,
+            bridge_submit_alpha_to_halpha,
             // Console access
             // Account recovery (OAuth-based)
             validate_recovery_password,
@@ -368,6 +386,23 @@ fn main() {
             get_contacts,
             update_contact,
             delete_contact,
+            // Local wallets (password-encrypted Substrate wallets)
+            local_wallet_list,
+            local_wallet_has_any,
+            local_wallet_get_active,
+            local_wallet_generate_mnemonic,
+            local_wallet_validate_mnemonic,
+            local_wallet_derive_address,
+            local_wallet_create,
+            local_wallet_set_active,
+            local_wallet_rename,
+            local_wallet_delete,
+            local_wallet_verify_password,
+            local_wallet_get_decrypted_mnemonic,
+            local_wallet_export_backup,
+            local_wallet_export_backup_zip,
+            local_wallet_import_encrypted_backup,
+            local_wallet_import_encrypted_backup_from_zip,
             is_onboarding_done,
             set_onboarding_done,
             get_user_preference,
@@ -506,7 +541,21 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // Single AppState holds all mutable state — zero statics.
         let app_state = crate::app_state::AppState::new();
         app_state.sync_bridge.set_app_handle(app_handle.clone());
+        // Downgrade BEFORE `manage` consumes the AppState. The
+        // watchdog holds a `Weak<UploadProcessingState>` so app
+        // shutdown can drop the state without keeping it alive via
+        // a long-lived background task. See `spawn_watchdog`.
+        let upload_processing_weak = std::sync::Arc::downgrade(&app_state.upload_processing);
+        // Same Weak-before-manage discipline for the preparing-override
+        // watchdog: it self-clears a stuck "Preparing sync…" when
+        // hcfs-client drops a terminal event (drive removed mid-cycle).
+        // It needs the runner too, to force the snapshot re-emit that
+        // pushes the cleared state to the FE.
+        let preparing_weak = std::sync::Arc::downgrade(&app_state.preparing);
+        let sync_weak = std::sync::Arc::downgrade(&app_state.sync);
         app_handle.manage(app_state);
+        crate::sync::upload_processing::spawn_watchdog(upload_processing_weak, app_handle.clone());
+        crate::sync::preparing::spawn_watchdog(preparing_weak, sync_weak);
         let win = app.get_webview_window("main").expect("main window not found");
 
         // Open devtools on startup when `HIPPIUS_DEVTOOLS=1` is set in the

@@ -136,7 +136,7 @@ export default function FileContextMenu({
   const { url: folderUrl } = generateFolderUrl(file, getParam);
   const fileManagerLabel = getFileManagerLabel();
 
-  const menuItemClass = "flex items-center gap-2 p-2 text-xs font-medium !text-grey-30 hover:!text-grey-40 hover:bg-grey-90 border-b border-grey-80 cursor-pointer";
+  const menuItemClass = "flex items-center gap-2 p-2 text-xs font-medium !text-grey-30 hover:!text-grey-40 hover:bg-grey-90 border-b border-grey-80 cursor-pointer dark:!text-grey-dark-200 dark:hover:!text-grey-light-100 dark:hover:bg-white/5 dark:border-black-300";
 
   return createPortal(
     <div
@@ -144,7 +144,7 @@ export default function FileContextMenu({
       style={menuStyle}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="bg-white border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] rounded-lg overflow-hidden p-0 min-w-[9.375rem]">
+      <div className="bg-white border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] rounded-lg overflow-hidden p-0 min-w-[9.375rem] dark:bg-black-500 dark:border-black-300 dark:shadow-[0px_12px_32px_8px_rgba(0,0,0,0.3)]">
         <div className="flex flex-col">
           {file.isFolder && (
             <Link
@@ -242,9 +242,9 @@ export default function FileContextMenu({
             )}
 
           <button
-            className={cn("flex items-center gap-2 p-2 text-xs font-medium hover:bg-grey-90", {
-              "hover:!text-error-70 !text-error-60 cursor-pointer": file.isAssigned,
-              "opacity-60 cursor-not-allowed pointer-events-none !text-grey-30": !file.isAssigned
+            className={cn("flex items-center gap-2 p-2 text-xs font-medium hover:bg-grey-90 dark:hover:bg-error-70/10", {
+              "hover:!text-error-70 !text-error-60 cursor-pointer dark:!text-error-70 dark:hover:!text-error-60": file.isAssigned,
+              "opacity-60 cursor-not-allowed pointer-events-none !text-grey-30 dark:!text-grey-dark-200": !file.isAssigned
             })}
             disabled={!file.isAssigned}
             title={!file.isAssigned ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete." : "Delete this file"}

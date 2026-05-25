@@ -4,13 +4,12 @@ import React, {
   useEffect,
   useCallback,
   memo,
-  useMemo,
   useRef,
 } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Button } from "@/components/ui/button";
 import { MoreVertical, Download, FolderOpen, Link2 } from "lucide-react";
-import { useAtomValue, useSetAtom } from "jotai";
+import { useAtomValue } from "jotai";
 import {
   shareFeatureEnabledAtom,
   shareModalFileAtom,
@@ -28,8 +27,8 @@ import { useRouter } from "next/navigation";
 
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { FileViewSharedState } from "@/app/components/page-sections/drive/shared/FileViewUtils";
-import FileDetailsDialogContent from "@/app/components/page-sections/drive/file-details-dialog-content";
-import SidebarDialog from "@/app/components/ui/SidebarDialog";
+import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
+import { useSetAtom } from "jotai";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { Folder } from "@/app/components/ui/icons";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
@@ -101,24 +100,11 @@ const CardView: FC<CardViewProps> = ({
     files: filesToDelete,
   });
 
-  const [localFileDetailsFile, setLocalFileDetailsFile] =
-    useState<FormattedUserFile | null>(null);
-  const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
   const [openMenuIndex, setOpenMenuIndex] = useState<number | null>(null);
 
-  // Look up the latest version of the file details from live query data.
-  // The captured snapshot may have stale arion hashes if it was opened
-  // before sync completed.
-  const liveLocalFileDetailsFile = useMemo(() => {
-    if (!localFileDetailsFile) return null;
-    return (
-      files.find(
-        (f) =>
-          f.actualFileName === localFileDetailsFile.actualFileName &&
-          f.label === localFileDetailsFile.label,
-      ) ?? localFileDetailsFile
-    );
-  }, [localFileDetailsFile, files]);
+  // Defensive fallback: if no sharedState was passed, dispatch directly to
+  // the global file-details atom so the inline panel still opens.
+  const setFileDetailsAtom = useSetAtom(fileDetailsPanelAtom);
 
   const { setSelectedFile, handleShowFileDetails, handleContextMenu } =
     sharedState || {};
@@ -147,14 +133,13 @@ const CardView: FC<CardViewProps> = ({
 
   const localHandleShowFileDetails = useCallback(
     (file: FormattedUserFile) => {
-      if (!handleShowFileDetails) {
-        setLocalFileDetailsFile(file);
-        setLocalIsFileDetailsOpen(true);
-      } else {
+      if (handleShowFileDetails) {
         handleShowFileDetails(file);
+      } else {
+        setFileDetailsAtom(file);
       }
     },
-    [handleShowFileDetails],
+    [handleShowFileDetails, setFileDetailsAtom],
   );
 
   const localHandleContextMenu = useCallback(
@@ -429,17 +414,6 @@ const CardView: FC<CardViewProps> = ({
         />
       )}
 
-      {!sharedState && localIsFileDetailsOpen && (
-        <SidebarDialog
-          heading={`${liveLocalFileDetailsFile?.isFolder ? "Folder" : "File"} Details`}
-          open={localIsFileDetailsOpen}
-          onOpenChange={setLocalIsFileDetailsOpen}
-        >
-          <FileDetailsDialogContent
-            file={liveLocalFileDetailsFile ?? undefined}
-          />
-        </SidebarDialog>
-      )}
     </div>
   );
 };

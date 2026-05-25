@@ -14,18 +14,21 @@ import useUserFiles, {
   FormattedUserFile,
 } from "@/app/lib/hooks/use-user-files";
 import useRecentFiles from "@/lib/hooks/use-recent-files";
-import { WaitAMoment } from "@/components/ui";
 import * as Typography from "@/components/ui/typography";
+import FilesTableSkeleton from "./files-table/FilesTableSkeleton";
+import CardViewSkeleton from "./card-view/CardViewSkeleton";
 import DriveOnboarding from "./DriveOnboarding";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { useDriveStorageStats } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
-import { FileTypes } from "@/lib/types/fileTypes";
+import type { FileExtension } from "@/app/lib/utils/fileTypeMapper";
+import type { DateRange } from "@/app/lib/types/dateRange";
 import {
   generateActiveFilters,
   ActiveFilter,
 } from "@/lib/utils/fileFilterUtils";
 import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
+import { useRecursiveFileSearch } from "@/app/lib/hooks/useRecursiveFileSearch";
 import DriveHeader from "./DriveHeader";
 import DriveContent from "./DriveContent";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
@@ -34,10 +37,6 @@ import { downloadFolder } from "@/app/lib/utils/downloadFolder";
 import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
-  settingsDialogOpenAtom,
-  activeSettingsTabAtom,
-} from "@/app/components/sidebar/sideBarAtoms";
-import {
   getViewModePreference,
   saveViewModePreference,
   getActiveSyncFolderLabel,
@@ -45,6 +44,7 @@ import {
 } from "@/lib/utils/userPreferencesDb";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { useInvokeQuery } from "@/app/lib/hooks/api/useInvokeQuery";
 import {
   triggerSyncPathRefreshAtom,
   hasConfiguredDrivesAtom,
@@ -104,6 +104,22 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   // Folder upload dialog state (lifted from DriveHeader so context menus can trigger it)
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
+  // When a folder is dropped onto the files table we open the dialog
+  // with this path pre-filled. Cleared on close so the next open starts
+  // empty (or seeded again by another drop).
+  const [folderUploadInitialPath, setFolderUploadInitialPath] = useState<
+    string | undefined
+  >(undefined);
+
+  const handleFolderUploadOpenChange = useCallback((open: boolean) => {
+    setIsFolderUploadOpen(open);
+    if (!open) setFolderUploadInitialPath(undefined);
+  }, []);
+
+  const handleAddFolderFromDrop = useCallback((path: string) => {
+    setFolderUploadInitialPath(path);
+    setIsFolderUploadOpen(true);
+  }, []);
 
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState(
     undefined as string | null | undefined,
@@ -134,10 +150,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Search state
   const [searchTerm, setSearchTerm] = useState<string>("");
 
-  // Filter states - using a single atomic state to prevent race conditions
+  // Filter states - using a single atomic state to prevent race conditions.
+  // `fileExtension` is the console-style single-select specific extension
+  // ("mp4", "jpg", ...). The legacy multi-select coarse category has been
+  // removed in favour of the grouped extension dropdown shipped to align
+  // with hippius-console's File Type filter.
   const [filterState, setFilterState] = useState({
-    fileTypes: [] as FileTypes[],
-    date: "",
+    fileExtension: undefined as FileExtension | undefined,
+    dateRange: undefined as DateRange | undefined,
     fileSize: 0,
     fileSizes: [] as number[],
     lastUpdated: Date.now(),
@@ -156,9 +176,26 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
   const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
-  const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
-  const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
   const isSyncConfigured = useAtomValue(hasConfiguredDrivesAtom);
+
+  // Live credit-eligibility check for the "file-upload" action. Drives
+  // the no-credits variant of FilesNoEntriesFound shown when the user's
+  // sync folder is empty AND they can't afford to upload anything.
+  // Action enum mirrors Rust's `BillableAction` (see
+  // `src-tauri/src/billing/eligibility.rs`). We refetch on window focus
+  // so a top-up in another window flips the gate without a manual refresh.
+  const { data: fileUploadEligibility } = useInvokeQuery<{
+    eligible: boolean;
+  }>({
+    command: "check_action_eligibility",
+    queryKey: (addr) => ["action-eligibility", "file-upload", addr],
+    params: (addr) => ({ accountId: addr, action: "file-upload" }),
+    options: {
+      staleTime: 30_000,
+      refetchOnWindowFocus: true,
+    },
+  });
+  const hasNoCredits = fileUploadEligibility?.eligible === false;
 
   // Per-drive sync status is owned by Rust and pushed via the
   // `useDriveStatuses` hook mounted in `SyncEventLogger`. The previous
@@ -196,6 +233,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       names[label] = entry.folderName;
     }
     return names;
+  }, [driveStatuses]);
+
+  const drivePathsByLabel = useMemo(() => {
+    const paths: Record<string, string> = {};
+    for (const [label, entry] of driveStatuses.entries()) {
+      if (entry.path) {
+        paths[label] = entry.path;
+      }
+    }
+    return paths;
   }, [driveStatuses]);
 
   // ── Nested folder browsing (URL-param driven) ──────────────────────────────
@@ -269,11 +316,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   //   - recent files (read-only): use the recent-files query flags
   //   - nested folder browsing: use the nested-listing hook's flags
   //   - root drive view: use the regular useUserFiles flags
-  const isLoading = isRecentFiles
-    ? isRecentFilesLoading
-    : isNested
-      ? nestedListing.isLoading
-      : isRegularFilesLoading;
+  // `isLoading` itself is computed *after* `useFilteredFiles` below so it
+  // can fold in `isFiltering`, which surfaces the debounce/IPC window
+  // during transitions like nested→root and sync-folder switches.
   const isFetching = isRecentFiles
     ? isRecentFilesFetching
     : isNested
@@ -317,13 +362,106 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // `useFilteredFiles` debounces fast typing so we don't IPC per keystroke.
   // In nested mode the listing is already scoped to one folder, so
   // `folderTab` is null (no second-pass label filter needed).
-  const filteredData = useFilteredFiles(allFilteredData, {
-    searchTerm,
-    fileTypes: filterState.fileTypes,
-    dateFilter: filterState.date,
-    fileSizes: filterState.fileSizes,
-    folderTab: isRecentFiles || isNested ? null : activeSyncFolderLabel,
-  });
+  // `isFiltering` is true while the IPC for the current inputs hasn't
+  // landed yet — folded into the loading derivation below so transitions
+  // like nested→root or sync-folder switches show the skeleton instead
+  // of the previous filter result.
+  // `fileExtensionsCriteria` MUST be memoised on the single selected
+  // extension — otherwise `[filterState.fileExtension]` would be a new
+  // array on every render, the downstream `currentInputs` useMemo in
+  // `useFilteredFiles` / `useRecursiveFileSearch` would invalidate, and
+  // `isFetching` would never settle to `false` (the symptom: picking a
+  // file-type filter pinned the page in a permanent loading state).
+  const fileExtensionsCriteria = useMemo(
+    () => (filterState.fileExtension ? [filterState.fileExtension] : undefined),
+    [filterState.fileExtension],
+  );
+
+  const { data: inMemoryFilteredData, isFiltering } = useFilteredFiles(
+    allFilteredData,
+    {
+      searchTerm,
+      fileExtensions: fileExtensionsCriteria,
+      dateRange: filterState.dateRange,
+      fileSizes: filterState.fileSizes,
+      folderTab: isRecentFiles || isNested ? null : activeSyncFolderLabel,
+    },
+  );
+
+  // Recursive cross-folder search — fires only when an active filter is
+  // set AND we have a real drive context (root view of a drive or a
+  // nested folder under it). Matches the web console's `/search_files`
+  // behaviour: results are a flat list of leaf files spanning every
+  // nested folder under the drive (scoped to `subfolder` when nested).
+  //
+  // Recent Files is excluded because its dataset is already a synthetic
+  // cross-drive merge — running another recursive search on top would
+  // be misleading. The drive root and nested-folder paths share the
+  // same hook so the user gets identical deep-search behaviour at any
+  // depth.
+  const recursiveSearchLabel = isRecentFiles
+    ? null
+    : isNested
+      ? (nestedDrive?.label ?? null)
+      : activeSyncFolderLabel;
+  const recursiveSearchSubfolder = isNested ? (urlSubFolderPath ?? null) : null;
+  const hasActiveSearchOrFilter =
+    Boolean(searchTerm.trim()) ||
+    Boolean(filterState.fileExtension) ||
+    Boolean(filterState.dateRange?.from) ||
+    filterState.fileSizes.length > 0;
+  // Same memoisation discipline as `fileExtensionsCriteria` — the
+  // criteria object itself needs a stable identity across renders so
+  // the hook's internal `useMemo` for `currentInputs` doesn't drift,
+  // which would otherwise keep `isFetching: true` forever.
+  const recursiveCriteria = useMemo(
+    () => ({
+      searchTerm,
+      fileExtensions: fileExtensionsCriteria,
+      dateRange: filterState.dateRange,
+      fileSizes: filterState.fileSizes,
+    }),
+    [
+      searchTerm,
+      fileExtensionsCriteria,
+      filterState.dateRange,
+      filterState.fileSizes,
+    ],
+  );
+
+  const { data: recursiveResults, isFetching: isRecursiveSearching } =
+    useRecursiveFileSearch({
+      accountId: polkadotAddress,
+      label: recursiveSearchLabel,
+      subfolder: recursiveSearchSubfolder,
+      criteria: recursiveCriteria,
+      enabled: hasActiveSearchOrFilter && !isRecentFiles,
+    });
+
+  // When the recursive search is active (filter set + drive context),
+  // show its flat result; otherwise fall back to the in-memory filter
+  // applied to the current level's listing. This is the console-parity
+  // behaviour the user asked for: filters reach across every nested
+  // folder instead of stopping at the rows currently loaded in memory.
+  const useRecursiveResults =
+    hasActiveSearchOrFilter && Boolean(recursiveSearchLabel) && !isRecentFiles;
+  const filteredData = useRecursiveResults
+    ? recursiveResults
+    : inMemoryFilteredData;
+
+  // Folded into `isLoading` so transitions where the underlying dataset
+  // swaps — nested→root navigation, switching `activeSyncFolderLabel`
+  // from the Local cards — surface the skeleton instead of the previous
+  // filter result during the ~150ms debounce + IPC window.
+  // `isRecursiveSearching` covers the cross-folder filter path: the user
+  // typed into search and we're still waiting on the new IPC. Folding it
+  // in keeps the loading shell consistent whether the active filter
+  // path is in-memory or recursive.
+  const isLoading = isRecentFiles
+    ? isRecentFilesLoading || isFiltering
+    : isNested
+      ? nestedListing.isLoading || isFiltering || isRecursiveSearching
+      : isRegularFilesLoading || isFiltering || isRecursiveSearching;
 
   // Infinite scroll state for list and card views
   const { visibleData, hasMore, loadMore, resetScroll } =
@@ -346,15 +484,15 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Update active filters when filter settings change
   useEffect(() => {
     const newActiveFilters = generateActiveFilters(
-      filterState.fileTypes,
-      filterState.date,
+      filterState.fileExtension,
+      filterState.dateRange,
       filterState.fileSize,
       filterState.fileSizes,
     );
     setActiveFilters(newActiveFilters);
   }, [
-    filterState.fileTypes,
-    filterState.date,
+    filterState.fileExtension,
+    filterState.dateRange,
     filterState.fileSize,
     filterState.fileSizes,
     filterState.lastUpdated,
@@ -365,8 +503,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     resetScroll();
   }, [
     searchTerm,
-    filterState.fileTypes,
-    filterState.date,
+    filterState.fileExtension,
+    filterState.dateRange,
     filterState.fileSize,
     filterState.fileSizes,
     filterState.lastUpdated,
@@ -374,19 +512,21 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     resetScroll,
   ]);
 
-  // Handle removing a filter
+  // Handle removing a filter chip from the bar above the table.
+  // Each filter type clears its own slice of state; the chip generator
+  // keeps the chip-type strings stable across the codebase via
+  // `ActiveFilter['type']`, so this switch is the one place that needs
+  // to map them back to state mutations.
   const handleRemoveFilter = useCallback(
     (filter: ActiveFilter) => {
       const updates: Partial<typeof filterState> = {};
       switch (filter.type) {
-        case "fileType":
-          updates.fileTypes = filterState.fileTypes.filter(
-            (type: FileTypes) => type !== filter.value,
-          );
+        case "fileExtension":
+          updates.fileExtension = undefined;
           break;
 
-        case "date":
-          updates.date = "";
+        case "dateRange":
+          updates.dateRange = undefined;
           break;
 
         case "fileSize":
@@ -400,7 +540,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
       updateFilters(updates);
     },
-    [filterState.fileTypes, filterState.fileSizes, updateFilters],
+    [filterState.fileSizes, updateFilters],
   );
 
   // Header "Total Storage Used":
@@ -437,16 +577,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   }, []);
 
   // Handle filter changes using atomic state updates
-  const handleFileTypesChange = useCallback(
-    (types: FileTypes[]) => {
-      updateFilters({ fileTypes: types });
+  const handleFileExtensionChange = useCallback(
+    (extension: FileExtension | undefined) => {
+      updateFilters({ fileExtension: extension });
     },
     [updateFilters],
   );
 
-  const handleDateChange = useCallback(
-    (date: string) => {
-      updateFilters({ date });
+  const handleDateRangeChange = useCallback(
+    (range: DateRange | undefined) => {
+      updateFilters({ dateRange: range });
     },
     [updateFilters],
   );
@@ -640,9 +780,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   // Navigation to settings
   const handleNavigateToSettings = useCallback(() => {
-    setActiveSettingsTab("Sync & Storage");
-    setSettingsDialogOpen(true);
-  }, [setActiveSettingsTab, setSettingsDialogOpen]);
+    router.push("/settings?section=sync");
+  }, [router]);
 
   // Handle start syncing button click
   const handleStartSyncing = useCallback(() => {
@@ -662,13 +801,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   }, []);
 
   const handleContextAddFolder = useCallback(() => {
+    setFolderUploadInitialPath(undefined);
     setIsFolderUploadOpen(true);
   }, []);
 
   const handleContextAddSyncFolder = useCallback(() => {
-    setActiveSettingsTab("Sync & Storage");
-    setSettingsDialogOpen(true);
-  }, [setActiveSettingsTab, setSettingsDialogOpen]);
+    router.push("/settings?section=sync");
+  }, [router]);
 
   // Breadcrumb / Local-view navigation handlers.
   //
@@ -874,24 +1013,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     }
   }, [error]);
 
-  // Header "Number of Files":
-  //   - "All" tab, no search/filters: indexer count (deduplicated).
-  //   - Folder tab, no search/filters: Rust-aggregated per-label count
-  //     (one entry per leaf file; empty folders contribute 0).
-  //   - Search or filter active: count the filtered list. Folder rows
-  //     contribute their recursive file_count; empty folders contribute 0.
-  //     Safe from double-count because list_sync_folder is single-level —
-  //     a folder row's descendants are never in regularFilesData.files.
+  // Header "Number of Files" — drive-level stat, NOT filter-aware.
+  //   - Folder tab: Rust-aggregated per-label count (one entry per leaf
+  //     file; empty folders contribute 0).
+  //   - No active folder (mid-bootstrap): indexer count (deduplicated).
+  // Search / filter activity intentionally does NOT change this number:
+  // users asked for the header to stay anchored to the drive's totals
+  // so they can see how a filtered result compares to the whole drive.
   const displayedFileCount = useMemo(() => {
-    if (searchTerm || activeFilters.length > 0) {
-      return filteredData.reduce((count, item) => {
-        if (item.isFolder) {
-          return count + (item.fileCount ?? 0);
-        }
-        return count + 1;
-      }, 0);
-    }
-
     if (activeSyncFolderLabel) {
       return (
         regularFilesData?.labelStats?.[activeSyncFolderLabel]?.fileCount ?? 0
@@ -903,14 +1032,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     }
 
     return 0;
-  }, [
-    filteredData,
-    searchTerm,
-    activeFilters.length,
-    activeSyncFolderLabel,
-    remoteFileCount,
-    regularFilesData?.labelStats,
-  ]);
+  }, [activeSyncFolderLabel, remoteFileCount, regularFilesData?.labelStats]);
 
   // Handle file drop events
   useEffect(() => {
@@ -1067,7 +1189,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     !isNested && (isCheckingSyncPath || isLoadingPrivatePath);
 
   if (shouldShowLoading) {
-    content = <WaitAMoment />;
+    content =
+      viewMode === "card" ? (
+        <CardViewSkeleton isRecentFiles={isRecentFiles} />
+      ) : (
+        <FilesTableSkeleton isRecentFiles={isRecentFiles} />
+      );
   } else if (error && !isRecentFiles && !isNested) {
     // `useUserFiles` exposes a terminal error (after TanStack Query's
     // retry budget is exhausted or the 15 s wall-clock cap in the
@@ -1158,14 +1285,19 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 hasMore={hasMore}
                 loadMore={loadMore}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
+                hasNoCredits={hasNoCredits}
                 onSyncPathConfigured={
-                  isRecentFiles
-                    ? handleNavigateToSettings
-                    : handleStartSyncing
+                  isRecentFiles ? handleNavigateToSettings : handleStartSyncing
                 }
                 onUploadFile={handleContextUploadFile}
                 onAddFolder={handleContextAddFolder}
                 onAddSyncFolder={handleContextAddSyncFolder}
+                onAddFolderFromDrop={handleAddFolderFromDrop}
+                isFolderUploadOpen={isFolderUploadOpen}
+                drivePathsByLabel={drivePathsByLabel}
+                currentSubfolderPath={
+                  isNested ? (urlSubFolderPath ?? "") : null
+                }
               />
             );
 
@@ -1194,16 +1326,18 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 isSyncPathEmpty={effectiveSyncPathEmpty}
                 onStartSyncing={handleStartSyncing}
                 hasNoSyncPaths={hasNoSyncPaths}
+                hasNoCredits={hasNoCredits}
                 onNavigateToSettings={handleNavigateToSettings}
-                selectedFileTypes={filterState.fileTypes}
-                selectedDate={filterState.date}
+                selectedFileExtension={filterState.fileExtension}
+                selectedDateRange={filterState.dateRange}
                 selectedFileSizes={filterState.fileSizes}
-                onFileTypesChange={handleFileTypesChange}
-                onDateChange={handleDateChange}
+                onFileExtensionChange={handleFileExtensionChange}
+                onDateRangeChange={handleDateRangeChange}
                 onFileSizesChange={handleFileSizesChange}
                 defaultFolderLabel={activeSyncFolderLabel}
                 isFolderUploadOpen={isFolderUploadOpen}
-                onSetFolderUploadOpen={setIsFolderUploadOpen}
+                onSetFolderUploadOpen={handleFolderUploadOpenChange}
+                folderUploadInitialPath={folderUploadInitialPath}
                 breadcrumbSegments={breadcrumbSegments}
                 onBreadcrumbLocalClick={handleNavigateToLocalView}
                 isNested={isNested}

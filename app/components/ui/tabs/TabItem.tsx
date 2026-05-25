@@ -17,6 +17,8 @@ export interface TabItemProps {
   paddingX?: string;
   /** Vertical padding Tailwind class (e.g. `py-[3px]`). When set, overrides `height`. */
   paddingY?: string;
+  /** Tailwind classes used for the label's typography. Defaults to the standard 13px Geist Medium style. */
+  textClassName?: string;
   isJustifyStart?: boolean;
   showTooltip?: boolean;
   iconOnly?: boolean;
@@ -33,6 +35,7 @@ const TabItem: React.FC<TabItemProps> = ({
   height = "h-[36px]",
   paddingX = "px-3",
   paddingY,
+  textClassName = "font-medium text-[13px] tracking-[-0.26px] leading-[1.1]",
   isJustifyStart = false,
   showTooltip = true,
   iconOnly = false,
@@ -46,13 +49,13 @@ const TabItem: React.FC<TabItemProps> = ({
     <div
       data-tab-label={dataLabel ?? label}
       className={cn(
-        "flex shrink-0 cursor-pointer items-center justify-center rounded-[3px] transition-opacity duration-200",
+        "flex shrink-0 cursor-pointer items-center justify-center rounded-[3.065px] transition-opacity duration-200 border-[0.766px]",
         paddingX,
         paddingY ? paddingY : height,
         iconOnly ? "w-[2.5rem]" : width,
         isActive
-          ? "bg-[#f8f8f8] border border-[#e3e3e3] text-[#000000] shadow-[0px_12.26px_3.831px_0px_rgba(0,0,0,0.00),0px_8.429px_3.065px_0px_rgba(0,0,0,0.01),0px_4.597px_3.065px_0px_rgba(0,0,0,0.04),0px_2.299px_2.299px_0px_rgba(0,0,0,0.08),0px_0.766px_0.766px_0px_rgba(0,0,0,0.09)] dark:bg-[#161616] dark:border-[#313131] dark:text-[#ffffff] dark:shadow-[0px_0px_0px_1px_black]"
-          : "opacity-50 text-[#000000] hover:opacity-75 dark:text-[#ffffff]",
+          ? "bg-grey-light-300 border-grey-dark-100 text-black-900 shadow-[0px_12.26px_3.831px_0px_rgba(0,0,0,0.00),0px_8.429px_3.065px_0px_rgba(0,0,0,0.01),0px_4.597px_3.065px_0px_rgba(0,0,0,0.04),0px_2.299px_2.299px_0px_rgba(0,0,0,0.08),0px_0.766px_0.766px_0px_rgba(0,0,0,0.09)] dark:bg-black-primary-bg dark:border-black-300 dark:text-white"
+          : "border-transparent opacity-50 text-black-900 hover:opacity-75 dark:text-white",
         tabItemClassName,
       )}
       onClick={onClick}
@@ -74,7 +77,7 @@ const TabItem: React.FC<TabItemProps> = ({
           </span>
         ) : null}
         {!iconOnly && (
-          <span className="font-medium text-[13px] tracking-[-0.26px] leading-[1.1] whitespace-nowrap">
+          <span className={cn(textClassName, "whitespace-nowrap")}>
             {displayLabel}
           </span>
         )}
