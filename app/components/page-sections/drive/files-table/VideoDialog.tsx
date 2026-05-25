@@ -5,10 +5,7 @@ import VideoPlayer from "./VideoPlayer";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { cn } from "@/lib/utils";
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
-import {
-  FileViewerLayout,
-  FileViewerTitle,
-} from "@/app/components/page-sections/drive/file-viewer";
+import { FileViewerLayout } from "@/app/components/page-sections/drive/file-viewer";
 
 export const VideoDialogTrigger: React.FC<{
   children: ReactNode;
@@ -63,34 +60,28 @@ const VideoDialog: React.FC<{
       onNavigate={onNavigate}
       handleFileDownload={handleFileDownload}
     >
-      {/* Title row + media row. Video fills the available width, so the
-          title at the wrapper's left edge naturally sits at the video's
-          left edge. */}
-      <div className="w-full h-full flex flex-col gap-2">
-        <FileViewerTitle file={file} />
-        <div
-          className={cn(
-            "relative flex-1 min-h-0 min-w-0 w-full flex flex-col rounded-[8px] overflow-hidden",
-            "shadow-[0_14px_31px_rgba(0,0,0,0.06),0_56px_56px_rgba(0,0,0,0.05)]",
-            "animate-scale-in-95-0.4",
-          )}
-        >
-          {resolvedUrl ? (
-            <VideoPlayer
-              key={resolvedUrl}
-              videoUrl={resolvedUrl}
-              isFromIpfs={false}
-              isFromLocal={true}
-              fileFormat={fileFormat}
-              file={file}
-              handleFileDownload={handleFileDownload}
-            />
-          ) : (
-            <div className="flex items-center justify-center w-full h-full">
-              <div className="animate-spin rounded-full size-8 border-b-2 border-primary-50" />
-            </div>
-          )}
-        </div>
+      <div
+        className={cn(
+          "relative w-full h-full min-h-0 min-w-0 flex flex-col rounded-[8px] overflow-hidden",
+          "shadow-[0_14px_31px_rgba(0,0,0,0.06),0_56px_56px_rgba(0,0,0,0.05)]",
+          "animate-scale-in-95-0.4",
+        )}
+      >
+        {resolvedUrl ? (
+          <VideoPlayer
+            key={resolvedUrl}
+            videoUrl={resolvedUrl}
+            isFromIpfs={false}
+            isFromLocal={true}
+            fileFormat={fileFormat}
+            file={file}
+            handleFileDownload={handleFileDownload}
+          />
+        ) : (
+          <div className="flex items-center justify-center w-full h-full">
+            <div className="animate-spin rounded-full size-8 border-b-2 border-primary-50" />
+          </div>
+        )}
       </div>
     </FileViewerLayout>
   );

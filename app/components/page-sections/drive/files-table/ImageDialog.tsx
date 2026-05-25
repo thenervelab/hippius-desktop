@@ -6,10 +6,7 @@ import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
-import {
-  FileViewerLayout,
-  FileViewerTitle,
-} from "@/app/components/page-sections/drive/file-viewer";
+import { FileViewerLayout } from "@/app/components/page-sections/drive/file-viewer";
 
 export const ImageDialogTrigger: React.FC<{
   children: ReactNode;
@@ -99,27 +96,13 @@ const ImageDialog: React.FC<{
       onNavigate={onNavigate}
       handleFileDownload={handleFileDownload}
     >
-      {/* Shrink-wrap container so the title row always sits at the
-          rendered image's left edge. w-fit collapses the wrapper's width
-          to its widest child (the image's natural width capped by
-          max-w-full); the title then left-aligns inside that same box.
-          grid-rows-[auto_minmax(0,1fr)] gives the title its intrinsic
-          height and lets the image consume the remaining vertical space. */}
       <div
         className={cn(
-          "grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2",
-          "max-w-full max-h-full",
-          // w-fit shrinks the wrapper to its widest grid item — the
-          // image's natural width — so the title aligns with the image
-          // edge regardless of viewport size. For images larger than the
-          // padded box, max-w-full caps the wrapper and object-contain
-          // on the <img> below preserves aspect ratio.
-          "w-fit",
+          "h-full min-h-0 w-full max-w-full max-h-full",
+          "flex items-center justify-center",
         )}
       >
-        <FileViewerTitle file={file} />
-
-        <div className="relative min-h-0 min-w-0 flex items-center justify-center">
+        <div className="relative min-h-0 min-w-0 max-w-full max-h-full flex items-center justify-center">
           {!imageLoaded && !imageError && resolvedUrl && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <Loader2 className="size-6 text-primary-50 animate-spin" />

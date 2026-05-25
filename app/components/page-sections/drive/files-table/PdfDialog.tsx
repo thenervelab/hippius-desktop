@@ -5,10 +5,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Loader2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
-import {
-  FileViewerLayout,
-  FileViewerTitle,
-} from "@/app/components/page-sections/drive/file-viewer";
+import { FileViewerLayout } from "@/app/components/page-sections/drive/file-viewer";
 
 const LOAD_TIMEOUT_MS = 15000;
 
@@ -78,62 +75,57 @@ const PdfDialog: React.FC<{
       onNavigate={onNavigate}
       handleFileDownload={handleFileDownload}
     >
-      {/* Title row + media row. PDF iframe fills the available width, so
-          the title at the wrapper's left edge sits at the iframe's left. */}
-      <div className="w-full h-full flex flex-col gap-2">
-        <FileViewerTitle file={file} />
-        <div className="relative flex-1 min-h-0 min-w-0 w-full flex items-center justify-center">
-          {!loaded && !loadError && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <Loader2 className="size-6 text-primary-50 animate-spin" />
-            </div>
-          )}
+      <div className="relative w-full h-full min-h-0 min-w-0 flex items-center justify-center">
+        {!loaded && !loadError && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <Loader2 className="size-6 text-primary-50 animate-spin" />
+          </div>
+        )}
 
-          {loadError && (
-            <div
-              className={cn(
-                "flex flex-col items-center justify-center text-grey-10 dark:text-grey-light-100",
-                "p-6 w-full max-w-md mx-auto rounded-[12px]",
-                "bg-white/80 dark:bg-black-primary-bg/80 backdrop-blur-sm",
-                "border border-grey-dark-100 dark:border-black-300",
-              )}
+        {loadError && (
+          <div
+            className={cn(
+              "flex flex-col items-center justify-center text-grey-10 dark:text-grey-light-100",
+              "p-6 w-full max-w-md mx-auto rounded-[12px]",
+              "bg-white/80 dark:bg-black-primary-bg/80 backdrop-blur-sm",
+              "border border-grey-dark-100 dark:border-black-300",
+            )}
+          >
+            <AlertCircle className="size-12 mx-auto mb-3 text-red-400" />
+            <p className="text-lg font-medium mb-2">Failed to load PDF</p>
+            <p className="text-sm text-grey-50 dark:text-grey-light-300 mb-6 text-center">
+              The file could not be displayed. Try downloading it instead.
+            </p>
+            <button
+              onClick={() => handleFileDownload(file, polkadotAddress ?? "")}
+              className="flex items-center gap-x-2 bg-primary-50 hover:bg-primary-70 transition-colors px-4 py-2 rounded-md font-medium text-white"
             >
-              <AlertCircle className="size-12 mx-auto mb-3 text-red-400" />
-              <p className="text-lg font-medium mb-2">Failed to load PDF</p>
-              <p className="text-sm text-grey-50 dark:text-grey-light-300 mb-6 text-center">
-                The file could not be displayed. Try downloading it instead.
-              </p>
-              <button
-                onClick={() => handleFileDownload(file, polkadotAddress ?? "")}
-                className="flex items-center gap-x-2 bg-primary-50 hover:bg-primary-70 transition-colors px-4 py-2 rounded-md font-medium text-white"
-              >
-                <Icons.DocumentDownload className="size-5" />
-                <span>Download File Instead</span>
-              </button>
-            </div>
-          )}
+              <Icons.DocumentDownload className="size-5" />
+              <span>Download File Instead</span>
+            </button>
+          </div>
+        )}
 
-          {resolvedUrl && !loadError && (
-            <div
-              className={cn(
-                "relative w-full h-full flex flex-col rounded-[8px] overflow-hidden",
-                "shadow-[0_14px_31px_rgba(0,0,0,0.06),0_56px_56px_rgba(0,0,0,0.05)]",
-                "animate-scale-in-95-0.4",
-                !loaded && "invisible",
-              )}
-            >
-              <iframe
-                key={resolvedUrl}
-                src={resolvedUrl}
-                width="100%"
-                height="100%"
-                className="border-none bg-white"
-                onLoad={() => setLoaded(true)}
-                onError={() => setLoadError(true)}
-              />
-            </div>
-          )}
-        </div>
+        {resolvedUrl && !loadError && (
+          <div
+            className={cn(
+              "relative w-full h-full flex flex-col rounded-[8px] overflow-hidden",
+              "shadow-[0_14px_31px_rgba(0,0,0,0.06),0_56px_56px_rgba(0,0,0,0.05)]",
+              "animate-scale-in-95-0.4",
+              !loaded && "invisible",
+            )}
+          >
+            <iframe
+              key={resolvedUrl}
+              src={resolvedUrl}
+              width="100%"
+              height="100%"
+              className="border-none bg-white"
+              onLoad={() => setLoaded(true)}
+              onError={() => setLoadError(true)}
+            />
+          </div>
+        )}
       </div>
     </FileViewerLayout>
   );
