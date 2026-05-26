@@ -166,6 +166,10 @@ pub async fn local_wallet_delete(state: State<'_, AppState>, id: i64) -> Result<
 /// Verify the user typed the correct password for a wallet without
 /// surfacing the mnemonic. Used by the unlock-on-action UX pattern in
 /// the FE (the password prompt before signing).
+///
+/// Accepts both the new Argon2id PHC password hash and the legacy
+/// hex-SHA256 hash via [`crypto::verify_password`] — `false` on either
+/// a wrong password or an unrecognised stored-hash format.
 #[tauri::command]
 pub async fn local_wallet_verify_password(state: State<'_, AppState>, id: i64, password: String) -> Result<bool, AppError> {
     let owner = require_owner(&state)?;
@@ -174,14 +178,20 @@ pub async fn local_wallet_verify_password(state: State<'_, AppState>, id: i64, p
         Some(w) => w,
         None => return Err(AppError::Other(format!("Wallet {id} not found"))),
     };
-    let expected = crypto::password_hash(&password, &wallet.address);
-    Ok(constant_time_eq(expected.as_bytes(), wallet.password_hash.as_bytes()))
+    Ok(crypto::verify_password(&wallet.password_hash, &password, &wallet.address))
 }
 
 /// Decrypt and return a wallet's mnemonic. The FE uses this on the
 /// "view recovery phrase" screen after the user re-types their password.
 /// Wrong password yields `Err` (the AEAD tag mismatch is indistinguishable
 /// from corrupt data at the API surface).
+///
+/// **Transparent migration**: if the row's stored ciphertext or
+/// password hash is in the legacy (HKDF / hex-SHA256) format, the
+/// successful unlock immediately re-encrypts the mnemonic under
+/// Argon2id and re-hashes the password, then writes both back to the
+/// DB atomically. The user sees nothing — the next call already finds
+/// the row in the new format.
 #[tauri::command]
 pub async fn local_wallet_get_decrypted_mnemonic(state: State<'_, AppState>, id: i64, password: String) -> Result<String, AppError> {
     let owner = require_owner(&state)?;
@@ -190,12 +200,40 @@ pub async fn local_wallet_get_decrypted_mnemonic(state: State<'_, AppState>, id:
         Some(w) => w,
         None => return Err(AppError::Other(format!("Wallet {id} not found"))),
     };
-    // Hash check first for a friendlier error than AEAD-decrypt-failed.
-    let expected = crypto::password_hash(&password, &wallet.address);
-    if !constant_time_eq(expected.as_bytes(), wallet.password_hash.as_bytes()) {
+    // Verifier check first for a friendlier error than AEAD-decrypt-failed.
+    if !crypto::verify_password(&wallet.password_hash, &password, &wallet.address) {
         return Err(AppError::Other("Incorrect password".into()));
     }
-    let plain = crypto::decrypt_mnemonic(&wallet.encrypted_mnemonic, &password, &wallet.address)?;
+    let (plain, ciphertext_was_legacy) =
+        crypto::decrypt_mnemonic(&wallet.encrypted_mnemonic, &password, &wallet.address)?;
+
+    let hash_was_legacy = crypto::password_hash_is_legacy(&wallet.password_hash);
+    if ciphertext_was_legacy || hash_was_legacy {
+        // Re-encrypt under Argon2id + re-hash the password. The
+        // address-as-salt invariant is preserved (same address goes in
+        // both), so subsequent unlocks just verify normally.
+        let new_ciphertext =
+            crypto::encrypt_mnemonic(plain.as_str(), &password, &wallet.address)?;
+        let new_hash = crypto::password_hash(&password, &wallet.address);
+        if let Err(e) =
+            repo::update_secrets(pool, &owner, wallet.id, &new_ciphertext, &new_hash).await
+        {
+            // Failing to migrate must not block the unlock the user
+            // asked for — they get the mnemonic, the row stays legacy,
+            // and we'll try again on the next unlock.
+            tracing::warn!(
+                wallet = %wallet.address,
+                error = %e,
+                "Failed to migrate legacy wallet secrets to Argon2id; will retry on next unlock"
+            );
+        } else {
+            tracing::info!(
+                wallet = %wallet.address,
+                "Migrated wallet secrets to Argon2id"
+            );
+        }
+    }
+
     Ok(plain.as_str().to_owned())
 }
 
@@ -255,13 +293,11 @@ pub async fn local_wallet_import_encrypted_backup(
     if address.trim().is_empty() {
         return Err(AppError::Other("Address is required".into()));
     }
-    // Verify the user typed the correct password by recomputing the
-    // address-salted SHA-256 hash and constant-time-comparing it to
-    // the hash from the backup. Without this we'd happily import the
-    // wallet regardless of what the user typed — and they'd then hit
-    // "Incorrect password" on the next sign attempt with no clue why.
-    let expected = crypto::password_hash(&password, address.trim());
-    if !constant_time_eq(expected.as_bytes(), password_hash.as_bytes()) {
+    // Verify the user typed the correct password against the hash from
+    // the backup. `crypto::verify_password` accepts both the new
+    // Argon2id PHC format and the legacy hex-SHA256 format, so backups
+    // produced by either version of the app are accepted.
+    if !crypto::verify_password(&password_hash, &password, address.trim()) {
         return Err(AppError::Other("Incorrect password for this backup".into()));
     }
     let owner = require_owner(&state)?;
@@ -378,9 +414,9 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
 
     // Same verification as the JSON path: the user's typed password
     // must match the hash baked into the backup, otherwise we'd
-    // store a wallet they can't actually sign with.
-    let expected = crypto::password_hash(&password, &address);
-    if !constant_time_eq(expected.as_bytes(), password_hash.as_bytes()) {
+    // store a wallet they can't actually sign with. Accepts legacy +
+    // new hash formats via `crypto::verify_password`.
+    if !crypto::verify_password(&password_hash, &password, &address) {
         return Err(AppError::Other("Incorrect password for this backup".into()));
     }
 
@@ -396,20 +432,6 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
     )
     .await?;
     Ok(PublicLocalWallet::from(&row))
-}
-
-/// Constant-time equality for two byte slices. SHA-256 hex strings are
-/// fixed length so the timing channel from `==` is small in practice, but
-/// using constant-time eq makes that explicit.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff: u8 = 0;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
 }
 
 // Convenience: keep the LocalWallet alias importable from this module so

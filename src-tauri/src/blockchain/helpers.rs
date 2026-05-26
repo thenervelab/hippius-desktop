@@ -60,11 +60,14 @@ pub(crate) async fn get_substrate_address(app_state: &crate::app_state::AppState
 /// Derive the active local wallet's signing keypair from `password`.
 ///
 /// 1. Look up the active wallet row.
-/// 2. Verify the supplied password via the stored SHA-256 hash; bail
-///    early on mismatch so AEAD decrypt isn't even attempted with the
-///    wrong key.
-/// 3. ChaCha20-Poly1305-decrypt the mnemonic with HKDF(password,
-///    address).
+/// 2. Verify the supplied password against the stored hash (Argon2id
+///    PHC or the legacy hex-SHA256 — both formats are accepted by
+///    `crypto::verify_password`). Bail early on mismatch so the AEAD
+///    decrypt isn't attempted with the wrong key.
+/// 3. ChaCha20-Poly1305-decrypt the mnemonic. The KDF used depends on
+///    the ciphertext version byte: Argon2id for new rows, HKDF for
+///    legacy rows. Successful legacy decrypt + verify triggers an
+///    in-place upgrade of the row so subsequent signs use the new KDF.
 /// 4. Parse the mnemonic and derive an sr25519 keypair via
 ///    `subxt_signer`.
 ///
@@ -78,14 +81,28 @@ pub(crate) async fn get_signer_and_address(
     let pool = app_state.pool()?;
     let active = repo::get_active(pool, &owner).await?.ok_or(AppError::NotReady(NotReadyKind::SigningKeyUnavailable))?;
 
-    // Cheap hash check first — gives a clear wrong-password error rather
-    // than the indistinguishable AEAD-tag-failed message.
-    let expected = crypto::password_hash(password, &active.address);
-    if !constant_time_eq(expected.as_bytes(), active.password_hash.as_bytes()) {
+    // Password verifier check first — gives a clean wrong-password
+    // error rather than the indistinguishable AEAD-tag-failed message.
+    if !crypto::verify_password(&active.password_hash, password, &active.address) {
         return Err(AppError::NotReady(NotReadyKind::SigningKeyUnavailable));
     }
 
-    let mnemonic = crypto::decrypt_mnemonic(&active.encrypted_mnemonic, password, &active.address)?;
+    let (mnemonic, ciphertext_was_legacy) =
+        crypto::decrypt_mnemonic(&active.encrypted_mnemonic, password, &active.address)?;
+
+    // Transparent migration: if either the ciphertext or the password
+    // hash is in the legacy format, re-encrypt + re-hash and persist.
+    // We do this on every signing path (Send / Stake / Unstake /
+    // Withdraw / Bridge) so a user who already had a wallet under the
+    // old KDF doesn't have to do anything to get the upgrade — the
+    // first sign they attempt does it. A migration failure must NOT
+    // block the sign: we log and move on.
+    let needs_migration =
+        ciphertext_was_legacy || crypto::password_hash_is_legacy(&active.password_hash);
+    if needs_migration {
+        migrate_to_argon2(app_state, &owner, &active, &mnemonic, password).await;
+    }
+
     let parsed = SubxtMnemonic::parse_normalized(mnemonic.as_str())
         .map_err(|e| AppError::Crypto(format!("Active local wallet stored an unparseable mnemonic: {e}")))?;
     let keypair = Keypair::from_phrase(&parsed, None).map_err(|e| AppError::Crypto(format!("Failed to derive sr25519 keypair: {e}")))?;
@@ -101,16 +118,40 @@ pub(crate) async fn get_signer(app_state: &crate::app_state::AppState, password:
     Ok(signer)
 }
 
-/// Constant-time equality for the SHA-256 hex hash check. Both sides
-/// are fixed-length so the timing channel is small in practice; using
-/// constant-time eq makes it explicit.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
+/// Re-encrypt + re-hash a legacy wallet row under the new (Argon2id)
+/// scheme and persist. Called from the signing-flow migration path —
+/// failures are logged and swallowed so the user's signing operation
+/// can still complete on the in-memory mnemonic we already decrypted.
+async fn migrate_to_argon2(
+    app_state: &crate::app_state::AppState,
+    owner: &str,
+    active: &repo::LocalWallet,
+    mnemonic: &zeroize::Zeroizing<String>,
+    password: &str,
+) {
+    let Ok(new_ct) = crypto::encrypt_mnemonic(mnemonic.as_str(), password, &active.address)
+    else {
+        tracing::warn!(
+            wallet = %active.address,
+            "Argon2id re-encrypt failed during signing flow migration"
+        );
+        return;
+    };
+    let new_hash = crypto::password_hash(password, &active.address);
+    let pool = match app_state.pool() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    match repo::update_secrets(pool, owner, active.id, &new_ct, &new_hash).await {
+        Ok(()) => tracing::info!(
+            wallet = %active.address,
+            "Migrated wallet secrets to Argon2id during signing flow"
+        ),
+        Err(e) => tracing::warn!(
+            wallet = %active.address,
+            error = %e,
+            "Failed to persist Argon2id-migrated wallet secrets"
+        ),
     }
-    let mut diff: u8 = 0;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
 }
+
