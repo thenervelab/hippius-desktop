@@ -24,8 +24,8 @@ export const ImageDialogTrigger: React.FC<{
     >
       <span className="flex-1 min-w-0">{children}</span>
       {/* Eye icon on hover */}
-      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100 to-white dark:to-black-300 right-4 inset-y-0 flex items-center">
-        <Icons.Eye className="size-5 text-primary-60 [&>path]:stroke-[0.1875rem]" />
+      <div className="absolute pointer-events-none opacity-0 transition-opacity duration-300 group-hover:opacity-100 right-4 inset-y-0 flex items-center">
+        <Icons.EyeOutline className="size-4 text-primary-60" />
       </div>
     </button>
   );

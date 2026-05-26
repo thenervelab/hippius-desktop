@@ -1,6 +1,6 @@
 import React, { ReactNode, useState, useEffect } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { Icons } from "@/components/ui";
+import { Video } from "lucide-react";
 import VideoPlayer from "./VideoPlayer";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { cn } from "@/lib/utils";
@@ -23,8 +23,8 @@ export const VideoDialogTrigger: React.FC<{
     >
       <span className="flex-1 min-w-0">{children}</span>
       {/* Play icon on hover */}
-      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100 to-white dark:to-black-300 right-4 inset-y-0 flex items-center">
-        <Icons.PlayCircle className="size-5 text-primary-60 [&>path]:stroke-[0.25rem]" />
+      <div className="absolute pointer-events-none opacity-0 transition-opacity duration-300 group-hover:opacity-100 right-4 inset-y-0 flex items-center">
+        <Video className="size-4 text-primary-60" />
       </div>
     </button>
   );
