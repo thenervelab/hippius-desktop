@@ -170,6 +170,12 @@ pub async fn local_wallet_delete(state: State<'_, AppState>, id: i64) -> Result<
 /// Accepts both the new Argon2id PHC password hash and the legacy
 /// hex-SHA256 hash via [`crypto::verify_password`] — `false` on either
 /// a wrong password or an unrecognised stored-hash format.
+///
+/// Rate-limited: see `crate::wallet::rate_limit`. After repeated
+/// failures the call returns `Err(RateLimited)` instead of a boolean,
+/// telling the FE to display a wait-and-retry message instead of
+/// "Incorrect password" so attackers can't disguise a lockout as a
+/// regular wrong-password retry loop.
 #[tauri::command]
 pub async fn local_wallet_verify_password(state: State<'_, AppState>, id: i64, password: String) -> Result<bool, AppError> {
     let owner = require_owner(&state)?;
@@ -178,7 +184,16 @@ pub async fn local_wallet_verify_password(state: State<'_, AppState>, id: i64, p
         Some(w) => w,
         None => return Err(AppError::Other(format!("Wallet {id} not found"))),
     };
-    Ok(crypto::verify_password(&wallet.password_hash, &password, &wallet.address))
+    if let Err(rl) = state.wallet_rate_limit.check(id) {
+        return Err(AppError::Other(rl.message()));
+    }
+    let ok = crypto::verify_password(&wallet.password_hash, &password, &wallet.address);
+    if ok {
+        state.wallet_rate_limit.record_success(id);
+    } else {
+        state.wallet_rate_limit.record_failure(id);
+    }
+    Ok(ok)
 }
 
 /// Decrypt and return a wallet's mnemonic. The FE uses this on the
@@ -200,10 +215,18 @@ pub async fn local_wallet_get_decrypted_mnemonic(state: State<'_, AppState>, id:
         Some(w) => w,
         None => return Err(AppError::Other(format!("Wallet {id} not found"))),
     };
-    // Verifier check first for a friendlier error than AEAD-decrypt-failed.
+    // Rate-limit BEFORE the verifier so a locked-out attacker can't
+    // measure Argon2id timing to distinguish "wrong password" from
+    // "lockout" — both surface as a plain error string now.
+    if let Err(rl) = state.wallet_rate_limit.check(id) {
+        return Err(AppError::Other(rl.message()));
+    }
+    // Verifier check next for a friendlier error than AEAD-decrypt-failed.
     if !crypto::verify_password(&wallet.password_hash, &password, &wallet.address) {
+        state.wallet_rate_limit.record_failure(id);
         return Err(AppError::Other("Incorrect password".into()));
     }
+    state.wallet_rate_limit.record_success(id);
     let (plain, ciphertext_was_legacy) =
         crypto::decrypt_mnemonic(&wallet.encrypted_mnemonic, &password, &wallet.address)?;
 

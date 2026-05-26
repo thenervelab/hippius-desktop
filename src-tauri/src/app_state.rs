@@ -111,6 +111,12 @@ pub struct AppState {
     /// Mutex held only for the snapshot read at revoke time and the
     /// snapshot write at end of list — lock duration is microseconds.
     pub share_active_list_cache: Mutex<HashMap<String, Vec<hcfs_client::client::share::ShareSummary>>>,
+    /// Per-wallet rate limiter for password operations. See
+    /// `crate::wallet::rate_limit` for the policy. Process-local — no
+    /// persistence across app restarts (intentional: against a
+    /// stolen-DB attacker this layer adds nothing; its job is to clamp
+    /// online IPC abuse during a single session).
+    pub wallet_rate_limit: Arc<crate::wallet::rate_limit::RateLimitState>,
 }
 
 impl Default for AppState {
@@ -170,6 +176,7 @@ impl AppState {
             // the dialog gets a chance to run before any sync init races in.
             recovery_gate: tokio::sync::watch::channel(RecoveryGateState::Skipped).0,
             share_active_list_cache: Mutex::new(HashMap::new()),
+            wallet_rate_limit: Arc::new(crate::wallet::rate_limit::RateLimitState::new()),
         }
     }
 

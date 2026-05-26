@@ -81,11 +81,19 @@ pub(crate) async fn get_signer_and_address(
     let pool = app_state.pool()?;
     let active = repo::get_active(pool, &owner).await?.ok_or(AppError::NotReady(NotReadyKind::SigningKeyUnavailable))?;
 
-    // Password verifier check first — gives a clean wrong-password
-    // error rather than the indistinguishable AEAD-tag-failed message.
-    if !crypto::verify_password(&active.password_hash, password, &active.address) {
+    // Rate limiter before the verifier — see commands.rs for the
+    // reasoning. Lockouts surface as the same generic error variant a
+    // wrong password produces, so a script can't distinguish them.
+    if let Err(_) = app_state.wallet_rate_limit.check(active.id) {
         return Err(AppError::NotReady(NotReadyKind::SigningKeyUnavailable));
     }
+    // Password verifier check next — gives a clean wrong-password
+    // error rather than the indistinguishable AEAD-tag-failed message.
+    if !crypto::verify_password(&active.password_hash, password, &active.address) {
+        app_state.wallet_rate_limit.record_failure(active.id);
+        return Err(AppError::NotReady(NotReadyKind::SigningKeyUnavailable));
+    }
+    app_state.wallet_rate_limit.record_success(active.id);
 
     let (mnemonic, ciphertext_was_legacy) =
         crypto::decrypt_mnemonic(&active.encrypted_mnemonic, password, &active.address)?;

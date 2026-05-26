@@ -8,4 +8,5 @@
 
 pub mod commands;
 pub mod crypto;
+pub mod rate_limit;
 pub mod repo;
