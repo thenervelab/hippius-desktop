@@ -20,7 +20,7 @@ import type {
   BridgeResult,
   TrackedTransaction,
 } from "@/lib/bridge/types";
-import { deriveBridgeKeypair } from "@/lib/bridge/local-keypair";
+import { buildBridgeSigner } from "@/lib/bridge/local-keypair";
 
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 
@@ -99,10 +99,12 @@ const BALANCES_KEY = "bridge-balances";
  * `bridgeAlphaToHAlpha` / `bridgeHAlphaToAlpha` for submissions.
  *
  * The desktop difference is signing — we never use a Polkadot.js
- * extension. Instead, the FE submits the user's password through
- * `local_wallet_get_decrypted_mnemonic`, derives an Sr25519 keypair
- * via `@polkadot/util-crypto`, and hands it to the existing
- * `keypair`-aware code path on the service.
+ * extension. Instead, `buildBridgeSigner` wires the bridge service's
+ * `keypair.sign` callback into the Rust `local_wallet_sign` IPC: the
+ * user's password is captured once in a closure on submit, each sign
+ * round-trips through Rust which decrypts the mnemonic, signs, and
+ * drops everything before returning the 64-byte signature. The
+ * plaintext mnemonic never enters renderer memory.
  */
 export function useBridge() {
   const { activeWallet } = useLocalWallet();
@@ -222,10 +224,7 @@ export function useBridge() {
         throw new Error("No active wallet — create or unlock one first.");
       }
 
-      const keypair = await deriveBridgeKeypair(
-        activeWallet.id,
-        params.password,
-      );
+      const keypair = await buildBridgeSigner(activeWallet.id, params.password);
 
       const result: BridgeResult = await serviceBridgeHAlphaToAlpha(
         {
@@ -265,10 +264,7 @@ export function useBridge() {
         throw new Error("No active wallet — create or unlock one first.");
       }
 
-      const keypair = await deriveBridgeKeypair(
-        activeWallet.id,
-        params.password,
-      );
+      const keypair = await buildBridgeSigner(activeWallet.id, params.password);
 
       const result: BridgeResult = await serviceBridgeAlphaToHAlpha(
         {

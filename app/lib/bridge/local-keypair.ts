@@ -1,56 +1,82 @@
 /**
- * Local-wallet keypair helper for the bridge.
+ * Bridge signer adapter for the desktop's local-wallet keystore.
  *
- * The hippius-web build hands `bridgeAlphaToHAlpha` / `bridgeHAlphaToAlpha`
- * a `keypair` object derived from the user's mnemonic so signing doesn't
- * round-trip through a wallet extension. On desktop the mnemonic lives
- * encrypted in Rust; we ask Rust to decrypt it for this one bridge
- * operation, derive an Sr25519 pair in JS, and drop the mnemonic + seed
- * the moment the call finishes.
+ * Web's `bridgeAlphaToHAlpha` / `bridgeHAlphaToAlpha` accept a
+ * `keypair = { publicKey, sign }` object and hand it to
+ * `getPolkadotSigner`. On web the keypair lives in the renderer
+ * because the user's mnemonic is loaded into JS at session start by
+ * the polkadot-js extension.
  *
- * This mirrors the convention used by Stake / Unstake / Send: collect
- * the password inline, hand it to a verified-once IPC, sign, forget.
+ * Desktop is the opposite: the mnemonic lives encrypted in SQLite
+ * inside the Rust process and we don't want it ever crossing the IPC
+ * boundary. This module builds a keypair-shaped object whose `sign`
+ * callback round-trips through Rust's `local_wallet_sign` IPC — Rust
+ * decrypts the mnemonic, derives the sr25519 keypair, signs the
+ * payload, and drops everything before returning the 64-byte
+ * signature.
+ *
+ * The user's password is captured once in a closure when the bridge
+ * submit begins (after the inline-password confirmation step) and is
+ * referenced by every `sign` call within that closure's lifetime.
+ * When the submit finishes (success, failure, or cancel) the closure
+ * is dropped and the password becomes unreachable. The mnemonic
+ * never enters the renderer at any point.
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import {
-  cryptoWaitReady,
-  mnemonicToMiniSecret,
-  sr25519PairFromSeed,
-  sr25519Sign,
-} from "@polkadot/util-crypto";
 
 export interface BridgeKeypair {
+  /** Raw 32-byte Sr25519 public key — used by polkadot-api's
+   *  `getPolkadotSigner` to identify the signer; not sensitive. */
   publicKey: Uint8Array;
-  sign: (payload: Uint8Array) => Uint8Array;
+  /** Sign callback. polkadot-api accepts a Promise return, so the
+   *  IPC round-trip lives behind this async signature without
+   *  requiring any changes to the upstream service. */
+  sign: (payload: Uint8Array) => Promise<Uint8Array>;
+}
+
+function uint8ToB64(bytes: Uint8Array): string {
+  // Browser-safe — `btoa` only accepts binary strings.
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+function b64ToUint8(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 /**
- * Build a one-shot bridge keypair from a verified password.
+ * Build a signer object that the bridge service can hand to
+ * polkadot-api. Captures `password` in a closure so each sign call
+ * doesn't need to re-prompt — but the password never escapes this
+ * module other than as a `string` arg to the Rust IPC.
  *
- * Throws if the password is wrong or no wallet is active. Callers are
- * expected to have already verified the password via
- * `LocalWalletContext.verifyPassword` so users see "Incorrect password"
- * inline instead of mid-flight.
+ * Note: `password` here is **not** persisted anywhere. It lives in
+ * the closure for the lifetime of one bridge submit and is released
+ * when the dialog teardown drops every reference to the returned
+ * signer.
  */
-export async function deriveBridgeKeypair(
+export async function buildBridgeSigner(
   walletId: number,
   password: string,
 ): Promise<BridgeKeypair> {
-  const mnemonic = await invoke<string>("local_wallet_get_decrypted_mnemonic", {
+  const publicKeyB64 = await invoke<string>("local_wallet_get_public_key", {
     id: walletId,
-    password,
   });
-  if (!mnemonic) {
-    throw new Error("Failed to decrypt wallet mnemonic.");
-  }
+  const publicKey = b64ToUint8(publicKeyB64);
 
-  await cryptoWaitReady();
-  const seed = mnemonicToMiniSecret(mnemonic);
-  const pair = sr25519PairFromSeed(seed);
-
-  return {
-    publicKey: pair.publicKey,
-    sign: (payload: Uint8Array) => sr25519Sign(payload, pair),
+  const sign = async (payload: Uint8Array): Promise<Uint8Array> => {
+    const sigB64 = await invoke<string>("local_wallet_sign", {
+      id: walletId,
+      password,
+      payloadB64: uint8ToB64(payload),
+    });
+    return b64ToUint8(sigB64);
   };
+
+  return { publicKey, sign };
 }

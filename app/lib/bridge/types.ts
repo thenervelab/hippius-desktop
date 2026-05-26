@@ -31,10 +31,15 @@ export interface BridgeRequest {
     senderAddress: string;
     recipientAddress?: string; // Optional - defaults to sender address
     hotkey?: string; // Optional - validator hotkey for Alpha→hAlpha deposits
-    /** Optional local keypair — signs transactions without wallet extension popup */
+    /** Optional local keypair — signs transactions without wallet extension popup.
+     *  Sign can return a Uint8Array OR a Promise<Uint8Array> so the desktop's
+     *  Rust-backed signer (which IPC-calls into local_wallet_sign) fits the
+     *  same shape as web's in-renderer Sr25519 pair without forcing a sync
+     *  cross-thread bridge. polkadot-api's `getPolkadotSigner` already
+     *  awaits the return value. */
     keypair?: {
         publicKey: Uint8Array;
-        sign: (data: Uint8Array) => Uint8Array;
+        sign: (data: Uint8Array) => Uint8Array | Promise<Uint8Array>;
     };
 }
 
