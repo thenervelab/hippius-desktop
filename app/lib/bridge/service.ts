@@ -39,7 +39,12 @@ export type OnStepCallback = (steps: BridgeStep[]) => void;
 // ---------------------------------------------------------------------------
 // Timeout helper — prevents signAndSubmit / WS calls from hanging forever
 // ---------------------------------------------------------------------------
-const TX_TIMEOUT_MS = 120_000; // 2 minutes per on-chain step
+// 3 minutes per on-chain step. Originally 2 min (web's default) but
+// testnet block production occasionally stalls long enough that a
+// fully-functional bridge step would time out below 180s. The
+// underlying `at: 'best'` option already prevents waiting on
+// finalization; this budget is for inclusion + first confirmation.
+const TX_TIMEOUT_MS = 180_000;
 const QUERY_TIMEOUT_MS = 30_000; // 30 seconds for queries
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label = 'Operation'): Promise<T> {
