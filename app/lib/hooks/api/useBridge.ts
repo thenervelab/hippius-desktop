@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSetAtom } from "jotai";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+
+import { bridgeInFlightAtom } from "@/lib/global-atoms/bridgeAtoms";
 
 import {
   initializeBridge,
@@ -109,6 +112,7 @@ const BALANCES_KEY = "bridge-balances";
 export function useBridge() {
   const { activeWallet } = useLocalWallet();
   const queryClient = useQueryClient();
+  const setBridgeInFlight = useSetAtom(bridgeInFlightAtom);
 
   const address = activeWallet?.address ?? null;
 
@@ -224,32 +228,47 @@ export function useBridge() {
         throw new Error("No active wallet — create or unlock one first.");
       }
 
-      const keypair = await buildBridgeSigner(activeWallet.id, params.password);
+      // Bracket the entire submit in a refcount the idle-lock checks
+      // so a long submit (slow testnet block production) doesn't
+      // silently flip the soft-lock state mid-flight. `try/finally`
+      // is the only place we touch the counter — the closure-scoped
+      // password stays valid for every sign regardless, so a missed
+      // decrement would only leak the "unlocked" flag, not any
+      // secret material.
+      setBridgeInFlight((c) => c + 1);
+      try {
+        const keypair = await buildBridgeSigner(
+          activeWallet.id,
+          params.password,
+        );
 
-      const result: BridgeResult = await serviceBridgeHAlphaToAlpha(
-        {
-          direction: "halpha-to-alpha",
-          amount: BigInt(params.amount),
-          senderAddress: activeWallet.address,
-          recipientAddress: params.recipientAddress,
-          keypair,
-        },
-        setWizardSteps,
-      );
+        const result: BridgeResult = await serviceBridgeHAlphaToAlpha(
+          {
+            direction: "halpha-to-alpha",
+            amount: BigInt(params.amount),
+            senderAddress: activeWallet.address,
+            recipientAddress: params.recipientAddress,
+            keypair,
+          },
+          setWizardSteps,
+        );
 
-      if (!result.success) {
-        throw new Error(result.error || "Bridge submission failed");
+        if (!result.success) {
+          throw new Error(result.error || "Bridge submission failed");
+        }
+
+        void queryClient.invalidateQueries({ queryKey: [BALANCES_KEY] });
+        void refetchTransactions();
+
+        return {
+          bridgeTransactionId: result.bridgeTransactionId ?? "",
+          txHash: result.txHash ?? "",
+        };
+      } finally {
+        setBridgeInFlight((c) => Math.max(0, c - 1));
       }
-
-      void queryClient.invalidateQueries({ queryKey: [BALANCES_KEY] });
-      void refetchTransactions();
-
-      return {
-        bridgeTransactionId: result.bridgeTransactionId ?? "",
-        txHash: result.txHash ?? "",
-      };
     },
-    [activeWallet, queryClient, refetchTransactions],
+    [activeWallet, queryClient, refetchTransactions, setBridgeInFlight],
   );
 
   /* ── Submit: Alpha → hAlpha ──────────────────────────────────────── */
@@ -264,32 +283,43 @@ export function useBridge() {
         throw new Error("No active wallet — create or unlock one first.");
       }
 
-      const keypair = await buildBridgeSigner(activeWallet.id, params.password);
+      // See submitHalphaToAlpha for the refcount rationale. Alpha →
+      // hAlpha is the longer of the two paths (4 chain ops) so this
+      // matters more here in practice.
+      setBridgeInFlight((c) => c + 1);
+      try {
+        const keypair = await buildBridgeSigner(
+          activeWallet.id,
+          params.password,
+        );
 
-      const result: BridgeResult = await serviceBridgeAlphaToHAlpha(
-        {
-          direction: "alpha-to-halpha",
-          amount: BigInt(params.amount),
-          senderAddress: activeWallet.address,
-          hotkey: params.hotkey,
-          keypair,
-        },
-        setWizardSteps,
-      );
+        const result: BridgeResult = await serviceBridgeAlphaToHAlpha(
+          {
+            direction: "alpha-to-halpha",
+            amount: BigInt(params.amount),
+            senderAddress: activeWallet.address,
+            hotkey: params.hotkey,
+            keypair,
+          },
+          setWizardSteps,
+        );
 
-      if (!result.success) {
-        throw new Error(result.error || "Bridge submission failed");
+        if (!result.success) {
+          throw new Error(result.error || "Bridge submission failed");
+        }
+
+        void queryClient.invalidateQueries({ queryKey: [BALANCES_KEY] });
+        void refetchTransactions();
+
+        return {
+          bridgeTransactionId: result.bridgeTransactionId ?? "",
+          txHash: result.txHash ?? "",
+        };
+      } finally {
+        setBridgeInFlight((c) => Math.max(0, c - 1));
       }
-
-      void queryClient.invalidateQueries({ queryKey: [BALANCES_KEY] });
-      void refetchTransactions();
-
-      return {
-        bridgeTransactionId: result.bridgeTransactionId ?? "",
-        txHash: result.txHash ?? "",
-      };
     },
-    [activeWallet, queryClient, refetchTransactions],
+    [activeWallet, queryClient, refetchTransactions, setBridgeInFlight],
   );
 
   return useMemo(

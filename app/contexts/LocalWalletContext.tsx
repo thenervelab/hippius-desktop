@@ -1,6 +1,7 @@
 "use client";
 
 import { invoke } from "@tauri-apps/api/core";
+import { useAtomValue } from "jotai";
 import React, {
   createContext,
   useCallback,
@@ -10,6 +11,7 @@ import React, {
   useState,
 } from "react";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { bridgeInFlightAtom } from "@/lib/global-atoms/bridgeAtoms";
 
 /** Mirrors `PublicLocalWallet` in `src-tauri/src/wallet/repo.rs`. */
 export interface LocalWallet {
@@ -406,18 +408,30 @@ export function LocalWalletProvider({
    * → flip isUnlocked back to false. The user can re-unlock with the
    * usual password prompt; the timer resets on every
    * `setIsUnlocked(true)` (handled by the watcher below).
+   *
+   * Pause condition: when a bridge submit is in progress
+   * (`bridgeInFlight > 0`), the timer is suspended. A multi-step
+   * bridge can legitimately take longer than the idle window
+   * (slow testnet block production + several signs), and silently
+   * flipping the soft-lock during the user's "watch the wizard
+   * tick" experience is confusing. The bridge submit closure holds
+   * its password independently so signing continues either way —
+   * pausing the timer is purely a UX correctness fix.
    */
   const IDLE_LOCK_MS = 5 * 60 * 1000;
+  const bridgeInFlight = useAtomValue(bridgeInFlightAtom);
   useEffect(() => {
     if (!isUnlocked) return;
+    if (bridgeInFlight > 0) return;
     const t = window.setTimeout(() => {
       setIsUnlocked(false);
     }, IDLE_LOCK_MS);
     return () => window.clearTimeout(t);
-    // Re-arm the timer every time the unlocked state flips to true. A
-    // user who keeps confirming password actions resets the clock
-    // implicitly (each unlock-bearing IPC sets isUnlocked back to true).
-  }, [isUnlocked, IDLE_LOCK_MS]);
+    // Re-arm the timer every time the unlocked state flips to true,
+    // and re-evaluate the pause-during-bridge condition when the
+    // in-flight count changes (so the timer restarts as soon as a
+    // bridge submit settles, not after the next isUnlocked toggle).
+  }, [isUnlocked, IDLE_LOCK_MS, bridgeInFlight]);
 
   /* ── Backup / recovery ─────────────────────────────────────────────── */
 
