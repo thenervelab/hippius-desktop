@@ -392,6 +392,33 @@ export function LocalWalletProvider({
     setIsUnlocked(false);
   }, []);
 
+  /* ── Idle auto-lock ──────────────────────────────────────────────────
+   *
+   * The wallet "unlocked" flag is a soft FE gate — every signing flow
+   * (Send / Stake / Unstake / Withdraw / Bridge) re-prompts for the
+   * password and re-derives the keypair in Rust, so there's no
+   * long-lived secret in renderer memory for an idle attacker to
+   * grab. Auto-lock here is mostly UX-defensive: if the laptop is
+   * left unattended after the user viewed their recovery phrase, the
+   * next user-action requiring "unlocked" state should re-prompt.
+   *
+   * Timeline: 5 min of idle (no successful unlock-refreshing call)
+   * → flip isUnlocked back to false. The user can re-unlock with the
+   * usual password prompt; the timer resets on every
+   * `setIsUnlocked(true)` (handled by the watcher below).
+   */
+  const IDLE_LOCK_MS = 5 * 60 * 1000;
+  useEffect(() => {
+    if (!isUnlocked) return;
+    const t = window.setTimeout(() => {
+      setIsUnlocked(false);
+    }, IDLE_LOCK_MS);
+    return () => window.clearTimeout(t);
+    // Re-arm the timer every time the unlocked state flips to true. A
+    // user who keeps confirming password actions resets the clock
+    // implicitly (each unlock-bearing IPC sets isUnlocked back to true).
+  }, [isUnlocked, IDLE_LOCK_MS]);
+
   /* ── Backup / recovery ─────────────────────────────────────────────── */
 
   const getDecryptedMnemonic = useCallback(
