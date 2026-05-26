@@ -30,21 +30,22 @@ import {
   type ReferralEvent,
 } from "@/lib/hooks/api/useUserReferrals";
 import { formatDate } from "@/app/lib/utils/formatters/formatDate";
+import { cn } from "@/lib/utils";
 
-/* "Referral History" table — ported from hippius-web. Renders the
- * USER ID / hAlpha EARNED / DATE CREATED / INVOICE columns, with full
- * pagination, header-portal'd MiniPaginationControl, and a placeholder
- * Download button (invoices aren't fully wired yet).
+/* "Referral History" table.
  *
- * Reads the desktop's IPC-backed useUserReferrals hook — same row
- * shape as web's. The Invoice cell action is intentionally a no-op
- * until the API ships. */
+ * Restyled to mirror BillingnHistoryTable / TransactionHistoryTable:
+ * same Th/Td primitives, same #E3E3E3 / #313131 border palette, banded
+ * #fbfbfb / #f5f5f5 (light) and #161616 / #1e1e1e (dark) row fills,
+ * SkeletonTableRow on load, NoEntriesFound empty state, and the
+ * MiniPaginationControl-in-header / full-Pagination-below pair. */
 
 const columnHelper = createColumnHelper<ReferralEvent>();
 const DEFAULT_PAGE_SIZE = 10;
 
 const HEADERS = ["USER ID", "CREDIT EARNED", "DATE CREATED", "INVOICE"];
-const SKELETON_WIDTHS = ["70%", "80px", "120px", "80px"];
+const SKELETON_WIDTHS = ["70%", "100px", "120px", "100px"];
+const MIN_W = "min-w-[680px]";
 
 interface ReferralHistoryTableProps {
   headerPortalTarget?: HTMLElement | null;
@@ -105,8 +106,12 @@ const ReferralHistoryTable: React.FC<ReferralHistoryTableProps> = ({
         },
       }),
       columnHelper.accessor("reward", {
-        header: "hAlpha Earned",
-        cell: (info) => info.getValue(),
+        header: "CREDIT EARNED",
+        cell: (info) => (
+          <span className="font-medium text-grey-20 dark:text-grey-dark-200">
+            {info.getValue()}
+          </span>
+        ),
         meta: {
           headerClassName: "w-[140px]",
           cellClassName: "w-[140px]",
@@ -118,7 +123,11 @@ const ReferralHistoryTable: React.FC<ReferralHistoryTableProps> = ({
           const raw = d.getValue();
           const parsed = new Date(raw);
           const formatted = !isNaN(parsed.getTime()) ? formatDate(parsed) : raw;
-          return <span className="text-[#7D7D7D]">{formatted}</span>;
+          return (
+            <span className="font-medium text-grey-dark-800 dark:text-grey-dark-800">
+              {formatted}
+            </span>
+          );
         },
       }),
       columnHelper.display({
@@ -153,13 +162,13 @@ const ReferralHistoryTable: React.FC<ReferralHistoryTableProps> = ({
     return (
       <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
         <div className="overflow-x-auto custom-scrollbar-thin">
-          <Table className="min-w-[680px]">
+          <Table className={MIN_W}>
             <THead>
-              <Tr className="bg-[#fefefe] dark:bg-black-primary-bg">
+              <Tr>
                 {HEADERS.map((h) => (
                   <th
                     key={h}
-                    className="h-[var(--table-row-height,36px)] border-b border-r border-[#E3E3E3] bg-white px-[var(--table-cell-padding-x,10px)] py-0 text-left text-[length:var(--table-header-font-size,10px)] leading-[var(--table-header-line-height,14px)] font-semibold uppercase text-grey-dark-600 last:border-r-0 dark:border-[#313131] dark:!bg-[#111111] dark:text-grey-dark-700"
+                    className="h-[var(--table-row-height,36px)] border-b border-r border-[#E3E3E3] bg-white px-[var(--table-cell-padding-x,10px)] py-0 text-left text-[length:var(--table-header-font-size,10px)] font-semibold uppercase text-grey-dark-600 last:border-r-0 dark:border-[#313131] dark:!bg-[#111111] dark:text-grey-dark-700"
                   >
                     {h}
                   </th>
@@ -168,9 +177,11 @@ const ReferralHistoryTable: React.FC<ReferralHistoryTableProps> = ({
             </THead>
             <TBody>
               <SkeletonTableRow
-                rows={pageSize}
+                rows={DEFAULT_PAGE_SIZE}
                 columns={HEADERS.length}
                 columnWidths={SKELETON_WIDTHS}
+                rowClassName="odd:bg-[#fbfbfb] even:bg-[#f5f5f5] dark:odd:bg-[#161616] dark:even:bg-[#1e1e1e]"
+                cellClassName="!border-[#E3E3E3] dark:!border-[#313131]"
               />
             </TBody>
           </Table>
@@ -181,19 +192,27 @@ const ReferralHistoryTable: React.FC<ReferralHistoryTableProps> = ({
 
   if (isError && !data) {
     return (
-      <NoEntriesFound
-        title="Failed to load"
-        description="Referral history is temporarily unavailable."
-      />
+      <div className="p-3">
+        <NoEntriesFound
+          title="Failed to load"
+          description="Referral history is temporarily unavailable."
+          cardView={false}
+          className="p-6 sm:p-10 rounded-[8px]"
+        />
+      </div>
     );
   }
 
   if (totalCount === 0) {
     return (
-      <NoEntriesFound
-        title="No referrals yet"
-        description="You have not made any referrals yet."
-      />
+      <div className="p-3">
+        <NoEntriesFound
+          title="No referrals yet"
+          description="You have not made any referrals yet."
+          cardView={false}
+          className="p-6 sm:p-10 rounded-[8px]"
+        />
+      </div>
     );
   }
 
@@ -218,31 +237,33 @@ const ReferralHistoryTable: React.FC<ReferralHistoryTableProps> = ({
 
       <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
         <div className="overflow-x-auto custom-scrollbar-thin">
-          <Table className="min-w-[680px]">
+          <Table className={MIN_W}>
             <THead>
               {table.getHeaderGroups().map((headerGroup) => (
-                <Tr
-                  key={headerGroup.id}
-                  className="bg-[#fefefe] dark:bg-black-primary-bg"
-                >
+                <Tr key={headerGroup.id}>
                   {headerGroup.headers.map((header) => (
-                    <Th key={header.id} header={header} />
+                    <Th
+                      key={header.id}
+                      header={header}
+                      className="bg-white dark:!bg-[#111111] !border-[#E3E3E3] dark:!border-[#313131]"
+                    />
                   ))}
                 </Tr>
               ))}
             </THead>
             <TBody>
               {table.getRowModel().rows.map((row) => (
-                <Tr
-                  key={row.id}
-                  className="bg-white dark:bg-black-600"
-                  transparent
-                >
+                <Tr key={row.id}>
                   {row.getVisibleCells().map((cell) => (
                     <Td
-                      className="text-[#1D1D1D] dark:text-[#DBDBDB] font-semibold"
                       key={cell.id}
                       cell={cell}
+                      className={cn(
+                        "!border-[#E3E3E3] dark:!border-[#313131]",
+                        row.index % 2 === 0
+                          ? "bg-[#fbfbfb] dark:bg-[#161616]"
+                          : "bg-[#f5f5f5] dark:bg-[#1e1e1e]",
+                      )}
                     />
                   ))}
                 </Tr>
@@ -253,7 +274,7 @@ const ReferralHistoryTable: React.FC<ReferralHistoryTableProps> = ({
       </TableWrapper>
 
       {showPagination && (
-        <div className="mt-2">
+        <div className="px-3 pb-3 mt-3">
           <Pagination
             currentPage={currentPage}
             totalPages={totalPages}

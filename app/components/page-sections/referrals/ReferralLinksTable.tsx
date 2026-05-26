@@ -28,17 +28,22 @@ import {
   type ReferralLink,
 } from "@/lib/hooks/api/useReferralLinks";
 import { REFERRAL_CODE_CONFIG } from "@/lib/config";
+import { cn } from "@/lib/utils";
 
-/* "Your Referral Links" table — ported from hippius-web. Reads the
- * desktop's existing IPC-backed useReferralLinks hook (same row shape
- * as web's), then renders the LINK / AMOUNT / COPY column set with
- * full pagination support. */
+/* "Your Referral Links" table.
+ *
+ * Restyled to mirror BillingnHistoryTable / TransactionHistoryTable:
+ * the same Th/Td primitives, the same #E3E3E3 / #313131 border palette,
+ * banded #fbfbfb / #f5f5f5 (light) and #161616 / #1e1e1e (dark) row
+ * fills, SkeletonTableRow on load, NoEntriesFound empty state, and the
+ * MiniPaginationControl-in-header / full-Pagination-below pair. */
 
 const columnHelper = createColumnHelper<ReferralLink>();
 const DEFAULT_PAGE_SIZE = 10;
 
-const HEADERS = ["LINK", "hALPHA EARNED", ""];
-const SKELETON_WIDTHS = ["70%", "80px", "40px"];
+const HEADERS = ["LINK", "AMOUNT (hALPHA)", ""];
+const SKELETON_WIDTHS = ["70%", "100px", "40px"];
+const MIN_W = "min-w-[560px]";
 
 interface ReferralLinksTableProps {
   headerPortalTarget?: HTMLElement | null;
@@ -83,13 +88,13 @@ const ReferralLinksTable: React.FC<ReferralLinksTableProps> = ({
         cell: ({ getValue }) => {
           const fullReferralCode = `${REFERRAL_CODE_CONFIG.link}${getValue()}`;
           return (
-            <>
-              <div className="hidden lg:block">{fullReferralCode}</div>
-              <div className="lg:hidden max-w-[150px]">
+            <span className="font-medium text-grey-20 dark:text-grey-dark-200">
+              <span className="hidden lg:inline">{fullReferralCode}</span>
+              <span className="lg:hidden">
                 {fullReferralCode.slice(0, 5)}…
                 {fullReferralCode.slice(fullReferralCode.length - 6)}
-              </div>
-            </>
+              </span>
+            </span>
           );
         },
       }),
@@ -99,10 +104,14 @@ const ReferralLinksTable: React.FC<ReferralLinksTableProps> = ({
             AMOUNT (<span className="!normal-case">hALPHA</span>)
           </span>
         ),
-        cell: (info) => info.getValue(),
+        cell: (info) => (
+          <span className="font-medium text-grey-20 dark:text-grey-dark-200">
+            {info.getValue()}
+          </span>
+        ),
         meta: {
-          headerClassName: "w-[130px]",
-          cellClassName: "w-[130px]",
+          headerClassName: "w-[140px]",
+          cellClassName: "w-[140px]",
         },
       }),
       columnHelper.display({
@@ -138,40 +147,48 @@ const ReferralLinksTable: React.FC<ReferralLinksTableProps> = ({
   if (loading) {
     return (
       <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
-        <Table>
-          <THead>
-            <Tr className="bg-[#fefefe] dark:bg-black-primary-bg">
-              {HEADERS.map((h) => (
-                <th
-                  key={h}
-                  className="h-[var(--table-row-height,36px)] border-b border-r border-[#E3E3E3] bg-white px-[var(--table-cell-padding-x,10px)] py-0 text-left text-[length:var(--table-header-font-size,10px)] leading-[var(--table-header-line-height,14px)] font-semibold uppercase text-grey-dark-600 last:border-r-0 dark:border-[#313131] dark:!bg-[#111111] dark:text-grey-dark-700"
-                >
-                  {h}
-                </th>
-              ))}
-            </Tr>
-          </THead>
-          <TBody>
-            <SkeletonTableRow
-              rows={pageSize}
-              columns={HEADERS.length}
-              columnWidths={SKELETON_WIDTHS}
-            />
-          </TBody>
-        </Table>
+        <div className="overflow-x-auto custom-scrollbar-thin">
+          <Table className={MIN_W}>
+            <THead>
+              <Tr>
+                {HEADERS.map((h) => (
+                  <th
+                    key={h}
+                    className="h-[var(--table-row-height,36px)] border-b border-r border-[#E3E3E3] bg-white px-[var(--table-cell-padding-x,10px)] py-0 text-left text-[length:var(--table-header-font-size,10px)] font-semibold uppercase text-grey-dark-600 last:border-r-0 dark:border-[#313131] dark:!bg-[#111111] dark:text-grey-dark-700"
+                  >
+                    {h}
+                  </th>
+                ))}
+              </Tr>
+            </THead>
+            <TBody>
+              <SkeletonTableRow
+                rows={DEFAULT_PAGE_SIZE}
+                columns={HEADERS.length}
+                columnWidths={SKELETON_WIDTHS}
+                rowClassName="odd:bg-[#fbfbfb] even:bg-[#f5f5f5] dark:odd:bg-[#161616] dark:even:bg-[#1e1e1e]"
+                cellClassName="!border-[#E3E3E3] dark:!border-[#313131]"
+              />
+            </TBody>
+          </Table>
+        </div>
       </TableWrapper>
     );
   }
 
   if (totalCount === 0) {
     return (
-      <NoEntriesFound
-        title="No referral links yet"
-        description="Your referral links will appear here once generated."
-        buttonText="+ Generate Referral Link"
-        onButtonClick={onGenerate}
-        isLoading={isGenerating}
-      />
+      <div className="p-3">
+        <NoEntriesFound
+          title="No referral links yet"
+          description="Your referral links will appear here once generated."
+          buttonText="+ Generate Referral Link"
+          onButtonClick={onGenerate}
+          isLoading={isGenerating}
+          cardView={false}
+          className="p-6 sm:p-10 rounded-[8px]"
+        />
+      </div>
     );
   }
 
@@ -196,31 +213,33 @@ const ReferralLinksTable: React.FC<ReferralLinksTableProps> = ({
 
       <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
         <div className="overflow-x-auto custom-scrollbar-thin">
-          <Table>
+          <Table className={MIN_W}>
             <THead>
               {table.getHeaderGroups().map((hg) => (
-                <Tr
-                  key={hg.id}
-                  className="bg-[#fefefe] dark:bg-black-primary-bg"
-                >
+                <Tr key={hg.id}>
                   {hg.headers.map((h) => (
-                    <Th key={h.id} header={h} />
+                    <Th
+                      key={h.id}
+                      header={h}
+                      className="bg-white dark:!bg-[#111111] !border-[#E3E3E3] dark:!border-[#313131]"
+                    />
                   ))}
                 </Tr>
               ))}
             </THead>
             <TBody>
               {table.getRowModel().rows.map((row) => (
-                <Tr
-                  key={row.id}
-                  className="bg-white dark:bg-black-600"
-                  transparent
-                >
+                <Tr key={row.id}>
                   {row.getVisibleCells().map((cell) => (
                     <Td
-                      className="text-[#1D1D1D] dark:text-[#DBDBDB] font-semibold"
                       key={cell.id}
                       cell={cell}
+                      className={cn(
+                        "!border-[#E3E3E3] dark:!border-[#313131]",
+                        row.index % 2 === 0
+                          ? "bg-[#fbfbfb] dark:bg-[#161616]"
+                          : "bg-[#f5f5f5] dark:bg-[#1e1e1e]",
+                      )}
                     />
                   ))}
                 </Tr>
@@ -231,14 +250,17 @@ const ReferralLinksTable: React.FC<ReferralLinksTableProps> = ({
       </TableWrapper>
 
       {showPagination && (
-        <div className="mt-2">
+        <div className="px-3 pb-3 mt-3">
           <Pagination
             currentPage={pageIndex + 1}
             totalPages={totalPages}
             setPage={(p) => setPageIndex(p - 1)}
             totalCount={totalCount}
             pageSize={pageSize}
-            setPageSize={setPageSize}
+            setPageSize={(s) => {
+              setPageSize(s);
+              setPageIndex(0);
+            }}
           />
         </div>
       )}
