@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import TimeAgo from "react-timeago";
 import { IconComponent } from "@/app/lib/types";
 import { cn } from "@/app/lib/utils";
 import NotificationContextMenu from "./NotificationContextMenu";
@@ -42,6 +43,8 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
   id,
   notificationType,
   notificationText,
+  notificationTime,
+  timestamp,
   unread = false,
   selected = false,
   onClick,
@@ -104,9 +107,22 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
 
         {/* Content */}
         <div className="flex-1 min-w-0">
-          <p className="text-[14px] font-medium leading-[18.2px] truncate text-[#0a0a0a] dark:text-white">
-            {notificationType}
-          </p>
+          <div className="flex items-baseline gap-2">
+            <p className="flex-1 min-w-0 text-[14px] font-medium leading-[18.2px] truncate text-[#0a0a0a] dark:text-white">
+              {notificationType}
+            </p>
+            {/* Relative time pill — same `react-timeago` formatter the
+             *  detail view uses, so the list and detail surfaces never
+             *  drift. `timestamp` is the canonical signal (ms-precise
+             *  epoch ms from the DB); `notificationTime` is a stored
+             *  pre-formatted string used as a fallback when the row
+             *  has no numeric timestamp (legacy rows). */}
+            {(timestamp || notificationTime) && (
+              <span className="shrink-0 text-[11px] font-medium leading-[16px] tracking-[-0.22px] text-grey-50 dark:text-grey-dark-700 whitespace-nowrap">
+                {timestamp ? <TimeAgo date={timestamp} /> : notificationTime}
+              </span>
+            )}
+          </div>
           <p className="text-[13px] font-medium leading-[16.9px] truncate mt-0.5 text-[#0a0a0a] dark:text-grey-dark-700">
             {notificationText}
           </p>
