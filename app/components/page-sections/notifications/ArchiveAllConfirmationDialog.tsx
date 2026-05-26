@@ -1,105 +1,82 @@
-import * as Dialog from "@radix-ui/react-dialog";
+"use client";
+
 import React from "react";
-import { ArrowLeft } from "lucide-react";
-import DialogContainer from "@/components/ui/DialogContainer";
-import { CardButton, Graphsheet, Icons } from "@/components/ui";
+import { Trash2 } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { WalletDialogShell } from "@/components/page-sections/wallet/shared/WalletDesign";
 
 export interface ArchiveAllConfirmationProps {
-    open: boolean;
-    onClose: () => void;
-    onConfirm: () => void;
-    loading?: boolean;
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  loading?: boolean;
 }
 
+/* "Delete all notifications" confirmation. Uses the project-wide
+ * redesigned dialog shell (`WalletDialogShell`) so it speaks the
+ * same visual language as Send / Stake / Withdraw / Bridge
+ * confirmation dialogs. The shell is named after wallet because
+ * that's where the design landed first; the chrome itself is
+ * neutral and we deliberately reuse it cross-section.
+ *
+ * Footer is hand-rolled (not via `WalletDialogFooter`) so we can
+ * surface a destructive primary button — the shared footer only
+ * supports the `primary` / `primaryLight` variants. */
 const ArchiveAllConfirmationDialog: React.FC<ArchiveAllConfirmationProps> = ({
-    open,
-    onClose,
-    onConfirm,
-    loading = false
+  open,
+  onClose,
+  onConfirm,
+  loading = false,
 }) => {
-    return (
-        <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit">
-                <Dialog.Title className="sr-only">Delete All Notifications</Dialog.Title>
-
-                {/* Top accent bar (mobile only) */}
-                <div className="h-4 bg-primary-50 md:hidden block" />
-
-                <div className="px-4">
-                    {/* Desktop Header */}
-                    <div className="text-2xl font-medium text-grey-10 hidden md:flex flex-col items-center justify-center pb-2 pt-4 gap-4">
-                        <div className="size-14 flex justify-center items-center relative">
-                            <Graphsheet
-                                majorCell={{
-                                    lineColor: [31, 80, 189, 1.0],
-                                    lineWidth: 2,
-                                    cellDim: 200
-                                }}
-                                minorCell={{
-                                    lineColor: [49, 103, 211, 1.0],
-                                    lineWidth: 1,
-                                    cellDim: 20
-                                }}
-                                className="absolute w-full h-full duration-500 opacity-30 z-0"
-                            />
-                            <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
-                            <div className="h-8 w-8 bg-error-50 rounded-lg flex items-center justify-center z-20">
-                                <Icons.Trash className="size-6 text-grey-100" />
-                            </div>
-                        </div>
-                        <span className="text-center text-2xl text-grey-10 font-medium">
-                            Delete all notifications?
-                        </span>
-                    </div>
-
-                    {/* Mobile Header */}
-                    <div className="flex py-4 items-center justify-between text-grey-10 relative w-full md:hidden">
-                        <button onClick={onClose} className="mr-2">
-                            <ArrowLeft className="size-6 text-grey-10" />
-                        </button>
-                        <div className="text-lg font-medium relative">
-                            <span className="capitalize">Delete All Notifications</span>
-                        </div>
-                        <button onClick={onClose}>
-                            <Icons.CloseCircle className="size-6 relative" />
-                        </button>
-                    </div>
-
-                    {/* Message */}
-                    <div className="font-medium text-base text-grey-20 mb-4 text-center">
-                        This will permanently remove all notifications from your history.
-                        This action cannot be undone.
-                    </div>
-
-                    {/* Action Buttons. Convention across the app: Cancel
-                        sits on the left (the safe escape hatch the user
-                        reaches first), the destructive confirm on the
-                        right (matches OS-level dialogs on macOS/Windows
-                        and the alert-mode ConfirmDialog primitive). */}
-                    <div className="flex gap-4 mb-6">
-                        <CardButton
-                            className="w-full"
-                            variant="secondary"
-                            onClick={onClose}
-                            disabled={loading}
-                        >
-                            Cancel
-                        </CardButton>
-
-                        <CardButton
-                            className="text-base w-full"
-                            variant="error"
-                            onClick={onConfirm}
-                            disabled={loading}
-                            loading={loading}
-                        >
-                            {loading ? "Deleting..." : "Delete All"}
-                        </CardButton>
-                    </div>
-                </div>
-            </DialogContainer>
-        </Dialog.Root>
-    );
+  return (
+    <WalletDialogShell
+      open={open}
+      onClose={onClose}
+      title="Delete all notifications?"
+      description="This will permanently remove all notifications from your history. This action cannot be undone."
+      icon={<Trash2 className="size-4 text-white" />}
+      // Border + icon background pinned to the destructive Button
+      // variant's coral (`bg-[#fc7d73]`) so the whole dialog reads as
+      // a single visual unit: the accent ring around the card, the
+      // trash badge, and the "Delete All" CTA all share the same
+      // colour token. Previously the border defaulted to the wallet
+      // blue and the badge used the deeper `error-50` red, which
+      // read as three unrelated reds at a glance.
+      borderClassName="bg-[#fc7d73]"
+      iconBgClassName="bg-[#fc7d73]"
+      iconTitleGap="mt-4 mb-1"
+      titleDescriptionGap="mt-1"
+      maxWidth="max-w-[560px]"
+      footer={
+        <div className="flex gap-4">
+          <Button
+            type="button"
+            variant="defaultStable"
+            className="h-[40px] flex-1 rounded-[6px] border border-[#e3e3e3] bg-[#fefefe] px-4 text-[13px] font-medium tracking-[-0.26px] text-[#4f4f4f] dark:border-[#494949] dark:bg-[#2a2a2a] dark:text-white"
+            onClick={onClose}
+            disabled={loading}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            className="h-[40px] flex-1 rounded-[6px] px-4 text-[14px] font-medium tracking-[-0.28px] text-white"
+            onClick={onConfirm}
+            disabled={loading}
+          >
+            {loading ? "Deleting…" : "Delete All"}
+          </Button>
+        </div>
+      }
+    >
+      {/* No body content — the description on the shell carries the
+       *  message; padding the body with the same copy would just look
+       *  duplicated. */}
+      <div />
+    </WalletDialogShell>
+  );
 };
 
 export default ArchiveAllConfirmationDialog;
