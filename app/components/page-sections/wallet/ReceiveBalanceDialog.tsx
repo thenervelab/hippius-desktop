@@ -43,7 +43,7 @@ const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
       description="Deposit Address"
       icon={<InGoing className="size-3 text-white" />}
       iconTitleGap="mt-4 mb-4"
-      maxWidth="sm:max-w-[540px] sm:min-w-[540px]"
+      maxWidth="sm:max-w-[720px] sm:min-w-[720px]"
       contentClassName="sm:w-full"
       footer={
         <div className="flex justify-center">
@@ -88,20 +88,20 @@ const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
           />
         </div>
 
-        {/* Address field — full SS58 string is shown without any
-            truncation. The address wraps onto a second line at narrow
-            widths and the container grows to fit it. The copy button
-            stays pinned to the top-right so a wrapped value can never
-            hide it; `break-all` wraps mid-string so the address
-            doesn't push the copy button outside the panel on the
-            narrowest layouts. */}
+        {/* Address field — full SS58 string on a single line. The
+            dialog is wide enough (720px) that a 48-char monospace
+            address fits inline at 13px alongside the copy button.
+            On unusually narrow viewports (anything <720px once the
+            dialog falls back to its base width) the address row
+            scrolls horizontally via `overflow-x-auto` instead of
+            wrapping, so the copy button stays put. */}
         <div>
           <label className="text-xs sm:text-sm text-grey-70 dark:text-grey-dark-800 font-medium mb-1.5 sm:mb-2 block">
             Deposit Address
           </label>
 
-          <div className="flex items-start border border-grey-80 dark:border-[#494949] rounded-[8px] bg-white dark:bg-[#1f1f1f] min-h-12 sm:min-h-14 px-3 sm:px-4 py-3 gap-2">
-            <div className="flex-1 min-w-0 text-[13px] text-grey-60 font-medium dark:text-white leading-[22px] break-all font-mono select-all">
+          <div className="flex items-center border border-grey-80 dark:border-[#494949] rounded-[8px] bg-white dark:bg-[#1f1f1f] h-12 sm:h-14 px-3 sm:px-4 gap-2">
+            <div className="flex-1 min-w-0 overflow-x-auto custom-scrollbar-thin text-[13px] text-grey-60 font-medium dark:text-white leading-[22px] whitespace-nowrap font-mono select-all">
               {fullAddress || "---"}
             </div>
             <button
