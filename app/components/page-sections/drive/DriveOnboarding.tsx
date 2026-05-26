@@ -148,12 +148,22 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
         }>;
       }>("get_sync_folders_with_stats", { accountId: polkadotAddress });
 
+      // Keep all three stat fields the Rust IPC returns
+      // (`get_sync_folders_with_stats` already populates them). The
+      // shared `LocalFoldersSection` renders them inline next to the
+      // status pill, so dropping them here was the difference between
+      // the Files-page card showing "default · Syncing" and the
+      // Settings-page card showing "default · Syncing · 229.8 MB ·
+      // 351 files · May 26, 2026 at 5:50 pm".
       const localFolders: SyncFolder[] = result.local.map((f) => ({
         id: f.id,
         folderName: f.folderName,
         localPath: f.localPath,
         isLocal: true,
         status: f.status as "syncing" | "paused",
+        fileCount: f.fileCount ?? undefined,
+        totalBytes: f.totalBytes ?? undefined,
+        lastModified: f.lastModified ?? undefined,
       }));
 
       const remoteFoldersData: RemoteFolder[] = result.remote.map((f) => ({
