@@ -28,27 +28,43 @@ interface WalletStakeCardProps {
  * fastest way to do an A/B in the running app.
  */
 type WithdrawButtonStyle = "current" | "green";
-const WITHDRAW_BUTTON_STYLE = "current" as WithdrawButtonStyle;
+const WITHDRAW_BUTTON_STYLE = "green" as WithdrawButtonStyle;
 
 const WITHDRAW_BUTTON_CLASSES_CURRENT = cn(
   "!bg-white !text-[#4f4f4f] border border-grey-dark-100 hover:!bg-grey-light-700",
   "dark:!bg-black-600 dark:!text-grey-light-100 dark:border-black-300 dark:hover:!bg-black-500",
 );
 
-/** Success-tinted variant — bright green pill that reads as a positive
- *  action when the user becomes eligible. Disabled state retains the
- *  green hue at reduced opacity so the user can see that the same
- *  button will activate once the cooldown elapses. */
+/** Success-tinted variant matching the "Received" transaction-type
+ *  badge: light-mode = mint fill / 6CE9A6 border / 04C870 text; dark-mode
+ *  swaps to a deep-forest fill (03301E) with the mint colour on the
+ *  border + text. Same palette as TransactionHistoryTable's direction
+ *  pill so the enabled state reads as a positive action that the user
+ *  already recognises on this page.
+ *
+ *  We never apply this when the button is disabled — see
+ *  `withdrawButtonClasses` below. A "greyed-out green" reads as
+ *  decorative; the user expects the disabled state to look like
+ *  the disabled "Unstake hAlpha" sibling. */
 const WITHDRAW_BUTTON_CLASSES_GREEN = cn(
-  "!bg-[#04C870] !text-white border border-[#04C870] hover:!bg-[#03B062]",
-  "dark:!bg-[#04C870] dark:!text-white dark:border-[#04C870] dark:hover:!bg-[#03B062]",
-  "disabled:!bg-[#04C870]/40 disabled:!border-[#04C870]/40 disabled:!text-white",
+  "!bg-[#DAFBE8] !text-[#04C870] border !border-[#6CE9A6]",
+  "hover:!bg-[#c7f5d8]",
+  "dark:!bg-[#03301E] dark:!text-[#6CE9A6] dark:!border-[#03301E]",
+  "dark:hover:!bg-[#054a2c]",
 );
 
-const WITHDRAW_BUTTON_CLASSES =
-  WITHDRAW_BUTTON_STYLE === "green"
+/** Resolve the button styling based on the toggle AND the current
+ *  enabled state. The disabled state always falls back to the
+ *  neutral "current" treatment so the button reads as the same
+ *  greyed pill the Unstake hAlpha button next to it shows when its
+ *  own preconditions aren't met (`!hasBonded`). cva's
+ *  `disabled:opacity-50` then layers on top to soften the chrome. */
+function withdrawButtonClasses(enabled: boolean): string {
+  if (!enabled) return WITHDRAW_BUTTON_CLASSES_CURRENT;
+  return WITHDRAW_BUTTON_STYLE === "green"
     ? WITHDRAW_BUTTON_CLASSES_GREEN
     : WITHDRAW_BUTTON_CLASSES_CURRENT;
+}
 
 /**
  * Truncate (not round) to 4 decimals so the rendered value never reads
@@ -330,7 +346,7 @@ const WalletStakeCard: FC<WalletStakeCardProps> = ({ className }) => {
                       size="auto"
                       className={cn(
                         "h-7 gap-1 rounded-[6px] px-2.5 text-[12px] font-medium tracking-[-0.24px]",
-                        WITHDRAW_BUTTON_CLASSES,
+                        withdrawButtonClasses(hasWithdrawable),
                       )}
                       onClick={() => setWithdrawOpen(true)}
                       disabled={!hasWithdrawable}
@@ -341,27 +357,25 @@ const WalletStakeCard: FC<WalletStakeCardProps> = ({ className }) => {
                   </span>
                 </TooltipPrimitive.Trigger>
                 {!hasWithdrawable && (
+                  // Tooltip styling mirrors the wallet-page header info
+                  // tooltip (see `page-sections/wallet/index.tsx`):
+                  // light-on-white card, grey-dark-100 border, the same
+                  // soft drop shadow, with a Radix Arrow tucked under
+                  // the trigger. Keeps the page's tooltip language
+                  // consistent across surfaces.
                   <TooltipPrimitive.Portal>
                     <TooltipPrimitive.Content
                       side="bottom"
-                      align="end"
-                      sideOffset={6}
+                      align="center"
+                      sideOffset={8}
                       collisionPadding={8}
                       avoidCollisions
-                      className={cn(
-                        "z-50 max-w-[260px] rounded-lg border px-3 py-2 text-xs shadow-md",
-                        "border-[#e3e3e3] bg-white dark:border-[#494949] dark:bg-[#2a2a2a] dark:shadow-black/30",
-                        "animate-in fade-in-0 zoom-in-95",
-                      )}
+                      className="z-[9999] max-w-[200px] rounded-[8px] border border-grey-dark-100 bg-white px-3 py-[10px] text-[12px] font-medium leading-4 tracking-[-0.24px] text-[#52525c] shadow-[0px_4px_24px_0px_rgba(0,0,0,0.08)] dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-[#a3a3a3] dark:shadow-black/25"
                     >
-                      <div className="font-semibold text-[#0a0a0a] dark:text-white">
-                        Withdraw not available yet
-                      </div>
-                      <div className="mt-1 text-[#6c6c6c] dark:text-[#a0a0a0] leading-relaxed">
-                        {longestRemainingLabel
-                          ? `Available in ~${longestRemainingLabel} once the unstaking period completes.`
-                          : "Available once the unstaking period completes."}
-                      </div>
+                      {longestRemainingLabel
+                        ? `Withdraw available in ~${longestRemainingLabel} once the unstaking period completes.`
+                        : "Withdraw available once the unstaking period completes."}
+                      <TooltipPrimitive.Arrow className="fill-white dark:fill-[#2c2c2c]" />
                     </TooltipPrimitive.Content>
                   </TooltipPrimitive.Portal>
                 )}
