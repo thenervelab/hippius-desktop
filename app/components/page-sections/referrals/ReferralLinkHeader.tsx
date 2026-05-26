@@ -3,26 +3,24 @@
 import React, { useCallback, useMemo } from "react";
 import { Copy } from "lucide-react";
 import { toast } from "sonner";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import {
-  CornerBracket,
-  CornerBracketDown,
   Discord,
-  InfoCircle,
   Link as LinkIcon,
-  PlusCrossIcon,
   RefreshCcwDot,
   X,
 } from "@/components/ui/icons";
-import CustomTooltip from "@/components/ui/CustomTooltip";
 import { cn } from "@/lib/utils";
 
 import { useReferralLinks } from "@/lib/hooks/api/useReferralLinks";
 import { REFERRAL_CODE_CONFIG } from "@/lib/config";
 
-/* "Your Earnings" + share-and-copy strip at the top of the referrals
- * page. Ported from hippius-web — XL+ shows a 3-column layout with the
- * referral URL inline; below XL it stacks. */
+/* Compact referral-link block used as the rightSlot of the page-level
+ * PageHeader. The previous 3-column layout with PlusCrossIcon /
+ * CornerBracket overlays was a holdover from the hippius-web port; the
+ * desktop's PageHeader already provides the title + subtitle column,
+ * so we drop the duplicated heading and the corner-junction icons. */
 
 const TelegramIcon = ({ className }: { className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor">
@@ -30,11 +28,17 @@ const TelegramIcon = ({ className }: { className?: string }) => (
   </svg>
 );
 
-const ReferralLinkHeader: React.FC<{
+interface ReferralLinkHeaderProps {
   referralUrl?: string | null;
   onRefresh?: () => void;
   isRefreshing?: boolean;
-}> = ({ referralUrl: referralUrlProp, onRefresh, isRefreshing = false }) => {
+}
+
+const ReferralLinkHeader: React.FC<ReferralLinkHeaderProps> = ({
+  referralUrl: referralUrlProp,
+  onRefresh,
+  isRefreshing = false,
+}) => {
   const { links, reload } = useReferralLinks();
 
   const mostRecentLink = useMemo(() => {
@@ -56,21 +60,33 @@ const ReferralLinkHeader: React.FC<{
     toast.success("Referral link copied to clipboard!");
   }, [referralUrl]);
 
-  const handleShareX = useCallback(() => {
+  // External URLs must be opened via Tauri's opener plugin —
+  // `window.open()` is a no-op in a Tauri webview because the runtime
+  // intercepts navigation requests it can't route. Other pages
+  // (CreditsWidget, etc.) use the same plugin via `openLinkByKey`.
+  const handleShareX = useCallback(async () => {
     if (!referralUrl) return;
     const text = encodeURIComponent(
       `🚀 I'm using @hippius_subnet for decentralized storage, compute & more!\n\nJoin using my referral link and we both earn credits:\n${referralUrl}\n\n#Hippius #Web3 #Decentralized`,
     );
-    window.open(`https://x.com/intent/tweet?text=${text}`, "_blank");
+    try {
+      await openUrl(`https://x.com/intent/tweet?text=${text}`);
+    } catch {
+      toast.error("Failed to open X. Please try again.");
+    }
   }, [referralUrl]);
 
-  const handleShareTelegram = useCallback(() => {
+  const handleShareTelegram = useCallback(async () => {
     if (!referralUrl) return;
     const url = encodeURIComponent(referralUrl);
     const text = encodeURIComponent(
       "🚀 I'm using Hippius for decentralized storage, compute & more! Join using my referral link and we both earn credits:",
     );
-    window.open(`https://t.me/share/url?url=${url}&text=${text}`, "_blank");
+    try {
+      await openUrl(`https://t.me/share/url?url=${url}&text=${text}`);
+    } catch {
+      toast.error("Failed to open Telegram. Please try again.");
+    }
   }, [referralUrl]);
 
   const handleShareDiscord = useCallback(async () => {
@@ -95,162 +111,86 @@ const ReferralLinkHeader: React.FC<{
     toast.success("Refreshing referral data…");
   }, [onRefresh, reload]);
 
+  // Tile dimensions, border, fill and inset highlight per the Figma
+  // share-icon spec. Light mode gets the double-inset white shadow
+  // (top-inner + 1px below) that gives the tile its embossed look;
+  // dark mode drops the shadow entirely since the dark fill swallows it.
   const iconButtonBase =
-    "inline-flex items-center justify-center rounded-lg border border-[#e3e3e3] bg-white size-9 cursor-pointer transition-colors hover:bg-grey-light-400 dark:border-[#313131] dark:bg-[rgba(255,255,255,0.02)] dark:hover:bg-[rgba(255,255,255,0.05)] disabled:opacity-50 disabled:cursor-not-allowed";
-
-  const tooltipNode = (
-    <span className="block max-w-[240px] text-xs leading-[16px] text-grey-40">
-      Credits are paid automatically on every purchase made through your
-      referral link.
-    </span>
-  );
-
-  const shareIcons = (
-    <div className="flex items-center gap-1.5 shrink-0">
-      <button
-        onClick={handleShareX}
-        disabled={!referralUrl}
-        className={iconButtonBase}
-        title="Share on X"
-      >
-        <X className="size-4 text-[#0a0a0a] dark:text-[#bbb]" />
-      </button>
-      <button
-        onClick={handleShareTelegram}
-        disabled={!referralUrl}
-        className={iconButtonBase}
-        title="Share on Telegram"
-      >
-        <TelegramIcon className="size-4 text-[#0a0a0a] dark:text-[#bbb]" />
-      </button>
-      <button
-        onClick={handleShareDiscord}
-        disabled={!referralUrl}
-        className={iconButtonBase}
-        title="Share on Discord"
-      >
-        <Discord className="size-4 text-[#0a0a0a] dark:text-[#bbb]" />
-      </button>
-      <button
-        onClick={handleRefresh}
-        disabled={isRefreshing}
-        className={iconButtonBase}
-        title="Refresh"
-      >
-        <RefreshCcwDot
-          className={cn(
-            "size-4 text-[#0a0a0a] dark:text-[#bbb]",
-            isRefreshing && "animate-spin",
-          )}
-        />
-      </button>
-    </div>
-  );
+    "inline-flex shrink-0 items-center justify-center gap-1 w-[39px] h-[37px] px-2 py-1.5 rounded-md cursor-pointer transition-colors border border-[#E3E3E3] bg-[#F2F2F2] shadow-[inset_0_2px_0_0_#FFF,0_1px_0_0_#FFF] hover:bg-[#E8E8E8] dark:border-[#313131] dark:bg-[#161616] dark:shadow-none dark:hover:bg-[#1F1F1F] disabled:opacity-50 disabled:cursor-not-allowed";
+  const iconClass = "size-4 text-[#0a0a0a] dark:text-[#bbb]";
 
   return (
-    <div className="relative w-full font-geist border-b border-grey-dark-100 shadow-[0px_1px_0px_0px_white] dark:border-black-900 dark:shadow-[0px_1px_0px_0px_rgba(255,255,255,0.06)]">
-      {/* ── Desktop 3-column grid (xl+, ≥1280px) ── */}
-      <div className="hidden xl:grid xl:grid-cols-3">
-        {/* Col 1: Title & subtitle */}
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5 py-3 px-3 sm:px-5 xl:border-r border-grey-dark-100 dark:border-black-900">
-          <div className="flex items-center gap-3">
-            <h2 className="truncate font-geist text-[16px] font-medium leading-8 tracking-[-0.56px] text-[#0a0a0a] dark:text-grey-light-100 sm:text-[21px]">
-              Your Earnings
-            </h2>
-            <CustomTooltip tooltip={tooltipNode} className="align-middle">
-              <span className="inline-flex size-[30px] shrink-0 items-center justify-center rounded-[5.455px] border-[0.909px] border-grey-dark-100 bg-grey-light-700 shadow-[0px_0.909px_0px_0px_white,inset_0px_1.818px_0px_0px_white] dark:border-[#494949] dark:bg-black-300/70 dark:shadow-none">
-                <InfoCircle className="size-4 text-grey-50 opacity-40 dark:text-grey-light-100" />
-              </span>
-            </CustomTooltip>
-          </div>
-          <p className="text-base font-medium leading-[22px] tracking-[-0.32px] text-grey-60 dark:text-grey-dark-800">
-            Earn 5% of every purchase your referrals make, for life.
-          </p>
+    <div
+      className={cn(
+        "flex items-stretch overflow-hidden rounded-[8px] border",
+        "border-grey-light-500 bg-grey-light-600",
+        "dark:border-black-300 dark:bg-black-primary-bg",
+      )}
+    >
+      {/* Label + subtitle column */}
+      <div className="flex flex-col items-start justify-center gap-[2px] border-r border-grey-dark-100 dark:border-black-500 px-3.5 py-2 shrink-0">
+        <div className="flex items-center gap-1">
+          <LinkIcon className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
+          <span className="font-mono text-[12px] font-medium uppercase leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark">
+            Referral Link
+          </span>
         </div>
-
-        {/* Col 2–3: Referral link */}
-        <div className="relative xl:col-span-2 flex items-center justify-between gap-3 px-5 py-3">
-          {/* Column junction corner icons */}
-          <div className="pointer-events-none absolute left-0 -top-[4.5px] z-10 -translate-x-1/2">
-            <PlusCrossIcon className="text-[#8A8A8A] dark:text-[#7d7d7d]" />
-          </div>
-          <div className="pointer-events-none absolute left-0 bottom-[-4.5px] z-10 -translate-x-1/2">
-            <PlusCrossIcon className="text-[#8A8A8A] dark:text-[#7d7d7d]" />
-          </div>
-          <div className="pointer-events-none absolute left-1/2 bottom-[-4.5px] z-10 -translate-x-1/2">
-            <CornerBracketDown className="text-[#8A8A8A] dark:text-[#7d7d7d]" />
-          </div>
-
-          <div className="flex flex-col">
-            <div className="flex items-center gap-1.5">
-              <LinkIcon className="size-4 text-primary-50" />
-              <span className="font-geist-mono text-[12px] font-medium uppercase tracking-[-0.24px] text-primary-50 dark:text-primary-brand-dark">
-                Referral Link
-              </span>
-            </div>
-            <span className="text-xs text-grey-dark-800 dark:text-grey-dark-800">
-              Copy and share your link.
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleCopy}
-              disabled={!referralUrl}
-              className="flex items-center gap-2 rounded-lg border border-[#e3e3e3] bg-white px-4 py-2 text-sm cursor-pointer transition-colors hover:bg-grey-light-400 dark:border-[#313131] dark:bg-[rgba(255,255,255,0.02)] dark:hover:bg-[rgba(255,255,255,0.05)] disabled:opacity-50 disabled:cursor-not-allowed max-w-[340px]"
-            >
-              <span className="font-mono text-sm text-[#0a0a0a] dark:text-[#bbb] truncate">
-                {displayUrl}
-              </span>
-              <Copy className="size-4 shrink-0 text-[#0a0a0a] opacity-60 dark:text-[#bbb]" />
-            </button>
-            {shareIcons}
-          </div>
-        </div>
+        <span className="text-[11px] leading-[14px] text-grey-dark-800 dark:text-grey-dark-600 whitespace-nowrap">
+          Copy and share your link.
+        </span>
       </div>
 
-      {/* ── Compact layout (< xl, covers mobile + all tablets) ── */}
-      <div className="xl:hidden">
-        <div className="flex min-w-0 flex-col gap-0.5 px-3 sm:px-5 py-3 border-b border-grey-dark-100 dark:border-black-900">
-          <div className="flex items-center gap-3">
-            <h2 className="truncate font-geist text-[16px] font-medium leading-8 tracking-[-0.56px] text-[#0a0a0a] dark:text-grey-light-100 sm:text-[18px]">
-              Your Earnings
-            </h2>
-            <CustomTooltip tooltip={tooltipNode} className="align-middle">
-              <span className="inline-flex size-[30px] shrink-0 items-center justify-center rounded-[5.455px] border-[0.909px] border-grey-dark-100 bg-grey-light-700 shadow-[0px_0.909px_0px_0px_white,inset_0px_1.818px_0px_0px_white] dark:border-[#494949] dark:bg-black-300/70 dark:shadow-none">
-                <InfoCircle className="size-4 text-grey-50 opacity-40 dark:text-grey-light-100" />
-              </span>
-            </CustomTooltip>
-          </div>
-          <p className="hidden sm:block text-base font-medium leading-[22px] tracking-[-0.32px] text-grey-60 dark:text-grey-dark-800">
-            Earn 5% of every purchase your referrals make, for life.
-          </p>
-        </div>
+      {/* URL chip + share icons */}
+      <div className="flex flex-1 min-w-0 items-center gap-1.5 px-3 py-2">
+        <button
+          onClick={handleCopy}
+          disabled={!referralUrl}
+          className="flex w-[227px] shrink-0 items-center gap-2 rounded-lg border border-[#e3e3e3] bg-white px-3 py-1.5 cursor-pointer transition-colors hover:bg-grey-light-400 dark:border-[#313131] dark:bg-[rgba(255,255,255,0.02)] dark:hover:bg-[rgba(255,255,255,0.05)] disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <span className="min-w-0 flex-1 truncate text-left font-mono text-[13px] text-[#0a0a0a] dark:text-[#bbb]">
+            {displayUrl}
+          </span>
+          <Copy className="size-4 shrink-0 text-[#0a0a0a] opacity-60 dark:text-[#bbb]" />
+        </button>
 
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 sm:px-5 py-3">
-          <div className="flex items-center gap-1.5 shrink-0">
-            <LinkIcon className="size-4 text-primary-50" />
-            <span className="font-geist-mono text-[12px] font-medium uppercase tracking-[-0.24px] text-primary-50 dark:text-primary-brand-dark">
-              Referral Link
-            </span>
-          </div>
-          <button
-            onClick={handleCopy}
-            disabled={!referralUrl}
-            className="flex min-w-[160px] flex-1 items-center gap-2 rounded-lg border border-[#e3e3e3] bg-white px-4 py-2 text-sm cursor-pointer transition-colors hover:bg-grey-light-400 dark:border-[#313131] dark:bg-[rgba(255,255,255,0.02)] dark:hover:bg-[rgba(255,255,255,0.05)] disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <span className="min-w-0 flex-1 truncate text-left font-mono text-sm text-[#0a0a0a] dark:text-[#bbb]">
-              {displayUrl}
-            </span>
-            <Copy className="size-4 shrink-0 text-[#0a0a0a] opacity-60 dark:text-[#bbb]" />
-          </button>
-          <div className="ml-auto">{shareIcons}</div>
-        </div>
-      </div>
-
-      {/* Bottom-left section junction icon — desktop only */}
-      <div className="pointer-events-none absolute bottom-0 left-0 z-10 translate-y-1/2 hidden xl:block">
-        <CornerBracket className="text-[#8A8A8A] dark:text-[#7d7d7d]" />
+        <button
+          onClick={handleShareX}
+          disabled={!referralUrl}
+          className={iconButtonBase}
+          title="Share on X"
+        >
+          <X className={iconClass} />
+        </button>
+        <button
+          onClick={handleShareTelegram}
+          disabled={!referralUrl}
+          className={iconButtonBase}
+          title="Share on Telegram"
+        >
+          <TelegramIcon className={iconClass} />
+        </button>
+        <button
+          onClick={handleShareDiscord}
+          disabled={!referralUrl}
+          className={iconButtonBase}
+          title="Share on Discord"
+        >
+          <Discord className={iconClass} />
+        </button>
+        <span
+          aria-hidden="true"
+          className="mx-1 h-5 w-px shrink-0 bg-[#e3e3e3] dark:bg-[#313131]"
+        />
+        <button
+          onClick={handleRefresh}
+          disabled={isRefreshing}
+          className={iconButtonBase}
+          title="Refresh"
+        >
+          <RefreshCcwDot
+            className={cn(iconClass, isRefreshing && "animate-spin")}
+          />
+        </button>
       </div>
     </div>
   );
