@@ -220,7 +220,7 @@ function SyncFileStatusBadge({
   } else if (variant === "active") {
     icon = <SyncFileStatusDot outerColor="#D3DFF8" innerColor="#3167DD" />;
   } else if (variant === "neutral") {
-    icon = <SyncFileStatusDot outerColor="#E5E7EB" innerColor="#9CA3AF" />;
+    icon = <SyncFileStatusDot outerColor="#FEE4E2" innerColor="#F04438" />;
   } else {
     icon = <SyncFileStatusDot outerColor="#FAEED1" innerColor="#FEB101" />;
   }
