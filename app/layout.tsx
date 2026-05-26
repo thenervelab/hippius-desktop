@@ -70,11 +70,29 @@ export default function RootLayout({
                   </Suspense>
                   {/* </SplashWrapper> */}
 
+                  {/* Toast styling mirrors hippius-web's SonnerToaster
+                   *  setup: explicit dark-mode classNames so the toast
+                   *  doesn't stay light-themed when the app is in dark
+                   *  mode. Tailwind's `darkMode: "class"` strategy
+                   *  means the `dark:*` classes fire based on the
+                   *  `.dark` class the theme controller puts on
+                   *  <html>; sonner's `theme="system"` is left in
+                   *  place mostly for the default icon colours, but
+                   *  the explicit `dark:` overrides are what
+                   *  guarantee the colour flip. */}
                   <Toaster
                     position="top-center"
+                    theme="system"
                     className="toaster-auth-aware"
                     toastOptions={{
                       style: { fontFamily: "var(--font-geist-sans)" },
+                      classNames: {
+                        toast:
+                          "border-[#e3e3e3] bg-white text-[#0a0a0a] dark:border-[#494949] dark:bg-[#1e1e1e] dark:text-white",
+                        title: "text-[#0a0a0a] dark:text-white",
+                        description: "text-[#6c6c6c] dark:text-[#a0a0a0]",
+                        icon: "text-[#0a0a0a] dark:text-white",
+                      },
                     }}
                   />
                 </NavigationLoaderProvider>
