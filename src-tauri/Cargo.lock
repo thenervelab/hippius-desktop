@@ -10,6 +10,7 @@ dependencies = [
  "alloy-signer",
  "alloy-signer-local",
  "anyhow",
+ "argon2",
  "axum",
  "base64 0.22.1",
  "bip39",
