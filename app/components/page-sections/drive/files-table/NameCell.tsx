@@ -143,6 +143,8 @@ const FileStatusBadge: FC<{
     n === null ? "" : ` ${n}%`;
 
   if (status === "pending") {
+    // Dark mode uses a 20% tinted bg + solid coloured text (Figma node
+    // 5225:131494). Light mode keeps the solid pill from 4045:151603.
     return (
       <CustomTooltip2
         side="top"
@@ -150,15 +152,27 @@ const FileStatusBadge: FC<{
       >
         <span
           data-testid="sync-status-pending"
-          className={cn(pillBase, "bg-warning-200")}
+          className={cn(
+            pillBase,
+            "bg-warning-200 dark:bg-warning-200/20",
+          )}
         >
-          <span className={cn(pillLabel, "text-white")}>Pending</span>
+          <span
+            className={cn(
+              pillLabel,
+              "text-white dark:text-warning-200",
+            )}
+          >
+            Pending
+          </span>
         </span>
       </CustomTooltip2>
     );
   }
 
   if (status === "failed") {
+    // Dark mode mirrors Figma node 5225:131500: #FF6D61 at 20% opacity
+    // with solid #FF6D61 text.
     return (
       <CustomTooltip2
         side="top"
@@ -167,9 +181,19 @@ const FileStatusBadge: FC<{
         <span
           data-testid="sync-status-failed"
           aria-label="Upload failed"
-          className={cn(pillBase, "bg-[#FF6D61]")}
+          className={cn(
+            pillBase,
+            "bg-[#FF6D61] dark:bg-[#FF6D61]/20",
+          )}
         >
-          <span className={cn(pillLabel, "text-white")}>Failed</span>
+          <span
+            className={cn(
+              pillLabel,
+              "text-white dark:text-[#FF6D61]",
+            )}
+          >
+            Failed
+          </span>
         </span>
       </CustomTooltip2>
     );
