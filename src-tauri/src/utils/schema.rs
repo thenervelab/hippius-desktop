@@ -36,7 +36,6 @@ const EXPECTED_TABLES: &[&str] = &[
     "share_origin",
     "shared_link_history",
     "local_wallets",
-    "bridge_transactions",
 ];
 
 /// Read the column names of a table via `PRAGMA table_info(...)`.
@@ -634,43 +633,14 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(&mut *tx)
         .await?;
 
-    // Bridge transactions — replaces hippius-web's `localStorage`-backed
-    // tracking map (`lib/bridge/service.ts`). Per-account scoping via
-    // `owner` mirrors `sync_paths` / `local_wallets`: a logged-out
-    // user must never see another account's history. The full event
-    // timeline is stored as JSON in `events_json` so the FE can render
-    // the per-row timeline without a JOIN; the row itself is the source
-    // of truth for the high-level status + the latest tx hashes.
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS bridge_transactions (
-            id TEXT PRIMARY KEY,
-            owner TEXT NOT NULL,
-            direction TEXT NOT NULL,
-            status TEXT NOT NULL,
-            amount_planck TEXT NOT NULL,
-            amount_decimals INTEGER NOT NULL,
-            sender_address TEXT NOT NULL,
-            recipient_address TEXT NOT NULL,
-            source_tx_hash TEXT,
-            destination_tx_hash TEXT,
-            deposit_id TEXT,
-            withdrawal_id TEXT,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            error TEXT,
-            attestations INTEGER NOT NULL DEFAULT 0,
-            required_attestations INTEGER NOT NULL DEFAULT 3,
-            events_json TEXT NOT NULL DEFAULT '[]',
-            denial_reason TEXT,
-            refunded INTEGER NOT NULL DEFAULT 0
-        )",
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_bridge_transactions_owner ON bridge_transactions(owner, created_at DESC)")
-        .execute(&mut *tx)
-        .await?;
+    // (Removed: `bridge_transactions` table. The first cut of the bridge
+    // persisted a full per-account tx-history table here, but the FE now
+    // mirrors hippius-web's localStorage-backed tracking via
+    // `app/lib/bridge/local-cache.ts` — there is no Rust writer left to
+    // populate this table. Pre-existing rows in upgraded installs are
+    // harmless; we leave them in place rather than running a destructive
+    // DROP. If the bridge ever moves back to Rust persistence the CREATE
+    // can return alongside the new writer.)
 
     tx.commit().await?;
     Ok(())
