@@ -43,7 +43,7 @@ const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
       description="Deposit Address"
       icon={<InGoing className="size-3 text-white" />}
       iconTitleGap="mt-4 mb-4"
-      maxWidth="sm:max-w-[720px] sm:min-w-[720px]"
+      maxWidth="sm:max-w-[600px] sm:min-w-[600px]"
       contentClassName="sm:w-full"
       footer={
         <div className="flex justify-center">
