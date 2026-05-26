@@ -21,6 +21,36 @@ interface WalletStakeCardProps {
 }
 
 /**
+ * Withdraw button colour treatment. Flip to `"green"` to preview the
+ * success-tinted variant against the current neutral chrome. Kept as a
+ * named constant rather than a prop because the choice is design-led
+ * across every stake-card instance — flipping this one line is the
+ * fastest way to do an A/B in the running app.
+ */
+type WithdrawButtonStyle = "current" | "green";
+const WITHDRAW_BUTTON_STYLE = "current" as WithdrawButtonStyle;
+
+const WITHDRAW_BUTTON_CLASSES_CURRENT = cn(
+  "!bg-white !text-[#4f4f4f] border border-grey-dark-100 hover:!bg-grey-light-700",
+  "dark:!bg-black-600 dark:!text-grey-light-100 dark:border-black-300 dark:hover:!bg-black-500",
+);
+
+/** Success-tinted variant — bright green pill that reads as a positive
+ *  action when the user becomes eligible. Disabled state retains the
+ *  green hue at reduced opacity so the user can see that the same
+ *  button will activate once the cooldown elapses. */
+const WITHDRAW_BUTTON_CLASSES_GREEN = cn(
+  "!bg-[#04C870] !text-white border border-[#04C870] hover:!bg-[#03B062]",
+  "dark:!bg-[#04C870] dark:!text-white dark:border-[#04C870] dark:hover:!bg-[#03B062]",
+  "disabled:!bg-[#04C870]/40 disabled:!border-[#04C870]/40 disabled:!text-white",
+);
+
+const WITHDRAW_BUTTON_CLASSES =
+  WITHDRAW_BUTTON_STYLE === "green"
+    ? WITHDRAW_BUTTON_CLASSES_GREEN
+    : WITHDRAW_BUTTON_CLASSES_CURRENT;
+
+/**
  * Truncate (not round) to 4 decimals so the rendered value never reads
  * larger than the on-chain amount. Mirrors `formatCompactAmount` in
  * hippius-web's StakeWidget.
@@ -278,21 +308,65 @@ const WalletStakeCard: FC<WalletStakeCardProps> = ({ className }) => {
               Stake hALPHA
             </p>
           </div>
-          {hasWithdrawable && (
-            <Button
-              type="button"
-              variant="defaultStable"
-              size="auto"
-              className={cn(
-                "h-7 gap-1 rounded-[6px] px-2.5 text-[12px] font-medium tracking-[-0.24px]",
-                "!bg-white !text-[#4f4f4f] border border-grey-dark-100 hover:!bg-grey-light-700",
-                "dark:!bg-black-600 dark:!text-grey-light-100 dark:border-black-300 dark:hover:!bg-black-500",
-              )}
-              onClick={() => setWithdrawOpen(true)}
-            >
-              <OutGoing className="size-2 shrink-0" />
-              Withdraw
-            </Button>
+          {(hasWithdrawable || hasUnbonding) && (
+            // Shown as soon as any unstaking is in progress so the user
+            // has visual continuity from "I started unstaking" to "I can
+            // withdraw" — the button doesn't surprise-appear at the end
+            // of the cooldown. Disabled until any chunk is redeemable;
+            // when disabled, the Radix tooltip explains how much longer
+            // the user has to wait so the disabled state isn't a dead
+            // end.
+            <TooltipPrimitive.Provider delayDuration={150}>
+              <TooltipPrimitive.Root>
+                <TooltipPrimitive.Trigger asChild>
+                  {/* `span` wrapper because a disabled <button> doesn't
+                      receive pointer events on its own, and a tooltip
+                      that only shows when the user mouses over a live
+                      button is the opposite of what we want. */}
+                  <span className="inline-flex">
+                    <Button
+                      type="button"
+                      variant="defaultStable"
+                      size="auto"
+                      className={cn(
+                        "h-7 gap-1 rounded-[6px] px-2.5 text-[12px] font-medium tracking-[-0.24px]",
+                        WITHDRAW_BUTTON_CLASSES,
+                      )}
+                      onClick={() => setWithdrawOpen(true)}
+                      disabled={!hasWithdrawable}
+                    >
+                      <OutGoing className="size-2 shrink-0" />
+                      Withdraw
+                    </Button>
+                  </span>
+                </TooltipPrimitive.Trigger>
+                {!hasWithdrawable && (
+                  <TooltipPrimitive.Portal>
+                    <TooltipPrimitive.Content
+                      side="bottom"
+                      align="end"
+                      sideOffset={6}
+                      collisionPadding={8}
+                      avoidCollisions
+                      className={cn(
+                        "z-50 max-w-[260px] rounded-lg border px-3 py-2 text-xs shadow-md",
+                        "border-[#e3e3e3] bg-white dark:border-[#494949] dark:bg-[#2a2a2a] dark:shadow-black/30",
+                        "animate-in fade-in-0 zoom-in-95",
+                      )}
+                    >
+                      <div className="font-semibold text-[#0a0a0a] dark:text-white">
+                        Withdraw not available yet
+                      </div>
+                      <div className="mt-1 text-[#6c6c6c] dark:text-[#a0a0a0] leading-relaxed">
+                        {longestRemainingLabel
+                          ? `Available in ~${longestRemainingLabel} once the unstaking period completes.`
+                          : "Available once the unstaking period completes."}
+                      </div>
+                    </TooltipPrimitive.Content>
+                  </TooltipPrimitive.Portal>
+                )}
+              </TooltipPrimitive.Root>
+            </TooltipPrimitive.Provider>
           )}
         </div>
 
