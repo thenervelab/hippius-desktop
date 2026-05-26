@@ -171,9 +171,15 @@ export function BackgroundContainer({
           className="absolute inset-0 hidden h-full w-full pointer-events-none dark:sm:block"
         />
 
-        {/* Dot pattern + edge blur (opt-in) */}
+        {/* Dot pattern + edge blur (opt-in). Two variants per layer so
+            the same Figma-style dotted backdrop renders in both themes:
+            `#d4d4d4` dots on the light backdrop, `#2c2c2c` dots that
+            stay legible against the dialog's `bg-[#04040466]` dark
+            overlay. The radial-mask blur sits on top in both modes to
+            soften the dots into the dialog's edge. */}
         {addDotWithBlurryEffect && (
           <>
+            {/* Light-mode dots */}
             <div
               className="pointer-events-none absolute top-1/2 left-1/2 z-[-1] h-[100vh] w-[100vw] -translate-x-1/2 -translate-y-1/2 dark:hidden block"
               aria-hidden="true"
@@ -187,8 +193,37 @@ export function BackgroundContainer({
                 }}
               />
             </div>
+            {/* Dark-mode dots */}
+            <div
+              className="pointer-events-none absolute top-1/2 left-1/2 z-[-1] h-[100vh] w-[100vw] -translate-x-1/2 -translate-y-1/2 hidden dark:block"
+              aria-hidden="true"
+            >
+              <div
+                className="w-full h-full"
+                style={{
+                  backgroundImage:
+                    "radial-gradient(circle, #2c2c2c 1.5px, transparent 1.5px)",
+                  backgroundSize: "18px 18px",
+                }}
+              />
+            </div>
+            {/* Light-mode edge blur */}
             <div
               className="pointer-events-none absolute top-1/2 left-1/2 z-[11] -translate-x-1/2 -translate-y-1/2 dark:hidden block"
+              aria-hidden="true"
+              style={{
+                height: "100vh",
+                width: "100vw",
+                backdropFilter: "blur(1.5px)",
+                maskImage:
+                  "radial-gradient(ellipse 50vw 75vh at 50% 50%, transparent 0%, transparent 60%, black 61%)",
+                WebkitMaskImage:
+                  "radial-gradient(ellipse 60vw 75vh at 50% 50%, transparent 0%, transparent 60%, black 61%)",
+              }}
+            />
+            {/* Dark-mode edge blur */}
+            <div
+              className="pointer-events-none absolute top-1/2 left-1/2 z-[11] -translate-x-1/2 -translate-y-1/2 hidden dark:block"
               aria-hidden="true"
               style={{
                 height: "100vh",
