@@ -3,8 +3,8 @@
 import { AppVersion } from "@/components/ui";
 import cn from "@/app/lib/utils/cn";
 import ProfileCard from "@/components/dashboard-title-wrapper/ProfileCard";
-// import SyncWidgetPlayground from "@/app/(pages)/SyncWidgetPlayground";
-import SyncStatusHandler from "@/app/(pages)/SyncStatusHandler";
+import SyncWidgetPlayground from "@/app/(pages)/SyncWidgetPlayground";
+// import SyncStatusHandler from "@/app/(pages)/SyncStatusHandler";
 
 interface SidebarFooterProps {
   collapsed: boolean;
@@ -28,8 +28,8 @@ const SidebarFooter: React.FC<SidebarFooterProps> = ({ collapsed }) => {
 
       {!collapsed && (
         <div className="-mx-3">
-          {/* <SyncWidgetPlayground liveHost="sidebar" /> */}
-          <SyncStatusHandler host="sidebar" />
+          <SyncWidgetPlayground liveHost="sidebar" />
+          {/* <SyncStatusHandler host="sidebar" /> */}
         </div>
       )}
       <ProfileCard collapsed={collapsed} />
