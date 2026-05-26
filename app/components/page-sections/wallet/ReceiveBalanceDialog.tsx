@@ -16,8 +16,6 @@ export interface ReceiveBalanceDialogProps {
   polkadotAddress: string;
 }
 
-const SUFFIX_LEN = 6;
-
 const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
   open,
   onClose,
@@ -90,33 +88,21 @@ const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
           />
         </div>
 
-        {/* Address field with CSS-only center truncation: the prefix
-            truncates via native ellipsis while a fixed-width suffix
-            stays visible, so the address always shows its first chars
-            (which differ between accounts) and its tail (which the
-            user can visually verify against an external source). */}
+        {/* Address field — full SS58 string is shown without any
+            truncation. The address wraps onto a second line at narrow
+            widths and the container grows to fit it. The copy button
+            stays pinned to the top-right so a wrapped value can never
+            hide it; `break-all` wraps mid-string so the address
+            doesn't push the copy button outside the panel on the
+            narrowest layouts. */}
         <div>
           <label className="text-xs sm:text-sm text-grey-70 dark:text-grey-dark-800 font-medium mb-1.5 sm:mb-2 block">
             Deposit Address
           </label>
 
-          <div className="flex items-center border border-grey-80 dark:border-[#494949] rounded-[8px] bg-white dark:bg-[#1f1f1f] h-12 sm:h-14 px-3 sm:px-4 gap-2">
-            <div className="flex flex-1 min-w-0 items-center text-[13px] text-grey-60 font-medium dark:text-white leading-[22px]">
-              {fullAddress ? (
-                <>
-                  <span className="truncate min-w-0">
-                    {fullAddress.slice(
-                      0,
-                      Math.max(0, fullAddress.length - SUFFIX_LEN),
-                    )}
-                  </span>
-                  <span className="shrink-0">
-                    {fullAddress.slice(-SUFFIX_LEN)}
-                  </span>
-                </>
-              ) : (
-                "---"
-              )}
+          <div className="flex items-start border border-grey-80 dark:border-[#494949] rounded-[8px] bg-white dark:bg-[#1f1f1f] min-h-12 sm:min-h-14 px-3 sm:px-4 py-3 gap-2">
+            <div className="flex-1 min-w-0 text-[13px] text-grey-60 font-medium dark:text-white leading-[22px] break-all font-mono select-all">
+              {fullAddress || "---"}
             </div>
             <button
               type="button"
