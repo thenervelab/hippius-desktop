@@ -220,6 +220,19 @@ const Notifications = () => {
                     Mark all as read
                   </button>
 
+                  {/* Clear all — opens a confirmation dialog before
+                   *  calling `deleteAllNotifications`. Disabled when
+                   *  there's nothing in the current view. Same
+                   *  chrome as "Mark all as read" so the two
+                   *  bulk-actions read as a paired group. */}
+                  <button
+                    className="flex items-center h-[30px] px-[10px] gap-2 text-[14px] font-medium tracking-[-0.28px] rounded-[7px] bg-[#fefefe] border border-[#e3e3e3] text-[#111] shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)] hover:bg-[#f5f5f5] dark:bg-[#1e1e1e] dark:border-[#313131] dark:text-white dark:shadow-[0px_0px_0px_1px_black] dark:hover:bg-[#252525] disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+                    onClick={() => setIsArchiveDialogOpen(true)}
+                    disabled={notifications.length === 0 || isArchiving}
+                  >
+                    Clear all
+                  </button>
+
                   {/* Notifications Settings */}
                   <button
                     className="flex items-center h-[30px] px-[10px] gap-2 text-[14px] font-medium tracking-[-0.28px] rounded-[7px] bg-[#fefefe] border border-[#e3e3e3] text-[#111] shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)] hover:bg-[#f5f5f5] dark:bg-[#1e1e1e] dark:border-[#313131] dark:text-white dark:shadow-[0px_0px_0px_1px_black] dark:hover:bg-[#252525] whitespace-nowrap"
