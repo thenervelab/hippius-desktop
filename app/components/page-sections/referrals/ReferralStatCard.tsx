@@ -6,10 +6,10 @@ import MiniBarChart, { type ChartDataPoint } from "./MiniBarChart";
 import Skeleton from "@/components/ui/SkeletonLoader";
 import HomepageChartSelect from "@/components/ui/HomepageChartSelect";
 
-/* Single stat card on the referrals dashboard. Composed of a label +
- * value + range-filter dropdown on the left and a MiniBarChart on the
- * right. Ported from hippius-web with the time-range options pinned to
- * the same five buckets web uses. */
+/* Single stat card on the referrals dashboard. Restyled to match the
+ * desktop card shell used by the wallet / billing widget cards:
+ * rounded-[8px] outer border + mono uppercase header strip in
+ * primary-40 + inner white panel with rounded top corners. */
 
 const TIME_RANGE_OPTIONS = [
   { value: "last7days", label: "THIS WEEK" },
@@ -57,7 +57,7 @@ function buildChartData(
       break;
     }
     case "last60days": {
-      bucketCount = 30; // 2-day buckets
+      bucketCount = 30;
       getDate = (i) => {
         const d = new Date(now);
         d.setDate(d.getDate() - (bucketCount - 1 - i) * 2);
@@ -80,7 +80,6 @@ function buildChartData(
       break;
     }
     default: {
-      // "max" — use all seed values, spread over months
       bucketCount = seedValues.length;
       getDate = (i) => {
         const d = new Date(now);
@@ -135,17 +134,21 @@ const ReferralStatCard: React.FC<ReferralStatCardProps> = ({
   return (
     <div
       className={cn(
-        "relative flex flex-col justify-between border-b xl:border-b-0 xl:border-r border-grey-dark-100 dark:border-black-900 last:border-b-0 xl:last:border-r-0 p-3 sm:px-5 sm:py-4",
+        "flex flex-col items-center w-full rounded-[8px] border overflow-hidden",
+        "bg-grey-light-300 border-grey-dark-100",
+        "dark:bg-black-primary-bg dark:border-black-300",
+        "shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]",
         className,
       )}
     >
-      {/* Header — Icon + Label left, Date filter right */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1">
-          <span className="text-primary-50 dark:text-primary-brand-dark [&>svg]:size-[18px]">
+      {/* Header strip — icon + uppercase label + range filter on the
+          right. Mirrors the SettingsCard header dimensions. */}
+      <div className="flex h-[38px] w-full items-center justify-between gap-2 pl-[14px] pr-[10px]">
+        <div className="flex items-center gap-1 min-w-0">
+          <span className="text-primary-40 dark:text-primary-brand-dark flex-shrink-0 inline-flex [&>svg]:size-[14px]">
             {icon}
           </span>
-          <p className="font-geist-mono text-[12px] font-medium uppercase leading-[18px] tracking-[-0.24px] text-primary-50 dark:text-primary-brand-dark">
+          <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase truncate">
             {label}
           </p>
         </div>
@@ -156,8 +159,17 @@ const ReferralStatCard: React.FC<ReferralStatCardProps> = ({
         />
       </div>
 
-      {/* Content: value left, chart right */}
-      <div className="mt-3 flex items-end justify-between gap-3">
+      {/* Inner white panel — number on the left, sparkline on the
+          right, both aligned to the bottom edge so the headline reads
+          like the wallet/billing balance cards. */}
+      <div
+        className={cn(
+          "flex w-full flex-1 items-end justify-between gap-3",
+          "rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100",
+          "bg-white dark:bg-black-600 dark:border-black-300",
+          "p-3",
+        )}
+      >
         <div className="flex flex-col items-start justify-end gap-[2px] shrink-0">
           {isLoading ? (
             <div className="flex h-[79px] flex-col justify-end gap-[6px]">
@@ -166,11 +178,11 @@ const ReferralStatCard: React.FC<ReferralStatCardProps> = ({
             </div>
           ) : value !== null && value !== undefined && value !== "" ? (
             <div className="relative">
-              <span className="text-[40px] font-medium leading-[48px] tracking-[-0.8px] text-grey-10 dark:text-grey-light-100 font-geist">
+              <span className="font-mono font-medium text-[40px] leading-[48px] tracking-[-0.8px] text-grey-10 dark:text-white">
                 {value}
               </span>
               {unit && (
-                <span className="ml-1 text-[12px] font-medium leading-[18px] tracking-[-0.24px] text-grey-10 dark:text-grey-light-100">
+                <span className="ml-1 font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50">
                   {unit}
                 </span>
               )}
@@ -183,7 +195,7 @@ const ReferralStatCard: React.FC<ReferralStatCardProps> = ({
           height={79}
           isLoading={isLoading}
           tooltipLabel={label}
-          className="max-w-[50%] flex-1"
+          className="max-w-[55%] flex-1"
         />
       </div>
     </div>
