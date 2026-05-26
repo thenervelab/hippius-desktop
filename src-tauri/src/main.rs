@@ -103,9 +103,10 @@ use crate::utils::tray_menu::get_tray_menu_data;
 use crate::wallet::commands::{
     local_wallet_create, local_wallet_delete, local_wallet_derive_address, local_wallet_export_backup,
     local_wallet_export_backup_zip, local_wallet_generate_mnemonic, local_wallet_get_active,
-    local_wallet_get_decrypted_mnemonic, local_wallet_has_any, local_wallet_import_encrypted_backup,
-    local_wallet_import_encrypted_backup_from_zip, local_wallet_list, local_wallet_rename,
-    local_wallet_set_active, local_wallet_validate_mnemonic, local_wallet_verify_password,
+    local_wallet_get_decrypted_mnemonic, local_wallet_get_public_key, local_wallet_has_any,
+    local_wallet_import_encrypted_backup, local_wallet_import_encrypted_backup_from_zip,
+    local_wallet_list, local_wallet_rename, local_wallet_set_active, local_wallet_sign,
+    local_wallet_validate_mnemonic, local_wallet_verify_password,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 use tauri::{Builder, Emitter, Manager, Wry, path::BaseDirectory};
@@ -399,6 +400,8 @@ fn main() {
             local_wallet_delete,
             local_wallet_verify_password,
             local_wallet_get_decrypted_mnemonic,
+            local_wallet_get_public_key,
+            local_wallet_sign,
             local_wallet_export_backup,
             local_wallet_export_backup_zip,
             local_wallet_import_encrypted_backup,
