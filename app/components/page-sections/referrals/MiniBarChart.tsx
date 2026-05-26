@@ -177,16 +177,29 @@ const MiniBarChart: React.FC<MiniBarChartProps> = ({
   }, []);
 
   if (isLoading) {
+    // 12 evenly spaced bars of varied heights at a width visible enough
+    // to read as a chart-shaped skeleton. Previous version rendered
+    // 7 bars at 2px wide with 40% opacity — practically invisible
+    // against the white card body.
+    const SKELETON_HEIGHTS = [
+      55, 72, 38, 65, 28, 80, 45, 62, 35, 70, 50, 58,
+    ];
     return (
       <div
-        className={cn("flex items-end gap-[5px] shrink-0", className)}
+        className={cn(
+          "flex w-full items-end justify-between gap-[3px]",
+          className,
+        )}
         style={{ height }}
       >
-        {[45, 62, 38, 70, 28, 52, 35].map((h, i) => (
+        {SKELETON_HEIGHTS.map((h, i) => (
           <div
             key={i}
-            className="animate-pulse rounded-full bg-[#dfe8ff]/40 dark:bg-[#2c2c2c]/70"
-            style={{ width: 2, height: (h / 100) * height }}
+            className="flex-1 animate-pulse rounded-full bg-grey-light-700 dark:bg-grey-dark-200"
+            style={{
+              height: `${(h / 100) * height}px`,
+              animationDelay: `${i * 60}ms`,
+            }}
           />
         ))}
       </div>
