@@ -514,7 +514,7 @@ _Risk:_ Medium. ConflictsBanner currently renders a single banner; moving to a M
 
 _Notes:_ Fix lands entirely in hippius-desktop: the per-drive primitive clear_drive_review(label) already exists in hcfs-client (runner.rs:519-528) and is already used by sync_with_conflict_resolutions, so no hcfs change is required — only swapping which existing function cancel_review calls, plus the FE/atom rework. The optional FileId-ownership hardening in sync_with_conflict_resolutions could touch hcfs-client if matching must error on unknown IDs, but that is not required for the core fix. Real-world trigger requires >1 configured drive AND concurrent conflicting cycles, which is why medium (not high) is correct — single-drive users (the common case; useStagedChanges defaults to 'default') are unaffected.
 
-- [ ] **F16 fixed & tested**
+- [x] **F16 fixed & tested** — committed 0bf8f7b9
 
 ---
 
