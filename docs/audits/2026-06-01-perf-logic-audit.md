@@ -876,7 +876,7 @@ _Risk:_ Low. Behavior-preserving: keys are only ever read inside the loops, so d
 
 _Notes:_ No Rust diff produced this turn (read-only validation), so the Rust workflow gates (preflight, axioms, quality_gate, critique, exemplars, self-review checklist) are N/A. Finding is real and correctly scoped at low severity (performance, cold-start path). Minor auditor overstatement: realistic added latency is a few ms, not "tens of ms", and the DB-fallback call site already runs concurrently with asset-scope arming — neither changes the verdict. The proposed lazy-by-need fix is verified safe because sub_key/drive_key are strictly loop-local.
 
-- [ ] **F25 fixed & tested**
+- [x] **F25 fixed & tested** — committed 50740152
 
 ---
 
@@ -966,7 +966,7 @@ _Risk:_ Very low. The only behavior change is turning a previously-Ok malformed 
 
 _Notes:_ No Rust diff produced this turn (read-only validation), so the Rust workflow gates and the seven-item self-review checklist are N/A. The fixture's `low` severity and `high` confidence on the reproduction are both correct; I only corrected the impact scope from "any other consumer gets garbage" (no such consumer exists) to "every real consumer catches it via u128::parse; the bug is a contract violation of the standalone command, not an exploitable data-corruption path". Fix lands entirely in this repo (convert.rs), not hcfs.
 
-- [ ] **F28 fixed & tested**
+- [x] **F28 fixed & tested** — committed 50740152
 
 ---
 
@@ -996,7 +996,7 @@ _Risk:_ Low. Adding a warn! is behavior-preserving for the happy path. The stron
 
 _Notes:_ Severity correctly low: triggering requires a server-side formatting regression or schema drift; the failure mode is fail-closed (safe for billing), so the only harm is poor diagnosability and a misleading 'insufficient credits' message instead of 'could not verify balance'. The legitimate None/empty/"0" cases are already handled correctly by unwrap_or("0") + credits_to_planck's empty guard, so any warn! must fire ONLY on a real parse error. The cited divergence with the display path is real but the display path mangles a comma-string into a malformed non-zero planck rather than collapsing to 0 — minor mischaracterization in the finding, does not change the verdict. No Rust diff produced this turn (analysis only); Rust workflow gates N/A.
 
-- [ ] **F29 fixed & tested**
+- [x] **F29 fixed & tested** — committed 50740152
 
 ---
 
@@ -1026,7 +1026,7 @@ _Risk:_ Very low. The fix changes no eligibility decision — bytes is still 0 o
 
 _Notes:_ Finding is fully valid and not inflated: severity correctly low because (a) the trigger is a narrow window (metadata fails AND copy later succeeds — transient stat on network/FUSE or a brief TOCTOU), and (b) the gate is documented as best-effort with hcfs-server's 402 as the authoritative backstop (eligibility.rs:368-379). The finding's scope note that the batch/folder paths "don't materially differ" is accurate — sum_batch_bytes (files.rs:445) and sum_regular_file_bytes (files.rs:415-418) use the same silent-0-on-Err pattern, so the proposed fix should touch all three sites for consistency, not just add_file. No Rust diff was produced this turn (analysis only), so the illu Rust gates (preflight / data-structure plan / axioms / critique / exemplars / quality_gate / 7-item self-review) are N/A.
 
-- [ ] **F30 fixed & tested**
+- [x] **F30 fixed & tested** — committed 50740152
 
 ---
 
@@ -1056,7 +1056,7 @@ _Risk:_ Very low. The field is `pub` so in principle an out-of-crate consumer co
 
 _Notes:_ No Rust diff produced this turn (read-only validation), so the mandatory Rust gates (preflight, data-structure plan, axioms baseline, exemplars, critique, quality_gate, seven-item self-review checklist) are N/A per the CLAUDE.md conditional carve-outs. Severity confirmed at low: the finding itself concedes zero correctness impact; the value of fixing it is removing a doc comment that actively misleads (it names `remove_drive_and_wait`, a function that has never existed) plus two no-op calls and one dead field. The tokio characterization in the fixture is accurate: `Notify::notify_waiters` wakes only already-parked waiters and stores no permit, so even a future awaiter added naively would be exposed to a lost-wakeup unless it re-checks state in a loop with the `notified()` future acquired before the check — which is exactly why option (b) is not worth doing speculatively. Cross-repo is false: this is entirely local desktop state in app_state.rs + sync/lifecycle.rs; hcfs-client is not involved (its `remove_drive_inmemory` is the desktop's own function, not an hcfs symbol).
 
-- [ ] **F31 fixed & tested**
+- [x] **F31 fixed & tested** — committed 50740152
 
 ---
 
