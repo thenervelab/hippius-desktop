@@ -444,7 +444,7 @@ _Risk:_ Low. Behavior-preserving for current wording. Watch: (a) every catch blo
 
 _Notes:_ No Rust diff produced this turn (validation only); the four illu Rust workflow gates and the seven-item self-review checklist are therefore N/A. src-tauri/ is not illu-indexed, so error.rs and the sync/*.rs scans used Read + rg as sanctioned fallback; app/ TS was read directly. Verdict valid (not partially_valid) because the core mechanism is exactly as claimed and verified line-for-line; the only deviations from the writeup make the impact slightly broader (3 dispatchSigningError call sites, not 1; the 'mnemonic' substring matches by luck), not narrower. Severity medium is appropriate: silent UX regressions (credit-insufficient dialog never opens, reauth toast across 3 wallet flows degrades to generic toast, auto-init retry loses its retry signal) with no data loss and no automated detection.
 
-- [ ] **F14 fixed & tested**
+- [x] **F14 fixed & tested** — committed 303c3ae0
 
 ---
 
@@ -613,7 +613,7 @@ _Risk:_ Low. Risk is a redundant re-fetch storm if upstream debounce is bypassed
 
 _Notes:_ No Rust diff this turn; preflight / data-structure plan / axioms-baseline / exemplars / critique / quality_gate / self-review checklist all N/A (TypeScript-only fix). Verified via direct reads of the cited TSX and sibling hooks plus rg cross-checks. The fix is self-contained in one TS file and mirrors an established, tested pattern (use-recent-files). Severity kept at medium per fixture but sits at the boundary with low: recoverable staleness/UX-consistency defect with zero data-integrity impact.
 
-- [ ] **F19 fixed & tested**
+- [x] **F19 fixed & tested** — committed 303c3ae0
 
 ---
 
@@ -1271,7 +1271,7 @@ _Risk:_ Very low. The field has no readers, so removal cannot break a consumer (
 
 _Notes:_ No Rust diff this turn; Rust preflight / data-structure plan / axioms-baseline / quality_gate / critique / exemplars / self-review checklist all N/A (TypeScript-only finding). The re-render impact is real but coupled to finding #1 (unmemoized provider value at line 565). Removing sessionTimeRemaining is correct cleanup but does NOT by itself fix the re-render storm — both should be fixed together; F1 is the higher-leverage one. Fixture's consumer count (66/68) is wrong — actual is 133 files via `rg -l useWalletAuth`. Severity "low" upheld because the extra renders are one-shot at login/restore, not a hot loop.
 
-- [ ] **F37 fixed & tested**
+- [x] **F37 fixed & tested** — committed 303c3ae0
 
 ---
 
@@ -1331,7 +1331,7 @@ _Risk:_ Low. Contract is 'reset scroll to 50 when the data SOURCE changes'. The 
 
 _Notes:_ TypeScript-only finding; no Rust touched, so the Rust workflow gates (preflight/axioms/data-structure plan/exemplars/critique/quality_gate) and the seven-item adversarial self-review checklist are N/A this turn. Fix is entirely in app/ (frontend), not cross-repo into hcfs. Fixture verify_notes was truncated mid-sentence but its substantive claims (exact memo body, [data] dep, the three explicit resetScroll sites) all check out. One correction to the auditor: 'drop the auto-reset entirely' is unsafe because the explicit resetScroll() calls don't cover non-filter data-source swaps — keep the reset, just make the signature cheap.
 
-- [ ] **F39 fixed & tested**
+- [x] **F39 fixed & tested** — committed 303c3ae0
 
 ---
 
@@ -1361,7 +1361,7 @@ _Risk:_ Low. Watch for: (1) any test or code that relies on file-item DOM nodes 
 
 _Notes:_ Pure TypeScript/React finding — no Rust diff this task; preflight/axioms/exemplars/critique/quality_gate/self-review-checklist all N/A. Cross-repo=false: fix is entirely in the desktop app/ frontend (the hcfs sync engine is not involved; it only sets the ~250ms emit cadence, which is correct and not the bug). Severity confirmed low and not inflated: the finding self-rates as the least severe, the SyncFileItem memo already blocks the expensive per-item work, and the widget is only mounted while widgetVisible is true, so there is no persistent background cost. Effort S (single one-line gate + one test + a comment update, well under 1h).
 
-- [ ] **F40 fixed & tested**
+- [x] **F40 fixed & tested** — committed 303c3ae0
 
 ---
 
