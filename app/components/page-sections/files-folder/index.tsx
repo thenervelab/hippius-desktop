@@ -118,9 +118,12 @@ export default function FolderView({
     fileSizes: filterSizes,
   });
 
-  // Infinite scroll state for list and card views
-  const { visibleData, hasMore, loadMore, resetScroll } =
-    useInfiniteScroll(filteredData);
+  // Infinite scroll state for list and card views. Cheap keyFn (no row
+  // serialization) for the source-change reset.
+  const { visibleData, hasMore, loadMore, resetScroll } = useInfiniteScroll(
+    filteredData,
+    (f) => `${f.label ?? ""}::${f.actualFileName ?? f.arionHash}::${f.lastChargedAt}`
+  );
 
   useEffect(() => {
     const newActiveFilters = generateActiveFilters(
@@ -216,6 +219,18 @@ export default function FolderView({
 
   useEffect(() => {
     loadFolderContents();
+  }, [loadFolderContents]);
+
+  // Silently refresh when any sync cycle completes files. `useSyncEvents`
+  // dispatches this debounced window event after every completing cycle; the
+  // sibling recent-files source already listens, but the folder view did not,
+  // so its listing went stale after a sync until a manual refresh (F19).
+  // deps=[loadFolderContents] keeps the handler closed over the current
+  // sync path / label / subfolder.
+  useEffect(() => {
+    const onSyncCompleted = () => loadFolderContents(false);
+    window.addEventListener("sync_files_completed_changed", onSyncCompleted);
+    return () => window.removeEventListener("sync_files_completed_changed", onSyncCompleted);
   }, [loadFolderContents]);
 
   // Resolve the correct sync path + label by matching folderSource
